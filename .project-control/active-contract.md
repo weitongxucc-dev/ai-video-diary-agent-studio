@@ -31,7 +31,7 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38：v5.1真实UI迁移纵向负责人 | 具名Web外壳、页面、组件、样式与直接测试；不写API/actions/共享文档 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38源码阶段已结案并保留线程；整体GUI待B41 | 已提交3925e9b；停止新增修改，具体GUI缺陷另具名交回；不写API/actions/共享文档 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40准备已结案；任务41同候选UI验收 | 仅新/tmp隔离环境和验收证据；冻结候选后具名START_GUI，不写产品 |
 
@@ -53,7 +53,7 @@ UI是唯一Web写者及本轮迁移纵向负责人。退役目标：活动外壳
 
 **任务41 / B（MAIN-UI-ACCEPTANCE-20261008-41）**：承接本轮必需的独立真实UI验收，唯一证据根`/tmp/main-acceptance-20261008/ui41/`，pipefish源码分支与既有成果保持。第一阶段可按准确PR96 API对象`a3e9c7b9dd51927f605272fda8bd6410bd707896`准备隔离方法和最小真实仓库fixture；最终服务启动前必须换成主控冻结UI+PR96+当前设计文档组合的完整archive并核API blob不变。仅允许env-i下独立HOME/XDG/config/cache/DB/library/output/tmp/models/agent，排除.env；复用既有已安装venv/Node/Web依赖，不安装/build。准备可导入候选SourceRepository/ProductionRepository/本机成员初始化，创建一个可信合成owner、两条知识资料（其中一条同源V1/V2）与一条合成剪辑任务／两镜头／当前及历史时间线；不启动app.main/服务/GUI/模型/媒体工具/资源探针或生产作业。只读复制任务36具名合法16s色卡`creation36/software-first/library/source.mp4`与其参考方法，合成产物状态必须标为fixture，不冒称连续制作结果；不读取旧DB/token、真实用户素材/密钥。先给PREPARED准确环境、fixture范围、拟命令和退出方法，等待本Dispatch具名START_GUI。
 
-START_GUI仅在主控冻结准确SHA后生效：API4571/Web3171、自己的Chrome profile/PID/window、最长30分钟绝对租约不续期，沿任务37已经验证的服务启动／同env API重启／退出方法；端口占用只报不杀他人。实际生产入口app.main、真实API与SQLite，不能mock响应/静态代页。执行ui40最小矩阵（可同一操作覆盖多项），必要普通参数提案／确认／一次撤销可写本隔离fixture，禁止开始制作／重出／模型、任意重媒体预览、收费服务或发布。设置只改非秘密provider/base_url/model；Key为空，既有真实Key证据复用未变后端事实，新界面保存仍需复验。不得创建／读取／修改登录或旧钥匙串，测试store仅本根不存在的具名空路径；如发现必须实际空store则向主控报具体原因后由主控限定处理，B不自动操作Keychain。正常页面GET的既有状态读取可用，但无独立HostResourceProbe或模型实测权。准备和GUI均无产品／共享权威／远端写权。
+START_GUI冻结候选为`ef4b74c7405842b0f38e6fbf45dd6ae04aa8a0a5`，独立review checkout `/tmp/main-controller-20261008/ui-v51/integration`：准确父链PR96 a3e9c7b→当前设计文档7dfbb72→UI38精确差额ef4b74c（来源3925e9b），工作树干净，API/actions/lib差额零。交叠Creation确认/重出/画幅/复合6项检查通过；不重跑未变172矩阵。任务38源码succeeded已接受并retain，整体RETIRED仍待本同候选GUI。主控对任务41 Dispatch `ctx_955af68806bd`具名发送后才生效：API4571/Web3171、自己的Chrome profile/PID/window、最长30分钟绝对租约不续期，沿任务37已经验证的服务启动／同env API重启／退出方法；端口占用只报不杀他人。实际生产入口app.main、真实API与SQLite，不能mock响应/静态代页。执行ui40最小矩阵（可同一操作覆盖多项），必要普通参数提案／确认／一次撤销可写本隔离fixture，禁止开始制作／重出／模型、任意重媒体预览、收费服务或发布。设置只改非秘密provider/base_url/model；Key为空，既有真实Key证据复用未变后端事实，新界面保存仍需复验。不得创建／读取／修改登录或旧钥匙串，测试store仅本根不存在的具名空路径；如发现必须实际空store则向主控报具体原因后由主控限定处理，B不自动操作Keychain。正常页面GET的既有状态读取可用，但无独立HostResourceProbe或模型实测权。准备和GUI均无产品／共享权威／远端写权。
 
 截图必须来自本候选实际可见页面，API／DB仅辅助持久效应；CSS视口亮暗／三尺寸／断点、嵌套关闭与不穿透、父草稿／滚动／焦点、真实V1/V2、保存重启、剪辑选择／播放／关闭重开逐项PASS/FAIL/UNVERIFIED。第一可见缺陷准确交UI与主控，同一候选可继续独立无依赖项；改变源码必须停止旧服务、保留证据和释放，再换新准确候选。结束只停止登记并核身份的自有PID/PGID，证明组退出、精确根无残余、4571/3171无listener；用户浏览器与数据保留。完整成员权限、Electron安装包、真实Key新GUI保存、完整制作／口型／发布不在本UI通过范围；任务41完整结果含必要GUI及释放，PREPARED不是完成节点。
 
