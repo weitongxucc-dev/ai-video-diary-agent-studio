@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CardSelect, HomeCardDialog } from "../HomeCardDialog";
 
@@ -18,6 +20,63 @@ function Cards() {
 }
 
 describe("v5.1 object card stack", () => {
+  it("hydrates a server-rendered workspace with a closed card before enabling its client portal", async () => {
+    function Workspace() {
+      const [open, setOpen] = useState(false);
+      return <main>
+        <button onClick={() => setOpen(true)}>查看历史</button>
+        <HomeCardDialog open={open} kind="detail" title="历史版本" onClose={() => setOpen(false)}>
+          <input aria-label="历史草稿" defaultValue="旧版说明" />
+        </HomeCardDialog>
+        <div aria-label="剪辑工作区"><video aria-label="当前播放器" /></div>
+      </main>;
+    }
+    let html: string;
+    try {
+      vi.stubGlobal("document", undefined);
+      vi.stubGlobal("window", undefined);
+      html = renderToString(<Workspace />);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.append(container);
+    const stage = within(container).getByLabelText("剪辑工作区");
+    const player = within(container).getByLabelText("当前播放器") as HTMLVideoElement;
+    player.currentTime = 1.25;
+    const errors: unknown[] = [];
+    let root: Root | undefined;
+    try {
+      await act(async () => {
+        root = hydrateRoot(container, <Workspace />, { onRecoverableError: error => errors.push(error) });
+      });
+      expect(errors).toEqual([]);
+      expect(within(container).getByLabelText("剪辑工作区")).toBe(stage);
+      expect(within(container).getByLabelText("当前播放器")).toBe(player);
+      expect(player.currentTime).toBe(1.25);
+      const trigger = within(container).getByRole("button", { name: "查看历史" });
+      trigger.focus(); fireEvent.click(trigger);
+      const card = screen.getByRole("dialog", { name: "历史版本" });
+      expect(container).not.toContainElement(card);
+      const body = screen.getByLabelText("历史草稿").parentElement!;
+      body.scrollTop = 120;
+      fireEvent.change(screen.getByLabelText("历史草稿"), { target: { value: "保留历史选择草稿" } });
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "历史版本" })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+      fireEvent.click(trigger);
+      expect(screen.getByRole("dialog", { name: "历史版本" })).toBe(card);
+      expect(screen.getByLabelText("历史草稿")).toHaveValue("保留历史选择草稿");
+      expect(body.scrollTop).toBe(120);
+      expect(within(container).getByLabelText("当前播放器")).toBe(player);
+      expect(player.currentTime).toBe(1.25);
+      expect(errors).toEqual([]);
+    } finally {
+      await act(async () => root?.unmount());
+      container.remove();
+    }
+  });
   it("keeps draft/scroll mounted and returns focus one layer per Escape", () => {
     render(<Cards />);
     const parent = screen.getByRole("dialog", {name:"资料详情"});

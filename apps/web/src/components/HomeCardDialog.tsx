@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, X } from "lucide-react";
-import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import styles from "./SideCards.module.css";
 
@@ -19,7 +19,9 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
 }) {
   const id = useId();
   const parent = useContext(ParentCard);
-  const active = open && parent?.active !== false;
+  const [clientReady, setClientReady] = useState(false);
+  useEffect(() => { setClientReady(true); }, []);
+  const active = clientReady && open && parent?.active !== false;
   const zIndex = kind === "modal" || kind === "navigation" ? 111 : parent ? parent.zIndex + 10 : kind === "detail" ? 80 : kind === "selection" ? 100 : 90;
   const node = useRef<HTMLElement>(null);
   const close = useRef(onClose); close.current = onClose;
@@ -106,7 +108,7 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
       {layer && (footer || kind === "detail") ? <footer>{footer ?? <button type="button" onClick={onClose}>收起详情</button>}</footer> : null}
     </section>
   </ParentCard.Provider>;
-  return typeof document === "undefined" ? null : createPortal(kind === "modal" || kind === "navigation" ? <div hidden={!active} className={styles.modalShade}>{card}</div> : card, document.body);
+  return clientReady ? createPortal(kind === "modal" || kind === "navigation" ? <div hidden={!active} className={styles.modalShade}>{card}</div> : card, document.body) : null;
 }
 
 export function CardSelect({ label, value, options, onChange, disabled = false, name }: {
