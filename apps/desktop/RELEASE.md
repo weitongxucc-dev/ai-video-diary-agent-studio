@@ -4,6 +4,8 @@
 
 ### 内部测试包
 
+当前阶段的交付优先级见[产品需求§1.3](../../docs/product-requirements.md#13-交付设备平台与待定选项)：先验证用户本机的安装包真实运行与主要流程，可复用已有模型和运行环境；新电脑依赖准备与独立测试者安装后续验证。这不改变下面两种身份模式或公开Release门禁。
+
 `.github/workflows/internal-macos-test.yml` 只允许手动触发，分别在原生 arm64 和 Intel runner 上构建：
 
 - `auth_mode` 必须显式选择 `local` 或 `supabase`；默认值 `local` 只用于本机开发或受控诊断。
