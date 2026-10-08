@@ -3,7 +3,7 @@ import { useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { CardSelect, HomeCardDialog } from "../HomeCardDialog";
+import { CardSelect, HomeCardDialog, homeCardParentForTarget } from "../HomeCardDialog";
 import { CommandPalette } from "../CommandPalette";
 
 function Cards() {
@@ -40,6 +40,34 @@ describe("v5.3 object card stack", () => {
       view.unmount();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps toolbar search at the root but attaches a shortcut to its actual owning card", () => {
+    function SearchOwnership() {
+      const [open, setOpen] = useState(false);
+      const [parentId, setParentId] = useState<string | undefined>();
+      const [selectionOpen, setSelectionOpen] = useState(false);
+      return <>
+        <button type="button" onClick={(event) => { setParentId(homeCardParentForTarget(event.currentTarget)); setOpen(true); }}>顶栏搜索</button>
+        <HomeCardDialog kind="detail" title="父卡" onClose={() => undefined}>
+          <button type="button" onClick={(event) => { setParentId(homeCardParentForTarget(event.currentTarget)); setOpen(true); }}>卡内搜索</button>
+          <button type="button" onClick={() => setSelectionOpen(true)}>打开短菜单</button>
+          {selectionOpen ? <HomeCardDialog kind="selection" title="短菜单" onClose={() => setSelectionOpen(false)}><button type="button" onClick={(event) => { setParentId(homeCardParentForTarget(event.currentTarget)); setOpen(true); }}>短菜单内搜索</button></HomeCardDialog> : null}
+        </HomeCardDialog>
+        <CommandPalette items={[]} onClose={() => setOpen(false)} onNavigate={vi.fn()} open={open} parentLayerId={parentId} />
+      </>;
+    }
+    render(<SearchOwnership />);
+    fireEvent.click(screen.getByRole("button", { name: "顶栏搜索" }));
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "111" });
+    fireEvent.click(screen.getAllByRole("button", { name: "关闭卡片" }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "卡内搜索" }));
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "90" });
+    fireEvent.click(screen.getAllByRole("button", { name: "关闭卡片" }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "打开短菜单" }));
+    fireEvent.click(screen.getByRole("button", { name: "短菜单内搜索" }));
+    expect(screen.getByRole("dialog", { name: "搜索页面和创作任务" })).toHaveStyle({ zIndex: "90" });
+    expect(screen.queryByRole("dialog", { name: "短菜单" })).not.toBeInTheDocument();
   });
 
   it("hydrates a server-rendered workspace with a closed card before enabling its client portal", async () => {
@@ -142,10 +170,16 @@ describe("v5.3 object card stack", () => {
     fireEvent.scroll(screen.getByRole("dialog", {name:"版本配置"}).querySelector('[class*="body"]')!);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); expect(screen.getByRole("button", {name:"查看版本"})).toHaveTextContent("版本2");
   });
-  it("scopes ordinary confirmation inert/focus to its parent, not the application", () => {
+  it("scopes ordinary confirmation inert/focus and modal semantics to its parent", () => {
     render(<Cards />); const parent = screen.getByRole("dialog", {name:"资料详情"}); fireEvent.click(screen.getByRole("button", {name:"应用参数"}));
     const confirmation = screen.getByRole("dialog", {name:"确认对象参数"});
-    expect(confirmation).toHaveAttribute("aria-modal", "true"); expect(parent.inert).toBe(true);
+    expect(confirmation).not.toHaveAttribute("aria-modal"); expect(parent.inert).toBe(true);
+    expect(confirmation.parentElement).toHaveStyle({ background: "transparent", pointerEvents: "none" });
+    const parentShade = confirmation.parentElement?.querySelector('[class*="localShade"]') as HTMLElement;
+    expect(parentShade.style.left).toBe(parent.style.left);
+    expect(parentShade.style.top).toBe(parent.style.top);
+    expect(parentShade.style.width).toBe(parent.style.width);
+    expect(parentShade.style.height).toBe(parent.style.height);
     expect(screen.getByRole("button", {name:"返回详情"})).toHaveFocus();
     const last = within(confirmation).getByRole("button", {name:"确认应用"}); last.focus(); fireEvent.keyDown(last, {key:"Tab"});
     expect(within(confirmation).getByRole("button", {name:"关闭卡片"})).toHaveFocus();

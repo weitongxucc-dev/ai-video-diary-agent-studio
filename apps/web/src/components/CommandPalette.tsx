@@ -24,9 +24,10 @@ type Props = {
   onClose: () => void;
   onNavigate: (href: string) => void;
   open: boolean;
+  parentLayerId?: string;
 };
 
-export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
+export function CommandPalette({ items, onClose, onNavigate, open, parentLayerId }: Props) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -61,7 +62,7 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
   }
 
   return (
-    <HomeCardDialog kind="navigation" title="搜索页面和创作任务" onClose={onClose}>
+    <HomeCardDialog kind="navigation" parentLayerId={parentLayerId} title="搜索页面和创作任务" onClose={onClose}>
       <section
         className="command-palette-content"
         onKeyDown={(event) => {

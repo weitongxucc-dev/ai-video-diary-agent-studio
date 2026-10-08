@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
@@ -31,6 +32,7 @@ vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
 vi.mock("@/lib/api", () => ({ listCreationTasks: apiMocks.listCreationTasks, getRuntimeSettings: vi.fn().mockResolvedValue({status:{llm:{configured:false}}}) }));
 
 import { AppShell } from "@/components/AppShell";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 
 function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
   return {
@@ -281,10 +283,28 @@ describe("AppShell", () => {
       expect(screen.getByRole("dialog", {name:"镜头参数"})).toHaveAttribute("data-card-kind","config");
       fireEvent.keyDown(document.activeElement!, {key:"Escape"});
       fireEvent.change(screen.getByLabelText("镜头草稿"), {target:{value:"新草稿"}});
-      fireEvent.click(screen.getByRole("button", {name:"收起详情"}));
+      fireEvent.click(screen.getByRole("button", {name:"关闭卡片"}));
       fireEvent.click(screen.getByRole("button", {name:"查看详情"}));
       expect(screen.getByLabelText("镜头草稿")).toHaveValue("新草稿");
       expect(screen.getByRole("button", {name:"播放"})).toBeInTheDocument();
+    });
+    it("keeps the quick card as confirmation parent while preserving its draft on close", () => {
+      function ConfirmationSurface() {
+        const [confirmationOpen, setConfirmationOpen] = useState(false);
+        return <AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" defaultValue="待保存" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="confirmation" title="确认修改" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button><video /></AppShell>;
+      }
+      render(<ConfirmationSurface />);
+      fireEvent.click(screen.getByRole("button", { name: "编辑镜头参数" }));
+      const quick = screen.getByRole("dialog", { name: "镜头参数" });
+      fireEvent.change(screen.getByLabelText("快速草稿"), { target: { value: "保留快速草稿" } });
+      fireEvent.click(screen.getByRole("button", { name: "确认草稿" }));
+      expect(screen.getByRole("dialog", { name: "镜头详情" })).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
+      expect(screen.getByRole("dialog", { name: "确认修改" })).toHaveAttribute("data-card-kind", "confirmation");
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "确认修改" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
+      expect(screen.getByLabelText("快速草稿")).toHaveValue("保留快速草稿");
     });
     it("uses the 1200 responsive default without overwriting remembered width", () => {
       localStorage.clear();

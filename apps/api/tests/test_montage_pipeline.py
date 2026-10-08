@@ -5154,6 +5154,54 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     from app.production import ArtifactRecord, JobRun, TimelineVersion, TransformRun
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
+    # Seal this fixture's existing person clip with the current, authorized
+    # lineage path; no portrait renderer or media decoding is invoked.
+    person_segment = state.production.get_narration_segment(
+        state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id,
+    )
+    person_profile = state.production.get_person_profile(
+        state.workspace_id, state.old_render.person_profile_id, state.old_render.person_version,
+    )
+    person_audio = state.production.resolve_authorized_narration_audio_reference(
+        state.workspace_id, person_segment.audio_reference,
+    )
+    person_visual = state.production.resolve_workspace_media_reference(
+        state.workspace_id, person_profile.avatar_reference, require_registered=True,
+    )
+    person_input_facts = main_module.presenter_input_facts(
+        SimpleNamespace(audio_path=str(person_audio), visual_path=str(person_visual)),
+    )
+    person_input_refs = list(dict.fromkeys([
+        f"person-profile://{person_profile.id}/{person_profile.version}",
+        f"voice-profile://{person_segment.voice_profile_id}/{person_segment.voice_version}",
+        f"narration-segment://{person_segment.id}", person_segment.audio_reference,
+        person_profile.avatar_reference,
+    ]))
+    person_artifact_ref = f"artifacts/{state.task.id}/person-lineage/person-render.mp4"
+    published_person = main_module.artifact_store.publish_file(
+        person_artifact_ref, Path(state.old_render.output_path),
+    )
+    person_job = state.production.create_job_run(JobRun(
+        id="job_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
+        kind="person_render", idempotency_key="v3-person-lineage", input_digest=state.old_render.cache_key,
+    ))
+    state.production.claim_job_run(state.workspace_id, person_job.id)
+    state.production.create_artifact_record(ArtifactRecord(
+        id="artifact_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
+        kind="person_render", logical_ref=person_artifact_ref, sha256=published_person.sha256,
+        size_bytes=published_person.size_bytes, producer_job_id=person_job.id, input_refs=person_input_refs,
+    ))
+    state.production.finish_job_run(state.workspace_id, person_job.id, status="succeeded", output_refs=[person_artifact_ref])
+    state.production.bind_person_render_artifact(state.workspace_id, state.task.id, state.old_render.id, person_artifact_ref)
+    state.old_render = state.production.get_person_render(state.workspace_id, state.task.id, state.old_render.id)
+    state.production.create_transform_run(TransformRun(
+        id="transform_job_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
+        job_id=person_job.id, transform_type="person_render", input_digest=state.old_render.cache_key,
+        input_refs=person_input_refs, output_refs=[person_artifact_ref], engine=state.old_render.model_id,
+        parameters={"motion": state.old_render.motion, "expression": state.old_render.expression,
+                    "language": person_segment.language, "presenter_input_facts": person_input_facts},
+        status="succeeded", started_at=main_module.utc_now(), finished_at=main_module.utc_now(),
+    ))
     # Establish a real versioned input before registering the synthetic output.
     input_edit = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"16:9"})
     assert input_edit.status_code == 200, input_edit.text
@@ -5213,6 +5261,14 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=original,
     )
+    person_authorization = state.production.get_person_profile(
+        state.workspace_id, person_profile.id, person_profile.version,
+    ).authorization
+    state.production.save_authorization(replace(person_authorization, version="v2-revoked", status="revoked"))
+    assert not main_module._creation_render_is_valid(
+        state.workspace_id, state.task.id, verify_media=False, timeline_version=original,
+    )
+    state.production.save_authorization(replace(person_authorization, version="v3-active"))
     # Missing sealed input facts must never restore a ready output.
     unsealed_snapshot = {key: value for key, value in original.snapshot.items() if not key.startswith("render_input_")
                          and key != "creation_render_request_id"}

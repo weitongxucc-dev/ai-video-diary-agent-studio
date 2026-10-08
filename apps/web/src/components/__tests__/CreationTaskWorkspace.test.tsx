@@ -734,7 +734,8 @@ describe("CreationTaskWorkspace", () => {
       expect(detail).toHaveAttribute("data-card-kind", "detail");
       expect(detail?.inert).toBe(true);
       expect(confirmation).toHaveAttribute("data-card-kind", "confirmation");
-      expect(confirmation).toHaveAttribute("aria-modal", "true");
+      expect(confirmation).not.toHaveAttribute("aria-modal");
+      expect(Boolean((document.querySelector(".desktop-shell") as HTMLElement).inert)).toBe(false);
       expect(screen.getByRole("button", { name: "返回详情" })).toHaveFocus();
     } else {
       expect(detail).toBeNull();

@@ -63,7 +63,7 @@ function matchesBinding(event: KeyboardEvent, keys: string[]): boolean {
   });
 }
 
-export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: () => void }) {
+export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: (target: EventTarget | null) => void }) {
   const router = useRouter();
   const { pushToast } = useToast();
 
@@ -71,7 +71,7 @@ export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: () => void }
     function onKeyDown(event: KeyboardEvent) {
       if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        onOpenSearch();
+        onOpenSearch(event.target);
         return;
       }
 

@@ -14982,6 +14982,24 @@ def _creation_render_is_valid(
             input_refs = _creation_task_montage_render_input_refs(task, input_plan)
             if expected_digest != render_input_digest:
                 return False
+            person_clips = [clip for clip in input_plan.clips if clip.person_render_id]
+            if person_clips:
+                narration_segments = _narration_segments_from_snapshot(version.snapshot)
+                if narration_segments is None:
+                    return False
+                segments_by_id = {segment.id: segment for segment in narration_segments}
+                cues_by_id = {cue.id: cue for cue in input_plan.cues}
+                person_transforms = production_repo.list_transform_runs(workspace_id, task_id)
+                for clip in person_clips:
+                    cue = cues_by_id.get(clip.cue_id)
+                    segment = segments_by_id.get(cue.narration_segment_id) if cue and cue.narration_segment_id else None
+                    if segment is None:
+                        return False
+                    person_render = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
+                    if (person_render.status != "ready"
+                            or person_render.narration_segment_id != segment.id
+                            or not _person_render_matches_narration(person_render, segment, person_transforms)):
+                        return False
         registered = next(
             (artifact for artifact in production_repo.list_artifact_records(workspace_id, task_id)
              if artifact.logical_ref == ref and artifact.kind == "rendered_video"),

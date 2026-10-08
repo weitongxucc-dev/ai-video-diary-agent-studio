@@ -37,7 +37,7 @@ import {
   type CSSProperties,
 } from "react";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
-import { HomeCardDialog } from "@/components/HomeCardDialog";
+import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
@@ -238,10 +238,11 @@ export function AppShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchParentId, setSearchParentId] = useState<string | undefined>();
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
   useEffect(() => {
-    if (inspectorConfirmationKey) { setQuickOpen(false); setDetailsOpen(true); }
+    if (inspectorConfirmationKey) setDetailsOpen(true);
   }, [inspectorConfirmationKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
   useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
@@ -399,7 +400,7 @@ export function AppShell({
             <button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></button>
             {toolbarActions}
             {quickAvailable ? <button aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(true); setQuickOpen(true); }} type="button">镜头参数</button> : null}
-            <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => setSearchOpen(true)} type="button">
+            <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
               <Search size={16} />
 
             </button>
@@ -428,14 +429,22 @@ export function AppShell({
         </div>
 
       </section>
-      <KeyboardShortcuts onOpenSearch={() => setSearchOpen(true)} />
-      {providedInspector ? <HomeCardDialog open={detailsOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{quickOpen && quickInspector ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>{quickInspector(() => setQuickOpen(false))}</HomeCardDialog> : null}{inspectorConfirmation}</HomeCardDialog> : null}
+      <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} />
+      {providedInspector ? <HomeCardDialog open={detailsOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
+        {providedInspector}
+        {quickOpen && quickInspector ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>
+          {quickInspector(() => { setQuickOpen(false); setDetailsOpen(true); })}
+          {inspectorConfirmation}
+        </HomeCardDialog> : null}
+        {!quickOpen ? inspectorConfirmation : null}
+      </HomeCardDialog> : null}
       <HelpPanel />
       <CommandPalette
         items={commandItems}
         onClose={() => setSearchOpen(false)}
         onNavigate={(href) => router.push(href)}
         open={searchOpen}
+        parentLayerId={searchParentId}
       />
     </div>
   );

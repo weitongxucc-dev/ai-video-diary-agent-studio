@@ -11,6 +11,14 @@ const layers: Layer[] = [];
 const ParentCard = createContext<Layer | null>(null);
 const topLayer = () => layers.at(-1);
 
+/** Resolve palette ownership from its actual trigger, skipping short menus. */
+export function homeCardParentForTarget(target: EventTarget | null) {
+  if (!(target instanceof Node)) return undefined;
+  const owner = [...layers].reverse().find(layer => layer.active && layer.node.contains(target));
+  if (!owner) return undefined;
+  return owner.kind === "selection" ? owner.parentId : owner.id;
+}
+
 /** Measure the actual workspace once, then position every open card from that shared box. */
 function positionLayers() {
   const measuredWorkspace = document.querySelector<HTMLElement>(".desktop-workspace")?.getBoundingClientRect();
@@ -18,13 +26,15 @@ function positionLayers() {
   const measuredContent = contentElement?.getBoundingClientRect();
   const hasWorkArea = Boolean(measuredWorkspace && measuredWorkspace.width > 0 && measuredWorkspace.height > 0);
   const workspace = hasWorkArea ? measuredWorkspace : undefined;
-  const content = measuredContent?.height ? measuredContent : undefined;
-  const left = workspace?.left ?? 0;
-  const right = workspace?.right ?? window.innerWidth;
+  const hasVisibleMain = Boolean(measuredContent && measuredContent.width > 0 && measuredContent.height > 0);
+  const mainArea = hasVisibleMain ? measuredContent : workspace;
+  const left = mainArea?.left ?? 0;
+  const right = mainArea?.right ?? window.innerWidth;
   const toolbarBottom = document.querySelector<HTMLElement>(".desktop-toolbar")?.getBoundingClientRect().bottom ?? 56;
   const phaseNav = contentElement?.querySelector<HTMLElement>('[aria-label="制作阶段"]')?.getBoundingClientRect();
-  const top = Math.max(content?.top ?? 56, toolbarBottom, phaseNav && phaseNav.bottom > (content?.top ?? 56) && phaseNav.top < (content?.bottom ?? window.innerHeight) ? phaseNav.bottom : 0);
-  const bottom = workspace?.bottom ?? window.innerHeight;
+  const contentTop = measuredContent?.top ?? 56;
+  const top = Math.max(contentTop, toolbarBottom, phaseNav && phaseNav.bottom > contentTop && phaseNav.top < (measuredContent?.bottom ?? window.innerHeight) ? phaseNav.bottom : 0);
+  const bottom = Math.min(mainArea?.bottom ?? window.innerHeight, workspace?.bottom ?? window.innerHeight);
   const width = Math.max(0, Math.min(360, right - left - 48));
   const rootTop = top + 16;
   const height = Math.max(0, Math.min(560, bottom - rootTop - 80));
@@ -52,17 +62,22 @@ function positionLayers() {
 }
 
 /** Object-card children portal out of the parent's scroll clip. */
-export function HomeCardDialog({ title, children, onClose, kind = "modal", anchor, footer, open = true }: {
+export function HomeCardDialog({ title, children, onClose, kind = "modal", anchor, footer, open = true, parentLayerId }: {
   title: string; children: ReactNode; onClose: () => void; kind?: Kind;
   anchor?: RefObject<HTMLElement | null>; footer?: ReactNode;
   open?: boolean;
+  parentLayerId?: string;
 }) {
   const id = useId();
-  const parent = useContext(ParentCard);
+  const contextParent = useContext(ParentCard);
+  const parent = parentLayerId ? layers.find(layer => layer.id === parentLayerId) ?? contextParent : contextParent;
   const [clientReady, setClientReady] = useState(false);
   useEffect(() => { setClientReady(true); }, []);
   const active = clientReady && open && parent?.active !== false;
-  const zIndex = kind === "modal" || kind === "navigation" ? 111 : parent ? parent.zIndex + 10 : kind === "detail" ? 80 : kind === "selection" ? 100 : 90;
+  const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
+  const scopedConfirmation = kind === "confirmation" && parent !== null;
+  const blocksApplication = modal && !scopedConfirmation;
+  const zIndex = parent ? parent.zIndex + 10 : modal ? 111 : kind === "detail" ? 80 : kind === "selection" ? 100 : 90;
   const node = useRef<HTMLElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const close = useRef(onClose); close.current = onClose;
@@ -73,7 +88,14 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     if (!active) return;
     const card = node.current!;
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const entry: Layer = { id, kind, active: true, zIndex, parentId: parent?.id, node: card, close: () => close.current(), position: {}, setPosition, anchor: anchorRef.current };
+    const entry: Layer = {
+      id, kind, active: true, zIndex, parentId: parent?.id, node: card,
+      close: () => {
+        layers.filter(value => value.parentId === id).forEach(value => value.close());
+        close.current();
+      },
+      position: {}, setPosition, anchor: anchorRef.current,
+    };
     // Replace a sibling, never its parent or the parent's scroll/draft state.
     layers.filter(value => value.parentId === entry.parentId && value.id !== id && (entry.parentId || value.kind === kind)).forEach(value => value.close());
     layers.push(entry); setLayer(entry);
@@ -82,8 +104,10 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     const observer = new ResizeObserver(measure);
     const workArea = document.querySelector<HTMLElement>(".desktop-workspace");
     const contentArea = document.querySelector<HTMLElement>(".desktop-main-scroll");
+    const toolbar = document.querySelector<HTMLElement>(".desktop-toolbar");
     if (workArea) observer.observe(workArea);
     if (contentArea) observer.observe(contentArea);
+    if (toolbar) observer.observe(toolbar);
     card.querySelector<HTMLElement>(kind === "confirmation" || kind === "modal" ? "[data-card-cancel], button" : "button, input, select, textarea")?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (topLayer() !== entry) return;
@@ -112,10 +136,12 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     };
     const shell = document.querySelector<HTMLElement>(".desktop-shell");
     const wasShellInert = shell?.inert ?? false;
-    const wasParentInert = parent?.node.inert ?? false;
-    const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
-    if (modal && shell) shell.inert = true;
-    if (modal && parent) parent.node.inert = true;
+    const blockedLayers = scopedConfirmation && parent
+      ? [parent]
+      : blocksApplication ? layers.filter(value => value.id !== id) : [];
+    const previousLayerInert = new Map(blockedLayers.map(value => [value.node, value.node.inert === true]));
+    if (blocksApplication && shell) shell.inert = true;
+    previousLayerInert.forEach((_inert, cardNode) => { cardNode.inert = true; });
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("scroll", fieldScroll, true);
@@ -127,8 +153,8 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
       document.removeEventListener("pointerdown", outside, true);
       document.removeEventListener("scroll", fieldScroll, true);
       const index = layers.indexOf(entry); if (index !== -1) layers.splice(index, 1);
-      if (parent && modal) parent.node.inert = wasParentInert;
-      if (shell && modal) shell.inert = wasShellInert || layers.some(value => value.kind === "modal" || value.kind === "navigation" || value.kind === "confirmation");
+      previousLayerInert.forEach((inert, cardNode) => { cardNode.inert = inert; });
+      if (shell && blocksApplication) shell.inert = wasShellInert || layers.some(value => value.kind === "modal" || value.kind === "navigation" || (value.kind === "confirmation" && !value.parentId));
       positionLayers();
     };
   }, [id, kind, parent, anchor, active, zIndex]);
@@ -146,17 +172,16 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     const target = kind === "selection" ? node.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]') ?? node.current?.querySelector<HTMLElement>('[role="option"]') : node.current?.querySelector<HTMLElement>('[data-card-cancel]');
     target?.focus();
   }, [layer, kind, active]);
-  const modal = kind === "modal" || kind === "navigation" || kind === "confirmation";
   const childContext = useMemo(() => layer ? { ...layer, active } : null, [layer, active]);
   const card = <ParentCard.Provider value={childContext}>
-    {active && kind === "confirmation" && parent ? <div className={styles.localShade} style={{ ...(() => { const r = parent.node.getBoundingClientRect(); return { top: r.top, left: r.left, width: r.width, height: r.height }; })() }} /> : null}
-    <section hidden={!active} aria-label={title} aria-modal={modal ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex }} data-card-kind={kind}>
+    {active && scopedConfirmation && parent ? <div className={styles.localShade} style={{ zIndex: parent.zIndex + 9, pointerEvents: "auto", top: parent.position.top, left: parent.position.left, width: parent.position.width, height: parent.position.height }} /> : null}
+    <section hidden={!active} aria-label={title} aria-modal={blocksApplication ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex, ...(scopedConfirmation ? { pointerEvents: "auto" } : {}) }} data-card-kind={kind}>
       <header><h2>{title}</h2><button aria-label="关闭卡片" onClick={onClose} type="button"><X size={16} /></button></header>
       <div className={styles.body}>{layer ? children : null}</div>
-      {layer && (footer || kind === "detail") ? <footer>{footer ?? <button type="button" onClick={onClose}>收起详情</button>}</footer> : null}
+      {kind !== "selection" ? <footer>{footer ?? null}</footer> : null}
     </section>
   </ParentCard.Provider>;
-  return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade}>{card}</div> : card, document.body) : null;
+  return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade} style={{ zIndex: zIndex - 1, ...(scopedConfirmation ? { background: "transparent", pointerEvents: "none" } : {}) }}>{card}</div> : card, document.body) : null;
 }
 
 export function CardSelect({ label, value, options, onChange, disabled = false, name }: {
