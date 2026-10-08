@@ -33,9 +33,19 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44源码已结案保留，B45历史可读分项通过 | 无新增源码/服务权；具体缺陷另具名交回 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45已结案保留；B45整体缺证outcome failed | 无产品/服务/GUI权；ui45资源已到期退出，下一补验须新具名任务 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45已结案；任务46补未验交互 | 仅新ui46隔离测试/自有GUI和证据；条件START及15分钟绝对窗口，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务46 / B（MAIN-UI-INTERACTION-ACCEPTANCE-20261008-46）**：用户最新“可以抓紧吧”确认现有未验交互的继续验收并愿协助3–5分钟，不改变设计或恢复重模型。复用既有B终端的新Dispatch，唯一新写根`/tmp/main-acceptance-20261008/ui46/`，准确冻结94bf3671cb6efcd540e09f83f818a34f363c75e1，来源`/tmp/main-controller-20261008/ui-v51/integration`；按DESIGN §2/4.2/7只补受控历史关闭重开/正文滚动/焦点、三栏拖动收起与记忆、完整播放器可见与普通刷新。原45已退出，绝不重启旧根。无产品/测试/Git/共享文档/Linear/远端写权，UI/A均无新增权。
+
+准备只定向读取45最终`db/fixture-source-local-v2.sqlite3`及0600合成owner-token，mode=ro备份新库并逐表相等；只读复用具名`ui45/library/source.mp4`和其父素材目录作为本轮VIDEO_INBOX_PATH，素材路径保持已验证的合法事实，禁止扫描/分析/改写素材目录或其它文件。复制合成token到新0600文件，不打印；其它HOME/XDG/config/cache/tmp/output/models/agent与不存在的具名测试store全新隔离，排除dotenv、Key空、Pi/model offline、生产定时OFF。准确候选完整archive到新根，现有依赖只读复用，不安装/build/测试/模型/媒体工具/资源探针/收费调用。
+
+本条即此新Dispatch的条件START：语义ACK、准确源码与初始库比较通过、4573/3173确实空闲后，允许一次启动自有API/Web/Chrome新profile，以首次服务启动起15分钟固定绝对到期，不续。须先真实API任务与本地合成身份就绪，再正常打开页面；登记PID/PGID/窗口/实际尺寸与expiry，立即报READY和第一个人工动作所需稳定画面，不等待再次START。优先在实际1024宽窗口将历史卡打开、草稿和镜头选择确立为本轮新基线。原生focused gate失败不重试/绕过；键盘/滚动/拖动由主控逐步提示用户，B收到回报后立即只读AX/PNG回看，不私自改变待验画面。一次动作一次核对；避免准备长报告耗尽人工窗口。
+
+人工动作等待期间可定向读本轮已有状态，不能导航/刷新/改选择/重启；用户未回应是未验，不当完成。关闭后受控重开保留历史版/滚动/镜头/草稿/播放位置须真实对照。必要普通GUI本地选择/草稿/播放允许，不确认参数、撤销业务、制作或检查字幕。用户协助拉高/加宽窗口才能取得指定视口时记录真实几何，不能把启动参数当CSS实测。待人工阶段结束才正常刷新核任务页与quality/404；开发Issue仅在真实出现时展开读正文，不猜原因。已过配置保存/锁定确认/历史可读/API事实不重跑。
+
+到期优先只停自有登记组与新profile，证明全部PID/PGID/根进程及4573/3173无残余，保留用户浏览器、旧库和全部证据。新真实缺陷报主控，不自行改产品，不热换SHA。最终短报告PASS/FAIL/UNVERIFIED、准确证据与释放后worker_done；完整结果和下一步需主控回读，不因PREPARED/READY宣布Done或整体RETIRED。
 
 任务45结算：主控已完整核最终`ui45/report.md`、12项结果及真实PNG/只读比较，接受准确failed并retain。准确94bf候选为5 PASS / 7 UNVERIFIED、无新增已证产品FAIL；1024×838 V1和人工阶段1091×838 V4完整圆角卡、列表/正文及下部字幕/产物均可见，原裁切已修复。草稿及8表持久事实保持，未证明受控关闭重开/滚动/Esc/焦点或选择/时间完整保留，不宣称整体RETIRED。新初始fixture仅素材两处路径改动，原DB/hash不改；媒体200/206及GUI定位8秒、播放暂停9.52244为分项证据，不替代完整播放器PNG。重启/刷新期间两张真实404后入口恢复，具体因果未定；quality恢复不算完整刷新验收，开发1 Issue正文仍未知。六个现旧PID/PGID及ui45根、4572/3172在原14:30:42到期退出，主控独立ps/lsof与release.json相符。任务45全部操作权收回；以下START只保留追溯，无复活/续租权。PR97仍草稿，WIL-205仍In Progress，下一具名窗口只补剩余项。
 
