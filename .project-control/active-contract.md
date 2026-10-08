@@ -33,9 +33,11 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47/49/50已结案并保留线程 | 无新增源码/服务/GUI权，准确焦点源码补验归51 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48已结案；任务51准备焦点修复补验 | 仅新ui51隔离准备；本Dispatch准确SHA START后一次15分钟GUI，无产品写权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46/48/51已结案并保留线程 | 全部服务/GUI资源退出，无新增产品/服务/GUI权 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+任务51结算：主控已核ui51完整report、实际closed/reopened PNG/AX与card-comparison，接受准确1e0c972必要GUI5 PASS、可选嵌套关闭1 UNVERIFIED，succeeded并retain。首屏/普通刷新正常，历史V1开关重开、关闭入口焦点及镜头2/草稿/暂停8秒保持；可选嵌套卡已可见但后续window_not_found，结果与焦点未证，不猜产品FAIL或绕过恢复。已装普通React19.2.6包与实际Next15.5.18浏览器19.2.0-canary分别记录，不冒称GUI同CI renderer。61表/旧库hash不变；16:53:32 API23815/Web23816/lease23817/Chrome24159及组、根进程、4575/3175全部退出，主控独立ps/lsof与release.json相符，无续租。任务51以下START只作历史依据，无恢复权。准确1e0c972 CI37752015898 Frontend/Backend/Desktop syntax全部SUCCESS并回读head一致。PR97/WIL-205保留草稿/In Progress及指定尺寸/主题、三栏拖动、完整键盘/播放器/新blob嵌套关闭等未验，不宣布整体RETIRED或自动合入；用户Tab可用反馈已记录。
 
 任务50结算与51冻结：主控已核完整ui50报告/锁版before/trace/after、8cc1ddbf7aff3b15ee8a70f151d5a40c05d71c04/父0af2373、HomeCardDialog仅11增2删，测试blob未改。React19.2.6/jsdom30.0.1/Vitest4.1.10真实单例失败、焦点call-through“入口→关闭→入口→关闭”证提交覆盖；移passive清理后同锁版7卡片专项、类型/diffcheck通过。接受succeeded并retain。机械组合`1e0c972665f3cb3b43db9af97abac4033d047477`，来源`/tmp/main-controller-20261008/ui-v51/integration`，组件与UI提交blob一致，API/lib/actions较PR96不变；与48产品blob有差额，不借用48焦点通过。B51收到本Dispatch具名START后，语义ACK/61表备份/准确完整archive/已有锁版依赖映射/4575及3175空闲检查通过即可一次15分钟新GUI，旧根不复活。真实GUI结果和新head CI尚待核，不声明可合入。
 
