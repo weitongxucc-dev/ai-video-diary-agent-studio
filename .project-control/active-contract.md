@@ -12,9 +12,13 @@
 
 ## 当前执行边界
 
-用户最新指定先做小范围可信试用，交付渠道以 [产品需求 §1.3](../docs/product-requirements.md#13-交付设备平台与待定选项) 为准；2026-10-07 用户进一步批准按审查缺口开始执行，并提供 `/Users/Zhuanz/Desktop/sk.docx` 中的 MiniMax Key。原只读审查结束；当前写权、操作权及主控真实文字请求的有限例外只来自下表当前任务及其具名条款，历史候选说明与旧任务不恢复。
+用户于2026-10-08批准“把设计文档彻底重构……目前就以这个版本为准”，指定其提供的UI交接包作为整个桌面的设计基线。该最新授权增加本轮设计文档重构，不恢复下方已结案的产品任务：main主控独占`DESIGN.md`、本合同、开发计划的视觉引用、文档路由及`docs/design/`活动参考资产写权；按[设计唯一权威](../DESIGN.md)收录新参考并退役旧参考。本轮不修改产品代码、不启动服务/GUI/模型、不安装依赖，不改Linear/GitHub数据。
 
-用户于 2026-10-07 在本会话指定 main 线程为产品主控，提供两条可见 Codex 执行线程，并明确要求“现在你来安排工作吧”。本次仅恢复下表具名范围；原主控和其他旧派工仍停工，历史授权不自动扩展到本批。
+UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`（`main-ui-linear`）只读重新绑定新规范，保留既有候选，不整体merge/rebase。旧的锁定先前视觉参数的建议不再作为执行契约；收到`AUTHORITY_CHANGED`后读取main指定章节并提交语义`REBASE_ACK`，不因此获得产品写/测试/服务/GUI权。后续实现由主控另行给出当前代码基线和具名范围，A/B资源暂停边界保持。
+
+用户最新指定先做小范围可信试用，交付渠道以 [产品需求 §1.3](../docs/product-requirements.md#13-交付设备平台与待定选项) 为准；2026-10-07 用户进一步批准按审查缺口开始执行，并提供 `/Users/Zhuanz/Desktop/sk.docx` 中的 MiniMax Key。原只读审查结束；当前写权、操作权及主控真实文字请求的有限例外只来自本节设计任务、下表当前任务及其具名条款，历史候选说明与旧任务不恢复。
+
+用户于 2026-10-07 在本会话指定 main 线程为产品主控，提供两条可见 Codex 执行线程，并明确要求“现在你来安排工作吧”。产品施工仅限下表具名范围；原主控和其他旧派工仍停工，历史授权不自动扩展到本批。
 
 - 唯一主控：main 会话 `670d30a5-7031-4814-9b07-0c1ad334fb7f:a034d4bb-1ff5-4d1b-9aae-d599b402934b`；当前终端 `term_2a22cf6b-53e4-402c-969f-5365d6a15444`。负责共享文档、Linear、候选审核、Git 集成与 PR，不编写产品代码。
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
@@ -495,7 +499,7 @@ B 仅写自有 `/tmp/main-acceptance-20261007/gui-wil108/`，冻结代码 archiv
 
 从准确 `origin/main@43cd7e25fb5ce635888cb9d4cd70d7cd9c6e5252` 在 manta 建独立 `codex/desktop-distribution-workflows-20261007`，先核干净并保留 WIL-108/110 分支。Owned 仅 `.github/workflows/internal-macos-test.yml` 与 `release.yml`：前者移除已无构建/包内来源的旧 worker-server 检查，保留原生 app/API 架构、签名及健康 smoke；后者复用现有 desktop Web/API 构建和分发配置脚本，移除不存在的 worker.spec 输入与旧 Worker 步骤，显式账号模式与公开连接配置并在缺失时真实失败。保持双架构、tag/version 校验、五项签名凭据硬门禁、codesign/spctl/stapler、发布依赖及双 ZIP 更新清单。不改 runtime/auth/数据库/业务规则/预算/模型/版本号、产品名称或共享文档，不复活旧 Worker，不添加默认凭据、local 回退或伪成功。
 
-绑定[架构桌面边界](../docs/system-architecture.md)、[认证 §1](../docs/auth-workspace-boundary.md#1-认证模式)、[桌面开发](../apps/desktop/README.md)与[Release 门禁](../apps/desktop/RELEASE.md)。账号配置只采用现有公开 URL/publishable key 变量入口，不读取真实值或将管理凭据引入包。Supabase 技能的真实云操作要求不能扩大本任务授权；本单只在隔离临时文件中验证公开配置生成与缺失拒绝，不查询实际数据库/账号。
+绑定[架构桌面边界](../docs/system-architecture.md)、[认证 §1](../docs/auth-workspace-boundary.md#1-身份模式)、[桌面开发](../apps/desktop/README.md)与[Release 门禁](../apps/desktop/RELEASE.md)。账号配置只采用现有公开 URL/publishable key 变量入口，不读取真实值或将管理凭据引入包。Supabase 技能的真实云操作要求不能扩大本任务授权；本单只在隔离临时文件中验证公开配置生成与缺失拒绝，不查询实际数据库/账号。
 
 最小验证：解析两条 YAML、核实际命令/脚本/产物引用、隔离配置生成成功及声明账号模式但缺少配置时失败，保留安全/架构门禁的差额核对与 diff check；不写镜像实现的测试、不全量复测产品。允许复用已有工具/依赖，不新安装。不得触发 internal/release workflow、打 tag、签名、公证、构建/下载安装包、发布、改 GitHub 配置/密钥、读取真实配置/钥匙串/用户库或调用云账号/模型。不能在本轮取得的安装、账号制作、媒体/性能、签名公证实证明确未验，不声称正式可分发已经通过。需要其他源码变更仅报主控，不能扩写。交付独立 SHA、两文件 diff、实际最小检查、失败/未验边界；A 不 push/PR/Linear，由主控审核提交独立 PR 并按原合同请求具名合入批准。B 的冻结 43cd7e2 页面与业务验收不受本 workflow 差额影响，无需重验未变化产品。
 

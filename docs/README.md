@@ -32,7 +32,7 @@
 - 新产品能力：`product-requirements.md` 的目标章节；涉及对象状态时补读 `domain-model.md`。
 - 0.11开发：工作包、依赖、技术候选和验收样本读 [`../.project-control/0.11-development-plan.md`](../.project-control/0.11-development-plan.md)；它不表示功能已实现，也不自动授权实施。当前是否可开始工作由活动合同及最新用户指令决定。
 - 下一阶段规划：长期优先级读 [`product-requirements.md`](product-requirements.md#151-制作质量修改效率与复用的优先级)；本轮工作包和剩余项读 [`../.project-control/active-contract.md`](../.project-control/active-contract.md)。后者是短期执行入口，不是第二份产品权威；合同结束删除时同步移除此链接。
-- UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则；应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
+- UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则，并按需查看[当前参考资产入口](../DESIGN.md#510-当前视觉与交互基线)；原型只供构图与交互对照。应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
 - 跨 Web/API/Worker：`system-architecture.md` 的目标边界和直接相关代码，不读全部产品文档。
 - 认证或发布：读取各自技术权威和实际实现；不要用产品文档推断当前运行状态。
 - 文档治理：本文件和目标文档；只有发现跨域冲突时才加载第二份权威。
