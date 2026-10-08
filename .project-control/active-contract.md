@@ -49,6 +49,8 @@ owned：HomeCardDialog.tsx、SideCards.module.css、AppShell.tsx及CSS、Command
 
 完成同一源码的直接消费者最小测试、类型与diff检查；不写CSS像素镜像、不跑无关全量、重复旧矩阵，不加仅为测试的生产fallback。不得启动服务/GUI/模型/探针/FFmpeg、下载/安装、费用、真实库/Key、共享文档或远端写入。交准确clean候选、净diff、逐页实际消费者和不存在证据；未验GUI明确待71，不以原型/测试代替生产通过。
 
+70.1 同批69审阅实证差额：主控发现 `_creation_render_is_valid` 仅在可选 `render_input_digest` 存在时检查原输入，新测试注册任意fixture job/transform及字节而无sealed输入仍断言undo恢复output_ready，违反已绑定“缺失输入依赖不恢复有效”规则。允许UI70追加 `apps/api/app/main.py` 仅该函数/undo直接调用所需最小差额及 `apps/api/tests/test_montage_pipeline.py` 既有v3撤销用例。撤销恢复必须复用既有render_input_*及实际原输入版本、job/transform/artifact、当前授权，不以文件存在/记录相互相同代替绑定；缺完整事实恢复草稿但成片需生成。沿现有真实渲染输入计算复用必要小函数可行，不新建第二digest事实源/安全层、不触发媒体或模板渲染。只测缺封存输入、有效版本恢复、真实依赖改变拒绝恢复三个已有契约场景；不跑全媒体套件。其他API文件无写权，此条不改变产品权威。
+
 ### B71：最新候选集中相关验收
 
 旧B66仅prepare且已fence，无服务/GUI运行，保留/tmp/main-acceptance-20261008/ui66/准备资料。原B可见终端复用，新证据/tmp/main-acceptance-20261008/ui71/；不重造未影响合法色卡或旧库，不写产品代码。读DESIGN v5.3相关几何/编辑/验收与实际领域版本，确认新验收取代66旧几何；语义ACK后先核准备输入，不启动服务。以ui66合法合成隔离准备为来源，所有新写仅ui71，原库只读；保持HOME/XDG/DB/config/library/output/tmp/cache/models/agent隔离、0600合成凭据、无真实Key/Pi离线/scheduled OFF。不扫描个人数据/模型，不造真实生成结果/费用/质量成功。
