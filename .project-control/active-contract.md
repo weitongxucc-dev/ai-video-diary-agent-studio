@@ -60,6 +60,8 @@ Migrate验收：纯素材crop编辑确认后以真实现有start/resume接线得
 
 A在准备窗口可以合法夹具初始化并由真实HTTP确认文案和读取execution/preview，不能先POST start/resume或加载模型。交PREPARED具体源码/env/inputs/probe当次decision及PID/PGID/端口、OS profile和精确一轮整链命令；主控对本Dispatch的START_CREATION36才允许一次原API start→真实Grant→Qwen→确定性montage→受许可FFmpeg/字幕成片，父180秒/各阶段原120/10/60秒，首因停止不自动重试。已编辑输出另90秒窗口须后续冻结重出候选；本节不给人物/真实账号云/GUI/Pi/生产标定。软件媒体窗口期间B仅静态工作，A亦不并行测试/别的重进程。
 
+任务36/37同候选媒体准备C1：A重出53bae98和B工作台5f06e77均已clean/最小专项通过并机械组合，冻结`91143e8ffc84db64c89c6d4ed431ad7a7d186c86`；主控已审范围和B组件测试组释放。首份61fca准备因内存5779849216<5905580032拒绝，0start/job/Grant/model、API/全部helper/permit已释放，原证据保留。允许A在同software-first根建立独立`source-final`精确archive/清单/新env和fresh-prefixed证据，不覆盖原源码/首因；复用已确认合法owner/script/素材/DB及一次已生成双色媒体，不重复造素材、执行确认业务或OS边界检查。相同profile与4569仅本地连接、自有API组/新20分钟lease、预算所有数值不变；一次fresh swap基线和真实HostResourceProbe（最多原3秒持续窗口）在API启动后核实际准入。先回PREPARED及准确PID/完整decision，再等本Dispatch的START_CREATION36；拒绝即停止/释放，不循环测、不加载模型、不调cap。B和A其它测试/GUI/模型此窗口均暂停。首次完整制作父180秒/各阶段120/10/60秒仍具名START后才可执行一次，编辑重出另有限窗口后续放行。
+
 用户于2026-10-08回复本机人物视频与声音均为本人，要求主控直接查找：允许主控定向只读现有素材目录、`legacy-movies/agent.sqlite3`的素材/声音登记元数据，以`mode=ro,uri=True`读取，不访问账号/秘密或修改原库。已定位素材`video-inbox/历史成片_待审核/VID_20260529_122252_preview.mp4`（登记a_roll/approved/rights_confirmed）和默认`acceptance/real-voice-20260824/reference/reference.wav`；允许主控在新`/tmp/main-controller-20261008/creation36/user-media/`仅一次≤30秒、线程1的FFmpeg取前段单帧视觉核验，记录自有PID/退出及原文件stat，不启动模型。人物与真实声音的模型处理/截段须随后具名有限窗口，不扩大A/B当前模型权；纯素材链继续独立推进，用户原件保留。
 
 ## A：连续制作与账号许可闭环（候选保留，写权收回）
