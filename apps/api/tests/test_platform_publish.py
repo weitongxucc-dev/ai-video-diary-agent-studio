@@ -19,7 +19,7 @@ from app.device_scheduler import ProcessIdentity, VerifiedSession
 from app.platform_publish.queue import platform_publish_registration, recover_platform_publish_jobs
 from app.platform_publish.routes import build_platform_publish_router
 from app.production import (
-    CreationPlan, CreationTask, JobRun, ProductionRepository, TimelineVersion, _json_payload,
+    CreationPlan, CreationTask, ProductionRepository, TimelineVersion, _json_payload,
 )
 
 
@@ -51,7 +51,9 @@ class _Connection:
 
 class _Repository:
     database_path = "/tmp/isolated-test.sqlite3"
-    def __init__(self): self.jobs = {}; self.events = []
+    def __init__(self):
+        self.jobs = {}
+        self.events = []
     @contextmanager
     def _connect(self): yield _Connection()
     def create_job_run(self, job, *, connection=None):
@@ -75,7 +77,10 @@ class _Scheduler:
 
 
 class _Runtime:
-    def __init__(self): self.registrations = {"platform_publish": object()}; self.scheduler = _Scheduler(); self.wakes = 0
+    def __init__(self):
+        self.registrations = {"platform_publish": object()}
+        self.scheduler = _Scheduler()
+        self.wakes = 0
     def wake(self): self.wakes += 1
 
 
@@ -302,6 +307,13 @@ def test_real_repository_device_runtime_persists_result_and_never_replays_unknow
     response = client.post("/api/publishing/tasks/task-1/publish", json=_payload())
     assert response.status_code == 202, response.text
     job_id = response.json()["id"]
+    recover_platform_publish_jobs(
+        repository, runtime,
+        actor_from_event=lambda identity: CreationExecutionActor.from_event(
+            identity["workspace_id"], identity,
+        ),
+        verify_identity=lambda actor: "ready",
+    )
     assert runtime.run_once() is True
 
     persisted = ProductionRepository(repository.database_path, repository.video_library_path)
@@ -313,6 +325,7 @@ def test_real_repository_device_runtime_persists_result_and_never_replays_unknow
     if expected == "succeeded":
         success = next(event for event in events if event.event_type == "platform_publish_succeeded")
         assert success.payload["remote_publish_id"] == receipt
+        assert len([call for call in driver.calls if call[0] == "click"]) == 1
     else:
         assert any(event.event_type == "platform_publish_unknown" for event in events)
         before = len([call for call in driver.calls if call[0] == "click"])

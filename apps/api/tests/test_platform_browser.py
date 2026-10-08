@@ -19,16 +19,24 @@ class FakeDriver:
         self.account = account
         self.receipt = receipt
 
-    async def goto(self, url): self.calls.append(("goto", url))
-    async def upload(self, selector, path): self.calls.append(("upload", selector, path))
-    async def fill(self, selector, value): self.calls.append(("fill", selector, value))
-    async def click(self, selector): self.calls.append(("click", selector))
+    async def goto(self, url):
+        self.calls.append(("goto", url))
+    async def upload(self, selector, path):
+        self.calls.append(("upload", selector, path))
+    async def fill(self, selector, value):
+        self.calls.append(("fill", selector, value))
+    async def click(self, selector):
+        self.calls.append(("click", selector))
     async def read_text(self, selector):
         self.calls.append(("read", selector))
-        if selector == "[data-e2e='creator-avatar']": return "avatar"
-        if selector == "[data-e2e='creator-uid']": return self.account
-        if selector == "[data-e2e='publish-success']": return "发布成功"
-        if selector == "[data-e2e='publish-result-id']": return self.receipt
+        if selector == "[data-e2e='creator-avatar']":
+            return "avatar"
+        if selector == "[data-e2e='creator-uid']":
+            return self.account
+        if selector == "[data-e2e='publish-success']":
+            return "发布成功"
+        if selector == "[data-e2e='publish-result-id']":
+            return self.receipt
         return ""
 
 

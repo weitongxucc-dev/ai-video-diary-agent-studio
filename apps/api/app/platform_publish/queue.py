@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-from app.device_scheduler import Grant, RetryReason, SubmissionIntent, VerifiedWork, WorkRequest
+from app.device_scheduler import Grant, RetryReason, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.device_runtime import OwnerRegistration
 from app.platform_browser import (
-    PUBLISH_OPERATION_TIMEOUT_SECONDS, DouyinAdapter, LoginRequired,
+    PUBLISH_OPERATION_TIMEOUT_SECONDS, DouyinAdapter,
     PublishConfirm, PublishOutcomeUnknown,
 )
 from app.platform_browser.playwright_driver import PlaywrightSessionManager
@@ -170,7 +169,7 @@ class PlatformPublishExecutor:
 
     def execute(self, grant: Grant, scheduler) -> None:
         job, prepared = self._load(grant)
-        claimed = self.repository.claim_job_run(job.workspace_id, job.id)
+        self.repository.claim_job_run(job.workspace_id, job.id)
         p = prepared.payload
         actor = self.actor_from_event(p["identity"]) if self.actor_from_event else None
         account_id = p["identity"].get("user_id") or p["identity"]["member_id"]
@@ -211,6 +210,7 @@ class PlatformPublishExecutor:
             unknown = started or isinstance(exc, PublishOutcomeUnknown)
             status = "interrupted" if unknown else "failed"
             reason = "publish_outcome_unknown" if unknown else "publish_not_submitted"
+            error_type = type(exc).__name__
             now = datetime.now(UTC).isoformat()
 
             def failure_write(conn, _grant):
@@ -223,7 +223,7 @@ class PlatformPublishExecutor:
                 )
                 self._event(conn, job=job,
                             event_type="platform_publish_unknown" if unknown else "platform_publish_safe_retry",
-                            payload={"reason": reason, "error_type": type(exc).__name__})
+                            payload={"reason": reason, "error_type": error_type})
 
             scheduler.fail_unit(grant, reason=reason.replace("-", "_"), failure_write=failure_write)
             return

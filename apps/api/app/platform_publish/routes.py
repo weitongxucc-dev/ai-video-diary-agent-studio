@@ -113,7 +113,7 @@ def build_platform_publish_router(
         workspace_id = workspace_for(request)
         user_id, _actor, _fields = require_member(request, workspace_id)
         try:
-            task = task_for_user(workspace_id, task_id, user_id)
+            task_for_user(workspace_id, task_id, user_id)
         except KeyError as exc:
             raise HTTPException(404, "创作任务不存在") from exc
         except PermissionError as exc:
