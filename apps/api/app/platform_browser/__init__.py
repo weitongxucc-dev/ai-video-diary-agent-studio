@@ -3,6 +3,7 @@
 from app.platform_browser.base import (
     BaseBrowserAdapter,
     BrowserUnavailable,
+    PUBLISH_OPERATION_TIMEOUT_SECONDS,
     HumanInterventionRequired,
     LoginRequired,
     LoginState,
@@ -21,6 +22,7 @@ from app.platform_browser.playwright_driver import PlaywrightSessionManager, pro
 __all__ = [
     "BaseBrowserAdapter",
     "BrowserUnavailable",
+    "PUBLISH_OPERATION_TIMEOUT_SECONDS",
     "HumanInterventionRequired",
     "LoginRequired",
     "LoginState",

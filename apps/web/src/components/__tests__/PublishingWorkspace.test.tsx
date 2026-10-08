@@ -88,4 +88,25 @@ describe("PublishingWorkspace", () => {
     expect(screen.getByText("平台动作可能已经提交；系统不会自动重发。")).toBeInTheDocument();
     expect(screen.getByText("处理：先在平台账号后台核对结果。")).toBeInTheDocument();
   });
+
+  it("refreshes the persisted job state and displays its terminal platform result", async () => {
+    const queued: PlatformPublishJob = {
+      id: "publish-refresh", task_id: "task-1", status: "queued", progress: 0, queue_state: "waiting",
+      queue_wait_reason: null, failure_reason: null, impact: null, repair_action: null,
+      events: [{ type: "platform_publish_prepared", payload: {}, created_at: "2026-10-09T00:00:00Z" }],
+    };
+    const succeeded: PlatformPublishJob = {
+      ...queued, status: "succeeded", progress: 100, queue_state: "done",
+      events: [{ type: "platform_publish_succeeded", payload: { remote_publish_id: "remote-42" }, created_at: "2026-10-09T00:01:00Z" }],
+    };
+    setup({ jobs: { items: [queued] } });
+    expect(await screen.findByText("等待本机发布队列")).toBeInTheDocument();
+    api.listPlatformPublishJobs.mockResolvedValueOnce({ items: [succeeded] });
+
+    fireEvent.click(screen.getByRole("button", { name: /^刷新$/ }));
+
+    expect(await screen.findByText("平台已返回发布结果")).toBeInTheDocument();
+    expect(screen.getByText("平台返回编号：remote-42")).toBeInTheDocument();
+    expect(api.listPlatformPublishJobs).toHaveBeenLastCalledWith("task-1");
+  });
 });

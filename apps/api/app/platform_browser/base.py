@@ -12,6 +12,12 @@ from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 
+# The DeviceRuntime resource contract and the complete browser operation share
+# one finite wall-clock cap. This is an operational deadline, not a measured
+# Chrome memory or CPU calibration.
+PUBLISH_OPERATION_TIMEOUT_SECONDS = 30.0
+
+
 class BrowserUnavailable(RuntimeError):
     """The configured browser/profile cannot be opened or used."""
 
@@ -96,7 +102,9 @@ class BaseBrowserAdapter:
     login_evidence_selector = ""
     account_identity_selector = ""
     submit_selector = ""
+    publish_success_selector = ""
     published_id_selector = ""
+    publish_success_text = ""
 
     def __init__(self, driver: BrowserDriver | None = None) -> None:
         self._driver = driver
@@ -137,7 +145,11 @@ class BaseBrowserAdapter:
             await driver.fill(self.topics_selector, " ".join(f"#{topic}" for topic in confirm.topics))
         before_submit()
         await driver.click(self.submit_selector)
+        success = (await driver.read_text(self.publish_success_selector)).strip()
         receipt = (await driver.read_text(self.published_id_selector)).strip()
-        if not receipt:
-            raise PublishOutcomeUnknown("提交动作已触发但未观察到平台回执；不得自动重发")
+        if not self.is_success_receipt(success, receipt):
+            raise PublishOutcomeUnknown("提交动作已触发，但成功状态或平台编号未同时核实；不得自动重发")
         return PublishRef(self.platform, receipt, confirm.account_ref, "页面回执已读取")
+
+    def is_success_receipt(self, success_text: str, platform_id: str) -> bool:
+        return False

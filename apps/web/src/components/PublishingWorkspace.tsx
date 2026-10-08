@@ -50,6 +50,7 @@ export function PublishingWorkspace() {
   const [topics, setTopics] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const latestRequest = useRef(0);
+  const latestJobsRequest = useRef(0);
 
   const refreshTasks = useCallback(async () => {
     const requestId = ++latestRequest.current;
@@ -73,6 +74,17 @@ export function PublishingWorkspace() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "暂时无法读取发布账号。"); }
   }, []);
 
+  const refreshJobs = useCallback(async (taskId: string | null) => {
+    const requestId = ++latestJobsRequest.current;
+    if (!taskId) { setJobs([]); return; }
+    try {
+      const response = await listPlatformPublishJobs(taskId);
+      if (requestId === latestJobsRequest.current) setJobs(response.items);
+    } catch (cause) {
+      if (requestId === latestJobsRequest.current) setError(cause instanceof Error ? cause.message : "无法读取发布记录。");
+    }
+  }, []);
+
   useEffect(() => { void refreshTasks(); void refreshPublishing(); }, [refreshTasks, refreshPublishing]);
 
   const filtered = useMemo(() => tasks.filter((task) => {
@@ -85,12 +97,14 @@ export function PublishingWorkspace() {
   const connectedDouyin = accounts.find((account) => account.platform === "douyin");
 
   useEffect(() => {
-    let active = true;
-    if (!selected) { setJobs([]); return () => { active = false; }; }
-    void listPlatformPublishJobs(selected.id).then((response) => { if (active) setJobs(response.items); })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "无法读取发布记录。"); });
-    return () => { active = false; };
-  }, [selected?.id]);
+    void refreshJobs(selected?.id ?? null);
+    return () => { latestJobsRequest.current += 1; };
+  }, [refreshJobs, selected?.id]);
+
+  async function refreshAll() {
+    setError(null);
+    await Promise.all([refreshTasks(), refreshPublishing(), refreshJobs(selected?.id ?? null)]);
+  }
 
   async function connectDouyin() {
     setBusy("connect"); setError(null); setNotice(null);
@@ -142,7 +156,7 @@ export function PublishingWorkspace() {
   return <AppShell creationTasks={tasks} inspector={inspector} inspectorTitle="发布与账号">
     <div className={styles.page}>
       <section className={styles.sectionHeading} style={{ marginTop: 4 }}><div><span>发布工作台</span><h2>账号、成片与发布记录</h2><p>账号保存在成员专用的 Chrome 配置中；发送前会再次核对账号、当前成片版本和完整文案。</p></div></section>
-      {error ? <section className={styles.inspectorNotice} role="alert"><strong>操作未完成</strong><p>{error}</p><button className={styles.secondaryButton} onClick={() => { void refreshPublishing(); void refreshTasks(); }} type="button">重新读取</button></section> : null}
+      {error ? <section className={styles.inspectorNotice} role="alert"><strong>操作未完成</strong><p>{error}</p><button className={styles.secondaryButton} onClick={() => void refreshAll()} type="button">重新读取</button></section> : null}
       {notice ? <p role="status" className={styles.inspectorMuted}>{notice}</p> : null}
 
       <section className={styles.inspectorMuted} aria-label="发布平台">
@@ -177,7 +191,7 @@ export function PublishingWorkspace() {
       </section>
 
       <section className={styles.recordList} aria-label="持久发布作业">
-        <div className={styles.sectionHeading}><h2>发布作业</h2><button className={styles.secondaryButton} disabled={!selected || busy !== null} onClick={() => selected && void listPlatformPublishJobs(selected.id).then((value) => setJobs(value.items)).catch((cause) => setError(cause instanceof Error ? cause.message : "读取发布记录失败"))} type="button"><RefreshCw size={14} />刷新结果</button></div>
+        <div className={styles.sectionHeading}><h2>发布作业</h2><button className={styles.secondaryButton} disabled={!selected || busy !== null} onClick={() => void refreshJobs(selected?.id ?? null)} type="button"><RefreshCw size={14} />刷新结果</button></div>
         {jobs.length ? <ol className={styles.records}>{jobs.map((job) => {
           const resultEvent = job.events.find((event) => event.type === "platform_publish_succeeded");
           const remoteId = resultEvent?.payload.remote_publish_id;
@@ -190,7 +204,7 @@ export function PublishingWorkspace() {
       </section>
 
       {error && !tasks.length ? <p role="alert">创作任务读取失败：{error}</p> : null}
-      <div className={styles.summaryRow}><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{tasks.filter((task) => task.output_ready).length}</strong> 成片就绪</span><button className={styles.secondaryButton} disabled={loading} onClick={() => void refreshTasks()} type="button"><RefreshCw size={14} />刷新</button></div>
+      <div className={styles.summaryRow}><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{tasks.filter((task) => task.output_ready).length}</strong> 成片就绪</span><button className={styles.secondaryButton} disabled={loading} onClick={() => void refreshAll()} type="button"><RefreshCw size={14} />刷新</button></div>
       <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setFilter(item.id)} type="button">{item.label}</button>)}</nav>
       <section className={styles.recordList}><div className={styles.sectionHeading}><h2>创作任务</h2><p>{loading ? "正在读取…" : `${filtered.length} 项`}</p></div>
         {filtered.length ? <ol className={styles.records}>{filtered.map((task) => { const state = taskState(task); const StateIcon = state.icon; return <li key={task.id}><button aria-pressed={selected?.id === task.id} className={selected?.id === task.id ? styles.selectedRecord : undefined} data-open-details onClick={() => setSelectedId(task.id)} type="button"><span className={`${styles.recordState} ${state.tone}`}><StateIcon size={16} /></span><span className={styles.recordBody}><span className={styles.recordTitle}><strong>{task.name}</strong><em>{state.label}</em></span><span>{stageLabels[task.stage]} · {task.output_ready ? `可发布版本 V${task.timeline_sequence}` : "完成检查后可发布"}</span><span className={styles.progressTrack} aria-label={`进度 ${task.progress}%`}><i style={{ width: `${task.progress}%` }} /></span></span><span className={styles.recordTime}>{formatTime(task.updated_at)}<ArrowRight size={15} /></span></button></li>; })}</ol> : <div className={styles.emptyStage}><span className={styles.emptyIcon}><Film size={22} /></span><div><h2>{loading ? "正在读取任务" : "当前没有可显示的记录"}</h2><p>{error || "发布只会使用已确认且仍为当前版本的有效成片。"}</p></div></div>}

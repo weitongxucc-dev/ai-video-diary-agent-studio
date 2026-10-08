@@ -22,6 +22,7 @@ from urllib.parse import quote
 import psutil
 
 from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
+from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -456,7 +457,7 @@ class HostResourceRefusal(RecoveryBlocked):
 class HostResourceProbe:
     """Admit measured material work and explicitly bounded CPU render only."""
 
-    _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta"})
+    _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta", "platform_publish"})
 
     def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...],
                  budget: HostBudget, io_paths: Mapping[str, str | Path] | None = None) -> None:
@@ -619,7 +620,25 @@ class HostResourceProbe:
             required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
             if kind in {"creation_narration", "creation_person_render"}:
                 required_disk += stage.additional_disk_bytes
-        elif kind in self._SUPPORTED_KINDS:
+        elif kind == "platform_publish":
+            timeout = resources.get("timeout_seconds")
+            if type(size) is not int or size <= 0:
+                return decision(None, "platform_publish_size_invalid")
+            if type(timeout) not in {int, float} or not math.isfinite(timeout) or timeout <= 0:
+                return decision(None, "platform_publish_timeout_invalid")
+            checks["size_bytes"] = {
+                "actual": size, "maximum": self.budget.max_unit_input_bytes,
+                "passed": size <= self.budget.max_unit_input_bytes,
+            }
+            checks["timeout_seconds"] = {
+                "actual": timeout, "maximum": PUBLISH_OPERATION_TIMEOUT_SECONDS,
+                "passed": timeout <= PUBLISH_OPERATION_TIMEOUT_SECONDS,
+            }
+            if size > self.budget.max_unit_input_bytes or timeout > PUBLISH_OPERATION_TIMEOUT_SECONDS:
+                return decision(False, "declared_resources_exceed_budget")
+            required_memory = self.budget.min_available_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes
+        elif kind in self._SUPPORTED_KINDS - {"platform_publish"}:
             if type(size) is not int or size < 0:
                 return decision(None, "material_size_invalid")
             checks["size_bytes"] = {"actual": size, "maximum": self.budget.max_unit_input_bytes,
@@ -799,8 +818,10 @@ class HostResourceProbe:
 
     def released(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        # These kinds have no resident model/GPU allocation. Process descendants
-        # are independently checked by DeviceScheduler before calling this.
+        # This probe owns no persistent browser context: Chrome is held by the
+        # application-scoped session manager and closed on API shutdown. The
+        # grant's registered process groups are independently checked by the
+        # DeviceScheduler before this per-unit resource lease is released.
         if resources is None:
             return None
         if resources.get("kind") in self._SUPPORTED_KINDS:

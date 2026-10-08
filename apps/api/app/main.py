@@ -415,6 +415,12 @@ from app.services import EpisodeService
 from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
 from app.knowledge_grants import VerifiedMemberGrantTargetResolver
+from app.platform_auth.service import PlatformAuthService
+from app.platform_publish import (
+    build_platform_publish_router,
+    platform_publish_registration,
+    recover_platform_publish_jobs,
+)
 from app.sources import (
     KnowledgeItem,
     ObsidianVault,
@@ -533,6 +539,10 @@ production_repo = ProductionRepository(
 montage_repo = MontageRepository(settings.database_path)
 quality_check_repo = QualityCheckRepository(settings.database_path)
 local_members_service = LocalMemberService(settings.database_path)
+platform_auth_service = PlatformAuthService(
+    settings.database_path,
+    Path(settings.database_path).expanduser().resolve().parent / "platform-browser-profiles",
+)
 montage_planner = MontagePlanner(
     semantic_provider=visual_semantic_provider,
     visual_feature_loader=production_repo.get_visual_feature,
@@ -975,6 +985,21 @@ app.include_router(knowledge_grant_router(
     workspace_for=current_workspace_id,
     content_reader=_content_reader,
     target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth_context.enabled),
+))
+app.include_router(build_platform_publish_router(
+    production_repo,
+    workspace_for=current_workspace_id,
+    content_reader=_content_reader,
+    actor_for=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+    auth_service=platform_auth_service,
+    # Lambdas defer helper name resolution until after module initialization.
+    task_for_user=lambda workspace_id, task_id, user_id: _platform_publish_task_for_user(
+        workspace_id, task_id, user_id
+    ),
+    publishable_output_for=lambda workspace_id, task_id, user_id: _platform_publish_output_for(
+        workspace_id, task_id, user_id
+    ),
+    runtime_for=lambda: _creation_runtime(),
 ))
 
 
@@ -11760,6 +11785,43 @@ def _creation_task_output_path(
     return path
 
 
+def _platform_publish_task_for_user(workspace_id: str, task_id: str, user_id: str) -> CreationTask:
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    if not content_readable(
+        user_id=user_id, local_diagnostic=False,
+        visibility=task.visibility, owner_user_id=task.owner_user_id,
+    ):
+        raise PermissionError("当前成员无权查看此创作任务")
+    return task
+
+
+def _platform_publish_output_for(workspace_id: str, task_id: str, user_id: str) -> dict[str, object]:
+    """Resolve only the current, authorized and already-validated task output."""
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    if not content_readable(
+        user_id=user_id, local_diagnostic=False,
+        visibility=task.visibility, owner_user_id=task.owner_user_id,
+    ):
+        raise PermissionError("当前成员无权发布此创作任务")
+    if not task.output_ready or not task.current_timeline_version_id:
+        raise ValueError("当前创作任务尚无可发布的有效成片")
+    version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+    if version.task_id != task.id or not _creation_render_is_valid(
+        workspace_id, task_id, verify_media=False, timeline_version=version,
+    ):
+        raise ValueError("当前时间线版本没有已验证的有效成片")
+    ref = version.snapshot.get("montage", {}).get("output_path")
+    if not isinstance(ref, str) or ref not in version.snapshot.get("output_refs", []):
+        raise ValueError("当前时间线未登记成片")
+    path = _creation_task_output_path(workspace_id, task_id, subtitle=False)
+    artifact = next((item for item in production_repo.list_artifact_records(workspace_id, task_id)
+                     if item.logical_ref == ref and item.kind == "rendered_video"), None)
+    if artifact is None or not path.is_file() or path.stat().st_size != artifact.size_bytes:
+        raise ValueError("当前成片文件与已登记产物不一致")
+    return {"task": task, "timeline_version_id": version.id, "logical_ref": ref,
+            "path": str(path), "sha256": artifact.sha256, "size_bytes": artifact.size_bytes}
+
+
 def _quality_check_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
     user_id, _ = _content_reader(request, workspace_id)
     if user_id is None:
@@ -15678,6 +15740,14 @@ def _build_device_components(*, repository: ProductionRepository):
                            "montage_plan": _montage_stage_with_grant, "person_edit": _person_edit_stage_with_grant},
         ),
     }
+    registrations["platform_publish"] = platform_publish_registration(
+        repository, platform_auth_service,
+        publishable_output_for=_platform_publish_output_for,
+        verify_identity=_verify_creation_identity,
+        actor_from_event=lambda identity: CreationExecutionActor.from_event(
+            identity["workspace_id"], identity
+        ),
+    )
     material_service = None
     material_executor = None
     if material_execution_mode == "scheduled":
@@ -15758,7 +15828,7 @@ def _stop_material_ingestion() -> None:
         service.stop()
 
 
-def _start_device_runtime() -> None:
+def _start_device_runtime(*, start: bool = True) -> None:
     """启动这一个整机驱动线程；预算没标定时明确说明，不静默降级。
 
     启动失败不影响其它路由——整机许可是可选能力，交互式制作相关路由会自己
@@ -15777,9 +15847,11 @@ def _start_device_runtime() -> None:
         return
     device_runtime = runtime
     if material_service is not None:
-        material_service.start()
         material_ingestion = material_service
-    runtime.start()
+        if start:
+            material_service.start()
+    if start:
+        runtime.start()
 
 
 def _stop_device_runtime() -> None:
@@ -15794,9 +15866,22 @@ def _stop_device_runtime() -> None:
 def resume_persisted_creation_executions() -> None:
     _start_execution_worker()
     try:
-        _start_device_runtime()
+        # Register the runtime first, recover all persisted owner jobs while its
+        # dispatch loop is still stopped, then allow any queued unit to run.
+        _start_device_runtime(start=False)
         _start_material_ingestion()
         _recover_creation_executions()
+        runtime = device_runtime
+        if runtime is not None and "platform_publish" in runtime.registrations:
+            recover_platform_publish_jobs(
+                production_repo, runtime,
+                actor_from_event=lambda identity: CreationExecutionActor.from_event(
+                    identity["workspace_id"], identity
+                ),
+                verify_identity=_verify_creation_identity,
+            )
+        if runtime is not None:
+            runtime.start()
     except Exception:
         _stop_device_runtime()
         _stop_material_ingestion()
@@ -15809,6 +15894,7 @@ def stop_creation_execution_worker() -> None:
     _stop_device_runtime()
     _stop_material_ingestion()
     _stop_execution_worker()
+    platform_auth_service.sessions.close_all()
 
 
 @app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)

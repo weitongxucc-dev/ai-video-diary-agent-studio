@@ -38,6 +38,7 @@ from app.host_resource_probes import (
     resource_kinds,
     sample_host_capacity,
 )
+from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
@@ -111,6 +112,39 @@ def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):
     assert probe.admit(SimpleNamespace(resources={"kind": "material_probe_meta", "size_bytes": 10})) is True
     assert probe.admit(SimpleNamespace(resources={"kind": "creation_render", "size_bytes": 10})) is None
     assert probe.admit(SimpleNamespace(resources={"kind": "material_hash", "size_bytes": 1025})) is False
+
+
+def test_platform_publish_uses_real_size_finite_browser_deadline_and_shared_host_budget(tmp_path, monkeypatch):
+    probe = HostResourceProbe(
+        tmp_path / "isolated.sqlite", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 100, 0, 200, 1000, 4096, 0.01),
+    )
+    counters = iter((SimpleNamespace(read_bytes=10, write_bytes=20),
+                     SimpleNamespace(read_bytes=10, write_bytes=20)))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_kwargs: next(counters))
+    monkeypatch.setattr(psutil, "cpu_percent", lambda **_kwargs: 1.0)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=10000))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, "disk_usage", lambda _path: SimpleNamespace(free=10000))
+    ticks = iter((10.0, 11.0))
+    monkeypatch.setattr("app.host_resource_probes.time.monotonic", lambda: next(ticks))
+
+    resources = {"kind": "platform_publish", "size_bytes": 512,
+                 "timeout_seconds": PUBLISH_OPERATION_TIMEOUT_SECONDS,
+                 "browser_channel": "chrome"}
+    decision = probe._sample(resources)
+    assert decision.verdict is True
+    assert decision.checks["size_bytes"] == {"actual": 512, "maximum": 4096, "passed": True}
+    assert decision.checks["timeout_seconds"]["passed"] is True
+    assert decision.checks[f"disk_free_bytes:{tmp_path}"]["minimum"] == 200
+
+    too_large = probe._sample({**resources, "size_bytes": 4097})
+    assert too_large.verdict is False and too_large.reason == "declared_resources_exceed_budget"
+    too_slow = probe._sample({**resources, "timeout_seconds": PUBLISH_OPERATION_TIMEOUT_SECONDS + 0.01})
+    assert too_slow.verdict is False and too_slow.reason == "declared_resources_exceed_budget"
+    missing_deadline = probe._sample({key: value for key, value in resources.items()
+                                      if key != "timeout_seconds"})
+    assert missing_deadline.verdict is None and missing_deadline.reason == "platform_publish_timeout_invalid"
 
 
 def _render_resources():

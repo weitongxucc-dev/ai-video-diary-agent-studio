@@ -13,7 +13,7 @@ import threading
 from concurrent.futures import Future, TimeoutError
 from pathlib import Path
 
-from app.platform_browser.base import BrowserUnavailable
+from app.platform_browser.base import BrowserUnavailable, PUBLISH_OPERATION_TIMEOUT_SECONDS
 
 
 def profile_key(workspace_id: str, user_id: str, platform: str) -> str:
@@ -77,7 +77,7 @@ class PlaywrightSessionManager:
         self._ready.set()
         loop.run_forever()
 
-    def _call(self, coroutine, *, timeout: float = 30):
+    def _call(self, coroutine, *, timeout: float = PUBLISH_OPERATION_TIMEOUT_SECONDS):
         loop = self._ensure_loop()
         future: Future = asyncio.run_coroutine_threadsafe(coroutine, loop)
         try:
@@ -124,7 +124,8 @@ class PlaywrightSessionManager:
             raise BrowserUnavailable("尚未为当前成员打开该平台的独立浏览器配置")
         return self._drivers[key]
 
-    def invoke(self, workspace_id: str, user_id: str, platform: str, action):
+    def invoke(self, workspace_id: str, user_id: str, platform: str, action,
+               *, timeout: float = PUBLISH_OPERATION_TIMEOUT_SECONDS):
         """Run an async action with its page driver on Playwright's owning loop."""
         key = profile_key(workspace_id, user_id, platform)
 
@@ -137,7 +138,7 @@ class PlaywrightSessionManager:
                 return await result
             return result
 
-        return self._call(run_action())
+        return self._call(run_action(), timeout=timeout)
 
     async def _close_all(self) -> None:
         for context in tuple(self._contexts.values()):

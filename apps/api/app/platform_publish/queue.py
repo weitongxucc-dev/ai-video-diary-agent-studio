@@ -10,7 +10,10 @@ from datetime import UTC, datetime, timedelta
 
 from app.device_scheduler import Grant, RetryReason, SubmissionIntent, VerifiedWork, WorkRequest
 from app.device_runtime import OwnerRegistration
-from app.platform_browser import DouyinAdapter, LoginRequired, PublishConfirm, PublishOutcomeUnknown
+from app.platform_browser import (
+    PUBLISH_OPERATION_TIMEOUT_SECONDS, DouyinAdapter, LoginRequired,
+    PublishConfirm, PublishOutcomeUnknown,
+)
 from app.platform_browser.playwright_driver import PlaywrightSessionManager
 from app.production import TaskEvent
 
@@ -55,11 +58,17 @@ class PlatformPublishOwnerVerifier:
         key = f"publish:{event['timeline_version_id']}:{job.input_digest}"
         if intent.unit_key != key:
             raise PermissionError("发布版本或单元摘要不匹配")
+        size_bytes = event.get("content_size_bytes")
+        if type(size_bytes) is not int or size_bytes <= 0:
+            raise PermissionError("已确认发布内容缺少真实成片大小")
         return VerifiedWork(
             workspace_id=job.workspace_id, owner_type="platform_publish", owner_id=job.id,
             input_digest=job.input_digest, unit_key=key, member_id=member_id,
-            work_class="normal_make", resources={"kind": "platform_publish",
-                                                  "browser_channel": "chrome"},
+            work_class="normal_make", resources={
+                "kind": "platform_publish", "size_bytes": size_bytes,
+                "timeout_seconds": PUBLISH_OPERATION_TIMEOUT_SECONDS,
+                "browser_channel": "chrome",
+            },
         )
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
@@ -71,7 +80,7 @@ class PlatformPublishOwnerVerifier:
                 or job.input_digest != request.input_digest
                 or event.get("identity", {}).get("member_id") != request.member_id):
             return "stale"
-        if job.status == "interrupted" and conn.execute(
+        if job.status in {"queued", "interrupted"} and conn.execute(
             "SELECT 1 FROM task_events WHERE job_id=? AND event_type='platform_publish_submission_started'",
             (job.id,),
         ).fetchone():
@@ -84,11 +93,19 @@ class PlatformPublishOwnerVerifier:
         if task.current_timeline_version_id != event.get("timeline_version_id") or not task.output_ready:
             return "stale"
         try:
-            self.publishable_output_for(job.workspace_id, job.task_id, event["identity"].get("user_id") or request.member_id)
+            output = self.publishable_output_for(
+                job.workspace_id, job.task_id,
+                event["identity"].get("user_id") or request.member_id,
+            )
         except (PermissionError, KeyError):
             return "unauthorized"
         except (OSError, ValueError):
             return "dependency"
+        if (output.get("timeline_version_id") != event.get("timeline_version_id")
+                or output.get("sha256") != event.get("content_sha256")
+                or output.get("logical_ref") != event.get("logical_ref")
+                or output.get("size_bytes") != event.get("content_size_bytes")):
+            return "stale"
         account = self.auth_service.get_account(job.workspace_id,
                                                event["identity"].get("user_id") or request.member_id,
                                                event["platform"])
@@ -180,13 +197,15 @@ class PlatformPublishExecutor:
             output = self.publishable_output_for(job.workspace_id, job.task_id, account_id)
             if (output.get("timeline_version_id") != p["timeline_version_id"]
                     or output.get("sha256") != p["content_sha256"]
-                    or output.get("logical_ref") != p["logical_ref"]):
+                    or output.get("logical_ref") != p["logical_ref"]
+                    or output.get("size_bytes") != p["content_size_bytes"]):
                 raise ValueError("确认后的有效成片版本或摘要已变化，发布未提交")
             adapter = DouyinAdapter()
             result = self.sessions.invoke(
                 job.workspace_id, account_id, "douyin",
                 lambda driver: attach_and_publish(adapter, driver, confirm,
                                                   str(output["path"]), before_submit),
+                timeout=PUBLISH_OPERATION_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             unknown = started or isinstance(exc, PublishOutcomeUnknown)
@@ -262,15 +281,15 @@ def recover_platform_publish_jobs(repository, runtime, *, actor_from_event,
             continue
         started = any(event.job_id == job.id and
                       event.event_type == "platform_publish_submission_started" for event in events)
-        if job.status == "running":
+        if job.status == "running" or (job.status == "queued" and started):
             now = datetime.now(UTC).isoformat()
             reason = "publish_outcome_unknown" if started else "publish_interrupted_before_submit"
             impact = "平台动作可能已经提交；系统不会自动重发。" if started else "浏览器动作未到平台提交边界，作业已中断。"
             repair = "先在平台账号后台核对结果；确认未提交后再由用户明确重试。" if started else "检查本机 Chrome 与队列后重新核对当前版本。"
             with repository._connect() as conn:
                 conn.execute(
-                    "UPDATE job_runs SET status='interrupted',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status='running'",
-                    (reason, impact, repair, now, now, job.workspace_id, job.id),
+                    "UPDATE job_runs SET status='interrupted',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status=?",
+                    (reason, impact, repair, now, now, job.workspace_id, job.id, job.status),
                 )
                 repository.append_task_event(TaskEvent(
                     id=f"event_{job.id}_restart_recovered", workspace_id=job.workspace_id,

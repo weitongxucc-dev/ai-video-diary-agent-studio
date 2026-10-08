@@ -178,8 +178,11 @@ def build_platform_publish_router(
         content = {"platform": payload.platform, "account_ref": payload.account_ref,
                    "task_id": task_id, "timeline_version_id": payload.timeline_version_id,
                    "logical_ref": logical_ref, "content_sha256": content_sha256,
+                   "content_size_bytes": output.get("size_bytes"),
                    "title": payload.title.strip(), "description": payload.description.strip(),
                    "topics": topics}
+        if type(content["content_size_bytes"]) is not int or content["content_size_bytes"] <= 0:
+            raise HTTPException(409, "当前成片缺少可验证的真实文件大小")
         digest = _json_hash(content)
         existing = repository.get_job_run_by_idempotency_key(workspace_id, payload.idempotency_key)
         if existing is not None:

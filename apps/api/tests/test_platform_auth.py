@@ -16,7 +16,7 @@ class _Driver:
     async def click(self, selector): pass
     async def read_text(self, selector):
         return {"[data-e2e='creator-avatar']": "avatar",
-                "[data-e2e='creator-name']": "creator-001"}.get(selector, "")
+                "[data-e2e='creator-uid']": "creator-001"}.get(selector, "")
 
 
 class _Sessions:
@@ -28,7 +28,8 @@ class _Sessions:
         self.opened.append((workspace, user, platform, url))
         return self.driver
 
-    def invoke(self, workspace, user, platform, action):
+    def invoke(self, workspace, user, platform, action, *, timeout=30):
+        assert timeout == 30
         return asyncio.run(action(self.driver))
 
 
