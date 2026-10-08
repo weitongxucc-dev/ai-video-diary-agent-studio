@@ -47,8 +47,8 @@ for (const token of [
 for (const required of [
   ':root[data-theme="dark"]',
   "prefers-reduced-motion",
-  "--sidebar-width: 220px",
-  "--inspector-width: 320px",
+  "--sidebar-width: 160px",
+  "--inspector-width: 360px",
   "min-width: 1024px",
 ]) {
   if (!css.includes(required)) failures.push(`modern desktop CSS is missing: ${required}`);
@@ -167,7 +167,7 @@ if (!signin.includes('pattern="[A-Za-z0-9._-]{3,32}"')) {
   failures.push("sign-in must reject email-shaped identifiers and enforce account names");
 }
 
-if (!design.includes("Modern Desktop System") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
+if (!design.includes("# 智能视频日记桌面客户端设计规范") || !design.includes("status: user-approved-design-baseline") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
   failures.push("DESIGN.md is not the modern desktop source of truth");
 }
 
