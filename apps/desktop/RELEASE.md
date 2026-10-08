@@ -4,12 +4,14 @@
 
 ### 内部测试包
 
+当前阶段的交付优先级见[产品需求§1.3](../../docs/product-requirements.md#13-交付设备平台与待定选项)：先验证用户本机的安装包真实运行与主要流程，可复用已有模型和运行环境；新电脑依赖准备与独立测试者安装后续验证。这不改变下面两种身份模式或公开Release门禁。
+
 `.github/workflows/internal-macos-test.yml` 只允许手动触发，分别在原生 arm64 和 Intel runner 上构建：
 
 - `auth_mode` 必须显式选择 `local` 或 `supabase`；默认值 `local` 只用于本机开发或受控诊断。
 - 交付给独立测试者的包必须选择 `supabase`，并由 GitHub Actions variables 或 secrets 提供 Supabase URL 与 publishable key。
 - 分发配置只包含可公开的 URL 和 publishable key；service-role、secret key、账号密码和管理凭据不得进入安装包。
-- 使用 uv 管理的 Python 3.11.15 构建 API 与 Worker。
+- 使用 uv 管理的 Python 3.11.15 构建 API；模型与工具资源按桌面打包配置随包提供。
 - 校验二进制架构。
 - 对 `.app` 做 ad-hoc 签名并启动打包后的 API 健康 smoke。
 - 生成 DMG、ZIP 和按架构命名的 `SHA256SUMS-<arch>.txt`。
