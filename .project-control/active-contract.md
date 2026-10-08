@@ -29,9 +29,11 @@
 
 ## 本批线程、所有权与验收
 
+2026-10-08用户再次确认首个试用版必须包含抖音/小红书/视频号自动发布，不批准用人工上传缩减范围；发布前目标账号和内容确认仍依产品§11。主控以真实制作/修改重出/保存、三平台发布、安装运行作为交付主线；当前UI72只完成已批准收口，不延伸视觉任务。B71等待候选期间可并行做一次只读发布与分发缺口核验：仅当前集成树 `/tmp/main-controller-20261008/ui-v3-integration` 的platform_auth/platform_browser、PublishingWorkspace、API/桌面直接接线及internal-macos-test workflow，结合WIL38/45/113/114/115/169；输出最小可实施顺序与具体账号/外发授权需求到既有ui71目录。无产品写权、服务/GUI/网络/凭据/真实账号或发送权，不等待整轮UI才能指出阻断；此核验不替代71具名START。
+
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 70：最新柔光与全部右侧同壳迁移 | 69源码保留；公共浮层及实际直接消费者，详见70；无服务/模型权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 72：70交付的实际遗留缺口收口 | 70源码保留；沿70范围只补审核确认的几何/父层/依赖及必要检查 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 71：新设计同候选验收准备 | 66准备资料保留；最终候选绑定前无服务/GUI权 |
 
@@ -50,6 +52,10 @@ owned：HomeCardDialog.tsx、SideCards.module.css、AppShell.tsx及CSS、Command
 完成同一源码的直接消费者最小测试、类型与diff检查；不写CSS像素镜像、不跑无关全量、重复旧矩阵，不加仅为测试的生产fallback。不得启动服务/GUI/模型/探针/FFmpeg、下载/安装、费用、真实库/Key、共享文档或远端写入。交准确clean候选、净diff、逐页实际消费者和不存在证据；未验GUI明确待71，不以原型/测试代替生产通过。
 
 70.1 同批69审阅实证差额：主控发现 `_creation_render_is_valid` 仅在可选 `render_input_digest` 存在时检查原输入，新测试注册任意fixture job/transform及字节而无sealed输入仍断言undo恢复output_ready，违反已绑定“缺失输入依赖不恢复有效”规则。允许UI70追加 `apps/api/app/main.py` 仅该函数/undo直接调用所需最小差额及 `apps/api/tests/test_montage_pipeline.py` 既有v3撤销用例。撤销恢复必须复用既有render_input_*及实际原输入版本、job/transform/artifact、当前授权，不以文件存在/记录相互相同代替绑定；缺完整事实恢复草稿但成片需生成。沿现有真实渲染输入计算复用必要小函数可行，不新建第二digest事实源/安全层、不触发媒体或模板渲染。只测缺封存输入、有效版本恢复、真实依赖改变拒绝恢复三个已有契约场景；不跑全媒体套件。其他API文件无写权，此条不改变产品权威。
+
+### UI72：70交付未达到完整目标的接续
+
+70源码899b23ab已交clean并保留，主控不认可整体迁移完成：标准config无footer时仍没有64底栏；共同left取包含中栏的desktop-workspace；modal/navigation zIndex和遮罩仍固定；AppShell确认仍关闭quick父卡且同级挂载，全球搜索无真实父关联；70.1人物当前授权依赖复用点尚未落实。旧报告11个最小Web通过，仍有一次扩展运行18失败未分类，不能宣称CI就绪。原UI可见终端从clean899b23ab接续新分支，owned沿70/70.1，不扩大业务/媒体权，不重做保留成果。主控会提供已核可用的原pytest运行时 `/tmp/manta-wil108-20261007/venv/bin/python`；不再按“无pytest”阻断或安装。目标是一次交完整差额和相关检查，不每项单独交付。只对已观察真实缺口编码，现有直接测试中保护退役旧规则的断言按新行为更新，真实失败必须修，不把全部18项猜为既有失败。复用未改正证；无全仓库测试、服务GUI/模型/探针/网络/收费/共享权威写权。证据续/tmp/main-acceptance-20261008/ui70/，加接续说明保留旧report原文。准确净源码交后由主控审核，再B71同候选GUI。
 
 ### B71：最新候选集中相关验收
 
