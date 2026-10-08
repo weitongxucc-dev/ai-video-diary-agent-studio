@@ -41,6 +41,8 @@ UI与A当前64/65均已语义REBASE_ACK v3权威与共同867c6bf，原分支保�
 
 UI64负责可独立交付的可读文字/清楚交互态、七类真实状态形状、首页分组、列表显示入口、任务实际比例与共用真实时间尺。owned：globals.css、modern-overrides.css、AppShell.tsx、HomeWorkspace.tsx及CSS、VideoEditor.tsx及CSS、MaterialLibraryWorkspace.tsx、KnowledgeWorkspace.tsx及它们直接CSS/既有测试；其他文件先报告真实必要差额。保留360/320/240四角浮卡底座、父状态与全部已有操作；VideoEditor内VideoClipQuickEditor及普通比例控件直接提交既有onPreview回调（A65将其解释为应用草稿），不新增确认链。不写CreationTaskWorkspace.tsx、精细编辑组件、lib、API或共享权威。真实已有能力缺失明确说明，不新增虚假分类/波形/状态或列表设置。
 
+64.1实际状态消费者补充：允许UI64追加PublishingWorkspace.tsx仅现有任务行状态图标映射/导入及必要直接CSS，不改发布能力、账号、存储或API，不制造真实发布通过。已有waiting_for_user等实际状态按DESIGN七类形状表达；只补必要显示，不重测整条发布链路。
+
 A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤销/重做→产物依赖有效性”的纵向负责人。owned：CreationTaskWorkspace.tsx、ScriptSectionEditor.tsx、AudioTimelineEditor.tsx、GraphicOverlayEditor.tsx、既有精确编辑/字幕表单直接消费者、lib/api.ts/types.ts中确有必要的直接编辑调用、main.py及production.py中当前编辑/撤销/重做/有效性直接路径、对应既有测试。精确字段在选择/完成输入/结束拖动时直接持久化，不提交未完成值；复用原命令校验、版本和依赖，不新建draft事实源或扫描/兜底/兼容层。自然语言提案一键“应用到草稿”，普通编辑不自动生成；扣费/删除才保留确认，未知费用不扣费，系统授权及阶段动作不套额外产品确认。其他生成/权限/队列/模型/发布不扩权；API确认命名可保留为内部提交，不以改名重建接口。涉及实际媒体预览/生成须与草稿提交分开，模型资源暂停不解除。不得把聊天状态或未持久化React快照称为草稿完成。
 
 65.1直接接口绑定：VideoClipQuickEditor实在UI-owned VideoEditor.tsx，UI64同时改其字段/结构动作提交时机，A65不跨文件写入。真实三轨共尺需A-owned AudioTimelineTracks配合：允许既有组件新增sharedTimeScale可选属性，CreationTaskWorkspace内嵌传true；嵌入时音频跟随父0–真实duration的同一lane和标签宽，不使用独立zoom/滚动尺度，其他音频工作区既有独立缩放保留。UI64负责共同CSS及VideoEditor视频/字幕坐标；A65负责音轨直接消费者，双方仅重绑此差额。不得隐藏整条音轨/旧操作或只靠CSS假称同步。
