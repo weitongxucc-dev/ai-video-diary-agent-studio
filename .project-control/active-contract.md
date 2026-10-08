@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 73：确认职责与旧草稿消费者断言收口 | 72源码保留；只修下方实证缺口及受影响直接测试 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 74：字幕不可用时普通编辑保存与失败画幅显示修复 | 73成果保留；仅下方已实证消费者及直接测试 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 71：新设计同候选验收准备 | 66准备资料保留；最终候选绑定前无服务/GUI权 |
 
@@ -66,6 +66,14 @@ owned：HomeCardDialog.tsx、SideCards.module.css、AppShell.tsx及CSS、Command
 72的CreationTaskWorkspace全文件18失败只证明和899父候选相同，父候选本身不是通过基线，不能用于放行。主控已读失败JSON：大部分仍找旧“预览字幕修改/预览裁剪/预览转场/确认修改”或期待preview API；另有比例DTO、录音和重出检查断言。按v5.3既有语义更新这些现有用例/必要mock，保留无自动生成、持久化刷新、撤销/重做、版本失效、删除取消/确认和真实重出预检的实质覆盖；不得删/skip测试或加生产fallback。如果录音确为必要表单一次应用，更新旧“只提案”断言并保留替换范围/失败/版本检查；若真实动作错误先精确指出，不按所有旧断言自动回退新设计。新增zIndex90/111、几何数值镜像断言退役，采用焦点/关闭顺序/父草稿/作用范围功能证据。
 
 复用72 API2项、类型等未变证据；只跑上述实际受影响卡片/任务文件，文件通过后不再重复全仓库或GUI矩阵。新续报/tmp/main-acceptance-20261008/ui70/continuation73.md记录准确clean源码及仍未验事实，整项交付后检查待收消息。无服务/GUI/模型/媒体/主机探针/收费/网络安装/真实库/共享权威或远端写权。B71继续等准确候选，不启动已知确认职责错误的72页面；不要求用户协助普通GUI。
+
+### UI74：B71真实普通编辑失败的定向修复
+
+B71冻结db5ff93937d74a590618387237d8fc787638b1ab实际GUI把画幅16:9改1:1，POST edits/exact因“valid 字幕轨必须有条目、产物和变换证据”失败；合法初始unavailable字幕、当前V5与16:9未改，卡片仍显示1:1。主控已读square-save-result.png与square-after-await.json，源码定位main.py `_clone_subtitle_track` 无条件status=valid且丢失failure/impact/repair字段，ChangeCanvas及普通编辑会调用它；仓储拒绝有效，无权削弱。此前卡片重开已刷新恢复，不据此扩大74。
+
+原UI可见终端保留clean84a3b76分支，从主控组合db5ff939本地fetch建新分支。owned：apps/api/app/main.py仅上述复制/实际普通编辑直接调用；apps/api/tests/test_montage_pipeline.py直接用例；apps/web/src/components/VideoEditor.tsx的CanvasControls、CreationTaskWorkspace.tsx的已有直接编辑结果反馈及CreationTaskWorkspace.test.tsx。其他文件仅报最小必要差额，不自行扩写。沿当前产品/领域版本和DESIGN§4普通直接草稿语义，复制不可用/失败轨保持真实状态和原因、影响、修复动作，不冒称生成成功；真实新生成轨按已有成功产物契约处理。普通画幅/镜头编辑应能提交新持久版本，GET回读、撤销/重做仍保留不可用轨与真实输出失效；仓储valid校验保持。画幅提交失败时控件与保存状态不能冒充已保存新值，沿既有反馈和任务事实源解决，不另建草稿系统或通用回退。
+
+只做一个API相关端到端专项覆盖合法unavailable/failed字幕的普通ChangeCanvas保存→回读→undo/redo及既有valid轨控制、一个实际Web请求失败反馈专项；类型/diff必要检查。不要重复110项/全仓库、CSS像素或无关失败矩阵。现有pytest运行时/tmp/manta-wil108-20261007/venv/bin/python复用，不安装。证据只/tmp/main-acceptance-20261008/ui74/。无服务/GUI/模型/媒体/FFmpeg/探针/联网安装/真实库/Key/收费/共享文档/远端权；不写B71正在运行的archive或DB，不重启其lease。交准确clean源码、净diff及最小检查，主控审后另绑定受影响GUI补验，不从此获取START。
 
 ### B71：最新候选集中相关验收
 
