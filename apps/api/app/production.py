@@ -5471,105 +5471,117 @@ class ProductionRepository:
             ).fetchall()
         return [self._task_from_row(row) for row in rows]
 
-    def create_timeline_version(self, version: TimelineVersion) -> TimelineVersion:
+    def create_timeline_version(
+        self, version: TimelineVersion, *, connection: sqlite3.Connection | None = None,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> TimelineVersion:
         _validate_timeline_version(version)
-        with self._connect() as conn:
-            task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.create_timeline_version(version, connection=conn,
+                    expected_current_version_id=expected_current_version_id)
+            return self.get_timeline_version(version.workspace_id, version.id)
+        conn = connection
+        task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+        if (expected_current_version_id is not False
+                and task.current_timeline_version_id != expected_current_version_id):
+            raise ValueError("当前时间线已变化，不能发布旧版本成片")
+        existing_row = conn.execute(
+            "SELECT * FROM timeline_versions WHERE id = ?",
+            (version.id,),
+        ).fetchone()
+        if existing_row is None:
             existing_row = conn.execute(
-                "SELECT * FROM timeline_versions WHERE id = ?",
-                (version.id,),
-            ).fetchone()
-            if existing_row is None:
-                existing_row = conn.execute(
-                    """
-                    SELECT * FROM timeline_versions
-                    WHERE workspace_id = ? AND task_id = ? AND sequence = ?
-                    """,
-                    (version.workspace_id, version.task_id, version.sequence),
-                ).fetchone()
-            if existing_row is not None:
-                persisted = self._timeline_version_from_row(existing_row)
-                if persisted != version:
-                    raise ValueError("时间线版本已存在，不能覆盖")
-                if task.current_timeline_version_id != version.id:
-                    task.current_timeline_version_id = version.id
-                    task.updated_at = utc_now()
-                    conn.execute(
-                        """
-                        UPDATE creation_tasks SET payload = ?, updated_at = ?
-                        WHERE workspace_id = ? AND id = ?
-                        """,
-                        (
-                            _json_payload(task),
-                            task.updated_at.isoformat(),
-                            task.workspace_id,
-                            task.id,
-                        ),
-                    )
-                return persisted
-            latest_row = conn.execute(
                 """
-                SELECT id, sequence FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ?
-                ORDER BY sequence DESC LIMIT 1
+                SELECT * FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND sequence = ?
                 """,
-                (version.workspace_id, version.task_id),
+                (version.workspace_id, version.task_id, version.sequence),
             ).fetchone()
-            if latest_row is None:
-                if version.parent_version_id is not None or version.sequence != 1:
-                    raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
-            else:
-                parent = conn.execute(
-                    """
-                    SELECT sequence FROM timeline_versions
-                    WHERE workspace_id = ? AND task_id = ? AND id = ?
-                    """,
-                    (
-                        version.workspace_id,
-                        version.task_id,
-                        version.parent_version_id,
-                    ),
-                ).fetchone()
-                if parent is None:
-                    raise ValueError("父时间线版本不属于当前工作区与任务")
-                if version.sequence != int(latest_row["sequence"]) + 1:
-                    raise ValueError("时间线版本序号必须连续递增")
-            try:
+        if existing_row is not None:
+            persisted = self._timeline_version_from_row(existing_row)
+            if persisted != version:
+                raise ValueError("时间线版本已存在，不能覆盖")
+            if task.current_timeline_version_id != version.id:
+                task.current_timeline_version_id = version.id
+                task.updated_at = utc_now()
                 conn.execute(
                     """
-                    INSERT INTO timeline_versions
-                        (id, workspace_id, task_id, parent_version_id, sequence,
-                         snapshot_json, created_by_operation_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    UPDATE creation_tasks SET payload = ?, updated_at = ?
+                    WHERE workspace_id = ? AND id = ?
                     """,
                     (
-                        version.id,
-                        version.workspace_id,
-                        version.task_id,
-                        version.parent_version_id,
-                        version.sequence,
-                        _json_object(version.snapshot),
-                        version.created_by_operation_id,
-                        version.created_at.isoformat(),
+                        _json_payload(task),
+                        task.updated_at.isoformat(),
+                        task.workspace_id,
+                        task.id,
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("时间线版本已存在，不能覆盖") from exc
-            task.current_timeline_version_id = version.id
-            task.updated_at = utc_now()
-            conn.execute(
+            return persisted
+        latest_row = conn.execute(
+            """
+            SELECT id, sequence FROM timeline_versions
+            WHERE workspace_id = ? AND task_id = ?
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (version.workspace_id, version.task_id),
+        ).fetchone()
+        if latest_row is None:
+            if version.parent_version_id is not None or version.sequence != 1:
+                raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
+        else:
+            parent = conn.execute(
                 """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
+                SELECT sequence FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
                 """,
                 (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
+                    version.workspace_id,
+                    version.task_id,
+                    version.parent_version_id,
+                ),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("父时间线版本不属于当前工作区与任务")
+            if version.sequence != int(latest_row["sequence"]) + 1:
+                raise ValueError("时间线版本序号必须连续递增")
+        try:
+            conn.execute(
+                """
+                INSERT INTO timeline_versions
+                    (id, workspace_id, task_id, parent_version_id, sequence,
+                     snapshot_json, created_by_operation_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version.id,
+                    version.workspace_id,
+                    version.task_id,
+                    version.parent_version_id,
+                    version.sequence,
+                    _json_object(version.snapshot),
+                    version.created_by_operation_id,
+                    version.created_at.isoformat(),
                 ),
             )
-        return self.get_timeline_version(version.workspace_id, version.id)
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("时间线版本已存在，不能覆盖") from exc
+        task.current_timeline_version_id = version.id
+        task.updated_at = utc_now()
+        conn.execute(
+            """
+            UPDATE creation_tasks SET payload = ?, updated_at = ?
+            WHERE workspace_id = ? AND id = ?
+            """,
+            (
+                _json_payload(task),
+                task.updated_at.isoformat(),
+                task.workspace_id,
+                task.id,
+            ),
+        )
+        return version
 
     def get_timeline_version(
         self, workspace_id: str, version_id: str
@@ -8655,74 +8667,83 @@ class ProductionRepository:
         task_id: str,
         plan_id: str,
         payload: dict[str, object],
+        *, connection: sqlite3.Connection | None = None,
+        expected_current_version_id: str | None | Literal[False] = False,
     ) -> tuple[CreationTask, dict[str, object]]:
         status = str(payload.get("status", ""))
         if status not in {"waiting_for_user", "ready", "rendering", "rendered", "failed"}:
             raise ValueError("混剪计划状态无效")
-        with self._connect() as conn:
-            task_row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            if task.stage not in {"montage", "review"}:
-                raise ValueError("当前创作任务不在剪辑或成片检查阶段")
-            if str(payload.get("task_id", "")) != task.id:
-                raise ValueError("混剪计划与当前创作任务不一致")
-            now = utc_now()
-            payload = {**payload, "updated_at": now.isoformat()}
-            conn.execute(
-                """
-                INSERT INTO creation_task_montage_plans
-                    (id, workspace_id, task_id, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, task_id) DO UPDATE SET
-                    id = excluded.id, payload = excluded.payload, updated_at = excluded.updated_at
-                """,
-                (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
-            )
-            task.montage_plan_id = plan_id
-            task.output_ready = status == "rendered"
-            if status != "failed":
-                task.stage_reason = None
-                task.stage_impact = None
-                task.stage_repair_action = None
-                task.stage_retryable = None
-            if status == "rendering":
-                task.stage = "montage"
-                task.stage_status = "running"
-                task.status = "running"
-            elif status == "rendered":
-                task.stage = "review"
-                task.stage_status = "waiting_for_user"
-                task.status = "waiting_for_user"
-                task.progress = max(task.progress, 90)
-                task.recovery_point = "review"
-                task.output_ready = True
-            elif status == "failed":
-                task.stage = "montage"
-                task.stage_status = "failed"
-                task.status = "failed"
-                task.recovery_point = "montage"
-                task.stage_reason = "render_failed"
-                task.stage_impact = "未生成可检查的成片。"
-                task.stage_repair_action = str(payload.get("message") or "检查 FFmpeg 日志后重试。")
-                task.stage_retryable = True
-            else:
-                task.stage = "montage"
-                task.stage_status = "waiting_for_user"
-                task.status = "waiting_for_user"
-                task.progress = 70 if status == "waiting_for_user" else 75
-            task.updated_at = now
-            conn.execute(
-                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
-            )
-        return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(
-            workspace_id, task_id
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.save_creation_task_montage_plan(workspace_id, task_id, plan_id, payload,
+                    connection=conn, expected_current_version_id=expected_current_version_id)
+            return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(workspace_id, task_id)
+        conn = connection
+        task_row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if task_row is None:
+            raise KeyError(task_id)
+        task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+        if (expected_current_version_id is not False
+                and task.current_timeline_version_id != expected_current_version_id):
+            raise ValueError("当前时间线已变化，不能覆盖新确认的剪辑计划")
+        if task.stage not in {"montage", "review"}:
+            raise ValueError("当前创作任务不在剪辑或成片检查阶段")
+        if str(payload.get("task_id", "")) != task.id:
+            raise ValueError("混剪计划与当前创作任务不一致")
+        now = utc_now()
+        payload = {**payload, "updated_at": now.isoformat()}
+        conn.execute(
+            """
+            INSERT INTO creation_task_montage_plans
+                (id, workspace_id, task_id, payload, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, task_id) DO UPDATE SET
+                id = excluded.id, payload = excluded.payload, updated_at = excluded.updated_at
+            """,
+            (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
         )
+        task.montage_plan_id = plan_id
+        task.output_ready = status == "rendered"
+        if status != "failed":
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+        if status == "rendering":
+            task.stage = "montage"
+            task.stage_status = "running"
+            task.status = "running"
+        elif status == "rendered":
+            task.stage = "review"
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = max(task.progress, 90)
+            task.recovery_point = "review"
+            task.output_ready = True
+        elif status == "failed":
+            task.stage = "montage"
+            task.stage_status = "failed"
+            task.status = "failed"
+            task.recovery_point = "montage"
+            task.stage_reason = "render_failed"
+            task.stage_impact = "未生成可检查的成片。"
+            task.stage_repair_action = str(payload.get("message") or "检查 FFmpeg 日志后重试。")
+            task.stage_retryable = True
+        else:
+            task.stage = "montage"
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = 70 if status == "waiting_for_user" else 75
+        task.updated_at = now
+        conn.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+        )
+        return task, payload
 
     def get_creation_task_montage_plan(
         self, workspace_id: str, task_id: str

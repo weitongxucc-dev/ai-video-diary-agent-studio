@@ -11154,6 +11154,7 @@ def _render_creation_task_montage_for_workspace(
     ):
         plan_input.pop(transient_key, None)
     plan_input["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    plan_input["timeline_version_id"] = task.current_timeline_version_id
     plan_input["subtitles_visible"] = subtitles_visible
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure") for clip in plan.clips):
         try:
@@ -11196,8 +11197,11 @@ def _render_creation_task_montage_for_workspace(
         original_tracks = snapshot.get("render_input_subtitle_tracks")
         original_visible = snapshot.get("render_input_subtitles_visible")
         original_digest = snapshot.get("render_input_digest")
-        if not isinstance(original_tracks, list) or not isinstance(original_visible, bool):
+        if (not isinstance(original_tracks, list) or not isinstance(original_visible, bool)
+                or "render_input_timeline_version_id" not in snapshot
+                or active_version.parent_version_id != snapshot["render_input_timeline_version_id"]):
             raise ValueError("成片恢复缺少原始字幕输入")
+        plan_input["timeline_version_id"] = snapshot["render_input_timeline_version_id"]
         plan_input["subtitle_tracks"] = original_tracks
         plan_input["subtitles_visible"] = original_visible
         input_digest = hashlib.sha256(
@@ -11247,7 +11251,8 @@ def _render_creation_task_montage_for_workspace(
         and (latest_matching_job is None or latest_matching_job.status != "interrupted")
     ):
         raise HTTPException(status_code=409, detail="montage render is not resumable")
-    if latest_matching_job is not None and latest_matching_job.status == "succeeded":
+    if (render_context is None and latest_matching_job is not None
+            and latest_matching_job.status == "succeeded"):
         reusable_records = [
             record
             for record in production_repo.list_artifact_records(workspace_id, task.id)
@@ -11383,7 +11388,9 @@ def _render_creation_task_montage_for_workspace(
                 rendering_payload = creation_task_montage_plan_to_payload(plan)
                 rendering_payload["status"] = "rendering"
                 production_repo.save_creation_task_montage_plan(
-                    workspace_id, task.id, plan.id, rendering_payload
+                    workspace_id, task.id, plan.id, rendering_payload,
+                    **({"expected_current_version_id": plan_input["timeline_version_id"]}
+                       if render_context is not None else {}),
                 )
                 plan.status = "ready"
                 staging_root = Path(settings.video_output_path).expanduser() / ".job-staging"
@@ -11406,6 +11413,8 @@ def _render_creation_task_montage_for_workspace(
                     staged_subtitles = Path(staging) / "subtitles.srt"
 
                     def publish_or_reuse(logical_ref: str, staged_path: Path):
+                        if render_context is not None:
+                            render_context.check()
                         try:
                             return artifact_store.describe(logical_ref)
                         except FileNotFoundError:
@@ -11493,9 +11502,8 @@ def _render_creation_task_montage_for_workspace(
             rendered.subtitle_path = subtitle_ref
             rendered.message = "带字幕的成片已生成，等待检查。"
             rendered_payload = creation_task_montage_plan_to_payload(rendered)
-            production_repo.save_creation_task_montage_plan(
-                workspace_id, task.id, rendered.id, rendered_payload
-            )
+            if render_context is not None:
+                render_context.check()
             version_id = f"timeline_{context.job_id}"
             try:
                 version = production_repo.get_timeline_version(
@@ -11505,6 +11513,9 @@ def _render_creation_task_montage_for_workspace(
                 versions = production_repo.list_timeline_versions(workspace_id, task.id)
                 current_task = production_repo.get_creation_task(workspace_id, task.id)
                 parent_version_id = current_task.current_timeline_version_id
+                if (render_context is not None
+                        and parent_version_id != plan_input["timeline_version_id"]):
+                    raise ValueError("渲染期间当前时间线已变化，请重新安排成片")
                 if parent_version_id is None and versions:
                     parent_version_id = versions[-1].id
                 version = TimelineVersion(
@@ -11522,12 +11533,26 @@ def _render_creation_task_montage_for_workspace(
                         **({
                             "creation_render_request_id": render_context.grant.request_id,
                             "render_input_digest": input_digest,
+                            "render_input_timeline_version_id": plan_input["timeline_version_id"],
                             "render_input_subtitle_tracks": plan_input["subtitle_tracks"],
                             "render_input_subtitles_visible": subtitles_visible,
                         } if render_context is not None else {}),
                         **({"cover_asset_id": f"cover_{version_id}"} if active_cover else {}),
                     },
                     created_by_operation_id=None,
+                )
+            with production_repo._connect() as publish_conn:
+                publish_conn.execute("BEGIN IMMEDIATE")
+                production_repo.save_creation_task_montage_plan(
+                    workspace_id, task.id, rendered.id, rendered_payload,
+                    connection=publish_conn,
+                    **({"expected_current_version_id": plan_input["timeline_version_id"]}
+                       if render_context is not None else {}),
+                )
+                production_repo.create_timeline_version(
+                    version, connection=publish_conn,
+                    **({"expected_current_version_id": plan_input["timeline_version_id"]}
+                       if render_context is not None else {}),
                 )
             event_id = f"event_{context.job_id}_render_succeeded"
             try:
@@ -11547,7 +11572,6 @@ def _render_creation_task_montage_for_workspace(
                         },
                     )
                 )
-            production_repo.create_timeline_version(version)
             # The selected cover is an immutable image with its own source reference;
             # rendering a video must not silently discard or retarget that selection.
             if active_cover is not None and not production_repo.list_cover_assets(
@@ -11629,12 +11653,15 @@ def _render_creation_task_montage_for_workspace(
         plan.output_path = None
         plan.subtitle_path = None
         plan.message = f"成片渲染失败：{result.failure_reason or '未知错误'}"
-        production_repo.save_creation_task_montage_plan(
-            workspace_id,
-            task.id,
-            plan.id,
-            creation_task_montage_plan_to_payload(plan),
-        )
+        with production_repo._connect() as failure_conn:
+            failure_conn.execute("BEGIN IMMEDIATE")
+            current_task = production_repo._require_creation_task(failure_conn, workspace_id, task.id)
+            # A failed old render must not replace a crop confirmed while it ran.
+            if render_context is None or current_task.current_timeline_version_id == plan_input["timeline_version_id"]:
+                production_repo.save_creation_task_montage_plan(
+                    workspace_id, task.id, plan.id, creation_task_montage_plan_to_payload(plan),
+                    connection=failure_conn,
+                )
         raise _topic_failure_response(
             status_code=500,
             error="montage_render_failed",

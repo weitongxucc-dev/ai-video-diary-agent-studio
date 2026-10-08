@@ -103,6 +103,327 @@ def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
     )
 
 
+def _render_version_fixture(tmp_path):
+    """Persisted render inputs only; marker bytes never claim playable media."""
+    from app.member_permits import MemberDeviceAccess
+
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    members = LocalMemberService(repo.database_path)
+    member = members.add_member("render version fixture")
+    actor = CreationExecutionActor("local", member.member_id)
+    audio, video = tmp_path / "library/audio.wav", tmp_path / "library/source.mp4"
+    audio.write_bytes(b"synthetic-audio-input")
+    video.write_bytes(b"synthetic-video-input")
+    repo._save_asset(MaterialAsset(
+        id="asset_1", workspace_id="local", file_name=video.name, path=str(video),
+        size_bytes=video.stat().st_size, modified_at=datetime.now(timezone.utc),
+        duration_seconds=1, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
+                                  end_seconds=1, description="synthetic fixture", review_status="approved")],
+    ))
+    repo.save_narration_artifact(NarrationArtifactRecord(
+        id="narration_cache_1", workspace_id="local", task_id=task_id,
+        script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
+        audio_path=str(audio), duration_seconds=1, sample_rate=24000, model_id="fixture",
+    ))
+    task = repo.get_creation_task("local", task_id)
+    task.narration_cache_key = "cache_1"
+    task.stage = "montage"
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(task), default=str), "local", task_id))
+    montage = CreationTaskMontagePlan(
+        id="montage_1", workspace_id="local", task_id=task_id, script_id=script_id,
+        script_title="confirmed fixture", status="ready",
+        cues=[NarrationCue("cue_1", "section_1", "fixture", 1)],
+        clips=[MontageClip("clip_1", "cue_1", "asset_1", "segment_1", "workspace://source.mp4",
+                           0, 1, 0, 1, 1, ["confirmed fixture"], False)],
+        duration_seconds=1, low_confidence_clip_count=0, narration_audio_path="narration://artifact/cache_1",
+    )
+    repo.save_creation_task_montage_plan("local", task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    version = repo.create_timeline_version(TimelineVersion(
+        "timeline_base", "local", task_id, None, 1,
+        {"montage": repo.get_creation_task_montage_plan("local", task_id)}, None))
+    execution = _execution(repo, render_ready=lambda workspace, task: repo.get_creation_task(workspace, task).output_ready)
+    owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 60),
+                                    verify_identity=MemberDeviceAccess(members).verify_identity)
+    scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock", owners=owner,
+        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+                                  released=lambda _grant: True), processes=HostProcessProbe())
+    return repo, task_id, script_id, digest, actor, execution, owner, scheduler, version, members
+
+
+@pytest.mark.parametrize("mutation", ["version", "source", "revoked"])
+def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_path, mutation):
+    from app.production import EditIntent, EditProposal, EditOperation
+
+    repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, members = _render_version_fixture(tmp_path)
+    try:
+        job = execution.start("local", task_id, script_id, digest, actor=actor)
+        # Persisted completed-job fixture; no fabricated render/audio acceptance.
+        repo.claim_job_run("local", job.id)
+        repo.finish_job_run("local", job.id, status="succeeded")
+        original = repo.get_creation_task_montage_plan("local", task_id)
+        original.update(status="rendered", output_path="artifacts/fixture-old.mp4")
+        repo.save_creation_task_montage_plan("local", task_id, "montage_1", original)
+        assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
+        edited = json.loads(json.dumps(original))
+        edited.update(status="ready", output_path=None, subtitle_path=None)
+        edited["clips"][0]["crop_x"] = 0
+        intent = repo.create_edit_intent(EditIntent("intent_crop", "local", task_id, "crop", "review",
+            ["clip_1"], None, "ChangeCrop", {}, {}, 1, "parsed"))
+        proposal = repo.create_edit_proposal(EditProposal("proposal_crop", "local", task_id, intent.id,
+            "crop", ["clip_1"], {"operation_type": "ChangeCrop"}, [], {}, []))
+        version = TimelineVersion("timeline_crop", "local", task_id, base.id, 2, {"montage": edited}, "operation_crop")
+        now = datetime.now(timezone.utc)
+        repo.confirm_edit_proposal("local", task_id, proposal.id,
+            operation=EditOperation("operation_crop", "local", task_id, proposal.id, "ChangeCrop",
+                                    {"clip_id": "clip_1", "fit_mode": "fill", "crop_x": 0, "crop_y": 0.5},
+                                    base.id, version.id, "applied", created_at=now, applied_at=now),
+            result_version=version, montage_plan_id="montage_1", montage_payload=edited)
+        resumed = execution.retry("local", task_id, member_id=actor.member_id)
+        assert resumed.id != job.id and resumed.input_digest == job.input_digest
+        assert execution.retry("local", task_id, member_id=actor.member_id).id == resumed.id
+        request_id = submit_creation_stage(execution, scheduler, resumed, actor)
+        assert submit_creation_stage(execution, scheduler, resumed, actor) == request_id
+        grant = scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == request_id and grant.unit_key.startswith("render:")
+        scheduler.assert_grant(grant)
+        task = repo.get_creation_task("local", task_id)
+        assert task.narration_cache_key == "cache_1" and task.montage_plan_id == "montage_1"
+        assert not task.output_ready and task.current_timeline_version_id == version.id
+        assert repo.get_edit_proposal("local", proposal.id).status == "confirmed"
+        if mutation == "version":
+            repo.create_timeline_version(replace(version, id="timeline_concurrent", parent_version_id=version.id, sequence=3))
+        elif mutation == "source":
+            (tmp_path / "library/source.mp4").write_bytes(b"changed-source")
+        else:
+            members.remove_member(actor.member_id)
+        with pytest.raises(PermissionError, match="失效"):
+            scheduler.assert_grant(grant)
+        scheduler.defer_unit(grant, reason="authorization_lost" if mutation == "revoked" else "input_stale")
+        scheduler.assert_released(grant)
+        with repo._connect() as conn:
+            requests = conn.execute("SELECT unit_key FROM device_work_requests WHERE owner_id=?", (resumed.id,)).fetchall()
+            assert len(requests) == 1 and requests[0]["unit_key"].startswith("render:")
+            assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+    finally:
+        scheduler.close()
+
+
+def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_crop(tmp_path):
+    repo, task_id, _, _, _, _, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        original = repo.get_creation_task_montage_plan("local", task_id)
+        old_output = {**original, "status": "rendered", "output_path": "artifacts/old-render.mp4"}
+        # A version conflict after the plan write must roll back both changes.
+        conflict = replace(base, id="timeline_output", sequence=3, parent_version_id=base.id)
+        with pytest.raises(ValueError, match="连续递增"):
+            with repo._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
+                    connection=conn, expected_current_version_id=base.id)
+                repo.create_timeline_version(conflict, connection=conn, expected_current_version_id=base.id)
+        assert repo.get_creation_task_montage_plan("local", task_id) == original
+        concurrent = replace(base, id="timeline_concurrent", sequence=2, parent_version_id=base.id)
+        repo.create_timeline_version(concurrent)
+        for status in ("rendered", "failed"):
+            with pytest.raises(ValueError, match="不能覆盖"):
+                repo.save_creation_task_montage_plan("local", task_id, "montage_1", {**old_output, "status": status},
+                    expected_current_version_id=base.id)
+        with pytest.raises(ValueError, match="不能发布"):
+            repo.create_timeline_version(replace(conflict, parent_version_id=base.id), expected_current_version_id=base.id)
+        assert repo.get_creation_task("local", task_id).current_timeline_version_id == concurrent.id
+        assert repo.get_creation_task_montage_plan("local", task_id) == original
+        # Successful compare-and-publish reuses the same transaction and current parent.
+        output = replace(conflict, parent_version_id=concurrent.id)
+        with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
+                connection=conn, expected_current_version_id=concurrent.id)
+            repo.create_timeline_version(output, connection=conn, expected_current_version_id=concurrent.id)
+        assert repo.get_creation_task("local", task_id).current_timeline_version_id == output.id
+        assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == old_output["output_path"]
+    finally:
+        scheduler.close()
+
+
+def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle_mutation(tmp_path):
+    from app.production import ArtifactRecord, JobRun, TransformRun, SubtitleTrack, SubtitleCue
+
+    repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        track = SubtitleTrack("input_track", "local", task_id, base.id, "zh-CN", None,
+            {"enabled": True}, [SubtitleCue("cue", None, "original fixture", 0, 1)], "timeline", None,
+            "artifacts/fixture/input.srt", "transform_fixture_subtitle", "valid")
+        repo.create_subtitle_track(track)
+        job = execution.start("local", task_id, script_id, digest, actor=actor)
+        request_id = submit_creation_stage(execution, scheduler, job, actor)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        scheduler.assert_grant(grant)
+        # Actual persistent producer/transform lineage with explicitly synthetic
+        # artifact records. This tests input fencing, not playable-media validity.
+        inner = repo.create_job_run(JobRun("job_fixture_render", "local", task_id,
+            "creation_task_montage_render", "fixture-inner", "fixture-inner-digest"))
+        repo.claim_job_run("local", inner.id)
+        refs = ["artifacts/fixture/video.mp4", "artifacts/fixture/subtitles.srt"]
+        for index, ref in enumerate(refs):
+            repo.create_artifact_record(ArtifactRecord(f"fixture_artifact_{index}", "local", task_id,
+                "rendered_video" if index == 0 else "subtitle_track", ref, "0" * 64, 1, inner.id, []))
+        repo.finish_job_run("local", inner.id, status="succeeded", output_refs=refs)
+        transform = repo.create_transform_run(TransformRun(f"transform_{inner.id}", "local", task_id,
+            inner.id, "montage_render", inner.input_digest, [], refs, "fixture", {}, "succeeded",
+            datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
+        rendered = repo.get_creation_task_montage_plan("local", task_id)
+        rendered.update(status="rendered", output_path=refs[0], subtitle_path=refs[1])
+        published = TimelineVersion(f"timeline_{inner.id}", "local", task_id, base.id, 2,
+            {"montage": rendered, "output_refs": refs, "transform_run_id": transform.id,
+             "creation_render_request_id": request_id, "render_input_digest": inner.input_digest,
+             "render_input_timeline_version_id": base.id}, None)
+        with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            repo.save_creation_task_montage_plan("local", task_id, "montage_1", rendered,
+                connection=conn, expected_current_version_id=base.id)
+            repo.create_timeline_version(published, connection=conn, expected_current_version_id=base.id)
+        scheduler.assert_grant(grant)
+        # New output tracks are not retroactively inputs to their own render.
+        repo.create_subtitle_track(replace(track, id="output_track", timeline_version_id=published.id))
+        scheduler.assert_grant(grant)
+        copied = replace(published, id="timeline_independent", parent_version_id=published.id, sequence=3)
+        repo.create_timeline_version(copied)
+        with pytest.raises(PermissionError, match="失效"):
+            scheduler.assert_grant(grant)
+        with repo._connect() as conn:
+            task = repo._require_creation_task(conn, "local", task_id)
+            task.current_timeline_version_id = published.id
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                         (json.dumps(asdict(task), default=str), "local", task_id))
+        scheduler.assert_grant(grant)
+        # Even a same-version subtitle change cannot retain the old input permit.
+        with repo._connect() as conn:
+            row = conn.execute("SELECT payload_json FROM subtitle_tracks WHERE id=?", (track.id,)).fetchone()
+            subtitle = json.loads(row[0])
+            subtitle["cues"][0]["text"] = "changed fixture"
+            conn.execute("UPDATE subtitle_tracks SET payload_json=? WHERE id=?", (json.dumps(subtitle), track.id))
+        with pytest.raises(PermissionError, match="失效"):
+            scheduler.assert_grant(grant)
+        scheduler.defer_unit(grant, reason="input_stale")
+        scheduler.assert_released(grant)
+    finally:
+        scheduler.close()
+
+
+def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from app.creation_execution import CpuRenderGrantContext
+    from app.production import EditIntent, EditProposal, EditOperation
+
+    repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        outer = execution.start("local", task_id, script_id, digest, actor=actor)
+        submit_creation_stage(execution, scheduler, outer, actor)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        original = repo.get_creation_task_montage_plan("local", task_id)
+        cropped = json.loads(json.dumps(original))
+        cropped["clips"][0]["crop_x"] = 0
+        proposal = repo.create_edit_proposal(EditProposal("concurrent_proposal", "local", task_id,
+            repo.create_edit_intent(EditIntent("concurrent_intent", "local", task_id, "crop", "montage",
+                ["clip_1"], None, "ChangeCrop", {}, {}, 1, "parsed")).id,
+            "crop", ["clip_1"], {"operation_type": "ChangeCrop"}, [], {}, []))
+        version = replace(base, id="timeline_concurrent_crop", parent_version_id=base.id,
+                          sequence=2, snapshot={"montage": cropped}, created_by_operation_id="concurrent_operation")
+
+        def fail_after_crop(inner, _render):
+            repo.create_job_run(inner)
+            repo.claim_job_run("local", inner.id)
+            now = datetime.now(timezone.utc)
+            repo.confirm_edit_proposal("local", task_id, proposal.id,
+                operation=EditOperation("concurrent_operation", "local", task_id, proposal.id, "ChangeCrop",
+                    {"clip_id": "clip_1", "crop_x": 0}, base.id, version.id, "applied", created_at=now, applied_at=now),
+                result_version=version, montage_plan_id="montage_1", montage_payload=cropped)
+            return repo.finish_job_run("local", inner.id, status="failed",
+                failure_reason="synthetic executor failed after concurrent crop", impact="no video", repair_action="fixture")
+
+        monkeypatch.setattr(main_module, "production_repo", repo)
+        monkeypatch.setattr(main_module, "video_job_runner", SimpleNamespace(run=fail_after_crop))
+        context = CpuRenderGrantContext(scheduler, grant, time.monotonic() + 60, 8_000_000, 1)
+        with pytest.raises(HTTPException) as error:
+            main_module._render_creation_task_montage_for_workspace("local", task_id, render_context=context)
+        assert error.value.status_code == 500
+        assert repo.get_creation_task("local", task_id).current_timeline_version_id == version.id
+        current = repo.get_creation_task_montage_plan("local", task_id)
+        assert current["status"] == "ready" and current["clips"][0]["crop_x"] == 0
+        assert current["output_path"] is None
+        assert not any(e.event_type == "render_succeeded" for e in repo.list_task_events("local", task_id))
+        scheduler.defer_unit(grant, reason="input_stale")
+        scheduler.assert_released(grant)
+    finally:
+        scheduler.close()
+
+
+def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_path, monkeypatch):
+    """Real main/repository/permit completion; explicit media/quality substitutes."""
+    repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        monkeypatch.setattr(main_module, "production_repo", repo)
+        monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
+        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+        monkeypatch.setattr(main_module, "settings", SimpleNamespace(
+            video_output_path=str(tmp_path / "output"), video_inbox_path=str(tmp_path / "library"),
+            effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
+        renders, media_checks, quality_requests = [], [], []
+
+        def synthetic_media(_workspace, plan, _audio, *, job_staging_path, render_context, subtitle_tracks):
+            render_context.check()
+            renders.append(render_context.grant.request_id)
+            # Neither these marker bytes nor the substituted validator are
+            # presented as FFmpeg, playable video, Qwen or quality acceptance.
+            (job_staging_path / "preview.mp4").write_bytes(b"synthetic-render-output")
+            (job_staging_path / "subtitles.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nfixture\n")
+            return replace(plan, status="rendered")
+
+        def synthetic_validate(path, *, scheduler, grant, **kwargs):
+            scheduler.assert_grant(grant)
+            assert path.read_bytes() == b"synthetic-render-output"
+            media_checks.append(grant.request_id)
+
+        monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", synthetic_media)
+        monkeypatch.setattr(main_module, "_validate_rendered_media", synthetic_validate)
+        monkeypatch.setattr(main_module, "_start_creation_task_quality_check", lambda w, t: quality_requests.append((w, t)))
+        job = execution.start("local", task_id, script_id, digest, actor=actor)
+        request_id = submit_creation_stage(execution, scheduler, job, actor)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        executor = CreationJobUnitExecutor(repo,
+            render_action=lambda w, t, context: main_module._render_creation_task_montage_for_workspace(w, t, render_context=context),
+            render_is_valid=lambda w, t, context: main_module._creation_render_is_valid(w, t, render_context=context))
+        executor.execute(grant, scheduler)
+        scheduler.assert_released(grant)
+        finished = repo.get_job_run("local", job.id)
+        assert finished.status == "succeeded", finished.failure_reason
+        published_task = repo.get_creation_task("local", task_id)
+        version = repo.get_timeline_version("local", published_task.current_timeline_version_id)
+        assert version.parent_version_id == base.id
+        assert version.snapshot["render_input_timeline_version_id"] == base.id
+        assert version.snapshot["creation_render_request_id"] == request_id
+        tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=version.id)
+        assert len(tracks) == 1 and tracks[0].status == "valid"
+        inner = [j for j in repo.list_job_runs("local", task_id) if j.kind == "creation_task_montage_render"]
+        assert len(inner) == 1 and inner[0].status == "succeeded"
+        assert renders == [request_id] and media_checks == [request_id]
+        assert quality_requests == [("local", task_id)]
+        execution.render_is_valid = lambda w, t: main_module._creation_render_is_valid(w, t, verify_media=False)
+        assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
+        assert submit_creation_stage(execution, scheduler, repo.get_job_run("local", job.id), actor) is None
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "done"
+            assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+    finally:
+        scheduler.close()
+
+
 @pytest.mark.parametrize("stop", [None, "revoked", "cancelled", "output", "rss", "timeout", "commit_unknown", "input", "render_revoked", "render_commit_unknown"])
 def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account(tmp_path, monkeypatch, stop):
     """Real scheduler/SQL/media, synthetic TTS worker; no model or cloud claim."""

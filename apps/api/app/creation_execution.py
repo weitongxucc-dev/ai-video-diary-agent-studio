@@ -121,7 +121,8 @@ class CpuRenderLimits:
 
 
 def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
-                     creation_plan: CreationPlan, limits: CpuRenderLimits) -> tuple[str, dict[str, object]]:
+                     creation_plan: CreationPlan, limits: CpuRenderLimits,
+                     *, request: WorkRequest | None = None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
         raise ValueError("当前任务缺少已确认故事板或配音")
@@ -156,15 +157,37 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             or creation_plan.selected_voice is None
             or narration.voice_profile_id != creation_plan.selected_voice.profile_id):
         raise ValueError("当前配音产物不可用")
+    version = None
     if task.current_timeline_version_id:
         version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
-        transform_id = version.snapshot.get("transform_run_id")
-        initial_storyboard = (version.parent_version_id is None and version.sequence == 1
-                              and transform_id is None and not version.snapshot.get("output_refs"))
-        if (version.task_id != task.id or version.created_by_operation_id is not None
-                or (not initial_storyboard and
-                    (not isinstance(transform_id, str) or not transform_id.startswith("transform_job_")))):
-            raise ValueError("当前时间线已有独立编辑，CPU 成片组合尚未接入该版本")
+        if version.task_id != task.id:
+            raise ValueError("当前时间线不属于制作任务")
+        # Only this request's actual inner publication can advance its own
+        # version without changing the inputs bound by the existing Grant.
+        if (request is not None and version.created_by_operation_id is None
+                and version.snapshot.get("creation_render_request_id") == request.id):
+            transform_id = version.snapshot.get("transform_run_id")
+            if (not isinstance(transform_id, str) or not transform_id.startswith("transform_job_")
+                    or version.id != f"timeline_{transform_id.removeprefix('transform_')}"
+                    or "render_input_timeline_version_id" not in version.snapshot
+                    or version.parent_version_id != version.snapshot["render_input_timeline_version_id"]):
+                raise ValueError("当前成片版本缺少本次许可的原始输入")
+            inner = repository.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"))
+            transform = repository.get_transform_run(task.workspace_id, transform_id)
+            if (inner.task_id != task.id or inner.kind != "creation_task_montage_render"
+                    or inner.status != "succeeded" or transform.status != "succeeded"
+                    or transform.job_id != inner.id or transform.task_id != task.id
+                    or inner.input_digest != version.snapshot.get("render_input_digest")
+                    or transform.input_digest != inner.input_digest
+                    or inner.output_refs != version.snapshot.get("output_refs")
+                    or transform.output_refs != inner.output_refs
+                    or payload.get("status") != "rendered"
+                    or inner.output_refs != [payload.get("output_path"), payload.get("subtitle_path")]
+                    or not all(isinstance(ref, str) and ref for ref in inner.output_refs)):
+                raise ValueError("当前成片版本与真实渲染记录不一致")
+            version = (repository.get_timeline_version(task.workspace_id, version.parent_version_id)
+                       if version.parent_version_id is not None else None)
+    if version is not None:
         previous_montage = version.snapshot.get("montage")
         if not isinstance(previous_montage, dict):
             raise ValueError("当前时间线缺少可信故事板快照")
@@ -191,6 +214,14 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                              "inode": stat.st_ino,
                              "device": stat.st_dev})
     manifest = {
+        "timeline_version_id": version.id if version is not None else None,
+        "subtitle_track_ids": version.snapshot.get("subtitle_track_ids") if version is not None else None,
+        "subtitle_tracks": [
+            {"id": track.id, "language": track.language, "status": track.status,
+             "style": track.style, "cues": [asdict(cue) for cue in track.cues]}
+            for track in repository.list_subtitle_tracks(
+                task.workspace_id, task.id, timeline_version_id=version.id)
+        ] if version is not None else [],
         "plan": {key: value for key, value in payload.items()
                  if key not in {"status", "message", "output_path", "subtitle_path", "updated_at"}},
         "sources": source_facts,
@@ -389,7 +420,8 @@ class CreationJobOwnerVerifier:
             if stage == "render":
                 if self.cpu_render_limits is None:
                     return "dependency"
-                key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits)
+                key, resources = cpu_render_facts(self.repository, conn, task, plan, self.cpu_render_limits,
+                                                  request=request)
             else:
                 key, resources = creation_stage_facts(
                     self.repository, task, script, plan, stage, self.narration_budget, self.montage_budget)
@@ -908,7 +940,9 @@ class CreationExecution:
         event = self.repository.get_task_event(workspace_id, f"event_{latest.id}_start")
         if member_id is not None and event.payload.get("member_id") != member_id:
             raise PermissionError("当前成员不能继续其他成员创建的制作任务")
-        if latest.status in {"queued", "running", "succeeded"}:
+        if latest.status in {"queued", "running"}:
+            return latest
+        if latest.status == "succeeded" and self.render_is_valid(workspace_id, task_id):
             return latest
         if latest.status == "interrupted":
             return latest
