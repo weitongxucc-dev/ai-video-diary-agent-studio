@@ -163,6 +163,17 @@ describe("persisted final video quality checks", () => {
       duration_seconds: .85, detail: "真实黑场", clip_ids: ["clip-2"] }],
     unavailable: [{ kind: "clipping", reason: "音频无法测量", status: "unavailable" }] };
 
+  it("shows identity read failure without claiming unchecked or triggering inspection", async () => {
+    mocks.getQualityCheck.mockRejectedValueOnce(new Error("身份服务不可用"));
+    render(<FinalVideoQualityCheck taskId="task-1" versionId="timeline-version-6"
+      outputUrl={null} onLocate={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("身份服务不可用");
+    expect(screen.getByRole("status", { name: "成片质量检查状态" })).toHaveTextContent("检查结果读取失败");
+    expect(screen.queryByText("当前成片尚未检查")).not.toBeInTheDocument();
+    expect(screen.queryByText("未发现确定性媒体问题")).not.toBeInTheDocument();
+    expect(mocks.checkQuality).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ check_state: "checking", result_status: null }, "成片检查中"],
     [{ check_state: "failed", result_status: null, error: "解码失败" }, "成片检查失败"],
