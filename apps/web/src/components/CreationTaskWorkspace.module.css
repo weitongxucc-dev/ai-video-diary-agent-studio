@@ -746,13 +746,10 @@
   background: var(--surface-1);
 }
 
-.sharingMenu {position:relative;flex:0 0 auto;font-size:12px;}
-.sharingMenu > summary {display:flex;align-items:center;gap:5px;height:32px;padding:0 8px;border-radius:999px;list-style:none;color:var(--text-2);cursor:pointer;}
-.sharingMenu > summary::-webkit-details-marker {display:none;}
-.sharingMenu > summary:hover {background:var(--surface-2);}
-.sharingMenu > div {position:absolute;z-index:40;top:38px;right:0;display:grid;gap:12px;width:300px;padding:16px;border:1px solid var(--border-1);border-radius:12px;background:var(--surface-1);box-shadow:var(--shadow-float);}
-.sharingMenu .taskVisibility {justify-content:space-between;flex-wrap:wrap;}
-.sharingMenu .taskVisibility + .taskVisibility {border-top:1px solid var(--border-1);padding-top:12px;}
+.sharingControls { display:grid; gap:12px; }
+.sharingControls .taskVisibility { justify-content:space-between; flex-wrap:wrap; }
+.sharingControls .taskVisibility + .taskVisibility { border-top:1px solid var(--border-1); padding-top:12px; }
+.sharingControls [role="alert"] { margin:0; color:var(--danger); }
 .executionPanel {margin:12px 0;}
 .executionScript {border-top:1px solid var(--border-1);padding:12px 0;}
 .executionScript summary {display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;cursor:pointer;}

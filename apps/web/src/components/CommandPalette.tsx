@@ -3,6 +3,7 @@ import { HomeCardDialog } from "./HomeCardDialog";
 
 import { Search } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -29,6 +30,10 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const attachInput = useCallback((input: HTMLInputElement | null) => {
+    inputRef.current = input;
+    input?.focus();
+  }, []);
 
   const results = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
@@ -42,7 +47,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
     if (!open) return;
     setQuery("");
     setActiveIndex(0);
-    requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
   useEffect(() => {
@@ -85,7 +89,7 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
               setActiveIndex(0);
             }}
             placeholder="搜索页面、创作任务或设置"
-            ref={inputRef}
+            ref={attachInput}
             value={query}
           />
           <kbd>ESC</kbd>

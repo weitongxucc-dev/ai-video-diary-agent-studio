@@ -4,6 +4,7 @@ import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CardSelect, HomeCardDialog } from "../HomeCardDialog";
+import { CommandPalette } from "../CommandPalette";
 
 function Cards() {
   const [open, setOpen] = useState(true);
@@ -20,6 +21,27 @@ function Cards() {
 }
 
 describe("v5.1 object card stack", () => {
+  it("focuses the real navigation input when its portal mounts on first open", async () => {
+    function SearchConsumer() {
+      const [open, setOpen] = useState(false);
+      return <>
+        <button onClick={() => setOpen(true)} type="button">搜索入口</button>
+        <CommandPalette items={[]} onClose={() => setOpen(false)} onNavigate={vi.fn()} open={open} />
+      </>;
+    }
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+    const view = render(<SearchConsumer />);
+    try {
+      const trigger = screen.getByRole("button", { name: "搜索入口" });
+      trigger.focus(); fireEvent.click(trigger);
+      const input = await screen.findByRole("textbox", { name: "搜索页面和创作任务" });
+      expect(input).toHaveFocus();
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("hydrates a server-rendered workspace with a closed card before enabling its client portal", async () => {
     function Workspace() {
       const [open, setOpen] = useState(false);

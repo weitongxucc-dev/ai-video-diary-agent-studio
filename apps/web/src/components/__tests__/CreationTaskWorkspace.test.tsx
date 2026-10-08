@@ -2918,22 +2918,49 @@ describe("作业进度读数", () => {
     mocks.setCreationTaskVisibility.mockResolvedValue({ ...workspace(baseTask), task: shared });
     render(<CreationTaskWorkspace initialTopics={null} initialTasks={[baseTask]} initialWorkspace={workspace(baseTask)} />);
 
-    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+    const trigger = screen.getByRole("button", { name: "共享设置" });
+    trigger.focus(); fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "任务与方案共享" });
+    expect(within(dialog).getByText("任务：仅自己可见")).toBeInTheDocument();
+    expect(mocks.setCreationTaskVisibility).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "共享给团队" }));
 
-    await screen.findByText("团队共享");
+    await within(dialog).findByText("任务：团队共享");
     expect(mocks.setCreationTaskVisibility).toHaveBeenCalledWith("task-1", "shared");
+  });
+
+  it("keeps plan sharing independent inside the compact toolbar menu", async () => {
+    mocks.getCreationPlan.mockResolvedValue({ visibility: "private" });
+    mocks.setCreationPlanVisibility.mockResolvedValue({ visibility: "shared" });
+    render(<CreationTaskWorkspace initialTopics={null} initialTasks={[baseTask]} initialWorkspace={workspace(baseTask)} />);
+
+    const trigger = screen.getByRole("button", { name: "共享设置" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "任务与方案共享" });
+    await within(dialog).findByText("方案：仅自己可见");
+    expect(mocks.setCreationPlanVisibility).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "方案共享给团队" }));
+
+    await within(dialog).findByText("方案：团队共享");
+    expect(within(dialog).getByText("任务：仅自己可见")).toBeInTheDocument();
+    expect(mocks.setCreationPlanVisibility).toHaveBeenCalledWith(baseTask.plan_id, "shared");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("keeps the current value and reports the reason when sharing fails", async () => {
     mocks.setCreationTaskVisibility.mockRejectedValue(new Error("本地服务拒绝了这次保存"));
     render(<CreationTaskWorkspace initialTopics={null} initialTasks={[baseTask]} initialWorkspace={workspace(baseTask)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "共享给团队" }));
+    const trigger = screen.getByRole("button", { name: "共享设置" });
+    trigger.focus(); fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "任务与方案共享" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "共享给团队" }));
 
-    await screen.findByRole("alert");
-    expect(screen.getByText("本地服务拒绝了这次保存")).toBeInTheDocument();
+    await within(dialog).findByRole("alert");
+    expect(within(dialog).getByText("本地服务拒绝了这次保存")).toBeInTheDocument();
     // 没有保存成功就不能显示成已共享。
-    expect(screen.getByText("仅自己可见")).toBeInTheDocument();
+    expect(within(dialog).getByText("任务：仅自己可见")).toBeInTheDocument();
   });
 });
