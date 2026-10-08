@@ -177,7 +177,8 @@ function materialiseDep(entryName) {
   materialisePeerDeps(pnpmPkgNodeModules, dstPkgNM, entryName);
 }
 
-for (const entry of fs.readdirSync(SRC_NM)) {
+const webPackage = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'apps', 'web', 'package.json'), 'utf8'));
+for (const entry of Object.keys(webPackage.dependencies || {})) {
   materialiseDep(entry);
 }
 
