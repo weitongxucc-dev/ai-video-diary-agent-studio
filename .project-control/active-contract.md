@@ -14,7 +14,7 @@
 
 用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。资源暂停继续有效：无主机探针、模型、配音/口型和FFmpeg执行。
 
-用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据，无新增写权；75已结案，旧条件START不复活。
+用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
 本次变更 `MAIN-SOFT-CARDS-20261008-70` 属共享设计增量，用户已直接授权；只有受影响浮层条款重绑。69已完成的草稿差额和64/67/68未影响成果保留，公共浮层的旧几何证据不用于新规则通过结论。
 
@@ -26,7 +26,7 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新操作仅下方70/71具名范围。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新操作仅下方76/77具名范围。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
@@ -35,9 +35,37 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 74已交并retain，等待实际缺陷 | 保留源码；无新增写权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 77：本机arm64桌面包准备与构建 | apps/desktop构建及运行接线；无视觉/API业务写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 75已结案并retain，等待新任务 | 保留证据；无新增产品/服务/GUI权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 76：公开人物局部重生成队列接线 | 指定API/队列及必要Web消费者；无模型/打包权 |
+
+## 当前交付波次：B76 / UI77
+
+用户于2026-10-08最新批准“抓紧开始”，实施上轮已解释的集成、人物重生成接线、本机包准备及三平台路线核实。两条原可见线程复用；主控不编写产品代码、不新建窗口/内部Agent，不自动合main。共同产品代码基线为clean3db903441af97f359ccf2180f8f2fb4944bd0542（/tmp/main-controller-20261008/ui-v3-integration），当前main共享权威单独读取，不整体merge旧工作树或覆盖旧分支。先核各自clean，保留历史分支，从本地fetch该完整候选建立新具名分支；语义REBASE_ACK后直接完成，不等待第二次START。
+
+本波次共享不变量：资源暂停仍有效，无主机资源探针、真实模型/TTS/口型/FFmpeg执行；测试只用完整隔离的合法假provider与资源快照，不冒称真实媒体。产品无费用/充值/扣费工作。定时执行OFF，不访问真实用户DB/Key、账号登录/发送、云身份、设备注册或迁移；不下载模型。worker无push/PR/Linear/共享权威写权。具名本地构建仅UI77的新权限，不能延伸为模型/GUI/安装/外发授权。
+
+### B76：WIL-141公开人物编辑未命中缓存时重生成
+
+目标：从现有精确编辑及自然语言提案应用入口，针对当前任务/输入版本/声音段落，把ChangePersonSegment、RegeneratePersonRender未命中可复用产物的请求接入唯一设备持久队列，获当前授权与专属预算后才调用现有人物生成函数，并仅更新目标镜头的不可变版本；排队/失败/取消不伪装完成。主控已读main.py约9007–9177，未命中分支调用_generate_creation_task_person_render_record不传grant_context，正向连续制作约15521已具许可入口；不得删除既有guard或把缺口只改成409测试。
+
+绑定当前main架构§3.12/§5.2/§5.3、认证§5和领域§6.2/§7/§8的目标章节；沿已有JobRun/TaskEvent/device_runtime/CreationExecution，不新建队列/并行草稿系统或改默认人物比例。B为这一局部用户结果负责人。owned：apps/api/app/main.py上述公开确认/精确编辑及队列注册直接接线、creation_execution.py、device_runtime.py、device_scheduler.py、production.py及schemas.py的必要直接消费者；apps/api/tests内现有对应montage/person/creation/device专项；必要Web反馈只apps/web/src/lib/api.ts、types.ts、components/CreationTaskWorkspace.tsx及其既有直接测试。不改HomeCard/AppShell/CSS/桌面/共享文档、根依赖锁或新增数据库迁移；必要共享接口变化先回报精确差额，主控补边界。仅实际需要的文件改动，其他owned不意味着必须修改。
+
+最小验收：公开入口真正提交持久请求且未许可前provider零调用；队列取得合法专属Grant后假provider完成对应人物片段、版本/映射更新，其他配音/字幕/镜头保持；原真实同源缓存复用不退化；陈旧版本、许可撤销、取消/失败不提交伪成功，重复应用不重复生成。复用A53/A60/A63未变专项，只跑受影响直接用例和必要类型检查，不跑全仓库、不添加像素镜像/防御fallback。可以复用/tmp/manta-wil108-20261007/venv的pytest，但完整HOME/XDG/config/DB/tmp/output隔离；实际Host/进程探针替身只放测试，不改生产判断。证据/tmp/main-acceptance-20261008/person76/；交准确clean源码、净diff、实测命令、当前范围与未验真实模型/GUI。无服务/GUI/重模型或媒体执行权。
+
+### UI77：WIL-169本机arm64包准备与有界构建
+
+目标：把已有候选准备成可在用户本机运行的arm64本地测试.app及DMG/ZIP（构建条件允许时），保留现有Pi/Node/Python/FFmpeg/外部模型路径发现与Key安全保存契约，不把模型权重或任何用户配置/Key打进包。只做本机local身份受控诊断；不以它代替独立测试者supabase交付。当前API/Web/桌面原入口与业务契约保留，不新增依赖管理框架或调整视觉。
+
+绑定当前main产品§1.3、desktop README/RELEASE的本机通道及架构§2.1/§2.5；读当前实际脚本和包配置。owned：apps/desktop/main.js、preload.js、device-identity.js、package.json、scripts/中实际构建/独立资源/身份/生命周期消费者与现有直接检查，apps/api/pyinstaller.spec；必要Next standalone配置仅apps/web/next.config文件。UI不写API业务/B76文件、Web页面/视觉、根依赖清单/锁、workflow或共享文档。先核已有依赖并复用；已装pytest环境没有PyInstaller，不按可构建猜测。缺构建工具时可在新owned staging/venv按现有锁或确定包版本安装必要公开构建依赖，允许公开包下载；不能修改全局环境、下载模型或执行未知安装脚本，不为此新建产品依赖管理。
+
+构建和测试目录只/tmp/main-acceptance-20261008/desktop77/，源码分支外另archive准确candidate排除dotenv并核blob；源码修改时先提交准确clean差额，再由该候选archive构建。依赖可只读复用，Next/PyInstaller/Electron缓存、输出、HOME/XDG/config/tmp均为新根，secret/用户DB不进入构建。允许本地arm64目录包及DMG/ZIP有界构建、必要ad-hoc签名与包内容/架构/摘要核验，不使用Apple证书、公证、上传、Release、覆盖/Applications或实际启动Electron/API/Web；本波次不触发完整GUI/模型验收。记构建PID/PGID、失败首因与可恢复步骤，必要构建命令60分钟绝对上限，结束释放自有构建组；不为打包运行媒体或Host资源探针。
+
+先对实际缺口做最小接线，已有正确代码保留；不能只交计划作为完成。交源码SHA/净diff（无差额就明确无源码改动）、实际包路径/SHA256/候选输入摘要/包内依赖边界及直接检查、未验启动与完整制作；不可构建须给精确命令/失败/缺依赖，不冒称安装可用。当前共同候选不含B76并行差额，标清后续机械组合需要重建包；本轮已验证构建步骤复用，不要求再重跑视觉矩阵。
+
+### 主控：集成与三平台接入核实
+
+主控审核76/77并机械组合，准备最新UI增量PR及交接，不直接把未验范围写成通过或自动合并。并行只读核抖音/小红书/视频号当前官方接入路线、账号/应用条件和本地浏览器可支持入口，结合B71 release-gaps.md直接缺口，产出可以具名施工的一平台纵向任务及平台差异。当前不登录账号、获取会话/Key、上传素材/草稿、发视频、触发GitHub构建或Release；实际发布仍须用户确认具名账号和内容。模型恢复另需用户明确撤销暂停，不因本波次获准自动恢复。
 
 ## 当前增量：UI70 / B71
 
