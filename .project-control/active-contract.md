@@ -45,6 +45,8 @@ A65为“普通字段或结构命令→同一CreationTask版本化草稿→撤�
 
 65.1直接接口绑定：VideoClipQuickEditor实在UI-owned VideoEditor.tsx，UI64同时改其字段/结构动作提交时机，A65不跨文件写入。真实三轨共尺需A-owned AudioTimelineTracks配合：允许既有组件新增sharedTimeScale可选属性，CreationTaskWorkspace内嵌传true；嵌入时音频跟随父0–真实duration的同一lane和标签宽，不使用独立zoom/滚动尺度，其他音频工作区既有独立缩放保留。UI64负责共同CSS及VideoEditor视频/字幕坐标；A65负责音轨直接消费者，双方仅重绑此差额。不得隐藏整条音轨/旧操作或只靠CSS假称同步。
 
+65.2必要关联变速差额：主控核原TimelineAudioClip duration固定源区间、linked_timeline.retime_clip强制先物化新音频ref，确与普通草稿不生成冲突。允许A65追加audio_timeline.py/linked_timeline.py/task_audio.py实际音频模型/重定时/校验与mix消费者，以及其既有直接测试；仅让草稿保存原授权source_ref/源区间与速度/时间变换，明确试听/渲染时沿既有许可消费者执行。source、timeline和包络时钟一致，不造待生成音频引用、不静默降成仅画面、不新建第二队列/事实源或数据库迁移。lib types直接契约归A。仍无真实媒体执行权；代码路径/最小合法合成数据证明与真实音质输出未验分开。领域§6.3已绑定新草稿表示，读此条语义ACK即可继续。
+
 本单退役目标：普通参数确认链、贴边详情、颜色独自表意及等宽时间段；已有合法底座和未影响成果复用。主控为整体v3验收/退役负责人，64/65各报所辖不存在证据，不凭层级分项关闭整体任务。实施期只做最小已有消费者与真实问题复现，禁止为CSS像素写镜像测试，不重复旧全量/GUI。证据64/65分别写/tmp/main-acceptance-20261008/ui64/及draft65/，短报告列commit、净差额、必要结果和真实剩余。无服务/GUI/个人浏览器、真实库/Key、模型、主机探针、网络安装或收费权；完成后交付准确源码并收回操作权。组合后B只做受影响页面、实际比例、编辑持久化/撤销/失效与费用/删除边界的必要真实可见验收，另绑定准确候选，不重跑全部UI。
 
 ## 任务52/53/54：UI收口与人物制作接线
