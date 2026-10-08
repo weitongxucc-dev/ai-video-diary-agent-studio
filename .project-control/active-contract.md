@@ -37,9 +37,11 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 87：首次录音采用 | task_070705973546 / ctx_dc7706d9c816；仅下方87录音直接源码；无实机运行/打包权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 86：实际包真实制作 | task_84f88d406229 / ctx_37688cc35760已ACK；仅下方86隔离运行，零产品代码写权；84旧启动权结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 86已审failed并retain | 包启动/Pi创建分项接受，完整制作未通过；所有自有组/端口释放，store锁定；无新增运行/写权 |
 
-## 当前真实制作波次：B86（2026-10-09）
+## 当前波次：UI87首次录音采用；B86真实包验证已结案（2026-10-09）
+
+B86 task_84f88d406229 / ctx_37688cc35760已按真实完整制作未达failed结算并retain，报告creation86/report.md。主控复核实际首页、两轮国内Pi工具预检与新任务可信归属回读；配音队列resource_busy/Grant0，包内数值首因未知，独立资源快照低于门槛；原夹具缺owner作为准备限制保留。首次录音409交UI87，实际成片/编辑重出/原生保存未验。主控独立核5组及3端口释放、87具名文件扫描无Key且成员凭证仅预期localStorage、新store锁定。86以下为已结束范围说明，不得复活START/租约；当前仅UI87具名施工，最终新候选冻结后再绑定最新包补验。
 
 用户本轮“继续吧”解除资源/模型验证暂停，变更 `MAIN-REAL-CREATION-20261009-86`。仅本节为当前运行入口；下方79–85及更早各任务均已结案，旧START/租约不得复活。主控共享规则写权和原UI/B可见终端不变，无内部Agent/新窗口。
 
@@ -66,6 +68,10 @@ B86实证：首次无故事板任务POST audio/recordings409，但montage也要�
 证据/tmp/main-acceptance-20261009/recording87/；只做最小相关测试/源码检查，现有缓存依赖复用、不下载/安装/全量测试或打包/服务/GUI/模型。B86独占真实包运行/媒体，UI只用测试隔离输入，不抢文件或实机资源。先语义ACK，再落实真实入口、实际DB回读与新合法单段录音的连续制作衔接，交clean候选/diff/必要证据及未验；最终包与真实媒体验证由主控审核后另绑定，不用旧84包验新差额。UI无push/PR/Linear/共享权威写权。
 
 87.1 主控接受精确checkpoint并完成 `MAIN-RECORDED-NARRATION-20261009-87` 共享语义变更：唯一权威为产品§10和领域§5.4。原UI87实现目标保持，新增Narration来源只在既有对象上表达generated/recorded；录音变体允许voice_profile/model为空，持久真实task_recording源/摘要/时长/当前ScriptSegment与明确采用，旧生成语义不变；纯素材真实渲染可用，人物授权/身份依赖不放宽。本轮先覆盖一个已确认ScriptSegment，无法明确映射的多段录音拒绝并说明，不伪造或猜对齐。UI重读两处及本条语义ACK后直接继续owned完整消费者与schema，不再等用户重复确认。B86冻结84旧包不具备新录音语义，继续已授权旧范围并结算实证，不以其验新差额；新源码冻结后再具名最新包补验。
+
+87.2 B86最新包真实首页仍显示“仅传文字 · 可能收费”，与用户已批准不做产品收费的当前表达冲突。UI87额外唯一写权仅HomeCommandComposer.tsx:278与CreationTaskWorkspace.tsx:835的这两处提示及必要既有直接断言，已配置状态改为“仅传文字”，未连接语义/真实provider状态与服务详情保留；不新增报价、收费、充值或承诺供应商免费。不为这项文案新建镜像测试，最终新包首页截图可直接验可见结果。
+
+87.3 既有narration_segments表profile/model NOT NULL，必须沿apps/api/app/database_migrations.py做具名版本升级以表达录音变体；UI87扩展唯一写权该文件及既有直接迁移测试，保留旧generated行、身份约束、索引/触发器和现有迁移机制。仅自有隔离DB验证，真实用户库迁移仍未授权，不用空字符串冒充模型绕约束。
 
 ## 已结案交付波次：B79 / UI80（2026-10-09；以下仅为源码与证据索引）
 
