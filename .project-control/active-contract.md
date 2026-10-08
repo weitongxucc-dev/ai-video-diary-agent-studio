@@ -31,11 +31,15 @@ UI可见线程`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47已结案并保留线程 | 无新增源码/服务/GUI权；47源码接受，独立GUI归48 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 任务38/42/43/44/47已结案；任务49核准确CI三失败 | 仅HomeCardDialog及三个具名直接测试；无服务/GUI权；不得削弱业务/焦点断言 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 任务39准备已结案并保留线程 | 无新增产品/服务/模型/探针权；报告creation39/report.md不代表完整制作通过 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 任务40/41/45/46已结案；任务48准备侧卡hydration补验 | 仅新ui48隔离准备/证据；候选冻结并收到本Dispatch START后才有一次15分钟服务/GUI窗口，不写产品 |
 
 ## 任务38/39/40：设计v5.1实施与独立准备
+
+**任务49 / UI（MAIN-UI-HYDRATION-CI-20261008-49）**：准确49ec013的CI37748842801 Frontend ESLint通过、Vitest552 PASS/3 FAIL；实际日志`ui47/frontend-ci.log`定位CreationTaskWorkspace“uses typed operations for replace, reorder, lock, confirmation, and undo”找不到取消、HomeCommandComposer“asks the assistant before creating anything, then confirms the real preflight”找不到制作方案dialog、新SideCards SSR→hydrate用例Esc后焦点仍在关闭卡片而非查看历史。不能猜全部只是测试时序或关闭失败；B48准确真实GUI分项正证保留，正在释放，不热换其源码。
+
+唯一UI写者从clean a512cc479068be25f47205a3234d913b22626991核三失败真实首因和最小联合复现。owned仅HomeCardDialog.tsx，以及既有SideCards.test.tsx、CreationTaskWorkspace.test.tsx、HomeCommandComposer.test.tsx三条失败及其直接必要fixture。必须保留SSR首帧一致、关闭挂载、正常焦点/逐层关闭/取消不写/真实预览契约；若仅异步Portal初始化和requestAnimationFrame完成时序，等待真实用户可见条件后再断言，不加任意sleep/重试、提高超时、删焦点或放宽断言。若实际产品问题，只能在HomeCardDialog修准确首因并回报，不改业务/CSS/API/配置或其它文件。必要最小3用例一次复现→修复后联合复验、改动所需类型；不跑全量或重复无关矩阵/服务/GUI/模型/安装。只新`/tmp/main-acceptance-20261008/ui49/`短报告精确父/commit/diff、是否产品blob改变、真实复现/复验及剩余。主控机械组合同PR97并读新head CI；产品blob不变可复用B48真实GUI，改变须新准确补验。读本段语义ACK后实施，不等待再次许可。
 
 任务47结算及48冻结：主控已核准确a512cc479068be25f47205a3234d913b22626991/父400c3ee，两owned文件64增3删、真实SSR→hydrate修改前失败及修改后7 PASS/类型通过、clean；接受succeeded并retain，不等于GUI通过。已机械组合为`49ec0130560de78eba8b64a81edc85bc5b065f85`（来源`/tmp/main-controller-20261008/ui-v51/integration`），两文件与UI候选blob一致，API/lib/actions较PR96不变。B48须用此完整archive，收到本Dispatch具名START且语义ACK、备份比较、源码核对、4574/3174空闲后才启动；原94bf与46环境不复活。47修复仅初始clientReady/useEffect及active就绪门控，保留关闭挂载与原栈行为。
 
