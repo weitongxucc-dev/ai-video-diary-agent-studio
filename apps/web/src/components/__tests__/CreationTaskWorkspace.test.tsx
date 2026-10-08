@@ -2556,8 +2556,14 @@ describe("CreationTaskWorkspace", () => {
   it("lists historical timeline versions and shows an old version's own snapshot read-only", async () => {
     const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const,
       status: "waiting_for_user" as const, progress: 70, timeline_sequence: 2 };
-    const initial = workspace(task);
-    mocks.listTimelineVersions.mockResolvedValue({
+    const initial = workspace(task, {
+      ...subtitleCoverWorkspace().montage!,
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+        source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+        timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: 1, match_reasons: [],
+        needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false }],
+    });
+    const versions = {
       task_id: "task-1",
       current_version_id: "tv-2",
       items: [
@@ -2566,7 +2572,8 @@ describe("CreationTaskWorkspace", () => {
         { id: "tv-2", sequence: 2, parent_version_id: "tv-1", created_at: "2026-10-02T02:00:00+00:00",
           is_current: true, shot_count: 2, subtitle_track_count: 0, narration_segment_count: 1 },
       ],
-    });
+    };
+    mocks.listTimelineVersions.mockResolvedValue(versions);
     mocks.getTimelineVersion.mockResolvedValue({
       task_id: "task-1",
       version: { id: "tv-1", sequence: 1, parent_version_id: null, created_at: "2026-10-01T02:00:00+00:00",
@@ -2584,8 +2591,18 @@ describe("CreationTaskWorkspace", () => {
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
+    expect(mocks.listTimelineVersions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    const playerSource = player.getAttribute("src");
+    player.currentTime = 1.25;
+    fireEvent.seeked(player);
+    fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "保留这份未应用草稿" } });
     fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
-    const panel = await screen.findByRole("region", { name: "历史时间线版本" });
+    const panel = await screen.findByRole("dialog", { name: "历史时间线版本" });
+    expect(panel).toHaveAttribute("data-card-kind", "detail");
+    expect(screen.getByRole("main")).not.toContainElement(panel);
+    expect(within(panel).getByRole("heading", { name: "历史时间线版本" })).toBeInTheDocument();
 
     // 版本序号、时间与「当前版本」标识都来自接口当前返回的版本列表
     expect(mocks.listTimelineVersions).toHaveBeenCalledWith("task-1");
@@ -2603,9 +2620,38 @@ describe("CreationTaskWorkspace", () => {
     expect(within(panel).getByRole("link", { name: "查看这一版的成片" })).toHaveAttribute(
       "href", "/api/creation-tasks/task-1/timeline/versions/tv-1/artifacts/video");
     expect(within(panel).getByText("该版本没有生成封面。")).toBeInTheDocument();
-
-    // 只读：面板里没有回滚或编辑旧版本的出口，也不触发任何写操作
     expect(within(panel).queryByRole("button", { name: /回滚|恢复|应用/ })).not.toBeInTheDocument();
+
+    // 收起/恢复只隐藏同一浮卡，保留历史选择和滚动，也不重建当前播放器、选择或草稿。
+    const body = within(panel).getByRole("region", { name: "历史时间线版本" }).parentElement!;
+    body.scrollTop = 120;
+    fireEvent.click(within(panel).getByRole("button", { name: "收起历史版本" }));
+    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+    expect(player.currentTime).toBe(1.25);
+    expect(player).toHaveAttribute("src", playerSource);
+    expect(screen.getByRole("button", { name: "选择镜头 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("局部修改要求")).toHaveValue("保留这份未应用草稿");
+    // 隐藏期间真实列表有新版本：重开必须重读，不能沿用挂载时的当前标记。
+    mocks.listTimelineVersions.mockResolvedValue({
+      ...versions, current_version_id: "tv-3",
+      items: [...versions.items.map(version => ({ ...version, is_current: false })),
+        { ...versions.items[1], id: "tv-3", sequence: 3, parent_version_id: "tv-2", is_current: true }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
+    expect(screen.getByRole("dialog", { name: "历史时间线版本" })).toBe(panel);
+    expect(body.scrollTop).toBe(120);
+    expect(within(panel).getByRole("button", { name: /第 1 版/ })).toHaveAttribute("aria-current", "true");
+    expect(within(panel).getByText("旧版本第一句")).toBeInTheDocument();
+    expect(await within(panel).findByRole("button", { name: /第 3 版/ })).toHaveTextContent("当前版本");
+    expect(within(panel).getByRole("button", { name: /第 2 版/ })).not.toHaveTextContent("当前版本");
+    expect(within(panel).getByRole("button", { name: /第 1 版/ })).toHaveAttribute("aria-current", "true");
+    expect(mocks.listTimelineVersions).toHaveBeenCalledTimes(2);
+    expect(mocks.getTimelineVersion).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
+
+    // 查看、收起与重开都不触发写时间线或替换当前工作区。
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     expect(mocks.undoTimeline).not.toHaveBeenCalled();
     expect(mocks.getWorkspace).not.toHaveBeenCalled();
@@ -2654,7 +2700,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
     fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
-    const panel = await screen.findByRole("region", { name: "历史时间线版本" });
+    const panel = await screen.findByRole("dialog", { name: "历史时间线版本" });
     await waitFor(() => expect(within(panel).getByRole("button", { name: /第 2 版/ })).toBeInTheDocument());
 
     const firstButton = within(panel).getByRole("button", { name: /第 1 版/ });

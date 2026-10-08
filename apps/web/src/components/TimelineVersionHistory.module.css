@@ -1,35 +1,8 @@
 .history {
   display: grid;
-  gap: 8px;
-  max-height: 460px;
-  margin: 12px 0 0;
-  padding: 10px 12px;
-  overflow-y: auto;
-  border: 1px solid var(--border-1);
-  border-radius: 10px;
-  background: var(--surface-1);
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.heading {
-  margin: 0;
-  color: var(--text-1);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.close {
-  padding: 0 4px;
-  border: 0;
-  background: none;
-  color: var(--text-3);
-  cursor: pointer;
+  min-width: 0;
+  gap: 12px;
+  overflow-wrap: anywhere;
 }
 
 .note,
@@ -39,6 +12,7 @@
   gap: 6px;
   margin: 0;
   font-size: 12px;
+  line-height: 18px;
 }
 
 .note {
@@ -62,12 +36,14 @@
   display: grid;
   gap: 2px;
   width: 100%;
-  padding: 6px 8px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: none;
   color: var(--text-1);
-  font-size: 13px;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -83,6 +59,7 @@
 
 .itemTitle {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
@@ -92,13 +69,14 @@
   border-radius: 999px;
   background: var(--surface-3);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
 .itemMeta {
   color: var(--text-3);
   font-size: 12px;
+  line-height: 18px;
 }
 
 .detail {
@@ -112,14 +90,14 @@
   margin: 0;
   color: var(--text-1);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .sectionTitle {
   margin: 8px 0 0;
   color: var(--text-2);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .shots {
@@ -128,7 +106,7 @@
   margin: 0;
   padding: 0 0 0 18px;
   color: var(--text-1);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .shot {
@@ -138,7 +116,7 @@
 
 .shotRange {
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .shotText {
@@ -147,7 +125,7 @@
 
 .shotNote {
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .track {
@@ -166,7 +144,7 @@
   margin: 0;
   padding-left: 18px;
   color: var(--text-1);
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
