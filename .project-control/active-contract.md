@@ -307,6 +307,16 @@ B新QA-V2-B-PREVIEW-BINDING，仅在原clean345d88f candidate新分支codex/revi
 
 D新QA-V2-D-PREVIEW-TEST-FIXTURES，从准确1993ad0 clone到`/tmp/main-acceptance-20261009/review-v2-preview-test-fixtures/candidate`新公开分支；只owned tests/test_media_preview_runs.py、tests/test_media_preview_api.py与确需新增一个私有直接test辅助文件，禁止改任何生产代码、B新test_profile_api_contract.py、main/schema/资源cap或跳过测试。先复核两文件真实既有失败，修旧缺ProfileReference/可信登记/任意无效媒体字节夹具成真实合成WAV/PNG和可信本地测试成员；预览正例沿本次唯一DeviceRuntime/专属grant，HTTP queued再实际受控完成回读，不把queued看作成功，不以宽泛可接受多个status削弱断言。保留来源失联/成员隔离/固定版本/取消/无grant拒绝/模型不可用/历史不可覆盖等真实负例；必要直接复用既有明确fixture helper，不新增产品抽象或第二调度器。已装pytest及测试替身/自有合成媒体可用，无用户素材/Key/模型/服务/Pi/GUI/安装/远端。仅这两直接文件完整测试一次，发现生产缺口报准确case与事实由主控具名，不能为绿测降门禁。交clean提交与受控验证报告，仍不宣称实际模型/GUI或全仓CI通过。
 
+### 当前真实认证读断点：片段检索与原生媒体
+
+F msg_bca6ac695a54及主控1993ad0回读确认search_production_material_segments未传可信reader，ProductionRepository.search_material_segments使用默认全私有list_assets；通用Pi find_materials直接消费该端点，主控预检仅事后过滤也会受未授权条目的排序/limit影响。不是只换文案可修。B当前PREVIEW-BINDING原product文件production.py唯一写者追加仅该search_material_segments签名/首次list_assets reader参数及直接私有隔离专项；C当前main唯一写者追加同一端点和真实_preflight检索调用透传_content_reader/真实plan reader，必要直接HTTP私有成员负例。不事后用前端过滤替代召回前权限；默认review_state不重引入旧门槛，用途限制及范围真实资格保持。B/C需互报精确viewer_user_id/local_diagnostic接口并ACK，本单不开放用户数据或旧未过滤工具运行。
+
+主控另确认People ReferencePlayback、独立预览结果和VideoEditor源媒体为原生src请求，local-member-auth只把成员令牌放localStorage+fetch自定义头；Next local API代理不补该头，backend _local_member_token只读头。新的private档案JSON可读而原生图片/音视频请求匿名会404，是同类媒体读取身份断点。E新QA-V2-E-NATIVE-MEDIA-IDENTITY只owned Web local-member-auth.ts、middleware.ts、必要一个明确的本地原生媒体传输helper与直接测试，原creation-wave树保留，从准确1993ad0新clone到`/tmp/main-acceptance-20261009/review-v2-native-media-identity/candidate`公开分支。不写后端main/schema/权限/生产/People/编辑器/API/types/用户令牌/配置/全局CSS。
+
+沿已有本地可信成员令牌，仅为同源原生GET/HEAD媒体请求同步一个会话cookie传输已有令牌（SameSite=Strict、Path=/api，HTTPS才Secure；与现有JS localStorage同一可见性，不新增令牌/身份/服务或匿名升权）。store/clear实际同步和清除；cookie名按当前原点端口区分避免同主机端口串App，值不进URL/日志/公开证据。Next仅local模式、准确现有媒体路由、请求原X-Local-Member-Token头缺席时将cookie转同一头，明确无效/空的已有头不能被cookie替代，缺cookie不伪造身份；Supabase仍用原服务端session/Authorization，不能继承本地成员。媒体URL和Range原样代理，不整文件blob缓存或复制。断点修正不扩大任何对象可见性，后端仍每请求验证成员和workspace/私有/grant；媒体错误仍真实显示，不回退到旧文件。
+
+E先核当前实际媒体端点及现有store/clear调用，不罗列猜测式通配路径；测试用合成成员字符串、Next Request/Headers替身，验证native GET/HEAD/Range身份透传、store/clear/切成员/端口隔离、显式无效头不回退、Supabase与非媒体POST不注入、没有把令牌写入URL/响应业务正文。必要当前local auth/middleware专项+tsc即可；未运行真实浏览器/API/GUI，源机制和受控代理证据不冒称可播放。无安装/Pi/模型/用户数据/Key/真实Cookie/账号/媒体/服务/远端；clean delta/report交主控同候选真实窗口验收。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
