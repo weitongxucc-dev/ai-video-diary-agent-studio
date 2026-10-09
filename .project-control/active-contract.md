@@ -425,6 +425,16 @@ F前860a247已clean组合并retain。实际settings/page.tsx栏目Link丢return_
 
 先REBASE_ACK后实施；最小实证settings栏目、source→knowledge内部导航仍返回、模板显式换版再返回30秒、旧/并行草稿/不同成员空间/非法URL/存储拒绝、原template使用入口保持。只受控组件/mock与既有公开cache专项/ESLint/类型，非owned旧TS207保持等待UI修复；真实GUI统一候选后验。无模型/Pi/App/API服务/Key/媒体/用户库/账号/安装/远端。报告/tmp/main-acceptance-20261009/review-v2-preflight-return-continuity/report.md，不能复用前85case声称新导航已验通。
 
+### QA-V2-C-REPLY-SCRIPT-CONSUMERS：审阅整改先行，API写权等待
+
+E只读审阅完成/report在/tmp/main-acceptance-20261009/review-v2-reply-script-review/report.md并retain。具体f76021d对source_reply_reference豁免confirm各段非空资料引用，直接test证明空证据也进narration；不予组合。领域7.5已明确：可以保存未完整来源的草稿，但既有确认条件不因reply来源豁免，原editor须能手工选择当前有效引用，不能自动填全库/猜引用或借证明门槛拦普通导入。
+
+C新QA-V2-C-REPLY-SCRIPT-CONSUMERS在原可见终端从准确c121b329 clone新隔离/tmp/main-acceptance-20261009/review-v2-reply-script-consumers/candidate分支codex/review-v2-reply-script-consumers-20261009，再仅fetch/cherry自身f76021d，不拷UI dirty。先重读E审阅与领域7.5/原N14契约、发REBASE_ACK。当前仅production.py中N14仓储整改/资料引用与确认及草稿修订参数、原新tests/test_reply_script_transfer.py、tests/test_script_library.py必要N14相关fixture。仅这一文件owner C，并追加production.materialize_profile_reference voice expected_stages可接同creation_job真正narration_edit:专属许可，保留persona拒绝/工作区/真实grant检查；其最小新单独tests/test_narration_edit_reference_contract.py，不写B executor、D旧fixture或UI main/schema/APItypes。此许可叶单独clean提交可先root组合，N14正文仓储签名整改仍与未来消费者作为整体交付。
+
+main/schema/assistant_pi.py/ScriptEditor/APItypes/Home/Panel/Task/knowledge及相关直接tests现在全部HOLD，UI-CAS唯一写者。完成当前独立Repo整改只发送阶段状态和准确SHA，不worker_done解除纵向任务；本新Task等主控准确UI组合后正式释放再完成N14阶段2。届时将所有活跃UI/Agent update/confirm改mandatory持久updated_at，在同原事务核验；不能保留可选令牌旧API旁路。新转入与重复回读均先核真实当前会话/成员/space/turn完成/当前正文及任务来源版本/use_state，旧引用不是事实依据。只有原editor真实手工补引用、当前来源重核、确认与现库保存/准确entry返回完整接线才源码交付，仍不自动关GUI验收。此处不是当前消费者写权。
+
+只source/临时DB/合成文字与Grant替身直接测试/准确Ruff；没有服务/Pi/App/GUI/模型/Key/用户库/媒体/安装/远端。report/tmp/main-acceptance-20261009/review-v2-reply-script-consumers/report.md；避免对前14/44或独立声音26/8无影响测试重做。主控已完成及remote product c121b329、control a2b89c07回读，后续控制变更仍须新push。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
