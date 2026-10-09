@@ -4987,6 +4987,8 @@ class ProductionRepository:
         min_duration_seconds: float | None = None,
         max_duration_seconds: float | None = None,
         limit: int = 20,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> list[MaterialSegmentMatch]:
         """Search one workspace's approved, persisted segments and explain every candidate.
 
@@ -5019,7 +5021,12 @@ class ProductionRepository:
             min_duration_seconds is not None or max_duration_seconds is not None
         )
         matches: list[MaterialSegmentMatch] = []
-        for asset in self.list_assets(workspace_id):
+        for asset in self.list_assets(
+            workspace_id,
+            include_private=viewer_user_id is not None or local_diagnostic,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        ):
             if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:

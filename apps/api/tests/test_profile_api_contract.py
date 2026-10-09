@@ -266,6 +266,37 @@ def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo,tmp
         assert runtime.stop(1)
 
 
+@pytest.fixture
+def private_search_assets(repo):
+    for asset_id,owner,visibility,description in [
+        ('a-two','member-two','private','预算'),
+        ('z-one','member-one','private','预算'),
+        ('shared',None,'shared','公共镜头'),
+    ]:
+        path=repo.video_library_path/(asset_id+'.mp4')
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b'isolated search metadata fixture, not decoded media')
+        segment=MaterialSegment(id=asset_id+'-segment',asset_id=asset_id,start_seconds=0,end_seconds=2,description=description,usage_role='b_roll')
+        repo._save_asset(MaterialAsset(id=asset_id,workspace_id='ws',file_name=path.name,path=str(path),size_bytes=path.stat().st_size,modified_at=datetime.fromtimestamp(path.stat().st_mtime),duration_seconds=2,analysis_status='ready',segments=[segment],owner_user_id=owner,visibility=visibility))
+
+
+@pytest.mark.parametrize('reader,owned',[('member-one','z-one'),('member-two','a-two')])
+def test_material_search_reader_filters_private_before_limit(repo,private_search_assets,reader,owned):
+    args={'query':'预算','usage_roles':['b_roll'],'viewer_user_id':reader}
+    first=repo.search_material_segments('ws',limit=1,**args)
+    assert [item.asset_ref for item in first]==['asset:'+owned]
+    assert first[0].rank==1
+    assert {item.asset_ref for item in repo.search_material_segments('ws',limit=100,**args)}=={'asset:'+owned,'asset:shared'}
+
+
+def test_material_search_missing_reader_keeps_only_legacy_shared(repo,private_search_assets):
+    args={'query':'预算','usage_roles':['b_roll'],'limit':1}
+    assert [item.asset_ref for item in repo.search_material_segments('ws',**args)]==['asset:shared']
+    assert repo.search_material_segments('other',**args)==[]
+    # Explicit existing local diagnostics are a different, controlled caller.
+    assert [item.asset_ref for item in repo.search_material_segments('ws',local_diagnostic=True,**args)]==['asset:a-two']
+
+
 def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo,tmp_path):
     runtime,resources,provider,queued=setup_preview(repo,tmp_path)
     try:
