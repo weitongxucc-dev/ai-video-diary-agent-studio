@@ -326,7 +326,7 @@ def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monke
         workspace_id="workspace-1", conversation_id="conversation-1", message="读取这个片段标签",
         selection=selection,
     ) == ("收到。", None)
-    assert seen["tool_names"] == "read_selected_material,update_selected_material_tags"
+    assert seen["tool_names"] == "read_material_library_status,search_material_library,read_selected_material,update_selected_material_tags"
     assert seen["material_selection"] == {
         "scope": "segment", "assetId": "asset-1", "segmentId": "segment-2",
     }

@@ -40,7 +40,7 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
   const materialSelection = process.env.AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION
     ? JSON.parse(process.env.AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION)
     : null;
-  if (materialSelection) registerMaterialTools(pi, { selection: materialSelection, request });
+  if (stage === "material" || materialSelection) registerMaterialTools(pi, { selection: materialSelection, request });
   pi.registerTool({
     name: "read_workspace_context",
     label: "读取当前工作区",
@@ -75,7 +75,7 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
   pi.registerTool({
     name: "find_materials",
     label: "检索可用素材",
-    description: "按文字检索当前工作区已审核且允许直接用片的镜头，只返回引用和匹配原因，不读取媒体文件。",
+    description: "按文字检索当前工作区已分析且允许直接用片的镜头，遵守真实使用限制，不要求统一逐条审核。只返回引用和匹配依据，不读取媒体文件；score是检索分数，不是适配概率或使用确认。",
     parameters: {
       type: "object",
       properties: { query: { type: "string", minLength: 1, maxLength: 120 } },
@@ -122,7 +122,7 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
     name: "find_material_candidates",
     label: "按描述找候选素材",
     description:
-      "按一句描述（如「更亮的城市夜景」）从已审核素材里找若干候选镜头，每条带可核对依据（文件名、标签、时长、来源、匹配原因、镜头引用）。只给候选与依据，供用户和 agent 一起裁量；绝不自动替换、不改时间线。",
+      "按一句描述（如「更亮的城市夜景」）从已分析、符合实际使用限制的素材里找若干候选镜头，不要求统一逐条审核；每条带可核对依据（文件名、标签、时长、来源、匹配原因、镜头引用）。只给候选与依据，供用户和 agent 一起裁量；绝不自动替换、不改时间线。",
     parameters: {
       type: "object",
       properties: {

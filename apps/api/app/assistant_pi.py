@@ -34,7 +34,8 @@ ASSISTANT_BUSINESS_TOOLS = {
         "read_workspace_context", "read_video_templates", "find_knowledge", "find_materials",
         "preview_creation_plan",
     ),
-    "material": ("read_selected_material", "update_selected_material_tags"),
+    "material": ("read_material_library_status", "search_material_library",
+                 "read_selected_material", "update_selected_material_tags"),
     "topic": ("read_current_task", "find_knowledge", "generate_creation_task_topics"),
     "script": ("read_current_task", "find_knowledge", "preview_script_draft"),
     "task_edit": ("read_current_task", "find_knowledge", "find_materials", "preview_edit",
@@ -107,6 +108,8 @@ _PI_TOOL_LABELS = {
     "resume_creation_execution": "继续连续制作",
     "cancel_creation_execution": "取消连续制作",
     "read_selected_material": "读取所选素材",
+    "read_material_library_status": "读取素材库状态",
+    "search_material_library": "检索可见素材",
     "update_selected_material_tags": "修改我的标签",
 }
 
@@ -182,11 +185,18 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return "这一步没有完成；请以页面显示的任务状态和错误提示为准。"
     payload = result if isinstance(result, dict) else {}
     details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    if tool_name == "read_material_library_status":
+        return f"已逐页读取可见素材库，共 {details.get('total_count', 0)} 条素材；转写和OCR需另看分项状态。"
+    if tool_name == "search_material_library":
+        matches = details.get("matches") if isinstance(details.get("matches"), list) else []
+        return f"素材检索返回 {len(matches)} 条文件候选，服务端可见匹配总数 {details.get('total_count', 0)}（含不使用条目，非可用候选数）；未自动选择或修改。"
     if tool_name in {"read_selected_material", "update_selected_material_tags"}:
         scope = "整条素材" if details.get("scope") == "asset" else "当前片段"
         if tool_name == "read_selected_material":
             tags = details.get("user_tags") if isinstance(details.get("user_tags"), list) else []
-            return f"已读取{scope}的我的标签，共 {len(tags)} 项。"
+            if details.get("content_withheld"):
+                return f"{scope}已设为不使用，未外发文字分析；仅回读原有标签管理信息。"
+            return f"已读取{scope}的文字分析状态和我的标签，共 {len(tags)} 项标签。"
         return (f"{scope}的我的标签已提交并回读。" if details.get("changed")
                 else f"已回读{scope}的我的标签，内容没有变化。")
     if tool_name in {"start_creation_execution", "resume_creation_execution", "cancel_creation_execution"}:
@@ -480,9 +490,11 @@ PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当�
 人物口型默认选 high 高精度；只有用户明确要求速度优先或低精度时才选 fast。不要在高精度不可用时自行改为 fast。
 回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案等内部词；说清能否开始、缺什么和下一步。"""
 
-MATERIAL_PROMPT = """你是 AI 视频日记素材库里的对话助手，只处理当前页面明确选中的一条素材或一个片段。
-每轮先调用 read_selected_material 核对当前对象真实的“我的标签”。只有用户明确要求修改标签并能确定替换、添加或移除及对应文字时，才调用 update_selected_material_tags 一次；“把标签改成……”表示替换，“再加上/添加……”表示添加，“移除/去掉……”表示移除。对象范围由服务端绑定，不能询问、推测或指定其他素材/片段，也不能改系统标签、片段描述、转写、用途或标签夹。
-如果用户没有说清操作方式或标签内容，先用日常中文问清，不执行修改。普通标签直接保存，不创建剪辑提案或创作任务，也不要求二次确认。只有工具写后回读成功才可说已保存；失败要如实说明，不得根据请求或模型回复冒称成功。回答仅围绕所选对象当前我的标签，不泄露路径、成员、工作区或其他素材内容。"""
+MATERIAL_PROMPT = """你是 AI 视频日记素材库里的对话助手，只使用已注册的真实素材业务读写工具。
+用户问库里有什么或分析进度时用 read_material_library_status；按描述找文件用 search_material_library。只按真实分页总数和返回候选作答，空库、零匹配、HTTP失败分别说明，不把一页当全库。文件候选不等于适合成片，不自动选择或创建视频。
+有发送时的明确选择才调用 read_selected_material，读取文件身份、原资产时间范围和分项文字证据；整条素材可按offset/limit继续读片段，不能混淆不同文件同一秒数。区分画面观察、声音陈述、OCR、已存片段转录、用户说明和未知项；blocked、failed或not_recorded不能说已识别。依据不足须说明，不从标签猜人物身份、用途或缺失转写。
+只有用户明确要求修改标签并能确定替换、添加或移除及对应文字时，先read_selected_material核对标签，再调用 update_selected_material_tags 一次；“把标签改成……”表示替换，“再加上/添加……”表示添加，“移除/去掉……”表示移除。无选择只读库或请用户在页面选择，不猜对象。对象身份由服务端发送时绑定，不接受用户或模型指定ID、路径、成员、工作区，也不能改系统标签、片段描述、转写、用途或标签夹。
+如果用户没有说清操作方式或标签内容，先用日常中文问清，不执行修改。普通标签直接保存，不创建剪辑提案或创作任务，也不要求二次确认。只有工具写后同对象回读成功才可说已保存；失败如实说明，不得根据提交或模型回复冒称成功。不请求原始媒体、任意路径或整库正文，不泄露路径和身份信息。"""
 
 SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每轮先调用 read_current_task，读取已确认选题、本次时长和允许使用的资料；需要补充事实时调用 find_knowledge。
 你只能使用工具列出的当前任务来源 ID 作为文案证据，不能编造引用、事实、素材或已完成的制作结果。资料不足就问一个具体问题。
@@ -633,7 +645,10 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             "preview_edit", "preview_creation_plan", "preview_script_draft",
             "generate_creation_task_topics", *action_tools,
             "read_selected_material", "update_selected_material_tags",
+            "read_material_library_status", "search_material_library",
         }:
+            if event.get("toolName") in {"read_material_library_status", "search_material_library"}:
+                material_failed = bool(event.get("isError")) or material_failed
             if event.get("toolName") in {"read_selected_material", "update_selected_material_tags"}:
                 material_failed = bool(event.get("isError")) or material_failed
                 if not event.get("isError"):
@@ -826,7 +841,7 @@ def run_material_turn(
     workspace_id: str,
     conversation_id: str,
     message: str,
-    selection: dict[str, str],
+    selection: dict[str, str] | None = None,
     authorization: str | None = None,
     cookie: str | None = None,
     local_member_token: str | None = None,
@@ -838,17 +853,19 @@ def run_material_turn(
         "scope": selection["scope"],
         "assetId": selection["asset_id"],
         **({"segmentId": selection["segment_id"]} if selection["scope"] == "segment" else {}),
-    }
+    } if selection is not None else None
     return _run_turn(
         settings, workspace_id=workspace_id, task_id="", message=message,
         stage="material", selected_refs=[], playhead_ms=None,
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event, prompt=MATERIAL_PROMPT,
-        tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["material"]),
+        tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["material"] if selection is not None
+                            else ("read_material_library_status", "search_material_library")),
         preview_kind="material_result",
         session_key=(f"material:{conversation_id}:{selection['scope']}:{selection['asset_id']}"
-                     f":{selection.get('segment_id', '')}"),
+                     f":{selection.get('segment_id', '')}" if selection is not None
+                     else f"material:{conversation_id}:browse"),
         material_selection=tool_selection,
         turn_id=turn_id,
     )
