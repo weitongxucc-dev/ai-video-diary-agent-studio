@@ -63,4 +63,4 @@
 3. 三平台：账号适配和完整发布回执仍有缺口，#100不等于三平台完成。B99报告`/tmp/main-acceptance-20261009/account99/report.md`、UI98同名目录报告可定向读，账号profile原地保留不复制、不公开；发送前确认账号/内容及具名权限。
 4. 仅在范围完成后审核对应PR、获得按合同所需合入批准、合入和Linear结算分别回读。Linear issue当前状态本轮没有再在线核查，不用旧195项统计当实时完成率。
 
-安全准备资料只在确需新实际验证时读取：用户已授权五秒本人媒体`/tmp/main-acceptance-20261009/creation92/library/user-video.mp4`及user-audio.wav原件只读；外接models `/Volumes/Dujiangyan-VM/AI视频日记/models`、model-runtime/bin/python；Pi `/Users/Zhuanz/.nvm/versions/node/v24.16.0/bin/pi`。MiniMax文档`/Users/Zhuanz/Desktop/sk.docx`及native service `ai-video-diary.workspace-secret.minimax-validation-20261007.llm_api_key`/account同名，只能按既有具名授权在RAM处理；本交接不包含任何密钥、令牌、账号ID或会话。无自动模型/媒体/外发运行授权。
+安全准备资料只在确需新实际验证时读取：用户已授权五秒本人媒体`/tmp/main-acceptance-20261009/creation92/library/user-video.mp4`及user-audio.wav原件只读；外接models `/Volumes/Dujiangyan-VM/AI视频日记/models`、model-runtime/bin/python；Pi `/Users/Zhuanz/.nvm/versions/node/v24.16.0/bin/pi`。MiniMax文档`/Users/Zhuanz/Desktop/sk.docx`及native service `ai-video-diary.workspace-secret.minimax-validation-20261007.llm_api_key`/account `minimax-validation-20261007`，只能按既有具名授权在RAM处理；本交接不包含任何密钥、令牌、账号ID或会话。无自动模型/媒体/外发运行授权。
