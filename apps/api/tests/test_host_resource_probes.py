@@ -72,6 +72,34 @@ def run(scheduler, argv, **options):
     )
 
 
+@pytest.fixture(params=["source", "simulated_frozen"])
+def grant_entry(request, tmp_path, monkeypatch):
+    if request.param == "source":
+        return
+    # Exercise the real fixed server entry through a standalone executable.
+    # This is a simulated frozen launcher, not a PyInstaller acceptance result.
+    import app.granted_subprocess as commands
+
+    server = Path(__file__).resolve().parents[1] / "server.py"
+    executable = tmp_path / "simulated-api-server"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import builtins, runpy, sys\n"
+        "original_import = builtins.__import__\n"
+        "def guarded_import(name, *args, **kwargs):\n"
+        "    if name == 'uvicorn' or name == 'app' or name.startswith('app.'):\n"
+        "        raise AssertionError('Grant child must not load API/recovery')\n"
+        "    return original_import(name, *args, **kwargs)\n"
+        "builtins.__import__ = guarded_import\n"
+        "sys.frozen = True\n"
+        f"runpy.run_path({str(server)!r}, run_name='__main__')\n"
+    )
+    executable.chmod(0o700)
+    monkeypatch.setattr(commands, "sys", SimpleNamespace(
+        executable=str(executable), frozen=True, platform=sys.platform,
+    ))
+
+
 def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
     from app.host_resource_probes import SceneRuntimeLimits
     import app.granted_subprocess as commands
@@ -235,15 +263,47 @@ def test_scene_window_requires_calibrated_input_decode_and_hard_timeout(tmp_path
     assert measured.admit(SimpleNamespace(resources={**resources, "timeout_seconds": 20})) is False
 
 
-def test_registration_ack_precedes_real_exec(tmp_path):
+def test_registration_ack_precedes_real_exec(tmp_path, grant_entry):
     marker = tmp_path / "must-not-exist"
     scheduler = RecordingScheduler(reject_registration=True)
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         run(scheduler, [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"])
     assert not marker.exists()
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_cancel_before_or_during_registration_never_execs_marker(tmp_path):
+@pytest.mark.parametrize("revoked", [False, True])
+def test_grant_is_rechecked_after_registration_before_exec(tmp_path, grant_entry, revoked):
+    marker = tmp_path / "executed"
+
+    class CheckedScheduler(RecordingScheduler):
+        def register_child(self, grant, child):
+            assert not marker.exists()
+            super().register_child(grant, child)
+            time.sleep(0.05)
+            assert not marker.exists()
+
+        def assert_grant(self, grant):
+            super().assert_grant(grant)
+            if self.children:
+                assert not marker.exists()
+                if revoked:
+                    raise PermissionError("grant revoked before exec ACK")
+
+    scheduler = CheckedScheduler()
+    command = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    if revoked:
+        with pytest.raises(PermissionError, match="grant revoked"):
+            run(scheduler, command)
+        assert not marker.exists()
+    else:
+        assert run(scheduler, command).returncode == 0
+        assert marker.exists()
+    assert len(scheduler.children) == 1
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+def test_cancel_before_or_during_registration_never_execs_marker(tmp_path, grant_entry):
     marker = tmp_path / "must-not-exist"
     command = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
     cancelled = threading.Event()
@@ -261,7 +321,7 @@ def test_cancel_before_or_during_registration_never_execs_marker(tmp_path):
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_cancel_after_output_eof_still_stops_live_process():
+def test_cancel_after_output_eof_still_stops_live_process(grant_entry):
     scheduler = RecordingScheduler()
     cancelled = threading.Event()
     timer = threading.Timer(0.15, cancelled.set)
@@ -278,7 +338,7 @@ def test_cancel_after_output_eof_still_stops_live_process():
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_real_command_timeout_cancel_output_limit_and_release():
+def test_real_command_timeout_cancel_output_limit_and_release(grant_entry):
     scheduler = RecordingScheduler()
     with pytest.raises(GrantedCommandTimeout):
         run(scheduler, [sys.executable, "-c", "import time; time.sleep(5)"], timeout_seconds=0.25)
@@ -295,7 +355,7 @@ def test_real_command_timeout_cancel_output_limit_and_release():
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_timeout_stops_real_grandchild_in_same_process_group():
+def test_timeout_stops_real_grandchild_in_same_process_group(grant_entry):
     scheduler = RecordingScheduler()
     spawn = ("import subprocess,sys,time; "
              "subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)']); "

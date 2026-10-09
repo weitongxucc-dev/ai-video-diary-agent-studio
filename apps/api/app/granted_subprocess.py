@@ -19,23 +19,6 @@ from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, Recove
 from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits
 
 
-_TRAMPOLINE = """
-import os, sys
-gate = int(sys.argv[1])
-try:
-    approved = os.read(gate, 1)
-finally:
-    os.close(gate)
-if approved != b'G':
-    sys.exit(126)
-try:
-    os.execvp(sys.argv[2], sys.argv[2:])
-except OSError as exc:
-    print(f'exec failed: {exc}', file=sys.stderr)
-    sys.exit(127)
-"""
-
-
 @dataclass(frozen=True)
 class GrantedCommandResult:
     returncode: int
@@ -197,9 +180,12 @@ def run_granted_command(
     outputs = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
     exec_ack = False
+    entrypoint = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", _TRAMPOLINE, str(read_fd), *argv],
+            [*entrypoint, "--grant-exec", str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
             env=env,

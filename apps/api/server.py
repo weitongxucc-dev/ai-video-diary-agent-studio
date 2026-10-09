@@ -54,7 +54,39 @@ def _configure_env() -> None:
                     os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def _exec_granted_command(arguments: list[str]) -> None:
+    """Wait for the parent's private registration ACK, then replace this group leader.
+
+    This fixed entry works in the frozen executable without a Python interpreter
+    or importing the API's startup/recovery code.
+    """
+    if len(arguments) < 2:
+        raise SystemExit(2)
+    try:
+        gate = int(arguments[0])
+    except ValueError:
+        raise SystemExit(2) from None
+    if gate < 0:
+        raise SystemExit(2)
+    try:
+        approved = os.read(gate, 1)
+    finally:
+        os.close(gate)
+    if approved != b"G":
+        raise SystemExit(126)
+    try:
+        os.execvp(arguments[1], arguments[1:])
+    except OSError as exc:
+        print(f"exec failed: {exc}", file=sys.stderr)
+        raise SystemExit(127) from exc
+
+
 def main() -> None:
+    if sys.argv[1:2] == ["--grant-exec"]:
+        _exec_granted_command(sys.argv[2:])
+        return
+    if sys.argv[1:]:
+        raise SystemExit("api-server accepts only its fixed --grant-exec child entry")
     _configure_env()
 
     import uvicorn
