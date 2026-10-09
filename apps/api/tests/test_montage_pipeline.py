@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from starlette.requests import Request
 
 import app.main as main_module
 from app.artifact_store import ArtifactStore
@@ -792,6 +793,12 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         old_render=old_render,
         provider=provider,
         client=TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}),
+        request=Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(b"x-local-member-token", member_token.encode("ascii"))],
+        }),
     )
 
 
@@ -2494,7 +2501,12 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         database_path=tmp_path / "studio.sqlite3",
         video_library_path=tmp_path,
     )
-    asset = _asset(tmp_path, workspace_id=workspace_id)
+    from app.local_members import LocalMemberService
+
+    members = LocalMemberService(production.database_path)
+    member, member_token = members.join(members.create_invite_code(), "字幕编辑测试成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    asset = _asset(tmp_path, workspace_id=workspace_id, owner_user_id=member.member_id)
     production._save_asset(asset)
     creation_plan = CreationPlan(
         id="plan-subtitle-edit",
@@ -2704,7 +2716,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
         replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
     ]))
-    display_client = TestClient(main_module.app)
+    display_client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     for mode, languages in [("en", {"en-US"}), ("zh", {"zh-CN"}), ("none", set())]:
         preview = display_client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
             "operation_type":"ConfigureSubtitleTrack", "subtitle_display":mode})
@@ -2718,20 +2730,20 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     current = display_client.get(f"/api/creation-tasks/{task.id}").json()
     current_zh = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="zh-CN")
     current_en = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="en-US")
-    rejected_style = TestClient(main_module.app).post(
+    rejected_style = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/edits/exact", json={
             "operation_type": "UpdateSubtitleCue", "track_id": current_en,
             "cue_id": "english-cue", "text": "MANUAL TEST", "style": {"name": "emphasis"},
         },
     )
     assert rejected_style.status_code == 422
-    english_preview = TestClient(main_module.app).post(
+    english_preview = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/edits/preview", json={
             "context_stage":"subtitle_cover", "selected_object_refs":["cue:english-cue"],
             "raw_command":"把这句字幕改成 Manual edited English"})
     assert english_preview.status_code == 200, english_preview.text
     assert english_preview.json()["proposal"]["operation"]["payload"]["track_id"] == current_en
-    response = TestClient(main_module.app).post(
+    response = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/edits/exact",
         json={
             "operation_type": "UpdateSubtitleCue",
@@ -2766,7 +2778,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
 
-    undo = TestClient(main_module.app).post(
+    undo = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/timeline/undo",
         json={},
     )
@@ -2780,7 +2792,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert restored.status == "ready"
     assert restored.output_path is None
     assert restored.subtitle_path is None
-    restored_workspace = TestClient(main_module.app).get(
+    restored_workspace = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).get(
         f"/api/creation-tasks/{task.id}"
     ).json()
     assert restored_workspace["task"]["stage"] == "montage"
@@ -2804,7 +2816,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
     monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
     # Diagnostic helper, then cache hit: both must carry the same immutable cover selection.
     for _ in range(2):
@@ -3226,7 +3238,12 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
         database_path=tmp_path / "studio.sqlite3",
         video_library_path=tmp_path,
     )
-    asset = _asset(tmp_path, workspace_id=workspace_id)
+    from app.local_members import LocalMemberService
+
+    members = LocalMemberService(production.database_path)
+    member, member_token = members.join(members.create_invite_code(), "待确认镜头测试成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    asset = _asset(tmp_path, workspace_id=workspace_id, owner_user_id=member.member_id)
     production._save_asset(asset)
     creation_plan = CreationPlan(
         id="plan-render-route",
@@ -3321,7 +3338,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     changed, _ = main_module._prepare_changed_montage(plan, message="字幕已修改。")
     assert changed.status == "waiting_for_user"
     assert changed.low_confidence_clip_count == 1
@@ -4148,8 +4165,14 @@ def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
     clip.visual_effects={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
     frames=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
     from app.schemas import CreationTaskMontageClipUpdateRequest
-    plan,_tracks,_linkage=main_module._apply_creation_task_montage_clip_update(state.workspace_id,state.task.id,state.montage,clip.id,
-        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2))
+    plan,_tracks,_linkage=main_module._apply_creation_task_montage_clip_update(
+        state.workspace_id,
+        state.task.id,
+        state.montage,
+        clip.id,
+        CreationTaskMontageClipUpdateRequest(split_time_seconds=clip.timeline_start_seconds+.2),
+        request=state.request,
+    )
     assert plan.clips[0].visual_effects==plan.clips[1].visual_effects=={'fade_in_seconds':.4,'fade_out_seconds':.4,'exposure':.5}
     assert plan.clips[0].fade_envelope_duration_frames==plan.clips[1].fade_envelope_duration_frames==frames
     assert plan.clips[0].fade_envelope_offset_frames==0
