@@ -327,6 +327,41 @@ def test_existing_draft_requires_explicit_current_revision_and_confirmed_script_
     assert replacement.run_id == "reply-run-two"
     assert replacement.sections[0].content == REPLY_TEXT
 
+    with pytest.raises(ValueError, match="画面建议和来源证据"):
+        repo.confirm_creation_task_script(
+            WORKSPACE, task.id, replacement.id,
+            title="不能直接确认", sections=replacement.sections,
+            expected_updated_at=replacement.updated_at,
+        )
+    with pytest.raises(ValueError, match="画面建议和来源证据"):
+        repo.confirm_creation_task_script(
+            WORKSPACE, task.id, replacement.id,
+            title="缺画面建议", sections=[replace(
+                replacement.sections[0],
+                evidence_reference_ids=[INPUT_REFERENCES[0]["reference_id"]],
+            )],
+            expected_updated_at=replacement.updated_at,
+        )
+    with pytest.raises(ValueError, match="本次模型输入之外"):
+        repo.update_assistant_script_draft(
+            WORKSPACE, task.id, replacement.id,
+            title="不能编造来源", sections=[replace(
+                replacement.sections[0],
+                evidence_reference_ids=["knowledge:other:v1"],
+            )],
+            expected_updated_at=replacement.updated_at,
+        )
+    completed_section = replace(
+        replacement.sections[0],
+        visual_prompt="展示当前资料中的核心功能。",
+        evidence_reference_ids=[INPUT_REFERENCES[0]["reference_id"]],
+    )
+    replacement = repo.update_assistant_script_draft(
+        WORKSPACE, task.id, replacement.id,
+        title="补齐有效来源与画面建议", sections=[completed_section],
+        expected_updated_at=replacement.updated_at,
+    )
+
     before = replacement
     confirmed_task, confirmed = repo.confirm_creation_task_script(
         WORKSPACE, task.id, replacement.id,

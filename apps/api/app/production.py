@@ -9302,8 +9302,13 @@ class ProductionRepository:
         sections: list[CreationTaskScriptSection],
         expected_updated_at: datetime | str | None = None,
     ) -> tuple[CreationTask, CreationTaskScript]:
-        if not title.strip() or not sections or any(not section.content.strip() for section in sections):
-            raise ValueError("确认文案必须包含正文和来源证据")
+        if not title.strip() or not sections or any(
+            not section.content.strip()
+            or not section.visual_prompt.strip()
+            or not section.evidence_reference_ids
+            for section in sections
+        ):
+            raise ValueError("确认文案必须包含正文、画面建议和来源证据")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
@@ -9318,11 +9323,6 @@ class ProductionRepository:
                 raise KeyError(script_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
             script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
-            if (
-                script.source_reply_reference is None
-                and any(not section.evidence_reference_ids for section in sections)
-            ):
-                raise ValueError("确认文案必须包含正文和来源证据")
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
