@@ -501,6 +501,15 @@ B msg_7b750b033f82已核已有协议：Job无waiting枚举，Task已有waiting_f
 
 E N14只读报告已审：ScriptEditor保存过程中输入可继续编辑、setDraft(saved)无条件覆盖晚输入，源码可证实本地数据丢失；UI当前ctx_cd4a6305e221追加唯一CreationTaskWorkspace.tsx及直接新测试，提交快照与编辑代际明确，晚响应保留新正文/来源/画面建议并接返回updated_at供再次CAS保存，不简单禁用全部输入或宽泛回退。PlanReplyDraftAction/父refresh切任务晚响应为待受控复现，只在正例重现后最小修准确对象边界；必要app/tasks/[taskId]/page.tsx仅任务identity key由同UI写者，不能全局导航重架构。C/B无Web权。E报告称knowledge/page.tsx读取entry_id有误，主控准确读到该文件只加载资料、默认sources且scripts hidden；该可见深链缺口仍UI具名单中，源码自动选中子容器不等于用户可见。原报告保留并以本次主控校正为准。
 
+### QA-V2-CI-RESIDUAL：准确f648回归后的单写整改
+
+全API准确f648d65为1949 PASS/16 FAIL/7 ERROR，Ruff全通过；完整Web838/2与tsc/ESLint0 errors成立。随后UI导航叶ae795bf已审、机械组合73a25d900cdb29e44104208116913bb2b1ee65d1；两个Web残差相关37 PASS，不把未重跑全套宣布全绿。B仍纵向负责素材资格/配音/等待执行器，F三个排队下游失败由此协议修后再具名处理。以下新单均从准确73a25d9隔离公开候选，保护旧树、语义ACK后仅指定文件最小整改/检查，无真实模型/服务/用户资料/安装下载/远端写权。
+
+- C QA-V2-C-CAS-FIXTURES：唯一tests/test_assistant_script.py、test_material_ingestion.py、test_production_foundation.py、test_reply_script_transfer.py、test_script_library.py。当前失败/ERROR为旧直接update/confirm无版本、旧HTTP缺mandatory token、stale已确认重放旧期望；沿同真实读回当前token，缺失/过期必须拒绝且不写，正确重放/确认意图保留，不生产兼容后门或宽断言。只当前失败/共用fixture消费者最小回归/Ruff，已通过1949不全重跑；产品归B，C产品权结束。
+- D QA-V2-D-MONTAGE-READER-FIXTURES：唯一tests/test_montage_pipeline.py四残差及其共用local fixture，标题两个subtitle exact、confirm pending、split fade。核真实成员/private-owner来源，成功fixture须为真正可读对象；直接_apply_creation_task_montage_clip_update须真实可信Request，不伪诊断/全库可见。若确有未影响操作被新guard错误拦截，报B源证据，不放宽权限改绿。仅四受影响case/最小shared fixture消费者/Ruff；不改B新material tests或所有prod。
+- F QA-V2-F-REQUEST-CAPACITY-FIXTURES：唯一tests/test_material_tag_navigation.py三残差、test_workspace_llm_secrets.py provider投影残差、test_model_installer.py成功安装状态刷新残差。发送路径补真实会话读回draft_version与稳定UUID意图，保留invisible零Pi/credentials禁止/可信成员及provider事实断言，不独立绕过API；installer受控tiny下载case要用明确受控容量fixture，当前真实机器10.1GiB小于模型声明10.7导致失败，不改真实容量门槛、不下载真实模型。只五当前case/必要共用fixture消费者/Ruff，不改产品/Key/用户环境。
+- UI QA-V2-UI-SCRIPT-LATE-EDIT：原导航ctx_cd4a6305e221已结算retain，上一节追加晚保存写权不送达旧Dispatch。此新单唯一CreationTaskWorkspace.tsx及一个新late-response组件专项，必要app/tasks/[taskId]/page.tsx仅明确任务identity key及直接专项；修请求返回不覆盖请求期间继续输入，并更新真实CAS版本。待复现切任务晚返回只准确对象隔离，不改API/types/main/B/source/helper，原37/838证据复用。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
