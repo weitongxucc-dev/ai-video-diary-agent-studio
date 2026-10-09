@@ -582,8 +582,12 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90),
         narration_budget=narration, montage_budget=montage, verify_identity=verify)
     resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=budget)
-    # Deterministic ambient load only: request caps and group sampling stay real.
-    monkeypatch.setattr("app.host_resource_probes.psutil.cpu_percent", lambda **_kwargs: 0)
+    # Deterministic ambient load; preserve the probe's real sampling interval.
+    def ambient_cpu_percent(*, interval):
+        time.sleep(interval)
+        return 0
+
+    monkeypatch.setattr("app.host_resource_probes.psutil.cpu_percent", ambient_cpu_percent)
     monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda **_kwargs:
         HostCapacity(cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0))
     monkeypatch.setattr("app.montage.sample_host_capacity", lambda **_kwargs:
@@ -669,9 +673,19 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         assert scheduler.pick_and_grant() is None
         assert calls == []
         state["identity"] = "ready"
+        with repo._connect() as conn:
+            requests = conn.execute("SELECT id FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchall()
+        assert len(requests) == 1
+        request_id = requests[0][0]
         grant = scheduler.pick_and_grant()
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + resources.io_window_seconds + 1
         while grant is None and stop != "input" and time.monotonic() < deadline:
+            with repo._connect() as conn:
+                waiting = conn.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+            assert tuple(waiting) == ("blocked", "resource_unknown")
+            assert state["identity"] == "ready"
+            assert repo.get_job_run(workspace, job_id).status == "queued"
+            assert calls == []
             time.sleep(0.1)
             grant = scheduler.pick_and_grant()
         if stop == "input":
@@ -681,7 +695,10 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             with repo._connect() as conn:
                 assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone()[0] == "resource_busy"
             return
-        assert grant.unit_key.startswith("narration:")
+        assert grant is not None
+        assert grant.request_id == request_id and grant.unit_key.startswith("narration:")
+        assert resources.io_window_seconds == 3.0
+        assert resources._admission_io[-1][0] - resources._admission_io[0][0] >= resources.io_window_seconds
         stopper = None
         stop_errors = []
         if stop in {"revoked", "cancelled"}:
@@ -724,7 +741,13 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         submit_creation_stage(execution, scheduler, retry, actor)
         for stage in ("montage_plan", "render"):
             grant = scheduler.pick_and_grant()
-            assert grant is not None and grant.unit_key.startswith(stage + ":")
+            with repo._connect() as conn:
+                queued = [dict(row) for row in conn.execute(
+                    "SELECT id,unit_key,state,wait_reason FROM device_work_requests WHERE owner_id=?", (retry.id,))]
+            assert grant is not None and grant.unit_key.startswith(stage + ":"), (
+                queued, repo.get_job_run(workspace, retry.id).failure_reason,
+                repo.get_creation_task_montage_plan(workspace, task_id).get("status"),
+                repo.get_creation_task_montage_plan(workspace, task_id).get("low_confidence_clip_count"))
             if stage == "render" and stop == "render_revoked":
                 state["identity"] = "unauthorized"
             executor.execute(grant, scheduler)
