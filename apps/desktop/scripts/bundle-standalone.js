@@ -1,233 +1,185 @@
 #!/usr/bin/env node
 /**
- * Materialise Next.js standalone output for electron-builder packaging.
- *
- * Next.js standalone in a pnpm monorepo creates symlinks like
- *   web/node_modules/next -> ../../../node_modules/.pnpm/next@.../node_modules/next
- *
- * Inside .pnpm, package peer-dependencies are symlinked at the package's
- * node_modules level (e.g. ``.pnpm/next@.../node_modules/styled-jsx``),
- * NOT inside the package directory.  Node.js's standard module resolution
- * requires ``next/node_modules/styled-jsx``, so we must restructure.
- *
- * This script:
- * 1. Copies standalone/apps/web/* to standalone-bundled/apps/web/*
- *    and adds the static/public assets that Next intentionally omits from
- *    standalone output.
- * 2. For each top-level symlinked dep (next, react), follows the pnpm chain
- *    and reconstructs a standard node_modules tree with all transitive deps
- *    materialised as real files.
- *
- * Output: standalone-bundled/apps/web/ with zero symlinks, ready for
- * electron-builder extraResources.
+ * Materialise the runtime dependency graph emitted by Next.js standalone.
+ * The traced standalone node_modules tree is authoritative: package.json may
+ * also contain build/test dependencies that are intentionally not traced.
  */
-
 const fs = require('fs');
 const path = require('path');
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const STANDALONE = path.join(REPO_ROOT, 'apps', 'web', '.next', 'standalone');
-const WEB_BUILD = path.join(REPO_ROOT, 'apps', 'web', '.next');
-const WEB_PUBLIC = path.join(REPO_ROOT, 'apps', 'web', 'public');
-const SRC = path.join(STANDALONE, 'apps', 'web');
-const DST = path.join(REPO_ROOT, 'apps', 'web', '.next', 'standalone-bundled', 'apps', 'web');
-
-if (!fs.existsSync(SRC)) {
-  console.error('standalone output not found at', SRC);
-  console.error('Run "pnpm --dir apps/web build" first.');
-  process.exit(1);
+function isSymlink(target) {
+  try {
+    return fs.lstatSync(target).isSymbolicLink();
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
-// Remove previous
-if (fs.existsSync(DST)) {
-  fs.rmSync(DST, { recursive: true, force: true });
+function resolveSymlink(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error(`Broken standalone dependency link: ${target}`);
+    }
+    throw error;
+  }
 }
 
-// ── Utilities ──
-
-function isSymlink(p) {
-  try { return fs.lstatSync(p).isSymbolicLink(); } catch (_) { return false; }
-}
-
-function realpathSafe(p) {
-  try { return fs.realpathSync(p); } catch (_) { return null; }
-}
-
-/** Copy a file or directory (not a symlink) to dst recursively. */
-function copyTree(src, dst) {
-  const st = fs.statSync(src);
-  if (st.isDirectory()) {
-    fs.mkdirSync(dst, { recursive: true });
-    for (const entry of fs.readdirSync(src)) {
-      const s = path.join(src, entry);
-      const d = path.join(dst, entry);
-      if (isSymlink(s)) {
-        const real = realpathSafe(s);
-        if (real) copyTree(real, d);
+function copyTree(source, destination) {
+  const stat = fs.statSync(source);
+  if (stat.isDirectory()) {
+    fs.mkdirSync(destination, { recursive: true });
+    for (const name of fs.readdirSync(source)) {
+      const sourceChild = path.join(source, name);
+      const destinationChild = path.join(destination, name);
+      if (isSymlink(sourceChild)) {
+        copyTree(resolveSymlink(sourceChild), destinationChild);
       } else {
-        copyTree(s, d);
+        copyTree(sourceChild, destinationChild);
       }
     }
-  } else {
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.copyFileSync(src, dst);
-  }
-}
-
-// ── Phase 1: copy everything except node_modules from web source ──
-
-console.log('Materialising standalone deps (dereference + restructure)...');
-console.log('  src:', SRC);
-console.log('  dst:', DST);
-
-fs.mkdirSync(DST, { recursive: true });
-for (const entry of fs.readdirSync(SRC)) {
-  if (entry === 'node_modules') continue;
-  const s = path.join(SRC, entry);
-  const d = path.join(DST, entry);
-  copyTree(s, d);
-}
-
-// Next's standalone server deliberately omits `.next/static` and `public`.
-// They are needed at runtime for stylesheets, JavaScript chunks, and any
-// public assets, so materialise them next to server.js before packaging.
-const staticSrc = path.join(WEB_BUILD, 'static');
-if (fs.existsSync(staticSrc)) {
-  copyTree(staticSrc, path.join(DST, '.next', 'static'));
-}
-if (fs.existsSync(WEB_PUBLIC)) {
-  copyTree(WEB_PUBLIC, path.join(DST, 'public'));
-}
-
-// ── Phase 2: materialise top-level node_modules entries ──
-
-const SRC_NM = path.join(SRC, 'node_modules');
-const DST_NM = path.join(DST, 'node_modules');
-fs.mkdirSync(DST_NM, { recursive: true });
-
-const pnpmRoot = path.join(STANDALONE, 'node_modules', '.pnpm');
-if (!fs.existsSync(pnpmRoot)) {
-  console.error('ERROR: .pnpm store not found at', pnpmRoot);
-  process.exit(1);
-}
-
-/**
- * Given a symlink path like
- *   standalone/apps/web/node_modules/next  (symlink)
- *     → ../../../node_modules/.pnpm/next@X/node_modules/next
- *
- * 1. Resolve the symlink to the real package dir in .pnpm
- * 2. Copy the package to DST_NM/<name> as a real directory
- * 3. Look at .pnpm/<pkg>/node_modules/ for peer-dependency symlinks
- * 4. Materialise those inside DST_NM/<name>/node_modules/
- */
-function materialiseDep(entryName) {
-  const symlinkPath = path.join(SRC_NM, entryName);
-  if (!isSymlink(symlinkPath)) {
-    // Not a symlink — copy as-is
-    copyTree(symlinkPath, path.join(DST_NM, entryName));
     return;
   }
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
+}
 
-  const realPkg = realpathSafe(symlinkPath);
-  if (!realPkg) {
-    console.error('  WARNING: broken symlink for', entryName, '— skipping');
-    return;
+function packageInstallRoot(packagePath) {
+  const parts = path.resolve(packagePath).split(path.sep);
+  const marker = parts.lastIndexOf('node_modules');
+  if (marker < 0) throw new Error(`Cannot find node_modules ancestor for ${packagePath}`);
+  return path.join(path.sep, ...parts.slice(1, marker + 1));
+}
+
+function materialisePackage(source, destination, activePackages) {
+  const realSource = isSymlink(source) ? resolveSymlink(source) : fs.realpathSync(source);
+  const stat = fs.statSync(realSource);
+  if (!stat.isDirectory()) {
+    throw new Error(`Standalone dependency is not a directory: ${source}`);
   }
+  copyTree(realSource, destination);
 
-  // Copy the package itself
-  const dstPkg = path.join(DST_NM, entryName);
-  copyTree(realPkg, dstPkg);
+  if (activePackages.has(realSource)) return;
+  const nextActive = new Set(activePackages);
+  nextActive.add(realSource);
+  const installRoot = packageInstallRoot(realSource);
+  materialiseInstalledEntries(installRoot, path.join(destination, 'node_modules'), realSource, nextActive);
+}
 
-  // The pnpm package dir is something like
-  //   .pnpm/next@15.5.18.../node_modules/next/
-  // Its peer deps are at
-  //   .pnpm/next@15.5.18.../node_modules/  (siblings of `next/`)
-  const pnpmPkgNodeModules = path.dirname(realPkg); // parent = the pnpm node_modules for this package
+function materialiseInstalledEntries(sourceRoot, destinationRoot, packageToSkip, activePackages) {
+  if (!fs.existsSync(sourceRoot)) return;
+  for (const name of fs.readdirSync(sourceRoot).sort()) {
+    if (name === '.bin') continue;
+    const source = path.join(sourceRoot, name);
+    const destination = path.join(destinationRoot, name);
+    const stat = fs.lstatSync(source);
 
-  if (!fs.existsSync(pnpmPkgNodeModules)) return;
-
-  /**
-   * Materialise pnpm peer-dependency entries into dstBase.
-   * Handles both flat symlinks (styled-jsx -> real) and scoped
-   * real-directory containers (@swc/helpers where @swc/ is a dir
-   * containing a symlink `helpers`).
-   */
-  function materialisePeerDeps(srcDir, dstBase, skipName) {
-    for (const dep of fs.readdirSync(srcDir)) {
-      if (dep === skipName) continue;
-
-      const depPath = path.join(srcDir, dep);
-      const depDst = path.join(dstBase, dep);
-
-      if (isSymlink(depPath)) {
-        const depReal = realpathSafe(depPath);
-        if (depReal && !fs.existsSync(depDst)) {
-          copyTree(depReal, depDst);
-        }
-      } else if (fs.statSync(depPath).isDirectory()) {
-        // Scoped-package container: `@swc/` contains `helpers` (symlink)
-        fs.mkdirSync(depDst, { recursive: true });
-        materialisePeerDeps(depPath, depDst, null);
+    if (stat.isSymbolicLink()) {
+      const realSource = resolveSymlink(source);
+      if (realSource === packageToSkip) continue;
+      if (!fs.existsSync(destination)) {
+        materialisePackage(realSource, destination, activePackages);
+      }
+    } else if (stat.isDirectory()) {
+      if (fs.existsSync(path.join(source, 'package.json'))) {
+        if (fs.realpathSync(source) === packageToSkip) continue;
+        if (!fs.existsSync(destination)) materialisePackage(source, destination, activePackages);
+      } else {
+        materialiseInstalledEntries(source, destination, packageToSkip, activePackages);
       }
     }
   }
-
-  const dstPkgNM = path.join(dstPkg, 'node_modules');
-  materialisePeerDeps(pnpmPkgNodeModules, dstPkgNM, entryName);
 }
 
-const webPackage = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'apps', 'web', 'package.json'), 'utf8'));
-for (const entry of Object.keys(webPackage.dependencies || {})) {
-  materialiseDep(entry);
-}
-
-// ── Sanity check ──
-
-const nextPkgJson = path.join(DST_NM, 'next', 'package.json');
-if (!fs.existsSync(nextPkgJson)) {
-  console.error('FAILED: next/package.json not found at', nextPkgJson);
-  process.exit(1);
-}
-
-const reactPkgJson = path.join(DST_NM, 'react', 'package.json');
-if (!fs.existsSync(reactPkgJson)) {
-  console.error('FAILED: react/package.json not found at', reactPkgJson);
-  process.exit(1);
-}
-
-// Check that next can find styled-jsx and @swc/helpers
-const styledJsxIn = path.join(DST_NM, 'next', 'node_modules', 'styled-jsx', 'package.json');
-if (!fs.existsSync(styledJsxIn)) {
-  console.error('FAILED: styled-jsx not materialised inside next/node_modules at', styledJsxIn);
-  process.exit(1);
-}
-const swcHelpersIn = path.join(DST_NM, 'next', 'node_modules', '@swc', 'helpers', 'package.json');
-if (!fs.existsSync(swcHelpersIn)) {
-  console.error('FAILED: @swc/helpers not materialised inside next/node_modules at', swcHelpersIn);
-  process.exit(1);
-}
-
-// Check zero symlinks in output
-const symlinksRemaining = (() => {
+function countSymlinks(root) {
   let count = 0;
-  function walk(dir) {
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, entry.name);
-        if (entry.isSymbolicLink()) count++;
-        else if (entry.isDirectory()) walk(p);
-      }
-    } catch (_) {}
+  function walk(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) count += 1;
+      else if (entry.isDirectory()) walk(child);
+    }
   }
-  walk(DST);
+  walk(root);
   return count;
-})();
-
-console.log('  symlinks remaining in output:', symlinksRemaining);
-if (symlinksRemaining > 0) {
-  console.error('FAILED: symlinks still present after materialisation');
-  process.exit(1);
 }
 
-console.log('  OK — all deps materialised, 0 symlinks.');
+function materialiseStandalone({ standaloneRoot, webBuild, webPublic, destination }) {
+  const sourceWeb = path.join(standaloneRoot, 'apps', 'web');
+  const sourceNodeModules = path.join(sourceWeb, 'node_modules');
+  if (!fs.existsSync(sourceWeb)) {
+    throw new Error(`Next standalone output not found at ${sourceWeb}`);
+  }
+  if (!fs.existsSync(sourceNodeModules)) {
+    throw new Error(`Next standalone traced node_modules not found at ${sourceNodeModules}`);
+  }
+
+  const tracedEntries = fs.readdirSync(sourceNodeModules).filter((name) => name !== '.bin');
+  for (const required of ['next', 'react']) {
+    if (!tracedEntries.includes(required)) {
+      throw new Error(`Required traced runtime dependency is missing: ${required}`);
+    }
+  }
+
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(destination, { recursive: true });
+  for (const name of fs.readdirSync(sourceWeb)) {
+    if (name === 'node_modules') continue;
+    copyTree(path.join(sourceWeb, name), path.join(destination, name));
+  }
+
+  const staticSource = path.join(webBuild, 'static');
+  if (fs.existsSync(staticSource)) copyTree(staticSource, path.join(destination, '.next', 'static'));
+  if (fs.existsSync(webPublic)) copyTree(webPublic, path.join(destination, 'public'));
+
+  const destinationNodeModules = path.join(destination, 'node_modules');
+  fs.mkdirSync(destinationNodeModules, { recursive: true });
+  for (const name of tracedEntries.sort()) {
+    materialisePackage(path.join(sourceNodeModules, name), path.join(destinationNodeModules, name), new Set());
+  }
+
+  for (const required of ['next', 'react']) {
+    if (!fs.existsSync(path.join(destinationNodeModules, required, 'package.json'))) {
+      throw new Error(`Required runtime dependency was not materialised: ${required}`);
+    }
+  }
+  for (const required of [
+    ['next', 'node_modules', 'styled-jsx', 'package.json'],
+    ['next', 'node_modules', '@swc', 'helpers', 'package.json'],
+  ]) {
+    const packageFile = path.join(destinationNodeModules, ...required);
+    if (!fs.existsSync(packageFile)) {
+      throw new Error(`Required transitive runtime dependency was not materialised: ${packageFile}`);
+    }
+  }
+
+  const symlinks = countSymlinks(destination);
+  if (symlinks !== 0) throw new Error(`Standalone output contains ${symlinks} symbolic link(s)`);
+  return { tracedEntries: tracedEntries.sort(), symlinks };
+}
+
+function main() {
+  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const standaloneRoot = path.join(repoRoot, 'apps', 'web', '.next', 'standalone');
+  const webBuild = path.join(repoRoot, 'apps', 'web', '.next');
+  const webPublic = path.join(repoRoot, 'apps', 'web', 'public');
+  const destination = path.join(webBuild, 'standalone-bundled', 'apps', 'web');
+  const result = materialiseStandalone({ standaloneRoot, webBuild, webPublic, destination });
+  console.log('Materialised standalone runtime dependencies:', result.tracedEntries.join(', '));
+  console.log('  output:', destination);
+  console.log('  symlinks remaining:', result.symlinks);
+  console.log('  OK — standalone tree is materialised.');
+}
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`FAILED: ${error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+module.exports = { materialiseStandalone };
