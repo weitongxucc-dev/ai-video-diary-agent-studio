@@ -259,6 +259,8 @@ F新QA-V2-LOCAL-CLIENT-PORT：原F候选retain，仅复用已有终端，从准�
 
 C-SOURCE-FORM原ctx_32bdf6c226be的provider最终轮明确consumer_fenced后停止，未发worker_done，三文件未提交差额保留。主控按orchestration恢复指南以该正证abandon原attempt，不停止/删除终端或候选；同一task_dd0225de596e可用--retry-of接续原C可见终端及原arrowworm placement。新attempt必须保留并复核既有`/tmp/main-acceptance-20261009/review-v2-source-form/candidate`三文件差额，禁止重新clone覆盖；先核Task/Dispatch新注入身份和本合同。已有10项sources专项正证可复用，公开依赖改复用当前main-ui-linear/apps/web/node_modules（其中已有react-markdown/remark-gfm），仅必要tsc/diff及变动专项，不安装。新候选repo本地设公开Git身份，交clean提交/报告及准确后端接线未验。消费收件箱使用新注入handle和命令；若仍有fence，停止并报告准确错误，不能用其他Run/旧Dispatch绕过。共享main/schema/api/types仍仅B写，原普通导入默认可用性与使用限制边界保持。
 
+QA-V2-UI-CONVERSATION-REVIEW接续：从主控准确aa2e431新clone到`/tmp/main-acceptance-20261009/review-v2-conversation-review/candidate`，原UI终端保留复用，公开本地Git身份。当前仅useAssistantConversation.ts及直接专项可写；32f01e9已组合但不是完整持久草稿修复。主控准确回读bindTurnEvents先按current.id/turn存在return，再记录turn_started身份；切走后的真实持久确认被丢，晚失败仍可能把已发送原句当未发恢复。事件身份必须先按绑定的conversation/localTurn记录，是否当前界面只控制render，不改变真实提交状态；不猜时间/同文字身份。主控也确认恢复PATCH是无条件服务器覆盖；每hook Map不能约束已卸载实例与重进新hook保存的新草稿。先用必要迟到事件及卸载→新实例编辑→原失败的专项正反证复核，修具名客户端身份差额；对服务器CAS/轮次幂等接线仅给最小准确接口/字段方案，不写main/schema/api/types/Repository，B当前仍独占共享入口。方案须沿唯一conversation SQLite事实源，普通输入/轮次checkpoint/失败恢复都处理真实版本，不能把已持久轮次或新草稿恢复成旧原文。报告未接服务器即未关闭N03，不靠减少测试覆盖、刷新或吞错通过。可另只读识别N06/N14与U01/U04真实入口最小纵向接线提议，明确哪些已存在可复用，不施工无权文件。无真实API/Web/Pi/模型/GUI/用户库，复用公开缓存，只必要新增专项；交clean差额和精确接续方案。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
