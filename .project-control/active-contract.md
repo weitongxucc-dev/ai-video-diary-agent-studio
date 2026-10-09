@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI：会话纵向根因核实 | task_087deec80e9a / ctx_5664c1ed76fa；以下具名只读定位；109旧写权结束 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI-IMPLEMENT：会话共同机制修正 | 定位task_087deec80e9a / ctx_5664c1ed76fa已succeeded并retain；以下新实施范围 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B：声音/人物纵向根因核实 | task_d4a8b44a7fda / ctx_06b5564d9958；以下具名只读定位；108运行权结束；99脏树保留 |
 
@@ -47,13 +47,19 @@
 
 准确产品基线为`/tmp/main-controller-20261008/ui-v3-integration`的`6d7b0ada06e8389cd5495c2d32501fdb92102e60`，PR102仍draft且未获合入批准。评审包SHA256为`c62f75e9282673c79b71703cc0a28bd43a390886ed7a7887dbfbdb1340c206f0`，manifest289文件无差异；定向证据及累计入口在`/tmp/main-controller-20261009/review-v2/`。既有用户包和试用数据保留，不访问其DB/配置/Key或改设置；原模型/媒体/账号租约不复活。本批授权产品整改，不取得实际模型、个人样本、外发、收费、账号、发布、用户数据迁移或删除许可。
 
-首波仅复用UI/B终端进行互不重叠的定向根因定位；主控随后按确认差额具名施工与验收，不让临时诊断停在泛化计划。每个Issue关闭须逐来源ID回填候选、复现、系统原因、受影响消费者、真实UI及必要持久结果；静态/测试/HTTP/模型/客户端分别记证据。
+首波复用UI/B终端定向根因定位；UI定位已收读并按以下确认差额接续实施，B仍完成资源定位。每个Issue关闭须逐来源ID回填候选、复现、系统原因、受影响消费者、真实UI及必要持久结果；静态/测试/HTTP/模型/客户端分别记证据。
 
-### QA-V2-UI：会话生命周期与Agent控制根因（定位任务）
+### QA-V2-UI-IMPLEMENT：会话生命周期与Agent控制共同机制（MAIN-REVIEWV2-CONVERSATION）
 
-纵向负责人UI。仅只读准确6d7b0ada的HomeCommandComposer、AppShell、CreationTaskWorkspace、assistant_pi、直接assistant路由与Repository、lib/api/types、现有消息渲染和直接专项；读main DESIGN§2/§4、架构§2/§9与auth当前可信成员边界。原树clean保留，不切换或改产品；不恢复109/105权限。来源N01–N04、U01/U04–U06/N05、H-L05/DEEP-01–04/06；只核本批会话路径，不扫描全部历史。
+定位报告`/tmp/main-acceptance-20261009/review-v2-ui/report.md`已确认首页/素材React本地状态、任务TaskEvent、Pi临时conversation ID三个生命周期未统一，消息整轮后追加、无真实停止、headless不执行斜杠命令与裸Markdown。定位权结束。本次为用户已授权整改的C2共享契约补齐；重读main DESIGN§2新增会话/轮次/命令条款、领域§7.5、架构§9新增持久入口及auth可信成员/对象边界，语义REBASE_ACK后直接实施。B的§3/§4定位不受影响。
 
-owned仅`/tmp/main-acceptance-20261009/review-v2-ui/`报告/最小证据。确认当前消息延迟、草稿与历史生命周期、真实Pi会话身份、页面/任务/对象切换、请求取消与子进程释放链、命令能力注册表（实际Pi1.1.0公共代码只读，不读用户会话或设置）。给出每个确认问题的准确代码定位与共同原因、最小完整改动路径及共享文件需求；列真实支持/缺接线/需要产品决定，不能把全部Pi能力名当已支持命令。不能用Abort浏览器读取冒称已停止Pi或取消制作。可用现有离线专项定向复现，测试不是GUI；不开网络服务、GUI、Pi/Key、模型/媒体或构建，不改依赖/共享权威/远端。尽快报告可直接实施的边界；结案后retain，主控新Dispatch接续实现。
+UI是纵向实施及退役负责人，从原clean6d7b0ada建立`codex/review-v2-conversation-20261009`，保护原成果。来源N01–N04、U01/U04–U06/N05及相关历史。新增结果：可信成员/空间/范围绑定的应用会话与轮次、导航及刷新可恢复历史和未发送草稿、可发现新建/命名/恢复入口、即时用户消息、生成时可编辑下一条草稿、真实停止并保留部分输出、统一安全Markdown/正文复制/真实工具顺序摘要、页面相关建议。停止不等于取消制作、不自动重试写命令、不增加排队/插话；未知或未接通命令明确说明，禁止模型口头模拟。应用新建/恢复/命名优先真实接通；实际Pi命令/扩展/技能/模板/工具完整盘点形成能力表，其他控制只能映射真实现有入口，缺口如实保留，不造无效按钮或开放任意shell/文件命令。
+
+沿现有SQLite/Repository、可信assistant路由、Pi运行和业务工具建立必要会话持久入口，不建第二Agent/生产状态库。新的聊天轮次只有一个写者，既有TaskEvent业务结果保持；旧任务聊天仅作为明确只读历史投影，不清空或静默迁移用户历史，不读取任意Pi session文件。草稿按合理提交检查点保存，不每个字符产生业务版本或伪装已执行；选择切换后结果归原会话对象，不能覆盖新选择。停止须从服务端关联当前轮次实际子进程并释放，终态回读可核实；可用受控无秘密假进程验证生命周期，不能用停止SSE读取代替进程停止。
+
+唯一owned产品：HomeCommandComposer.tsx、CreationTaskWorkspace.tsx、AppShell.tsx、MaterialLibraryWorkspace.tsx仅会话上下文；lib/api.ts、lib/types.ts；main.py仅会话创建/回读/草稿/命令/停止与三个assistant直接消费者、assistant_pi.py；确有需要的单一会话Repository模块/对应增量schema与生命周期模块、diary_tools.ts仅真实事件投影；必要共享消息组件和对话局部样式及上述直接测试。不改ProfilesRepository/人物声音/平台/任务媒体或调度/共享权威/云身份/桌面。package/lock仅在核无既有安全Markdown渲染能力后允许引入react-markdown和remark-gfm及必要锁文件；不执行安装脚本、不加入其他UI底座。B无以上文件写权，若B后续需要共享入口须等本单交付后具名转交。
+
+owned证据`/tmp/main-acceptance-20261009/review-v2-conversation/`。最小验证：两处Composer即时/流式/下一草稿/安全渲染/复制/工具顺序/未知命令；服务端会话成员空间隔离与范围绑定、历史/草稿刷新恢复、轮次错误/取消与实际受控子进程释放、只读历史兼容。允许已有依赖专项、tsc及隔离测试DB，不运行真实用户DB迁移、Pi/Key、个人素材/模型、账号/GUI/常驻服务或打包。新增必要表/字段只能在可丢弃测试DB验证，原数据保留与旧写者退役有负向证据。交clean候选、净diff、命令能力表、逐ID证据和未验项；源码通过后主控一次集成及具名客户端补验，未完成真实目标不得关闭Issue或称MIGRATION_ACCEPTED。
 
 ### QA-V2-B：F01/F02人物声音完整路径根因（定位任务）
 
