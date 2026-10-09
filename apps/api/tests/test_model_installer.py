@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,8 +46,9 @@ def test_interrupted_job_is_marked_resumable(tmp_path):
     assert "断点" in recovered["message"]
 
 
-def test_successful_install_refreshes_runtime_dependencies(tmp_path):
+def test_successful_install_refreshes_runtime_dependencies(tmp_path, monkeypatch):
     refreshed: list[bool] = []
+    downloads: list[str] = []
     catalog = ModelCatalog(
         tmp_path / "models",
         tmp_path / "runtime" / "bin" / "python",
@@ -58,13 +60,26 @@ def test_successful_install_refreshes_runtime_dependencies(tmp_path):
             return None
 
         def _download_model(self, _job_id, _spec):
+            downloads.append(_spec.id)
             return []
 
         def _publish_model(self, _spec, _manifest_files):
             return None
 
     installer = SuccessfulInstaller(catalog, on_complete=lambda: refreshed.append(True))
+    # This tests installation state/callbacks with a tiny download substitute,
+    # not this machine's free capacity or actual model/runtime installation.
+    capacity = {"free": 32 * 1024**3}
+    monkeypatch.setattr("app.model_installer.shutil.disk_usage", lambda _path: SimpleNamespace(
+        total=32 * 1024**3, used=32 * 1024**3 - capacity["free"], free=capacity["free"]))
+    required = installer.storage_preflight(CHINESE_CLIP_VIT_B16)["required_bytes"]
+    capacity["free"] = required - 1
+    with pytest.raises(ModelInstallError, match="可用空间不足"):
+        installer.run_sync(CHINESE_CLIP_VIT_B16.id, license_accepted=True)
+    assert downloads == refreshed == []
+    capacity["free"] = required
     job = installer.run_sync(CHINESE_CLIP_VIT_B16.id, license_accepted=True)
 
     assert job["status"] == "ready"
     assert refreshed == [True]
+    assert downloads == [CHINESE_CLIP_VIT_B16.id]

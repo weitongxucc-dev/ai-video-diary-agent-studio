@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -101,7 +102,7 @@ def tag_counts(client: TestClient, headers: dict[str, str] | None = None) -> dic
     return {item["tag"]: item for item in response.json()["tags"]}
 
 
-def create_material_conversation(client: TestClient, headers: dict[str, str], asset_id: str) -> str:
+def create_material_conversation(client: TestClient, headers: dict[str, str], asset_id: str, draft_text: str | None = None) -> dict:
     # Plain TestClient use does not enter the app lifespan; initialize only the
     # already isolated test conversation database before seeding this session.
     main_module.conversation_repo.initialize()
@@ -111,7 +112,13 @@ def create_material_conversation(client: TestClient, headers: dict[str, str], as
         json={"scope_kind": "material", "scope_id": f"asset:{asset_id}", "title": "测试素材对话"},
     )
     assert response.status_code == 200, response.text
-    return response.json()["id"]
+    if draft_text is not None:
+        saved = client.patch(f"/api/assistant/conversations/{response.json()['id']}", headers=headers,
+                             json={"draft_text": draft_text, "expected_draft_version": response.json()["draft_version"]})
+        assert saved.status_code == 200, saved.text
+    conversation = client.get(f"/api/assistant/conversations/{response.json()['id']}", headers=headers)
+    assert conversation.status_code == 200, conversation.text
+    return conversation.json()
 
 
 def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_tags(tag_client, monkeypatch) -> None:
@@ -119,7 +126,7 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
         tag_client.repository, tag_client.library, "对话素材.mp4",
         uploader_user_id=tag_client.uploader_user_id, user_tags=["旧标签"],
     )
-    conversation_id = create_material_conversation(tag_client.client, tag_client.headers, asset_id)
+    conversation = create_material_conversation(tag_client.client, tag_client.headers, asset_id, "把整条素材标签改成新标签")
 
     def fake_turn(_settings, *, workspace_id, selection, **_kwargs):
         assert workspace_id == WORKSPACE
@@ -136,7 +143,8 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
     monkeypatch.setattr(main_module, "run_material_turn", fake_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
-        json={"message": "把整条素材标签改成新标签", "conversation_id": conversation_id,
+        json={"message": "把整条素材标签改成新标签", "conversation_id": conversation["id"],
+              "client_request_id": str(uuid4()), "expected_draft_version": conversation["draft_version"],
               "selection": {"scope": "asset", "asset_id": asset_id}},
     )
     assert response.status_code == 200
@@ -148,6 +156,8 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
 
 def test_selected_material_assistant_does_not_call_pi_for_an_invisible_asset(tag_client, monkeypatch) -> None:
     private_asset = register(tag_client.repository, tag_client.library, "他人素材.mp4", uploader_user_id="another-member")
+    visible_asset = register(tag_client.repository, tag_client.library, "本人素材.mp4", uploader_user_id=tag_client.uploader_user_id)
+    conversation = create_material_conversation(tag_client.client, tag_client.headers, visible_asset, "读一下标签")
     called = False
 
     def forbidden_turn(*_args, **_kwargs):
@@ -158,7 +168,8 @@ def test_selected_material_assistant_does_not_call_pi_for_an_invisible_asset(tag
     monkeypatch.setattr(main_module, "run_material_turn", forbidden_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
-        json={"message": "读一下标签", "conversation_id": "cf7ecf08-ec5f-4960-9767-39325555ebcf",
+        json={"message": "读一下标签", "conversation_id": conversation["id"],
+              "client_request_id": str(uuid4()), "expected_draft_version": conversation["draft_version"],
               "selection": {"scope": "asset", "asset_id": private_asset}},
     )
     assert response.status_code == 404
@@ -170,6 +181,7 @@ def test_selected_material_assistant_rejects_credentials_in_user_message(tag_cli
         tag_client.repository, tag_client.library, "凭据检查素材.mp4",
         uploader_user_id=tag_client.uploader_user_id,
     )
+    conversation = create_material_conversation(tag_client.client, tag_client.headers, asset_id)
     monkeypatch.setattr(
         main_module, "_workspace_settings_for",
         lambda _workspace_id: SimpleNamespace(effective_llm_api_key="synthetic-secret-123"),
@@ -184,7 +196,8 @@ def test_selected_material_assistant_rejects_credentials_in_user_message(tag_cli
     monkeypatch.setattr(main_module, "run_material_turn", forbidden_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
-        json={"message": "添加标签 token=synthetic-secret-123", "conversation_id": "fce9f2b6-adc8-4aeb-bbb6-e51d3aad7a74",
+        json={"message": "添加标签 token=synthetic-secret-123", "conversation_id": conversation["id"],
+              "client_request_id": str(uuid4()), "expected_draft_version": conversation["draft_version"],
               "selection": {"scope": "asset", "asset_id": asset_id}},
     )
     assert response.status_code == 422
