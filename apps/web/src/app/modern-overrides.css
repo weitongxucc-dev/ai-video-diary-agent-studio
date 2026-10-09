@@ -341,15 +341,39 @@ h4 {
   white-space: pre-wrap;
 }
 
-.assistant-activity { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; }
-.assistant-activity__text { max-height: 120px; overflow-y: auto; margin: 0; color: var(--text-1); font-size: 13px; line-height: var(--line-body); white-space: pre-wrap; }
-.assistant-activity__tools { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
-.assistant-activity__tools li { padding-left: 2px; }
-.assistant-activity__tools li[data-state="failed"] > span { color: var(--danger); }
-.assistant-activity__tools li[data-state="succeeded"] > span { color: var(--success); }
-.assistant-activity__tools details { margin: 2px 0 0 4px; }
-.assistant-activity__tools summary { width: fit-content; cursor: pointer; color: var(--text-3); }
-.assistant-activity__tools p { margin: 3px 0; color: var(--text-2); }
+.assistant-conversation-panel { display: grid; min-height: 0; gap: 10px; }
+.assistant-conversation-head, .assistant-conversation-head > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.assistant-conversation-head { color: var(--text-2); font-size: 12px; }
+.assistant-conversation-head button, .assistant-conversation-head select, .assistant-conversation-actions button, .assistant-conversation-actions summary, .assistant-copy { border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-2); padding: 5px 8px; font: inherit; cursor: pointer; }
+.assistant-conversation-history { display: grid; align-content: start; gap: 10px; max-height: 280px; min-height: 48px; overflow: auto; }
+.assistant-persisted-turn { display: grid; gap: 6px; }
+.assistant-persisted-turn[data-turn-status="running"] { border-left: 2px solid var(--accent); padding-left: 8px; }
+.assistant-persisted-turn[data-turn-status="failed"] { border-left: 2px solid var(--danger); padding-left: 8px; }
+.assistant-conversation-entry { display: grid; gap: 7px; }
+.assistant-conversation-entry textarea { width: 100%; min-height: 58px; resize: vertical; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); padding: 10px 12px; font: inherit; }
+.assistant-conversation-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.assistant-conversation-actions details { margin-right: auto; }
+.assistant-conversation-actions details p { max-width: 520px; color: var(--text-3); font-size: 12px; }
+.assistant-conversation-actions button[type="submit"] { background: var(--accent); color: white; }
+.assistant-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
+.assistant-suggestions p { flex-basis: 100%; margin: 0; }
+.assistant-suggestions button { border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface-1); color: var(--text-2); padding: 5px 9px; font: inherit; cursor: pointer; }
+.assistant-markdown-wrap { position: relative; color: var(--text-1); }
+.assistant-markdown { line-height: var(--line-body); overflow-wrap: anywhere; }
+.assistant-markdown > :first-child { margin-top: 0; }
+.assistant-markdown > :last-child { margin-bottom: 0; }
+.assistant-markdown pre { max-width: 100%; overflow: auto; border-radius: 8px; background: var(--surface-2); padding: 8px; }
+.assistant-markdown table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
+.assistant-markdown th, .assistant-markdown td { border: 1px solid var(--border-1); padding: 4px 7px; }
+.assistant-markdown a { color: var(--accent); text-decoration: underline; }
+.assistant-copy { margin-top: 5px; font-size: 11px; }
+.assistant-turn-tools, .assistant-turn-result, .assistant-capability-diagnostics { color: var(--text-3); font-size: 12px; }
+.assistant-turn-tools summary, .assistant-turn-result summary, .assistant-capability-diagnostics summary { width: fit-content; cursor: pointer; }
+.assistant-turn-tools ol { display: grid; gap: 4px; margin: 6px 0; padding-left: 22px; }
+.assistant-turn-tools li[data-state="failed"] > strong { color: var(--danger); }
+.assistant-turn-tools li[data-state="succeeded"] > strong { color: var(--success); }
+.assistant-turn-tools p, .assistant-turn-result p, .assistant-capability-diagnostics p { margin: 3px 0; color: var(--text-2); }
+.assistant-conversation-error { color: var(--danger); }
 
 .home-composer__result {
   display: grid;
@@ -411,7 +435,6 @@ h4 {
 .assistant-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 2px; color: var(--text-3); font-size: 12px; }
 .assistant-meta summary { cursor: pointer; }
 .assistant-meta a { color: var(--accent); }
-.assistant-reply { max-height: 88px; overflow-y: auto; margin: 2px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--text-1); font-size: 13px; white-space: pre-wrap; }
 
 .status-success { color: var(--success); }
 .status-warning { color: var(--warning); }

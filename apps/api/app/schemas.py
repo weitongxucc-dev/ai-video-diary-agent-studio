@@ -1566,9 +1566,61 @@ class CreationTaskEditPreviewResponse(BaseModel):
     proposal: EditProposalResponse
 
 
+class AssistantConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_kind: Literal["home", "material", "task"]
+    scope_id: str = Field(min_length=1, max_length=240)
+    title: str = Field(default="新对话", min_length=1, max_length=80)
+
+
+class AssistantConversationCurrentRequest(AssistantConversationCreateRequest):
+    pass
+
+
+class AssistantConversationUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    draft_text: str | None = Field(default=None, max_length=4000)
+
+
+class AssistantConversationTurnResponse(BaseModel):
+    id: UUID
+    sequence: int
+    user_message: str
+    assistant_text: str
+    status: Literal["running", "completed", "failed", "stopped"]
+    events: list[dict[str, object]]
+    result: dict[str, object] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssistantConversationResponse(BaseModel):
+    id: UUID
+    workspace_id: str
+    scope_kind: Literal["home", "material", "task"]
+    scope_id: str
+    title: str
+    draft_text: str
+    created_at: datetime
+    updated_at: datetime
+    turns: list[AssistantConversationTurnResponse] = Field(default_factory=list)
+
+
+class AssistantConversationListResponse(BaseModel):
+    items: list[AssistantConversationResponse]
+
+
+class AssistantConversationStopRequest(BaseModel):
+    turn_id: UUID
+
+
 class CreationTaskAssistantTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    conversation_id: UUID
     message: str = Field(min_length=2, max_length=1000)
     context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
@@ -1584,6 +1636,8 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     execution_action: Literal["start", "resume", "cancel"] | None = None
     execution_status: dict[str, object] | None = None
     topic_candidates: CreationTaskTopicsResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["completed", "stopped"] = "completed"
 
 
 class CreationTaskAssistantHistoryEntry(BaseModel):
@@ -1698,6 +1752,8 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     provider: str
     model: str
     plan_preview: CreationPlanPreviewResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["completed", "stopped"] = "completed"
 
 
 class MaterialAssistantSelectionRequest(BaseModel):
@@ -1740,12 +1796,16 @@ class MaterialAssistantTurnResponse(BaseModel):
     provider: str
     model: str
     material_result: MaterialAssistantResultResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["completed", "stopped"] = "completed"
 
 
 class AssistantStreamEvent(BaseModel):
     """UI-safe projection of Pi text/tool events and the existing final response."""
 
-    type: Literal["text_delta", "tool_start", "tool_end", "result", "error"]
+    type: Literal["turn_started", "turn_status", "text_delta", "tool_start", "tool_end", "result", "error"]
+    turn_id: UUID | None = None
+    turn_state: Literal["running", "completed", "failed", "stopped"] | None = None
     delta: str | None = None
     tool_id: int | None = None
     label: str | None = None

@@ -1,6 +1,8 @@
 import json
 import shutil
 import subprocess
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,8 +11,52 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.assistant_pi import AssistantUnavailable, _PiStreamProjector, _last_answer_and_preview, _safe_tool_result_summary, run_material_turn, run_plan_turn, run_task_turn
+from app.conversation_repository import ConversationRepository
+from app.assistant_pi import (
+    AssistantStopped,
+    AssistantUnavailable,
+    _PiStreamProjector,
+    _last_answer_and_preview,
+    _run_pi_streaming,
+    _safe_tool_result_summary,
+    register_turn_control,
+    request_stop_turn,
+    run_material_turn,
+    run_plan_turn,
+    run_task_turn,
+)
 from app.config import Settings
+
+
+def test_stopping_assistant_turn_terminates_its_controlled_child_group(tmp_path):
+    turn_id = "synthetic-turn-stop"
+    started = threading.Event()
+    failures: list[BaseException] = []
+    register_turn_control(turn_id)
+
+    def run_child():
+        try:
+            _run_pi_streaming(
+                [sys.executable, "-u", "-c",
+                 "import json,time; print(json.dumps({'type':'tool_execution_start','toolName':'read_current_task','toolCallId':'test'}),flush=True); time.sleep(60)"],
+                message="synthetic stop test", env=dict(__import__("os").environ), cwd=tmp_path,
+                timeout_seconds=10, on_event=lambda _event: started.set(), turn_id=turn_id,
+            )
+        except BaseException as cause:
+            failures.append(cause)
+
+    worker = threading.Thread(target=run_child)
+    worker.start()
+    try:
+        assert started.wait(timeout=5), "isolated child did not emit its synthetic first event"
+        assert request_stop_turn(turn_id) is True
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "assistant child runner did not release after stop"
+        assert len(failures) == 1 and isinstance(failures[0], AssistantStopped)
+    finally:
+        if worker.is_alive():
+            request_stop_turn(turn_id)
+            worker.join(timeout=5)
 
 
 @pytest.mark.parametrize("rejected", [False, True])
@@ -625,7 +671,7 @@ def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):
                       stage="montage", selected_refs=[], playhead_ms=None)
 
 
-def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
+def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     seen = []
     def scoped_task(workspace_id, task_id):
         if workspace_id != "workspace-a" or task_id != "task-a":
@@ -651,12 +697,15 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
         )),
     )
     monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
+    repo = ConversationRepository(tmp_path / "assistant-task.sqlite3")
+    monkeypatch.setattr(main_module, "conversation_repo", repo)
+    conversation = repo.current_or_create("workspace-a", "member-caller", "task", "task-a")
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
-    payload = {"message": "请检查镜头", "context_stage": "montage",
+    payload = {"conversation_id": conversation["id"], "message": "请检查镜头", "context_stage": "montage",
                "selected_object_refs": ["clip:clip-1"], "playhead_ms": 1200}
     denied = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload,
                          headers={"x-test-workspace": "workspace-b"})
@@ -669,24 +718,31 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
     assert seen[0]["selected_refs"] == ["clip:clip-1"]
 
 
-def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch):
+def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(main_module, "current_workspace_id",
                         lambda request: request.headers.get("x-test-workspace", "workspace-a"))
     monkeypatch.setattr(main_module, "run_plan_turn",
                         lambda settings, **kwargs: (seen.append(kwargs) or ("请说明视频目标。", None)))
+    monkeypatch.setattr(main_module, "_local_member_token", lambda _request: "member-caller")
+    monkeypatch.setattr(main_module, "local_members_service", SimpleNamespace(
+        resolve_member=lambda token: SimpleNamespace(member_id=token, role="member", name="成员甲", created_at=None),
+    ))
+    repo = ConversationRepository(tmp_path / "assistant-plan.sqlite3")
+    monkeypatch.setattr(main_module, "conversation_repo", repo)
+    conversation = repo.current_or_create("workspace-b", "member-caller", "home", "home")
     client = TestClient(main_module.app)
     conversation_id = "11111111-1111-4111-8111-111111111111"
     rejected = client.post("/api/assistant/plan/turn", json={"message": "做视频", "conversation_id": "bad"})
     assert rejected.status_code == 422
     assert seen == []
     response = client.post("/api/assistant/plan/turn",
-                           json={"message": "做视频", "conversation_id": conversation_id},
+                           json={"message": "做视频", "conversation_id": conversation["id"]},
                            headers={"x-test-workspace": "workspace-b"})
     assert response.status_code == 200
     assert response.json()["plan_preview"] is None
     assert seen[0]["workspace_id"] == "workspace-b"
-    assert seen[0]["conversation_id"] == conversation_id
+    assert seen[0]["conversation_id"] == conversation["id"]
 
 
 def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):

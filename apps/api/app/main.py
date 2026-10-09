@@ -27,7 +27,12 @@ from pydantic import BaseModel, ValidationError
 
 import httpx
 
-from app.assistant_pi import AssistantUnavailable, run_material_turn, run_plan_turn, run_task_turn
+from app.assistant_pi import (
+    AssistantStopped, AssistantUnavailable, forget_turn_control, register_turn_control,
+    request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
+    stop_all_assistant_turns,
+)
+from app.conversation_repository import ConversationRepository, ConversationTurnAlreadyRunning
 
 from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
@@ -236,6 +241,12 @@ from app.workspace_settings import (
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
 from app.schemas import (
+    AssistantConversationCreateRequest,
+    AssistantConversationCurrentRequest,
+    AssistantConversationListResponse,
+    AssistantConversationResponse,
+    AssistantConversationStopRequest,
+    AssistantConversationUpdateRequest,
     JobProgressResponse,
     TaskJobProgressResponse,
     ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
@@ -543,6 +554,7 @@ production_repo = ProductionRepository(
     speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
     visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
 )
+conversation_repo = ConversationRepository(settings.database_path, initialize=False)
 montage_repo = MontageRepository(settings.database_path)
 quality_check_repo = QualityCheckRepository(settings.database_path)
 local_members_service = LocalMemberService(settings.database_path)
@@ -963,6 +975,54 @@ def _content_reader(request: Request, workspace_id: str) -> tuple[str | None, bo
     # 受控诊断只限保留的 local 工作区：本机单人使用照常可读自己的私有内容。
     # 其他 workspace 没有这个范围——那里的匿名请求没有可信身份，读不到私有内容。
     return None, workspace_id == LEGACY_WORKSPACE_ID
+
+
+def _assistant_member_id(request: Request, workspace_id: str) -> str:
+    member_id, _local_diagnostic = _content_reader(request, workspace_id)
+    if not member_id:
+        raise HTTPException(status_code=403, detail="请先确认当前成员身份，再使用可恢复的对话会话。")
+    return member_id
+
+
+def _assistant_scope_id(kind: str, *, task_id: str | None = None,
+                        selection: dict[str, str] | None = None) -> str:
+    if kind == "home":
+        return "home"
+    if kind == "task" and task_id:
+        return task_id
+    if kind == "material" and selection:
+        if selection["scope"] == "segment":
+            return f"segment:{selection['asset_id']}:{selection['segment_id']}"
+        return f"asset:{selection['asset_id']}"
+    if kind == "material":
+        return "browse"
+    raise HTTPException(status_code=422, detail="对话范围无效。")
+
+
+def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> None:
+    workspace_id = current_workspace_id(request)
+    if kind == "home" and scope_id == "home":
+        return
+    if kind == "task":
+        task = _creation_task_or_404(workspace_id, scope_id)
+        if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+            raise HTTPException(status_code=404, detail="creation task not found")
+        return
+    if kind == "material" and scope_id == "browse":
+        return
+    if kind == "material" and scope_id.startswith("asset:"):
+        asset_id = scope_id.removeprefix("asset:")
+        if asset_id:
+            get_production_material(asset_id, request)
+            return
+    if kind == "material" and scope_id.startswith("segment:"):
+        parts = scope_id.split(":", 2)
+        if len(parts) == 3 and parts[1] and parts[2]:
+            asset = get_production_material(parts[1], request)
+            if any(segment.id == parts[2] and segment.asset_id == asset.id for segment in asset.segments):
+                return
+            raise HTTPException(status_code=404, detail="所选素材片段不存在")
+    raise HTTPException(status_code=422, detail="对话范围与当前可见对象不匹配。")
 
 
 def _content_visible(
@@ -4409,6 +4469,164 @@ def _creation_task_workspace_response(
             },
         }
     )
+def _assistant_conversation_response(row: dict) -> dict:
+    return {**row, "turns": conversation_repo.list_turns(row["id"])}
+
+
+def _assistant_conversation_for_request(request: Request, conversation_id: str) -> tuple[str, str, dict]:
+    workspace_id = current_workspace_id(request)
+    member_id = _assistant_member_id(request, workspace_id)
+    row = conversation_repo.get(conversation_id, workspace_id, member_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="对话不存在或当前成员无权访问。")
+    _validate_assistant_scope(request, row["scope_kind"], row["scope_id"])
+    return workspace_id, member_id, row
+
+
+@app.post("/api/assistant/conversations/current", response_model=AssistantConversationResponse)
+def current_assistant_conversation(request: Request, payload: AssistantConversationCurrentRequest):
+    workspace_id = current_workspace_id(request)
+    member_id = _assistant_member_id(request, workspace_id)
+    _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
+    row = conversation_repo.current_or_create(workspace_id, member_id, payload.scope_kind, payload.scope_id)
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+
+
+@app.post("/api/assistant/conversations", response_model=AssistantConversationResponse)
+def create_assistant_conversation(request: Request, payload: AssistantConversationCreateRequest):
+    workspace_id = current_workspace_id(request)
+    member_id = _assistant_member_id(request, workspace_id)
+    if _assistant_text_without_credentials(payload.title, workspace_id) != payload.title:
+        raise HTTPException(status_code=422, detail="会话名称不能包含密钥或口令。")
+    _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
+    row = conversation_repo.create(workspace_id, member_id, payload.scope_kind, payload.scope_id, payload.title)
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+
+
+@app.get("/api/assistant/conversations", response_model=AssistantConversationListResponse)
+def list_assistant_conversations(request: Request, scope_kind: str, scope_id: str):
+    workspace_id = current_workspace_id(request)
+    member_id = _assistant_member_id(request, workspace_id)
+    _validate_assistant_scope(request, scope_kind, scope_id)
+    rows = conversation_repo.list_for_scope(workspace_id, member_id, scope_kind, scope_id)
+    return AssistantConversationListResponse.model_validate({
+        "items": [_assistant_conversation_response(row) for row in rows],
+    })
+
+
+@app.get("/api/assistant/conversations/{conversation_id}", response_model=AssistantConversationResponse)
+def get_assistant_conversation(conversation_id: str, request: Request):
+    _workspace_id, _member_id, row = _assistant_conversation_for_request(request, conversation_id)
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+
+
+@app.post("/api/assistant/conversations/{conversation_id}/resume", response_model=AssistantConversationResponse)
+def resume_assistant_conversation(conversation_id: str, request: Request):
+    workspace_id, member_id, row = _assistant_conversation_for_request(request, conversation_id)
+    selected = conversation_repo.select_current(conversation_id, workspace_id, member_id)
+    assert selected is not None
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(selected))
+
+
+@app.post(
+    "/api/assistant/conversations/{conversation_id}/turns/{turn_id}/plan-preview",
+    response_model=CreationPlanPreviewResponse,
+)
+def update_assistant_plan_preview(
+    conversation_id: str, turn_id: UUID, request: Request, payload: CreationPlanPreviewRequest,
+):
+    workspace_id, _member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
+    if conversation["scope_kind"] != "home":
+        raise HTTPException(status_code=409, detail="只有首页创作对话可以保存制作方案预览。")
+    turn = conversation_repo.get_turn(str(turn_id))
+    if (turn is None or turn["conversation_id"] != conversation_id or turn["status"] != "completed"
+        or not isinstance(turn["result"], dict) or turn["result"].get("kind") != "plan_preview"):
+        raise HTTPException(status_code=409, detail="所选对话轮次没有可更新的制作方案预览。")
+    plan = _creation_plan_preflight(request, workspace_id, payload)
+    response = _creation_plan_preview_response(plan)
+    if not conversation_repo.update_completed_plan_preview(str(turn_id), response.model_dump(mode="json")):
+        raise HTTPException(status_code=409, detail="方案轮次已变化，请重新读取这段对话后再调整。")
+    return response
+
+
+@app.patch("/api/assistant/conversations/{conversation_id}", response_model=AssistantConversationResponse)
+def update_assistant_conversation(
+    conversation_id: str, request: Request, payload: AssistantConversationUpdateRequest,
+):
+    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
+    if payload.title is not None and _assistant_text_without_credentials(payload.title, workspace_id) != payload.title:
+        raise HTTPException(status_code=422, detail="会话名称不能包含密钥或口令。")
+    if payload.draft_text is not None and _assistant_text_without_credentials(payload.draft_text, workspace_id) != payload.draft_text:
+        raise HTTPException(status_code=422, detail="对话草稿不能包含密钥或口令。")
+    updated = conversation_repo.update(
+        conversation_id, workspace_id, member_id,
+        title=payload.title, draft_text=payload.draft_text,
+    )
+    assert updated is not None
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(updated))
+
+
+@app.post("/api/assistant/conversations/{conversation_id}/stop")
+def stop_assistant_conversation_turn(
+    conversation_id: str, request: Request, payload: AssistantConversationStopRequest,
+):
+    _workspace_id, _member_id, _row = _assistant_conversation_for_request(request, conversation_id)
+    turn = conversation_repo.get_turn(str(payload.turn_id))
+    if turn is None or turn["conversation_id"] != conversation_id:
+        raise HTTPException(status_code=404, detail="对话轮次不存在。")
+    if turn["status"] != "running":
+        raise HTTPException(status_code=409, detail="这一轮已经结束，未重复执行停止。")
+    if not request_stop_turn(str(payload.turn_id)):
+        raise HTTPException(status_code=409, detail="这一轮已结束或没有可停止的助手进程。")
+    return {"turn_id": str(payload.turn_id), "status": "stopping"}
+
+
+@app.get("/api/assistant/capabilities")
+def assistant_capabilities(request: Request):
+    workspace_id = current_workspace_id(request)
+    _assistant_member_id(request, workspace_id)
+    return {
+        "application_commands": ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
+        "pi_tui_commands": {
+            "available": False,
+            "version": "1.1.0",
+            "commands": ["/settings", "/model", "/tree", "/thinking", "/scoped-models", "/export", "/import", "/share", "/bug", "/copy", "/name", "/session", "/changelog", "/hotkeys", "/fork", "/clone", "/trust", "/login", "/logout", "/new", "/compact", "/resume", "/reload", "/quit"],
+            "reason": "当前产品以无交互调用运行Pi；以上交互式Pi命令均未接通，不能从对话输入中调用。",
+        },
+        "extension_commands": {"available": False, "commands": [], "reason": "扩展仅注册受限业务工具，没有注册命令或任意文件/终端入口。"},
+        "skills": {"available": False, "reason": "当前Pi启动参数关闭skills。"},
+        "prompt_templates": {"available": False, "reason": "当前Pi启动参数关闭prompt templates。"},
+        "business_tools": {
+            "home": ["read_workspace_context", "read_video_templates", "find_knowledge", "find_materials", "preview_creation_plan"],
+            "material": ["read_selected_material", "update_selected_material_tags"],
+            "topic": ["read_current_task", "find_knowledge", "generate_creation_task_topics"],
+            "script": ["read_current_task", "find_knowledge", "preview_script_draft"],
+            "task_edit": ["read_current_task", "find_knowledge", "find_materials", "preview_edit", "start_creation_execution", "resume_creation_execution", "cancel_creation_execution"],
+        },
+    }
+
+
+def _begin_assistant_turn(
+    request: Request, conversation_id: str, scope_kind: str, scope_id: str,
+    message: str, on_event,
+) -> str:
+    workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
+    if conversation["scope_kind"] != scope_kind or conversation["scope_id"] != scope_id:
+        raise HTTPException(status_code=409, detail="当前对话与所选对象范围不匹配，请切换到该范围的会话。")
+    if _assistant_text_without_credentials(message, workspace_id) != message:
+        raise HTTPException(status_code=422, detail="请勿在对话中粘贴密钥或口令。")
+    try:
+        turn = conversation_repo.create_turn(conversation_id, message)
+    except ConversationTurnAlreadyRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    register_turn_control(turn["id"])
+    if conversation["title"] == "新对话":
+        conversation_repo.update(conversation_id, workspace_id, member_id, title=message[:36])
+    if on_event is not None:
+        on_event({"type": "turn_started", "turn_id": turn["id"], "turn_state": "running"})
+    return turn["id"]
+
+
 @app.post(
     "/api/assistant/plan/turn",
     response_model=WorkspaceAssistantPlanTurnResponse,
@@ -4434,6 +4652,9 @@ def _workspace_assistant_plan_turn(
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
     caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    turn_id = _begin_assistant_turn(
+        request, str(payload.conversation_id), "home", "home", payload.message.strip(), on_event,
+    )
     try:
         reply, preview = run_plan_turn(
             workspace_settings_for_turn,
@@ -4445,15 +4666,33 @@ def _workspace_assistant_plan_turn(
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
             on_event=on_event,
+            turn_id=turn_id,
+        )
+    except AssistantStopped:
+        conversation_repo.finish_turn(turn_id, "stopped")
+        saved = conversation_repo.get_turn(turn_id)
+        return WorkspaceAssistantPlanTurnResponse(
+            reply=saved["assistant_text"] if saved else "", provider=workspace_settings_for_turn.effective_llm_provider,
+            model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
         )
     except AssistantUnavailable as exc:
+        forget_turn_control(turn_id)
+        conversation_repo.finish_turn(turn_id, "failed", result={
+            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
+        })
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     plan_preview = CreationPlanPreviewResponse.model_validate(preview) if preview is not None else None
+    forget_turn_control(turn_id)
+    safe_reply = _assistant_text_without_credentials(reply, workspace_id)
+    conversation_repo.finish_turn(turn_id, "completed", safe_reply,
+                                  ({"kind": "plan_preview", "plan_preview": plan_preview.model_dump(mode="json")}
+                                   if plan_preview else {"kind": "conversation"}))
     return WorkspaceAssistantPlanTurnResponse(
-        reply=reply,
+        reply=safe_reply,
         provider=workspace_settings_for_turn.effective_llm_provider,
         model=workspace_settings_for_turn.effective_llm_model,
         plan_preview=plan_preview,
+        turn_id=turn_id,
     )
 
 
@@ -4491,6 +4730,10 @@ def _material_assistant_turn(
     if _assistant_text_without_credentials(message, workspace_id) != message:
         raise HTTPException(status_code=422, detail="请勿在素材要求中粘贴密钥或口令。")
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
+    turn_id = _begin_assistant_turn(
+        request, str(payload.conversation_id), "material", _assistant_scope_id("material", selection=selection),
+        message, on_event,
+    )
     try:
         reply, result = run_material_turn(
             workspace_settings_for_turn,
@@ -4503,8 +4746,20 @@ def _material_assistant_turn(
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
             on_event=on_event,
+            turn_id=turn_id,
+        )
+    except AssistantStopped:
+        conversation_repo.finish_turn(turn_id, "stopped")
+        saved = conversation_repo.get_turn(turn_id)
+        return MaterialAssistantTurnResponse(
+            reply=saved["assistant_text"] if saved else "", provider=workspace_settings_for_turn.effective_llm_provider,
+            model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
         )
     except AssistantUnavailable as exc:
+        forget_turn_control(turn_id)
+        conversation_repo.finish_turn(turn_id, "failed", result={
+            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
+        })
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     reply = _assistant_text_without_credentials(reply, workspace_id)
     material_result = None
@@ -4518,11 +4773,19 @@ def _material_assistant_turn(
                 or raw.get("segment_ref") != expected_segment_ref):
                 raise HTTPException(status_code=503, detail="所选素材回读与本轮选择不一致，未能确认结果")
             material_result = MaterialAssistantResultResponse.model_validate(raw)
+    forget_turn_control(turn_id)
+    conversation_repo.finish_turn(
+        turn_id, "completed", reply,
+        {"kind": "material_result" if material_result else "conversation",
+         "scope": material_result.scope if material_result else None,
+         "changed": material_result.changed if material_result else None},
+    )
     return MaterialAssistantTurnResponse(
         reply=reply,
         provider=workspace_settings_for_turn.effective_llm_provider,
         model=workspace_settings_for_turn.effective_llm_model,
         material_result=material_result,
+        turn_id=turn_id,
     )
 
 
@@ -5373,14 +5636,14 @@ def _assistant_stream_response(
     execute,
     *,
     workspace_id: str,
+    turn_id: str | None = None,
 ) -> StreamingResponse:
     events: queue.Queue[dict[str, object] | None] = queue.Queue()
     disconnected = threading.Event()
     text_sanitizer = _AssistantStreamTextSanitizer(workspace_id)
+    turn_ref = {"id": turn_id}
 
     def publish(raw_event: dict[str, object]) -> None:
-        if disconnected.is_set():
-            return
         event_type = raw_event.get("type")
         if event_type == "text_delta" and isinstance(raw_event.get("delta"), str):
             delta = text_sanitizer.feed(str(raw_event["delta"]))
@@ -5388,30 +5651,59 @@ def _assistant_stream_response(
                 return
             event = {"type": "text_delta", "delta": delta}
         elif event_type == "tool_start":
-            event = {key: raw_event[key] for key in ("type", "tool_id", "label") if key in raw_event}
+            event = {
+                "type": "tool_start", "tool_id": raw_event["tool_id"],
+                "label": _assistant_stream_safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
+            }
         elif event_type == "tool_end":
-            event = {key: raw_event[key] for key in ("type", "tool_id", "label", "ok", "summary") if key in raw_event}
+            event = {
+                "type": "tool_end", "tool_id": raw_event["tool_id"],
+                "label": _assistant_stream_safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
+                "ok": bool(raw_event.get("ok")),
+                "summary": _assistant_stream_safe_text(str(raw_event.get("summary", "")), workspace_id),
+            }
+        elif event_type == "turn_started":
+            event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state") if key in raw_event}
+            turn_ref["id"] = str(raw_event["turn_id"])
+        elif event_type == "turn_status":
+            event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state") if key in raw_event}
         else:
             return
         validated = AssistantStreamEvent.model_validate(event)
-        events.put(validated.model_dump(exclude_none=True))
+        safe_event = validated.model_dump(exclude_none=True)
+        if turn_ref["id"] and event_type in {"text_delta", "tool_start", "tool_end"}:
+            conversation_repo.append_event(turn_ref["id"], safe_event)
+        if not disconnected.is_set():
+            events.put(safe_event)
 
     def work() -> None:
         terminal_event: dict[str, object] | None = None
         try:
             result = execute(publish)
+            if turn_ref["id"]:
+                publish({"type": "turn_status", "turn_id": turn_ref["id"], "turn_state": getattr(result, "turn_status", "completed")})
             if not disconnected.is_set():
                 terminal_event = AssistantStreamEvent(
                     type="result", result=result.model_dump(mode="json"),
                 ).model_dump(exclude_none=True)
         except HTTPException as exc:
-            if not disconnected.is_set():
+            if turn_ref["id"]:
+                forget_turn_control(turn_ref["id"])
                 detail = exc.detail if isinstance(exc.detail, str) else "对话未能完成，请查看当前任务状态。"
+                conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                    "kind": "failure", "message": _assistant_stream_safe_text(detail, workspace_id),
+                })
+            if not disconnected.is_set():
                 terminal_event = AssistantStreamEvent(
                     type="error", status=exc.status_code,
                     message=_assistant_stream_safe_text(detail, workspace_id),
                 ).model_dump(exclude_none=True)
         except Exception as exc:
+            if turn_ref["id"]:
+                forget_turn_control(turn_ref["id"])
+                conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                    "kind": "failure", "message": "对话服务未能完整返回结果，请查看当前任务状态。",
+                })
             logger.error("assistant stream worker failed (%s)", type(exc).__name__)
             if not disconnected.is_set():
                 terminal_event = AssistantStreamEvent(
@@ -5420,13 +5712,16 @@ def _assistant_stream_response(
                 ).model_dump(exclude_none=True)
         finally:
             tail = text_sanitizer.feed("", final=True)
-            if tail and not disconnected.is_set():
-                events.put(AssistantStreamEvent(type="text_delta", delta=tail).model_dump(exclude_none=True))
+            if tail:
+                publish({"type": "text_delta", "delta": tail})
             if terminal_event is not None and not disconnected.is_set():
                 events.put(terminal_event)
             events.put(None)
 
     def body():
+        if turn_id:
+            started = AssistantStreamEvent(type="turn_started", turn_id=turn_id, turn_state="running")
+            yield f"data: {json.dumps(started.model_dump(exclude_none=True), ensure_ascii=False, separators=(',', ':'))}\n\n"
         thread = threading.Thread(target=work, name="assistant-stream-response", daemon=True)
         thread.start()
         result_seen = False
@@ -5579,12 +5874,9 @@ def _creation_task_assistant_turn(
     message = payload.message.strip()
     if _assistant_text_without_credentials(message, workspace_id) != message:
         raise HTTPException(status_code=422, detail="请勿在创作要求中粘贴密钥或口令。")
-    production_repo.append_task_event(TaskEvent(
-        id=f"event_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
-        job_id=None, event_type="assistant_turn",
-        payload={"role": "user", "message": message, "stage": trusted_stage},
-        created_at=utc_now(),
-    ))
+    turn_id = _begin_assistant_turn(
+        request, str(payload.conversation_id), "task", task_id, message, on_event,
+    )
     try:
         reply, preview = run_task_turn(
             _workspace_settings_for(workspace_id),
@@ -5592,6 +5884,7 @@ def _creation_task_assistant_turn(
             local_member_token=_local_member_token(request) or None,
             caller_user_id=caller_user_id if not local_diagnostic else None,
             task_id=task_id,
+            conversation_id=str(payload.conversation_id),
             message=message,
             stage=trusted_stage,
             selected_refs=trusted_refs,
@@ -5599,8 +5892,23 @@ def _creation_task_assistant_turn(
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
             on_event=on_event,
+            turn_id=turn_id,
+        )
+    except AssistantStopped:
+        conversation_repo.finish_turn(turn_id, "stopped")
+        saved = conversation_repo.get_turn(turn_id)
+        return CreationTaskAssistantTurnResponse(
+            reply=saved["assistant_text"] if saved else "",
+            provider=_workspace_settings_for(workspace_id).effective_llm_provider,
+            model=_workspace_settings_for(workspace_id).effective_llm_model,
+            turn_id=turn_id,
+            turn_status="stopped",
         )
     except AssistantUnavailable as exc:
+        forget_turn_control(turn_id)
+        conversation_repo.finish_turn(turn_id, "failed", result={
+            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
+        })
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     reply = _assistant_text_without_credentials(reply, workspace_id)
     script_draft = None
@@ -5645,14 +5953,7 @@ def _creation_task_assistant_turn(
             raise HTTPException(status_code=502, detail="对话工具返回了不属于当前任务的编辑提案。")
     else:
         edit_preview = None
-    production_repo.append_task_event(TaskEvent(
-        id=f"event_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
-        job_id=None, event_type="assistant_turn",
-        payload={"role": "assistant", "message": reply, "stage": trusted_stage,
-                 "script_id": script_draft.id if script_draft else None},
-        created_at=utc_now(),
-    ))
-    return CreationTaskAssistantTurnResponse(
+    response = CreationTaskAssistantTurnResponse(
         reply=reply,
         provider=_workspace_settings_for(workspace_id).effective_llm_provider,
         model=_workspace_settings_for(workspace_id).effective_llm_model,
@@ -5661,7 +5962,19 @@ def _creation_task_assistant_turn(
         execution_action=execution_action,
         execution_status=execution_status,
         topic_candidates=topic_candidates,
+        turn_id=turn_id,
     )
+    forget_turn_control(turn_id)
+    conversation_repo.finish_turn(turn_id, "completed", reply, {
+        "kind": "task_turn",
+        "edit_preview": bool(edit_preview),
+        "script_draft": script_draft.id if script_draft else None,
+        "execution_action": execution_action,
+        "execution_status": execution_status.get("job", {}).get("status")
+            if isinstance(execution_status, dict) and isinstance(execution_status.get("job"), dict) else None,
+        "topic_candidates": bool(topic_candidates),
+    })
+    return response
 
 
 @app.get(
@@ -16307,6 +16620,18 @@ def _stop_device_runtime() -> None:
     device_runtime = None
     if runtime is not None:
         runtime.stop(timeout_seconds=30.0)
+
+
+@app.on_event("startup")
+def recover_interrupted_assistant_turns() -> None:
+    conversation_repo.initialize()
+    conversation_repo.fail_interrupted_turns()
+
+
+@app.on_event("shutdown")
+def stop_active_assistant_turns() -> None:
+    for turn_id in stop_all_assistant_turns():
+        conversation_repo.finish_turn(turn_id, "stopped")
 
 
 @app.on_event("startup")

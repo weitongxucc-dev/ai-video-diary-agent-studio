@@ -1650,9 +1650,13 @@ export type CreationTaskAssistantTurnResponse = {
   execution_action: "start" | "resume" | "cancel" | null;
   execution_status: CreationExecutionStatus | null;
   topic_candidates: CreationTaskTopicsResponse | null;
+  turn_id?: string | null;
+  turn_status?: "completed" | "stopped";
 };
 
 export type AssistantStreamEvent =
+  | { type: "turn_started"; turn_id: string; turn_state: "running" }
+  | { type: "turn_status"; turn_id: string; turn_state: "completed" | "failed" | "stopped" }
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; tool_id: number; label: string }
   | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string };
@@ -1667,6 +1671,42 @@ export type AssistantToolActivity = {
 export type AssistantTurnActivity = {
   text: string;
   tools: AssistantToolActivity[];
+  events: Extract<AssistantStreamEvent, { type: "text_delta" | "tool_start" | "tool_end" }>[];
+};
+
+export type AssistantConversationTurn = {
+  id: string;
+  sequence: number;
+  user_message: string;
+  assistant_text: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  events: AssistantTurnActivity["events"];
+  result: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AssistantConversation = {
+  id: string;
+  workspace_id: string;
+  scope_kind: "home" | "material" | "task";
+  scope_id: string;
+  title: string;
+  draft_text: string;
+  created_at: string;
+  updated_at: string;
+  turns: AssistantConversationTurn[];
+};
+
+export type AssistantConversationScope = Pick<AssistantConversation, "scope_kind" | "scope_id">;
+
+export type AssistantCapabilities = {
+  application_commands: string[];
+  pi_tui_commands: { available: boolean; reason: string; version: string; commands: string[] };
+  extension_commands: { available: boolean; reason: string };
+  skills: { available: boolean; reason: string };
+  prompt_templates: { available: boolean; reason: string };
+  business_tools: Record<string, string[]>;
 };
 
 export type CreationTaskAssistantHistory = {
@@ -1731,6 +1771,8 @@ export type WorkspaceAssistantPlanTurnResponse = {
   provider: string;
   model: string;
   plan_preview: CreationPlanPreview | null;
+  turn_id?: string | null;
+  turn_status?: "completed" | "stopped";
 };
 
 export type MaterialAssistantSelection =
@@ -1753,6 +1795,8 @@ export type MaterialAssistantTurnResponse = {
   provider: string;
   model: string;
   material_result: MaterialAssistantResult | null;
+  turn_id?: string | null;
+  turn_status?: "completed" | "stopped";
 };
 
 export type CreationPlan = CreationPlanPreview & {

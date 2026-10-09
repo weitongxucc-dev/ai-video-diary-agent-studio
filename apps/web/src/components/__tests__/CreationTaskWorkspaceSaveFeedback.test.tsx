@@ -55,6 +55,14 @@ vi.mock("../DesktopVoiceRecorder", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  createAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `new-conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  listAssistantConversations: vi.fn().mockResolvedValue({ items: [] }),
+  getAssistantConversation: vi.fn(),
+  resumeAssistantConversation: vi.fn(),
+  updateAssistantConversation: vi.fn(async (id: string, update: { draft_text?: string; title?: string }) => ({ id, workspace_id: "local", scope_kind: "task", scope_id: "task-1", title: update.title ?? "新对话", draft_text: update.draft_text ?? "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  stopAssistantConversationTurn: vi.fn(),
+  getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, reason: "未接通", version: "1.1.0", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
   apiUrl: (path: string) => path,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
   getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
@@ -96,7 +104,7 @@ vi.mock("@/lib/api", () => ({
   selectCreationTaskNarrationVoice: vi.fn(),
   undoCreationTaskTimeline: vi.fn(),
   redoCreationTaskTimeline: vi.fn(),
-  getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
+  getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 100, offset: 0, has_more: false }),
 }));
 
 // 输出页所需的最小工作区：stage=review、有 output_url、无有效字幕轨

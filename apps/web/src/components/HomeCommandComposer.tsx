@@ -1,14 +1,16 @@
 "use client";
 
-import { AlertCircle, ArrowUp, Sparkles } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import Image from "next/image";
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline } from "@/lib/api";
-import type { AssistantStreamEvent, AssistantToolActivity, AssistantTurnActivity, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
+import { useEffect, useRef, useState } from "react";
+import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
+import type { CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
-import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
+import { useAssistantConversation } from "@/components/useAssistantConversation";
+import { AssistantConversationPanel } from "@/components/AssistantConversationPanel";
 
 type HomeCommandComposerProps = {
   assignLocation?: (url: string) => void;
@@ -47,33 +49,6 @@ function displayInvalidatedRefs(refs: string[]) {
   return [...new Set(refs.map((ref) => ref.endsWith(".srt") ? "字幕" : ref.endsWith(".mp4") ? "成片" : ref.endsWith(".png") || ref.endsWith(".jpg") ? "封面" : ref.endsWith(".wav") || ref.endsWith(".mp3") ? "声音" : "关联内容"))].join("、");
 }
 
-export function assistantActivityAfterEvent(activity: AssistantTurnActivity, event: AssistantStreamEvent): AssistantTurnActivity {
-  if (event.type === "text_delta") return { ...activity, text: activity.text + event.delta };
-  if (event.type === "tool_start") {
-    return { ...activity, tools: [...activity.tools, { tool_id: event.tool_id, label: event.label, state: "running" }] };
-  }
-  const tools = activity.tools.map((tool): AssistantToolActivity => tool.tool_id === event.tool_id
-    ? { ...tool, state: event.ok ? "succeeded" : "failed", summary: event.summary }
-    : tool);
-  return { ...activity, tools };
-}
-
-export function AssistantActivityView({ activity, streaming = false }: {
-  activity: AssistantTurnActivity;
-  streaming?: boolean;
-}) {
-  if (!activity.text && !activity.tools.length) return null;
-  return <div className="assistant-activity">
-    {activity.text ? <p className="assistant-activity__text" aria-live={streaming ? "polite" : undefined}>{activity.text}</p> : null}
-    {activity.tools.length ? <ol aria-label="助手执行过程" className="assistant-activity__tools">
-      {activity.tools.map((tool) => <li key={tool.tool_id} data-state={tool.state}>
-        <span>{tool.label} · {tool.state === "running" ? "进行中" : tool.state === "succeeded" ? "已返回" : "未完成"}</span>
-        {tool.summary ? <details><summary>查看结果</summary><p>{tool.summary}</p></details> : null}
-      </li>)}
-    </ol> : null}
-  </div>;
-}
-
 function voiceIsReady(preview: CreationPlanPreview) {
   return Boolean(preview.selected_voice) && !preview.blockers.some((item) => item.stage === "narration");
 }
@@ -89,16 +64,19 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
 export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext }: HomeCommandComposerProps) {
   const materialScopeKey = materialContext
     ? materialContext.selection
-      ? `${materialContext.selection.scope}:${materialContext.selection.asset_id}:${materialContext.selection.scope === "segment" ? materialContext.selection.segment_id : ""}`
-      : "none"
+      ? materialContext.selection.scope === "asset"
+        ? `asset:${materialContext.selection.asset_id}`
+        : `segment:${materialContext.selection.asset_id}:${materialContext.selection.segment_id}`
+      : "browse"
     : null;
-  const [message, setMessage] = useState("");
-  const [turns, setTurns] = useState<{ command: string; reply: string; activity?: AssistantTurnActivity }[]>([]);
-  const [streamActivity, setStreamActivity] = useState<AssistantTurnActivity | null>(null);
+  const scopeKind = materialScopeKey !== null ? "material" as const : task ? "task" as const : "home" as const;
+  const scopeId = materialScopeKey ?? task?.id ?? "home";
+  const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [shareValue, setShareValue] = useState<PresenterShare>(20);
   const [qualityValue, setQualityValue] = useState<LipSyncQuality>("high");
+  const [activePlanTurnId, setActivePlanTurnId] = useState<string | null>(null);
   const [shareUpdating, setShareUpdating] = useState(false);
   const shareRevision = useRef(0);
   const [taskPreview, setTaskPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
@@ -108,30 +86,36 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [modelConfigured, setModelConfigured] = useState(false);
   const [pending, setPending] = useState<"chat" | "confirm" | "undo" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const conversationId = useRef<string | null>(null);
+  const [taskActionStatus, setTaskActionStatus] = useState<string | null>(null);
   const scopeRevision = useRef(0);
-  const commandInput = useRef<HTMLTextAreaElement>(null);
-  const commandForm = useRef<HTMLFormElement>(null);
-  const composing = useRef(false);
-  const restoreInputFocus = useRef(false);
-  const streamActivityRef = useRef<AssistantTurnActivity>({ text: "", tools: [] });
-  useEffect(() => { if (autoFocus) commandInput.current?.focus(); }, [autoFocus]);
-  useEffect(() => {
-    if (pending === null && restoreInputFocus.current) {
-      restoreInputFocus.current = false;
-      commandInput.current?.focus();
-    }
-  }, [pending]);
+  const restoredPlanKey = useRef<string | null>(null);
   useEffect(() => {
     scopeRevision.current += 1;
-    setMessage(""); setTurns([]); setPreview(null); setPreviewOpen(false);
+    setPreview(null); setPreviewOpen(false);
+    setActivePlanTurnId(null);
     shareRevision.current += 1; setShareValue(20); setQualityValue("high"); setShareUpdating(false);
     setTaskPreview(null); setTaskPreviewOpen(false); setUndoReady(false);
-    setPending(null); setError(null); setStreamActivity(null);
-    streamActivityRef.current = { text: "", tools: [] };
-    restoreInputFocus.current = false;
-    conversationId.current = null;
+    setPending(null); setError(null); setTaskActionStatus(null);
+    restoredPlanKey.current = null;
   }, [task?.id, materialScopeKey]);
+  useEffect(() => {
+    const saved = assistant.conversation;
+    if (!saved || saved.scope_kind !== scopeKind || saved.scope_id !== scopeId) return;
+    const planTurn = [...saved.turns].reverse().find((turn) =>
+      turn.result?.kind === "plan_preview"
+      && typeof turn.result.plan_preview === "object"
+      && turn.result.plan_preview !== null,
+    );
+    const key = `${saved.id}:${planTurn?.id ?? "none"}:${planTurn?.updated_at ?? ""}`;
+    if (restoredPlanKey.current === key) return;
+    restoredPlanKey.current = key;
+    const restored = planTurn?.result?.plan_preview as CreationPlanPreview | undefined;
+    setActivePlanTurnId(planTurn?.id ?? null);
+    setPreview(restored ?? null);
+    setPreviewOpen(Boolean(restored));
+    setShareValue(restored?.presenter_share_target ?? 20);
+    setQualityValue(restored?.lipsync_quality ?? "high");
+  }, [assistant.conversation, scopeId, scopeKind]);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
       if (runtime.status.llm.configured) {
@@ -141,9 +125,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     }).catch(() => undefined);
   }, []);
 
-  async function sendToAssistant(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const command = message.trim();
+  async function sendToAssistant(rawMessage: string) {
+    const command = rawMessage.trim();
     if (!command || pending) return;
     if (materialContext && !materialContext.selection) {
       setError("请先从右侧选择整条素材或一个片段，再说明要怎么处理我的标签；这次没有发送。");
@@ -151,63 +134,69 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     }
     const revision = scopeRevision.current;
     setPending("chat");
-    restoreInputFocus.current = true;
-    streamActivityRef.current = { text: "", tools: [] };
-    setStreamActivity(streamActivityRef.current);
     setError(null);
+    setTaskActionStatus(null);
     setPreview(null);
     setPreviewOpen(false);
     setTaskPreview(null);
     setTaskPreviewOpen(false);
+    let requestConversationId: string | null = null;
+    let requestLocalTurnId: string | null = null;
     try {
+      if (!assistant.conversation) await assistant.createNew();
+      const turn = assistant.beginTurn(command);
+      requestConversationId = turn.conversationId;
+      requestLocalTurnId = turn.localTurnId;
+      const onStreamEvent = assistant.bindTurnEvents(turn.conversationId, turn.localTurnId);
+      await turn.draftCheckpoint;
+      if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
       if (materialContext?.selection) {
         const selection = materialContext.selection;
-        conversationId.current ??= crypto.randomUUID();
-        const result = await sendMaterialAssistantTurn(command, conversationId.current, selection, (item) => {
+        const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection, (item) => {
           if (revision !== scopeRevision.current) return;
-          streamActivityRef.current = assistantActivityAfterEvent(streamActivityRef.current, item);
-          setStreamActivity(streamActivityRef.current);
+          onStreamEvent(item);
         });
+        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         if (result.material_result) materialContext.onResult(selection, result.material_result);
-        if (revision !== scopeRevision.current) return;
-        setTurns((current) => [...current, { command, reply: result.reply, activity: streamActivityRef.current }].slice(-8));
         setModel(`${result.provider} / ${result.model}`);
       } else if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
+          conversation_id: turn.conversationId,
           message: command, context_stage: task.stage,
           selected_object_refs: [], playhead_ms: null,
         }, (item) => {
           if (revision !== scopeRevision.current) return;
-          streamActivityRef.current = assistantActivityAfterEvent(streamActivityRef.current, item);
-          setStreamActivity(streamActivityRef.current);
+          onStreamEvent(item);
         });
-        if (revision !== scopeRevision.current) return;
-        setTurns((current) => [...current, { command, reply: result.reply, activity: streamActivityRef.current }].slice(-8));
+        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         setModel(`${result.provider} / ${result.model}`);
         if (result.execution_action || result.topic_candidates) onTaskUpdated?.();
       } else {
-        conversationId.current ??= crypto.randomUUID();
-        const result = await sendWorkspaceAssistantPlanTurn(command, conversationId.current, (item) => {
+        const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId, (item) => {
           if (revision !== scopeRevision.current) return;
-          streamActivityRef.current = assistantActivityAfterEvent(streamActivityRef.current, item);
-          setStreamActivity(streamActivityRef.current);
+          onStreamEvent(item);
         });
-        if (revision !== scopeRevision.current) return;
-        setTurns((current) => [...current, { command, reply: result.reply, activity: streamActivityRef.current }].slice(-8));
+        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setPreview(result.plan_preview);
+        setActivePlanTurnId(result.turn_id ?? null);
         setShareValue(result.plan_preview?.presenter_share_target ?? 20);
         setQualityValue(result.plan_preview?.lipsync_quality ?? "high");
         setPreviewOpen(Boolean(result.plan_preview));
         setModel(`${result.provider} / ${result.model}`);
       }
-      setMessage("");
-      setStreamActivity(null);
+      if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
     } catch (cause) {
-      if (revision === scopeRevision.current) setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+      if (requestConversationId && requestLocalTurnId) {
+        await assistant.failUnpersistedTurn(requestConversationId, requestLocalTurnId,
+          cause instanceof Error ? cause.message : "本轮没有建立持久轮次，请检查后可重试。");
+      }
+      if (revision === scopeRevision.current && (!requestConversationId || assistant.isCurrentConversation(requestConversationId))) {
+        setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+      }
     } finally {
-      if (revision === scopeRevision.current) setPending(null);
+      if (revision === scopeRevision.current && (!requestConversationId || assistant.isCurrentConversation(requestConversationId))) setPending(null);
     }
   }
 
@@ -223,9 +212,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       setTaskPreviewOpen(false);
       const queued = "status" in result;
       setUndoReady(!queued);
-      setTurns((current) => [...current, { command: "确认修改", reply: queued
-        ? "人物修改已排队，等待设备许可和实际完成；当前版本保持不变，请查看任务作业进度。"
-        : "修改已完成。" }].slice(-8));
+      setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : null);
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current) {
@@ -247,7 +234,6 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       await undoCreationTaskTimeline(task.id);
       if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
       setUndoReady(false);
-      setTurns((current) => [...current, { command: "撤销", reply: "已撤销刚才的修改。" }].slice(-8));
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current) setError(cause instanceof Error ? cause.message : "撤销未完成，请到任务页查看。");
@@ -259,6 +245,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   async function confirmPlan() {
     if (!preview?.confirmable || pending || shareUpdating || shareValue !== (preview.presenter_share_target ?? 20) || qualityValue !== (preview.lipsync_quality ?? "high")) return;
     const revision = scopeRevision.current;
+    const conversationId = assistant.conversation?.id;
     setPending("confirm");
     setError(null);
     try {
@@ -271,16 +258,16 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         ...(preview.template_id ? { template_id: preview.template_id, template_version: preview.template_version } : {}),
         preflight_fingerprint: preview.preflight_fingerprint,
       });
-      if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
+      if (revision !== scopeRevision.current || (conversationId && !assistant.isCurrentConversation(conversationId))) return;
       assignLocation(`/tasks/${encodeURIComponent(plan.creation_task.id)}`);
     } catch (cause) {
-      if (revision === scopeRevision.current) {
+      if (revision === scopeRevision.current && (!conversationId || assistant.isCurrentConversation(conversationId))) {
         setError(cause instanceof Error ? cause.message : "创建任务没有完成，请重新预检。");
         setPreview(null);
         setPreviewOpen(false);
       }
     } finally {
-      if (revision === scopeRevision.current) setPending(null);
+      if (revision === scopeRevision.current && (!conversationId || assistant.isCurrentConversation(conversationId))) setPending(null);
     }
   }
 
@@ -291,24 +278,33 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setShareUpdating(true);
     setError(null);
     const revision = ++shareRevision.current;
+    const scopeAtStart = scopeRevision.current;
+    const conversationId = assistant.conversation?.id;
+    const planTurnId = activePlanTurnId;
     try {
-      const updated = await previewCreationPlan({
+      const input = {
         goal: preview.goal, name: preview.name, target_count: preview.target_count,
         language: preview.language, aspect_ratio: preview.aspect_ratio,
         duration_target_seconds: preview.duration_target_seconds,
         presenter_share_target: value,
         lipsync_quality: quality,
         ...(preview.template_id ? { template_id: preview.template_id, template_version: preview.template_version } : {}),
-      });
-      if (revision === shareRevision.current) setPreview(updated);
+      };
+      const updated = conversationId && planTurnId
+        ? await updateAssistantPlanPreview(conversationId, planTurnId, input)
+        : await previewCreationPlan(input);
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) setPreview(updated);
     } catch (cause) {
-      if (revision === shareRevision.current) {
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) {
         setError(cause instanceof Error ? cause.message : "制作方案未能检查，请重新查看方案。");
         setPreview(null);
         setPreviewOpen(false);
       }
     } finally {
-      if (revision === shareRevision.current) setShareUpdating(false);
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) setShareUpdating(false);
     }
   }
 
@@ -317,15 +313,20 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
         {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "尚未选择素材：请从右侧选择整条素材或一个片段。"}
       </p> : null}
-      {!turns.length ? <div className="home-chat-start"><h2>{materialContext ? "这份素材怎么标记？" : task ? "这条怎么改？" : "今天想做什么？"}</h2><p>{materialContext ? "明确说替换、添加或移除哪些我的标签；未明确选择时不会发送。" : task ? "说说不满意的地方，先看修改，再决定。" : "说说要介绍什么，剩下的我们一起完成。"}</p>{(materialContext ? ["把我的标签改成产品演示", "再加上室内", "移除旧标签"] : task ? ["让节奏快一点", "把字幕放大一点", "露脸占比调到四成"] : ["用我的素材，做一条产品介绍", "把客户常问的问题，做成讲解视频", "把今天拍的片段，剪成工作日常"]).map(text => <button type="button" key={text} onClick={() => { setMessage(text); commandInput.current?.focus(); }}>{text}</button>)}</div> : null}
-      {turns.length ? <div className="home-composer__conversation" aria-label="对话记录">
-      {turns.map((turn, index) => <div className="home-composer__turn" key={index}>
-          <p className="home-composer__command">{turn.command}</p>
-          <p className="home-composer__reply" aria-live={index === turns.length - 1 ? "polite" : undefined}>{turn.reply}</p>
-          {turn.activity ? <AssistantActivityView activity={{ ...turn.activity, text: "" }} /> : null}
-        </div>)}
-      </div> : null}
-      {streamActivity ? <AssistantActivityView activity={streamActivity} streaming={pending === "chat"} /> : null}
+      <AssistantConversationPanel
+        autoFocus={autoFocus}
+        busy={pending !== null}
+        configured={modelConfigured}
+        input={assistant.draftText}
+        inputLabel={materialContext ? "素材标签要求" : task ? "任务对话要求" : "制作要求"}
+        onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
+        onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setPending(null); setShareUpdating(false); setError(null); }}
+        onSend={sendToAssistant}
+        scopeLabel={materialContext ? (materialContext.label ?? "当前素材") : task ? task.name : "首页创作"}
+        state={assistant}
+        suggestions={materialContext ? ["把我的标签改成产品演示", "再加上室内", "移除旧标签"] : task ? ["先解释目前这一步", "让节奏快一点", "字幕放大一点"] : ["用我的素材，做一条产品介绍", "把客户常问的问题做成讲解视频", "把今天拍的片段剪成工作日常"]}
+      />
+      {taskActionStatus ? <p role="status" aria-live="polite">{taskActionStatus}</p> : null}
       {preview ? <button className="home-composer__open-card" onClick={() => setPreviewOpen(true)} type="button">查看方案</button> : null}
       {preview && previewOpen ? <HomeCardDialog onClose={() => setPreviewOpen(false)} title="制作方案"><section className="home-composer__result" aria-label="制作方案">
         <div className="home-composer__result-head"><strong>{preview.name.replace(/^创作任务[:：]\s*/, "")}</strong><span>{preview.aspect_ratio} · {preview.duration_target_seconds} 秒</span></div>
@@ -354,32 +355,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           <div className="home-edit-preview__actions"><button onClick={() => setTaskPreviewOpen(false)} type="button">先不改</button><button className="composer-submit" disabled={pending !== null} onClick={() => void confirmTaskPreview()} type="button">{pending === "confirm" ? "修改中" : "确认修改"}</button></div>
         </div>
       </HomeCardDialog> : null}
-      <form onSubmit={(event) => void sendToAssistant(event)} ref={commandForm}>
-        <div className="home-composer__input-row">
-          <Sparkles aria-hidden="true" size={18} />
-          <textarea aria-label={materialContext ? "素材标签要求" : "制作指令"} disabled={pending !== null} ref={commandInput}
-            onCompositionStart={() => { composing.current = true; }}
-            onCompositionEnd={() => { composing.current = false; }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey || composing.current
-                || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-              event.preventDefault();
-              commandForm.current?.requestSubmit();
-            }}
-            onChange={(event) => { setMessage(event.target.value); setPreview(null); setPreviewOpen(false); }}
-            placeholder={materialContext ? "说说我的标签怎么改" : task ? "说说怎么改" : "想做什么视频？"}
-            rows={2} value={message} />
-        </div>
-        <div className="home-composer__toolbar">
-          <div className="home-composer__meta">
-            <span>{modelConfigured ? "仅传文字" : "尚未连接"}</span>
-            {modelConfigured ? <CardDisclosure title="服务详情"><p>{materialContext ? `当前服务：${model}。只发送这段话和所选对象的我的标签，不发送原视频或声音。` : `当前服务：${model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。`}</p></CardDisclosure> : <a href="/settings">去设置</a>}
-          </div>
-          <button aria-label="发送" className="composer-submit" disabled={!modelConfigured || !message.trim() || pending !== null} type="submit">
-            <ArrowUp size={17} /><span>{pending === "chat" ? "发送中" : "发送"}</span>
-          </button>
-        </div>
-      </form>
+      {modelConfigured ? <p className="home-composer__meta">当前服务：{model}。本轮只提交文字和当前页面明确选择的上下文，不上传原始素材。</p> : <a href="/settings">连接文字模型</a>}
       {error ? <p className="home-composer__error" role="alert">{error}</p> : null}
       {!materialContext ? <div className="home-composer__footer">{task ? <><a href={`/tasks/${encodeURIComponent(task.id)}`}>打开任务</a>{undoReady ? <button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button> : null}</> : <a href="/production?new=1">手动创建</a>}</div> : null}
     </div>

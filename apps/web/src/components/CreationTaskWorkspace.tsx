@@ -26,10 +26,12 @@ import {
   UserRound,
   Volume2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
+import { AssistantConversationPanel } from "@/components/AssistantConversationPanel";
+import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
-import { AssistantActivityView, assistantActivityAfterEvent, HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import {
   apiUrl,
   checkCreationTaskQuality,
@@ -86,7 +88,6 @@ import type {
   CreationExecutionStatus,
   TaskJobProgress,
   CreationTaskAssistantHistory,
-  AssistantStreamEvent,
   AssistantTurnActivity,
   MaterialAsset,
   MaterialSegmentMatch,
@@ -766,14 +767,14 @@ function ContextCommandBar({
   onCancel,
   onCommandChange,
   onConfirm,
-  onPreview,
   onExactPreview,
   onSelectionPreview,
   preview,
-  assistantReply,
+  assistantState,
+  onAssistantSend,
+  onConversationChange,
+  previewCommand,
   assistantTurns,
-  assistantActivity,
-  assistantModel,
   assistantConfigured,
   selectedContextLabel,
   selectedContextPlaceholder,
@@ -786,103 +787,49 @@ function ContextCommandBar({
   onCancel: () => void;
   onCommandChange: (value: string) => void;
   onConfirm: () => void;
-  onPreview: () => void;
   onExactPreview: () => void;
   onSelectionPreview: (indices:number[])=>void;
   preview: CreationTaskEditPreviewResponse | null;
-  assistantReply: string | null;
+  assistantState: ReturnType<typeof useAssistantConversation>;
+  onAssistantSend: () => Promise<void>;
+  onConversationChange: () => void;
+  previewCommand: string;
   assistantTurns: { command: string; reply: string; context: string; activity?: AssistantTurnActivity }[];
-  assistantActivity: AssistantTurnActivity | null;
-  assistantModel: string;
   assistantConfigured: boolean;
   selectedContextLabel: string | null;
   selectedContextPlaceholder: string;
 }) {
-  const ui = editorUi;
   const barRef = useRef<HTMLElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const composingRef = useRef(false);
-  const restoreInputFocus = useRef(false);
-  const steps=preview?.proposal.operation.operation_type==="EditCompoundTimeline" && preview.proposal.operation.payload.selection_enabled
-    ? preview.proposal.operation.payload.steps as {index:number;command:string;enabled:boolean}[] : [];
-  const originalSelection=steps.filter(step=>step.enabled).map(step=>step.index);
   const [chosen,setChosen]=useState<number[]|null>(null);
-  const selectedSteps=chosen??originalSelection;
-  const commandChanged=steps.length>0 && command.trim()!==preview?.intent.raw_command.trim();
-  const selectionChanged=selectedSteps.length!==originalSelection.length||selectedSteps.some(index=>!originalSelection.includes(index));
   useEffect(() => {
     if (preview && !compact) barRef.current?.scrollIntoView?.({ block: "end" });
   }, [preview, compact]);
   useEffect(() => { setChosen(null); }, [preview?.proposal.id]);
-  useEffect(() => {
-    if (busy === null && restoreInputFocus.current) {
-      restoreInputFocus.current = false;
-      inputRef.current?.focus();
-    }
-  }, [busy]);
-
-  function sendAssistant() {
-    if (busy !== null) return;
-    restoreInputFocus.current = true;
-    onPreview();
-  }
-
   return (
     <section
       aria-label={scriptMode ? "文案对话" : "修改视频"}
       className={editorUi.chatCommand}
       ref={barRef}
     >
-      {!assistantReply ? <div className={editorUi.chatSuggestions}><h2>{scriptMode ? "这段文案怎么写？" : "这条怎么改？"}</h2><p>{scriptMode ? "说说想突出什么，草稿会放在右侧等你确认。" : selectedContextLabel ? `已选中${selectedContextLabel}` : "点选右边的镜头，再告诉我想怎么改。"}</p>{(scriptMode ? [["写个开头", "为当前选题写一个简短开头"], ["说得简单些", "把当前文案改得更容易理解"], ["再短一点", "缩短当前文案，保留关键事实和出处"]] : [["换个镜头", "换一个更合适的镜头，保留声音"], ["亮一点", "把当前镜头调亮一点"], ["字幕大些", "把字幕字号调大一点"]]).map(([label, value]) => <button key={label} type="button" disabled={busy !== null} onClick={() => onCommandChange(value)}>{label}</button>)}</div> : null}
-      <div className={editorUi.chatEntry}>
-        <label className={ui.commandInput}>
-          {!compact ? <span>{scriptMode ? "说说文案想怎么写" : "说说怎么改"}</span> : null}
-          <textarea
-            aria-label={scriptMode ? "文案要求" : "局部修改要求"}
-            rows={3}
-            ref={inputRef}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={() => { composingRef.current = false; }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey || composingRef.current
-                || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-              event.preventDefault();
-              sendAssistant();
-            }}
-            disabled={busy !== null || selectionChanged}
-            onChange={(event) => onCommandChange(event.target.value)}
-            placeholder={steps.length ? "想保留哪项？" : selectedContextPlaceholder}
-            value={command}
-          />
-        </label>
-        <div className={editorUi.composerTools}>
-          <span className={selectedContextLabel ? ui.contextSelection : ui.contextEmpty}>{scriptMode ? "当前文案" : selectedContextLabel ?? "先选对象"}</span>
-          <div className={editorUi.composerActions}>
-        {selectedContextLabel && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">预览修改</button> : null}
-        <button
-          aria-label="发送"
-          title="发送"
-          className={compact ? editorUi.sendButton : "modern-primary-button"}
-            disabled={busy !== null || !assistantConfigured || (Boolean(preview)&&!commandChanged) || !command.trim()}
-          onClick={sendAssistant}
-          type="button"
-        >
-          {busy === "assistant" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}
-          {!compact ? "发送" : null}
-        </button>
-          </div>
-        </div>
-      </div>
-      <div className="assistant-meta">
-        <span>{assistantConfigured ? "仅传文字" : "尚未连接"}</span>
-        {assistantConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
-        {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p>{turn.activity ? <AssistantActivityView activity={{ ...turn.activity, text: "" }} /> : null}</li>)}</ol></details> : null}
-      </div>
-      {scriptMode && assistantTurns.length ? <p className="assistant-reply">我：{assistantTurns.at(-1)?.command}</p> : null}
-      {assistantReply ? <p className="assistant-reply" aria-live="polite">{assistantReply}</p> : null}
-      {assistantTurns.at(-1)?.activity ? <AssistantActivityView activity={{ ...assistantTurns.at(-1)!.activity!, text: "" }} /> : null}
-      {assistantActivity ? <AssistantActivityView activity={assistantActivity} streaming={busy === "assistant"} /> : null}
-      {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={command} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview} /> : null}
+      <AssistantConversationPanel
+        busy={busy !== null}
+        compact={compact}
+        configured={assistantConfigured}
+        input={assistantState.draftText}
+        inputLabel={scriptMode ? "文案要求" : "局部修改要求"}
+        onInput={onCommandChange}
+        onSend={async () => onAssistantSend()}
+        onConversationChange={onConversationChange}
+        placeholder={selectedContextPlaceholder}
+        scopeLabel={scriptMode ? "当前任务 · 文案" : selectedContextLabel ? `当前任务 · ${selectedContextLabel}` : "当前任务"}
+        state={assistantState}
+        suggestions={scriptMode ? ["为当前选题写一个简短开头", "把当前文案改得更容易理解", "缩短文案并保留事实来源"] : selectedContextLabel ? ["先解释当前选中对象", "让节奏快一点", "把字幕放大一点"] : ["先说明当前任务状态", "继续制作", "重新生成成片"]}
+      />
+      {selectedContextLabel && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">精确预览修改</button> : null}
+      {assistantTurns.length ? <details className="assistant-history"><summary>旧版只读历史</summary><ol>{assistantTurns.map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
+      {!assistantConfigured ? <a href="/settings">连接文字模型</a> : null}
+      {assistantConfigured ? <p className="assistant-meta">本轮只提交文字和当前明确选择的上下文，不上传原视频或声音。</p> : null}
+      {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={previewCommand} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview} /> : null}
     </section>
   );
 }
@@ -1201,24 +1148,47 @@ function materialReviewLabel(status: MaterialAsset["review_status"]) {
   return "未审核";
 }
 
+const PREPARE_MATERIALS_PAGE_SIZE = 100;
+
 function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
   const [materials, setMaterials] = useState<MaterialAsset[] | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  useEffect(() => {
-    let active = true;
-    getProductionMaterials({ limit: 200 })
-      .then((library) => {
-        if (!active) return;
-        setMaterials(library.assets);
-        setHasMore(library.has_more);
-      })
-      .catch((cause: unknown) => {
-        if (!active) return;
-        setLoadError(cause instanceof Error ? cause.message : "素材读取失败");
+  const [nextOffset, setNextOffset] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const activeRef = useRef(true);
+  const loadingRef = useRef(false);
+  const loadPage = useCallback(async (offset: number, replace: boolean) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const library = await getProductionMaterials({ limit: PREPARE_MATERIALS_PAGE_SIZE, offset });
+      if (!activeRef.current) return;
+      setMaterials((current) => {
+        const assets = replace ? [] : current ?? [];
+        const byId = new Map(assets.map((asset) => [asset.id, asset]));
+        for (const asset of library.assets) byId.set(asset.id, asset);
+        return [...byId.values()];
       });
-    return () => { active = false; };
+      setHasMore(library.has_more);
+      setTotalCount(library.total_count);
+      setNextOffset(library.offset + library.limit);
+    } catch (cause: unknown) {
+      if (!activeRef.current) return;
+      setLoadError(cause instanceof Error ? cause.message : "素材读取失败");
+    } finally {
+      loadingRef.current = false;
+      if (activeRef.current) setLoading(false);
+    }
   }, []);
+  useEffect(() => {
+    activeRef.current = true;
+    void loadPage(0, true);
+    return () => { activeRef.current = false; };
+  }, [loadPage]);
   const matchesByAsset = useMemo(() => {
     const map = new Map<string, MaterialSegmentMatch>();
     for (const match of workspace.plan.material_matches) {
@@ -1239,17 +1209,18 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
           <h2>本次任务素材</h2>
           <p>只读回看方案匹配到的素材，不会在这里改动素材或重新跑匹配。</p>
         </div>
-        <span className={styles.artifactStatus}><CheckCircle2 size={15} />资料就绪</span>
+        <span className={styles.artifactStatus}><CheckCircle2 size={15} />{workspace.plan.material_matches.length ? `方案已记录 ${workspace.plan.material_matches.length} 个匹配片段` : "方案尚无匹配片段"}</span>
       </div>
       <div className={styles.artifactGrid}>
         <section><strong>方案匹配</strong><p>{workspace.plan.material_matches.length} 个素材片段匹配当前目标{workspace.plan.material_rule_summary ? ` · ${workspace.plan.material_rule_summary}` : ""}</p></section>
         <section><strong>审核进度</strong><p>已审核素材 {workspace.plan.approved_asset_count} 个 · 已审核镜头 {workspace.plan.approved_clip_count} 个</p></section>
       </div>
-      {loadError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>素材读取失败：{loadError}</span></div> : null}
+      {loadError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>素材列表读取失败：{loadError}；这不改变方案匹配或资料就绪状态。</span></div> : null}
       <div className={styles.evidenceList}>
         <strong>本次素材列表</strong>
-        {materials === null && !loadError ? <p>正在读取素材…</p> : null}
-        {materials !== null && matchedAssets.length === 0 ? <p>暂无：方案尚未匹配到可用素材，或素材解析状态缺失。</p> : null}
+        {loading && materials === null ? <p>正在读取素材…</p> : null}
+        {materials !== null && matchedAssets.length === 0 && hasMore ? <p>当前已读 {materials.length} 条，尚未找到本方案匹配素材；可继续读取下一页。</p> : null}
+        {materials !== null && matchedAssets.length === 0 && !hasMore ? <p>已读完素材列表；本方案暂无匹配素材，或素材解析状态缺失。</p> : null}
         {matchedAssets.map((asset) => {
           const match = matchesByAsset.get(asset.id);
           const tags = asset.user_tags ?? [];
@@ -1264,7 +1235,11 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
             </article>
           );
         })}
-        {hasMore ? <p>素材较多，此处只展示前 200 条匹配片段。</p> : null}
+        {hasMore || loadError ? (
+          <button type="button" disabled={loading} onClick={() => void loadPage(nextOffset, false)}>
+            {loading ? "正在读取…" : loadError && nextOffset > 0 ? "重试读取下一页" : loadError ? "重试读取素材" : `读取更多素材（已读 ${materials?.length ?? 0}${totalCount === null ? "" : ` / ${totalCount}`}）`}
+          </button>
+        ) : null}
       </div>
     </section>
   );
@@ -1417,17 +1392,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? null,
   );
   const [selectedNarrationSegmentId, setSelectedNarrationSegmentId] = useState<string | null>(null);
-  const [editCommand, setEditCommand] = useState("");
   const [editPreview, setEditPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
+  const [assistantPreview, setAssistantPreview] = useState(false);
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [recordings, setRecordings] = useState<CreationTaskRecording[]>([]);
   const [recordingsError, setRecordingsError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [assistantReply, setAssistantReply] = useState<string | null>(null);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurnRecord[]>([]);
-  const [assistantActivity, setAssistantActivity] = useState<AssistantTurnActivity | null>(null);
-  const assistantActivityRef = useRef<AssistantTurnActivity>({ text: "", tools: [] });
-  const [assistantModel, setAssistantModel] = useState("外部文字模型待连接");
   const [assistantConfigured, setAssistantConfigured] = useState(false);
   const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
   const [execution, setExecution] = useState<CreationExecutionStatus | null>(null);
@@ -1437,7 +1408,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
       if (runtime.status.llm.configured) {
-        setAssistantModel(`${runtime.status.llm.provider} / ${runtime.status.llm.model}`);
         setAssistantConfigured(true);
       }
     }).catch(() => undefined);
@@ -1460,6 +1430,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return () => { active = false; };
   }, [workspace.task.id, workspace.task.confirmed_script_id, workspace.task.stage]);
   const task = workspace.task;
+  const assistantConversation = useAssistantConversation({ scope_kind: "task", scope_id: task.id });
+  const editCommand = assistantConversation.draftText;
+  const setEditCommand = assistantConversation.setDraftText;
   const [sharingOpen, setSharingOpen] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
@@ -1491,14 +1464,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   useEffect(() => {
     let active = true;
     setAssistantTurns([]);
-    setAssistantReply(null);
-    setAssistantActivity(null);
-    assistantActivityRef.current = { text: "", tools: [] };
     void getCreationTaskAssistantHistory(task.id).then((history) => {
       if (!active) return;
       const turns = assistantHistoryTurns(history.items);
       setAssistantTurns(turns);
-      setAssistantReply(turns.at(-1)?.reply ?? null);
     }).catch((cause) => { if (active) setError(errorDetails(cause)); });
     return () => { active = false; };
   }, [task.id]);
@@ -1607,7 +1576,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   function invalidateEditPreview() {
     editContextRevision.current += 1;
     setEditPreview(null);
-    setAssistantReply(null);
+    setAssistantPreview(false);
   }
 
   async function refresh(preserveActiveView = false) {
@@ -1952,17 +1921,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function askAssistant() {
     const message = editCommand.trim();
     if (!message) return;
-    const contextLabel = activeView === "script" ? "当前文案" : selectedEditContext?.label ?? "当前任务";
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
+    let requestConversationId: string | null = null;
+    let requestLocalTurnId: string | null = null;
     setBusy("assistant");
     setError(null);
-    setAssistantReply(null);
-    assistantActivityRef.current = { text: "", tools: [] };
-    setAssistantActivity(assistantActivityRef.current);
     try {
+      if (!assistantConversation.conversation) await assistantConversation.createNew();
+      const turn = assistantConversation.beginTurn(message);
+      requestConversationId = turn.conversationId;
+      requestLocalTurnId = turn.localTurnId;
+      const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
+      await turn.draftCheckpoint;
+      if (revision !== editContextRevision.current) return;
       const result = await sendCreationTaskAssistantTurn(task.id, {
+        conversation_id: turn.conversationId,
         message,
         context_stage: activeView,
         selected_object_refs: selectedEditContext
@@ -1970,39 +1945,38 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           : [],
         playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
-      }, (event: AssistantStreamEvent) => {
+      }, (event) => {
         if (revision !== editContextRevision.current) return;
-        assistantActivityRef.current = assistantActivityAfterEvent(assistantActivityRef.current, event);
-        setAssistantActivity(assistantActivityRef.current);
+        onStreamEvent(event);
       });
+      if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
+      await assistantConversation.refresh();
       if (result.execution_status) setExecution(result.execution_status);
       pollExecutionRef.current();
-      const contextStillCurrent = revision === editContextRevision.current;
       if (result.script_draft) await refresh(true);
-      if (contextStillCurrent) {
-        setAssistantReply(result.reply);
-        setAssistantTurns((current) => [...current, {
-          command: message, reply: result.reply, context: contextLabel,
-          activity: assistantActivityRef.current,
-        }].slice(-8));
-        setAssistantActivity(null);
-        setAssistantModel(`${result.provider} / ${result.model}`);
+      if (revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId)) {
         setEditPreview(result.edit_preview);
-        if (result.edit_preview) setEditCommand(result.edit_preview.intent.raw_command);
+        if (result.edit_preview) setAssistantPreview(true);
       }
     } catch (cause) {
-      setError(errorDetails(cause));
-      if (activeView === "script") {
-        await refresh().catch(() => undefined);
-        const history = await getCreationTaskAssistantHistory(task.id).catch(() => null);
-        if (history) {
-          const turns = assistantHistoryTurns(history.items);
-          setAssistantTurns(turns);
-          setAssistantReply(turns.at(-1)?.reply ?? null);
+      if (requestConversationId && requestLocalTurnId) {
+        const failure = errorDetails(cause);
+        await assistantConversation.failUnpersistedTurn(requestConversationId, requestLocalTurnId,
+          [failure.message, failure.impact, failure.repairAction].filter(Boolean).join(" "));
+      }
+      if (revision === editContextRevision.current && (!requestConversationId || assistantConversation.isCurrentConversation(requestConversationId))) {
+        setError(errorDetails(cause));
+        if (activeView === "script") {
+          await refresh().catch(() => undefined);
+          const history = await getCreationTaskAssistantHistory(task.id).catch(() => null);
+          if (history && revision === editContextRevision.current) {
+            const turns = assistantHistoryTurns(history.items);
+            setAssistantTurns(turns);
+          }
         }
       }
     } finally {
-      setBusy(null);
+      if (revision === editContextRevision.current) setBusy(null);
     }
   }
 
@@ -2015,6 +1989,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function confirmEdit() {
     if (!editPreview) return;
+    const preserveNextDraft = assistantPreview;
     setBusy("edit-confirm");
     setError(null);
     setNotice(null);
@@ -2025,7 +2000,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setNotice("人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。");
       }
       invalidateEditPreview();
-      setEditCommand("");
+      if (!preserveNextDraft) setEditCommand("");
       await refresh(true);
     } catch (cause) {
       setError(errorDetails(cause));
@@ -2140,7 +2115,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     const proposalId=editPreview.proposal.id;
     setBusy("edit-preview");setError(null);
     const revision=++editContextRevision.current;
-    try{const next=await previewCompoundSelection(task.id,proposalId,selection);if(editContextRevision.current===revision){setEditPreview(next);setEditCommand(next.intent.raw_command);}}
+    try{const next=await previewCompoundSelection(task.id,proposalId,selection);if(editContextRevision.current===revision){setEditPreview(next);if(!assistantPreview)setEditCommand(next.intent.raw_command);}}
     catch(cause){setError(errorDetails(cause));}
     finally{setBusy(null);}
   }
@@ -2263,13 +2238,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   // target_refs is the actual proposal scope; external_effects is explanatory
   // copy (even a local crop includes it), not a boolean permission/fee flag.
   const operation = editPreview?.proposal.operation;
+  const previewCommand = assistantPreview && editPreview ? editPreview.intent.raw_command : editCommand;
   const ordinaryObjectEdit = operation && (["ReplaceClip", "ChangeCrop", "TrimClip", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "SetClipTransition", "AdjustVisualEffects", "UpdateSubtitleCue"].includes(operation.operation_type)
     || (operation.operation_type === "EditGraphicOverlay" && operation.payload.overlay_action === "update"));
   const localConfirmation = Boolean(ordinaryObjectEdit && selectedEditContext && editPreview
     && editPreview.proposal.task_id === task.id && editPreview.proposal.workspace_id === task.workspace_id
     && editPreview.proposal.target_refs.length > 0
     && editPreview.proposal.target_refs.every(ref => ref === selectedEditContext.ref));
-  const inspectorConfirmation = localConfirmation && editPreview ? <EditPreviewCard key={editPreview.proposal.id} preview={editPreview} busy={busy} compact command={editCommand} kind="config" onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} /> : null;
+  const inspectorConfirmation = localConfirmation && editPreview ? <EditPreviewCard key={editPreview.proposal.id} preview={editPreview} busy={busy} compact command={previewCommand} kind="config" onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} /> : null;
   const sharingControls = (
     <div className={styles.sharingControls}>
       <div className={styles.taskVisibility}>
@@ -2297,7 +2273,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantActivity={assistantActivity} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onConversationChange={() => { editContextRevision.current += 1; setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (

@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import re
+import signal
 import shutil
 import subprocess
 import threading
@@ -96,6 +97,72 @@ _PI_TOOL_LABELS = {
     "read_selected_material": "读取所选素材",
     "update_selected_material_tags": "修改我的标签",
 }
+
+
+class AssistantStopped(RuntimeError):
+    """The current conversation turn's Pi child was stopped by its owner."""
+
+
+_active_turn_processes: dict[str, subprocess.Popen[str]] = {}
+_turn_stop_events: dict[str, threading.Event] = {}
+_turn_process_guard = threading.RLock()
+
+
+def request_stop_turn(turn_id: str) -> bool:
+    with _turn_process_guard:
+        event = _turn_stop_events.get(turn_id)
+        if event is None:
+            return False
+        process = _active_turn_processes.get(turn_id)
+        if process is not None and process.poll() is not None:
+            return False
+        event.set()
+        if process is None:
+            return True
+    _terminate_process_group(process)
+    process.wait(timeout=3)
+    return True
+
+
+def register_turn_control(turn_id: str) -> None:
+    with _turn_process_guard:
+        _turn_stop_events[turn_id] = threading.Event()
+
+
+def forget_turn_control(turn_id: str) -> None:
+    with _turn_process_guard:
+        _turn_stop_events.pop(turn_id, None)
+        _active_turn_processes.pop(turn_id, None)
+
+
+def stop_all_assistant_turns() -> list[str]:
+    with _turn_process_guard:
+        active_ids = list(_turn_stop_events)
+    for turn_id in active_ids:
+        request_stop_turn(turn_id)
+    return active_ids
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    except ProcessLookupError:
+        process.wait()
 
 
 def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> str:
@@ -205,12 +272,25 @@ class _PiStreamProjector:
 
 def _run_pi_streaming(
     cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
-    timeout_seconds: int, on_event,
+    timeout_seconds: int, on_event, turn_id: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    stop_event = None
+    if turn_id:
+        with _turn_process_guard:
+            stop_event = _turn_stop_events.setdefault(turn_id, threading.Event())
+        if stop_event.is_set():
+            with _turn_process_guard:
+                _turn_stop_events.pop(turn_id, None)
+            raise AssistantStopped("assistant turn stopped before Pi started")
     process = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", bufsize=1, env=env, cwd=cwd,
+        text=True, encoding="utf-8", bufsize=1, env=env, cwd=cwd, start_new_session=True,
     )
+    if turn_id:
+        with _turn_process_guard:
+            _active_turn_processes[turn_id] = process
+            if stop_event is not None and stop_event.is_set():
+                _terminate_process_group(process)
     output_lines: list[str] = []
     error_lines: deque[str] = deque(maxlen=10000)
     line_queue: queue.Queue[str | None] = queue.Queue()
@@ -244,6 +324,11 @@ def _run_pi_streaming(
                 pass
         deadline = time.monotonic() + timeout_seconds
         while True:
+            if stop_event is not None and stop_event.is_set():
+                _terminate_process_group(process)
+                stdout_thread.join(timeout=1)
+                stderr_thread.join(timeout=1)
+                raise AssistantStopped("assistant turn stopped")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(cmd, timeout_seconds, "".join(output_lines), "".join(error_lines))
@@ -252,6 +337,8 @@ def _run_pi_streaming(
             except queue.Empty:
                 continue
             if line is None:
+                if stop_event is not None and stop_event.is_set():
+                    raise AssistantStopped("assistant turn stopped")
                 break
             output_lines.append(line)
             event = projector.project(line)
@@ -259,13 +346,20 @@ def _run_pi_streaming(
                 on_event(event)
         return_code = process.wait(timeout=max(0.05, deadline - time.monotonic()))
         stderr_thread.join(timeout=1)
+        if stop_event is not None and stop_event.is_set():
+            raise AssistantStopped("assistant turn stopped")
         return subprocess.CompletedProcess(cmd, return_code, "".join(output_lines), "".join(error_lines))
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+        _terminate_process_group(process)
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
         raise
+    finally:
+        if turn_id:
+            with _turn_process_guard:
+                if _active_turn_processes.get(turn_id) is process:
+                    _active_turn_processes.pop(turn_id, None)
+                _turn_stop_events.pop(turn_id, None)
 
 
 class AssistantUnavailable(RuntimeError):
@@ -653,6 +747,7 @@ def run_task_turn(
     *,
     workspace_id: str,
     task_id: str,
+    conversation_id: str | None = None,
     message: str,
     stage: str,
     selected_refs: list[str],
@@ -662,6 +757,7 @@ def run_task_turn(
     local_member_token: str | None = None,
     caller_user_id: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
@@ -681,7 +777,9 @@ def run_task_turn(
         prompt=TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
         tool_names=tools,
         preview_kind="topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
-        session_key=f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}",
+        session_key=(f"task:{task_id}:{conversation_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"
+                     if conversation_id else f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"),
+        turn_id=turn_id,
     )
 
 
@@ -696,6 +794,7 @@ def run_plan_turn(
     local_member_token: str | None = None,
     caller_user_id: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[str, dict | None]:
     return _run_turn(
         settings, workspace_id=workspace_id, task_id="", message=message,
@@ -704,7 +803,7 @@ def run_plan_turn(
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event,
         prompt=PLAN_PROMPT, tool_names="read_workspace_context,read_video_templates,find_knowledge,find_materials,preview_creation_plan",
-        preview_kind="plan_preview", session_key=f"new-plan:{conversation_id}",
+        preview_kind="plan_preview", session_key=f"new-plan:{conversation_id}", turn_id=turn_id,
     )
 
 
@@ -720,6 +819,7 @@ def run_material_turn(
     local_member_token: str | None = None,
     caller_user_id: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[str, dict | None]:
     tool_selection = {
         "scope": selection["scope"],
@@ -737,6 +837,7 @@ def run_material_turn(
         session_key=(f"material:{conversation_id}:{selection['scope']}:{selection['asset_id']}"
                      f":{selection.get('segment_id', '')}"),
         material_selection=tool_selection,
+        turn_id=turn_id,
     )
 
 
@@ -759,6 +860,7 @@ def _run_turn(
     session_key: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     material_selection: dict[str, str] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[str, dict | None]:
     checks = pi_runtime_checks()
     for check in checks:
@@ -827,8 +929,8 @@ def _run_turn(
     try:
         result = (_run_pi_streaming(
             cmd, message=message, env=env, cwd=runtime_root,
-            timeout_seconds=180, on_event=on_event,
-        ) if on_event is not None else subprocess.run(
+            timeout_seconds=180, on_event=on_event or (lambda _event: None), turn_id=turn_id,
+        ) if on_event is not None or turn_id is not None else subprocess.run(
             cmd, input=message, text=True, capture_output=True, timeout=180,
             env=env, cwd=runtime_root, check=False,
         ))
