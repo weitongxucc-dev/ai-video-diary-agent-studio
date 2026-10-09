@@ -299,6 +299,14 @@ C阶段1 task_e3a8068df898/ctx_15d1fec37b07已06d1104 succeeded/retain，仅四�
 
 实际phase1四项要转为修复后期望测试，可定向copy旧06d1104测试文件再改断言，不整包cherry-pick BUG_PASS。最小三入口/缺文件/不同状态/可信member、excluded receipt/迟到另一源不串状态/同源重试、Plan-topic-script-library默认可用与限制/固定历史版及撤销检查。只TestClient临时DB/文字网页替身、既有pytest/Web cache/tsc；无服务/模型/Pi/GUI/用户数据/Key/安装/账号/外发/远端。交clean准确delta/report和共享main/schema释放回执，UI持久CAS接续仅此结束后，不把fixture当真实界面。
 
+### B独立预览接续 / D旧直接验证夹具
+
+B-PROFILE-API task_36e5c2cf4607/ctx_9a8640de4abf按终态绑定并发残差failed结算并retain，345d88f实际源码组合1993ad0，29接口/门禁+36组件/tsc证据保留，未伪装GUI。C正式来源 task_73c344661ad2/ctx_48b39b372a5d ready，唯一main/schema来源写者；F读素材 task_f69e002c2824/ctx_d735bdd718dd ready且REBASE_ACK，唯一三个素材工具模块写者；UI原CAS第二阶段继续HOLD共享API，不抢文件。
+
+B新QA-V2-B-PREVIEW-BINDING，仅在原clean345d88f candidate新分支codex/review-v2-preview-binding-20261009，owned profile_preview_execution.py、production.py media_preview绑定/持久终态相关段、test_profile_api_contract.py直接专项。共享main/schema/API/types/人物UI写权明确结束归C后再UI，声音和人物生成核心/D词典不写。实证scheduler.submit之后bind之前既有runtime tick执行，service捕获None后终态整payload覆盖真实request_id；终态发布必须与本次grant request_id精确绑定，bind重读保留已完成/失败/取消事实，不回滚状态；采用既有scheduler事务/业务checkpoint，不能新增队列或泛化Hook。必要成功、失败与取消交错直接测试，旧29/36无变化不重跑，恢复未知仍不释放许可。队列分类独立档案试听无当前作品依赖，normal_make保留公平/预算。只临时DB/合成provider、控制runtime时序，无真实资源准入/服务/模型/GUI/用户库/安装/远端；clean delta/report和准确未验，原Task failed不擦除。
+
+D新QA-V2-D-PREVIEW-TEST-FIXTURES，从准确1993ad0 clone到`/tmp/main-acceptance-20261009/review-v2-preview-test-fixtures/candidate`新公开分支；只owned tests/test_media_preview_runs.py、tests/test_media_preview_api.py与确需新增一个私有直接test辅助文件，禁止改任何生产代码、B新test_profile_api_contract.py、main/schema/资源cap或跳过测试。先复核两文件真实既有失败，修旧缺ProfileReference/可信登记/任意无效媒体字节夹具成真实合成WAV/PNG和可信本地测试成员；预览正例沿本次唯一DeviceRuntime/专属grant，HTTP queued再实际受控完成回读，不把queued看作成功，不以宽泛可接受多个status削弱断言。保留来源失联/成员隔离/固定版本/取消/无grant拒绝/模型不可用/历史不可覆盖等真实负例；必要直接复用既有明确fixture helper，不新增产品抽象或第二调度器。已装pytest及测试替身/自有合成媒体可用，无用户素材/Key/模型/服务/Pi/GUI/安装/远端。仅这两直接文件完整测试一次，发现生产缺口报准确case与事实由主控具名，不能为绿测降门禁。交clean提交与受控验证报告，仍不宣称实际模型/GUI或全仓CI通过。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
