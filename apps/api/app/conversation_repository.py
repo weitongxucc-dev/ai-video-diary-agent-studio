@@ -15,6 +15,16 @@ class ConversationTurnAlreadyRunning(RuntimeError):
     pass
 
 
+class ConversationDraftVersionConflict(RuntimeError):
+    def __init__(self, current: dict) -> None:
+        self.current = current
+        super().__init__("对话草稿已在其他位置更新，请重新读取后再编辑。")
+
+
+class ConversationTurnRequestConflict(RuntimeError):
+    pass
+
+
 class ConversationRepository:
     """Persist app conversations and turns in the existing application SQLite DB."""
 
@@ -22,6 +32,13 @@ class ConversationRepository:
         self.database_path = Path(database_path).expanduser()
         if initialize:
             self.initialize()
+
+    @staticmethod
+    def _validate_draft_request(client_request_id: str, expected_draft_version: int) -> None:
+        if not client_request_id or len(client_request_id) > 128:
+            raise ValueError("client_request_id must contain 1..128 characters")
+        if expected_draft_version < 0:
+            raise ValueError("expected_draft_version must be non-negative")
 
     def initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,6 +52,7 @@ class ConversationRepository:
                     scope_id TEXT NOT NULL,
                     title TEXT NOT NULL,
                     draft_text TEXT NOT NULL DEFAULT '',
+                    draft_version INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -64,7 +82,24 @@ class ConversationRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_assistant_turns_conversation
                     ON assistant_conversation_turns(conversation_id, sequence ASC);
+                CREATE TABLE IF NOT EXISTS assistant_conversation_request_receipts (
+                    client_request_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    member_id TEXT NOT NULL,
+                    scope_kind TEXT NOT NULL CHECK(scope_kind IN ('home','material','task')),
+                    scope_id TEXT NOT NULL,
+                    user_message TEXT NOT NULL,
+                    expected_draft_version INTEGER NOT NULL,
+                    outcome TEXT NOT NULL CHECK(outcome IN ('consumed','recovered')),
+                    turn_id TEXT UNIQUE REFERENCES assistant_conversation_turns(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    CHECK((outcome='consumed' AND turn_id IS NOT NULL) OR (outcome='recovered' AND turn_id IS NULL))
+                );
             """)
+            conversation_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversations)")}
+            if "draft_version" not in conversation_columns:
+                conn.execute("ALTER TABLE assistant_conversations ADD COLUMN draft_version INTEGER NOT NULL DEFAULT 0")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path, timeout=10)
@@ -192,6 +227,7 @@ class ConversationRepository:
         if draft_text is not None:
             fields.append("draft_text=?")
             values.append(draft_text)
+            fields.append("draft_version=draft_version+1")
         if not fields:
             return self.get(conversation_id, workspace_id, member_id)
         fields.append("updated_at=?")
@@ -203,6 +239,42 @@ class ConversationRepository:
                 "WHERE id=? AND workspace_id=? AND member_id=?", values,
             )
         return self.get(conversation_id, workspace_id, member_id)
+
+    def save_draft(self, conversation_id: str, workspace_id: str, member_id: str,
+                   draft_text: str, expected_draft_version: int) -> dict | None:
+        """Compare-and-save a draft under its trusted conversation owner."""
+        if expected_draft_version < 0:
+            raise ValueError("expected_draft_version must be non-negative")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+            if row is None:
+                return None
+            current = self._conversation(row)
+            if current["draft_version"] != expected_draft_version:
+                raise ConversationDraftVersionConflict(current)
+            cursor = conn.execute(
+                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,updated_at=? "
+                "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=?",
+                (draft_text, _now(), conversation_id, workspace_id, member_id, expected_draft_version),
+            )
+            if cursor.rowcount != 1:
+                row = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                    (conversation_id, workspace_id, member_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                raise ConversationDraftVersionConflict(self._conversation(row))
+            updated = conn.execute(
+                "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+        assert updated is not None
+        return self._conversation(updated)
 
     def create_turn(self, conversation_id: str, user_message: str) -> dict:
         turn_id = str(uuid4())
@@ -226,10 +298,164 @@ class ConversationRepository:
                 "VALUES(?,?,?,?,?,'running','[]',?,?)",
                 (turn_id, conversation_id, sequence, user_message, "", now, now),
             )
-            conn.execute("UPDATE assistant_conversations SET draft_text='',updated_at=? WHERE id=?", (now, conversation_id))
+            conn.execute("UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,updated_at=? WHERE id=?",
+                         (now, conversation_id))
             result = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
         assert result is not None
         return dict(result)
+
+    def create_turn_idempotent(
+        self, conversation_id: str, workspace_id: str, member_id: str, user_message: str,
+        client_request_id: str, expected_draft_version: int,
+    ) -> tuple[dict | None, bool]:
+        """Atomically consume a draft version and create at most one turn per request ID.
+
+        The boolean is true only for the call that inserted the durable turn; a replay
+        must return the existing turn without launching its business tools again.
+        """
+        self._validate_draft_request(client_request_id, expected_draft_version)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conversation = conn.execute(
+                "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+            if conversation is None:
+                return None, False
+            existing = conn.execute(
+                "SELECT * FROM assistant_conversation_request_receipts WHERE client_request_id=?",
+                (client_request_id,),
+            ).fetchone()
+            if existing is not None:
+                same_request = (
+                    existing["workspace_id"] == workspace_id
+                    and existing["member_id"] == member_id
+                    and existing["conversation_id"] == conversation_id
+                    and existing["scope_kind"] == conversation["scope_kind"]
+                    and existing["scope_id"] == conversation["scope_id"]
+                    and existing["user_message"] == user_message
+                    and existing["expected_draft_version"] == expected_draft_version
+                )
+                if not same_request:
+                    raise ConversationTurnRequestConflict("此请求身份已用于其他内容或对话范围。")
+                if existing["outcome"] == "recovered":
+                    raise ConversationTurnRequestConflict("此请求已恢复为草稿；如需重新发送，请创建新的请求身份。")
+                turn = conn.execute(
+                    "SELECT * FROM assistant_conversation_turns WHERE id=? AND conversation_id=?",
+                    (existing["turn_id"], conversation_id),
+                ).fetchone()
+                assert turn is not None
+                return dict(turn), False
+
+            current = self._conversation(conversation)
+            if current["draft_version"] != expected_draft_version:
+                raise ConversationDraftVersionConflict(current)
+            running = conn.execute(
+                "SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running' LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if running is not None:
+                raise ConversationTurnAlreadyRunning("此对话已有正在运行的助手轮次。")
+            sequence_row = conn.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM assistant_conversation_turns WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()
+            turn_id = str(uuid4())
+            now = _now()
+            conn.execute(
+                "INSERT INTO assistant_conversation_turns "
+                "(id,conversation_id,sequence,user_message,assistant_text,status,events_json,result_json,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,'running','[]',NULL,?,?)",
+                (turn_id, conversation_id, int(sequence_row["sequence"]), user_message, "", now, now),
+            )
+            consumed = conn.execute(
+                "UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,updated_at=? "
+                "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=?",
+                (now, conversation_id, workspace_id, member_id, expected_draft_version),
+            )
+            if consumed.rowcount != 1:
+                row = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                    (conversation_id, workspace_id, member_id),
+                ).fetchone()
+                if row is None:
+                    return None, False
+                raise ConversationDraftVersionConflict(self._conversation(row))
+            conn.execute(
+                "INSERT INTO assistant_conversation_request_receipts "
+                "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
+                "expected_draft_version,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?, 'consumed',?,?)",
+                (client_request_id, conversation_id, workspace_id, member_id, conversation["scope_kind"],
+                 conversation["scope_id"], user_message, expected_draft_version, turn_id, now),
+            )
+            turn = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
+        assert turn is not None
+        return dict(turn), True
+
+    def restore_unpersisted_turn_draft(
+        self, conversation_id: str, workspace_id: str, member_id: str, client_request_id: str,
+        user_message: str, expected_draft_version: int,
+    ) -> tuple[dict | None, str]:
+        """Restore only when the matching request has no durable turn and the draft is unchanged."""
+        self._validate_draft_request(client_request_id, expected_draft_version)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conversation = conn.execute(
+                "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+            if conversation is None:
+                return None, "not_found"
+            existing = conn.execute(
+                "SELECT * FROM assistant_conversation_request_receipts WHERE client_request_id=?",
+                (client_request_id,),
+            ).fetchone()
+            if existing is not None:
+                same_request = (
+                    existing["workspace_id"] == workspace_id
+                    and existing["member_id"] == member_id
+                    and existing["conversation_id"] == conversation_id
+                    and existing["scope_kind"] == conversation["scope_kind"]
+                    and existing["scope_id"] == conversation["scope_id"]
+                    and existing["user_message"] == user_message
+                    and existing["expected_draft_version"] == expected_draft_version
+                )
+                if not same_request:
+                    raise ConversationTurnRequestConflict("此请求身份已用于其他内容或对话范围。")
+                outcome = "already_recovered" if existing["outcome"] == "recovered" else "already_persisted"
+                return self._conversation(conversation), outcome
+
+            current = self._conversation(conversation)
+            if current["draft_version"] != expected_draft_version:
+                raise ConversationDraftVersionConflict(current)
+            cursor = conn.execute(
+                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,updated_at=? "
+                "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=? "
+                "AND NOT EXISTS (SELECT 1 FROM assistant_conversation_request_receipts WHERE client_request_id=?)",
+                (user_message, _now(), conversation_id, workspace_id, member_id,
+                 expected_draft_version, client_request_id),
+            )
+            if cursor.rowcount != 1:
+                row = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                    (conversation_id, workspace_id, member_id),
+                ).fetchone()
+                if row is None:
+                    return None, "not_found"
+                raise ConversationDraftVersionConflict(self._conversation(row))
+            conn.execute(
+                "INSERT INTO assistant_conversation_request_receipts "
+                "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
+                "expected_draft_version,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?, 'recovered',NULL,?)",
+                (client_request_id, conversation_id, workspace_id, member_id, conversation["scope_kind"],
+                 conversation["scope_id"], user_message, expected_draft_version, _now()),
+            )
+            restored = conn.execute(
+                "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+        assert restored is not None
+        return self._conversation(restored), "restored"
 
     def get_turn(self, turn_id: str) -> dict | None:
         with self._connect() as conn:
