@@ -16,9 +16,26 @@ from app.avatar_lipsync import (
     UnavailableAvatarAndLipSyncProvider,
     VoiceProfile,
 )
-from app.narration import VoicePreviewService, _voice_preview_identity
-from app.production import MediaPreviewRunRecord, ProductionRepository
+from app.narration import VoicePreviewService
+from app.production import ProductionRepository
 from app.voice_clone import UnavailableVoiceCloneProvider, VoiceCloneResult
+from app.local_members import LocalMemberService
+from _media_preview_test_fixtures import (
+    PreviewRuntimeHarness,
+    build_preview_runtime,
+    register_synthetic_profiles,
+    synthetic_wav_bytes,
+)
+
+_ACTIVE_HARNESSES: list[PreviewRuntimeHarness] = []
+
+
+@pytest.fixture(autouse=True)
+def _release_test_preview_runtimes():
+    _ACTIVE_HARNESSES.clear()
+    yield
+    while _ACTIVE_HARNESSES:
+        assert _ACTIVE_HARNESSES.pop().close()
 
 
 def _repository(tmp_path: Path) -> ProductionRepository:
@@ -32,63 +49,84 @@ def _repository(tmp_path: Path) -> ProductionRepository:
     )
 
 
-def _authorization(workspace_id: str, content_type: str, scopes: tuple[str, ...]) -> Authorization:
-    return Authorization(
-        id=f"{content_type}-authorization",
-        version="v1",
-        rights_holder="权利人",
-        content_types=(content_type,),
-        usage_scopes=scopes,
-        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        expires_at=None,
-        evidence_reference="consent://preview-fixture",
-        status="active",
-        workspace_id=workspace_id,
-    )
-
-
 def _profiles(
     repository: ProductionRepository,
     workspace_id: str = "workspace_a",
 ) -> tuple[PersonProfile, VoiceProfile, Path]:
-    reference = repository.video_library_path / "approved" / f"{workspace_id}-reference.wav"
-    reference.parent.mkdir(parents=True, exist_ok=True)
-    reference.write_bytes(b"fixture reference")
-    avatar = repository.video_library_path / "approved" / f"{workspace_id}-avatar.mp4"
-    avatar.write_bytes(b"fixture avatar")
-    person = PersonProfile(
-        id="person_a",
-        workspace_id=workspace_id,
-        display_name="主播 A",
-        version="person-v1",
-        avatar_reference=f"workspace://approved/{avatar.name}",
-        background_capabilities=("studio",),
-        shot_capabilities=("medium",),
-        authorization=_authorization(workspace_id, "person_likeness", ("avatar_lipsync",)),
+    members = LocalMemberService(repository.database_path.with_name("preview-members.sqlite3"))
+    member, token = members.whoami(None)
+    person, voice, avatar_authorization, reference, _image = register_synthetic_profiles(
+        repository, workspace_id=workspace_id, member_id=member.member_id,
     )
-    voice = VoiceProfile(
-        id="voice_a",
-        workspace_id=workspace_id,
-        person_profile_id=person.id,
-        person_version=person.version,
-        version="voice-v1",
-        language="zh-en",
-        reference_audio_path=f"workspace://approved/{reference.name}",
-        reference_text="测试参考文字",
-        model_id="voice-model-v1",
-        authorization=_authorization(workspace_id, "voice", ("narration", "avatar_lipsync")),
-    )
+    repository._preview_member_id = member.member_id
+    repository._preview_member_token = token
+    repository._preview_members = members
+    repository._preview_avatar_authorization = avatar_authorization
     return person, voice, reference
 
 
 def _save_profiles(repository: ProductionRepository, person: PersonProfile, voice: VoiceProfile) -> Authorization:
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
-    avatar_authorization = _authorization(
-        person.workspace_id, "avatar_video", ("avatar_lipsync",)
+    voice_provider = FixtureVoiceProvider()
+    avatar_provider = FixtureAvatarProvider()
+    voice_service = VoicePreviewService(repository.video_library_path.parent / "outputs", voice_provider)
+    avatar_service = AvatarPreviewService(repository.video_library_path.parent / "outputs", avatar_provider)
+    repository._preview_voice_provider = voice_provider
+    repository._preview_avatar_provider = avatar_provider
+    repository._preview_voice_service = voice_service
+    repository._preview_avatar_service = avatar_service
+    repository._preview_harness = build_preview_runtime(
+        repository, output_root=repository.video_library_path.parent / "outputs",
+        voice_service=voice_service, avatar_service=avatar_service,
+        member_id=repository._preview_member_id, workspace_id=person.workspace_id,
     )
-    repository.save_authorization(avatar_authorization)
-    return avatar_authorization
+    _ACTIVE_HARNESSES.append(repository._preview_harness)
+    return repository._preview_avatar_authorization
+
+
+def _voice_request(
+    repository, *, preview_text="预览", retry=False, provider=None, complete=True,
+    voice_profile_id="voice_a", voice_version="voice-v1",
+):
+    harness = repository._preview_harness
+    service = repository._preview_voice_service
+    if provider is not None:
+        service.provider = provider
+    params = {
+        "voice_profile_id": voice_profile_id, "voice_version": voice_version,
+        "preview_text": preview_text, "retry": retry,
+    }
+    queued = harness.prepare(service, params)
+    if complete and queued.status == "queued" and harness.complete_once():
+        return repository.get_media_preview_run(harness.actor.workspace_id, "voice", queued.identity)
+    return queued
+
+
+def _avatar_request(repository, *, audio, provider=None, retry=False, complete=True, audio_path=None):
+    harness = repository._preview_harness
+    service = repository._preview_avatar_service
+    if provider is not None:
+        service.provider = provider
+    person = repository.get_person_profile(harness.actor.workspace_id, "person_a")
+    voice = repository.get_versioned_voice_profile(harness.actor.workspace_id, "voice_a", "voice-v1")
+    params = {
+        "person_id": person.id, "person_version": person.version,
+        "voice_profile_id": voice.id, "voice_version": voice.version,
+        "audio_path": str(audio_path or audio.output_path), "audio_cache_key": audio.identity,
+        "language": audio.language, "motion": "natural", "expression": "neutral",
+        "authorization_id": repository._preview_avatar_authorization.id,
+        "authorization_version": repository._preview_avatar_authorization.version,
+        "model_id": service.provider.model_id, "retry": retry,
+    }
+    queued = harness.prepare(service, params)
+    if complete and queued.status == "queued" and harness.complete_once():
+        return repository.get_media_preview_run(harness.actor.workspace_id, "avatar_lipsync", queued.identity)
+    return queued
+
+
+def _close_runtime(repository: ProductionRepository) -> None:
+    harness = getattr(repository, "_preview_harness", None)
+    if harness is not None:
+        assert harness.close()
 
 
 class FixtureVoiceProvider:
@@ -106,12 +144,15 @@ class FixtureVoiceProvider:
     def generate(self, *, output_path, reference_audio_path, **_kwargs):
         self.calls += 1
         self.references.append(str(reference_audio_path))
+        grant = _kwargs.get("grant_context")
+        assert grant is not None and grant.grant.owner_type == "media_preview"
+        assert grant.grant.unit_key.startswith("voice:")
         output = Path(output_path)
         if self.output_mode == "outside":
             output = output.parent.parent.parent.parent / "outside.wav"
         if self.output_mode != "missing":
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"fixture preview output")
+            output.write_bytes(synthetic_wav_bytes())
         return VoiceCloneResult(str(output), 1.0, 24000)
 
 
@@ -125,8 +166,10 @@ class FixtureAvatarProvider:
         self.output_mode = output_mode
         self.calls = 0
 
-    def render(self, *, request, output_path):
+    def render(self, *, request, output_path, grant_context=None):
         self.calls += 1
+        assert grant_context is not None and grant_context.grant.owner_type == "media_preview"
+        assert grant_context.grant.unit_key.startswith("avatar_lipsync:")
         output = Path(output_path)
         if self.output_mode == "outside":
             output = output.parent.parent.parent.parent / "outside.mp4"
@@ -149,26 +192,13 @@ def test_voice_preview_persists_idempotent_fixture_run_and_workspace_scope(tmp_p
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
     _save_profiles(repository, person, voice)
-    provider = FixtureVoiceProvider()
-    service = VoicePreviewService(tmp_path / "outputs", provider)
-
-    first = service.request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="这是 fixture 预览，不代表真实模型效果。",
-    )
-    second = service.request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="这是 fixture 预览，不代表真实模型效果。",
-    )
+    provider = repository._preview_voice_provider
+    first = _voice_request(repository, preview_text="这是 fixture 预览，不代表真实模型效果。")
+    second = _voice_request(repository, preview_text="这是 fixture 预览，不代表真实模型效果。")
 
     assert first.status == "succeeded"
     assert first.attempt == 1
+    assert first.device_request_id
     assert second == first
     assert provider.calls == 1
     assert provider.references == [str(_reference.resolve())]
@@ -191,19 +221,10 @@ def test_voice_preview_failure_requires_explicit_retry_and_preserves_attempt_his
     person, voice, _reference = _profiles(repository)
     _save_profiles(repository, person, voice)
     provider = FixtureVoiceProvider(output_mode="missing")
-    service = VoicePreviewService(tmp_path / "outputs", provider)
-    arguments = dict(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="重试预览",
-    )
-
-    failed = service.request(**arguments)
-    unchanged = service.request(**arguments)
+    failed = _voice_request(repository, preview_text="重试预览", provider=provider)
+    unchanged = _voice_request(repository, preview_text="重试预览", provider=provider)
     provider.output_mode = "expected"
-    retried = service.request(**arguments, retry=True)
+    retried = _voice_request(repository, preview_text="重试预览", retry=True, provider=provider)
 
     assert (failed.status, failed.attempt) == ("failed", 1)
     assert unchanged == failed
@@ -220,47 +241,53 @@ def test_running_voice_preview_is_returned_without_a_second_provider_call(tmp_pa
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
     _save_profiles(repository, person, voice)
-    provider = FixtureVoiceProvider()
-    inputs = repository.resolve_narration_inputs(
-        workspace_id="workspace_a",
-        episode_id="voice_preview",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-    )
-    identity = _voice_preview_identity(
-        voice=inputs.voice,
-        preview_text="进行中预览",
-        language="zh-en",
-        pronunciation_entries=inputs.pronunciation_entries,
-        provider_model_id=provider.model_id,
-    )
-    running = MediaPreviewRunRecord(
-        id=f"voice_preview_{identity[:16]}_1",
-        workspace_id="workspace_a",
-        preview_type="voice",
-        identity=identity,
-        status="running",
-        capability_id="voice_clone",
-        model_id=provider.model_id,
-        language="zh-en",
-        person_profile_id=voice.person_profile_id,
-        person_version=voice.person_version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        authorization_id=voice.authorization.id,
-        authorization_version=voice.authorization.version,
-    )
-    repository.save_media_preview_run(running)
+    provider = repository._preview_voice_provider
+    pending = _voice_request(repository, preview_text="进行中预览", complete=False)
+    duplicate = _voice_request(repository, preview_text="进行中预览", complete=False)
 
-    result = VoicePreviewService(tmp_path / "outputs", provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="进行中预览",
+    assert pending.status == "queued"
+    assert duplicate.id == pending.id and duplicate.device_request_id == pending.device_request_id
+    assert provider.calls == 0
+    assert repository._preview_harness.complete_once()
+    assert repository.get_media_preview_run("workspace_a", "voice", pending.identity).status == "succeeded"
+
+
+def test_unknown_device_admission_keeps_preview_queued_until_granted(tmp_path):
+    repository = _repository(tmp_path)
+    person, voice, _reference = _profiles(repository)
+    _save_profiles(repository, person, voice)
+    harness = repository._preview_harness
+    provider = repository._preview_voice_provider
+    harness.resources.admitted = None
+
+    queued = _voice_request(repository, preview_text="等待设备资源", complete=False)
+
+    assert queued.status == "queued" and queued.device_request_id
+    assert harness.complete_once() is False
+    assert harness.runtime.scheduler.view_for(queued.device_request_id, harness.actor)["wait_reason"] == "resource_unknown"
+    assert provider.calls == 0
+    harness.resources.admitted = True
+    assert harness.complete_once()
+    final = repository.get_media_preview_run("workspace_a", "voice", queued.identity)
+    assert final.status == "succeeded" and provider.calls == 1
+    with repository._connect() as connection:
+        permit = connection.execute("SELECT state, request_id FROM device_permit WHERE id=1").fetchone()
+    assert (permit["state"], permit["request_id"]) == ("free", None)
+
+
+def test_voice_preview_without_device_grant_does_not_call_provider(tmp_path):
+    repository = _repository(tmp_path)
+    person, voice, _reference = _profiles(repository)
+    _save_profiles(repository, person, voice)
+    provider = repository._preview_voice_provider
+    result = repository._preview_voice_service.request(
+        repository=repository, workspace_id="workspace_a",
+        viewer_user_id=repository._preview_member_id,
+        voice_profile_id=voice.id, voice_version=voice.version,
+        preview_text="没有设备许可不能运行",
     )
 
-    assert result == running
+    assert (result.status, result.reason) == ("blocked", "device_grant_required")
     assert provider.calls == 0
 
 
@@ -272,38 +299,27 @@ def test_concurrent_first_voice_preview_claims_provider_once(tmp_path):
     class Provider(FixtureVoiceProvider):
         def __init__(self) -> None:
             super().__init__()
-            self.entered = threading.Event()
-            self.release = threading.Event()
             self._calls_lock = threading.Lock()
 
         def generate(self, *, output_path, reference_audio_path, **kwargs):
             with self._calls_lock:
                 self.calls += 1
             self.references.append(str(reference_audio_path))
-            self.entered.set()
-            if not self.release.wait(timeout=3):
-                raise AssertionError("test did not release the claimed provider call")
+            grant = kwargs.get("grant_context")
+            assert grant is not None and grant.grant.owner_type == "media_preview"
             output = Path(output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"fixture preview output")
+            output.write_bytes(synthetic_wav_bytes())
             return VoiceCloneResult(str(output), 1.0, 24000)
 
     provider = Provider()
-    service = VoicePreviewService(tmp_path / "outputs", provider)
-    arguments = dict(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="并发预览",
-    )
     results: list[object] = []
     errors: list[BaseException] = []
     second_done = threading.Event()
 
     def request(*, signal_done: bool = False) -> None:
         try:
-            results.append(service.request(**arguments))
+            results.append(_voice_request(repository, preview_text="并发预览", provider=provider, complete=False))
         except BaseException as exc:
             errors.append(exc)
         finally:
@@ -312,18 +328,20 @@ def test_concurrent_first_voice_preview_claims_provider_once(tmp_path):
 
     first = threading.Thread(target=request)
     first.start()
-    assert provider.entered.wait(timeout=3)
     second = threading.Thread(target=request, kwargs={"signal_done": True})
     second.start()
     assert second_done.wait(timeout=3)
-    provider.release.set()
     first.join(timeout=3)
     second.join(timeout=3)
-
     assert not first.is_alive() and not second.is_alive()
     assert errors == []
+    assert provider.calls == 0
+    assert len({record.device_request_id for record in results}) == 1
+    assert repository._preview_harness.complete_once()
+    final = repository.get_media_preview_run("workspace_a", "voice", results[0].identity)
+    assert final.status == "succeeded"
     assert provider.calls == 1
-    assert sorted(record.status for record in results) == ["running", "succeeded"]
+    assert sorted(record.status for record in results) == ["queued", "queued"]
 
 
 def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
@@ -334,34 +352,23 @@ def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
     class Provider(FixtureVoiceProvider):
         def __init__(self) -> None:
             super().__init__(output_mode="missing")
-            self.entered = threading.Event()
-            self.release = threading.Event()
             self._calls_lock = threading.Lock()
 
         def generate(self, *, output_path, reference_audio_path, **kwargs):
             with self._calls_lock:
                 self.calls += 1
             self.references.append(str(reference_audio_path))
+            grant = kwargs.get("grant_context")
+            assert grant is not None and grant.grant.owner_type == "media_preview"
             if self.output_mode == "missing":
                 return VoiceCloneResult(str(output_path), 1.0, 24000)
-            self.entered.set()
-            if not self.release.wait(timeout=3):
-                raise AssertionError("test did not release the retry provider call")
             output = Path(output_path)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"fixture preview output")
+            output.write_bytes(synthetic_wav_bytes())
             return VoiceCloneResult(str(output), 1.0, 24000)
 
     provider = Provider()
-    service = VoicePreviewService(tmp_path / "outputs", provider)
-    arguments = dict(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="并发重试",
-    )
-    failed = service.request(**arguments)
+    failed = _voice_request(repository, preview_text="并发重试", provider=provider)
     provider.output_mode = "expected"
     results: list[object] = []
     errors: list[BaseException] = []
@@ -369,7 +376,7 @@ def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
 
     def retry(*, signal_done: bool = False) -> None:
         try:
-            results.append(service.request(**arguments, retry=True))
+            results.append(_voice_request(repository, preview_text="并发重试", provider=provider, retry=True, complete=False))
         except BaseException as exc:
             errors.append(exc)
         finally:
@@ -378,18 +385,21 @@ def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
 
     first = threading.Thread(target=retry)
     first.start()
-    assert provider.entered.wait(timeout=3)
     second = threading.Thread(target=retry, kwargs={"signal_done": True})
     second.start()
     assert second_done.wait(timeout=3)
-    provider.release.set()
     first.join(timeout=3)
     second.join(timeout=3)
+    assert provider.calls == 1
+    assert len({record.device_request_id for record in results}) == 1
+    assert repository._preview_harness.complete_once()
+    final = repository.get_media_preview_run("workspace_a", "voice", failed.identity)
+    assert final.status == "succeeded"
 
     assert not first.is_alive() and not second.is_alive()
     assert errors == []
     assert provider.calls == 2
-    assert sorted(record.status for record in results) == ["running", "succeeded"]
+    assert sorted(record.status for record in results) == ["queued", "queued"]
     attempts = repository.list_media_preview_attempts("workspace_a", "voice", failed.identity)
     assert [(record.attempt, record.status) for record in attempts] == [
         (2, "succeeded"),
@@ -466,32 +476,12 @@ def test_voice_preview_persists_unavailable_and_revoked_historical_versions(tmp_
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
     _save_profiles(repository, person, voice)
-    unavailable = VoicePreviewService(tmp_path / "outputs", UnavailableVoiceCloneProvider())
-
-    missing_provider = unavailable.request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="预览",
-    )
+    missing_provider = _voice_request(repository, provider=UnavailableVoiceCloneProvider())
     assert (missing_provider.status, missing_provider.reason) == ("unavailable", "capability_unavailable")
 
-    active = VoicePreviewService(tmp_path / "outputs", FixtureVoiceProvider()).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="预览",
-    )
+    active = _voice_request(repository, provider=FixtureVoiceProvider())
     repository.save_authorization(replace(voice.authorization, version="v2", status="revoked"))
-    revoked = VoicePreviewService(tmp_path / "outputs", FixtureVoiceProvider()).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="预览",
-    )
+    revoked = _voice_request(repository, provider=FixtureVoiceProvider())
 
     assert active.identity != revoked.identity
     assert (revoked.status, revoked.reason) == ("blocked", "authorization_revoked")
@@ -504,14 +494,13 @@ def test_voice_preview_preflights_language_and_pronunciation_before_provider(tmp
     _save_profiles(repository, person, voice)
 
     unsupported_language = replace(voice, version="voice-en", language="en")
-    repository.save_versioned_voice_profile(unsupported_language)
+    repository.save_versioned_voice_profile(
+        unsupported_language, verified_owner_user_id=repository._preview_member_id
+    )
     language_provider = FixtureVoiceProvider()
-    language_result = VoicePreviewService(tmp_path / "outputs", language_provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=unsupported_language.id,
+    language_result = _voice_request(
+        repository, provider=language_provider, preview_text="English preview",
         voice_version=unsupported_language.version,
-        preview_text="English preview",
     )
     assert (language_result.status, language_result.reason, language_provider.calls) == (
         "unavailable",
@@ -537,12 +526,8 @@ def test_voice_preview_preflights_language_and_pronunciation_before_provider(tmp
         supports_pronunciation_dictionary = False
 
     dictionary_provider = NoDictionaryProvider()
-    dictionary_result = VoicePreviewService(tmp_path / "outputs", dictionary_provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="词典预检",
+    dictionary_result = _voice_request(
+        repository, provider=dictionary_provider, preview_text="词典预检"
     )
     assert (dictionary_result.status, dictionary_result.reason, dictionary_provider.calls) == (
         "unavailable",
@@ -556,7 +541,7 @@ def test_workspace_media_reference_rejects_traversal_and_unapproved_absolute_pat
     repository = _repository(tmp_path)
     approved = repository.video_library_path / "approved" / "voice.wav"
     approved.parent.mkdir()
-    approved.write_bytes(b"fixture reference")
+    approved.write_bytes(synthetic_wav_bytes())
 
     assert repository.resolve_workspace_media_reference(
         "workspace_a", "workspace://approved/voice.wav"
@@ -592,47 +577,26 @@ def test_voice_preview_blocks_unapproved_reference_before_fixture_provider(
     )
     provider = FixtureVoiceProvider()
     with pytest.raises(ValueError):
-        repository.save_versioned_voice_profile(invalid_voice)
+        repository.save_versioned_voice_profile(
+            invalid_voice, verified_owner_user_id=repository._preview_member_id
+        )
     assert provider.calls == 0
 
 
 def test_preview_preflight_persists_missing_inputs_without_calling_fixture_provider(tmp_path):
     repository = _repository(tmp_path)
     person, voice, reference = _profiles(repository)
-    avatar_authorization = _save_profiles(repository, person, voice)
+    _save_profiles(repository, person, voice)
+    successful_voice = _voice_request(repository, preview_text="有效声音来源")
+    Path(successful_voice.output_path).unlink()
+    avatar_provider = FixtureAvatarProvider()
+    avatar_result = _avatar_request(repository, audio=successful_voice, provider=avatar_provider)
     reference.unlink()
     voice_provider = FixtureVoiceProvider()
-    voice_result = VoicePreviewService(tmp_path / "outputs", voice_provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="预览",
-    )
+    voice_result = _voice_request(repository, preview_text="参考失联", provider=voice_provider)
 
-    avatar_provider = FixtureAvatarProvider()
-    avatar_result = AvatarPreviewService(tmp_path / "outputs", avatar_provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(tmp_path / "outputs" / "previews" / "voice" / "workspace_a" / "missing.wav"),
-        audio_cache_key="voice-preview-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
-    )
-
-    assert (voice_result.status, voice_result.reason, voice_provider.calls) == (
-        "failed",
-        "reference_audio_missing",
-        0,
-    )
+    assert (voice_result.status, voice_result.reason) == ("blocked", "reference_audio_invalid")
+    assert voice_provider.calls == 0
     assert (avatar_result.status, avatar_result.reason, avatar_provider.calls) == (
         "failed",
         "audio_missing",
@@ -646,15 +610,7 @@ def test_voice_preview_rejects_missing_or_outside_fixture_output(tmp_path, outpu
     person, voice, _reference = _profiles(repository)
     _save_profiles(repository, person, voice)
 
-    result = VoicePreviewService(
-        tmp_path / "outputs", FixtureVoiceProvider(output_mode=output_mode)
-    ).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        preview_text="预览",
-    )
+    result = _voice_request(repository, provider=FixtureVoiceProvider(output_mode=output_mode))
 
     assert (result.status, result.reason) == ("failed", "output_invalid")
 
@@ -662,38 +618,18 @@ def test_voice_preview_rejects_missing_or_outside_fixture_output(tmp_path, outpu
 def test_avatar_preview_persists_unavailable_and_revoked_historical_versions(tmp_path):
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
-    avatar_authorization = _save_profiles(repository, person, voice)
-    audio = tmp_path / "outputs" / "previews" / "voice" / "workspace_a" / "narration.wav"
-    audio.parent.mkdir(parents=True)
-    audio.write_bytes(b"fixture audio")
-    arguments = dict(
-        repository=repository,
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(audio),
-        audio_cache_key="voice-preview-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
+    _save_profiles(repository, person, voice)
+    audio = _voice_request(repository, preview_text="人物预览来源")
+    unavailable = _avatar_request(
+        repository, audio=audio, provider=UnavailableAvatarAndLipSyncProvider()
     )
-    unavailable = AvatarPreviewService(
-        tmp_path / "outputs", UnavailableAvatarAndLipSyncProvider()
-    ).request(**arguments)
     assert (unavailable.status, unavailable.reason) == ("unavailable", "capability_unavailable")
 
     active_provider = FixtureAvatarProvider()
-    active = AvatarPreviewService(tmp_path / "outputs", active_provider).request(**arguments)
-    repeated_active = AvatarPreviewService(tmp_path / "outputs", active_provider).request(**arguments)
+    active = _avatar_request(repository, audio=audio, provider=active_provider)
+    repeated_active = _avatar_request(repository, audio=audio, provider=active_provider)
     repository.save_authorization(replace(person.authorization, version="v2", status="revoked"))
-    revoked = AvatarPreviewService(
-        tmp_path / "outputs", FixtureAvatarProvider()
-    ).request(**arguments)
+    revoked = _avatar_request(repository, audio=audio, provider=FixtureAvatarProvider())
 
     assert active.status == "succeeded"
     assert repeated_active == active
@@ -707,32 +643,12 @@ def test_avatar_preview_failure_requires_explicit_retry(tmp_path):
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
     avatar_authorization = _save_profiles(repository, person, voice)
-    audio = tmp_path / "outputs" / "previews" / "voice" / "workspace_a" / "narration.wav"
-    audio.parent.mkdir(parents=True)
-    audio.write_bytes(b"fixture audio")
+    audio = _voice_request(repository, preview_text="人物预览失败重试来源")
     provider = FixtureAvatarProvider(output_mode="missing")
-    service = AvatarPreviewService(tmp_path / "outputs", provider)
-    arguments = dict(
-        repository=repository,
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(audio),
-        audio_cache_key="voice-preview-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
-    )
-
-    failed = service.request(**arguments)
-    unchanged = service.request(**arguments)
+    failed = _avatar_request(repository, audio=audio, provider=provider)
+    unchanged = _avatar_request(repository, audio=audio, provider=provider)
     provider.output_mode = "expected"
-    retried = service.request(**arguments, retry=True)
+    retried = _avatar_request(repository, audio=audio, provider=provider, retry=True)
 
     assert (failed.status, failed.attempt) == ("failed", 1)
     assert unchanged == failed
@@ -747,26 +663,12 @@ def test_avatar_preview_rejects_audio_outside_output_root_before_fixture_provide
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
     avatar_authorization = _save_profiles(repository, person, voice)
+    audio = _voice_request(repository, preview_text="越界音频拒绝来源")
     outside_audio = tmp_path / "outside.wav"
-    outside_audio.write_bytes(b"fixture audio")
+    outside_audio.write_bytes(synthetic_wav_bytes())
     provider = FixtureAvatarProvider()
 
-    result = AvatarPreviewService(tmp_path / "outputs", provider).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(outside_audio),
-        audio_cache_key="voice-preview-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
-    )
+    result = _avatar_request(repository, audio=audio, provider=provider, audio_path=str(outside_audio))
 
     assert (result.status, result.reason, provider.calls) == (
         "failed",
@@ -779,28 +681,10 @@ def test_avatar_preview_rejects_audio_outside_output_root_before_fixture_provide
 def test_avatar_preview_rejects_missing_or_outside_fixture_output(tmp_path, output_mode):
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
-    avatar_authorization = _save_profiles(repository, person, voice)
-    audio = tmp_path / "outputs" / "previews" / "voice" / "workspace_a" / "narration.wav"
-    audio.parent.mkdir(parents=True)
-    audio.write_bytes(b"fixture audio")
-
-    result = AvatarPreviewService(
-        tmp_path / "outputs", FixtureAvatarProvider(output_mode=output_mode)
-    ).request(
-        repository=repository,
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(audio),
-        audio_cache_key="voice-preview-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
+    _save_profiles(repository, person, voice)
+    audio = _voice_request(repository, preview_text="人物预览输出校验来源")
+    result = _avatar_request(
+        repository, audio=audio, provider=FixtureAvatarProvider(output_mode=output_mode)
     )
 
     assert (result.status, result.reason) == ("failed", "output_invalid")
