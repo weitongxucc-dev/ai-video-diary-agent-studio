@@ -395,6 +395,18 @@ E原只跑一次后改23失败夹具就交，最终源码未验，不能声明�
 
 此单只这2files必要pytest/Ruff，原122未影响复用不重跑；原E Task已retain，不用旧Dispatch写，源码/临时SQLite/内存vault/记录替身允许，无App/Pi/模型/Key/用户库/媒体/账号/GUI/常驻服务/安装/远端。交clean准确SHA/report到`/tmp/main-acceptance-20261009/review-v2-health-repair/report.md`。真实材料role剩余由当前C唯一production writer处理，E不能越界。UI会话/F表单/D旧档案夹具都独立继续。
 
+### QA-V2-B-NARRATION-EDIT：局部重配音依原设备队列接续
+
+B前preview已69a4f85 succeeded/retain源权结束，C当前唯一production.py；UI当前唯一main/schema/APItypes/Task，F只表单/AppShell。新B从精确7cdaa9c1948b991e2cda21a1569a4deb26eaed85 clone `/tmp/main-acceptance-20261009/review-v2-narration-edit/candidate`公开分支codex/review-v2-narration-edit-20261009。先REBASE_ACK当前架构3.12新增局部重配音unit规则/领域Script-Narration/版本依赖，不读全旧历史。实证main current RegenerateNarrationSegment确认仍503“尚未接入设备许可”，旧_regenerate...helper无repository/reader/grant参数不能用于范围声音；只保留明确503不是已通闭环。
+
+阶段1只owned creation_execution.py现有creation_job Owner/executor对具名narration_edit单位的输入/准入/执行/终态检查点，及新tests/test_narration_edit_execution.py直接专项。与当前人物编辑成熟路径同一DeviceRuntime/scheduler/JobRun/TaskEvent，不能第二调度器/队列/事实表、借person_edit permit或自由运行生成。只有真实RegenerateNarrationSegment已应用意图/当前确认Script与segment稳定id/语音fixed版/原audio_reference/当前Timeline base/purpose限制/可信成员和workspace及校准NarrationBudget能产生单位。封输入digest含真实source hash/精确范围/rules版本/声音/model/语言/原段/时间线及资源事实；等待与准入重新核，不在admission decode/生成、不给未知资源静默默认。分类该当前任务局部预览，独立档案试听分类normal_make不改。
+
+专属creation_narration资源的narration_edit:<digest>实际Grant上下文传唯一stage callback，现有cancel/timeout/子进程登记/unknown recovery保留；未许可零provider。queued/运行时不改现有timeline、声音或创建撤销版本，成功callback返回同现有person_edit deferred commit(conn)并在scheduler终态同事务校验当前版本→写唯一EditOperation/TimelineVersion及只受影响配音/字幕/镜头依赖→Job/Event；失败/取消保留原fact，不复用旧结果冒充新成功，unknown不释放许可。可以复用两条真实现有edit的checkpoint，不抽通用流程平台或与其他重活逻辑合并。重复同proposal/输入仅同Job/请求；失败显式新proposal重试，同旧单不能复活。
+
+阶段1 main.py/narration.py/production.py/schemas.py/APItypes/Task都HOLD，不写或复制C/UI dirty，不注册可到达但无后端消费者的假成功按钮。可只读现实现/真实操作payload，接口补好和direct tests clean后仍本Task等待准确release，不以Phase1能力宣布局部重配音可用。阶段2在UI-CAS和C-N14 main单写结束后主控具名释放main.py旧_regenerate/helper/confirm/apply/runtimecallback及必要narration generator接线、APItypes/Task queued投影和直接tests，沿既有模型与repo/可信reader materialize精确范围/对应grant与有界combine，不更改不相关TaskScript/人物或放宽预算，退役旧503/无许可路径需同候选不存在证明。
+
+本单只有源码与临时DB/可信合成Task/媒体来源/受控Provider与DeviceRuntime/资源替身专项许可：等待零执行、成功精确回读一次、重复/跨空间/错grant/旧时间线/声音撤销/失败取消/恢复未知不改旧版本、实际checkpoint绑定。sourcefixture是owned临时输入，不是真模型/已出片/GUI；不启动App/API/Pi/模型/真实Key/用户DB/媒体/账号/外发/收费/安装/远端。必要本单专项+Ruff，前音频/人员35/26/8及未影响checks不重跑。交clean精确SHA/report `/tmp/main-acceptance-20261009/review-v2-narration-edit/report.md`，源+接口+GUI未验分开，持续完成当前独立阶段。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
