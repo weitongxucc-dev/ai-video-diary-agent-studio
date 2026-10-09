@@ -195,6 +195,16 @@ UI于msg_e32cdff2dfc3实际RELEASE_ACK MaterialLibraryWorkspace.tsx无diff且不
 
 N06全库只读助手仍由UI纵向共享入口后续接线，N09/33资格由B+main后续单，不由本单仅改文案假通过。只缓存manta公开node_modules、受控组件专项/tsc/diff，不安装/服务/GUI/模型/媒体/Key/用户DB/账号/打包/远端。必要测试覆盖默认预览后零结果无假警告、显式选中过滤失效及草稿保留、清除/重置、迟到返回、画面完成但声音未转写摘要；逐ID源码/组件/未验分开。交clean公开身份提交和父目录report，不单独关闭问题。
 
+### QA-V2-C-SCRIPT-SELECTION：不可变版本的来源核对
+
+C知识复审2d204678已30专项/tsc通过、retain。主控源码确认选中同一条目会清空sourcesChecked，但effect仅依selected.id不重读，停留正在核对；成功刷新同ID新version替换selected也不重新核来源、不清旧confirmed。新续单复用clean2d候选、新具名分支，仍原四知识文件及直接ScriptLibrary专项：以条目ID+version确定核对/确认身份，同版本重复选择保留有效核对或真正重读，同ID新版重核出处、取消旧确认，原失败可手动重试；来源迟到不能写其他版本。保留已确认文案库语义、后台事实引用及新任务要求，不造复制确认或新API。必要两个受控用例+tsc，未变结果复用。交clean提交追加报告，禁止安装/服务/GUI/模型/用户数据/远端。
+
+### QA-V2-E-PI-CAPABILITIES：实际注册能力只读盘点
+
+E发布三次审阅源码与17专项通过，retain并机械集成7064da9；现有发布权限及平台行为不扩展。E新只读任务核N04/R02：main-ui-linear的当前会话WIP capabilities表仍硬编码Pi1.1.0和终端命令，assistant_pi实际--print/json并关闭builtin/自动extensions/skills后具名加载业务extension。只读取实际Pi/Node可执行路径、安装包metadata及内置命令注册实现、当前源码启动argv/业务工具注册；对照Downloads指定测试包的工具文件元数据，不读用户config/.env/Key/会话/媒体/全历史，不启动Pi回合/模型/服务，不执行命令/工具/下载。
+
+交/tmp/main-acceptance-20261009/review-v2-pi-capabilities/report.md：actual版本/路径来源，包内容与当前候选区分、终端内置命令与应用本地会话命令/扩展命令/技能/模板/业务工具分别列；真实读取/写入/提取声音能力和需要显式对象或执行许可的边界，哪些实际连接、受控测试、纯缺口。current进程环境未读则不能声称替代配置路径就是实际正在使用。不给任意shell/文件工具新许可，所有产品源码/文档/GitHub/Linear零写权。事实交UI唯一main写者修能力表与真实命令入口，不能拿旧历史数量冒充当前注册。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
