@@ -149,7 +149,11 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistant.bindTurnEvents(turn.conversationId, turn.localTurnId);
       await turn.draftCheckpoint;
-      if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
+      if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) {
+        await assistant.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
+          "页面或会话已切换；本轮没有发送，原要求已保留为草稿。");
+        return;
+      }
       if (materialContext?.selection) {
         const selection = materialContext.selection;
         const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection, (item) => {

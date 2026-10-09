@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ saved: new Map<string, import("@/lib/types").AssistantConversation>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ saved: new Map<string, import("@/lib/types").AssistantConversation>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn() }));
 vi.mock("@/lib/api", () => {
   const saved = mocks.saved;
   function makeConversation(scope: { scope_kind: "home" | "task" | "material"; scope_id: string }, id = `conversation-${scope.scope_kind}-${scope.scope_id}`) {
@@ -52,7 +52,7 @@ vi.mock("@/lib/api", () => {
   listAssistantConversations: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => ({ items: [...saved.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
   getAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
   resumeAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
-  updateAssistantConversation: vi.fn(async (id: string, update: { draft_text?: string; title?: string }) => {
+  updateAssistantConversation: mocks.updateConversation.mockImplementation(async (id: string, update: { draft_text?: string; title?: string }) => {
     const item = saved.get(id)!;
     const updated = { ...item, ...update, updated_at: "2026-10-09T00:00:01Z" };
     saved.set(id, updated);
@@ -73,7 +73,7 @@ vi.mock("@/lib/api", () => {
   };
 });
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("HomeCommandComposer", () => {
   function configuredModel() {
@@ -85,6 +85,44 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(input).toBeEnabled());
     return input;
   }
+
+  it("settles an unsent turn as its original draft when scope changes during the draft checkpoint", async () => {
+    configuredModel();
+    let releaseInitialSave!: () => void;
+    let oldConversationId = "";
+    mocks.updateConversation.mockImplementationOnce((id: string, update: { draft_text?: string }) => new Promise((resolve) => {
+      oldConversationId = id;
+      releaseInitialSave = () => {
+        const existing = mocks.saved.get(id)!;
+        const updated = { ...existing, ...update, updated_at: "2026-10-09T00:00:01Z" };
+        mocks.saved.set(id, updated);
+        resolve(updated);
+      };
+    }));
+    const view = render(<HomeCommandComposer />);
+    const input = await readyInput("制作要求");
+
+    vi.useFakeTimers();
+    fireEvent.change(input, { target: { value: "本轮原始制作要求" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(451); });
+    expect(releaseInitialSave).toBeTypeOf("function");
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    view.rerender(<HomeCommandComposer materialContext={{
+      selection: { scope: "asset", asset_id: "asset-1" }, label: "素材 A", onResult: vi.fn(),
+    }} />);
+    await act(async () => {
+      releaseInitialSave();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(mocks.saved.get(oldConversationId)?.draft_text).toBe("本轮原始制作要求"));
+
+    expect(mocks.ask).not.toHaveBeenCalled();
+    expect(mocks.materialAsk).not.toHaveBeenCalled();
+    expect(mocks.saved.get(oldConversationId)?.draft_text).not.toContain("切换");
+  });
 
   it("asks the assistant before creating anything, then confirms the real preflight", async () => {
     configuredModel();

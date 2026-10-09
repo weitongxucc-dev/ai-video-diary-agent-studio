@@ -1966,7 +1966,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
       await turn.draftCheckpoint;
-      if (revision !== editContextRevision.current) return;
+      if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
+        await assistantConversation.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
+          "编辑范围已切换；本轮没有发送，原要求已保留为草稿。");
+        setBusy(null);
+        return;
+      }
       const result = await sendCreationTaskAssistantTurn(task.id, {
         conversation_id: turn.conversationId,
         message,
@@ -2485,17 +2490,27 @@ function JobProgressPanel({ taskId, refreshToken, pendingPersonEditJobId, onPers
   </div>;
   if (!progress) return null;
   const current = progress.current;
-  return <section aria-label="作业进度" className={styles.blocker}>
+  return <section aria-label="作业进度" className={styles.jobProgress}>
     <strong>作业进度</strong>
     {current ? <p>
       {jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}
     </p> : <p>这个任务还没有后台作业记录。</p>}
     {current && (current.status === "queued" || current.status === "running") ? <p>
-      预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}（尚无可信样本，无法预计）
+      预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}
+      {current.estimate_basis ? `（依据：${current.estimate_basis}）`
+        : current.wait_estimate_seconds === null && current.processing_estimate_seconds === null
+          ? "（尚无可信样本，无法预计）" : ""}
     </p> : null}
-    {current?.failure_reason ? <p>失败原因：{current.failure_reason}{current.impact ? ` · ${current.impact}` : ""}</p> : null}
-    {current?.repair_action ? <p>下一步：{current.repair_action}</p> : null}
-    {readError ? <p role="alert">最新一次刷新失败：{readError} <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button></p> : null}
+    {current && (current.status === "failed" || current.status === "interrupted"
+      || (current.status === "cancelled" && Boolean(current.failure_reason || current.repair_action))) ? <div role="alert" className={styles.jobFailure} aria-label="当前作业失败信息">
+      <AlertCircle size={16} />
+      <div>
+        <strong>{current.status === "failed" ? "当前作业失败" : current.status === "interrupted" ? "当前作业已中断" : "当前作业未完成"}</strong>
+        {current.failure_reason ? <p>失败原因：{current.failure_reason}{current.impact ? ` · ${current.impact}` : ""}</p> : null}
+        {current.repair_action ? <p>下一步：{current.repair_action}</p> : null}
+      </div>
+    </div> : null}
+    {readError ? <p role="alert" className={styles.jobRefreshError}>最新一次刷新失败：{readError} <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button></p> : null}
     {progress.items.length > 1 ? <details>
       <summary>查看历史作业（{progress.items.length} 条）</summary>
       <ol>

@@ -662,6 +662,28 @@
 .personAction { margin-top: 12px; }
 .blocker { display: flex; gap: 10px; color: var(--danger); }
 .blocker p { margin-top: 6px; }
+.jobProgress {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text-1);
+}
+.jobProgress p { margin: 0; color: var(--text-2); line-height: 1.5; }
+.jobProgress details > summary { color: var(--text-2); cursor: pointer; }
+.jobFailure {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-1));
+  border-radius: 8px;
+  color: var(--danger);
+}
+.jobFailure p { margin-top: 4px; color: inherit; }
+.jobRefreshError { color: var(--danger) !important; }
 
 @media (max-width: 1279px) {
   .workspace { padding: 20px 24px 32px; }

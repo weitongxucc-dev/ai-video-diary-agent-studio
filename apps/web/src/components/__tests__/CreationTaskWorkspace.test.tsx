@@ -3171,13 +3171,13 @@ describe("CreationTaskWorkspace", () => {
 });
 
 describe("作业进度读数", () => {
-  it("shows real job status, progress, elapsed and unknown estimates from persisted jobs", async () => {
+  it("shows known estimates as facts and keeps historical failures out of the current warning state", async () => {
     mocks.getJobProgress.mockResolvedValue({
       task_id: "task-1", total_count: 2,
       current: { id: "job-1", kind: "creation_task_montage_render", status: "running", progress: 40, attempt: 1,
         started_at: "2026-10-04T08:00:00Z", finished_at: null, updated_at: "2026-10-04T08:05:00Z",
         elapsed_seconds: 300, failure_reason: null, impact: null, repair_action: null,
-        wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null },
+        wait_estimate_seconds: 120, processing_estimate_seconds: 540, estimate_basis: "最近同类作业记录" },
       items: [
         { id: "job-1", kind: "creation_task_montage_render", status: "running", progress: 40, attempt: 1,
           started_at: "2026-10-04T08:00:00Z", finished_at: null, updated_at: "2026-10-04T08:05:00Z",
@@ -3193,13 +3193,40 @@ describe("作业进度读数", () => {
     const panel = await screen.findByRole("region", { name: "作业进度" });
     // 进度是作业自己写下的 40%，不是阶段序号；已耗时与更新时间来自记录。
     expect(within(panel).getAllByText(/成片输出 · 正在处理 · 进度 40% · 已耗时 5 分/).length).toBeGreaterThan(0);
-    // 没有可信样本：等待与处理估时都写未知，不编造倒计时。
-    expect(within(panel).getByText(/预计等待：未知 · 预计处理：未知（尚无可信样本，无法预计）/)).toBeInTheDocument();
-    // 历史失败仍能按需查看，但不占任务首屏。
+    expect(within(panel).getByText(/预计等待：2 分 · 预计处理：9 分（依据：最近同类作业记录）/)).toBeInTheDocument();
+    expect(within(panel).queryByRole("alert")).not.toBeInTheDocument();
+    // 历史失败仍能按需查看，但不占任务首屏，也不把整块进度涂成告警。
     const history = within(panel).getByText("查看历史作业（2 条）");
     expect(history.closest("details")).not.toHaveAttribute("open");
     fireEvent.click(history);
     expect(within(panel).getAllByText(/失败原因：输出磁盘写入失败/).length).toBeGreaterThan(0);
+  });
+
+  it("marks only the current failed job as a warning", async () => {
+    const failed = { id: "job-current", kind: "creation_task_montage_render" as const, status: "failed" as const,
+      progress: 45, attempt: 1, started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:01:00Z",
+      updated_at: "2026-10-04T08:01:00Z", elapsed_seconds: 60, failure_reason: "编码器退出",
+      impact: "当前版本未更新", repair_action: "查看设备状态后重试", wait_estimate_seconds: null,
+      processing_estimate_seconds: null, estimate_basis: null };
+    mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", total_count: 1, current: failed, items: [failed] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+    const panel = await screen.findByRole("region", { name: "作业进度" });
+    const failure = within(panel).getByRole("alert", { name: "当前作业失败信息" });
+    expect(failure).toHaveTextContent("编码器退出");
+    expect(failure).toHaveTextContent("当前版本未更新");
+    expect(failure).toHaveTextContent("查看设备状态后重试");
+  });
+
+  it("labels estimates unknown only when the active job has no estimate or basis", async () => {
+    const running = { id: "job-running", kind: "creation_task_montage_render" as const, status: "running" as const,
+      progress: 12, attempt: 1, started_at: "2026-10-04T08:00:00Z", finished_at: null,
+      updated_at: "2026-10-04T08:01:00Z", elapsed_seconds: 60, failure_reason: null,
+      impact: null, repair_action: null, wait_estimate_seconds: null, processing_estimate_seconds: null,
+      estimate_basis: null };
+    mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", total_count: 1, current: running, items: [running] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+    const panel = await screen.findByRole("region", { name: "作业进度" });
+    expect(within(panel).getByText(/预计等待：未知 · 预计处理：未知（尚无可信样本，无法预计）/)).toBeInTheDocument();
   });
 
   it("keeps completed jobs factual and folds long job history out of the primary view", async () => {
