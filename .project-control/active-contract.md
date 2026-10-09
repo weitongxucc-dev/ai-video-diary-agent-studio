@@ -385,6 +385,16 @@ C测试迁移505f35e已44PASS/Ruff0.15.7PASS/clean交付并retain，main/source�
 
 允许源实现/临时DB/TestClient/可信合成成员、Task/文字资料、mock模型/工具与旧公开依赖最小验证，不运行真实模型/Pi/用户Key/用户DB/媒体/账号/常驻App/API服务/GUI/远端/安装。阶段1必要Repo真实来源/错scope/非完成turn/固定版本/原子重试、阶段2实际HTTP与Web直接链验证；全模型/GUI真实性仍主控新候选后验，不能自动获得外发许可。阶段2发布前给旧draft/update/confirm消费者不存在证明，confirm可复用版与源链按当前实际产物判断。
 
+### 组合读状态复验与两个真实投影断点
+
+E原只跑一次后改23失败夹具就交，最终源码未验，不能声明完成。主控实际组合7cdaa9c准确受影响11行为files一次必要复验122PASS/1FAIL（日志`/tmp/main-controller-20261009/review-v2/read-state-final.log`），失败test_material_ingestion.py::test_segment_usage_change_updates_persisted_tags_and_search：新用途a_roll保存后system_tags仍用途:b_roll。原1710?数量不改造状态账，原一次全API结果保持具体现实时限。失败后的实际修复允许必要复验，禁止“只跑一次”用作留下未验修订的理由。
+
+当前production.py唯一C REPLY-SCRIPT-TRANSFER阶段1追加仅update_segment用途变化投影：依据新领域§3.3，说明保存不得重算/清识别标签；明确用途变化只同步该真实usage_role派生用途标签，其余系统识别/用户tag/转写完整保留，不恢复整包_seg_system_tags或补个人标签掩盖。C应对此叶单独clean提交可先主控集成，不与Script签名phase1未接线混包。直接既有E失败用例由主控回读组合最小复验；C可复制一份私有新直接tag test但不写E原test_material_ingestion。目标field未变不重算，无新宽泛兼容路径。
+
+主控另源码确认runtime_health._deepseek_item取当前state.detail却丢state.repair_action，固定通用提示；E最近失败测试改去只断言Settings底层record不能证明实际界面投影行动一致。E新QA-V2-E-HEALTH-REPAIR从精确7cdaa9c新clone`/tmp/main-acceptance-20261009/review-v2-health-repair/candidate`公开分支，唯一runtime_health.py该helper与tests/test_local_model_health.py此修复直接测试，使用同一当前workspace有效verification实际repair_action（非空时）供健康投影，未验证/未配既有真实提示保持，成功不制造故障。当前失败输出的建议与state事实一致，不新模型探测/网络/服务或猜字段。测试应断言health_item.repair_action本身，不从业务输出退回隐蔽底层record；保留scope隔离/未验证/真失败/成功证据。
+
+此单只这2files必要pytest/Ruff，原122未影响复用不重跑；原E Task已retain，不用旧Dispatch写，源码/临时SQLite/内存vault/记录替身允许，无App/Pi/模型/Key/用户库/媒体/账号/GUI/常驻服务/安装/远端。交clean准确SHA/report到`/tmp/main-acceptance-20261009/review-v2-health-repair/report.md`。真实材料role剩余由当前C唯一production writer处理，E不能越界。UI会话/F表单/D旧档案夹具都独立继续。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
