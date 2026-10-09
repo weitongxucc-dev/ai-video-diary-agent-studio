@@ -5433,9 +5433,16 @@ class ProductionRepository:
         segment.description = description.strip()
         segment.transcript = transcript.strip()
         if usage_role is not None:
+            previous_usage_role = segment.usage_role
             segment.usage_role = usage_role
             if usage_role == "exclude":
                 review_status = "rejected"
+            if usage_role != previous_usage_role:
+                segment.system_tags = [
+                    tag for tag in segment.system_tags if not tag.startswith("用途:")
+                ]
+                if usage_role != "unassigned":
+                    segment.system_tags.append(f"用途:{usage_role}")
         if user_tags is not None:
             segment.user_tags = _normalized_labels(user_tags)
         if collection_ids is not None:
