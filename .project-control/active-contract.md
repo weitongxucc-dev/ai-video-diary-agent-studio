@@ -61,7 +61,7 @@ UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号�
 
 ### B97：诊断差额入包后仅补真实修改重出
 
-2026-10-09 09:04定向修订 MAIN-RERENDER97-FIXTURE：静态核验表明free permit仍绑定原DB父目录锁，新路径clone会被现有真实边界拒绝。为避免重复已通过的上游，不改锁规则、不编辑DB，采用原停机92隔离fixture继续真实queued恢复。此前“所有写入仅97且旧92库不变”仅对此测试库/锁白名单由本段替代；它不是用户真实库或迁移。B必须先将旧92 SQLite完整只读backup保存97并记录hash，原first-video.mp4、undo-output.mp4及既有输入保持hash不变。唯一允许旧root写入：creation92/db/fixture.sqlite3及必要-wal/-shm、同目录device-permit.lock和.lock.state；其余config/userData/日志/tmp/新VIDEO_OUTPUT_PATH/新产物写97。沿原数据库/锁身份保持owner及queued原请求，不造新请求或seed成功；已有逻辑artifact只读复制97。若job仍要求在该白名单外写旧92，停止并交具体路径。启动前交新包身份、backup/媒体hash、配置路径核验与无旧进程证据，ACK本修订；服务仍等待本Dispatch的RERENDER_START，固定首服务10分钟lease与原cap不变。UI96已全释放，主控已独立核PID消失；不重开平台浏览器。
+2026-10-09 09:04定向修订 MAIN-RERENDER97-FIXTURE：静态核验表明free permit仍绑定原DB父目录锁，新路径clone会被现有真实边界拒绝。为避免重复已通过的上游，不改锁规则、不编辑DB，采用原停机92隔离fixture继续真实queued恢复。此前“所有写入仅97且旧92库不变”仅对此测试库/锁白名单由本段替代；它不是用户真实库或迁移。B必须先将旧92 SQLite完整只读backup保存97并记录hash，原first-video.mp4、undo-output.mp4及既有输入保持hash不变。唯一允许旧root写入：creation92/db/fixture.sqlite3及必要-wal/-shm、同目录device-permit.lock、.lock.state及既有原子落盘所需device-permit.lock.state.<uuid>.tmp（成功replace或失败清理按既有实现）；这些具名写入的必要伴生/临时文件不需要逐文件再请示。其余config/userData/日志/tmp/新VIDEO_OUTPUT_PATH/新产物写97。沿原数据库/锁身份保持owner及queued原请求，不造新请求或seed成功；已有逻辑artifact只读复制97。若job仍要求在该白名单外写旧92，停止并交具体路径。启动前交新包身份、backup/媒体hash、配置路径核验与无旧进程证据，ACK本修订；服务仍等待本Dispatch的RERENDER_START，固定首服务10分钟lease与原cap不变。UI96已全释放，主控已独立核PID消失；不重开平台浏览器。
 
 从clean4c748dfc45229b879e9e1daf473b309432899f4c复用B终端，唯一owned /tmp/main-acceptance-20261009/rerender97/，无产品源码写权。B94仅改host_resource_probes运行日志，B95纯测试；先证明相对B92准确2c896f24其余Web/desktop/worker/agent运行blob不变。只读复用92已物化Web/公开依赖，按既有PyInstaller/Electron Builder增量API重新产生实际ARM64 .app及新身份，不Next全构建/热换旧包、不DMG/ZIP/签名/下载。准备阶段可与UI96并行，但不开服务/GUI/媒体，实际运行等root确认UI96全释放后发RERENDER_START。
 
