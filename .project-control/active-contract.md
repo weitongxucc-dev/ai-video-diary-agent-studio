@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 90：录音差额CI真实失败修复 | task_1e35130530df / ctx_302e5db92ca5；仅下方90迁移与直接测试；87/88保留，不重做页面 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 90：已succeeded结案并retain | 无新增写权；5da2fbb已审核并机械集成c446d60，远端组合CI待回读 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 91：冻结许可子进程入口修复 | task_1a9de32d4beb / ctx_4cdf9a1f3e03；仅下方91源码及直接最小测试，无运行包权限 |
 
@@ -50,6 +50,8 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
 ### UI90：CI37862398673的迁移与旧测试替身缺口
+
+task_1e35130530df / ctx_302e5db92ca5已succeeded，交clean5da2fbbfd52b77d049e51503f1e0b4186d806fd0，5授权路径+48/-6。主控审核缺表时重放原v4真实schema后执行v15，保留实际已有generated身份；迁移5/Webm1/Web7专项通过。主控机械集成c446d60，逐blob仅两已批准权威文档与执行源不同。原UI终端retain，下面施工条款只供证据索引，不提供新写权。此前Corepack启动提示如实记录，已停该路径并使用已有Node/Vitest完成专项，无锁/依赖变更。
 
 PR101准确1767e11的远端CI已回读：Desktop syntax成功，Backend五失败／1659通过／20跳过，Frontend七失败／570通过。具名失败日志/tmp/main-controller-20261009/pr101-ci-failed.log。前端六项保存反馈缺listCreationTaskRecordings mock，另一项仍断言已替换的旧提示；后端四项裸auth/shared DB及旧v5迁移遇v15假定narration_segments必在，另一项Webm测试被WAV-only probe替身误读。这是本次真实失败，不能用吞错或修改通过数量掩盖。
 
