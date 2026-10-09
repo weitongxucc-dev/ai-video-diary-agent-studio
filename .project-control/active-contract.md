@@ -387,7 +387,7 @@ C测试迁移505f35e已44PASS/Ruff0.15.7PASS/clean交付并retain，main/source�
 
 ### 组合读状态复验与两个真实投影断点
 
-E原只跑一次后改23失败夹具就交，最终源码未验，不能声明完成。主控实际组合7cdaa9c准确受影响11行为files一次必要复验122PASS/1FAIL（日志`/tmp/main-controller-20261009/review-v2/read-state-final.log`），失败test_material_ingestion.py::test_segment_usage_change_updates_persisted_tags_and_search：新用途a_roll保存后system_tags仍用途:b_roll。原1710?数量不改造状态账，原一次全API结果保持具体现实时限。失败后的实际修复允许必要复验，禁止“只跑一次”用作留下未验修订的理由。
+E原只跑一次后改23失败夹具就交，最终源码未验，不能声明完成。主控实际组合7cdaa9c准确受影响11行为files一次必要复验122PASS/1FAIL（日志`/tmp/main-controller-20261009/review-v2/read-state-final.log`），失败test_material_ingestion.py::test_segment_usage_change_updates_persisted_tags_and_search：新用途a_roll保存后system_tags仍用途:b_roll。原一次全API结果保留其准确候选和检查时间，不因局部复验改写。失败后的实际修复允许必要复验，禁止“只跑一次”用作留下未验修订的理由。
 
 当前production.py唯一C REPLY-SCRIPT-TRANSFER阶段1追加仅update_segment用途变化投影：依据新领域§3.3，说明保存不得重算/清识别标签；明确用途变化只同步该真实usage_role派生用途标签，其余系统识别/用户tag/转写完整保留，不恢复整包_seg_system_tags或补个人标签掩盖。C应对此叶单独clean提交可先主控集成，不与Script签名phase1未接线混包。直接既有E失败用例由主控回读组合最小复验；C可复制一份私有新直接tag test但不写E原test_material_ingestion。目标field未变不重算，无新宽泛兼容路径。
 
