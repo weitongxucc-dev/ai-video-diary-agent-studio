@@ -24,8 +24,8 @@ describe("shared compact assistant send control", () => {
     ["", true, false, false, false, "发送", "先填写对话要求"],
     ["要求", false, false, false, false, "发送", "请先配置对话服务"],
     ["要求", true, true, false, false, "发送", "正在恢复对话"],
-    ["要求", true, false, true, false, "本轮运行中", "本轮运行中"],
-    ["要求", true, false, false, true, "正在处理", "正在处理"],
+    ["要求", true, false, true, false, "本轮运行中", "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"],
+    ["要求", true, false, false, true, "正在处理", "本轮正在处理，请稍后再发送"],
   ])("exposes the actual disabled state for %s / %s / %s / %s / %s", (input, configured, loading, running, busy, label, reason) => {
     render(<AssistantConversationPanel state={state(running, loading)} input={input} onInput={vi.fn()} onSend={vi.fn()} configured={configured} busy={busy} scopeLabel="fixture" />);
     const button = screen.getByRole("button", { name: label });

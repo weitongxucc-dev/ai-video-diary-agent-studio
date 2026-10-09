@@ -136,9 +136,16 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
-  const sendLabel = currentRunning && !input.trim().startsWith("/") ? "本轮运行中" : busy && !input.trim().startsWith("/") ? "正在处理" : "发送";
-  const sendDisabled = !configured || (busy && !input.trim().startsWith("/")) || state.loading || !input.trim() || (currentRunning && !input.trim().startsWith("/"));
-  const sendReason = state.loading ? "正在恢复对话" : !configured ? "请先配置对话服务" : sendLabel !== "发送" ? sendLabel : !input.trim() ? "先填写对话要求" : "Enter 发送，Shift+Enter 换行";
+  const isLocalCommand = input.trim().startsWith("/");
+  const sendLabel = currentRunning && !isLocalCommand ? "本轮运行中" : busy && !isLocalCommand ? "正在处理" : "发送";
+  const sendDisabled = !input.trim() || state.loading || (!isLocalCommand && (!configured || busy || currentRunning));
+  const sendReason = state.loading ? "正在恢复对话"
+    : !input.trim() ? "先填写对话要求"
+      : isLocalCommand ? "Enter 执行本地会话操作；无效命令不会发送给模型"
+        : !configured ? "请先配置对话服务"
+          : currentRunning ? "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"
+            : busy ? "本轮正在处理，请稍后再发送"
+              : "Enter 发送，Shift+Enter 换行";
   const commandHelp = useMemo(() => capabilities?.application_commands ?? ["/new", "/name <名称>", "/resume <会话ID>", "/help"], [capabilities]);
 
   useEffect(() => { void getAssistantCapabilities().then(setCapabilities).catch(() => undefined); }, []);
@@ -149,8 +156,12 @@ export function AssistantConversationPanel({
   async function submit(event?: FormEvent) {
     event?.preventDefault();
     const text = input.trim();
-    if (!text || state.loading || (busy && !text.startsWith("/"))) return;
-    if (text.startsWith("/")) {
+    if (!text) return;
+    const localCommand = text.startsWith("/");
+    if (state.loading) { setError(sendReason); return; }
+    if (!localCommand && !configured) { setError(sendReason); return; }
+    if (!localCommand && busy) { setError(sendReason); return; }
+    if (localCommand) {
       const [command, ...rest] = text.split(/\s+/);
       const value = rest.join(" ").trim();
       try {
@@ -176,7 +187,7 @@ export function AssistantConversationPanel({
       return;
     }
     if (currentRunning) {
-      setError("此对话已有正在运行的轮次。可先停止本轮，或切换到另一段对话；草稿会保留。");
+      setError(sendReason);
       return;
     }
     setError(null);

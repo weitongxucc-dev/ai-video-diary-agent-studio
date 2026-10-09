@@ -175,6 +175,95 @@ describe("AssistantConversationPanel", () => {
     await waitFor(() => expect(onInput).toHaveBeenCalledWith(next.draft_text));
   });
 
+  it.each(["/new", "/name 会话甲", "/resume conversation-two", "/help"].flatMap((command) =>
+    (["button", "enter"] as const).map((activation) => [command, activation] as const))) (
+    "keeps %s available without a configured model via %s", async (command, activation) => {
+    const next = { ...conversation(), id: "conversation-next", draft_text: "保留的当前草稿" };
+    const renamed = { ...conversation(), title: "会话甲", draft_text: "保留的当前草稿" };
+    const createNew = vi.fn().mockResolvedValue(next);
+    const rename = vi.fn().mockResolvedValue(renamed);
+    const resume = vi.fn().mockResolvedValue(next);
+    const current = state({
+      createNew, rename, resume,
+    });
+    const onSend = vi.fn();
+    const onInput = vi.fn();
+    const onConversationChange = vi.fn();
+    render(<AssistantConversationPanel state={current} input={command} onInput={onInput} onSend={onSend}
+      onConversationChange={onConversationChange} busy={false} configured={false} scopeLabel="首页创作" />);
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeEnabled();
+    expect(send).toHaveAttribute("title", "Enter 执行本地会话操作；无效命令不会发送给模型");
+
+    if (activation === "button") fireEvent.click(send);
+    else fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
+
+    if (command === "/new") {
+      await waitFor(() => expect(createNew).toHaveBeenCalledOnce());
+      expect(onConversationChange).toHaveBeenCalledOnce();
+      expect(onInput).toHaveBeenCalledWith(next.draft_text);
+    } else if (command.startsWith("/name")) {
+      await waitFor(() => expect(rename).toHaveBeenCalledWith("会话甲"));
+      expect(onInput).toHaveBeenCalledWith(renamed.draft_text);
+      expect(onConversationChange).not.toHaveBeenCalled();
+    } else if (command.startsWith("/resume")) {
+      await waitFor(() => expect(resume).toHaveBeenCalledWith("conversation-two"));
+      expect(onConversationChange).toHaveBeenCalledOnce();
+      expect(onInput).toHaveBeenCalledWith(next.draft_text);
+    } else {
+      expect(await screen.findByRole("alert")).toHaveTextContent("可用会话命令");
+      expect(createNew).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+    }
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it.each(["button", "enter"] as const)("keeps invalid commands local when no model is configured via %s", async (activation) => {
+    const onSend = vi.fn();
+    render(<AssistantConversationPanel state={state()} input="/unknown value" onInput={vi.fn()} onSend={onSend}
+      busy={false} configured={false} scopeLabel="首页创作" />);
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeEnabled();
+
+    if (activation === "button") fireEvent.click(send);
+    else fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("此命令格式不正确或当前不可用，没有发送给模型");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("blocks ordinary text consistently when the model is unconfigured", async () => {
+    const onSend = vi.fn();
+    render(<AssistantConversationPanel state={state()} input="继续创作" onInput={vi.fn()} onSend={onSend}
+      busy={false} configured={false} scopeLabel="首页创作" />);
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeDisabled();
+    expect(send).toHaveAttribute("title", "请先配置对话服务");
+    fireEvent.click(send);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("请先配置对话服务");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["busy", false, true, "本轮正在处理，请稍后再发送"],
+    ["running", true, false, "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"],
+  ] as const)("does not repeat ordinary sends while %s", async (_stateName, running, busy, reason) => {
+    const current = state({ conversation: running ? {
+      ...conversation(), turns: [{ ...conversation().turns[0], status: "running" as const }],
+    } : conversation() });
+    const onSend = vi.fn();
+    render(<AssistantConversationPanel state={current} input="再发一条" onInput={vi.fn()} onSend={onSend}
+      busy={busy} configured scopeLabel="首页创作" />);
+    const send = screen.getByRole("button", { name: running ? "本轮运行中" : "正在处理" });
+    expect(send).toBeDisabled();
+    expect(send).toHaveAttribute("title", reason);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(reason);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("keeps an invalid application command visible and does not send it to Pi", async () => {
     const onSend = vi.fn();
     const createNew = vi.fn();
