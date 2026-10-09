@@ -205,6 +205,14 @@ E发布三次审阅源码与17专项通过，retain并机械集成7064da9；现�
 
 交/tmp/main-acceptance-20261009/review-v2-pi-capabilities/report.md：actual版本/路径来源，包内容与当前候选区分、终端内置命令与应用本地会话命令/扩展命令/技能/模板/业务工具分别列；真实读取/写入/提取声音能力和需要显式对象或执行许可的边界，哪些实际连接、受控测试、纯缺口。current进程环境未读则不能声称替代配置路径就是实际正在使用。不给任意shell/文件工具新许可，所有产品源码/文档/GitHub/Linear零写权。事实交UI唯一main写者修能力表与真实命令入口，不能拿旧历史数量冒充当前注册。
 
+### QA-V2-F-PREFLIGHT-VIEW：候选层级与阶段阻断
+
+F媒体9c1f0e9已retain并组合54c318d；发布三提交组合7064da9。新单从准确clean7064da925493ccec4d6c560efb3c77ea9546275d隔离clone到/tmp/main-acceptance-20261009/review-v2-preflight-view/candidate，新codex/review-v2-preflight-view-20261009。唯一owned CreateProductionTaskForm.tsx、新局部CSS模块及其直接专项。主控核该文件不在UI当前owned且无diff；共享main/api/types/modern-overrides（UI）和资格production（B）不写，production/page也不写。
+
+按DESIGN预检/领域任务阶段修N34/N35/N37与N13该消费者：match_tier是主题/词语/结构候选，启发分值不做适配百分比，不称检索候选可直接用于制作；预检blocker显示明确阻止创建/进入哪阶段及当前允许的动作范围，真实confirmable控制主按钮，局部可读禁用态和就近原因。后台approved_count当前仍是旧审核筛选口径，不可只换名变成已可用；准确保留到诊断且声明本API口径，真正可用资格计数待B/main单接线后具名复验，N33不假关闭。资料/模型/声音显示真实可用事实，原始ID/参数/绝对路径按需诊断，不删必要错误或隐瞒外发。模板时长是默认偏好，显式输入可调整，前后preview/confirm同实际值，不能靠禁用时长把用户30秒变60秒。
+
+N36修复入口需要源/API和人物声音入口实际接通与目标返回保存，当前不伪造已完成按钮；本单可以准确列reason→现有真实路径、剩余返回条件，不造未实现回调或新API。只缓存公开manta依赖受控候选层级/阶段/禁用/明确时长检查及tsc，不安装/服务/GUI/模型/媒体/Key/用户数据/账号/打包/远端。交clean公开身份提交、逐ID/残余报告；组件不等于GUI或完整预检通过。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
