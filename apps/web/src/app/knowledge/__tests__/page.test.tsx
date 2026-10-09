@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
+import type { ScriptLibraryEntry } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
   getKnowledgeGrants: vi.fn(),
@@ -14,6 +15,8 @@ const api = vi.hoisted(() => ({
   sourceErrorMessage: vi.fn(),
   findCitedVersion: vi.fn(),
   parseKnowledgeReferenceId: vi.fn(),
+  listScriptLibraryEntries: vi.fn(),
+  getScriptLibrarySources: vi.fn(),
 }));
 vi.mock("@/lib/source-api", () => ({
   listKnowledgeItems: api.listKnowledgeItems,
@@ -26,7 +29,8 @@ vi.mock("@/lib/source-api", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
-  listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }),
+  listScriptLibraryEntries: api.listScriptLibraryEntries,
+  getScriptLibrarySources: api.getScriptLibrarySources,
   getKnowledgeGrants: api.getKnowledgeGrants,
   grantKnowledgeToWorkspace: api.grantKnowledgeToWorkspace,
   revokeKnowledgeGrant: api.revokeKnowledgeGrant,
@@ -47,8 +51,16 @@ const item: KnowledgeItem = {
   fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
 };
+const scriptEntry: ScriptLibraryEntry = {
+  id: "script-entry-one", name: "已确认文案", category: "产品介绍", version: 2,
+  supersedes_entry_id: null, source_script_id: "script-one", source_task_id: "task-one",
+  source_run_id: "run-one", source_topic_id: "topic-one", title: "产品记录",
+  language: "zh-CN", sections: [{ id: "section-one", title: "开场", content: "先讲产品用途。", visual_prompt: "", reference_ids: [] }],
+  created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z",
+};
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
+  window.history.replaceState({}, "", "/knowledge");
   api.getKnowledgeGrants.mockResolvedValue({
     can_manage: true, source_workspace_id: "workspace-one", access_via_grant: false,
     target_resolution: "resolved", target_resolution_message: "隔离UI响应示例", cross_workspace_status: "AVAILABLE",
@@ -58,6 +70,8 @@ beforeEach(() => {
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
   api.parseKnowledgeReferenceId.mockReturnValue(null);
+  api.listScriptLibraryEntries.mockResolvedValue({ items: [], total_count: 0 });
+  api.getScriptLibrarySources.mockResolvedValue([]);
 });
 describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
@@ -309,5 +323,33 @@ describe("knowledge workspace grants", () => {
     expect(screen.queryByRole("combobox", { name: "目标工作空间" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
     expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("opens the visible scripts collection and exact source-matched entry from a deep link", async () => {
+    window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("heading", { name: "已确认文案 · 版本 2" })).toBeInTheDocument();
+    expect(screen.getByText("先讲产品用途。")).toBeInTheDocument();
+    expect(api.listScriptLibraryEntries).toHaveBeenCalledWith("", "");
+  });
+
+  it.each([
+    ["source mismatch", "different-task", "文案版本与来源任务不匹配；没有打开其他版本。"],
+    ["missing entry", "task-one", "链接中的文案版本当前不可用；你仍可从列表查找其他版本。"],
+  ])("does not open another entry when a deep link has a %s", async (_case, sourceTaskId, message) => {
+    window.history.replaceState({}, "", `/knowledge?entry_id=script-entry-one&source_task_id=${sourceTaskId}`);
+    api.listScriptLibraryEntries.mockResolvedValue({
+      items: sourceTaskId === "different-task" ? [scriptEntry] : [{ ...scriptEntry, id: "sibling-entry", name: "其他文案" }],
+      total_count: 1,
+    });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("heading", { name: /版本 2/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("先讲产品用途。")).not.toBeInTheDocument();
   });
 });

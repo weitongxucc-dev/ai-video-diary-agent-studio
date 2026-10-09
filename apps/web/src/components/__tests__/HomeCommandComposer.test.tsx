@@ -459,7 +459,9 @@ describe("HomeCommandComposer", () => {
     configuredModel();
     let deliver!: (event: { type: "turn_started"; turn_id: string; turn_state: "running"; draft_version: number }) => void;
     let rejectTurn!: (cause: Error) => void;
+    let submittedDraftVersion = 0;
     mocks.sendTaskTurn.mockImplementationOnce((_taskId: string, payload: { conversation_id: string; message: string; client_request_id: string; expected_draft_version: number }, onEvent: typeof deliver) => {
+      submittedDraftVersion = payload.expected_draft_version;
       const saved = mocks.saved.get(payload.conversation_id)!;
       mocks.saved.set(saved.id, { ...saved, draft_text: "", draft_version: payload.expected_draft_version + 1 });
       mocks.receipts.set(payload.client_request_id, { request: `${payload.conversation_id}:${payload.message}:${payload.expected_draft_version}` });
@@ -477,14 +479,15 @@ describe("HomeCommandComposer", () => {
 
     view.rerender(<HomeCommandComposer task={second} />);
     await act(async () => {
-      deliver({ type: "turn_started", turn_id: "persisted-after-navigation", turn_state: "running", draft_version: 2 });
+      deliver({ type: "turn_started", turn_id: "persisted-after-navigation", turn_state: "running", draft_version: submittedDraftVersion + 1 });
       rejectTurn(new Error("响应连接中断"));
     });
 
     await waitFor(() => expect(mocks.restoreDraft).toHaveBeenCalledWith(oldConversationId,
-      expect.objectContaining({ user_message: "调亮", expected_draft_version: 1 })));
+      expect.objectContaining({ user_message: "调亮", expected_draft_version: submittedDraftVersion })));
     expect(mocks.saved.get(oldConversationId)?.draft_text).toBe("");
-    expect(mocks.saved.get(oldConversationId)?.draft_version).toBe(2);
+    expect(mocks.saved.get(oldConversationId)?.draft_version).toBe(submittedDraftVersion + 1);
+    expect(mocks.updateConversation.mock.calls.filter(([id]) => id === oldConversationId)).toHaveLength(1);
     expect(screen.queryByText("调亮")).not.toBeInTheDocument();
   });
 });

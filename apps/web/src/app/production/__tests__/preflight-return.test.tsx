@@ -10,7 +10,7 @@ beforeEach(() => { vi.clearAllMocks(); });
 it("binds only the draft UUID and the exact returned template version to the existing form", async () => {
   const template = { id: "fixed-template", version: 3, name: "固定版本" }; mocks.templates.mockResolvedValue({ items: [{ ...template, version: 4 }, template] });
   render(await ProductionPage({ searchParams: Promise.resolve({ new: "1", draft_id: draftId, template_id: template.id, template_version: "3" }) }));
-  expect(mocks.form).toHaveBeenCalledWith({ autoFocus: true, initialGoal: "", draftId, template });
+  expect(mocks.form).toHaveBeenCalledWith({ autoFocus: true, initialGoal: "", draftId, replyOrigin: null, template });
 });
 it("does not substitute the latest template when the pinned version cannot be read", async () => {
   mocks.templates.mockResolvedValue({ items: [{ id: "fixed-template", version: 4 }] });

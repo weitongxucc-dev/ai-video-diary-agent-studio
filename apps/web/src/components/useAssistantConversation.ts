@@ -209,11 +209,17 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
       })
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "无法恢复此范围的对话。"); })
       .finally(() => { if (active) setLoading(false); });
+    const recoveries = localTurnRecovery.current;
+    const draftRevisions = draftRevisionByConversation.current;
     return () => {
       active = false;
       if (draftTimer.current) clearTimeout(draftTimer.current);
       const previous = conversationRef.current;
-      if (previous && previous.draft_text !== draftValue.current) {
+      const recoveryOwnsEmptyDraft = previous && draftValue.current === "" && [...recoveries.values()].some((turn) =>
+        turn.conversationId === previous.id
+          && turn.persistedTurnId === null
+          && draftRevisionFor(draftRevisions, previous.id) === turn.draftRevision);
+      if (previous && previous.draft_text !== draftValue.current && !recoveryOwnsEmptyDraft) {
         void saveDraftValue(previous.id, draftValue.current).catch(() => undefined);
       }
       if (activeScopeKey.current === scopeKey) activeScopeKey.current = null;
