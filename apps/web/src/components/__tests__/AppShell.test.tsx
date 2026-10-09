@@ -34,7 +34,7 @@ vi.mock("@/lib/api", () => ({
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: false } } }),
   getCurrentAssistantConversation: vi.fn(async (scope: import("@/lib/types").AssistantConversationScope) => ({
     id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "workspace-1", ...scope,
-    title: "新对话", draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [],
+    title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [],
   } satisfies import("@/lib/types").AssistantConversation)),
   listAssistantConversations: vi.fn().mockResolvedValue({ items: [] }),
   getAssistantCapabilities: vi.fn().mockResolvedValue({
