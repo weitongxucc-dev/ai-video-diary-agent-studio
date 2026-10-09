@@ -275,6 +275,8 @@ QA-V2-C-SOURCE-API：task_dd0225de596e最终ctx_3faea4f2c137已成功3bd6622/11�
 
 准确C前端残差也需本纵向收口：saveToKnowledge只在listKnowledgeItems回读ID后成功，但当前该列表按既有excluded谓词刻意不返回排除条目；主动保存excluded不应因真实限制而假报未保存或重复创建。响应/回读须能核对当前可信源ID、知识ID与版本/use_state，区分登记成功与可用于检索，保留使用限制，不通过让excluded进入检索列表修复；选中源在异步期间变化不能将旧成功标在新源上，失败保留原条目/输入、重试真实同一对象。复用已确认ScriptLibrary与knowledge selection的固定版本规则；不改用户资料/删除旧source。无安装/真实服务/模型/Pi/GUI/用户库Key/账号/外发；TestClient/临时DB与受控网页文本替身只是接口证据，最终需要同候选真实UI。
 
+QA-V2-E-SCRIPT-TRANSFER-REVIEW：复用E原终端/原creation-wave placement，仅主控97ef234候选只读和产品§5/8、领域Plan/Script/确认、DESIGN对话/文案库直接章节。N14仍无首页回复→TaskScript草稿→用户确认→ScriptLibrary可见出口，不用“复制”或普通KnowledgeItem保存冒充闭环。准确核查已有assistant/script-context、assistant/script-draft、confirm-script、script-library与CreationTask stages/选题/必要真实来源契约，给一个可实施的最小完整纵向方案：无已有任务时如何保留回复原文和来源身份进入实际建任务流程；已有适用任务时如何保存未确认草稿、再沿原确认与文案库保存出口；不适用阶段如何说明/返回，不自动覆写已确认稿/旧成片，不引入第二文案事实库。判明本地保存是否被cloud_egress误绑定、固定对象/版本/晚响应保护和真实原端点能复用的部分；不要假定去所有阶段门槛即可成功。只报告具体需改文件/接口/最小真实数据回归与尚需模型权限步骤，源码不写、不建新服务/跑API/模型/Pi/GUI/用户数据/安装或读历史ZIP。不扫描全部历史；输出`/tmp/main-acceptance-20261009/review-v2-script-transfer-review/report.md`，准确只读结果 worker_done/retain，主控随后作决定和具名实施而非交用户新计划。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
