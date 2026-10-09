@@ -6,7 +6,7 @@ vi.mock("@/lib/api", () => ({ previewCreationPlan: mocks.preview, confirmCreatio
 vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: mocks.voices, listPersonProfiles: mocks.people, getDefaultVoice: mocks.defaultVoice }));
 vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: mocks.scope }));
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
-import { loadPreflightDraft, savePreflightDraft, type PreflightDraftFields } from "@/lib/preflight-draft";
+import { loadPreflightDraft, resolvePreflightRepairContext, savePreflightDraft, type PreflightDraftFields } from "@/lib/preflight-draft";
 const scope = { memberId: "local:member-a", workspaceId: "space-a" };
 const id = "12345678-1234-4123-8123-123456789abc", nextId = "12345678-1234-4123-8123-123456789abd";
 const template: VideoTemplate = { id: "template-fixed", version: 3, name: "60秒模板", visibility: "private", origin: "user", source_task_id: "old", source_timeline_version_id: "old-version", created_at: "2026-10-09", settings: { language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 60, voice: null, style_instruction: "短句", fit_mode: "fit", subtitle_style: {} } };
@@ -40,6 +40,7 @@ describe("uncreated task repair return", () => {
     expect(target.searchParams.get("template_version")).toBe("3"); expect(target.searchParams.has("goal")).toBe(false);
     const saved = loadPreflightDraft(sessionStorage, scope, draftId)!;
     expect(saved).toEqual({ ...fields, presenterShare: 20 });
+    expect(resolvePreflightRepairContext(sessionStorage, scope, null, window.location.origin)?.target.draftId).toBe(draftId);
     expect(JSON.stringify(saved)).not.toContain("fingerprint");
     first.unmount(); expect(loadPreflightDraft(sessionStorage, scope, draftId)).toEqual(saved);
     const lateDefault = defer<{ id: string; version: string }>(); mocks.defaultVoice.mockReturnValueOnce(lateDefault.promise);
@@ -58,6 +59,7 @@ describe("uncreated task repair return", () => {
     await waitFor(() => expect(mocks.assign).toHaveBeenLastCalledWith(expect.stringContaining("/tasks/real-task?")));
     expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ preflight_fingerprint: "n".repeat(64), duration_target_seconds: 30 }));
     expect(loadPreflightDraft(sessionStorage, scope, draftId)).toBeNull(); expect(loadPreflightDraft(sessionStorage, scope, nextId)).toEqual(fields);
+    expect(resolvePreflightRepairContext(sessionStorage, scope, null, window.location.origin)).toBeNull();
   });
   it.each([
     ["content_sources_missing", "topic", "管理信息源", "/sources"],

@@ -65,7 +65,19 @@ export function loadPreflightDraft(storage: Storage, scope: DraftScope, id: stri
     || saved.memberId !== scope.memberId || saved.workspaceId !== scope.workspaceId || !fields(saved.fields)) throw new Error("临时草稿内容无效，当前输入没有改变。");
   return saved.fields;
 }
-export function clearPreflightDraft(storage: Storage, scope: DraftScope, id: string): void { storage.removeItem(key(scope, id)); }
+export function clearPreflightDraft(storage: Storage, scope: DraftScope, id: string): void {
+  const markerKey = repairKey(scope), raw = storage.getItem(markerKey);
+  const ownMarker = raw !== null && parseRepairMarker(raw, scope).draftId.toLowerCase() === id.toLowerCase();
+  if (ownMarker) storage.removeItem(markerKey);
+  try { storage.removeItem(key(scope, id)); }
+  catch (cause) {
+    if (ownMarker) {
+      try { storage.setItem(markerKey, raw!); }
+      catch { throw new Error("草稿未删除，修复定位恢复也失败；当前输入仍保留，请勿离开表单。"); }
+    }
+    throw cause;
+  }
+}
 export function preflightReturnUrl(id: string, template: PreflightDraftFields["template"]): string {
   if (!validDraftId(id)) throw new Error("草稿编号无效。");
   const params = new URLSearchParams({ new: "1", draft_id: id });
@@ -87,3 +99,55 @@ export function boundedPreflightReturn(raw: string, origin: string): { href: str
   return { href: preflightReturnUrl(draftId, template), draftId, template };
 }
 export const PREFLIGHT_RESOURCE_PATHS = new Set(["/knowledge", "/sources", "/profiles", "/library", "/settings", "/health", "/templates"]);
+
+
+export type PreflightRepairContext = { scope: DraftScope; target: NonNullable<ReturnType<typeof boundedPreflightReturn>>; draft: PreflightDraftFields };
+function repairKey(scope: DraftScope): string {
+  return `ai-video-diary.preflight-repair.v1:${encodeURIComponent(scope.memberId)}:${encodeURIComponent(scope.workspaceId)}`;
+}
+function parseRepairMarker(raw: string, scope: DraftScope): { draftId: string; returnTo: string } {
+  if (raw.length > 2000) throw new Error("修复定位超出范围，没有读取草稿。");
+  const value: unknown = JSON.parse(raw);
+  if (!record(value) || Object.keys(value).sort().join() !== "draftId,memberId,returnTo,version,workspaceId" || value.version !== 1
+    || value.memberId !== scope.memberId || value.workspaceId !== scope.workspaceId || typeof value.draftId !== "string" || !validDraftId(value.draftId) || typeof value.returnTo !== "string") throw new Error("修复定位无效，没有读取其他草稿。");
+  return { draftId: value.draftId, returnTo: value.returnTo };
+}
+export function sameDraftTemplate(a: PreflightDraftFields["template"], b: PreflightDraftFields["template"]): boolean {
+  return a?.id === b?.id && a?.version === b?.version;
+}
+export function savePreflightRepairContext(storage: Storage, scope: DraftScope, id: string, template: PreflightDraftFields["template"]): void {
+  const draft = loadPreflightDraft(storage, scope, id);
+  if (!draft || !sameDraftTemplate(draft.template, template)) throw new Error("本成员与工作区的草稿或固定模板版本失联，没有建立修复定位。");
+  storage.setItem(repairKey(scope), JSON.stringify({ version: 1, memberId: scope.memberId, workspaceId: scope.workspaceId, draftId: id, returnTo: preflightReturnUrl(id, template) }));
+}
+// An explicit URL always wins, including when invalid. Only absent URLs may use the scoped marker.
+export function resolvePreflightRepairContext(storage: Storage, scope: DraftScope, raw: string | null, origin: string): PreflightRepairContext | null {
+  let target;
+  if (raw !== null) {
+    target = boundedPreflightReturn(raw, origin);
+    if (!target) throw new Error("返回创作地址无效，没有回退其他草稿。");
+  } else {
+    const saved = storage.getItem(repairKey(scope));
+    if (saved === null) return null;
+    const marker = parseRepairMarker(saved, scope);
+    target = boundedPreflightReturn(marker.returnTo, origin);
+    if (!target || target.draftId.toLowerCase() !== marker.draftId.toLowerCase()) throw new Error("修复定位返回地址无效，没有读取其他草稿。");
+  }
+  const draft = loadPreflightDraft(storage, scope, target.draftId);
+  if (!draft || !sameDraftTemplate(draft.template, target.template)) throw new Error("当前成员与工作区没有这份创作草稿或固定版本已失联，不能返回。");
+  return { scope, target, draft };
+}
+export function replacePreflightDraftTemplate(storage: Storage, context: PreflightRepairContext, template: NonNullable<PreflightDraftFields["template"]>, origin: string): string {
+  const current = resolvePreflightRepairContext(storage, context.scope, null, origin);
+  if (!current || current.target.href !== context.target.href) throw new Error("当前修复定位已变化，没有修改其他草稿。");
+  const original = storage.getItem(key(context.scope, context.target.draftId))!;
+  const updated = { ...current.draft, template };
+  savePreflightDraft(storage, context.scope, context.target.draftId, updated);
+  try { savePreflightRepairContext(storage, context.scope, context.target.draftId, template); }
+  catch (cause) {
+    try { storage.setItem(key(context.scope, context.target.draftId), original); }
+    catch { throw new Error("模板换版未完成，原草稿恢复也失败；没有离开模板页，请保留当前输入。"); }
+    throw cause;
+  }
+  return preflightReturnUrl(context.target.draftId, template);
+}

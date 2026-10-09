@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoTemplate } from "@/lib/types";
 const setVisibility = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
+vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: vi.fn().mockResolvedValue({ memberId: "local:member", workspaceId: "space" }) }));
+beforeEach(() => { sessionStorage.clear(); });
 vi.mock("@/lib/api", () => ({ setVideoTemplateVisibility: (...args: unknown[]) => setVisibility(...args) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
@@ -25,11 +28,11 @@ describe("TemplateLibraryWorkspace", () => {
   it.each([
     { profile_id: "voice_1", version: "v1" },
     { profile_id: "voice_missing", version: "missing-version" },
-  ])("reports that the original voice name is unreadable without exposing or replacing $profile_id", (voice) => {
+  ])("reports that the original voice name is unreadable without exposing or replacing $profile_id", async (voice) => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, settings: { ...template.settings, voice } }]} />);
     expect(screen.getByText("无法读取原声音名称")).toBeInTheDocument();
     expect(screen.queryByText(`${voice.profile_id} · ${voice.version}`)).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
   });
   it("still requires a voice selection when the template has no voice configuration", () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
@@ -44,22 +47,22 @@ describe("TemplateLibraryWorkspace", () => {
     rerender(<TemplateLibraryWorkspace offline={false} templates={[template]} />);
     expect(screen.getByText("未保存调色，使用新素材原色")).toBeInTheDocument();
   });
-  it("selects immutable versions and routes with identity instead of copied goals", () => {
+  it("selects immutable versions and routes with identity instead of copied goals", async () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[template, { ...template, version: 2 }]} />);
-    expect(screen.getByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2");
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2");
     fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
     fireEvent.click(screen.getByRole("button", { name: /视频日记 · 第1版/ }));
-    expect(screen.getByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
     expect(screen.getByRole("link", { name: "查看原片" })).toHaveAttribute("href", "/tasks/task_1");
   });
-  it("keeps built-in seeds separate from saved versions", () => {
+  it("keeps built-in seeds separate from saved versions", async () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, origin: "built_in" }]} />);
     expect(screen.queryByRole("link", { name: /用这个做/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /内置模板/ }));
     const details = screen.queryByRole("button", { name: "查看详情" }); if (details) fireEvent.click(details);
-    expect(screen.getByRole("link", { name: /用这个做/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toBeInTheDocument();
   });
-  it("suppresses detail and create action while offline even with leftover templates, then recovers", () => {
+  it("suppresses detail and create action while offline even with leftover templates, then recovers", async () => {
     const { rerender } = renderWorkspace(<TemplateLibraryWorkspace offline={true} templates={[colorTemplate]} />);
     expect(screen.getByText("暂时无法读取模板")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /用这个做/ })).not.toBeInTheDocument();
@@ -68,7 +71,7 @@ describe("TemplateLibraryWorkspace", () => {
     expect(document.querySelectorAll("[data-offline-inert]")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /视频日记 · 第1版/ })).not.toBeInTheDocument();
     rerender(<TemplateLibraryWorkspace offline={false} templates={[colorTemplate]} />);
-    expect(screen.getByRole("link", { name: /用这个做/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toBeInTheDocument();
     expect(screen.getByText("曝光 0.5 · 对比度 1.1 · 饱和度 0.8 · 冷暖 0.2")).toBeInTheDocument();
     expect(document.querySelectorAll("[data-offline-inert]")).toHaveLength(0);
   });
@@ -140,20 +143,20 @@ describe("TemplateLibraryWorkspace", () => {
 
 
 describe("template detail action and structure", () => {
-  it("puts the immutable version action in the fixed dialog footer without a duplicate body action", () => {
+  it("puts the immutable version action in the fixed dialog footer without a duplicate body action", async () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[template, { ...template, version: 2 }]} />);
     const details = screen.getByRole("dialog", { name: "模板详情" });
-    const links = within(details).getAllByRole("link", { name: "使用此模板" });
+    const links = await within(details).findAllByRole("link", { name: "使用此模板" });
     expect(links).toHaveLength(1);
     expect(links[0].closest("footer")).not.toBeNull();
     links.forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2"));
     fireEvent.click(within(details).getByRole("button", { name: "关闭卡片" }));
     fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
     fireEvent.click(screen.getByRole("button", { name: /视频日记 · 第1版/ }));
-    within(screen.getByRole("dialog", { name: "模板详情" })).getAllByRole("link", { name: "使用此模板" }).forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1"));
+    (await within(screen.getByRole("dialog", { name: "模板详情" })).findAllByRole("link", { name: "使用此模板" })).forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1"));
   });
 
-  it("previews saved built-in structure as labelled example content without claiming a finished video", () => {
+  it("previews saved built-in structure as labelled example content without claiming a finished video", async () => {
     const builtIn = { ...template, id: "builtin_tool_review", origin: "built_in" as const, name: "AI 工具测评", settings: { ...template.settings, script_structure: ["结论先行", "工具介绍", "实测场景", "坑点", "推荐人群"] } };
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[builtIn]} />);
     fireEvent.click(screen.getByRole("button", { name: /内置模板/ }));
@@ -163,12 +166,12 @@ describe("template detail action and structure", () => {
     expect(preview).toHaveTextContent("示例文案 · 展示结构，不是成片");
     expect(preview).toHaveTextContent("这款工具适合快速整理初稿");
     expect(document.querySelector("video")).toBeNull();
-    within(screen.getByRole("dialog", { name: "模板详情" })).getAllByRole("link", { name: "使用此制作结构" }).forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=builtin_tool_review&template_version=1"));
+    (await within(screen.getByRole("dialog", { name: "模板详情" })).findAllByRole("link", { name: "使用此制作结构" })).forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=builtin_tool_review&template_version=1"));
   });
 });
 
 
-it.each(["product_intro", "customer_faq", "customer_case"])("uses real catalog input requirements and the selected immutable identity for %s", (id) => {
+it.each(["product_intro", "customer_faq", "customer_case"])("uses real catalog input requirements and the selected immutable identity for %s", async (id) => {
   const item = { ...template, id: `builtin_${id}`, name: id, origin: "built_in" as const, settings: { ...template.settings, script_structure: ["问题", "依据", "下一步"] } };
   const catalog = [{ template_id: id, name: id, scenario: "已确认场景", recommended_duration: "30-90 秒", topic_structure: [], script_structure: item.settings.script_structure, material_requirements: ["已核实资料与出处"], jianying_style: "tutorial_demo", subtitle_style: "", title_rules: [], cover_copy_rules: [], publish_copy_rules: [], default_feedback_dimensions: [] }];
   renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[item]} catalog={catalog} />);
@@ -176,5 +179,5 @@ it.each(["product_intro", "customer_faq", "customer_case"])("uses real catalog i
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`${id} · 第1版`) }));
   const details = screen.getByRole("dialog", { name: "模板详情" });
   expect(within(details).getByRole("region", { name: "必要输入" })).toHaveTextContent("已核实资料与出处");
-  within(details).getAllByRole("link", { name: "使用此制作结构" }).forEach(link => expect(link).toHaveAttribute("href", `/production?new=1&template_id=builtin_${id}&template_version=1`));
+  (await within(details).findAllByRole("link", { name: "使用此制作结构" })).forEach(link => expect(link).toHaveAttribute("href", `/production?new=1&template_id=builtin_${id}&template_version=1`));
 });

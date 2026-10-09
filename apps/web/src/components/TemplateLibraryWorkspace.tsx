@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { ArrowRight, History, Layers3, Library, Search, WifiOff } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { boundedPreflightReturn, readPreflightDraftScope, resolvePreflightRepairContext, replacePreflightDraftTemplate, sameDraftScope, savePreflightRepairContext, type PreflightRepairContext } from "@/lib/preflight-draft";
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { setVideoTemplateVisibility } from "@/lib/api";
@@ -39,6 +41,38 @@ const emptyCopy: Record<TemplateView, { title: string; hint: string; href: strin
 };
 
 export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: { offline: boolean; templates: VideoTemplate[]; catalog?: ContentTemplate[] }) {
+  const router = useRouter();
+  const rawReturn = useSearchParams()?.get("return_to") ?? null;
+  const repairRevision = useRef(0);
+  const [repairContext, setRepairContext] = useState<PreflightRepairContext | null>(null);
+  const [repairReady, setRepairReady] = useState(false);
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true; const request = ++repairRevision.current;
+    setRepairContext(null); setRepairReady(false); setRepairError(null); setRepairBusy(false);
+    if (rawReturn !== null && !boundedPreflightReturn(rawReturn, window.location.origin)) { setRepairError("返回创作地址无效，没有回退其他草稿。"); return; }
+    void readPreflightDraftScope().then(scope => {
+      if (!active) return;
+      const value = resolvePreflightRepairContext(window.sessionStorage, scope, rawReturn, window.location.origin);
+      if (value && rawReturn !== null) savePreflightRepairContext(window.sessionStorage, scope, value.target.draftId, value.draft.template);
+      setRepairContext(value); setRepairReady(true);
+    }).catch(cause => { if (active) setRepairError(`不能读取修复上下文：${cause instanceof Error ? cause.message : "读取失败"}`); });
+    return () => { active = false; repairRevision.current = request + 1; };
+  }, [rawReturn]);
+  async function handleUseDraftTemplate(item: VideoTemplate) {
+    if (!repairContext || !repairReady || repairBusy) return;
+    const request = repairRevision.current;
+    setRepairBusy(true); setRepairError(null);
+    try {
+      const scope = await readPreflightDraftScope();
+      if (request !== repairRevision.current) return;
+      if (!sameDraftScope(scope, repairContext.scope)) throw new Error("成员或工作区已变化，没有修改原草稿。");
+      const href = replacePreflightDraftTemplate(window.sessionStorage, repairContext, { id: item.id, version: item.version }, window.location.origin);
+      router.push(href);
+    } catch (cause) { if (request === repairRevision.current) setRepairError(`草稿模板未更换：${cause instanceof Error ? cause.message : "存储不可用"}`); }
+    finally { if (request === repairRevision.current) setRepairBusy(false); }
+  }
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [view, setView] = useState<TemplateView>("mine");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -76,6 +110,12 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
   const settings = selected?.settings;
   const creationHref = selected ? `/production?new=1&template_id=${encodeURIComponent(selected.id)}&template_version=${selected.version}` : "";
   const useLabel = selected?.origin === "built_in" ? "使用此制作结构" : "使用此模板";
+  const useAction = selected ? !repairReady || repairError
+    ? <button className={styles.primaryButton} type="button" disabled>用这个做 <ArrowRight size={15} /></button>
+    : repairContext
+    ? <button className={styles.primaryButton} type="button" disabled={repairBusy || !repairReady || Boolean(repairError)} onClick={() => void handleUseDraftTemplate(selected)}>换用此{selected.origin === "built_in" ? "制作结构" : "模板"}并返回创作 <ArrowRight size={15} /></button>
+    : <Link className={styles.primaryButton} href={creationHref}>{useLabel} <ArrowRight size={15} /></Link>
+    : null;
   const hasQuery = haystack.length > 0;
   const empty = visible.length === 0;
   const inspector = canAct && selected && settings ? <div className={styles.inspector}>
@@ -120,11 +160,13 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     {offline ? <section className={styles.capabilityBanner}><span><WifiOff size={16} /></span><div><strong>暂时无法读取模板</strong><p>请检查本地服务后刷新；已保存的模板暂不可操作。</p></div><Link href="/health">检查运行情况</Link></section> : null}
     <div className={styles.viewBar}><nav className={styles.tabs} aria-label="模板视图">{views.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-pressed={view === id} className={view === id ? styles.activeTab : undefined} onClick={() => { setView(id); setSelectedKey(null); setQuery(""); setDetailsOpen(false); }}><Icon size={15} />{label}</button>)}</nav>
       <label className={own.search}><Search size={15} /><input type="search" aria-label="搜索模板名称" placeholder="搜索模板名称…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-      {canAct && selected ? <><button className={styles.secondaryButton} type="button" onClick={() => setDetailsOpen(true)}>查看详情</button><Link className={styles.primaryButton} href={creationHref}>用这个做 <ArrowRight size={15} /></Link></> : null}
+      {canAct && selected ? <><button className={styles.secondaryButton} type="button" onClick={() => setDetailsOpen(true)}>查看详情</button>{!repairReady || repairError || repairContext ? useAction : <Link className={styles.primaryButton} href={creationHref}>用这个做 <ArrowRight size={15} /></Link>}</> : null}
     </div>
+    {repairError ? <p role="alert">{repairError}</p> : null}
+    {repairContext ? <p>换用模板保留原目标、时长和人物声音选择，返回后重新检查；不会自动创建任务。</p> : null}
     {empty ? (offline ? null : emptyStage) : grid}
   </div>
-    <HomeCardDialog kind="detail" title="模板详情" open={detailsOpen && canAct && Boolean(selected)} onClose={() => setDetailsOpen(false)} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span><Link className={styles.primaryButton} href={creationHref}>{useLabel} <ArrowRight size={15} /></Link></div> : null}>{inspector}</HomeCardDialog>
+    <HomeCardDialog kind="detail" title="模板详情" open={detailsOpen && canAct && Boolean(selected)} onClose={() => setDetailsOpen(false)} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span>{useAction}</div> : null}>{inspector}</HomeCardDialog>
   </AppShell>;
 }
 

@@ -12,7 +12,7 @@ import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/li
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import ui from "./CreateProductionTaskForm.module.css";
-import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, validDraftId, type DraftScope, type PreflightDraftFields } from "@/lib/preflight-draft";
+import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields } from "@/lib/preflight-draft";
 
 // These fields are returned by MaterialSegmentMatchResponse; the shared Web type omits them.
 type PreflightMatch = CreationPlanPreview["material_matches"][number] & { match_tier?: string; asset_file_name?: string };
@@ -229,6 +229,7 @@ export function CreateProductionTaskForm({
       if (!validDraftId(id)) throw new Error("草稿编号无效，没有离开表单。");
       const saved = draftFields();
       savePreflightDraft(window.sessionStorage, scope, id, saved);
+      savePreflightRepairContext(window.sessionStorage, scope, id, saved.template);
       assignLocation(`${href}?${new URLSearchParams({ return_to: preflightReturnUrl(id, saved.template) })}`);
     } catch (cause) { if (alive.current && revision === inputRevision.current) setDraftError(`临时草稿保存失败，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`); }
   }
