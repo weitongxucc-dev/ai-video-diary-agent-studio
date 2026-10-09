@@ -388,10 +388,10 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
                 "person_version": "person-v1",
                 "version": "voice-v1",
                 "language": "zh",
-                "display_name": "声音 A",
+                "display_name": "   ",
                 "reference_audio_path": "__VOICE_REFERENCE__",
                 "reference": {"asset_id": "__VOICE_ASSET_ID__"},
-                "reference_text": "   ",
+                "reference_text": "与合成参考一致的文字",
                 "model_id": "voice-model-v1",
                 "authorization": _authorization_payload(
                     "voice-authorization", content_type="voice", usage_scope="narration"
