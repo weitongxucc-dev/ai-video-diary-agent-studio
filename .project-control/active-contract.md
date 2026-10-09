@@ -161,6 +161,12 @@ C复用原终端，从主控组合f454b31新clone到/tmp/main-acceptance-2026100
 
 仅链接/Users/Zhuanz/orca/workspaces/main/manta/apps/web/node_modules公开现有依赖，实际受控组件专项/tsc；迟到详情、空筛选、列表失败/恢复和默认诊断折叠有必要证据，真实GUI统一候选后补。禁止安装下载/服务/GUI/Key/用户库/模型/媒体/账号/打包/远端写入。交clean/净diff/逐ID与残余；N15完整保存、N14对话文案出口及API当前门槛未由本单完成，不关闭它们。
 
+### QA-V2-D-MATERIAL-AUDIT：素材/预检同源资格与选择范围
+
+D首页a0d56a0已结算retain、主控组合ff153f0；新单先纠正一个具体现有首页消费者：HomeWorkspace中的homeTodos不应仅因同任务output_ready就过滤。可看成片与待处理动作是不同业务事实；保留真实待处理原因/行动，可同对象合并或分别显示但不隐藏阻断。唯一产品写权HomeWorkspace.tsx及其直接专项，最多必要局部CSS，不改其他首页消费者/API/任务媒体。用已有成片但仍有当前待办/失败的受控用例证明待办不消失，阶段完成不冒充成片规则保持。
+
+其余是只读N06–N12/N33–N37/N13素材消费者定向诊断：准确ff153f0主控组合树和用户ZIP指定对应TXT/JSON/PNG；活动DESIGN素材/预检与领域§3/use_state、产品默认导入可用规则优先，不扫描历史输出或真实用户数据。不写MaterialLibraryWorkspace/HomeCommandComposer/CreationTaskWorkspace（UI）、main/schema/libapi/types（UI）、production/avatar/narration（B）；不按症状建平行规则。指出搜索结果和库总体/选中失效的真实状态来源、对象引用文件及时间、分析分项、人物/同义标签覆盖归并、候选与可用及语义评分范围、分阶段阻断与修复返回路径；每个ID静态确认/未复现/已改善分开，并给唯一写者及最小后续共同机制。API测试/纯合成fixture可只沿已存在公开依赖，不下载安装、启动服务/GUI/Pi/模型/媒体、访问用户库/Key或账号。读报告不取得媒体操作许可。owned新候选/tmp/main-acceptance-20261009/review-v2-material-audit/candidate从ff153f0新分支codex/review-v2-material-audit-20261009，证据同父目录。交clean首页差额与材料诊断矩阵，不把只读报告算已修。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
