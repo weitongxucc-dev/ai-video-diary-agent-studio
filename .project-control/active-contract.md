@@ -512,6 +512,10 @@ E N14只读报告已审：ScriptEditor保存过程中输入可继续编辑、set
 
 UI晚保存Task ctx_adb698a4de22交clean e249694、源已审并机械组合b33b1888643caf72c6f39ed72a30c775488a9c5a，延迟回归先红后绿/tsc通过，原路由切Task风险未证实、不顺手变更。UI已结算retain、CreationTaskWorkspace.tsx/直接测试写权结束；现正式释放给B当前ctx_5948cb0be957，追加该文件现有queued edit/JobProgressPanel对局部配音的准确投影及一个直接queued-narration Web专项，必要api.ts/types.ts仅原通用Queued响应/实际Job字段真实差额，不另造队列。排队不更新当前音频/Timeline或称完成；成功读真实终态刷新该Task/目标，失败/取消保持旧结果，unknown不伪成功，人物和配音提示对应实际操作。沿已传job_id/原作业读取及现有真实后端kind，旧人物行为保持，普通编辑确认仍准确。B先交后端clean叶供组合，再在同一组合源码绑定新Web消费者；不得拿其旧Web覆盖b33包含N14/late-save的活跃组件。B仍纵向owner直至交必要前后端/RETIRE/最小回归与明确未验，backend阶段通过不提前结束整个Task。服务/Pi/模型/用户数据/GUI/账号/打包和远端权不随源码释放恢复。
 
+### QA-V2-F-QUEUE-CONFIRM-CONSUMER：等待协议的真实测试消费者
+
+C CAS五test叶f3cfa5f、D可信读者50126a5、UI晚编辑e249694、F请求/受控容量e8b0268均审后机械组合ee2f089996917ea97edb2992e37b292e30fffe37。前一完整API剩余三失败均为已定位的合法waiting处理；新源码整体回归仍待B叶。F原请求单已结算retain，现同原可见终端新单，仅tests/test_creation_execution.py那个三参数None/render_revoked/render_commit_unknown及局部共用fixture。从准确ee2f089新隔离公开候选，可先准备消费者，但实际执行等待B已审等待源码组合START；不先反复重现已证实错误。保留真实3秒IO/真实FFmpeg/许可注册与释放/撤销unknown负例；低置信故事板实际产出后，应核Task等待/Job未失败/零render请求，再由同受控真实成员沿现有ConfirmClip预览→确认逐镜头确认，原continue/retry后才获取render grant。不改匹配分数/把waiting预造ready或SQLconfirmed、不resources.admit=True/伪时钟。actor、来源owner与HTTP local member须真一致，建立真实可丢弃成员而不伪diagnostic。成功/未知/撤销目标分支必须实际达到后再判通过，其他23未影响PASS复用。F不写B任何生产/测试新单或Web；主控在B叶审后精准通知候选与接口，必要差额向主控报告，不扩大所有权。无用户数据/真实模型/App/GUI/安装/远端权。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
