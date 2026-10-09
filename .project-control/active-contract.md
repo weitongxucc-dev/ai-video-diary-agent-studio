@@ -213,6 +213,14 @@ F媒体9c1f0e9已retain并组合54c318d；发布三提交组合7064da9。新单�
 
 N36修复入口需要源/API和人物声音入口实际接通与目标返回保存，当前不伪造已完成按钮；本单可以准确列reason→现有真实路径、剩余返回条件，不造未实现回调或新API。只缓存公开manta依赖受控候选层级/阶段/禁用/明确时长检查及tsc，不安装/服务/GUI/模型/媒体/Key/用户数据/账号/打包/远端。交clean公开身份提交、逐ID/残余报告；组件不等于GUI或完整预检通过。
 
+### QA-V2-D-MATERIAL-REVIEW：编辑锚点与全体分析事实
+
+D ada64c3已78专项/tsc通过并retain，主控审阅当前源码仍发现两项同类差额：默认检查器片段可编辑description/transcript/usage/collection但没有显式assistantSelection，搜索成功可selectAsset首项并重置这些用户未保存字段；OCR汇总flatMap丢弃understanding缺失片段，使部分OCR ready被说成全部完成。复用clean ada候选新具名分支，唯一owned MaterialLibraryWorkspace及直接专项/必要局部CSS。
+
+把用户实际修改的对象/时间范围作为编辑锚点，与助手显式引用分别保留；筛选/迟到响应不得重定向或抹草稿，真正丢目标才保护提示，普通初始预览仍无假告警。多分项分析必须涵盖全部片段，缺字段不是已完成；混合ready/blocked/failed/unknown如实给部分状态，不用首个状态掩盖其他片段。不改API/资格/全局/助手，必要初始默认项编辑后筛出再返回/不串写、2片段一ready一缺字段的直接用例+tsc，复用未变78项。交clean提交追加report，禁止安装/服务/GUI/Key/媒体/用户数据/远端。
+
+E能力盘点task_e5daffa2962a已failed结算retain：公开安装/源码矩阵成立，误触ZIP中测试会话内容后停止、未完成包元数据核对；没有恢复旧读权限或重跑会话证据。main能力表差额已交UI唯一写者。C知识2d/e5源码审核后机械组合f603abb，真实GUI及N14/N15接线未完成。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
