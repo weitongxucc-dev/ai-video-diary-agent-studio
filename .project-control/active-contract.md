@@ -463,6 +463,12 @@ C当前N14 main.py唯一写者追加两个已证实边界叶，不扩整file行�
 
 E新QA-V2-E-MATERIAL-QUALIFICATION-AUDIT只读root准确fe5ad62的实际任务候选/InsertClip/ReplaceClip/确认消费者（main.py约7260/10162/11162/11790及原legacy候选14000），与production.automatic_segment_eligible、manual use_state/实际来源身份规则核对。root静态已见候选/插入/替换仍用review_status!=approved硬门槛而当前正式自动资格只拒明确rejected；候选与写入必须使用同一真实资格，不能只删修复文字。先定向控制复现：已分析/可读/可创作但旧raw审核字段、主动not_for_automation手动与自动、reference_only/excluded/rejected/失联、另成员私有ID请求预览与确认是否真正拒绝。只自有/tmp诊断与临时合成DB/TestClient/许可工具，不改产品/仓库测试或D fixture；按实际调用确认活跃/退役来源，不默改所有legacy分支。交准确断点/最小同类迁移范围与不存在证明要求，主控再交当前main/production唯一writer；不能预先称未复現安全缺陷成立。没有真实服务/模型/Pi/GUI/Key/用户素材/远端权。
 
+D残差5cbc209已审，与原0cb7b000两测试leaf机械组合准确5bd870d；root固定Ruff0.15.7对12具名测试/helper PASS，不存在安装工具阻断。D已retain，所写测试源权结束。领域4.2按F01明确“参考可先登记，逐字文字可后补，真实引擎缺文字时阻断生成零模型调用”；当前VersionedVoice schema默认空、People“生成前填写”和VoicePreviewService.reference_text_missing已一致，旧required-field测试不是生产保存Bug。
+
+D新QA-V2-D-VOICE-TEXT-REGISTRATION基于准确5bd870d新隔离公开候选，仅tests/test_media_profile_api.py、一个新增tests/test_voice_reference_text_contract.py：把旧负例reference_text空改为当前真正必填display_name空，保留原其余必填/成员/来源校验；新增真实临时成员/有效合成WAV登记省略/空白文字可保存与跨入口回读，不宣布克隆。直接真实VoicePreviewService+可信仓储/许可替身证明缺逐字文字blocked reference_text_missing、零provider且原档案保留；不改产品/main/schema/Narration/People，源条件未满足仍准确失败，不改成any-status或绕reader。必要这几个案例与精准Ruff即可，前受影响23/47/379不重跑。
+
+F新QA-V2-F-QUEUE-IO-WINDOW基于同一5bd870d新隔离公开候选，仅tests/test_creation_execution.py中test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account的3个当前残差None/render_revoked/render_commit_unknown与其共用局部fixture。核实际HostResourceProbe：当前cpu_percent替身立即返回0使interval被忽略，样本只有0.0002s且首次pick期待即时grant；该测试必须沿真实排队/观察窗口等待，不改生产io_window_seconds、limit、判定、实际SQL/进程/Grant或许可负例，不给resources.admit=True。可让既有CPU负载替身尊重实际interval，并使用有界的当前请求pick/等待形成真实3秒证据；unknown/revoked/cancelled不能被等待循环掩盖、不能重复执行provider。先最小残差/准确Ruff，其他未变PASS复用；若真实运行时漏接观察/唤醒须原失败与精确source交主控，不靠伪造时间硬绿。两个新单无App服务/Pi/模型/GUI/用户数据/Key/原媒体/安装/远端权限，仅临时真实ffmpeg/合成worker/临时库。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
