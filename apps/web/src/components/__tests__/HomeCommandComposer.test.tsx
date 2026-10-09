@@ -59,7 +59,7 @@ vi.mock("@/lib/api", () => {
     return updated;
   }),
   stopAssistantConversationTurn: vi.fn(),
-  getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, reason: "未接通", version: "1.1.0", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
+  getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
   apiUrl: (path: string) => path,
   getRuntimeSettings: mocks.settings,
   sendWorkspaceAssistantPlanTurn: vi.fn((message: string, conversationId: string, onEvent: (event: never) => void) => runTurn(conversationId, message, onEvent, (emit) => mocks.ask(message, conversationId, emit))),

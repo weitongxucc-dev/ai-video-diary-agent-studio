@@ -28,7 +28,8 @@ from pydantic import BaseModel, ValidationError
 import httpx
 
 from app.assistant_pi import (
-    AssistantStopped, AssistantUnavailable, forget_turn_control, register_turn_control,
+    ASSISTANT_BUSINESS_TOOLS, AssistantStopped, AssistantUnavailable, forget_turn_control,
+    pi_runtime_checks, register_turn_control,
     request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
@@ -4585,24 +4586,25 @@ def stop_assistant_conversation_turn(
 def assistant_capabilities(request: Request):
     workspace_id = current_workspace_id(request)
     _assistant_member_id(request, workspace_id)
+    pi_check = next(check for check in pi_runtime_checks() if check["id"] == "pi")
     return {
         "application_commands": ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
         "pi_tui_commands": {
             "available": False,
-            "version": "1.1.0",
+            "inventory_source": "Pi 1.1.0 public interactive-mode command registry; static inventory, not proof of the installed executable",
+            "inventory_version": "1.1.0",
+            "runtime_version": pi_check["version"],
+            "runtime_status": pi_check["status"],
+            "runtime_reason": pi_check["reason"],
+            "runtime_check": "pi_runtime_checks isolated --version; actual conversation is not checked",
+            "product_mode": "headless --print --mode json",
             "commands": ["/settings", "/scoped-models", "/model", "/thinking", "/export", "/import", "/share", "/bug", "/copy", "/name", "/session", "/changelog", "/hotkeys", "/fork", "/clone", "/tree", "/trust", "/login", "/logout", "/new", "/compact", "/reload", "/debug", "/arminsayshi", "/dementedelves", "/resume", "/quit"],
             "reason": "当前产品以无交互调用运行Pi；以上交互式Pi命令均未接通，不能从对话输入中调用。",
         },
         "extension_commands": {"available": False, "commands": [], "reason": "扩展仅注册受限业务工具，没有注册命令或任意文件/终端入口。"},
         "skills": {"available": False, "reason": "当前Pi启动参数关闭skills。"},
         "prompt_templates": {"available": False, "reason": "当前Pi启动参数关闭prompt templates。"},
-        "business_tools": {
-            "home": ["read_workspace_context", "read_video_templates", "find_knowledge", "find_materials", "preview_creation_plan"],
-            "material": ["read_selected_material", "update_selected_material_tags"],
-            "topic": ["read_current_task", "find_knowledge", "generate_creation_task_topics"],
-            "script": ["read_current_task", "find_knowledge", "preview_script_draft"],
-            "task_edit": ["read_current_task", "find_knowledge", "find_materials", "preview_edit", "start_creation_execution", "resume_creation_execution", "cancel_creation_execution"],
-        },
+        "business_tools": {scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()},
     }
 
 

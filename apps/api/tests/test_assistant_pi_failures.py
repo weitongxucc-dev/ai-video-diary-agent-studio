@@ -279,6 +279,7 @@ def test_node_requirement_uses_the_same_path_as_the_launcher(monkeypatch, tmp_pa
     checks = {c["id"]: c for c in pi_runtime_checks()}
     assert seen["path"].split(__import__("os").pathsep)[0] == str(pi.parent)
     assert (checks["pi_node"]["status"] == "ready") == ready
+    assert checks["pi"]["version"] == ("1.0.4" if ready else None)
 
 
 def test_node_missing_blocks_before_provider_and_does_not_change_saved_key(monkeypatch, tmp_path):

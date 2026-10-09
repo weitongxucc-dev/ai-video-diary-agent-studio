@@ -2,9 +2,33 @@ from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
 import app.main as main_module
-from app.assistant_pi import AssistantUnavailable
+from app.assistant_pi import ASSISTANT_BUSINESS_TOOLS, AssistantUnavailable
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
+
+
+def test_assistant_capabilities_separates_static_pi_inventory_from_runtime_version(tmp_path, monkeypatch):
+    members = LocalMemberService(tmp_path / "capability-members.sqlite3")
+    _member, token = members.join(members.create_invite_code(), "成员甲")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace-one")
+    monkeypatch.setattr(main_module, "pi_runtime_checks", lambda: [{
+        "id": "pi", "status": "ready", "version": "1.2.3", "reason": "隔离版本检查已通过。",
+    }])
+    response = TestClient(main_module.app).get(
+        "/api/assistant/capabilities", headers={"X-Local-Member-Token": token},
+    )
+    assert response.status_code == 200
+    capability = response.json()["pi_tui_commands"]
+    assert capability["available"] is False
+    assert capability["inventory_version"] == "1.1.0"
+    assert "public interactive-mode command registry" in capability["inventory_source"]
+    assert capability["runtime_version"] == "1.2.3"
+    assert capability["product_mode"] == "headless --print --mode json"
+    assert "/arminsayshi" in capability["commands"]
+    assert response.json()["business_tools"] == {
+        scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()
+    }
 
 
 def test_conversation_resume_selects_persistent_current_for_trusted_member(tmp_path, monkeypatch):

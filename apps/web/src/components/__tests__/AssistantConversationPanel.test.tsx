@@ -18,7 +18,9 @@ vi.mock("@/lib/api", () => ({
   ...api,
   getAssistantCapabilities: api.getAssistantCapabilities.mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
-    pi_tui_commands: { available: false, reason: "不接通", version: "1.1.0", commands: ["/session"] },
+    pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0",
+      runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查",
+      product_mode: "headless", reason: "不接通", commands: ["/session"] },
     extension_commands: { available: false, reason: "当前不可用" },
     skills: { available: false, reason: "当前不可用" },
     prompt_templates: { available: false, reason: "当前不可用" },
@@ -84,6 +86,8 @@ describe("AssistantConversationPanel", () => {
     await screen.findByText("技术能力状态（诊断）");
     expect(screen.getByText("对话操作").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("技术能力状态（诊断）").closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("技术能力状态（诊断）"));
+    expect(screen.getByText(/本机版本未确认或与清单基线不同/)).toBeInTheDocument();
   });
 
   it("uses the complete persisted assistant text when it extends past streamed deltas", () => {

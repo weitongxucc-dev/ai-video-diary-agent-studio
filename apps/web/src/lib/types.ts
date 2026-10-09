@@ -1702,7 +1702,18 @@ export type AssistantConversationScope = Pick<AssistantConversation, "scope_kind
 
 export type AssistantCapabilities = {
   application_commands: string[];
-  pi_tui_commands: { available: boolean; reason: string; version: string; commands: string[] };
+  pi_tui_commands: {
+    available: boolean;
+    inventory_source: string;
+    inventory_version: string;
+    runtime_version: string | null;
+    runtime_status: string;
+    runtime_reason: string;
+    runtime_check: string;
+    product_mode: string;
+    reason: string;
+    commands: string[];
+  };
   extension_commands: { available: boolean; reason: string };
   skills: { available: boolean; reason: string };
   prompt_templates: { available: boolean; reason: string };

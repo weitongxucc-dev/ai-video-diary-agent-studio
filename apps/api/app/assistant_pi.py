@@ -29,6 +29,18 @@ FAILURE_RUNTIME_MISSING = "runtime_missing"        # 运行环境缺失
 FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
 FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
 
+ASSISTANT_BUSINESS_TOOLS = {
+    "home": (
+        "read_workspace_context", "read_video_templates", "find_knowledge", "find_materials",
+        "preview_creation_plan",
+    ),
+    "material": ("read_selected_material", "update_selected_material_tags"),
+    "topic": ("read_current_task", "find_knowledge", "generate_creation_task_topics"),
+    "script": ("read_current_task", "find_knowledge", "preview_script_draft"),
+    "task_edit": ("read_current_task", "find_knowledge", "find_materials", "preview_edit",
+                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution"),
+}
+
 # service_contacted=True 的只有三种：它们都真的向模型服务发过请求，结论可以写进
 # 服务状态。业务工具失败和「拿不到原因」不写——本地工具坏掉或日志缺失都不能
 # 拿来证明密钥是好的或坏的。
@@ -549,6 +561,7 @@ def pi_runtime_checks() -> list[dict]:
     if extension.name == "diary_tools.ts":
         tools_ready = tools_ready and (extension.parent / "retrieval.ts").is_file() and (extension.parent / "material_tools.ts").is_file()
     pi_reason = "未找到可执行 Pi；这不是密钥保存或鉴权失败。"
+    pi_version: str | None = None
     pi_repair_action = str(_FAILURES[FAILURE_RUNTIME_MISSING]["next_step"])
     pi_fix_command = "npm install -g @earendil-works/pi-coding-agent"
     if pi_ready and node_ready:
@@ -567,13 +580,17 @@ def pi_runtime_checks() -> list[dict]:
             pi_repair_action = "确认系统临时目录可写、Pi 可执行，并在相同运行环境中执行 pi --version 后重试。"
             pi_fix_command = None
         else:
-            pi_ready = result.returncode == 0 and bool(re.fullmatch(r"\d+\.\d+\.\d+", result.stdout.strip()))
+            matched_version = re.fullmatch(r"\d+\.\d+\.\d+", result.stdout.strip())
+            pi_ready = result.returncode == 0 and matched_version is not None
+            if pi_ready:
+                pi_version = result.stdout.strip()
             pi_reason = (f"Pi {result.stdout.strip()} 可启动；实际对话尚未验证。" if pi_ready
                          else "Pi 未返回有效版本；对话尚未开始，不能据此判定密钥失败。")
     elif pi_ready:
         pi_reason = "已找到 Pi；需先修复 Node.js 才能验证启动。"
     return [
         {"id": "pi", "label": "对话程序 Pi", "status": "ready" if pi_ready else "missing",
+         "version": pi_version,
          "reason": pi_reason,
          "repair_action": "无需安装；实际对话由功能入口验证。" if pi_ready else pi_repair_action,
          "fix_command": None if pi_ready else pi_fix_command},
@@ -761,13 +778,9 @@ def run_task_turn(
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
-    tools = (
-        "read_current_task,find_knowledge,generate_creation_task_topics"
-        if topic_turn else
-        "read_current_task,find_knowledge,preview_script_draft"
-        if script_turn else
-        "read_current_task,find_knowledge,find_materials,preview_edit,start_creation_execution,resume_creation_execution,cancel_creation_execution"
-    )
+    tools = ",".join(ASSISTANT_BUSINESS_TOOLS[
+        "topic" if topic_turn else "script" if script_turn else "task_edit"
+    ])
     return _run_turn(
         settings, workspace_id=workspace_id, task_id=task_id, message=message,
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
@@ -802,7 +815,7 @@ def run_plan_turn(
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event,
-        prompt=PLAN_PROMPT, tool_names="read_workspace_context,read_video_templates,find_knowledge,find_materials,preview_creation_plan",
+        prompt=PLAN_PROMPT, tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["home"]),
         preview_kind="plan_preview", session_key=f"new-plan:{conversation_id}", turn_id=turn_id,
     )
 
@@ -832,7 +845,7 @@ def run_material_turn(
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event, prompt=MATERIAL_PROMPT,
-        tool_names="read_selected_material,update_selected_material_tags",
+        tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["material"]),
         preview_kind="material_result",
         session_key=(f"material:{conversation_id}:{selection['scope']}:{selection['asset_id']}"
                      f":{selection.get('segment_id', '')}"),

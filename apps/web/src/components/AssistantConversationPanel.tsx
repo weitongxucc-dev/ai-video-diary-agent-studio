@@ -196,7 +196,8 @@ export function AssistantConversationPanel({
         {capabilities ? <>
           <details><summary>对话操作</summary><p>{commandHelp.join("、")}</p></details>
           <details className="assistant-capability-diagnostics"><summary>技术能力状态（诊断）</summary>
-            <p>Pi TUI v{capabilities.pi_tui_commands.version}（未接通）：{capabilities.pi_tui_commands.commands.join("、")}</p>
+            <p>{capabilities.pi_tui_commands.inventory_source}（命令清单基线 v{capabilities.pi_tui_commands.inventory_version}）：{capabilities.pi_tui_commands.commands.join("、")}</p>
+            <p>本机 Pi 隔离版本检查：{capabilities.pi_tui_commands.runtime_version ?? "未确认"}（{capabilities.pi_tui_commands.runtime_status}）；{capabilities.pi_tui_commands.runtime_reason} {capabilities.pi_tui_commands.runtime_check}。{capabilities.pi_tui_commands.runtime_version === capabilities.pi_tui_commands.inventory_version ? "本机版本号与清单基线相同。" : "本机版本未确认或与清单基线不同；命令清单仅适用于所示基线。"}当前产品模式：{capabilities.pi_tui_commands.product_mode}；这些 TUI 命令未接通。</p>
             <p>扩展命令：{capabilities.extension_commands.available ? "可用" : capabilities.extension_commands.reason}；技能：{capabilities.skills.available ? "可用" : capabilities.skills.reason}；模板：{capabilities.prompt_templates.available ? "可用" : capabilities.prompt_templates.reason}</p>
             {Object.entries(capabilities.business_tools).map(([scope, tools]) => <p key={scope}>{scope} 工具：{tools.join("、")}</p>)}
           </details>
