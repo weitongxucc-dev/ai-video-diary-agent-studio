@@ -461,6 +461,8 @@ UI新QA-V2-UI-MATERIAL-TURN-FAILURE只读root准确dc4bed2 main.py中_material_a
 
 C当前N14 main.py唯一写者追加两个已证实边界叶，不扩整file行为：E search-residual/report.md证实_preview_creation_task_edit候选阶段传reader而第二search_material_segments漏同一可信viewer/local_diagnostic，私有户外段被错滤；只透传同一真实_content_reader，保留实际用途/范围/自动资格/身份过滤，不改全库可见性。D原四个replacement用例保持原断言，另必要跨成员不可见负例。UI msg_f4500fdfb7dd证实素材回读scope拒绝503/schema验证400两种轮次持久running且新请求409；严格结果对象/schema拒绝仍保留，明确处理这些真实结果边界拒绝为failed/安全原因、释放控制，不吞异常/宽泛fallback，也不能恢复已被用户更新的新草稿。UI受控探针16529f5已交并retain，现仅作为Bug复现证据，不组合其期望running/409的断言。test_material_turn_failure.py正式释放给C唯一写者，机械取探针后把最终回归断言改为：仍拒绝非法结果、轮次failed且有安全原因、同请求回读failed零重复工具、生成期间新草稿保留、下一轮合法要求真实可继续；先证原基线红后最小源修绿，不冻结Bug。两个源码叶可先单独公开clean提交供组合，不提前worker_done结束N14纵向Task。若N14后端API/仓储源已完成，可交准确后端叶与接口及RELEASE_ACK main/schema给主控，再由B串行接配音API、C继续Web；不得自行两线程同时写同一file。
 
+E新QA-V2-E-MATERIAL-QUALIFICATION-AUDIT只读root准确fe5ad62的实际任务候选/InsertClip/ReplaceClip/确认消费者（main.py约7260/10162/11162/11790及原legacy候选14000），与production.automatic_segment_eligible、manual use_state/实际来源身份规则核对。root静态已见候选/插入/替换仍用review_status!=approved硬门槛而当前正式自动资格只拒明确rejected；候选与写入必须使用同一真实资格，不能只删修复文字。先定向控制复现：已分析/可读/可创作但旧raw审核字段、主动not_for_automation手动与自动、reference_only/excluded/rejected/失联、另成员私有ID请求预览与确认是否真正拒绝。只自有/tmp诊断与临时合成DB/TestClient/许可工具，不改产品/仓库测试或D fixture；按实际调用确认活跃/退役来源，不默改所有legacy分支。交准确断点/最小同类迁移范围与不存在证明要求，主控再交当前main/production唯一writer；不能预先称未复現安全缺陷成立。没有真实服务/模型/Pi/GUI/Key/用户素材/远端权。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
