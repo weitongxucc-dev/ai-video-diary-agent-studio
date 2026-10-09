@@ -207,6 +207,8 @@ export function AssistantConversationPanel({
     <header className="assistant-conversation-head">
       <span>{scopeLabel}{conversation?.title && conversation.title !== "新对话" ? ` · ${conversation.title}` : ""}</span>
       <div>
+        {capabilities ? <button className="assistant-diagnostics-toggle" type="button" aria-expanded={diagnosticsExpanded}
+          aria-controls={diagnosticsId} onClick={() => setDiagnosticsExpanded((expanded) => !expanded)}>技术能力状态（诊断）</button> : null}
         {conversation ? <button type="button" onClick={() => { void state.createNew().then((next) => { onConversationChange?.(); onInput(next.draft_text); }).catch((cause) => setError(cause instanceof Error ? cause.message : "新对话未能建立。")); }}>新对话</button> : null}
         {state.conversations.length > 1 ? <label>历史
           <select aria-label="恢复此范围的对话" value={conversation?.id ?? ""} onChange={(event) => { if (event.target.value) void state.resume(event.target.value).then((next) => { onConversationChange?.(); onInput(next.draft_text); }).catch((cause) => setError(cause.message)); }}>
@@ -223,11 +225,7 @@ export function AssistantConversationPanel({
     <form className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}>
       <textarea ref={setFocus} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "写下下一条要求；Enter 发送，Shift+Enter 换行"} rows={compact ? 2 : 3} />
       <div className="assistant-conversation-actions">
-        {capabilities ? <>
-          <details className="assistant-command-help"><summary>对话操作</summary><p>{commandHelp.join("、")}</p></details>
-          <button className="assistant-diagnostics-toggle" type="button" aria-expanded={diagnosticsExpanded}
-            aria-controls={diagnosticsId} onClick={() => setDiagnosticsExpanded((expanded) => !expanded)}>技术能力状态（诊断）</button>
-        </> : null}
+        {capabilities ? <details className="assistant-command-help"><summary>对话操作</summary><p>{commandHelp.join("、")}</p></details> : null}
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <button type="button" onClick={() => void state.stop().catch((cause) => setError(cause.message))}>停止本轮</button> : null}
         <span className="assistant-send-state" role="status">{sendDisabled ? sendReason : null}</span>
         <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><Send aria-hidden="true" size={14} /></button>
