@@ -151,6 +151,16 @@ E发布首批906aef36已结算retain，但主控审查尚不接受集成。E新�
 
 原E未执行组件检查因候选无node_modules；本单可只将候选node_modules链接到已存在公开依赖缓存/Users/Zhuanz/orca/workspaces/main/manta/apps/web/node_modules，不安装/下载/复制ignored私密配置，不删除依赖。必须运行既有组件专项与tsc并交实际结果，失败修当前owned差额；新用例需受控迟到读取、切换/取消/账号变化证明create未被调用，而非源码文本镜像。真实账号/浏览器/上传/发布/GUI仍无权，所有页面事实与对象使用原接口。无需重跑无关旧任务核验。
 
+### QA-V2-C-KNOWLEDGE-UI：资料集合的信息与读取机制
+
+C知识核心d88f173a+5a8c5e3已审查/结算retain，39项隔离仓储检查只证明核心；未接API/Schema/Plan的资格消费者仍开放。报告披露其曾额外下载pytest测试依赖、违反本单禁安装约束；主控取消非必要删除确认，保留候选临时依赖，没有用户数据/Key外发记录，不以清理为交付前提。后续只复用具名已存在公开缓存，不重复安装或删除。
+
+C复用原终端，从主控组合f454b31新clone到/tmp/main-acceptance-20261009/review-v2-knowledge-ui/candidate，新分支codex/review-v2-knowledge-ui-20261009。唯一owned apps/web/src/app/knowledge/KnowledgeWorkspace.tsx/.module.css、knowledge/page.tsx和直接既有knowledge/ScriptLibrary专项。main/schema/libapi/types/source-api/来源录入页、会话、共享壳与B核心均不写；来源录入默认证明字段API接线等待UI共享写者交付后具名串行处理。本单不造未接端点或假保存出口。
+
+按DESIGN§5.3/§7、产品§2.1、领域§2.4处理N13和历史H-D006及知识页同类读取：保留资料/已确认文案对象区别，搜索/对象行/空或无结果/加载/失败各有正确职责，默认层退役“尚未接入”工程大块、套层空容器，必要限制保留就近原因/真实下一步，技术参数/绝对路径/ID/诊断按需展开且不删除原证据。可读名称、版本及用户需要的来源保留；真实分类未支持就不展示无动作分类导航或伪分类。搜索可清空/恢复焦点，列表与详情选择不因筛选或慢请求串对象；失败不抹掉已知列表/未提交工作，不伪称空库，原读取可重试。保持已接受三栏/13px/56px/右侧柔光壳和共享footer，不推倒布局。权限/visibility/grant动作不改规则、确认或默认开启，历史快照与来源引用使用既有入口保持。
+
+仅链接/Users/Zhuanz/orca/workspaces/main/manta/apps/web/node_modules公开现有依赖，实际受控组件专项/tsc；迟到详情、空筛选、列表失败/恢复和默认诊断折叠有必要证据，真实GUI统一候选后补。禁止安装下载/服务/GUI/Key/用户库/模型/媒体/账号/打包/远端写入。交clean/净diff/逐ID与残余；N15完整保存、N14对话文案出口及API当前门槛未由本单完成，不关闭它们。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
