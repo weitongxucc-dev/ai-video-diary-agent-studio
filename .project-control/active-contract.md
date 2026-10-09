@@ -510,6 +510,8 @@ E N14只读报告已审：ScriptEditor保存过程中输入可继续编辑、set
 - F QA-V2-F-REQUEST-CAPACITY-FIXTURES：唯一tests/test_material_tag_navigation.py三残差、test_workspace_llm_secrets.py provider投影残差、test_model_installer.py成功安装状态刷新残差。发送路径补真实会话读回draft_version与稳定UUID意图，保留invisible零Pi/credentials禁止/可信成员及provider事实断言，不独立绕过API；installer受控tiny下载case要用明确受控容量fixture，当前真实机器10.1GiB小于模型声明10.7导致失败，不改真实容量门槛、不下载真实模型。只五当前case/必要共用fixture消费者/Ruff，不改产品/Key/用户环境。
 - UI QA-V2-UI-SCRIPT-LATE-EDIT：原导航ctx_cd4a6305e221已结算retain，上一节追加晚保存写权不送达旧Dispatch。此新单唯一CreationTaskWorkspace.tsx及一个新late-response组件专项，必要app/tasks/[taskId]/page.tsx仅明确任务identity key及直接专项；修请求返回不覆盖请求期间继续输入，并更新真实CAS版本。待复现切任务晚返回只准确对象隔离，不改API/types/main/B/source/helper，原37/838证据复用。
 
+UI晚保存Task ctx_adb698a4de22交clean e249694、源已审并机械组合b33b1888643caf72c6f39ed72a30c775488a9c5a，延迟回归先红后绿/tsc通过，原路由切Task风险未证实、不顺手变更。UI已结算retain、CreationTaskWorkspace.tsx/直接测试写权结束；现正式释放给B当前ctx_5948cb0be957，追加该文件现有queued edit/JobProgressPanel对局部配音的准确投影及一个直接queued-narration Web专项，必要api.ts/types.ts仅原通用Queued响应/实际Job字段真实差额，不另造队列。排队不更新当前音频/Timeline或称完成；成功读真实终态刷新该Task/目标，失败/取消保持旧结果，unknown不伪成功，人物和配音提示对应实际操作。沿已传job_id/原作业读取及现有真实后端kind，旧人物行为保持，普通编辑确认仍准确。B先交后端clean叶供组合，再在同一组合源码绑定新Web消费者；不得拿其旧Web覆盖b33包含N14/late-save的活跃组件。B仍纵向owner直至交必要前后端/RETIRE/最小回归与明确未验，backend阶段通过不提前结束整个Task。服务/Pi/模型/用户数据/GUI/账号/打包和远端权不随源码释放恢复。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
