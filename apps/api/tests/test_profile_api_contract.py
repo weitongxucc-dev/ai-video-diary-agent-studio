@@ -109,7 +109,7 @@ class Access:
     def can_view_device_summary(self,actor):return True
 
 
-def setup_preview(repo,tmp_path,provider=None):
+def setup_preview(repo,tmp_path,provider=None,before_submit=None):
     ref,_,_=repo.import_voice_reference_wav('ws',wav_bytes(),verified_owner_user_id='member')
     voice=repo.save_versioned_voice_profile(VoiceProfile(id='voice',workspace_id='ws',version='v1',language='zh',display_name='声音',reference_audio_path=ref,reference_text='合成文字',model_id='fixture-model',reference=ProfileReference()),verified_owner_user_id='member')
     provider=provider or VoiceProvider();service=VoicePreviewService(tmp_path/'output',provider)
@@ -119,8 +119,151 @@ def setup_preview(repo,tmp_path,provider=None):
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',device_access=Access(),registrations={'media_preview':reg},resources=resources,processes=Processes())
     actor=CreationExecutionActor('ws','member');params={'voice_profile_id':voice.id,'voice_version':voice.version,'preview_text':'简短合成测试'}
     prepared=service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    if before_submit is not None:
+        before_submit(runtime,resources,provider)
     queued=submit_profile_preview(runtime,prepared,actor,params)
     return runtime,resources,provider,queued
+
+
+@pytest.mark.parametrize('binding_time',['after_terminal','during_provider'])
+@pytest.mark.parametrize('outcome',['succeeded','failed','cancelled'])
+def test_preview_binding_tick_before_submitter_bind(repo,tmp_path,monkeypatch,binding_time,outcome):
+    original_bind=repo.bind_preview_device_request
+    phases=[]
+    runtime_ref=[]
+    def arrange(runtime,resources,provider):
+        runtime_ref.append(runtime)
+        resources.admit_value=True
+        generate=provider.generate
+        def delayed_bind(run,request_id,*,conn=None):
+            if conn is not None:
+                return original_bind(run,request_id,conn=conn)
+            def interleaved_generate(**kwargs):
+                if binding_time=='during_provider':
+                    bound=original_bind(run,request_id)
+                    assert bound.status=='running'
+                if outcome=='succeeded':
+                    return generate(**kwargs)
+                provider.calls+=1
+                if outcome=='failed':
+                    raise OSError('synthetic provider failure')
+                assert runtime.scheduler.cancel(request_id,CreationExecutionActor('ws','member'))['state']=='yield_requested'
+                runtime.registrations['media_preview'].executor.request_cancel(request_id)
+                kwargs['grant_context'].check()
+                raise AssertionError('cancelled provider must not produce an artifact')
+            provider.generate=interleaved_generate
+            assert runtime.run_once()
+            terminal=repo.get_media_preview_run('ws','voice',run.identity)
+            phases.append(terminal)
+            # Inspect the committed checkpoint before the submitter can repair it.
+            assert terminal.device_request_id==request_id
+            rebound=original_bind(run,request_id)
+            assert rebound==terminal
+            return rebound
+        monkeypatch.setattr(repo,'bind_preview_device_request',delayed_bind)
+    try:
+        runtime,_,provider,final=setup_preview(repo,tmp_path,before_submit=arrange)
+        assert final.status==outcome and final==phases[0]
+        assert final.finished_at is not None and final.preview_input['preview_text']=='简短合成测试'
+        assert final.member_identity==CreationExecutionActor('ws','member').identity_payload()
+        assert provider.calls==1
+        if outcome=='succeeded':
+            assert Path(final.output_path).read_bytes()==wav_bytes()
+        else:
+            assert final.output_path is None and final.reason is not None
+        with repo._connect() as conn:
+            request=conn.execute('SELECT state,checkpoint_ref,work_class FROM device_work_requests WHERE id=?',(final.device_request_id,)).fetchone()
+            assert tuple(request)==({'succeeded':'done','failed':'failed','cancelled':'cancelled'}[outcome],None if outcome=='failed' else final.id,'normal_make')
+            assert conn.execute('SELECT state,request_id FROM device_permit').fetchone()[:]==('free',None)
+        assert not runtime.run_once() and provider.calls==1
+    finally:
+        assert runtime_ref[0].stop(1)
+
+
+def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(repo,tmp_path,monkeypatch):
+    original_bind=repo.bind_preview_device_request
+    runtime_ref=[]
+    def arrange(runtime,resources,provider):
+        runtime_ref.append(runtime)
+        def delayed_bind(run,request_id,*,conn=None):
+            if conn is not None:
+                return original_bind(run,request_id,conn=conn)
+            assert runtime.scheduler.cancel(request_id,CreationExecutionActor('ws','member'))['state']=='cancelled'
+            cancelled=repo.save_media_preview_run(replace(run,status='cancelled',finished_at=main.utc_now(),reason='cancelled',impact='Cancelled before execution',repair_action='Explicit retry'))
+            bound=original_bind(run,request_id)
+            assert bound==replace(cancelled,device_request_id=request_id)
+            return bound
+        monkeypatch.setattr(repo,'bind_preview_device_request',delayed_bind)
+    try:
+        runtime,resources,provider,final=setup_preview(repo,tmp_path,before_submit=arrange)
+        resources.admit_value=True
+        assert final.status=='cancelled' and not runtime.run_once() and provider.calls==0
+        assert original_bind(final,final.device_request_id)==final
+    finally:
+        assert runtime_ref[0].stop(1)
+
+
+def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(repo,tmp_path,monkeypatch):
+    from app.device_scheduler import RecoveryBlocked
+    runtime,resources,provider,queued=setup_preview(repo,tmp_path)
+    recovered=None
+    try:
+        resources.admit_value=True
+        monkeypatch.setattr(resources,'released',lambda grant:None)
+        with pytest.raises(RecoveryBlocked,match='未确认释放'):
+            runtime.run_once()
+        pending=repo.get_media_preview_run('ws','voice',queued.identity)
+        assert pending.status=='running' and pending.device_request_id==queued.device_request_id
+        assert pending.finished_at is None and pending.output_path is None
+        assert pending.member_identity==queued.member_identity and pending.preview_input==queued.preview_input
+        assert repo.bind_preview_device_request(queued,queued.device_request_id)==pending
+        with repo._connect() as conn:
+            assert conn.execute('SELECT state,request_id FROM device_permit').fetchone()[:]==('held',queued.device_request_id)
+            assert conn.execute('SELECT state FROM device_work_requests WHERE id=?',(queued.device_request_id,)).fetchone()[0]=='granted'
+        assert provider.calls==1 and runtime.stop(1)
+        processes=Processes()
+        recovery={'state':'unknown'}
+        monkeypatch.setattr(processes,'recovery_state',lambda holder,children:recovery['state'])
+        recovered=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',device_access=Access(),registrations=runtime.registrations,resources=resources,processes=processes)
+        with pytest.raises(RecoveryBlocked):
+            recovered.run_once()
+        assert repo.get_media_preview_run('ws','voice',queued.identity)==pending and provider.calls==1
+        recovery['state']='released'
+        monkeypatch.setattr(resources,'released',lambda grant:True)
+        assert recovered.run_once()
+        final=repo.get_media_preview_run('ws','voice',queued.identity)
+        assert final.status=='succeeded' and final.id==queued.id and final.device_request_id==queued.device_request_id
+        with repo._connect() as conn:
+            assert conn.execute('SELECT state FROM device_work_requests WHERE id=?',(queued.device_request_id,)).fetchone()[0]=='done'
+            assert conn.execute('SELECT state,request_id FROM device_permit').fetchone()[:]==('free',None)
+        assert provider.calls==2
+    finally:
+        assert runtime.stop(1)
+        if recovered is not None:
+            assert recovered.stop(1)
+
+
+def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo,tmp_path):
+    runtime,resources,provider,queued=setup_preview(repo,tmp_path)
+    try:
+        unbound=replace(queued,device_request_id=None)
+        assert repo.save_media_preview_run(unbound)==queued
+        with pytest.raises(ValueError,match='其他设备请求'):
+            repo.save_media_preview_run(replace(queued,device_request_id='other-request'))
+        with pytest.raises(ValueError,match='输入不一致'):
+            repo.bind_preview_device_request(queued,'nonexistent-request')
+        with pytest.raises(ValueError,match='输入不一致'):
+            repo.bind_preview_device_request(replace(queued,input_digest='changed'),queued.device_request_id)
+        assert repo.get_media_preview_run('ws','voice',queued.identity)==queued and provider.calls==0
+        resources.admit_value=True
+        assert runtime.run_once()
+        final=repo.get_media_preview_run('ws','voice',queued.identity)
+        with pytest.raises(ValueError,match='不可覆盖'):
+            repo.save_media_preview_run(unbound)
+        assert repo.bind_preview_device_request(unbound,queued.device_request_id)==final
+        assert repo.get_media_preview_run('ws','voice',queued.identity)==final
+    finally:
+        assert runtime.stop(1)
 
 
 def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo,tmp_path):

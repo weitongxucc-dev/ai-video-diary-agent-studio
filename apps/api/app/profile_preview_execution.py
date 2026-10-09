@@ -172,6 +172,10 @@ class ProfilePreviewExecutor:
         context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources["timeout_seconds"],
                                            resources["max_output_bytes"], resources["threads"], event)
         def write(conn, terminal):
+            current = owner.repository.bind_preview_device_request(terminal, grant.request_id, conn=conn)
+            terminal = replace(terminal, device_request_id=grant.request_id)
+            if current.status not in {"queued", "running"} and current != terminal:
+                raise ValueError("已结束的预览尝试不可覆盖")
             conn.execute("UPDATE media_preview_attempts SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
                          (_json_payload(terminal), utc_now().isoformat(), terminal.workspace_id, terminal.id))
             return terminal.id
@@ -198,7 +202,11 @@ class ProfilePreviewExecutor:
             from app.granted_subprocess import GrantedCommandCancelled
             terminal = replace(owner.read(run.workspace_id, run.id), status="cancelled" if isinstance(exc, GrantedCommandCancelled) else "failed",
                 finished_at=utc_now(), output_path=None, reason=type(exc).__name__, impact="独立预览未完成，参考和输入保留。", repair_action=str(exc))
-            scheduler.fail_unit(grant, reason="preview_failed", failure_write=lambda conn, _: write(conn, terminal))
+            if terminal.status == "cancelled":
+                scheduler.complete_unit(grant, checkpoint_database_path=owner.repository.database_path,
+                                        checkpoint_write=lambda conn, _: write(conn, terminal), cancelled=True)
+            else:
+                scheduler.fail_unit(grant, reason="preview_failed", failure_write=lambda conn, _: write(conn, terminal))
         finally:
             with self.lock:
                 self.cancellations.pop(grant.request_id, None)

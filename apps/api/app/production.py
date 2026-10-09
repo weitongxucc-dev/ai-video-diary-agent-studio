@@ -3011,6 +3011,7 @@ class ProductionRepository:
     ) -> MediaPreviewRunRecord:
         _validate_media_preview_run(record)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT payload FROM media_preview_attempts
@@ -3024,6 +3025,10 @@ class ProductionRepository:
                 )
                 if previous.id != record.id:
                     raise ValueError("预览尝试 ID 与现有记录不一致")
+                if previous.device_request_id is not None:
+                    if record.device_request_id not in {None, previous.device_request_id}:
+                        raise ValueError("预览尝试已绑定其他设备请求")
+                    record = replace(record, device_request_id=previous.device_request_id)
                 if previous.status not in {"queued", "running"} and previous != record:
                     raise ValueError("已结束的预览尝试不可覆盖")
             conn.execute(
@@ -3048,13 +3053,24 @@ class ProductionRepository:
             )
         return record
 
-    def bind_preview_device_request(self, run, request_id):
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
-            current = self._media_preview_run_from_payload(json.loads(row["payload"]))
-            updated = replace(current, device_request_id=request_id)
-            conn.execute("UPDATE media_preview_attempts SET payload=? WHERE id=?", (_json_payload(updated), run.id))
+    def bind_preview_device_request(self, run, request_id, *, conn=None):
+        """Bind this attempt, including a terminal checkpoint, to its exact request."""
+        if conn is None:
+            with self._connect() as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                return self.bind_preview_device_request(run, request_id, conn=writer)
+        row = conn.execute("SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
+        if row is None:
+            raise KeyError(run.id)
+        current = self._media_preview_run_from_payload(json.loads(row["payload"]))
+        request = conn.execute("SELECT workspace_id,owner_type,owner_id,input_digest FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+        if (request is None or tuple(request) != (current.workspace_id, "media_preview", current.id, current.input_digest)
+                or (run.identity, run.attempt, run.input_digest) != (current.identity, current.attempt, current.input_digest)):
+            raise ValueError("设备请求与预览尝试或输入不一致")
+        if current.device_request_id not in {None, request_id}:
+            raise ValueError("预览尝试已绑定其他设备请求")
+        updated = replace(current, device_request_id=request_id)
+        conn.execute("UPDATE media_preview_attempts SET payload=? WHERE workspace_id=? AND id=?", (_json_payload(updated), run.workspace_id, run.id))
         return updated
 
     def claim_media_preview_run(
