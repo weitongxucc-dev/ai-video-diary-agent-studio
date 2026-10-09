@@ -3616,7 +3616,7 @@ def test_natural_language_presenter_share_previews_confirms_and_undoes(person_re
     assert state.client.get(base).json()["montage"]["clips"] == before["clips"]
 
 
-def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(person_render_edit_state, monkeypatch):
+def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_roundtrips_history(person_render_edit_state):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     segment_id = state.montage.cues[0].narration_segment_id
@@ -3625,54 +3625,50 @@ def test_narration_retime_publishes_new_subtitles_and_undo_restores_old_clock(pe
         "selected_object_refs": [f"narration:{segment_id}"],
     })
     assert preview.status_code == 200, preview.text
+    base_version_id = preview.json()["proposal"]["operation"]["payload"]["base_version_id"]
     state.production.create_subtitle_track(SubtitleTrack(
         id="retime-source", workspace_id=state.workspace_id, task_id=state.task.id,
-        timeline_version_id=preview.json()["proposal"]["operation"]["payload"]["base_version_id"],
+        timeline_version_id=base_version_id,
         language="zh-CN", source_language=None, style={"font_size": 40},
         cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="手动改过的字幕", start_seconds=0, end_seconds=4)],
         generation_method="timeline", model_id=None, artifact_ref="artifacts/original.srt",
         transform_id="original-transform", status="valid"))
     before = state.client.get(base).json()["subtitle_tracks"]
     changed = main_module._retime_montage_for_narration_segments(state.workspace_id, state.montage,
-        [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/new")
-    # Explicit diagnostic fixture durations exercise persistence/publication; no model evidence.
+        [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/diagnostic-new")
+    # Direct diagnostic snapshot only: synthetic duration facts exercise persisted history, not licensed generation.
     regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
         for segment in state.production.list_narration_segments(
             state.workspace_id, state.task.id, state.task.confirmed_script_id)]
-    def must_not_generate(**kwargs):
-        pytest.fail("未接许可的公开局部配音确认不能执行生成")
-    monkeypatch.setattr(main_module, "_regenerate_creation_task_narration_segment", must_not_generate)
-    with state.production._connect() as conn:
-        persisted_before = tuple(conn.iterdump())
-    response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
-    assert response.status_code == 503, response.text
-    assert "局部配音重做尚未接入设备许可" in response.json()["detail"]
-    with state.production._connect() as conn:
-        assert tuple(conn.iterdump()) == persisted_before
-    assert state.client.get(base).json()["subtitle_tracks"] == before
-    # Diagnostic-only confirmed fixture facts; no model, permission or product support claim.
-    proposal = state.production.get_edit_proposal(state.workspace_id, preview.json()['proposal']['id'])
+    proposal = state.production.get_edit_proposal(state.workspace_id, preview.json()["proposal"]["id"])
     current_task = state.production.get_creation_task(state.workspace_id, state.task.id)
-    base_version = state.production.get_timeline_version(state.workspace_id, proposal.operation['payload']['base_version_id'])
-    main_module._persist_typed_montage_edit(workspace_id=state.workspace_id, task=current_task,
-        proposal=proposal, base_version=base_version, updated_plan=changed,
-        operation_type="RegenerateNarrationSegment", operation_payload=proposal.operation['payload'],
+    base_version = state.production.get_timeline_version(state.workspace_id, base_version_id)
+    main_module._persist_typed_montage_edit(
+        workspace_id=state.workspace_id, task=current_task, proposal=proposal,
+        base_version=base_version, updated_plan=changed,
+        operation_type="RegenerateNarrationSegment", operation_payload=proposal.operation["payload"],
         narration_segments=regenerated)
     after = state.client.get(base).json()["subtitle_tracks"]
     assert after[0]["cues"][0]["end_seconds"] == 6
     assert after[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
-    assert after[0]["artifact_ref"] != before[0]["artifact_ref"]
-    path = main_module.artifact_store.resolve_file(after[0]["artifact_ref"])
-    assert "00:00:06,000" in path.read_text()
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
-    restored = state.client.get(base).json()["subtitle_tracks"]
-    assert restored[0]["cues"] == before[0]["cues"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
-    assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == after[0]["cues"]
+    assert after[0]["status"] == "unavailable"
+    assert after[0]["artifact_ref"] is None and after[0]["transform_id"] is None
+    assert after[0]["failure_reason"] and after[0]["impact"] and after[0]["repair_action"]
     assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    restored = state.client.get(base).json()["subtitle_tracks"]
+    assert restored[0]["cues"][0]["end_seconds"] == 4
+    assert restored[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
+    assert restored[0]["status"] == "valid"
+    assert restored[0]["artifact_ref"] == "artifacts/original.srt"
+    assert restored[0]["transform_id"] == "original-transform"
+    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    redone = state.client.get(base).json()["subtitle_tracks"]
+    assert redone[0]["cues"] == after[0]["cues"]
+    assert redone[0]["status"] == "unavailable"
+    assert redone[0]["artifact_ref"] is None and redone[0]["transform_id"] is None
+    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
-
 
 @pytest.mark.parametrize("action,expected", [("DeleteClip", 4), ("DuplicateClip", 12)])
 def test_linked_clip_edits_preview_audio_and_undo(person_render_edit_state, action, expected):

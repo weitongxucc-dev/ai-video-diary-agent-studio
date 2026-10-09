@@ -673,7 +673,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     from fastapi import HTTPException
     from app.artifact_store import ArtifactStore
     from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
-    from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, submit_creation_stage
+    from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, montage_waiting_for_confirmation, submit_creation_stage
     from app.production import ArtifactRecord, DependencyEdge, JobRun, PersonRender, TransformRun, MediaAuthorityError, utc_now
     from app.schemas import CreationTaskPersonRenderRequest
     from app.task_runtime import JobFailure, JobResult
@@ -704,6 +704,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         AvatarAndLipSyncService=SyntheticService, avatar_lipsync_cache_key=avatar_lipsync_cache_key,
         presenter_inputs=presenter_inputs, presenter_input_facts=presenter_input_facts, current_presenter_render=current_presenter_render,
         video_job_runner=VideoJobRunner(case.repo), creation_execution=case.execution,
+        montage_waiting_for_confirmation=montage_waiting_for_confirmation,
         device_runtime=SimpleNamespace(), _creation_render_is_valid=lambda *args, **kwargs: False,
         _EXECUTION_WAITING_TEXT={})
     names = {"_generate_creation_task_person_render_record", "_person_stage_with_grant", "_person_render_media_path",
