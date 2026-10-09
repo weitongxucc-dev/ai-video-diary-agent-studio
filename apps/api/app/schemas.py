@@ -1700,6 +1700,20 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     plan_preview: CreationPlanPreviewResponse | None = None
 
 
+class AssistantStreamEvent(BaseModel):
+    """UI-safe projection of Pi text/tool events and the existing final response."""
+
+    type: Literal["text_delta", "tool_start", "tool_end", "result", "error"]
+    delta: str | None = None
+    tool_id: int | None = None
+    label: str | None = None
+    ok: bool | None = None
+    summary: str | None = None
+    result: dict[str, object] | None = None
+    message: str | None = None
+    status: int | None = None
+
+
 class CreationPlanResponse(CreationPlanPreviewResponse):
     id: str
     workspace_id: str

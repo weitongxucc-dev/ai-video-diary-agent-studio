@@ -5,9 +5,11 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
@@ -20,7 +22,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ValidationError
 
 import httpx
@@ -272,6 +274,7 @@ from app.schemas import (
     CreationTaskAssistantTurnRequest,
     CreationTaskAssistantTurnResponse,
     CreationTaskAssistantHistoryResponse,
+    AssistantStreamEvent,
     WorkspaceAssistantPlanTurnRequest,
     WorkspaceAssistantPlanTurnResponse,
     CompoundEditSelectionRequest,
@@ -4411,6 +4414,20 @@ def workspace_assistant_plan_turn(
     request: Request,
     payload: WorkspaceAssistantPlanTurnRequest,
 ) -> WorkspaceAssistantPlanTurnResponse:
+    if "text/event-stream" in request.headers.get("accept", "").lower():
+        workspace_id = current_workspace_id(request)
+        return _assistant_stream_response(
+            lambda on_event: _workspace_assistant_plan_turn(request, payload, on_event),
+            workspace_id=workspace_id,
+        )
+    return _workspace_assistant_plan_turn(request, payload, None)
+
+
+def _workspace_assistant_plan_turn(
+    request: Request,
+    payload: WorkspaceAssistantPlanTurnRequest,
+    on_event,
+) -> WorkspaceAssistantPlanTurnResponse:
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
     caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
@@ -4424,6 +4441,7 @@ def workspace_assistant_plan_turn(
             message=payload.message.strip(),
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
+            on_event=on_event,
         )
     except AssistantUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -5212,6 +5230,157 @@ def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
     return safe
 
 
+def _assistant_stream_safe_text(value: str, workspace_id: str) -> str:
+    safe = _assistant_text_without_credentials(value, workspace_id)
+    return re.sub(r"(?:file://)?(?:/Users/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", "[本机路径]", safe)
+
+
+class _AssistantStreamTextSanitizer:
+    """Hold only suffixes that could complete a known secret or sensitive marker."""
+
+    _markers = (
+        "authorization: bearer ", "api_key=", "api_key: ", "api-key=", "api-key: ",
+        "api key=", "api key: ", "token=", "token: ", "password=", "password: ",
+        "secret=", "secret: ", "sk-", "file://", "/users/", "/private/", "/tmp/", "/var/folders/",
+    )
+    _sensitive_patterns = (
+        re.compile(r"(?i)\bauthorization\s*:\s*bearer\s+\S+"),
+        re.compile(r"(?i)\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+"),
+        re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+        re.compile(r"(?:file://)?(?:/Users/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", re.IGNORECASE),
+    )
+
+    def __init__(self, workspace_id: str) -> None:
+        self._workspace_id = workspace_id
+        self._pending = ""
+        key = _workspace_settings_for(workspace_id).effective_llm_api_key
+        self._known_secrets = tuple(secret for secret in (
+            key, settings.tencentcloud_secret_id, settings.tencentcloud_secret_key,
+        ) if secret and len(secret) >= 8)
+
+    def feed(self, delta: str, *, final: bool = False) -> str:
+        combined = self._pending + delta
+        if final:
+            self._pending = ""
+            return _assistant_stream_safe_text(combined, self._workspace_id)
+
+        safe_end = len(combined)
+        lowered = combined.lower()
+        for marker in self._markers:
+            max_length = min(len(marker), len(lowered))
+            for length in range(max_length, 0, -1):
+                if lowered.endswith(marker[:length]):
+                    safe_end = min(safe_end, len(combined) - length)
+                    break
+
+        for secret in self._known_secrets:
+            lowered_secret = secret.lower()
+            max_length = min(len(lowered_secret), len(lowered))
+            for length in range(max_length, 0, -1):
+                if lowered.endswith(lowered_secret[:length]):
+                    safe_end = min(safe_end, len(combined) - length)
+                    break
+            offset = combined.find(secret)
+            while offset >= 0:
+                end = offset + len(secret)
+                if offset < safe_end < end:
+                    safe_end = offset
+                offset = combined.find(secret, offset + 1)
+
+        for pattern in self._sensitive_patterns:
+            for match in pattern.finditer(combined):
+                if match.start() < safe_end and (match.end() == len(combined) or match.start() < safe_end < match.end()):
+                    safe_end = match.start()
+
+        safe_text = combined[:safe_end]
+        self._pending = combined[safe_end:]
+        return _assistant_stream_safe_text(safe_text, self._workspace_id) if safe_text else ""
+
+
+def _assistant_stream_response(
+    execute,
+    *,
+    workspace_id: str,
+) -> StreamingResponse:
+    events: queue.Queue[dict[str, object] | None] = queue.Queue()
+    disconnected = threading.Event()
+    text_sanitizer = _AssistantStreamTextSanitizer(workspace_id)
+
+    def publish(raw_event: dict[str, object]) -> None:
+        if disconnected.is_set():
+            return
+        event_type = raw_event.get("type")
+        if event_type == "text_delta" and isinstance(raw_event.get("delta"), str):
+            delta = text_sanitizer.feed(str(raw_event["delta"]))
+            if not delta:
+                return
+            event = {"type": "text_delta", "delta": delta}
+        elif event_type == "tool_start":
+            event = {key: raw_event[key] for key in ("type", "tool_id", "label") if key in raw_event}
+        elif event_type == "tool_end":
+            event = {key: raw_event[key] for key in ("type", "tool_id", "label", "ok", "summary") if key in raw_event}
+        else:
+            return
+        validated = AssistantStreamEvent.model_validate(event)
+        events.put(validated.model_dump(exclude_none=True))
+
+    def work() -> None:
+        terminal_event: dict[str, object] | None = None
+        try:
+            result = execute(publish)
+            if not disconnected.is_set():
+                terminal_event = AssistantStreamEvent(
+                    type="result", result=result.model_dump(mode="json"),
+                ).model_dump(exclude_none=True)
+        except HTTPException as exc:
+            if not disconnected.is_set():
+                detail = exc.detail if isinstance(exc.detail, str) else "对话未能完成，请查看当前任务状态。"
+                terminal_event = AssistantStreamEvent(
+                    type="error", status=exc.status_code,
+                    message=_assistant_stream_safe_text(detail, workspace_id),
+                ).model_dump(exclude_none=True)
+        except Exception as exc:
+            logger.error("assistant stream worker failed (%s)", type(exc).__name__)
+            if not disconnected.is_set():
+                terminal_event = AssistantStreamEvent(
+                    type="error", status=500,
+                    message="对话服务未能完整返回结果，请查看当前任务状态。",
+                ).model_dump(exclude_none=True)
+        finally:
+            tail = text_sanitizer.feed("", final=True)
+            if tail and not disconnected.is_set():
+                events.put(AssistantStreamEvent(type="text_delta", delta=tail).model_dump(exclude_none=True))
+            if terminal_event is not None and not disconnected.is_set():
+                events.put(terminal_event)
+            events.put(None)
+
+    def body():
+        thread = threading.Thread(target=work, name="assistant-stream-response", daemon=True)
+        thread.start()
+        result_seen = False
+        error_seen = False
+        try:
+            while True:
+                event = events.get()
+                if event is None:
+                    if not result_seen and not error_seen:
+                        incomplete = AssistantStreamEvent(
+                            type="error", message="连接中断，未收到完整的对话结果。",
+                        ).model_dump(exclude_none=True)
+                        yield f"data: {json.dumps(incomplete, ensure_ascii=False)}\n\n"
+                    break
+                result_seen = result_seen or event.get("type") == "result"
+                error_seen = error_seen or event.get("type") == "error"
+                yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        finally:
+            disconnected.set()
+
+    return StreamingResponse(body(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    })
+
+
 def _assistant_turn_scope(
     workspace_id: str, task: CreationTask, payload: CreationTaskAssistantTurnRequest,
 ) -> tuple[str, list[str]]:
@@ -5234,6 +5403,13 @@ def _assistant_turn_scope(
         raise HTTPException(status_code=409, detail="当前任务不能在所选阶段使用对话")
     if task.stage == "narration" and stage != "narration":
         raise HTTPException(status_code=409, detail="当前任务尚未生成可修改的故事板")
+
+    # The task-scoped conversation can read confirmed-task facts and invoke
+    # the explicit execution actions before any narration artifact exists.
+    # Object edits still pass through the strict selected-ref checks below;
+    # preview_edit's existing endpoint remains the authority for edit scope.
+    if not payload.selected_object_refs and payload.playhead_ms is None:
+        return stage, []
 
     narration = (production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
                  if task.narration_cache_key else None)
@@ -5306,6 +5482,21 @@ def creation_task_assistant_turn(
     request: Request,
     payload: CreationTaskAssistantTurnRequest,
 ) -> CreationTaskAssistantTurnResponse:
+    if "text/event-stream" in request.headers.get("accept", "").lower():
+        workspace_id = current_workspace_id(request)
+        return _assistant_stream_response(
+            lambda on_event: _creation_task_assistant_turn(task_id, request, payload, on_event),
+            workspace_id=workspace_id,
+        )
+    return _creation_task_assistant_turn(task_id, request, payload, None)
+
+
+def _creation_task_assistant_turn(
+    task_id: str,
+    request: Request,
+    payload: CreationTaskAssistantTurnRequest,
+    on_event,
+) -> CreationTaskAssistantTurnResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     # 先按可信身份确认这条任务读得到，再让助手碰它：读不到的任务不应被助手读到。
@@ -5335,6 +5526,7 @@ def creation_task_assistant_turn(
             playhead_ms=payload.playhead_ms,
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
+            on_event=on_event,
         )
     except AssistantUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

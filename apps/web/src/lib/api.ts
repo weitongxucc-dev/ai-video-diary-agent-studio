@@ -32,6 +32,7 @@ import type {
   CreationTaskEditPreviewResponse,
   CreationTaskAssistantTurnResponse,
   CreationTaskAssistantHistory,
+  AssistantStreamEvent,
   CreationTaskTopicsResponse,
   CreationTaskTimelineVersionDetail,
   CreationTaskTimelineVersionList,
@@ -228,6 +229,106 @@ async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise
   }
 
   return payload as T;
+}
+
+async function assistantStreamRequest<T>(
+  path: string,
+  body: unknown,
+  onEvent: (event: AssistantStreamEvent) => void,
+): Promise<T> {
+  let response: Response;
+  try {
+    const serverAuthorization = await getServerAuthorization();
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+        ...localMemberTokenHeader(),
+      },
+      cache: "no-store",
+    });
+  } catch {
+    throw new CreationPlanApiError(0, null, "本地服务未接通。");
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    const payload = text ? parseJson(text) : null;
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail: unknown }).detail
+      : payload;
+    const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
+    throw new CreationPlanApiError(
+      response.status,
+      typeof details.error === "string" ? details.error : null,
+      typeof detail === "string" ? detail
+        : typeof details.detail === "string" ? details.detail
+          : `请求失败：${response.status}`,
+      typeof details.impact === "string" ? details.impact : null,
+      typeof details.repair_action === "string" ? details.repair_action : null,
+      typeof details.reason === "string" ? details.reason : null,
+    );
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new CreationPlanApiError(0, null, "对话连接中断，未收到完整结果。");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: T | undefined;
+  const processFrame = (frame: string) => {
+    const data = frame.split(/\r?\n/).filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).replace(/^ /, "")).join("\n");
+    if (!data) return;
+    const event = parseJson(data);
+    if (!event || typeof event !== "object") return;
+    const value = event as Record<string, unknown>;
+    if (value.type === "result") {
+      result = value.result as T;
+      return;
+    }
+    if (value.type === "error") {
+      throw new CreationPlanApiError(
+        typeof value.status === "number" ? value.status : 0,
+        null,
+        typeof value.message === "string" ? value.message : "对话没有完成，请检查任务状态。",
+      );
+    }
+    if (value.type === "text_delta" && typeof value.delta === "string") {
+      onEvent({ type: "text_delta", delta: value.delta });
+    } else if (value.type === "tool_start" && typeof value.tool_id === "number" && typeof value.label === "string") {
+      onEvent({ type: "tool_start", tool_id: value.tool_id, label: value.label });
+    } else if (value.type === "tool_end" && typeof value.tool_id === "number"
+      && typeof value.label === "string" && typeof value.ok === "boolean" && typeof value.summary === "string") {
+      onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary });
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let boundary = buffer.search(/\r?\n\r?\n/);
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        const delimiter = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+        buffer = buffer.slice(boundary + delimiter.length);
+        processFrame(frame);
+        boundary = buffer.search(/\r?\n\r?\n/);
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) processFrame(buffer);
+  } catch (error) {
+    if (error instanceof CreationPlanApiError) throw error;
+    throw new CreationPlanApiError(0, null, "对话连接中断，未收到完整结果。");
+  } finally {
+    reader.releaseLock();
+  }
+  if (result === undefined) throw new CreationPlanApiError(0, null, "连接已结束，但没有收到完整的对话结果。");
+  return result;
 }
 
 async function getServerAuthorization(): Promise<string | null> {
@@ -563,7 +664,14 @@ export function previewCreationPlan(input: CreationPlanInput): Promise<CreationP
   });
 }
 
-export function sendWorkspaceAssistantPlanTurn(message: string, conversationId: string): Promise<WorkspaceAssistantPlanTurnResponse> {
+export function sendWorkspaceAssistantPlanTurn(
+  message: string,
+  conversationId: string,
+  onEvent?: (event: AssistantStreamEvent) => void,
+): Promise<WorkspaceAssistantPlanTurnResponse> {
+  if (onEvent) return assistantStreamRequest<WorkspaceAssistantPlanTurnResponse>(
+    "/api/assistant/plan/turn", { message, conversation_id: conversationId }, onEvent,
+  );
   return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
     "/api/assistant/plan/turn",
     { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
@@ -854,7 +962,11 @@ export function sendCreationTaskAssistantTurn(
     selected_object_refs: string[];
     playhead_ms: number | null;
   },
+  onEvent?: (event: AssistantStreamEvent) => void,
 ): Promise<CreationTaskAssistantTurnResponse> {
+  if (onEvent) return assistantStreamRequest<CreationTaskAssistantTurnResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`, input, onEvent,
+  );
   return creationPlanRequest<CreationTaskAssistantTurnResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`,
     { method: "POST", body: JSON.stringify(input) },

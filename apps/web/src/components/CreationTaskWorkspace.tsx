@@ -29,7 +29,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
 import { AppShell } from "@/components/AppShell";
-import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { AssistantActivityView, assistantActivityAfterEvent, HomeCommandComposer } from "@/components/HomeCommandComposer";
 import {
   apiUrl,
   checkCreationTaskQuality,
@@ -86,6 +86,8 @@ import type {
   CreationExecutionStatus,
   TaskJobProgress,
   CreationTaskAssistantHistory,
+  AssistantStreamEvent,
+  AssistantTurnActivity,
   MaterialAsset,
   MaterialSegmentMatch,
   MontageClipCandidate,
@@ -573,7 +575,7 @@ const executionStageLabels: Record<string, string> = {
   cover: "准备封面",
 };
 
-type AssistantTurnRecord = { command: string; reply: string; context: string };
+type AssistantTurnRecord = { command: string; reply: string; context: string; activity?: AssistantTurnActivity };
 
 function assistantHistoryTurns(items: CreationTaskAssistantHistory["items"]): AssistantTurnRecord[] {
   const turns: AssistantTurnRecord[] = [];
@@ -770,6 +772,7 @@ function ContextCommandBar({
   preview,
   assistantReply,
   assistantTurns,
+  assistantActivity,
   assistantModel,
   assistantConfigured,
   selectedContextLabel,
@@ -788,7 +791,8 @@ function ContextCommandBar({
   onSelectionPreview: (indices:number[])=>void;
   preview: CreationTaskEditPreviewResponse | null;
   assistantReply: string | null;
-  assistantTurns: { command: string; reply: string; context: string }[];
+  assistantTurns: { command: string; reply: string; context: string; activity?: AssistantTurnActivity }[];
+  assistantActivity: AssistantTurnActivity | null;
   assistantModel: string;
   assistantConfigured: boolean;
   selectedContextLabel: string | null;
@@ -796,6 +800,9 @@ function ContextCommandBar({
 }) {
   const ui = editorUi;
   const barRef = useRef<HTMLElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+  const restoreInputFocus = useRef(false);
   const steps=preview?.proposal.operation.operation_type==="EditCompoundTimeline" && preview.proposal.operation.payload.selection_enabled
     ? preview.proposal.operation.payload.steps as {index:number;command:string;enabled:boolean}[] : [];
   const originalSelection=steps.filter(step=>step.enabled).map(step=>step.index);
@@ -806,6 +813,19 @@ function ContextCommandBar({
   useEffect(() => {
     if (preview && !compact) barRef.current?.scrollIntoView?.({ block: "end" });
   }, [preview, compact]);
+  useEffect(() => { setChosen(null); }, [preview?.proposal.id]);
+  useEffect(() => {
+    if (busy === null && restoreInputFocus.current) {
+      restoreInputFocus.current = false;
+      inputRef.current?.focus();
+    }
+  }, [busy]);
+
+  function sendAssistant() {
+    if (busy !== null) return;
+    restoreInputFocus.current = true;
+    onPreview();
+  }
 
   return (
     <section
@@ -820,6 +840,15 @@ function ContextCommandBar({
           <textarea
             aria-label={scriptMode ? "文案要求" : "局部修改要求"}
             rows={3}
+            ref={inputRef}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { composingRef.current = false; }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || composingRef.current
+                || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+              event.preventDefault();
+              sendAssistant();
+            }}
             disabled={busy !== null || selectionChanged}
             onChange={(event) => onCommandChange(event.target.value)}
             placeholder={steps.length ? "想保留哪项？" : selectedContextPlaceholder}
@@ -835,7 +864,7 @@ function ContextCommandBar({
           title="发送"
           className={compact ? editorUi.sendButton : "modern-primary-button"}
             disabled={busy !== null || !assistantConfigured || (Boolean(preview)&&!commandChanged) || !command.trim()}
-          onClick={onPreview}
+          onClick={sendAssistant}
           type="button"
         >
           {busy === "assistant" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}
@@ -847,10 +876,12 @@ function ContextCommandBar({
       <div className="assistant-meta">
         <span>{assistantConfigured ? "仅传文字" : "尚未连接"}</span>
         {assistantConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{assistantModel}。只发送这段话、当前选择和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
-        {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
+        {assistantTurns.length > 1 ? <details className="assistant-history"><summary>往前看</summary><ol>{assistantTurns.slice(0, -1).map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p>{turn.activity ? <AssistantActivityView activity={{ ...turn.activity, text: "" }} /> : null}</li>)}</ol></details> : null}
       </div>
       {scriptMode && assistantTurns.length ? <p className="assistant-reply">我：{assistantTurns.at(-1)?.command}</p> : null}
       {assistantReply ? <p className="assistant-reply" aria-live="polite">{assistantReply}</p> : null}
+      {assistantTurns.at(-1)?.activity ? <AssistantActivityView activity={{ ...assistantTurns.at(-1)!.activity!, text: "" }} /> : null}
+      {assistantActivity ? <AssistantActivityView activity={assistantActivity} streaming={busy === "assistant"} /> : null}
       {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={command} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview} /> : null}
     </section>
   );
@@ -1394,6 +1425,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [historyOpen, setHistoryOpen] = useState(false);
   const [assistantReply, setAssistantReply] = useState<string | null>(null);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurnRecord[]>([]);
+  const [assistantActivity, setAssistantActivity] = useState<AssistantTurnActivity | null>(null);
+  const assistantActivityRef = useRef<AssistantTurnActivity>({ text: "", tools: [] });
   const [assistantModel, setAssistantModel] = useState("外部文字模型待连接");
   const [assistantConfigured, setAssistantConfigured] = useState(false);
   const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
@@ -1459,6 +1492,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     let active = true;
     setAssistantTurns([]);
     setAssistantReply(null);
+    setAssistantActivity(null);
+    assistantActivityRef.current = { text: "", tools: [] };
     void getCreationTaskAssistantHistory(task.id).then((history) => {
       if (!active) return;
       const turns = assistantHistoryTurns(history.items);
@@ -1924,6 +1959,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("assistant");
     setError(null);
     setAssistantReply(null);
+    assistantActivityRef.current = { text: "", tools: [] };
+    setAssistantActivity(assistantActivityRef.current);
     try {
       const result = await sendCreationTaskAssistantTurn(task.id, {
         message,
@@ -1933,6 +1970,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           : [],
         playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
+      }, (event: AssistantStreamEvent) => {
+        if (revision !== editContextRevision.current) return;
+        assistantActivityRef.current = assistantActivityAfterEvent(assistantActivityRef.current, event);
+        setAssistantActivity(assistantActivityRef.current);
       });
       if (result.execution_status) setExecution(result.execution_status);
       pollExecutionRef.current();
@@ -1940,7 +1981,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (result.script_draft) await refresh(true);
       if (contextStillCurrent) {
         setAssistantReply(result.reply);
-        setAssistantTurns((current) => [...current, { command: message, reply: result.reply, context: contextLabel }].slice(-8));
+        setAssistantTurns((current) => [...current, {
+          command: message, reply: result.reply, context: contextLabel,
+          activity: assistantActivityRef.current,
+        }].slice(-8));
+        setAssistantActivity(null);
         setAssistantModel(`${result.provider} / ${result.model}`);
         setEditPreview(result.edit_preview);
         if (result.edit_preview) setEditCommand(result.edit_preview.intent.raw_command);
@@ -2252,7 +2297,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={editPreview?.proposal.id ?? task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantActivity={assistantActivity} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
@@ -44,7 +44,7 @@ describe("HomeCommandComposer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "制作指令" }), { target: { value: "介绍产品" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await waitFor(() => expect(mocks.ask).toHaveBeenCalledWith("介绍产品", expect.any(String)));
+    await waitFor(() => expect(mocks.ask).toHaveBeenCalledWith("介绍产品", expect.any(String), expect.any(Function)));
     expect(mocks.confirm).not.toHaveBeenCalled();
     expect(await screen.findByRole("dialog", { name: "制作方案" })).toBeVisible();
     expect(await screen.findByRole("region", { name: "制作方案" })).toHaveTextContent("镜头 4");
@@ -150,6 +150,37 @@ describe("HomeCommandComposer", () => {
     expect(screen.getByRole("textbox", { name: "制作指令" })).toHaveFocus();
   });
 
+  it("sends on Enter, keeps Space/Shift+Enter/IME Enter in the input, streams safe steps and restores focus", async () => {
+    configuredModel();
+    let resolveTurn!: (value: unknown) => void;
+    const result = new Promise(resolve => { resolveTurn = resolve; });
+    mocks.ask.mockImplementation((_command: string, _conversation: string, onEvent: (event: unknown) => void) => {
+      onEvent({ type: "text_delta", delta: "我先查看当前任务。" });
+      onEvent({ type: "tool_start", tool_id: 1, label: "读取当前工作区" });
+      onEvent({ type: "tool_end", tool_id: 1, label: "读取当前工作区", ok: true, summary: "已读取 1 项任务摘要。" });
+      return result;
+    });
+    render(<HomeCommandComposer />);
+    const input = screen.getByRole("textbox", { name: "制作指令" });
+    fireEvent.change(input, { target: { value: "介绍产品 " } });
+    fireEvent.keyDown(input, { key: " ", code: "Space" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true, keyCode: 229 });
+    fireEvent.compositionEnd(input);
+    expect(mocks.ask).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "介绍产品" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("我先查看当前任务。", { exact: false })).toBeInTheDocument();
+    expect(mocks.ask).toHaveBeenCalledWith("介绍产品", expect.any(String), expect.any(Function));
+    await act(async () => resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null }));
+    expect(await screen.findByText("已读到当前制作条件。")).toBeInTheDocument();
+    expect(screen.getByText("读取当前工作区 · 已返回")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("查看结果"));
+    expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
   it("keeps an existing task in the chat, previews a change, confirms and undoes it", async () => {
     configuredModel();
     const task = { id: "task-1", stage: "montage", name: "产品介绍" } as CreationTask;
@@ -170,7 +201,7 @@ describe("HomeCommandComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledWith("task-1", {
       message: "把画面调亮", context_stage: "montage", selected_object_refs: [], playhead_ms: null,
-    }));
+    }, expect.any(Function)));
     expect(await screen.findByRole("dialog", { name: "修改预览" })).toHaveTextContent("调亮画面");
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
@@ -199,7 +230,7 @@ describe("HomeCommandComposer", () => {
     expect(await screen.findByText(/已提交并排队，尚未完成/)).toBeInTheDocument();
     expect(mocks.editAsk).toHaveBeenCalledWith("task-1", expect.objectContaining({
       message: "就按已确认的文案开始做成片，请回报真实作业进度", context_stage: "montage",
-    }));
+    }), expect.any(Function));
     expect(onTaskUpdated).toHaveBeenCalledOnce();
   });
 

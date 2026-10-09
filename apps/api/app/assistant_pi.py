@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import threading
+import time
+from collections import deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
@@ -73,6 +77,186 @@ _ADDRESS_PATTERNS = (
 )
 _TIMEOUT_PATTERNS = ("timeout", "timed out", "etimedout", "deadline exceeded", "read timeout")
 _TOOL_ERROR_PATTERNS = ("tool_execution_end", "tool call failed", "tool_error", "isError")
+
+_PI_TOOL_LABELS = {
+    "read_workspace_context": "读取当前工作区",
+    "read_video_templates": "读取可用模板",
+    "find_materials": "查找素材",
+    "read_preference_memory": "读取制作偏好",
+    "find_material_candidates": "查找候选片段",
+    "preview_creation_plan": "检查新建方案",
+    "read_current_task": "读取当前任务",
+    "generate_creation_task_topics": "生成选题候选",
+    "find_knowledge": "查找内容资料",
+    "preview_script_draft": "准备文案草稿",
+    "preview_edit": "准备修改预览",
+    "start_creation_execution": "提交连续制作",
+    "resume_creation_execution": "继续连续制作",
+    "cancel_creation_execution": "取消连续制作",
+}
+
+
+def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> str:
+    if failed:
+        return "这一步没有完成；请以页面显示的任务状态和错误提示为准。"
+    payload = result if isinstance(result, dict) else {}
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    if tool_name in {"start_creation_execution", "resume_creation_execution", "cancel_creation_execution"}:
+        action = details.get("action")
+        status = details.get("status") if isinstance(details.get("status"), dict) else {}
+        job = status.get("job") if isinstance(status.get("job"), dict) else {}
+        job_status = job.get("status")
+        state = {"queued": "已排队", "running": "正在运行", "succeeded": "已完成",
+                 "failed": "失败", "interrupted": "中断", "cancelled": "已取消"}.get(job_status, "状态已返回")
+        if action == "cancel":
+            return f"取消动作已返回，当前作业{state}。"
+        return f"制作请求已返回，当前作业{state}。"
+    if tool_name == "preview_creation_plan":
+        preview = details.get("preview") if isinstance(details.get("preview"), dict) else {}
+        blockers = preview.get("blockers") if isinstance(preview.get("blockers"), list) else []
+        return f"新建方案预检已返回，{len(blockers)} 项需处理；尚未创建任务。"
+    if tool_name == "preview_script_draft":
+        preview = details.get("preview") if isinstance(details.get("preview"), dict) else {}
+        sections = preview.get("sections") if isinstance(preview.get("sections"), list) else []
+        return f"已准备 {len(sections)} 段文案草稿，尚待你检查和确认。"
+    if tool_name == "preview_edit":
+        return "修改预览已生成；草稿尚未应用。"
+    if tool_name == "generate_creation_task_topics":
+        topics = details.get("topics") if isinstance(details.get("topics"), dict) else {}
+        candidates = topics.get("candidates") if isinstance(topics.get("candidates"), list) else []
+        return f"已生成 {len(candidates)} 个选题候选，尚未选择或确认。"
+    count_fields = {
+        "find_materials": ("matches", "素材候选"),
+        "find_material_candidates": ("candidates", "片段候选"),
+        "find_knowledge": ("matches", "资料摘录"),
+        "read_video_templates": ("templates", "模板"),
+        "read_workspace_context": ("tasks", "任务摘要"),
+    }
+    if tool_name in count_fields:
+        field, label = count_fields[tool_name]
+        values = details.get(field) if isinstance(details.get(field), list) else []
+        return f"已读取 {len(values)} 项{label}。"
+    if tool_name == "read_current_task":
+        return "当前任务和所选对象状态已读取。"
+    if tool_name == "read_preference_memory":
+        return "与本次创作有关的偏好已读取。"
+    return "业务步骤已完成。"
+
+
+class _PiStreamProjector:
+    """Project Pi 1.1 JSON events into a small UI-safe event vocabulary."""
+
+    def __init__(self) -> None:
+        self._calls: dict[str, tuple[int, str, str]] = {}
+        self._next_id = 0
+
+    def project(self, line: str) -> dict[str, object] | None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return None  # The final existing event parser reports malformed output.
+        event_type = event.get("type")
+        if event_type == "message_update":
+            update = event.get("assistantMessageEvent")
+            if isinstance(update, dict) and update.get("type") == "text_delta":
+                delta = update.get("delta")
+                return {"type": "text_delta", "delta": delta} if isinstance(delta, str) and delta else None
+            return None
+        if event_type == "tool_execution_start":
+            name = event.get("toolName")
+            raw_id = event.get("toolCallId")
+            if name not in _PI_TOOL_LABELS:
+                return None
+            self._next_id += 1
+            call_key = raw_id if isinstance(raw_id, str) and raw_id else f"call-{self._next_id}"
+            label = _PI_TOOL_LABELS[name]
+            self._calls[call_key] = (self._next_id, name, label)
+            return {"type": "tool_start", "tool_id": self._next_id, "label": label}
+        if event_type == "tool_execution_end":
+            raw_id = event.get("toolCallId")
+            name = event.get("toolName")
+            call_key = raw_id if isinstance(raw_id, str) else ""
+            stored = self._calls.pop(call_key, None)
+            if stored:
+                tool_id, stored_name, label = stored
+                name = stored_name
+            else:
+                if name not in _PI_TOOL_LABELS:
+                    return None
+                self._next_id += 1
+                tool_id, label = self._next_id, _PI_TOOL_LABELS[name]
+            failed = bool(event.get("isError"))
+            return {
+                "type": "tool_end", "tool_id": tool_id, "label": label,
+                "ok": not failed,
+                "summary": _safe_tool_result_summary(name, event.get("result"), failed),
+            }
+        return None
+
+
+def _run_pi_streaming(
+    cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
+    timeout_seconds: int, on_event,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", bufsize=1, env=env, cwd=cwd,
+    )
+    output_lines: list[str] = []
+    error_lines: deque[str] = deque(maxlen=10000)
+    line_queue: queue.Queue[str | None] = queue.Queue()
+    projector = _PiStreamProjector()
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            line_queue.put(line)
+        line_queue.put(None)
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        for line in process.stderr:
+            error_lines.append(line)
+
+    stdout_thread = threading.Thread(target=read_stdout, name="pi-assistant-stdout", daemon=True)
+    stderr_thread = threading.Thread(target=read_stderr, name="pi-assistant-stderr", daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        assert process.stdin is not None
+        try:
+            process.stdin.write(message)
+        except BrokenPipeError:
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout_seconds, "".join(output_lines), "".join(error_lines))
+            try:
+                line = line_queue.get(timeout=min(0.25, remaining))
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            output_lines.append(line)
+            event = projector.project(line)
+            if event is not None:
+                on_event(event)
+        return_code = process.wait(timeout=max(0.05, deadline - time.monotonic()))
+        stderr_thread.join(timeout=1)
+        return subprocess.CompletedProcess(cmd, return_code, "".join(output_lines), "".join(error_lines))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        raise
 
 
 class AssistantUnavailable(RuntimeError):
@@ -419,6 +603,7 @@ def run_task_turn(
     cookie: str | None = None,
     local_member_token: str | None = None,
     caller_user_id: str | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
@@ -434,6 +619,7 @@ def run_task_turn(
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
+        on_event=on_event,
         prompt=TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
         tool_names=tools,
         preview_kind="topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
@@ -451,12 +637,14 @@ def run_plan_turn(
     cookie: str | None = None,
     local_member_token: str | None = None,
     caller_user_id: str | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[str, dict | None]:
     return _run_turn(
         settings, workspace_id=workspace_id, task_id="", message=message,
         stage="", selected_refs=[], playhead_ms=None,
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
+        on_event=on_event,
         prompt=PLAN_PROMPT, tool_names="read_workspace_context,read_video_templates,find_knowledge,find_materials,preview_creation_plan",
         preview_kind="plan_preview", session_key=f"new-plan:{conversation_id}",
     )
@@ -479,6 +667,7 @@ def _run_turn(
     tool_names: str,
     preview_kind: str,
     session_key: str | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[str, dict | None]:
     checks = pi_runtime_checks()
     for check in checks:
@@ -544,10 +733,13 @@ def _run_turn(
             explanation="同一个任务还有一条对话正在处理，这一轮没有开始，也没有碰过服务。",
         )
     try:
-        result = subprocess.run(
+        result = (_run_pi_streaming(
+            cmd, message=message, env=env, cwd=runtime_root,
+            timeout_seconds=180, on_event=on_event,
+        ) if on_event is not None else subprocess.run(
             cmd, input=message, text=True, capture_output=True, timeout=180,
             env=env, cwd=runtime_root, check=False,
-        )
+        ))
     except subprocess.TimeoutExpired as exc:
         # 请求已经发出去了，所以这是关于服务的一次真实观察。
         _record_service(settings, ok=False, cause=FAILURE_TIMEOUT, workspace_id=workspace_id)

@@ -5,10 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.assistant_pi import AssistantUnavailable, _last_answer_and_preview, run_plan_turn, run_task_turn
+from app.assistant_pi import AssistantUnavailable, _PiStreamProjector, _last_answer_and_preview, _safe_tool_result_summary, run_plan_turn, run_task_turn
 from app.config import Settings
 
 
@@ -221,6 +222,87 @@ def test_pi_events_leave_failed_edit_reply_without_a_proposal():
 def test_pi_events_reject_incomplete_turn():
     with pytest.raises(AssistantUnavailable, match="完整回复"):
         _last_answer_and_preview('{"type":"agent_settled"}')
+
+
+def test_pi_stream_projects_only_text_and_safe_business_tool_status():
+    projector = _PiStreamProjector()
+    assert projector.project(json.dumps({
+        "type": "message_update", "assistantMessageEvent": {
+            "type": "text_delta", "contentIndex": 0, "delta": "我先检查当前任务。",
+        },
+    })) == {"type": "text_delta", "delta": "我先检查当前任务。"}
+    assert projector.project(json.dumps({
+        "type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": "private thought"},
+    })) is None
+    started = projector.project(json.dumps({
+        "type": "tool_execution_start", "toolCallId": "private-id",
+        "toolName": "read_current_task", "args": {"path": "/private/user/key.json"},
+    }))
+    assert started == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    ended = projector.project(json.dumps({
+        "type": "tool_execution_end", "toolCallId": "private-id",
+        "toolName": "read_current_task", "isError": False,
+        "result": {"details": {"status": "ready", "path": "/private/user/key.json"}},
+    }))
+    assert ended == {
+        "type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+        "summary": "当前任务和所选对象状态已读取。",
+    }
+    assert "/private/" not in json.dumps([started, ended])
+    assert "private-id" not in json.dumps([started, ended])
+
+
+def test_stream_tool_summary_uses_the_real_material_details_field():
+    assert _safe_tool_result_summary("find_materials", {
+        "details": {"matches": [{"asset_ref": "asset:one"}, {"asset_ref": "asset:two"}]},
+    }, False) == "已读取 2 项素材候选。"
+
+
+def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
+    monkeypatch.setattr(main_module, "_workspace_settings_for",
+                        lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
+    sanitizer = main_module._AssistantStreamTextSanitizer("local")
+    emitted = sanitizer.feed("先说结论：fixture-sec")
+    emitted += sanitizer.feed("ret-123 已核实。")
+    emitted += sanitizer.feed("", final=True)
+    assert "先说结论：" in emitted
+    assert "fixture-secret-123" not in emitted
+    assert "[已隐藏凭据]" in emitted
+
+    marked = main_module._AssistantStreamTextSanitizer("local")
+    redacted = marked.feed("说明 api_key=fixture-")
+    redacted += marked.feed("secret-123 可以读取。")
+    redacted += marked.feed("", final=True)
+    assert "fixture-secret-123" not in redacted
+
+
+def test_assistant_stream_response_sends_safe_events_then_authoritative_result(monkeypatch):
+    monkeypatch.setattr(main_module, "_workspace_settings_for",
+                        lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
+    app = FastAPI()
+
+    @app.get("/assistant-stream")
+    def stream():
+        def execute(publish):
+            publish({"type": "text_delta", "delta": "输出 fixture-secret-"})
+            publish({"type": "tool_start", "tool_id": 1, "label": "读取当前任务", "args": {"path": "/private/key"}})
+            publish({"type": "text_delta", "delta": "123 完成"})
+            publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                     "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
+            return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
+        return main_module._assistant_stream_response(execute, workspace_id="local")
+
+    response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert [event["type"] for event in events] == ["text_delta", "tool_start", "text_delta", "tool_end", "result"]
+    streamed_text = "".join(event.get("delta", "") for event in events if event["type"] == "text_delta")
+    assert "fixture-secret-123" not in streamed_text and "[已隐藏凭据]" in streamed_text
+    assert events[1] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    assert events[3] == {"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                         "summary": "当前任务和所选对象状态已读取。"}
+    assert events[-1]["result"]["reply"] == "当前制作条件已回读。"
 
 
 def test_pi_execution_action_reply_uses_returned_job_state_not_model_claim():

@@ -338,6 +338,16 @@ h4 {
   white-space: pre-wrap;
 }
 
+.assistant-activity { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; }
+.assistant-activity__text { max-height: 120px; overflow-y: auto; margin: 0; color: var(--text-1); font-size: 13px; line-height: var(--line-body); white-space: pre-wrap; }
+.assistant-activity__tools { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
+.assistant-activity__tools li { padding-left: 2px; }
+.assistant-activity__tools li[data-state="failed"] > span { color: var(--danger); }
+.assistant-activity__tools li[data-state="succeeded"] > span { color: var(--success); }
+.assistant-activity__tools details { margin: 2px 0 0 4px; }
+.assistant-activity__tools summary { width: fit-content; cursor: pointer; color: var(--text-3); }
+.assistant-activity__tools p { margin: 3px 0; color: var(--text-2); }
+
 .home-composer__result {
   display: grid;
   gap: 8px;

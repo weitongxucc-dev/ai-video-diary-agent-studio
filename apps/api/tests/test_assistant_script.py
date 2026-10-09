@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -161,6 +162,25 @@ def test_topic_scope_is_current_task_only():
         message="请生成选题", context_stage="topic", selected_object_refs=[],
     )
     assert main_module._assistant_turn_scope("local", topic_task, request) == ("topic", [])
+
+
+def test_confirmed_task_without_production_artifacts_can_use_general_assistant_scope(monkeypatch):
+    task = SimpleNamespace(
+        id="task-one", stage="narration", confirmed_script_id="script-confirmed",
+        narration_cache_key=None, current_timeline_version_id=None, montage_plan_id=None,
+    )
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace())
+    request = main_module.CreationTaskAssistantTurnRequest(
+        message="按已确认文案开始制作", context_stage="narration", selected_object_refs=[],
+    )
+    assert main_module._assistant_turn_scope("local", task, request) == ("narration", [])
+
+    selected_edit = main_module.CreationTaskAssistantTurnRequest(
+        message="把镜头调亮", context_stage="montage", selected_object_refs=["clip:clip-one"],
+    )
+    with pytest.raises(HTTPException) as exc:
+        main_module._assistant_turn_scope("local", task, selected_edit)
+    assert exc.value.detail == "当前任务尚未生成可修改的故事板"
 
 
 def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_path, monkeypatch):

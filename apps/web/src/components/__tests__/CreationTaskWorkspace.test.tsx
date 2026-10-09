@@ -514,7 +514,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(topicTask.id,
-      expect.objectContaining({ context_stage: "topic" })));
+      expect.objectContaining({ context_stage: "topic" }), expect.any(Function)));
     expect(await screen.findByText("从三个场景讲清一个误区")).toBeInTheDocument();
     expect(mocks.getTopics).toHaveBeenCalledWith(topicTask.id);
   });
@@ -542,27 +542,49 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith("task-1", expect.objectContaining({
       message: "写一个简短开头", context_stage: "script",
-    })));
+    }), expect.any(Function)));
     expect(await screen.findByText("真实草稿正文。", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("草稿已保存，请检查。")).toBeInTheDocument();
   });
 
-  it("reads an assistant start action back as the real queued execution state", async () => {
+  it("streams the real task action, keeps Space/Shift+Enter/IME Enter in the input, then restores focus", async () => {
     const initial = subtitleCoverWorkspace();
     const queued = queueStatus("queued");
+    let resolveTurn!: (value: unknown) => void;
+    const result = new Promise(resolve => { resolveTurn = resolve; });
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.getExecution.mockResolvedValue(queued);
-    mocks.askAssistant.mockResolvedValue({ reply: "已提交并排队，尚未完成。", provider: "minimax", model: "test",
-      edit_preview: null, script_draft: null, execution_action: "start", execution_status: queued,
-      topic_candidates: null });
+    mocks.askAssistant.mockImplementation((_taskId: string, _input: unknown, onEvent: (event: unknown) => void) => {
+      onEvent({ type: "text_delta", delta: "我按已确认文案提交制作。" });
+      onEvent({ type: "tool_start", tool_id: 1, label: "提交连续制作" });
+      onEvent({ type: "tool_end", tool_id: 1, label: "提交连续制作", ok: true, summary: "制作请求已返回，当前作业已排队。" });
+      return result;
+    });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     const input = screen.getByLabelText("局部修改要求");
-    fireEvent.change(input, { target: { value: "就按已确认的文案开始制作并回报当前作业状态" } });
+    fireEvent.change(input, { target: { value: "就按已确认的文案开始制作并回报当前作业状态 " } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.keyDown(input, { key: " ", code: "Space" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true, keyCode: 229 });
+    fireEvent.compositionEnd(input);
+    expect(mocks.askAssistant).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "就按已确认的文案开始制作并回报当前作业状态" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("我按已确认文案提交制作。", { exact: false })).toBeInTheDocument();
+    expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
+      message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover",
+      selected_object_refs: [], playhead_ms: null,
+    }), expect.any(Function));
+    await act(async () => resolveTurn({ reply: "已提交并排队，尚未完成。", provider: "minimax", model: "test",
+      edit_preview: null, script_draft: null, execution_action: "start", execution_status: queued,
+      topic_candidates: null }));
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id,
-      expect.objectContaining({ message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover" })));
+      expect.objectContaining({ message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover" }), expect.any(Function)));
     expect(await screen.findByText(/连续制作：已排队/)).toBeInTheDocument();
+    expect(screen.getByText("提交连续制作 · 已返回")).toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveFocus());
   });
 
   it("restores task dialogue from persisted history after reopening", async () => {
@@ -825,13 +847,15 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     expect(screen.queryByRole("dialog", { name: "镜头 01" })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("局部修改要求"), { target: { value: "换成产品特写" } });
+    const editInput = screen.getByLabelText("局部修改要求");
+    fireEvent.change(editInput, { target: { value: "换成产品特写" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith("task-1", expect.objectContaining({
       message: "换成产品特写", selected_object_refs: ["clip:clip-1"],
-    })));
+    }), expect.any(Function)));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    expect(screen.getByLabelText("局部修改要求")).toBe(editInput);
     const confirmation = screen.getByRole("dialog", { name: "修改提案" });
     const detail = screen.queryByRole("dialog", { name: "镜头 01" });
     if (scope === "local") {
@@ -848,6 +872,7 @@ describe("CreationTaskWorkspace", () => {
     }
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "修改提案" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("局部修改要求")).toBe(editInput);
     if (scope === "local") {
       expect(screen.getByRole("dialog", { name: "镜头 01" })).toBe(detail);
       expect(detail?.inert).not.toBe(true);

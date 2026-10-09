@@ -1652,6 +1652,23 @@ export type CreationTaskAssistantTurnResponse = {
   topic_candidates: CreationTaskTopicsResponse | null;
 };
 
+export type AssistantStreamEvent =
+  | { type: "text_delta"; delta: string }
+  | { type: "tool_start"; tool_id: number; label: string }
+  | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string };
+
+export type AssistantToolActivity = {
+  tool_id: number;
+  label: string;
+  state: "running" | "succeeded" | "failed";
+  summary?: string;
+};
+
+export type AssistantTurnActivity = {
+  text: string;
+  tools: AssistantToolActivity[];
+};
+
 export type CreationTaskAssistantHistory = {
   items: {
     role: "user" | "assistant";
