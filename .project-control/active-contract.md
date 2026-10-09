@@ -187,6 +187,14 @@ E复审0fef1a43已经15专项/tsc通过，旧单retain；主控审阅仍确认re
 
 F-MEDIA-VIEW已实际ready/turn_started及语义REBASE_ACK，task_d237a52737d4/ctx_8fb689611db4绑定原F终端，写权按上节；不把ready算交付。
 
+### QA-V2-D-MATERIAL-UI：显式选择、筛选结果和分析分项
+
+UI于msg_e32cdff2dfc3实际RELEASE_ACK MaterialLibraryWorkspace.tsx无diff且不再写；主控git回读为空后转D唯一所有权。D前f3a344f已retain并机械集成cb47a2e，F媒体9c1f0e9已审核，组合其后主控准确HEAD为本单基线。D从/tmp/main-controller-20261009/review-v2-integration读取cleanHEAD并记录完整SHA，新clone到/tmp/main-acceptance-20261009/review-v2-material-ui/candidate及codex/review-v2-material-ui-20261009；原foxface和前候选保留。
+
+唯一产品写权MaterialLibraryWorkspace.tsx、其直接MaterialLibrary专项和必要现有局部CSS。HomeCommandComposer、会话组件/hooks/CSS/API/types/main（UI）、CreateProductionTaskForm/production及资格规则不写。仅沿既有materialContext字段做文件简称+范围引用，不能为显示独自加共享字段。D负责N07/N08/N10/N11/N12/N13素材消费者共同机制：搜索/全部筛选/加载/失败/空库与零结果分清；查询一键清空保留其他筛选和焦点，另重置全部；显式用户选择与初始检查器预览/未保存编辑分离，真实选中失效保护保留，晚到请求不串选择/写其他素材；范围显示所属文件及时间。按已有实际speech_analysis/visual_status/ocr_status分项，缺分项证据诚实未知而非伪已完成，视觉完成不能泛称全部声音字幕都已分析。默认接入页面只给用户结果/作用/下一步，必要目录定位与诊断可展开，不删除真实配置或暴露秘密；保留三栏/13px/56px/右侧柔光与原生播放器。
+
+N06全库只读助手仍由UI纵向共享入口后续接线，N09/33资格由B+main后续单，不由本单仅改文案假通过。只缓存manta公开node_modules、受控组件专项/tsc/diff，不安装/服务/GUI/模型/媒体/Key/用户DB/账号/打包/远端。必要测试覆盖默认预览后零结果无假警告、显式选中过滤失效及草稿保留、清除/重置、迟到返回、画面完成但声音未转写摘要；逐ID源码/组件/未验分开。交clean公开身份提交和父目录report，不单独关闭问题。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
