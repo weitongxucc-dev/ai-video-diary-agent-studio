@@ -473,6 +473,14 @@ C N14真实Agent更新版本消费追加仅apps/api/agent_tools/diary_tools.ts�
 
 E前次qualification审阅静态证据可用，但uv run误触自动依赖准备，已停且仅新忽略venv移入owned报告保留，HTTP零结果不可声明PASS。E新QA-V2-E-MATERIAL-QUALIFICATION-REPRO仅自有/tmp新快照，使用已安装绝对Python /tmp/manta-wil108-20261007/venv/bin/python，禁止uv run/install/自动建环境、写公共candidate ignored目录或处理原保留venv；复用准确5bd870d的受控D合成fixture与临时HOME/XDG/DB，仅前段实际raw有效门槛/另成员private已知ID的少数HTTP预览及确认诊断。源/tests仓库只读，输出只精确诊断report/临时脚本，余矩阵保留未验；若现阶段确认需真实模型/媒体则停该项，不借评审扩许可。现有来源/权限真实现象足够后停止扩大扫描。
 
+### N14后端接管与当前素材资格纵向迁移
+
+C后端62b38e4已审，与自身ed39761/14cb462按叶组合准确f706d36f9ed4094a3170970e09f8aec16ceaacf0。60个受控API专项/Ruff证据成立；最终CI/GUI/全部来源不关闭，C仍继续N14 Web/报告。C msg_81b7e3af31d7已RELEASE_ACK main/schema，现正式给B同Task ctx_5948cb0be957：main.py中RegenerateNarrationSegment实际预览/confirm/runtime callback/受许可生成/queued事实，以及schema仅该现有编辑/Job响应，不改已组合N14/CAS/成员/资料接口；narration.py中原生成器必要grant/repo/reader/明确区间接线，现有creation_execution.py本单专属单元可必要调整；对应一个tests/test_narration_edit_api.py及已有test_narration_edit_execution.py直接专项。Web/APItypes/Task仍C唯一，不写，后续再释放。局部重做排队时旧audio/Timeline/EditOperation保留；专属Grant成功在同事务发布真实音频/retiming/EditOperation与Job终态，失败/取消不发布、unknown不释放；不借person permit或平行线程/队列，后台完成不是用户已验收。不复验17未影响阶段1；真实模型/媒体/App/GUI/Key运行仍未授权。
+
+C同时保留production.py仅update_assistant_script_draft/confirm_creation_task_script仓储CAS和其当前N14直接测试：root审阅见这两方法仍expected_updated_at=None且仅非None时校验，违反领域7.5的实际写事务mandatory版本。去掉无条件现存draft update/confirm分支，在原事务强制当前token，首次草稿创建不混作更新；API已接token不需重写main。只精准Repo/当前N14测试修订与必要负例，旧不带token测试夹具归主控下一波具名迁移，不开放兼容fallback。完成后提交净叶并RELEASE_ACK production.py；B在此之前不得写production.py，C从此不得再写main/schema。
+
+E资格HTTP诊断已实证：ready/available且旧raw审核字段导致picker为空、Insert/Replace预览409；另成员private已知ID的preview+confirm均200并实际改Timeline，原任务副本出现越权引用。源报告/tmp/main-acceptance-20261009/review-v2-material-qualification-audit/reproduction-report.md为临时合成证据，不涉及用户资料。B当前main拥有权追加纵向资格迁移，优先此已证实对象边界，再局部重做API；production.py共享手工/自动资格helper待C释放后才写。scope为活跃_creation_task_montage_candidates、_creation_task_insert_clip、_apply_creation_task_montage_clip_update及其所有preview/confirm调用；复用既有真实reader/private-owner/grant判据，每次读取与确认重新校验当前访问，不把候选过滤当写权限。手工和自动必须沿同一实际媒体/状态/范围/文件身份基础资格，手工可用not_for_automation，自动仍拒绝，明确rejected/reference_only/excluded/失联/越界/改变文件保持拒绝。退役所有活跃CreationTask旧approved硬门槛/无reader对象读取与误导审核修复文案；legacy已410写路与无活跃Web读路不顺手改造。一个新增tests/test_material_edit_qualification.py正/负例与D四replacement准确复验，保留真实媒体有效性，不全库include_private或诊断兜底、不深解码绕Grant。交新结果、RETIRED/调用不存在证明、精确来源与未验；不能据此发布或声称真实客户端通过。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
