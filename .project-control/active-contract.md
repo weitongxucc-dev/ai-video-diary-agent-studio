@@ -247,6 +247,8 @@ B-PROFILE-API C2准确接线差额：msg_dcd1cf6e82ae/msg_d46e1fe30715经主控8
 
 granted_subprocess仅将准确owner_type=media_preview与voice:/avatar_lipsync:单位加入既有真实HostResourceProbe/scene_runtime_limits要求及运行中scheduler.assert_grant循环；复用creation_narration/creation_person_render同类已标定资源预算，不放宽cap或参数、不新增采样/运行队列。类型化单位与注册owner绑定，未知owner/单位不能因字符串前缀获得许可；无真实探针/预算即拒绝。必要测试覆盖许可前零exec、撤销/资源越限/超时真实注册子进程组释放和失败无成功产物，原creation_job规则保持；自制媒体/受控Grant仍只是隔离证据，真实设备/模型运行权不扩大。ACK后继续当前Task，不另起重复任务。
 
+B-PROFILE-API C2直接自动选片消费者：主控回读montage.py三处approved限定确认N33预检单改会造成实际执行冲突，追加B独占montage.py仅这些选择消费者及必要直接专项，消费production同一真实用途资格方法，不在montage复制新一套公式。保留ready、可读来源/实际媒体范围、明确rejected/use_state/段exclude与真实主题/结构选择区别；低语义候选仍需实际人工选择，删除全体默认审批门槛不表示模型可随意采用无关镜头。既有渲染、时间轴、预算/输出和UI-TASK不改，准确回读主控候选后ACK继续当前单。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
