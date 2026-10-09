@@ -1176,6 +1176,7 @@ export type CreationTaskScript = {
   updated_at: string;
   confirmed_at: string | null;
   reused_from_entry_id?: string | null;
+  source_reply_reference?: { conversation_id: string; turn_id: string; response_digest: string } | null;
 };
 
 export type CreationTaskScriptsResponse = {

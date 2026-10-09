@@ -14,6 +14,9 @@ vi.mock("@/lib/api", () => {
     saved.set(id, value);
     return value;
   }
+  function mockUuid() {
+    return `00000000-0000-4000-8000-${String(++mocks.sequence).padStart(12, "0")}`;
+  }
   async function runTurn(conversationId: string, userMessage: string, clientRequestId: string, expectedDraftVersion: number,
     onEvent: (event: never) => void, work: (emit: (event: never) => void) => Promise<Record<string, unknown>>) {
     const priorReceipt = mocks.receipts.get(clientRequestId) as { request: string; response: Record<string, unknown> } | undefined;
@@ -23,7 +26,7 @@ vi.mock("@/lib/api", () => {
     }
     const before = saved.get(conversationId)!;
     if (before.draft_text !== userMessage || before.draft_version !== expectedDraftVersion) throw new Error("draft CAS conflict");
-    const turnId = `turn-${++mocks.sequence}`;
+    const turnId = mockUuid();
     const events: never[] = [];
     const emit = (event: never) => {
       const type = (event as { type?: string }).type;
@@ -60,8 +63,8 @@ vi.mock("@/lib/api", () => {
     return response;
   }
   return {
-  getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, `conversation-${scope.scope_kind}-${scope.scope_id}-${++mocks.sequence}`)),
-  createAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, `new-conversation-${scope.scope_kind}-${scope.scope_id}-${++mocks.sequence}`)),
+  getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, mockUuid())),
+  createAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, mockUuid())),
   listAssistantConversations: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => ({ items: [...saved.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
   getAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
   resumeAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
@@ -109,6 +112,30 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(input).toBeEnabled());
     return input;
   }
+
+  it("routes a completed home reply as a stable source reference without copying its body", async () => {
+    configuredModel();
+    mocks.ask.mockResolvedValue({ reply: "已完成的回复正文，不放进链接。", provider: "minimax", model: "MiniMax-M3" });
+    const assignLocation = vi.fn();
+    render(<HomeCommandComposer assignLocation={assignLocation} />);
+    fireEvent.change(await readyInput("制作要求"), { target: { value: "帮我整理成方案" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    const action = await screen.findByRole("button", { name: "带入新任务文案" });
+    fireEvent.click(action);
+    fireEvent.click(action);
+
+    expect(assignLocation).toHaveBeenCalledTimes(2);
+    const first = new URL(assignLocation.mock.calls[0][0], window.location.origin);
+    const second = new URL(assignLocation.mock.calls[1][0], window.location.origin);
+    expect(first.pathname).toBe("/production");
+    expect(first.searchParams.get("reply_conversation_id")).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(first.searchParams.get("reply_turn_id")).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(first.searchParams.get("reply_request_id")).toBe(second.searchParams.get("reply_request_id"));
+    expect(sessionStorage.getItem(`ai-video-diary.reply-plan-request.v1:${first.searchParams.get("reply_conversation_id")}:${first.searchParams.get("reply_turn_id")}`))
+      .toBe(first.searchParams.get("reply_request_id"));
+    expect(first.search).not.toContain("已完成的回复正文");
+  });
 
   it("settles an unsent turn as its original draft when scope changes during the draft checkpoint", async () => {
     configuredModel();

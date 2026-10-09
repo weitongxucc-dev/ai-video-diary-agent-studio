@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
-import type { CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
+import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
@@ -92,6 +92,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [taskActionStatus, setTaskActionStatus] = useState<string | null>(null);
   const scopeRevision = useRef(0);
   const restoredPlanKey = useRef<string | null>(null);
+  const replyPlanRequests = useRef(new Map<string, string>());
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);
@@ -269,6 +270,37 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     }
   }
 
+  function startPlanFromReply(turn: AssistantConversationTurn) {
+    const conversation = assistant.conversation;
+    if (scopeKind !== "home" || task || materialContext || !conversation
+      || !assistant.isCurrentConversation(conversation.id) || turn.status !== "completed"
+      || !turn.assistant_text.trim() || !conversation.turns.some(item => item.id === turn.id && item.status === "completed")) {
+      setError("当前首页对话或完成回复已变化，没有带入其他内容。");
+      return;
+    }
+    const key = `${conversation.id}:${turn.id}`;
+    let requestId = replyPlanRequests.current.get(key);
+    if (!requestId) {
+      const storageKey = `ai-video-diary.reply-plan-request.v1:${conversation.id}:${turn.id}`;
+      try {
+        const saved = window.sessionStorage.getItem(storageKey);
+        const savedRequestId = saved && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(saved)
+          ? saved : null;
+        requestId = savedRequestId ?? crypto.randomUUID();
+        if (!savedRequestId) window.sessionStorage.setItem(storageKey, requestId);
+      } catch {
+        setError("浏览器暂存不可用，没有开始新任务；请恢复暂存后重试。");
+        return;
+      }
+      replyPlanRequests.current.set(key, requestId);
+    }
+    const query = new URLSearchParams({
+      new: "1", reply_conversation_id: conversation.id, reply_turn_id: turn.id,
+      reply_request_id: requestId,
+    });
+    assignLocation(`/production?${query.toString()}`);
+  }
+
   async function changePlanOptions(value: PresenterShare, quality: LipSyncQuality) {
     if (!preview || pending) return;
     setShareValue(value);
@@ -348,6 +380,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
         onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setPending(null); setShareUpdating(false); setError(null); }}
         onSend={sendToAssistant}
+        onCreatePlanFromReply={scopeKind === "home" && !task && !materialContext ? startPlanFromReply : undefined}
         scopeLabel={materialContext ? (materialContext.label ?? "当前素材") : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
         state={assistant}
         suggestions={showEntry ? suggestions : []}

@@ -51,6 +51,18 @@ describe("bounded member/workspace session drafts", () => {
     sessionStorage.setItem(key, "{"); expect(() => loadPreflightDraft(sessionStorage, owner, id)).toThrow();
     sessionStorage.setItem(key, "x".repeat(10001)); expect(() => loadPreflightDraft(sessionStorage, owner, id)).toThrow("读取范围");
   });
+  it("stores only the stable reply origin and never a copied reply body", () => {
+    const replyOrigin = {
+      conversation_id: "11111111-1111-4111-8111-111111111111",
+      turn_id: "22222222-2222-4222-8222-222222222222",
+      request_id: "33333333-3333-4333-8333-333333333333",
+    };
+    savePreflightDraft(sessionStorage, owner, id, { ...draft, replyOrigin });
+    const saved = loadPreflightDraft(sessionStorage, owner, id)!;
+    expect(saved.replyOrigin).toEqual(replyOrigin);
+    expect(JSON.stringify(saved)).not.toContain("正文");
+    expect(() => savePreflightDraft(sessionStorage, owner, id2, { ...draft, replyOrigin: { ...replyOrigin, body: "secret" } as never })).toThrow("输入超出");
+  });
   it("bounds return_to to the original creation URL and fixed template, with no form body", () => {
     const href = preflightReturnUrl(id, draft.template);
     expect(boundedPreflightReturn(href, "https://example.test")).toEqual({ href, draftId: id, template: draft.template });

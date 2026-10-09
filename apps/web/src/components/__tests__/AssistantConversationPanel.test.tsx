@@ -80,6 +80,26 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AssistantConversationPanel", () => {
+  it("offers an explicit reply transfer and a second confirmation before replacing a draft", () => {
+    const onTransferReply = vi.fn();
+    render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
+      onTransferReply={onTransferReply} transferDraftState="draft" busy={false} configured scopeLabel="当前任务" />);
+    fireEvent.click(screen.getByRole("button", { name: "替换当前草稿并带入回复" }));
+    expect(onTransferReply).not.toHaveBeenCalled();
+    expect(screen.getByText("这会覆盖当前待确认文案；已确认的文案不会被替换。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认替换并带入回复" }));
+    expect(onTransferReply).toHaveBeenCalledWith(expect.objectContaining({ id: "turn-one" }), true);
+  });
+
+  it("offers an explicit new-task handoff for a completed home reply", () => {
+    const onCreatePlanFromReply = vi.fn();
+    render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
+      onCreatePlanFromReply={onCreatePlanFromReply} busy={false} configured scopeLabel="首页创作" />);
+    fireEvent.click(screen.getByRole("button", { name: "带入新任务文案" }));
+    expect(onCreatePlanFromReply).toHaveBeenCalledWith(expect.objectContaining({ id: "turn-one", status: "completed" }));
+    expect(screen.getByText("先确认制作方案和选题；这条回复只作为文案来源，不代替资料事实。")).toBeInTheDocument();
+  });
+
   it("renders one final Markdown body and one collapsed, ordered tool summary", async () => {
     const { container } = render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
       busy={false} configured scopeLabel="首页创作" />);

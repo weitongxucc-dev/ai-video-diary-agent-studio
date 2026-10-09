@@ -66,7 +66,8 @@ function TurnContent({ turn }: { turn: AssistantConversationTurn }) {
   </div>;
 }
 
-function TurnView({ turn }: { turn: AssistantConversationTurn }) {
+function TurnView({ turn, onTransferReply, onCreatePlanFromReply, transferDraftState }: { turn: AssistantConversationTurn; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed" }) {
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const result = turn.result;
   const executionStatusLabels: Record<string, string> = {
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
@@ -92,17 +93,30 @@ function TurnView({ turn }: { turn: AssistantConversationTurn }) {
     {resultSummary ? <details className="assistant-turn-result"><summary>本轮结果</summary><p>{resultSummary}</p></details> : null}
     {turn.status === "failed" ? <p role="status">本轮未完成；可以修改下面的草稿后重新发送。</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
+    {turn.status === "completed" && turn.assistant_text.trim() && onTransferReply ? <div className="assistant-turn-result">
+      {transferDraftState === "confirmed" ? <p>当前文案已确认，不能被回复替换。</p>
+        : transferDraftState === "draft" && confirmReplace
+          ? <><p>这会覆盖当前待确认文案；已确认的文案不会被替换。</p><button className="assistant-copy" type="button" onClick={() => { setConfirmReplace(false); onTransferReply(turn, true); }}>确认替换并带入回复</button><button className="assistant-copy" type="button" onClick={() => setConfirmReplace(false)}>取消</button></>
+          : <button className="assistant-copy" type="button" onClick={() => transferDraftState === "draft" ? setConfirmReplace(true) : onTransferReply(turn, false)}>{transferDraftState === "draft" ? "替换当前草稿并带入回复" : "带入文案草稿"}</button>}
+    </div> : null}
+    {turn.status === "completed" && turn.assistant_text.trim() && onCreatePlanFromReply ? <div className="assistant-turn-result">
+      <button className="assistant-copy" type="button" onClick={() => onCreatePlanFromReply(turn)}>带入新任务文案</button>
+      <p>先确认制作方案和选题；这条回复只作为文案来源，不代替资料事实。</p>
+    </div> : null}
   </article>;
 }
 
 export function AssistantConversationPanel({
-  state, input, onInput, onSend, onConversationChange, busy, configured, suggestions = [], scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false,
+  state, input, onInput, onSend, onConversationChange, onTransferReply, onCreatePlanFromReply, transferDraftState = "none", busy, configured, suggestions = [], scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false,
 }: {
   state: Conversation;
   input: string;
   onInput: (value: string) => void;
   onSend: (text: string) => Promise<void>;
   onConversationChange?: () => void;
+  onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
+  onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void;
+  transferDraftState?: "none" | "draft" | "confirmed";
   busy: boolean;
   configured: boolean;
   suggestions?: string[];
@@ -189,7 +203,7 @@ export function AssistantConversationPanel({
       </div>
     </header>
     <div className="assistant-conversation-history" aria-label="持久对话记录">
-      {turns.map((turn) => <TurnView key={turn.id} turn={turn} />)}
+        {turns.map((turn) => <TurnView key={turn.id} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} transferDraftState={transferDraftState} turn={turn} />)}
       {!turns.length ? <div className="assistant-suggestions"><p>{scopeLabel}。对话和未发送草稿会保存在当前成员的这一范围内。</p>{suggestions.map((suggestion) => <button key={suggestion} type="button" disabled={busy} onClick={() => { onInput(suggestion); focus?.focus(); }}>{suggestion}</button>)}</div> : null}
       {state.loading ? <p role="status">正在恢复对话…</p> : null}
     </div>

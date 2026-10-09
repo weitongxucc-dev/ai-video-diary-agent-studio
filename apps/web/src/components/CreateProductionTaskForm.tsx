@@ -12,7 +12,7 @@ import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/li
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import ui from "./CreateProductionTaskForm.module.css";
-import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields } from "@/lib/preflight-draft";
+import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields, type PreflightReplyOrigin } from "@/lib/preflight-draft";
 
 // These fields are returned by MaterialSegmentMatchResponse; the shared Web type omits them.
 type PreflightMatch = CreationPlanPreview["material_matches"][number] & { match_tier?: string; asset_file_name?: string };
@@ -32,6 +32,7 @@ type CreateProductionTaskFormProps = {
   initialGoal?: string;
   assignLocation?: (url: string) => void;
   draftId?: string;
+  replyOrigin?: PreflightReplyOrigin | null;
 };
 
 type FormError = {
@@ -124,6 +125,7 @@ export function CreateProductionTaskForm({
   initialGoal = "",
   assignLocation = assignDocumentLocation,
   draftId,
+  replyOrigin: initialReplyOrigin = null,
 }: CreateProductionTaskFormProps) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [people, setPeople] = useState<PersonProfile[]>([]);
@@ -137,6 +139,8 @@ export function CreateProductionTaskForm({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftReady, setDraftReady] = useState(false);
   const [restored, setRestored] = useState(false);
+  const [replyOrigin, setReplyOrigin] = useState<PreflightReplyOrigin | null>(initialReplyOrigin);
+  const replyOriginRef = useRef<PreflightReplyOrigin | null>(initialReplyOrigin);
   const alive = useRef(true);
   const operation = useRef(0);
   const [profilesError, setProfilesError] = useState<string | null>(null);
@@ -181,6 +185,11 @@ export function CreateProductionTaskForm({
     ++inputRevision.current; ++operation.current; submittingRef.current = false; setPending(null); setCreated(false); setPreview(null);
     userEdited.current = false; setDraftReady(false); setRestored(false); setDraftError(null); draftScope.current = null;
     draftUuid.current = draftId ?? crypto.randomUUID();
+    const hasInitialOrigin = initialReplyOrigin !== null;
+    if (!draftId || previousDraftId.current !== draftId) {
+      replyOriginRef.current = hasInitialOrigin ? initialReplyOrigin : null;
+      setReplyOrigin(replyOriginRef.current);
+    }
     if (draftId || previousDraftId.current !== draftId) {
       setGoal(draftId ? "" : initialGoal); setName(""); setTargetCount("1");
       setDuration(String(template?.settings.duration_target_seconds ?? 60));
@@ -201,18 +210,21 @@ export function CreateProductionTaskForm({
         setLanguage(saved.language); setAspectRatio(saved.aspectRatio); setPresenterShare(saved.presenterShare); setLipsyncQuality(saved.lipsyncQuality);
         voiceSelectionEdited.current = saved.voiceEdited || saved.voicePin !== null;
         setVoicePin(saved.voicePin ?? undefined); setPersonPin(saved.personPin ?? undefined); setRestored(true);
+        replyOriginRef.current = saved.replyOrigin ?? null;
+        setReplyOrigin(replyOriginRef.current);
         ++inputRevision.current;
         void runPreview(saved);
       }
       setDraftReady(true);
     }).catch(cause => { if (active) setDraftError(`临时草稿未恢复：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
     return () => { active = false; alive.current = false; ++inputRevision.current; ++operation.current; };
-  }, [draftId, template?.id, template?.version]);
+  }, [draftId, template?.id, template?.version, initialReplyOrigin?.conversation_id, initialReplyOrigin?.turn_id, initialReplyOrigin?.request_id]);
 
   function draftFields(): PreflightDraftFields {
     return { goal, name, targetCount, duration, language, aspectRatio, presenterShare, lipsyncQuality,
       voicePin: voicePin ?? null, personPin: personPin ?? null, voiceEdited: voiceSelectionEdited.current,
-      template: template ? { id: template.id, version: template.version } : null };
+      template: template ? { id: template.id, version: template.version } : null,
+      replyOrigin: replyOriginRef.current };
   }
   async function verifiedScope(): Promise<DraftScope> {
     const scope = await readPreflightDraftScope();
@@ -257,6 +269,10 @@ export function CreateProductionTaskForm({
   function invalidatePreview() {
     userEdited.current = true;
     ++inputRevision.current;
+    if (replyOriginRef.current) {
+      replyOriginRef.current = { ...replyOriginRef.current, request_id: crypto.randomUUID() };
+      setReplyOrigin(replyOriginRef.current);
+    }
     setPreview(null);
     setError(null);
   }
@@ -297,7 +313,10 @@ export function CreateProductionTaskForm({
     try {
       const scope = await verifiedScope();
       if (!alive.current || revision !== inputRevision.current) { if (alive.current && request === operation.current) { submittingRef.current = false; setPending(null); } return; }
-      const plan = await confirmCreationPlan({ ...input(), preflight_fingerprint: preview.preflight_fingerprint });
+      const plan = await confirmCreationPlan({
+        ...input(), preflight_fingerprint: preview.preflight_fingerprint,
+        ...(replyOriginRef.current ? { reply_origin: replyOriginRef.current } : {}),
+      });
       let cleanupWarning = "";
       try { clearPreflightDraft(window.sessionStorage, scope, confirmDraftId!); }
       catch (cause) { cleanupWarning = `临时草稿清理失败：${cause instanceof Error ? cause.message : "存储不可用"}`; }
@@ -322,6 +341,7 @@ export function CreateProductionTaskForm({
   return (
     <div className={`creation-plan-form ${ui.form}`}>
       {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/templates")}>重新选择模板</button></section> : null}
+      {replyOrigin ? <p role="status">已选择一条首页完成回复作为文案来源。这里仍需确认制作方案和选题；页面只保存会话与轮次定位，服务端会重新读取回复正文。</p> : null}
       <p className={ui.draftNotice}>{restored ? (pending === "preview" ? "已恢复本次输入，正在重新检查当前资格。" : preview ? "已恢复本次输入并取得新预检结果。" : "已恢复本次输入，请重新检查当前资格。") : "前往补充资源前会保存当前输入为本成员、本工作区的临时草稿。"}关闭或返回列表不会创建任务；已保存的临时草稿仅保留在本次浏览会话，创建成功后清理。</p>
       <button type="button" disabled={!draftReady || isPending} onClick={() => void abandonDraft()}>放弃本次草稿并返回列表</button>
       {draftError ? <p className={ui.draftNotice} role="alert">{draftError}</p> : null}

@@ -339,6 +339,7 @@ export function ScriptLibraryPanel() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [selected, setSelected] = useState<ScriptLibraryEntry | null>(null);
+  const [deepLink, setDeepLink] = useState<{ entryId: string; sourceTaskId: string | null } | null>(null);
   const selectedKey = selected ? JSON.stringify([selected.id, selected.version]) : null;
   const [sourceResult, setSourceResult] = useState<{ key: string; sources: ScriptLibrarySource[] } | null>(null);
   const [sourceFailure, setSourceFailure] = useState<{ key: string; message: string } | null>(null);
@@ -356,6 +357,11 @@ export function ScriptLibraryPanel() {
   const selectedId = selected?.id ?? null;
   const previousSelectedKey = useRef<string | null>(null);
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const entryId = params.get("entry_id");
+    if (entryId) setDeepLink({ entryId, sourceTaskId: params.get("source_task_id") });
+  }, []);
+  useEffect(() => {
     if (previousSelectedKey.current !== selectedKey) {
       previousSelectedKey.current = selectedKey;
       setConfirmedKey(null);
@@ -368,13 +374,27 @@ export function ScriptLibraryPanel() {
       if (active) {
         setEntries(result.items);
         setLoadedFilter({ query, category });
-        setSelected(current => current ? result.items.find(entry => entry.id === current.id) ?? null : null);
+        if (deepLink) {
+          const entry = result.items.find(item => item.id === deepLink.entryId);
+          if (entry && (!deepLink.sourceTaskId || entry.source_task_id === deepLink.sourceTaskId)) {
+            setSelected(entry);
+            setDeepLink(null);
+          } else if (!entry) {
+            setListError("链接中的文案版本当前不可用；你仍可从列表查找其他版本。");
+            setDeepLink(null);
+          } else {
+            setListError("文案版本与来源任务不匹配；没有打开其他版本。");
+            setDeepLink(null);
+          }
+        } else {
+          setSelected(current => current ? result.items.find(entry => entry.id === current.id) ?? null : null);
+        }
       }
     }).catch(cause => {
       if (active) setListError(cause instanceof Error ? cause.message : "文案库读取失败");
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [query, category, listRetry]);
+  }, [query, category, listRetry, deepLink]);
   useEffect(() => {
     if (!selectedId || !selectedKey) return;
     let active = true;

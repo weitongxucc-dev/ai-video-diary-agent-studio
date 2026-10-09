@@ -38,6 +38,9 @@ import {
   getCreationTaskQualityCheck,
   confirmCreationTaskEdit,
   confirmCreationTaskScript,
+  transferAssistantReplyToScript,
+  getAssistantScriptContext,
+  saveAssistantScriptDraft,
   saveScriptLibraryEntry,
   confirmCreationTaskTopic,
   CreationPlanApiError,
@@ -73,6 +76,7 @@ import {
 } from "@/lib/api";
 import type {
   CreationTask,
+  AssistantConversationTurn,
   CreationTaskQualityCheck,
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
@@ -107,7 +111,7 @@ type Props = {
   initialTasks: CreationTask[];
 };
 
-type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "execution" | "voice-select" | "recording-adopt" | "person-render" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
+type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "reply-transfer" | "execution" | "voice-select" | "recording-adopt" | "person-render" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 
 type WorkspaceView = CreationTask["stage"] | "subtitle_cover" | "prepare" | "person" | "publish";
 
@@ -564,10 +568,12 @@ function ScriptLibrarySave({ script }: { script: CreationTaskScript }) {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [savedEntry, setSavedEntry] = useState<{ id: string; source_task_id: string; version: number } | null>(null);
   async function save() {
     setSaving(true); setFeedback(null); setFailed(false);
     try {
       const entry = await saveScriptLibraryEntry({ source_script_id: script.id, name, category });
+      setSavedEntry(entry);
       setFeedback(`已保存「${entry.name}」版本 ${entry.version}；原文案与成片不变。`);
     } catch (cause) {
       setFailed(true); setFeedback(cause instanceof Error ? cause.message : "文案保存失败");
@@ -578,21 +584,90 @@ function ScriptLibrarySave({ script }: { script: CreationTaskScript }) {
     <label className={styles.field}><span>文案名称</span><input value={name} onChange={event => setName(event.target.value)} /></label>
     <label className={styles.field}><span>文案分类</span><input placeholder="例如产品介绍" value={category} onChange={event => setCategory(event.target.value)} /></label>
     <button className="modern-primary-button" disabled={saving || !name.trim()} onClick={() => void save()} type="button">{saving ? "正在保存…" : "存入文案库"}</button>
-    <Link href="/knowledge">查看文案库</Link>
+    <Link href={savedEntry ? `/knowledge?entry_id=${encodeURIComponent(savedEntry.id)}&source_task_id=${encodeURIComponent(savedEntry.source_task_id)}` : "/knowledge"}>{savedEntry ? `查看该条目 · 版本 ${savedEntry.version}` : "查看文案库"}</Link>
     <p>同一原任务以同名再次保存会追加历史版本；复用的新稿仍需重新确认。</p>
     {feedback ? <p role={failed ? "alert" : "status"}>{feedback}</p> : null}
   </section>;
 }
 
-function ScriptEditor({ script, busy, repairing, onConfirm }: { script: CreationTaskScript; busy: boolean; repairing: boolean; onConfirm: (script: CreationTaskScript) => void }) {
+export function PlanReplyDraftAction({ task, busy = false, onComplete }: { task: CreationTask; busy?: boolean; onComplete: () => Promise<void> }) {
+  const [origin, setOrigin] = useState<{ conversation_id: string; turn_id: string; request_id: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void getAssistantScriptContext(task.id).then((context) => {
+      if (active) setOrigin(context.reply_origin);
+    }).catch((cause) => {
+      if (active) setError(cause instanceof Error ? cause.message : "无法读取回复来源。");
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [task.id]);
+
+  async function transfer() {
+    if (!origin || pending || busy) return;
+    setPending(true); setError(null);
+    try {
+      const key = `ai-video-diary.plan-reply-transfer.v1:${task.id}:${origin.request_id}`;
+      const saved = window.sessionStorage.getItem(key);
+      const requestId = saved && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(saved)
+        ? saved : crypto.randomUUID();
+      if (!saved) window.sessionStorage.setItem(key, requestId);
+      const plan = await getCreationPlan(task.plan_id);
+      await transferAssistantReplyToScript(task.id, {
+        conversation_id: origin.conversation_id, turn_id: origin.turn_id,
+        request_id: requestId, plan_conversion_request_id: origin.request_id,
+        expected_plan_updated_at: plan.updated_at, expected_task_updated_at: task.updated_at,
+      });
+      await onComplete();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "回复草稿没有保存成功，请重新检查后重试。");
+    } finally { setPending(false); }
+  }
+  if (loading || !origin) return error ? <p role="alert">{error}</p> : null;
+  return <section className={styles.workSection} aria-label="已选择的首页回复">
+    <h3>已选择的对话回复</h3>
+    <p>保存为待确认文案草稿后，仍需逐段补充当前资料引用和画面建议；不会跳过选题确认。</p>
+    <button className={styles.secondaryButton} disabled={pending || busy} onClick={() => void transfer()} type="button">{pending ? "正在核对并保存…" : "保存这条回复为文案草稿"}</button>
+    {error ? <p role="alert">{error}</p> : null}
+  </section>;
+}
+
+function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: { taskId: string; script: CreationTaskScript; busy: boolean; repairing: boolean; onConfirm: (script: CreationTaskScript) => void }) {
   const [draft, setDraft] = useState(script);
+  const [sources, setSources] = useState<{ reference_id: string; title: string; text: string }[]>([]);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void getAssistantScriptContext(taskId).then((context) => { if (active) setSources(context.sources); })
+      .catch((cause) => { if (active) setDraftError(cause instanceof Error ? cause.message : "无法读取当前任务资料。"); });
+    return () => { active = false; };
+  }, [taskId]);
+  async function saveDraft() {
+    setSavingDraft(true); setDraftError(null);
+    try {
+      const saved = await saveAssistantScriptDraft(taskId, {
+        title: draft.title,
+        sections: draft.sections,
+        expected_updated_at: draft.updated_at,
+      });
+      setDraft(saved);
+    } catch (cause) {
+      setDraftError(cause instanceof Error ? cause.message : "草稿没有保存成功；当前编辑内容仍保留在本页。");
+    } finally { setSavingDraft(false); }
+  }
   return (
     <section className={styles.workSection}>
       <div className={styles.sectionHeading}><div><span>{repairing ? "文案修订" : "文案编辑"}</span><h2>{repairing ? "压缩并重新确认文案" : "检查事实和口播表达"}</h2><p>{repairing ? "调整正文后重新确认，再生成配音。" : "编辑不会再次调用模型；只有“确认文案”会推进到真实配音。"}</p></div></div>
       {script.reused_from_entry_id ? <p>从文案库复用的新稿，尚未确认；没有调用模型或复制旧成片。<Link href="/knowledge">查看文案来源</Link></p> : null}
+      {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；来源和画面建议需要你逐段核对补充。</p> : null}
       <label className={styles.field}><span>标题</span><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })} /><p><strong>画面建议：</strong>{section.visual_prompt}</p><p><strong>来源证据：</strong>{section.evidence_reference_ids.join("、")}</p></article>)}</div>
-      <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}{repairing ? "确认修订文案" : "确认文案"}</button></div>
+      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })} /><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })} /></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sources.length ? sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })} />{source.title}</label>) : <p>当前任务没有可选资料；请先补充并确认有效来源。</p>}</fieldset></article>)}</div>
+      {draftError ? <p role="alert">{draftError}</p> : null}
+      {script.selection_status === "draft" ? <button className={styles.secondaryButton} disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</button> : null}
+      <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim() || !section.evidence_reference_ids.length)} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}{repairing ? "确认修订文案" : "确认文案"}</button></div>
     </section>
   );
 }
@@ -800,6 +875,8 @@ function ContextCommandBar({
   onSelectionPreview,
   preview,
   assistantState,
+  onTransferReply,
+  transferDraftState,
   onAssistantSend,
   onConversationChange,
   previewCommand,
@@ -820,6 +897,8 @@ function ContextCommandBar({
   onSelectionPreview: (indices:number[])=>void;
   preview: CreationTaskEditPreviewResponse | null;
   assistantState: ReturnType<typeof useAssistantConversation>;
+  onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
+  transferDraftState: "none" | "draft" | "confirmed";
   onAssistantSend: () => Promise<void>;
   onConversationChange: () => void;
   previewCommand: string;
@@ -844,6 +923,8 @@ function ContextCommandBar({
         busy={busy !== null}
         compact={compact}
         configured={assistantConfigured}
+        onTransferReply={onTransferReply}
+        transferDraftState={transferDraftState}
         input={assistantState.draftText}
         inputLabel={scriptMode ? "文案要求" : "局部修改要求"}
         onInput={onCommandChange}
@@ -1476,6 +1557,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }, [workspace.task.id, workspace.task.confirmed_script_id, workspace.task.stage]);
   const task = workspace.task;
   const assistantConversation = useAssistantConversation({ scope_kind: "task", scope_id: task.id });
+  const replyTransferRequests = useRef(new Map<string, string>());
   const editCommand = assistantConversation.draftText;
   const setEditCommand = assistantConversation.setDraftText;
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -2021,6 +2103,52 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  async function transferReplyToDraft(turn: AssistantConversationTurn, replace: boolean) {
+    const conversationId = assistantConversation.conversation?.id;
+    if (!conversationId || !assistantConversation.isCurrentConversation(conversationId)
+      || turn.status !== "completed" || !turn.assistant_text.trim()) return;
+    if (latestScript?.selection_status === "confirmed") {
+      setError(errorDetails(new Error("当前文案已确认，不能被对话回复替换。")));
+      return;
+    }
+    if (latestScript?.selection_status === "draft" && !replace) {
+      setError(errorDetails(new Error("当前已有待确认文案，请明确选择替换后再带入。")));
+      return;
+    }
+    if (replace && latestScript?.selection_status !== "draft") {
+      setError(errorDetails(new Error("没有可替换的待确认文案。")));
+      return;
+    }
+    const requestKey = `${conversationId}:${turn.id}:${replace ? latestScript?.id : "new"}`;
+    const requestId = replyTransferRequests.current.get(requestKey) ?? crypto.randomUUID();
+    replyTransferRequests.current.set(requestKey, requestId);
+    setBusy("reply-transfer");
+    setError(null);
+    setNotice(null);
+    try {
+      const plan = await getCreationPlan(task.plan_id);
+      if (!assistantConversation.isCurrentConversation(conversationId)) return;
+      await transferAssistantReplyToScript(task.id, {
+        conversation_id: conversationId,
+        turn_id: turn.id,
+        request_id: requestId,
+        expected_plan_updated_at: plan.updated_at,
+        expected_task_updated_at: task.updated_at,
+        ...(replace && latestScript ? {
+          replace_existing_script_id: latestScript.id,
+          expected_script_updated_at: latestScript.updated_at,
+        } : {}),
+      });
+      replyTransferRequests.current.delete(requestKey);
+      await refresh(true);
+      setNotice("回复已保存为待确认文案草稿；请补充来源和画面建议，再确认文案。");
+    } catch (cause) {
+      setError(errorDetails(cause));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function personEditSettled(status: string) {
     await refresh(true);
     setPendingPersonEditJobId(null);
@@ -2314,7 +2442,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onConversationChange={() => { editContextRevision.current += 1; setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { editContextRevision.current += 1; setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (
@@ -2355,8 +2483,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "topic" && task.stage === "topic" ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>选题</span><h2>{topics?.candidates.length ? "选择一个要制作的方向" : "从授权资料生成选题"}</h2><p>模型只会看到预检中列出的文字摘录；确认后不会再次生成选题。</p></div>{!topics?.candidates.length ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。") } type="button">{busy === "topics" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成选题</button> : null}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => { setSelectedTopicId(candidate.id); setTopicTitleDraft(candidate.title); }} type="radio" /><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{selectedTopicCandidate ? <label className={styles.field}><span>编辑标题</span><input aria-label="编辑标题" disabled={busy !== null} maxLength={80} onChange={(event) => setTopicTitleDraft(event.target.value)} placeholder="输入本选题的标题" value={topicTitleDraft} /><small className={styles.eyebrow}>确认选题时带上这个标题；当前落库以生成标题为准，覆盖需后端支持。</small></label> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId || !topicTitleDraft.trim()} onClick={() => selectedTopicId && run("topic-confirm", () => confirmCreationTaskTopic(task.id, selectedTopicId), `选题「${topicTitleDraft.trim()}」已确认，下一步生成文案。`) } type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认选题</button></div> : null}</section> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView workspace={workspace} /> : null}
 
-        {activeView === "script" && task.stage === "script" && !latestScript ? <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>根据已确认选题生成中文文案</h2><p>这是本任务第二次、也是最后一次文字模型调用。生成后先编辑和确认，再进入配音。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section> : null}
-        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor busy={busy !== null} key={latestScript.updated_at} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
+        {activeView === "script" && task.stage === "script" && !latestScript ? <>
+          <PlanReplyDraftAction busy={busy !== null} task={task} onComplete={async () => { await refresh(true); setNotice("已保存对话回复为待确认文案草稿；请补充当前资料引用和画面建议。"); }} />
+          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>根据已确认选题生成中文文案</h2><p>这是本任务第二次、也是最后一次文字模型调用。生成后先编辑和确认，再进入配音。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
+        </> : null}
+        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={latestScript.updated_at} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ConfirmedScriptView script={latestScript} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}

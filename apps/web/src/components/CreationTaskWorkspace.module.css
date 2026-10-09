@@ -353,6 +353,11 @@
   padding: 14px 16px;
 }
 
+.scriptSourceChoices { display: grid; gap: 8px; margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--border-1); border-radius: 8px; }
+.scriptSourceChoices legend { padding: 0 4px; color: var(--text-2); font-size: 12px; }
+.scriptSourceChoices label { display: flex; align-items: flex-start; gap: 8px; color: var(--text-1); font-size: 13px; }
+.scriptSourceChoices input { margin-top: 2px; }
+
 .scriptSections header { display: flex; gap: 10px; margin-bottom: 10px; }
 .scriptSections header span { color: var(--text-3); font-size: 12px; }
 .scriptSections header strong { font-weight: 500; }

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ScriptLibraryPanel } from "@/app/knowledge/KnowledgeWorkspace";
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), sources: vi.fn(), reuse: vi.fn(), push: vi.fn() }));
@@ -23,6 +23,10 @@ beforeEach(() => {
   mocks.reuse.mockResolvedValue({ task_id: "new-task", script: { selection_status: "draft" } });
 });
 
+afterEach(() => {
+  window.history.replaceState({}, "", "/knowledge");
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -42,6 +46,13 @@ it("allows an unreferenced owned script only after explicit new requirements con
     name: "维护介绍 · 新任务", aspect_ratio: "9:16", duration_target_seconds: 60,
     requirements_confirmed: true,
   });
+});
+
+it("opens the exact saved entry from its task deep link and retains the source-task return", async () => {
+  window.history.replaceState({}, "", "/knowledge?entry_id=entry-1&source_task_id=original-task");
+  render(<ScriptLibraryPanel />);
+  expect(await screen.findByRole("heading", { name: "维护介绍 · 版本 1" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "查看原任务" })).toHaveAttribute("href", "/tasks/original-task");
 });
 
 it("keeps owned historical text visible when a source changes, but refuses reuse", async () => {

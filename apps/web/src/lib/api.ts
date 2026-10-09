@@ -787,7 +787,10 @@ export function sendMaterialAssistantTurn(
 }
 
 export function confirmCreationPlan(
-  input: CreationPlanInput & { preflight_fingerprint: string },
+  input: CreationPlanInput & {
+    preflight_fingerprint: string;
+    reply_origin?: { conversation_id: string; turn_id: string; request_id: string };
+  },
 ): Promise<CreationPlan> {
   return creationPlanRequest<CreationPlan>("/api/creation-plans/confirm", {
     method: "POST",
@@ -951,10 +954,46 @@ export function generateCreationTaskScript(taskId: string): Promise<CreationTask
 export function confirmCreationTaskScript(
   taskId: string,
   scriptId: string,
-  input: { title: string; sections: CreationTaskScriptSection[] },
+  input: { title: string; sections: CreationTaskScriptSection[]; expected_updated_at: string },
 ): Promise<CreationTaskScriptsResponse> {
   return creationPlanRequest<CreationTaskScriptsResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/confirm`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function transferAssistantReplyToScript(taskId: string, input: {
+  conversation_id: string;
+  turn_id: string;
+  request_id: string;
+  plan_conversion_request_id?: string;
+  expected_plan_updated_at: string;
+  expected_task_updated_at: string;
+  replace_existing_script_id?: string;
+  expected_script_updated_at?: string;
+}): Promise<CreationTaskScriptsResponse> {
+  return creationPlanRequest<CreationTaskScriptsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/reply-transfer`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function getAssistantScriptContext(taskId: string): Promise<{
+  task_id: string;
+  sources: { reference_id: string; title: string; text: string }[];
+  draft: CreationTaskScript | null;
+  reply_origin: { conversation_id: string; turn_id: string; request_id: string } | null;
+}> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
+}
+
+export function saveAssistantScriptDraft(taskId: string, input: {
+  title: string;
+  sections: CreationTaskScriptSection[];
+  expected_updated_at?: string;
+}): Promise<CreationTaskScript> {
+  return creationPlanRequest<CreationTaskScript>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }

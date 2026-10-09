@@ -23,6 +23,26 @@ beforeEach(() => {
   mocks.preview.mockResolvedValue(preview()); mocks.confirm.mockResolvedValue({ creation_task: { id: "real-task" } });
 });
 describe("uncreated task repair return", () => {
+  it("preserves only a stable completed-reply origin through repair and sends it on plan confirmation", async () => {
+    const replyOrigin = {
+      conversation_id: "11111111-1111-4111-8111-111111111111",
+      turn_id: "22222222-2222-4222-8222-222222222222",
+      request_id: "33333333-3333-4333-8333-333333333333",
+    };
+    const first = render(<CreateProductionTaskForm initialGoal="任务目标" replyOrigin={replyOrigin} assignLocation={mocks.assign} />);
+    check(); await screen.findByRole("button", { name: "确认并创建任务" });
+    fireEvent.click(screen.getByRole("button", { name: "前往素材库补充内容" }));
+    await waitFor(() => expect(mocks.assign).toHaveBeenCalled());
+    const target = new URL(new URL(mocks.assign.mock.calls[0][0], window.location.origin).searchParams.get("return_to")!, window.location.origin);
+    const draftId = target.searchParams.get("draft_id")!;
+    expect(loadPreflightDraft(sessionStorage, scope, draftId)?.replyOrigin).toEqual(replyOrigin);
+    expect(mocks.assign.mock.calls[0][0]).not.toContain("回复正文");
+    first.unmount();
+    render(<CreateProductionTaskForm draftId={draftId} assignLocation={mocks.assign} />);
+    await screen.findByRole("button", { name: "确认并创建任务" });
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ reply_origin: replyOrigin })));
+  });
   it("saves before the real resource navigation, restores every input and checks fresh facts without auto-creation", async () => {
     mocks.preview.mockResolvedValueOnce(preview({ confirmable: false, preflight_fingerprint: "o".repeat(64), blockers: [{ reason: "content_sources_missing", stage: "topic", impact: "缺少资料", repair_action: "补充资料", blocks_confirmation: true }] }));
     const first = render(<CreateProductionTaskForm template={template} initialGoal={fields.goal} assignLocation={mocks.assign} />);
@@ -39,7 +59,7 @@ describe("uncreated task repair return", () => {
     const target = new URL(resource.searchParams.get("return_to")!, window.location.origin); const draftId = target.searchParams.get("draft_id")!;
     expect(target.searchParams.get("template_version")).toBe("3"); expect(target.searchParams.has("goal")).toBe(false);
     const saved = loadPreflightDraft(sessionStorage, scope, draftId)!;
-    expect(saved).toEqual({ ...fields, presenterShare: 20 });
+    expect(saved).toEqual({ ...fields, presenterShare: 20, replyOrigin: null });
     expect(resolvePreflightRepairContext(sessionStorage, scope, null, window.location.origin)?.target.draftId).toBe(draftId);
     expect(JSON.stringify(saved)).not.toContain("fingerprint");
     first.unmount(); expect(loadPreflightDraft(sessionStorage, scope, draftId)).toEqual(saved);

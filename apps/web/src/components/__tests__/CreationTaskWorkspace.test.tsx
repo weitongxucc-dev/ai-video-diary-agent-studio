@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
     openQuickDetails: vi.fn(),
     confirmEdit: vi.fn(),
     confirmScript: vi.fn(),
+    saveScriptDraft: vi.fn(),
+    saveLibrary: vi.fn(),
     exactEdit: vi.fn(),
     exactPreview: vi.fn(),
     createMontage: vi.fn(),
@@ -38,6 +40,7 @@ const mocks = vi.hoisted(() => {
     checkQuality: vi.fn(),
     initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
+    getAssistantScriptContext: vi.fn().mockResolvedValue({ reply_origin: null, sources: [] }),
     getTopics: vi.fn(),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
     getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
@@ -150,6 +153,9 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskQualityCheck: mocks.getQualityCheck,
   checkCreationTaskQuality: mocks.checkQuality,
   getCreationPlan: mocks.getCreationPlan,
+  getAssistantScriptContext: mocks.getAssistantScriptContext,
+  saveAssistantScriptDraft: mocks.saveScriptDraft,
+  saveScriptLibraryEntry: mocks.saveLibrary,
   setCreationTaskVisibility: mocks.setCreationTaskVisibility,
   setCreationPlanVisibility: mocks.setCreationPlanVisibility,
   initializeCreationTaskTimeline: mocks.initializeTimeline,
@@ -626,6 +632,52 @@ describe("CreationTaskWorkspace", () => {
     }), expect.any(Function)));
     expect(await screen.findByText("真实草稿正文。", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("草稿已保存，请检查。")).toBeInTheDocument();
+  });
+
+  it("requires a deliberate current-source choice before confirming a reply-origin draft", async () => {
+    const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, confirmed_script_id: null };
+    const draft: WorkspaceState["scripts"][number] = {
+      id: "reply-draft", task_id: task.id, run_id: "reply-run", topic_id: "topic-1",
+      title: "回复草稿", language: "zh-CN", selection_status: "draft",
+      created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
+      source_reply_reference: { conversation_id: "conversation-id", turn_id: "turn-id", response_digest: "a".repeat(64) },
+      sections: [{ id: "reply-section", title: "回复", content: "这是来自对话的正文。",
+        visual_prompt: "", evidence_reference_ids: [] }],
+    };
+    const initial = workspace(task);
+    initial.scripts = [draft];
+    const source = { reference_id: "knowledge:current:v3", title: "当前知识资料", text: "仅供当前任务核对。" };
+    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [source] });
+    const updated = { ...draft, updated_at: "2026-10-09T00:00:01Z", sections: [{
+      ...draft.sections[0], visual_prompt: "展示资料中的实际功能。", evidence_reference_ids: [source.reference_id],
+    }] };
+    mocks.saveScriptDraft.mockResolvedValue(updated);
+    const confirmedTask = { ...task, stage: "narration" as const, stage_status: "not_started" as const,
+      status: "running" as const, confirmed_script_id: draft.id };
+    const confirmedWorkspace = workspace(confirmedTask);
+    confirmedWorkspace.scripts = [{ ...updated, selection_status: "confirmed", confirmed_at: updated.updated_at }];
+    mocks.confirmScript.mockResolvedValue({});
+    mocks.getWorkspace.mockResolvedValue(confirmedWorkspace);
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(await screen.findByText(/当前内容是待确认草稿/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "当前知识资料" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), {
+      target: { value: "展示资料中的实际功能。" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(mocks.saveScriptDraft).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      expected_updated_at: task.updated_at,
+      sections: [expect.objectContaining({ visual_prompt: "展示资料中的实际功能。", evidence_reference_ids: [source.reference_id] })],
+    })));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认文案" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "确认文案" }));
+    await waitFor(() => expect(mocks.confirmScript).toHaveBeenCalledWith(task.id, draft.id, expect.objectContaining({
+      expected_updated_at: updated.updated_at,
+      sections: [expect.objectContaining({ visual_prompt: "展示资料中的实际功能。", evidence_reference_ids: [source.reference_id] })],
+    })));
   });
 
   it("streams the real task action, keeps Space/Shift+Enter/IME Enter in the input, then restores focus", async () => {
