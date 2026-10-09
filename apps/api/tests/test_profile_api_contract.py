@@ -109,9 +109,9 @@ class Access:
     def can_view_device_summary(self,actor):return True
 
 
-def setup_preview(repo,tmp_path,provider=None,before_submit=None):
+def setup_preview(repo,tmp_path,provider=None,before_submit=None,authorization=None):
     ref,_,_=repo.import_voice_reference_wav('ws',wav_bytes(),verified_owner_user_id='member')
-    voice=repo.save_versioned_voice_profile(VoiceProfile(id='voice',workspace_id='ws',version='v1',language='zh',display_name='声音',reference_audio_path=ref,reference_text='合成文字',model_id='fixture-model',reference=ProfileReference()),verified_owner_user_id='member')
+    voice=repo.save_versioned_voice_profile(VoiceProfile(id='voice',workspace_id='ws',version='v1',language='zh',display_name='声音',reference_audio_path=ref,reference_text='合成文字',model_id='fixture-model',reference=ProfileReference(),authorization=authorization),verified_owner_user_id='member')
     provider=provider or VoiceProvider();service=VoicePreviewService(tmp_path/'output',provider)
     budget=NarrationBudget(100,1,10**6,5,10**6,1,10,10**6,2,0.1,10**6,10**6)
     reg=profile_preview_registration(repo,voice_service=service,avatar_service=AvatarPreviewService(tmp_path/'output',UnavailableAvatarAndLipSyncProvider()),narration_budget=budget,presenter_budget=None,verify_identity=lambda actor:'ready')
@@ -295,6 +295,107 @@ def test_material_search_missing_reader_keeps_only_legacy_shared(repo,private_se
     assert repo.search_material_segments('other',**args)==[]
     # Explicit existing local diagnostics are a different, controlled caller.
     assert [item.asset_ref for item in repo.search_material_segments('ws',local_diagnostic=True,**args)]==['asset:a-two']
+
+
+@pytest.fixture
+def restricted_preview(repo,tmp_path):
+    from datetime import timedelta,timezone
+    from app.avatar_lipsync import Authorization
+    from PIL import Image
+    auth=Authorization('auth','a1','synthetic owner',('voice','person_likeness','avatar_video'),('narration','avatar_lipsync'),datetime.now(timezone.utc)-timedelta(days=1),None,'synthetic evidence','active','ws')
+    runtime,resources,provider,queued=setup_preview(repo,tmp_path,authorization=auth)
+    try:
+        resources.admit_value=True
+        assert runtime.run_once()
+        voice=repo.get_versioned_voice_profile('ws','voice','v1')
+        path=repo.video_library_path/'person.png';Image.new('RGB',(2,2)).save(path)
+        asset=repo._save_asset(MaterialAsset('person-source','ws',path.name,str(path),path.stat().st_size,datetime.fromtimestamp(path.stat().st_mtime),media_type='image',owner_user_id='member'))
+        person=repo.save_person_profile(PersonProfile('person','ws','synthetic','p1',repo.workspace_media_reference_for_asset('ws',asset.id),(),(),authorization=auth,reference=ProfileReference(asset_id=asset.id)),verified_owner_user_id='member')
+        class NoAvatarProvider:
+            ready=True;model_id='avatar-fixture';supported_languages=('zh',);message='fixture';calls=0
+            def render(self,**kwargs):
+                self.calls+=1
+                raise AssertionError('restriction checks must not render')
+        avatar_provider=NoAvatarProvider()
+        avatar_service=AvatarPreviewService(tmp_path/'output',avatar_provider)
+        audio=repo.get_media_preview_run('ws','voice',queued.identity)
+        avatar_params=dict(person_id=person.id,person_version=person.version,voice_profile_id=voice.id,voice_version=voice.version,audio_path=audio.output_path,audio_cache_key=audio.identity,language='zh',motion='natural',expression='neutral',authorization_id=None,authorization_version=None,model_id=avatar_provider.model_id)
+        yield SimpleNamespace(runtime=runtime,voice_provider=provider,avatar_provider=avatar_provider,voice_service=runtime.registrations['media_preview'].owner.services['voice'],avatar_service=avatar_service,voice=voice,person=person,auth=auth,voice_params=queued.preview_input,avatar_params=avatar_params,audio=audio)
+    finally:
+        assert runtime.stop(1)
+
+
+@pytest.mark.parametrize('kind',['voice','avatar'])
+@pytest.mark.parametrize('restriction',['revoked','expired','excluded'])
+def test_preview_restriction_exact_blocked_reason_no_cache_reuse(repo,restricted_preview,kind,restriction):
+    from datetime import timedelta,timezone
+    f=restricted_preview
+    if restriction in {'revoked','expired'}:
+        updated=replace(f.auth,version='a2',status='revoked' if restriction=='revoked' else 'active',expires_at=datetime.now(timezone.utc)-timedelta(hours=1) if restriction=='expired' else None)
+        repo.save_authorization(updated)
+        reason='authorization_'+restriction
+    elif kind=='voice':
+        repo.save_versioned_voice_profile(replace(f.voice,version='v2',use_state='excluded'),verified_owner_user_id='member')
+        reason='profile_excluded'
+    else:
+        repo.save_person_profile(replace(f.person,version='p2',use_state='excluded'),verified_owner_user_id='member')
+        reason='profile_excluded'
+    service=f.voice_service if kind=='voice' else f.avatar_service
+    params=f.voice_params if kind=='voice' else f.avatar_params
+    result=service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    assert (result.status,result.reason,result.output_path)==('blocked',reason,None)
+    assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
+    assert repo.get_media_preview_run('ws','voice',f.audio.identity)==f.audio
+    # Default facts/generation resolution remains strict, even though preview
+    # preparation can read the reference and describe the explicit restriction.
+    with pytest.raises(ValueError,match='受限'):
+        if kind=='voice':
+            repo.profile_reference_input(repo.resolve_narration_inputs(workspace_id='ws',episode_id='voice_preview',voice_profile_id=f.voice.id,voice_version=f.voice.version).voice,viewer_user_id='member')
+        else:
+            repo.resolve_avatar_lipsync_request(workspace_id='ws',viewer_user_id='member',**f.avatar_params)
+
+
+@pytest.mark.parametrize('kind',['voice','avatar'])
+def test_preview_restriction_missing_source_is_media_error(repo,restricted_preview,kind):
+    f=restricted_preview
+    profile=f.voice if kind=='voice' else f.person
+    Path(repo.profile_reference_input(profile,viewer_user_id='member').source_path).unlink()
+    service=f.voice_service if kind=='voice' else f.avatar_service
+    params=f.voice_params if kind=='voice' else f.avatar_params
+    result=service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    assert (result.status,result.reason,result.output_path)==('blocked','reference_audio_invalid' if kind=='voice' else 'reference_visual_invalid',None)
+    assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
+
+
+@pytest.mark.parametrize('kind',['voice','avatar'])
+@pytest.mark.parametrize('private_scope',['profile','source'])
+def test_preview_restriction_private_read_denied_before_authorization(repo,restricted_preview,kind,private_scope):
+    f=restricted_preview
+    repo.save_authorization(replace(f.auth,version='a2',status='revoked'))
+    profile=f.voice if kind=='voice' else f.person
+    viewer='other'
+    if private_scope=='source':
+        viewer='member'
+        asset=repo.get_asset('ws',profile.reference.asset_id)
+        repo._save_asset(replace(asset,owner_user_id='other'))
+        Path(asset.path).unlink()
+    before=repo.list_media_preview_runs('ws')
+    service=f.voice_service if kind=='voice' else f.avatar_service
+    params=f.voice_params if kind=='voice' else f.avatar_params
+    with pytest.raises(PermissionError):
+        service.request(repository=repo,workspace_id='ws',viewer_user_id=viewer,prepare_only=True,**params)
+    assert repo.list_media_preview_runs('ws')==before
+    assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
+
+
+@pytest.mark.parametrize('kind',['voice','avatar'])
+def test_preview_restriction_fact_read_does_not_grant_generation(repo,restricted_preview,kind):
+    f=restricted_preview
+    service=f.voice_service if kind=='voice' else f.avatar_service
+    params={**f.voice_params,'preview_text':'另一条合成测试'} if kind=='voice' else f.avatar_params
+    result=service.request(repository=repo,workspace_id='ws',viewer_user_id='member',**params)
+    assert (result.status,result.reason,result.output_path)==('blocked','device_grant_required',None)
+    assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
 
 
 def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo,tmp_path):

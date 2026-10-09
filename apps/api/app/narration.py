@@ -596,6 +596,9 @@ class VoicePreviewService:
             voice_version=voice_version,
         )
         voice = inputs.voice
+        if not repository.profile_readable(voice, viewer_user_id, local_diagnostic):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        authorization_failure = profile_use_failure(voice, content_type="voice", usage_scope="narration")
         resolved_language = language or voice.language
         identity = _voice_preview_identity(
             voice=voice,
@@ -607,7 +610,7 @@ class VoicePreviewService:
         reference_error = None
         try:
             reference_input = repository.profile_reference_input(voice, viewer_user_id=viewer_user_id,
-                                                                 local_diagnostic=local_diagnostic)
+                                                                 local_diagnostic=local_diagnostic, for_generation=False)
             reference = Path(reference_input.source_path)
             if reference_input.needs_derivation and grant_context is None and not prepare_only:
                 raise ValueError("所选声音范围需要设备许可内的精确派生")
@@ -622,7 +625,7 @@ class VoicePreviewService:
         identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "voice", identity)
-        succeeded_reusable = not (
+        succeeded_reusable = authorization_failure is None and reference_error is None and not (
             existing is not None
             and existing.status == "succeeded"
             and not _valid_preview_output(existing.output_path, self.output_root)
@@ -652,6 +655,10 @@ class VoicePreviewService:
         )
         if not claimed:
             return running
+        if authorization_failure is not None:
+            return self._finish(repository, running, status="blocked", reason=authorization_failure,
+                impact="声音预览被使用资格或授权限制阻断，不会生成或复用音频。",
+                repair_action="确认该档案的使用限制和授权状态后，以有效版本重试。")
         if reference_error is not None:
             return self._finish(repository, running, status="blocked", reason="reference_audio_invalid",
                                 impact="原参考不可用于本次预览，未生成或复用音频。",
@@ -664,19 +671,6 @@ class VoicePreviewService:
                 reason="output_missing",
                 impact="已记录的声音预览输出不可用，不能作为成功结果复用。",
                 repair_action="确认输出目录后显式重试声音预览。",
-            )
-        authorization_failure = profile_use_failure(voice,
-            content_type="voice",
-            usage_scope="narration",
-        )
-        if authorization_failure is not None:
-            return self._finish(
-                repository,
-                running,
-                status="blocked",
-                reason=authorization_failure,
-                impact="声音预览被授权门禁阻断，不会生成或复用音频。",
-                repair_action="补充有效授权后以新的预览身份重试。",
             )
         if voice.language not in {resolved_language, "zh-en"}:
             return self._finish(

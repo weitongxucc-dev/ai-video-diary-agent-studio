@@ -709,15 +709,31 @@ class AvatarPreviewService:
             authorization_version=authorization_version,
             model_id=model_id,
             viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+            for_generation=False,
         )
+        authorization_failure = _authorization_failure(request)
+        reference_failure = None
+        # Read both sources before returning any restriction facts: a missing
+        # first source must not hide a private second source's read denial.
+        for profile, reason in ((request.voice, "reference_audio_invalid"), (request.person, "reference_visual_invalid")):
+            try:
+                source = repository.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                    local_diagnostic=local_diagnostic, for_generation=False)
+                if profile is request.person:
+                    request = replace(request, visual_path=source.source_path, visual_reference_input=source)
+            except (ValueError, KeyError) as exc:
+                if reference_failure is None:
+                    reference_failure = (reason, str(exc))
         identity = _avatar_preview_identity(
             request,
             capability_id=self.capability_id,
             provider_model_id=self.provider.model_id,
         )
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
+        if reference_failure is not None:
+            identity = hashlib.sha256(json.dumps([identity, reference_failure]).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "avatar_lipsync", identity)
-        succeeded_reusable = not (
+        succeeded_reusable = authorization_failure is None and reference_failure is None and not (
             existing is not None
             and existing.status == "succeeded"
             and not _valid_avatar_preview_output(existing.output_path, self.output_root)
@@ -747,6 +763,13 @@ class AvatarPreviewService:
         )
         if not claimed:
             return running
+        if authorization_failure is not None:
+            return self._finish(repository, running, status="blocked", reason=authorization_failure,
+                impact="人物预览被使用资格、授权或人物声音引用限制阻断，未生成视频。",
+                repair_action="确认档案使用限制、授权和所选声音版本后，以有效版本重试。")
+        if reference_failure is not None:
+            return self._finish(repository, running, status="blocked", reason=reference_failure[0],
+                impact="原参考不可用于本次预览，未生成或复用视频。", repair_action=reference_failure[1])
         if existing is not None and existing.status == "succeeded":
             return self._finish(
                 repository,
@@ -755,16 +778,6 @@ class AvatarPreviewService:
                 reason="output_missing",
                 impact="已记录的人物口型预览输出不可用，不能作为成功结果复用。",
                 repair_action="确认输出目录后显式重试人物口型预览。",
-            )
-        authorization_failure = _authorization_failure(request)
-        if authorization_failure is not None:
-            return self._finish(
-                repository,
-                running,
-                status="blocked",
-                reason=authorization_failure,
-                impact="人物口型预览被授权或人物绑定门禁阻断，未生成视频。",
-                repair_action="修复授权、人物声音绑定或语言一致性后，以新身份重试。",
             )
         if not self.provider.ready:
             return self._finish(

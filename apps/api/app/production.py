@@ -1921,8 +1921,6 @@ class ProductionRepository:
         probe_media: bool = True,
     ) -> tuple[Path, float | None, float | None]:
         """Re-read the source, membership and range; registration never runs a model."""
-        if profile.reference_issue is not None:
-            raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
         table = "person_profiles" if isinstance(profile, PersonProfile) else "versioned_voice_profiles"
         with self._connect() as conn:
             row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
@@ -1938,6 +1936,8 @@ class ProductionRepository:
         if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
                                 visibility=profile.visibility, owner_user_id=profile.owner_user_id):
             raise PermissionError("档案不属于当前成员或已取消共享")
+        if profile.reference_issue is not None:
+            raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
         reference = profile.reference
         if reference is not None:
             _validate_profile_reference_fields(profile)
@@ -1945,8 +1945,6 @@ class ProductionRepository:
                    else profile.reference_audio_path)
         path = self.resolve_workspace_media_reference(profile.workspace_id, logical,
                                                        require_registered=reference is None or not reference.asset_id)
-        if not path.is_file() or path.stat().st_size <= 0:
-            raise ValueError("参考文件失联或为空，请重新定位原参考")
         asset = None
         if reference is not None and reference.asset_id:
             asset = self.get_asset(profile.workspace_id, reference.asset_id)
@@ -1958,6 +1956,11 @@ class ProductionRepository:
                                    (profile.workspace_id, str(path))).fetchone()
             if row is not None:
                 asset = self._asset_from_row(row)
+        if asset is not None and not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                                      visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+            raise PermissionError("来源素材不属于当前成员或已取消共享")
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise ValueError("参考文件失联或为空，请重新定位原参考")
         if asset is not None:
             if abs(path.stat().st_mtime - asset.modified_at.timestamp()) > .00001:
                 raise ValueError("原参考已变化，请重新定位并登记新版本")
@@ -1973,9 +1976,6 @@ class ProductionRepository:
                 raise ValueError("人物参考需要已登记的视频或图片")
             if isinstance(profile, VersionedVoiceProfile) and asset.media_type not in {"audio", "video"}:
                 raise ValueError("声音参考需要已登记音频或视频")
-            if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-                                    visibility=asset.visibility, owner_user_id=asset.owner_user_id):
-                raise PermissionError("来源素材不属于当前成员或已取消共享")
             if asset.use_state == "excluded" or (for_generation and asset.use_state not in {"available", "not_for_publish"}):
                 raise ValueError(f"来源素材使用状态限制：{asset.use_state}")
             duration = asset.duration_seconds
@@ -2012,11 +2012,12 @@ class ProductionRepository:
         return path, start, end
 
     def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
-                                viewer_user_id: str | None = None, local_diagnostic: bool = False) -> ProfileReferenceInput:
+                                viewer_user_id: str | None = None, local_diagnostic: bool = False,
+                                for_generation: bool = True) -> ProfileReferenceInput:
         """Qualified source facts only; never decode/derive during device admission."""
         from app.profile_reference_media import ProfileReferenceInput
         path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic, for_generation=True, probe_media=False)
+            local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=False)
         reference = profile.reference
         asset = self.get_asset(profile.workspace_id, reference.asset_id) if reference and reference.asset_id else None
         kind = "voice_audio" if isinstance(profile, VersionedVoiceProfile) else "person_visual"
@@ -2423,6 +2424,7 @@ class ProductionRepository:
         authorization_version: str,
         model_id: str,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        for_generation: bool = True,
     ) -> AvatarAndLipSyncRequest:
         if language not in {"zh", "en", "zh-en"}:
             raise ValueError("人物口型语言必须是 zh、en 或 zh-en")
@@ -2439,8 +2441,12 @@ class ProductionRepository:
                 voice_profile_id,
                 voice_version,
             )
+            current_person = self._get_person_profile(conn, workspace_id, person_id)
+            current_voice = self._get_versioned_voice_profile(conn, workspace_id, voice_profile_id)
             person = replace(
                 historical_person,
+                use_state=(historical_person.use_state if historical_person.use_state != "available" else current_person.use_state),
+                visibility=current_person.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
@@ -2449,6 +2455,8 @@ class ProductionRepository:
             )
             voice = replace(
                 historical_voice,
+                use_state=(historical_voice.use_state if historical_voice.use_state != "available" else current_voice.use_state),
+                visibility=current_voice.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
@@ -2465,9 +2473,13 @@ class ProductionRepository:
                 workspace_id,
                 requested_authorization,
             )
-        self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-        visual_input = self.profile_reference_input(person, viewer_user_id=viewer_user_id,
-                                                    local_diagnostic=local_diagnostic)
+        if not self.profile_readable(person, viewer_user_id, local_diagnostic) or not self.profile_readable(voice, viewer_user_id, local_diagnostic):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        visual_input = None
+        if for_generation:
+            self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            visual_input = self.profile_reference_input(person, viewer_user_id=viewer_user_id,
+                                                        local_diagnostic=local_diagnostic)
         return AvatarAndLipSyncRequest(
             workspace_id=workspace_id,
             person=person,
@@ -2479,7 +2491,7 @@ class ProductionRepository:
             expression=expression,
             authorization=authorization,
             model_id=model_id,
-            visual_path=visual_input.source_path,
+            visual_path=visual_input.source_path if visual_input is not None else "",
             visual_reference_input=visual_input,
         )
 
