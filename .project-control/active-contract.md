@@ -516,6 +516,10 @@ UI晚保存Task ctx_adb698a4de22交clean e249694、源已审并机械组合b33b1
 
 C CAS五test叶f3cfa5f、D可信读者50126a5、UI晚编辑e249694、F请求/受控容量e8b0268均审后机械组合ee2f089996917ea97edb2992e37b292e30fffe37。前一完整API剩余三失败均为已定位的合法waiting处理；新源码整体回归仍待B叶。F原请求单已结算retain，现同原可见终端新单，仅tests/test_creation_execution.py那个三参数None/render_revoked/render_commit_unknown及局部共用fixture。从准确ee2f089新隔离公开候选，可先准备消费者，但实际执行等待B已审等待源码组合START；不先反复重现已证实错误。保留真实3秒IO/真实FFmpeg/许可注册与释放/撤销unknown负例；低置信故事板实际产出后，应核Task等待/Job未失败/零render请求，再由同受控真实成员沿现有ConfirmClip预览→确认逐镜头确认，原continue/retry后才获取render grant。不改匹配分数/把waiting预造ready或SQLconfirmed、不resources.admit=True/伪时钟。actor、来源owner与HTTP local member须真一致，建立真实可丢弃成员而不伪diagnostic。成功/未知/撤销目标分支必须实际达到后再判通过，其他23未影响PASS复用。F不写B任何生产/测试新单或Web；主控在B叶审后精准通知候选与接口，必要差额向主控报告，不扩大所有权。无用户数据/真实模型/App/GUI/安装/远端权。
 
+### 后端叶审核接受与两个准确消费者START
+
+B后端328e201已审，机械组合至准确c64ddecc06d8da5a033203357da8e536c4d2075b；31受控专项证明共享手动/自动素材资格、局部配音同事务检查点、故事板真实待确认交接，不能替代模型/GUI。旧审核必填、旧局部配音503及未确认即渲染路径已由现有协议取代；完整CI仍待消费者收尾。B当前ctx_5948cb0be957结束后台新增写入，仅按上一节Web所有权从此准确组合新建隔离消费者候选，保持N14和晚编辑修复，直接SOURCE_START。F当前ctx_facbc5aa6b25同样从此准确组合仅迁移原三参数真实队列测试消费者，现SOURCE_START；不改B新测试或生产。后端新增缺陷须先交主控重新具名，不通过消费者篡改状态、资格或预算。两线程必须回读准确SHA并语义ACK，旧树和已通过证明保留。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
