@@ -495,6 +495,8 @@ C Web/APItypes/Task写权随旧Task结束正式释放，主控尚未转授其他
 
 E原资格诊断已交并retain，私有素材写权限缺陷已由B受控修正而共同资格仍在施工。E原可见终端新只读单，仅准确a92a0e7146fafe63324b91dd22db6f1dffc6c622的N14新增Web/API调用与领域7.5/DESIGN2，输出owned/tmp/main-acceptance-20261009/review-v2-reply-consumer-review/report.md；不改任何产品/测试/共享文件，不运行测试/App/模型/用户资料/远端。核稳定意图ID、回复/任务/资料当前身份、切换与晚到响应不串对象、保存后编辑的CAS版本、文案库准确条目可见出口，按可证实源缺陷/需受控复现/未影响三类列精确链路。UI已拥有Home hook/两个残差/Knowledge深链，E只报证据不另派/修改；C仓储CAS与B主入口仍独占。复用60/162/838证据，不再全量扫描历史或重判改进不存在。语义ACK后读直接入口及必要调用，交报告结算，主控决定具名变更。
 
+C新仓储叶9f3ca13已审、机械组合f648d65fc33df15cfbe977ef163051213e5878f3，三个直接事务负例/正例通过；msg_b234f669c18a正式RELEASE_ACK production.py并结算retain。现production.py唯一写者转B当前ctx_5948cb0be957，精确追加material_segment_eligible手工/自动共用基础与原automatic wrapper、save_narration_artifact可选connection复用原SQL以完成target/combined/Timeline/Job同事务；不重写N14/CAS/档案规则或新表。B当前合成专项test_material_edit_qualification四项组跑fixture not found，负责人修实际pytest组装，单跑PASS不冒充CI组跑。API/CAS缺token的旧直接fixture按主控全API回归后另具名迁移，不加生产兼容。等待用户确认的执行器修正仍B，必须保持真实确认/继续协议。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
