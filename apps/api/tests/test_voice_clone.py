@@ -389,7 +389,7 @@ def test_narration_generator_uses_selected_voice_and_versioned_output(tmp_path):
     assert "episode_voice_person_b_" in artifact.audio_path
 
 
-def test_narration_cache_key_binds_voice_person_model_language_and_pronunciation_versions(tmp_path):
+def test_narration_cache_key_tracks_voice_provider_model_language_and_pronunciation_not_person_version(tmp_path):
     class Provider:
         model_id = "runtime-v1"
         ready = True
@@ -436,7 +436,8 @@ def test_narration_cache_key_binds_voice_person_model_language_and_pronunciation
         scope_reference="person_a",
         version="pronunciation-v1",
     )
-    generator = NarrationGenerator(tmp_path / "outputs", Provider())
+    provider = Provider()
+    generator = NarrationGenerator(tmp_path / "outputs", provider)
     baseline = generator.cache_key(
         episode=episode,
         profile=ProductionProfile(workspace_id="workspace_a"),
@@ -452,17 +453,18 @@ def test_narration_cache_key_binds_voice_person_model_language_and_pronunciation
         pronunciation_entries=(entry,),
         language="zh-en",
     )
-    assert baseline != generator.cache_key(
+    assert baseline == generator.cache_key(
         episode=episode,
         profile=ProductionProfile(workspace_id="workspace_a"),
         voice_identity=replace(voice, person_version="person-v2"),
         pronunciation_entries=(entry,),
         language="zh-en",
     )
+    provider.model_id = "runtime-v2"
     assert baseline != generator.cache_key(
         episode=episode,
         profile=ProductionProfile(workspace_id="workspace_a"),
-        voice_identity=replace(voice, model_id="voice-model-v2"),
+        voice_identity=voice,
         pronunciation_entries=(entry,),
         language="zh-en",
     )
