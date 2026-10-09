@@ -175,6 +175,18 @@ F导航503caa1已结算retain并组合ff153f0。新单从准确ff153f0到/tmp/ma
 
 只用既有公开manta缓存的受控media事件专项及tsc，不安装下载/真实媒体/服务/模型/Key/GUI/账号/打包；未看到真实画面就不宣称实际播放器故障或图像已通过。交clean、逐来源结果和GUI残余，H-B013/H-B017等完整任务剪辑仍待主控同候选验收。
 
+### QA-V2-C-KNOWLEDGE-REVIEW：补全交付与列表/选择闭环
+
+C knowledge-ui 的worker_done不构成clean交付：准确候选仍f454b31、四文件未提交且report.md缺失；26专项/tsc/差异检查由准确终端记录证实。旧单已retain。本续单复用原C终端、原owned候选与未提交成果，绝不重置覆盖。写权仍只有knowledge/KnowledgeWorkspace.tsx/.module.css、knowledge/page.tsx与直接专项；基于当前diff修必要残差并用候选本地公开身份提交，写父目录report.md。不得安装/下载/服务/模型/用户数据/共享API。
+
+审阅确认文案列表失败保留了旧数据，但没有原读取重试；成功筛选后旧selected详情仍可复用。列表请求按过滤身份隔离，读取失败保留且标明上次条件，成功新范围不能保留已不属于范围的可操作旧详情；来源核对失败须有原操作重试而非永远“正在核对”。默认详情中的原稿/运行/引用内部ID按需诊断，保留可读出处与版本，不删来源记录。资料刷新迟到响应不得覆盖较新成功结果。沿现有局部状态修复，不新增通用请求框架或自动重试；必要受控迟到/成功空筛选/失败→手动重试用例，未变26项不重复。真实GUI与N14/N15 API仍未验。
+
+### QA-V2-E-PUBLISH-REFRESH：同对象重读与异步取消最后差额
+
+E复审0fef1a43已经15专项/tsc通过，旧单retain；主控审阅仍确认refreshAll/selectTask/筛选点击无条件递增latestVersionRequest，但任务/版本不变时useEffect不会再次读取，导致正在读取的真实请求被失效后停在loading或旧详情。续单复用原E候选clean0fef1a43，新具名分支，仅PublishingWorkspace.tsx与直接专项。按同一任务/版本实际读取生命周期修复：主动刷新必须重新读当前详情，点同一任务/相同筛选不得丢有效读取；必要时实际产生新请求，不能清空错误或改为假ready。保留现有确认取消、账号/任务/版本快照及已发作业原归属。两个受控pending/refresh用例足够；不重复未变15专项以外无关检查，不接账号/平台/服务/GUI/外发/Key。交clean提交/追加report及未验；API和共享文件仍禁止写。
+
+F-MEDIA-VIEW已实际ready/turn_started及语义REBASE_ACK，task_d237a52737d4/ctx_8fb689611db4绑定原F终端，写权按上节；不把ready算交付。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
