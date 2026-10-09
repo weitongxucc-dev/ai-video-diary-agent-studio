@@ -67,7 +67,7 @@ it("does not bind the automatic first material, then binds only explicit asset a
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
   expect(screen.getByText(/当前范围：整条素材 · local\.mp4/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
-  expect(screen.getByText(/当前范围：片段 0:01–0:03 · 画面说明/)).toBeInTheDocument();
+  expect(screen.getByText(/当前范围：local\.mp4 · 片段 0:01–0:03 · 画面说明/)).toBeInTheDocument();
 });
 
 it("shows asset labels and applies assistant readback only to the exact selected segment", async () => {
@@ -278,6 +278,77 @@ it.each([
   });
   expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(chosen);
   expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${newLabel}`)).toBeInTheDocument();
+});
+
+it("distinguishes an empty search result from an empty library without warning on the initial preview", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValueOnce({ ...library, assets: [], total_count: 0 });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "不存在的词" } });
+  await screen.findByText("没有匹配的素材");
+  expect(screen.queryByText(/选中的素材已不在当前列表/)).not.toBeInTheDocument();
+  expect(screen.queryByText("素材库还是空的")).not.toBeInTheDocument();
+});
+
+it("preserves an explicitly selected material's unsaved description while it leaves the filtered list", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValueOnce({ ...taggedLibrary, assets: [], total_count: 0 });
+  vi.mocked(getProductionMaterials).mockResolvedValueOnce(taggedLibrary);
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  const description = screen.getByLabelText("片段描述");
+  fireEvent.change(description, { target: { value: "尚未保存的说明" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "无匹配" } });
+  await screen.findByText(/选中的素材已不在当前列表/);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "" } });
+  await waitFor(() => expect(screen.getByLabelText("片段描述")).toHaveValue("尚未保存的说明"));
+});
+
+it("clears only the query with focus retained and resets all filters separately", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "待审核" }));
+  const search = screen.getByRole("textbox", { name: "搜索素材" });
+  fireEvent.change(search, { target: { value: "本周" } });
+  fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+  expect(search).toHaveValue("");
+  expect(search).toHaveFocus();
+  expect(screen.getByRole("button", { name: "待审核" })).toHaveClass("is-active");
+  fireEvent.click(screen.getByRole("button", { name: "重置全部" }));
+  expect(within(screen.getByRole("group", { name: "审核状态筛选" })).getByRole("button", { name: /^全部$/ })).toHaveClass("is-active");
+});
+
+it("does not let a late search response replace a newer explicit selection", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  let resolveSearch!: (value: typeof library) => void;
+  vi.mocked(getProductionMaterials).mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "延迟搜索" } });
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+  await act(async () => resolveSearch({ ...library, assets: [taggedAsset], total_count: 1 }));
+  await screen.findByText(/选中的素材已不在当前列表/);
+  expect(screen.getByText(/素材说明不会写入其他素材|未保存的说明不会写入其他素材/)).toBeInTheDocument();
+});
+
+it("reports visual, speech, and OCR analysis separately instead of treating visual completion as all analysis", async () => {
+  const partial = { ...taggedAsset, speech_analysis: { status: "blocked" as const, source_fingerprint: "", model_id: "", observations: [], message: "" }, segments: [{ ...segment, visual_status: "ready" as const, understanding: { status: "ready" as const, fingerprint: "", model_id: "", sample_times: [], summary: "", facts: [], unknowns: [], ocr_status: "blocked" as const, ocr_model_id: "", ocr_frames: [], message: "" } }] };
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets: [partial] });
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [partial] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByText(/画面已分析 · 声音转写受阻 · 文字识别受阻/)).toBeInTheDocument();
+});
+
+it("keeps the last usable list visible and reports a failed search instead of showing an empty library", async () => {
+  vi.mocked(getProductionMaterials).mockRejectedValueOnce(new Error("network unavailable"));
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "查询失败" } });
+  await screen.findByText("搜索素材失败，请重试。");
+  expect(screen.getByRole("button", { name: /local\.mp4/ })).toBeInTheDocument();
+  expect(screen.queryByText("素材库还是空的")).not.toBeInTheDocument();
+});
+
+it("keeps the directory location available while hiding it in the collapsed intake details", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(await screen.findByText("查看接入位置和检查结果")).toBeInTheDocument();
+  expect(screen.getByText("/Volumes/Test/media")).not.toBeVisible();
+  expect(screen.getByRole("button", { name: "确认接入" })).toBeInTheDocument();
 });
 
 it("preserves the segment usage choice and existing error when saving fails, then allows retry", async () => {

@@ -160,10 +160,43 @@ function reviewLabel(asset: MaterialAsset) {
   if (asset.use_state === "reference_only") return "仅参考";
   if (asset.review_status === "approved") return "已审核";
   if (asset.review_status === "rejected") return "用途待确认";
-  if (asset.analysis_status === "ready") return "已分析";
+  if (asset.analysis_status === "ready") return "主分析已完成";
   if (asset.analysis_status === "failed" || asset.analysis_status === "blocked")
     return "分析受阻";
   return "等待分析";
+}
+
+function modalityLabel(
+  status: "pending" | "ready" | "blocked" | "failed" | undefined,
+  subject: string,
+) {
+  if (status === "ready") return `${subject}已完成`;
+  if (status === "pending") return `${subject}待处理`;
+  if (status === "blocked") return `${subject}受阻`;
+  if (status === "failed") return `${subject}失败`;
+  return `${subject}状态未知`;
+}
+
+function analysisSummary(asset: MaterialAsset) {
+  const visualStatuses = asset.segments.map((segment) => segment.visual_status);
+  const visual = visualStatuses.length && visualStatuses.every((status) => status === "ready")
+    ? "画面已分析"
+    : visualStatuses.length && visualStatuses.some((status) => status === "ready")
+      ? "画面部分完成"
+      : modalityLabel(visualStatuses[0], "画面分析");
+  const ocrStatuses = asset.segments.flatMap((segment) =>
+    segment.understanding ? [segment.understanding.ocr_status] : [],
+  );
+  const ocr = ocrStatuses.length && ocrStatuses.every((status) => status === "ready")
+    ? "文字识别已完成"
+    : ocrStatuses.length && ocrStatuses.some((status) => status === "ready")
+      ? "文字识别部分完成"
+      : modalityLabel(ocrStatuses[0], "文字识别");
+  return [
+    visual,
+    modalityLabel(asset.speech_analysis?.status, "声音转写"),
+    ocr,
+  ].join(" · ");
 }
 
 function analysisMessage(asset: MaterialAsset) {
@@ -235,6 +268,7 @@ export function MaterialLibraryWorkspace({
     initialLibrary.assets[0]?.segments[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -314,8 +348,10 @@ export function MaterialLibraryWorkspace({
   // component state so a later pick can restore context, the inspector closes
   // so nothing can be saved under the wrong name, and picking again re-seeds
   // from the newly selected item.
+  const explicitlySelectedAssetId = assistantSelection?.asset_id;
   const selectionLost =
-    Boolean(selectedId) && !assets.some((asset) => asset.id === selectedId);
+    Boolean(explicitlySelectedAssetId) &&
+    !assets.some((asset) => asset.id === explicitlySelectedAssetId);
   const selected = selectionLost
     ? null
     : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
@@ -347,7 +383,7 @@ export function MaterialLibraryWorkspace({
   const materialAssistantLabel = materialAssistantSelection && selected
     ? materialAssistantSelection.scope === "asset"
       ? `整条素材 · ${fileLabel(selected.file_name)}`
-      : `片段 ${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.start_seconds)}–${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.end_seconds)} · ${selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.description || "未填写说明"}`
+      : `${fileLabel(selected.file_name)} · 片段 ${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.start_seconds)}–${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.end_seconds)} · ${selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.description || "未填写说明"}`
     : null;
 
   useEffect(() => {
@@ -439,6 +475,8 @@ export function MaterialLibraryWorkspace({
     let active = true;
     const timer = window.setTimeout(() => {
       const revision = assetWriteRevision.current;
+      const selectionAtRequest = selectionRevision.current;
+      setError("");
       setBusy("search");
       getProductionMaterials({
         limit: initialLibrary.limit,
@@ -454,6 +492,8 @@ export function MaterialLibraryWorkspace({
           setTotalCount(result.total_count);
           setHasMore(result.has_more);
           if (
+            !assistantSelection &&
+            selectionAtRequest === selectionRevision.current &&
             result.assets[0] &&
             !result.assets.some((asset) => asset.id === selectedId)
           ) {
@@ -462,7 +502,7 @@ export function MaterialLibraryWorkspace({
         })
         .catch((cause) => {
           if (active)
-            setError(cause instanceof Error ? cause.message : "搜索素材失败");
+            setError(visibleError(cause, "搜索素材失败，请重试。"));
         })
         .finally(() => {
           if (active) setBusy(null);
@@ -472,7 +512,7 @@ export function MaterialLibraryWorkspace({
       active = false;
       window.clearTimeout(timer);
     };
-    // selectedId and selectAsset are intentionally excluded: changing selection must not re-run search.
+    // Selection changes do not re-run search; a revision check protects user choices made in flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, initialLibrary.limit, initialTag, mediaType, query]);
 
@@ -687,6 +727,7 @@ export function MaterialLibraryWorkspace({
 
   async function scan() {
     if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
+    const selectionAtStart = selectionRevision.current;
     setBusy("scan");
     setError("");
     try {
@@ -698,6 +739,8 @@ export function MaterialLibraryWorkspace({
       setQuery("");
       setFilter("all");
       if (
+        selectionAtStart === selectionRevision.current &&
+        !assistantSelection &&
         result.assets[0] &&
         !result.assets.some((asset) => asset.id === selectedId)
       ) {
@@ -781,6 +824,15 @@ export function MaterialLibraryWorkspace({
       `${window.location.pathname}${search ? `?${search}` : ""}`,
     );
     setMediaType(value);
+  }
+
+  function resetAllFilters() {
+    window.history.replaceState(null, "", window.location.pathname);
+    lastSearch.current = { filter: "all", query: "", tag: "", mediaType: "all" };
+    setQuery("");
+    setFilter("all");
+    setMediaType("all");
+    searchInput.current?.focus();
   }
 
   async function loadMore() {
@@ -1465,15 +1517,26 @@ export function MaterialLibraryWorkspace({
           ) : !intake.binding_available ? (
             <p className={styles.intakeDescription}>该目录已接入其他工作区。请切换到所属工作区处理，当前工作区不能直接接入。</p>
           ) : intake.directory_state === "changed" ? (
-            <p className={styles.intakeDescription}>{intake.directory_message} {intake.repair_action} 请在<Link href="/settings">设置</Link>中核对目录；不会自动更改工作区归属。</p>
+            <>
+              <p className={styles.intakeDescription}>素材目录状态已变化。请到<Link href="/settings">设置</Link>核对后再继续；工作区归属不会自动更改。</p>
+              <details className={styles.intakeDetails}>
+                <summary>查看目录位置和原因</summary>
+                <code>{intake.configured_directory ?? "未设置"}</code>
+                <p>{intake.directory_message} {intake.repair_action}</p>
+              </details>
+            </>
           ) : !intake.configured_directory ? (
             <p className={styles.intakeDescription}>尚未选择素材目录。请先到<Link href="/settings">设置</Link>选择目录。</p>
           ) : !intake.bound_to_current_workspace ? (
             <div className={styles.intakeRow}>
-              <p className={styles.intakeDescription}>
-                确认将 <code title={intake.configured_directory}>{intake.configured_directory}</code> 接入当前工作区。接入后每 {intake.scan_interval_seconds} 秒检查新文件，确认复制完成后才接收并分析，不会自动创建视频任务。
-                {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : ""}
-              </p>
+              <div className={styles.intakeCopy}>
+                <p className={styles.intakeDescription}>接入后每 {intake.scan_interval_seconds} 秒检查新文件，确认复制完成后才接收并分析，不会自动创建视频任务。</p>
+                <details className={styles.intakeDetails}>
+                  <summary>查看接入位置和检查结果</summary>
+                  <code>{intake.configured_directory}</code>
+                  {intake.directory_state !== "ready" ? <p>{intake.directory_message} {intake.repair_action ?? ""}</p> : null}
+                </details>
+              </div>
               <button className={styles.intakePrimary} disabled={intakeBusy !== null || intake.directory_state !== "ready"} onClick={() => void bindIntake()} type="button">
                 {intakeBusy === "bind" ? "正在接入…" : "确认接入"}
               </button>
@@ -1481,10 +1544,14 @@ export function MaterialLibraryWorkspace({
           ) : (
             <>
               <div className={styles.intakeRow}>
-                <p className={styles.intakeDescription}>
-                  已接入 <code title={intake.bound_directory ?? ""}>{intake.bound_directory}</code>，每 {intake.scan_interval_seconds} 秒自动检查。
-                  {intake.directory_state !== "ready" ? ` ${intake.directory_message} ${intake.repair_action ?? ""}` : " 外部文件须确认复制完成后才接收；应用内导入在复制结束后自动确认。"}
-                </p>
+                <div className={styles.intakeCopy}>
+                  <p className={styles.intakeDescription}>已接入素材目录，每 {intake.scan_interval_seconds} 秒自动检查。外部文件须确认复制完成后才接收；应用内导入会自动确认复制完成。</p>
+                  <details className={styles.intakeDetails}>
+                    <summary>查看目录位置和检查结果</summary>
+                    <code>{intake.bound_directory ?? "未记录"}</code>
+                    {intake.directory_state !== "ready" ? <p>{intake.directory_message} {intake.repair_action ?? ""}</p> : null}
+                  </details>
+                </div>
                 {intake.directory_state === "ready" ? (
                   <span className={styles.intakeRow}>
                     <button className={styles.intakeSecondary} disabled={importBusy || busy !== null || intakeBusy !== null} onClick={() => void runImport()} type="button">
@@ -1640,10 +1707,12 @@ export function MaterialLibraryWorkspace({
             <Search size={15} />
             <input
               aria-label="搜索素材"
+              ref={searchInput}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索文件、画面、标签或标签夹…"
               value={query}
             />
+            {query ? <button aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></button> : null}
           </label>
           <div
             className="library-filters"
@@ -1694,6 +1763,11 @@ export function MaterialLibraryWorkspace({
               </Link>
             </span>
           ) : null}
+          {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
+            <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
+          ) : (
+            <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button>
+          ) : null}
           <div className="library-view-toggle" role="group" aria-label="列表显示方式">
             <button aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></button>
             <button aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></button>
@@ -1709,6 +1783,7 @@ export function MaterialLibraryWorkspace({
             {error}
           </div>
         ) : null}
+        {busy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : null}
 
         {selectionLost || segmentLost ? (
           <div className="library-error" role="alert">
@@ -1769,6 +1844,7 @@ export function MaterialLibraryWorkspace({
                   <small>
                     {roleLabel(asset)} · {reviewLabel(asset)}
                   </small>
+                  <small>{analysisSummary(asset)}</small>
                   {(asset.analysis_status === "blocked" || asset.analysis_status === "failed") ? (
                     <small className={styles.assetDiagnostic}>{analysisMessage(asset)}</small>
                   ) : null}
@@ -1781,12 +1857,10 @@ export function MaterialLibraryWorkspace({
           <div className="library-empty">
             <Film size={23} />
             <div>
-              <strong>
-                {assets.length ? "没有匹配的素材" : "素材库还是空的"}
-              </strong>
+              <strong>{query || filter !== "all" || mediaType !== "all" || initialTag ? "没有匹配的素材" : "素材库还是空的"}</strong>
               <p>
-                {assets.length
-                  ? "调整搜索条件、审核状态或媒体类型。"
+                {query || filter !== "all" || mediaType !== "all" || initialTag
+                  ? "试试清除搜索词，或重置全部筛选条件。"
                   : intake?.bound_to_current_workspace
                     ? "系统会自动检查新素材。新文件稳定并完成分析后，将显示在这里。"
                     : "先在上方确认素材目录，系统随后会自动检查新文件。"}
