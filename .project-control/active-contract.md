@@ -121,7 +121,9 @@ D原设置单207547c已源码审核/retain，settings整页写权结束，保留
 
 E只读复核已交并retain，新单修发布消费者H-L04/N28/H-V012机制：同样从f595eaf到/tmp/main-acceptance-20261009/review-v2-publishing/candidate新clone，分支codex/review-v2-publishing-20261009。唯一owned PublishingWorkspace.tsx、必要新增局部模块CSS及其直接既有测试；不改共享ProductWorkspace.module.css、AppShell/api.ts/main/平台worker/账号/持久schema。统一实际可发布task+产物版本选择，列表/下拉/正文/预检/最终提交同一身份；提前文案草稿需清楚归属并保留task+版本的本轮临时草稿，切换不沿用其他任务文本，未提供持久保存不能称刷新可恢复。前提按有效成片→实际账号状态→编辑信息→现有最终确认组织；重查/对象版本或账号变更使旧确认失效，真实后端409门禁保持，不新增自动重发/隐式幂等。普通未就绪对象可只读记录或准备入口，不隐藏混成不可见提交目标。仅受控组件/API替身核多任务/版本/账号/取消/失败，不真实连接、账号浏览器、上传/草稿/发布或权限操作；报告请求快照证明只是fixture。原历史报告复用，不重测未影响字幕/素材。
 
-C来源第一批d16b9c0已交/retain；知识普通导入旧字段门槛与领域§2.4不符的跨层差额尚未派写，需在UI/B释放共享入口后具名接续；不以第一批源码完成关闭N15/H-D006。会话UI待M5/M6/M7任务错误/历史消费者接续，B待F01/F02 API/Web和范围派生接续，定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
+C来源第一批d16b9c0已交/retain。C新知识核心迁移：从准确f595eaf建立/tmp/main-acceptance-20261009/review-v2-knowledge-core/candidate，分支codex/review-v2-knowledge-core-20261009。唯一owned sources.py/source_repository.py及直接知识仓储/授权专项；只处理自己已有SourceItem/KnowledgeItem表的必要增量use_state持久字段/旧行兼容，不写B所有的database_migrations.py或生产字段，不写main/schema/creation_plan/Web/认证。依已有领域§2.4和产品§2.1补available默认与明确主动限制，归属仍由verified_user_id而非客户端ownership文本决定；authorization/ownership保留历史追溯且普通新导入不要求逐条证明或伪造已授权字符串。真实跨空间KnowledgeGrant及撤销/到期/固定版本/私有读边界保持。excluded不可读/检索/引用；reference_only仍可事实理解，not_for_automation/not_for_publish按具体消费者用途提供真实资格方法，不把阅读默认当发布/自动授权。版本/来源/旧字段保留，不把不可读原件变成本成员的档案。核心新增字段的DDL/回读只沿既有SourceRepository自有表初始化/字段升级位置，使用可丢弃旧格式与新库验证，不另造知识库或权限解析器，不迁移真实用户DB。交精确API/Schema/Plan后续接线接口及必要增量字段；共享入口等UI交付后由主控具名单写者串行接线，不以仓储通过宣布N15完整默认可用已修。
+
+会话UI待M5/M6/M7任务错误/历史消费者接续，B待F01/F02 API/Web和范围派生接续，知识H-D006集合布局仍待C后续消费者；定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
 
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
