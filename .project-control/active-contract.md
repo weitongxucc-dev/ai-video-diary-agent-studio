@@ -524,6 +524,10 @@ B后端只读自审msg_a6611c9c25b6提出同工作区其他段artifact元数据�
 
 E原消费者审阅已retain。新QA-V2-E-47-COVERAGE只读准确c64ddecc组合与v2新版U/N47入口、GitHub既有九组映射，不遍历全部历史。唯一输出/tmp/main-acceptance-20261009/review-v2-47-coverage/report.md，逐ID记录共同机制、准确活跃消费者符号、已具备源码/明显仍缺/需可见或真实条件验证三类，不把源码当GUI或猜测试覆盖；最多列实际遗漏的必要后续差额，F01/F02与历史只挂接、不重复凑数。B当前补点/Web及F队列测试在工作，审阅不能写他们任何产品/测试或扩大既有API/GUI权限。无测试/常驻服务/模型/用户资料/安装/远端写权；只读必要源码和本次明确报告即可，原错误报告校正保持。
 
+F确认消费者3dc5809已审、机械组合9a268d9；原三个参数真实IO/FFmpeg/ConfirmClip/同Job继续与render负例均PASS，Dispatch已retain，测试写权结束。E47源码报告已retain，仅作为静态映射不算验收；root校正其N14判断：固定c64已含b33晚保存修复，submittedDraft快照及setDraft(current)明确保留晚输入，其称此SHA尚未修不成立。N04已有本地/new、/name、/resume、/help分派，不与尚未接通Pi TUI控制混称；N06后端已具备真实库状态/搜索/所选内容read tools且允许selection=None，报告只指出Home入口仍标签窄化，不能认定后端查询全缺。
+
+新QA-V2-UI-MATERIAL-ASSISTANT-ENTRY从准确9a268d9新隔离公开候选，唯一HomeCommandComposer.tsx、其直接测试以及MaterialLibraryWorkspace.test.tsx仅对应输入label消费者。素材入口改普通“素材对话”，无选择可询问全库/分析状态，有选择可问范围内容/用途或明确修改标签；首次少量建议点击仅填草稿，不直接修改。范围提示准确说明查询无需选择、局部修改需明确对象；不改后端工具/会话/CAS/MaterialLibrary生产/Task/B files或重复读写机制。最小组件实证无选择状态查询发送selection=null且无onResult写回；所选内容查询发送固定范围且无修改结果不调用onResult；已有真实标签结果写回保持。后端读工具已过证明复用，不新模型/服务/GUI/用户资料权限。报告/tmp/main-acceptance-20261009/review-v2-material-entry/report.md，语义ACK后直接实施并交clean叶。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
