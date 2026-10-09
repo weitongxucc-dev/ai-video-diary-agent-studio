@@ -37,11 +37,11 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 90：录音差额CI真实失败修复 | task_1e35130530df / ctx_302e5db92ca5；仅下方90迁移与直接测试；87/88保留，不重做页面 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 89：录音新候选入包及真实媒体 | task_a4b667ebe4c2 / ctx_ff20ae5e926f；下方89具名源与隔离运行，无产品源码写权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 91：冻结许可子进程入口修复 | task_1a9de32d4beb / ctx_4cdf9a1f3e03；仅下方91源码及直接最小测试，无运行包权限 |
 
-## 当前波次：B89新包录音／资源定位，UI90定向CI修复（2026-10-09）
+## 当前波次：B91冻结入口修复，UI90定向CI修复（2026-10-09）
 
-### B91：冻结许可子进程入口修复（B89结案后接续）
+### B91：冻结许可子进程入口修复
 
 B89实际1767e11包录音save/adopt和许可故事板V1成立，首次渲染失败、无当前MP4。现有granted_subprocess.py使用sys.executable -c trampoline；冻结sys.executable是api-server，server.py却无该入口分派而直接加载API启动恢复。实际render和外层Job同时process_interrupted、driver checkpoint失败及resume503与此源码机制相符；子进程完整argv未捕获，首因结论保留推断，修后必须实际冻结验证。初次I/O压力是另一同次真实事件，不扩大资源阈值或重写恢复扫描。
 
@@ -59,7 +59,9 @@ PR101准确1767e11的远端CI已回读：Desktop syntax成功，Backend五失败
 
 UI88 task_238fb365c116 / ctx_29444be61a36已交cleanfe04d8111e3601f5e05c4ad48da0d0f6ba6f94a6，主控复核预检recorded优先、页面按钮与Inspector真实表达，接受隔离专项且retain。87/88与两处唯一权威差额机械组合为clean1767e11d411e40812d3b7fa7990973c5741e0c1b，位置/tmp/main-controller-20261008/ui-v3-integration、分支codex/recorded-narration-delivery-20261009；运行源码逐blob与fe04d81相同，仅两权威文档不同。87/88旧任务结束，以下旧条文不是新写权。
 
-### B89：新录音候选实际ARM64包及一次媒体闭环
+### B89：新录音候选实际ARM64包及一次媒体闭环（已failed结案，运行权结束）
+
+task_a4b667ebe4c2 / ctx_ff20ae5e926f已failed；主控接受实际录音保存/采用及故事板V1、无当前MP4和冻结入口推断边界。报告/tmp/main-acceptance-20261009/creation89/report.md、release.json及all-owned-process-exits.json已核，主控08:14独立ps查自有包/媒体进程为空。持久Grant3 held是保留的失败状态，不冒称逻辑清锁。复用同一可见B终端的新B91已有input_accepted/turn_started回执，旧89范围不恢复。
 
 复用原B可见终端，保留旧84/86分支和证据，从上述准确1767e11建立codex/recorded-package89-20261009。唯一写入根/tmp/main-acceptance-20261009/creation89/，所有构建、隔离HOME/XDG/userData/DB/config/library/output/cache/tmp/agent/log均在此根；冻结Git输入、排除dotenv，真实用户库/Key/账号不接触。无产品源码写权。因87/88产品源码变化必须沿已验证84路径重建一次ARM64 local.app；可只读复用具名公开已装依赖/缓存，不安装全局、不下载模型/浏览器，不生成DMG/ZIP/签名Release，不覆盖Applications或旧包。
 
