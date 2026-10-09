@@ -7,7 +7,6 @@ import sqlite3
 import subprocess
 import tempfile
 import time
-import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -31,14 +30,17 @@ from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
                             MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
-                            TimelineVersion)
+                            CreationPlanPersonReference, TimelineVersion)
 from app.artifact_store import ArtifactStore
 from app.config import Settings
-from app.avatar_lipsync import Authorization, VoiceProfile as VersionedVoiceProfile
 from app.narration import NarrationGenerator
 from app.voice_clone import Qwen3TTSSubprocessProvider
 from app.host_resource_probes import HostBudget, HostResourceProbe, CpuRenderBudget, NarrationBudget, MontageBudget
 from app.video_jobs import VideoJobRunner
+from _media_preview_test_fixtures import (
+    register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes,
+    write_synthetic_video,
+)
 
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True):
@@ -104,23 +106,50 @@ def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
 
 
 def _render_version_fixture(tmp_path):
-    """Persisted render inputs only; marker bytes never claim playable media."""
+    """Persisted render inputs are real synthetic media with an owned profile."""
     from app.member_permits import MemberDeviceAccess
 
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     members = LocalMemberService(repo.database_path)
     member = members.add_member("render version fixture")
     actor = CreationExecutionActor("local", member.member_id)
+    person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
+        repo, workspace_id="local", member_id=member.member_id,
+        person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
+        language="zh", model_id="test",
+    )
+    plan = repo.get_creation_plan("local", "plan_local")
+    plan.selected_person = CreationPlanPersonReference(person.id, person.version)
+    plan.selected_voice = CreationPlanVoiceReference(
+        voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version,
+        voice.authorization.id, voice.authorization.version, "zh-CN", "test",
+    )
+    plan.owner_user_id = member.member_id
+    task = repo.get_creation_task("local", task_id)
+    task.owner_user_id = member.member_id
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(plan), default=str), "local", plan.id))
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(task), default=str), "local", task.id))
     audio, video = tmp_path / "library/audio.wav", tmp_path / "library/source.mp4"
-    audio.write_bytes(b"synthetic-audio-input")
-    video.write_bytes(b"synthetic-video-input")
+    audio.write_bytes(synthetic_wav_bytes())
+    write_synthetic_video(video, seconds=36)
     repo._save_asset(MaterialAsset(
         id="asset_1", workspace_id="local", file_name=video.name, path=str(video),
-        size_bytes=video.stat().st_size, modified_at=datetime.now(timezone.utc),
-        duration_seconds=1, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        size_bytes=video.stat().st_size,
+        modified_at=datetime.fromtimestamp(video.stat().st_mtime, timezone.utc),
+        duration_seconds=36, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        media_type="video", owner_user_id=member.member_id,
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="synthetic fixture", review_status="approved")],
     ))
+    source_reference = repo.workspace_media_reference_for_asset("local", "asset_1")
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(
+            conn, workspace_id="local", reference=source_reference
+        )
     repo.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="local", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
@@ -458,7 +487,6 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
 def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account(tmp_path, monkeypatch, stop):
     """Real scheduler/SQL/media, synthetic TTS worker; no model or cloud claim."""
     import sys
-    import wave
     from uuid import uuid4
     from app.auth import AuthPrincipal
 
@@ -466,38 +494,40 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
     repo, task_id, script_id, _digest = _seed(tmp_path, workspace_id=workspace)
     plan = repo.get_creation_plan(workspace, f"plan_{workspace}")
     plan.presenter_share_target = 0
+    person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
+        repo, workspace_id=workspace, member_id=user,
+        person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
+        language="zh", model_id=plan.selected_voice.model_id,
+        person_authorization_id="person_auth_1", voice_authorization_id="voice_auth_1",
+        voice_usage_scopes=("narration",),
+    )
+    plan.selected_person = CreationPlanPersonReference(person.id, person.version)
+    plan.selected_voice = CreationPlanVoiceReference(
+        voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version,
+        voice.authorization.id, voice.authorization.version, "zh-CN", voice.model_id,
+    )
+    plan.owner_user_id = user
+    task = repo.get_creation_task(workspace, task_id)
+    task.owner_user_id = user
     with repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(plan), default=str), workspace, plan.id))
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(task), default=str), workspace, task_id))
         if stop is None:
             # Exercise actual granted FFmpeg concatenation, not just one-file copy.
             script_payload = json.loads(conn.execute("SELECT payload FROM creation_task_scripts WHERE id=?", (script_id,)).fetchone()[0])
             script_payload["sections"].append({**script_payload["sections"][0], "id": "section_2"})
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (json.dumps(script_payload), script_id))
     digest = revision_digest(repo.get_creation_task_script(workspace, script_id), plan)
-    reference = tmp_path / "library/ref.wav"
-    with wave.open(str(reference), "wb") as audio:
-        audio.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
-        audio.writeframes(b"\0\0" * 24000)
-    video = tmp_path / "library/source.mp4"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-                    "color=c=blue:s=320x240:r=25:d=1", "-pix_fmt", "yuv420p", str(video)],
-                   check=True, capture_output=True)
-    for name, path, role, description in (("reference", reference, "a_roll", "参考音频"),
-                                         ("asset", video, "b_roll", "现场")):
-        repo._save_asset(MaterialAsset(id=name, workspace_id=workspace, file_name=path.name,
-            path=str(path), size_bytes=path.stat().st_size, modified_at=datetime.now(timezone.utc),
-            duration_seconds=1, usage_role=role, review_status="approved", analysis_status="ready",
-            segments=[MaterialSegment(id=f"segment_{name}", asset_id=name, start_seconds=0,
-                end_seconds=1, description=description, review_status="approved")]))
-    voice = VersionedVoiceProfile(id="voice_1", workspace_id=workspace, person_profile_id="person_1",
-        person_version="v1", version="v1", language="zh", reference_audio_path="workspace://ref.wav",
-        reference_text="参考文字", model_id="qwen3-tts-12hz-0.6b-base-8bit",
-        authorization=Authorization(id="voice_auth_1", version="v1", rights_holder="fixture",
-            content_types=("voice",), usage_scopes=("narration",), effective_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
-            expires_at=None, evidence_reference="synthetic fixture", status="active", workspace_id=workspace))
-    with repo._connect() as conn:
-        repo._claim_workspace_media_reference(conn, workspace_id=workspace, reference="workspace://ref.wav")
+    asset, _source_reference = register_synthetic_video_asset(
+        repo, workspace_id=workspace, member_id=user,
+        path=tmp_path / "library/source.mp4", asset_id="asset", seconds=36,
+    )
+    assert [segment.id for _asset, segment in repo.automatic_material_segments(
+        workspace, viewer_user_id=user
+    )] == [f"asset-segment-{index}" for index in range(3)]
     monkeypatch.setattr(repo, "resolve_creation_task_narration_inputs",
                         lambda **_kwargs: SimpleNamespace(voice=voice, pronunciation_entries=()))
     model = tmp_path / "model"
@@ -703,7 +733,11 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 assert scheduler.processes.children_released(tuple(children)) is True
                 return
             if stage == "montage_plan":
-                assert "未运行视觉语义模型" in repo.get_creation_task_montage_plan(workspace, task_id)["message"]
+                try:
+                    montage = repo.get_creation_task_montage_plan(workspace, task_id)
+                except KeyError:
+                    pytest.fail(repo.get_job_run(workspace, retry.id).failure_reason)
+                assert "未运行视觉语义模型" in montage["message"]
         finished = repo.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
         assert calls == ["narration", "montage_plan", "montage_plan"]
@@ -769,7 +803,8 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
                    check=True, capture_output=True)
     repo._save_asset(MaterialAsset(
         id="asset_1", workspace_id="workspace_a", file_name=video.name, path=str(video),
-        size_bytes=video.stat().st_size, modified_at=datetime.now(timezone.utc),
+        size_bytes=video.stat().st_size,
+        modified_at=datetime.fromtimestamp(video.stat().st_mtime, timezone.utc),
         duration_seconds=1, usage_role="b_roll", review_status="approved", analysis_status="ready",
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
@@ -1521,29 +1556,39 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
     from datetime import timedelta
-    from app.avatar_lipsync import PersonProfile
     from app.device_runtime import OwnerRegistration, build_device_runtime
     from app.device_scheduler import RecoveryBlocked
     from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
     from app.member_permits import MemberDeviceAccess
+    from _media_preview_test_fixtures import register_synthetic_profiles
+    from app.production import CreationPlanPersonReference
 
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     members = LocalMemberService(repo.database_path)
     member = members.add_member("bounded fixture member")
     actor = CreationExecutionActor("local", member.member_id)
     access = MemberDeviceAccess(members)
-    auth = Authorization("voice_auth_1", "v1", "synthetic fixture", ("voice",), ("narration",),
-        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "synthetic WAV", "active", "local")
-    person_auth = replace(auth, id="person_auth_1", content_types=("person",))
-    repo.save_person_profile(PersonProfile("person_1", "local", "fixture", "v1", "fixture://unused", (), (), person_auth))
-    voice = VersionedVoiceProfile("voice_1", "local", "person_1", "v1", "v1", "zh", "workspace://ref.wav", "fixture", "test", auth)
-    repo.save_versioned_voice_profile(voice)
-    reference = tmp_path / "library/ref.wav"
-    with wave.open(str(reference), "wb") as wav:
-        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
-        wav.writeframes(b"\0\0" * 240)
+    person, voice, _avatar_auth, reference, _image_path = register_synthetic_profiles(
+        repo, workspace_id="local", member_id=member.member_id,
+        person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
+        language="zh", model_id="test", person_authorization_id="person_auth_1",
+        voice_authorization_id="voice_auth_1", voice_usage_scopes=("narration",),
+    )
+    plan = repo.get_creation_plan("local", "plan_local")
+    plan.selected_person = CreationPlanPersonReference(person.id, person.version)
+    plan.selected_voice = CreationPlanVoiceReference(
+        voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version,
+        voice.authorization.id, voice.authorization.version, "zh-CN", "test",
+    )
+    plan.owner_user_id = member.member_id
+    task = repo.get_creation_task("local", task_id)
+    task.owner_user_id = member.member_id
     with repo._connect() as conn:
-        repo._claim_workspace_media_reference(conn, workspace_id="local", reference="workspace://ref.wav")
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(plan), default=str), "local", plan.id))
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(task), default=str), "local", task_id))
     narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
@@ -1571,7 +1616,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
                 monkeypatch.setattr(context.scheduler.processes, "children_released", lambda children: False)
             raise failure
         audio = tmp_path / "library/narration.wav"
-        audio.write_bytes(reference.read_bytes())
+        audio.write_bytes(synthetic_wav_bytes())
         record = NarrationArtifactRecord(id="pressure_audio", workspace_id=workspace, task_id=current_task,
             script_id=script_id, voice_profile_id="voice_1", cache_key="pressure_cache",
             audio_path=str(audio), duration_seconds=0.01, sample_rate=24000, model_id="synthetic")

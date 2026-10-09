@@ -642,7 +642,7 @@ def test_avatar_preview_persists_unavailable_and_revoked_historical_versions(tmp
 def test_avatar_preview_failure_requires_explicit_retry(tmp_path):
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
-    avatar_authorization = _save_profiles(repository, person, voice)
+    _save_profiles(repository, person, voice)
     audio = _voice_request(repository, preview_text="人物预览失败重试来源")
     provider = FixtureAvatarProvider(output_mode="missing")
     failed = _avatar_request(repository, audio=audio, provider=provider)
@@ -662,7 +662,7 @@ def test_avatar_preview_failure_requires_explicit_retry(tmp_path):
 def test_avatar_preview_rejects_audio_outside_output_root_before_fixture_provider(tmp_path):
     repository = _repository(tmp_path)
     person, voice, _reference = _profiles(repository)
-    avatar_authorization = _save_profiles(repository, person, voice)
+    _save_profiles(repository, person, voice)
     audio = _voice_request(repository, preview_text="越界音频拒绝来源")
     outside_audio = tmp_path / "outside.wav"
     outside_audio.write_bytes(synthetic_wav_bytes())

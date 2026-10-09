@@ -29,7 +29,6 @@ from app.models import (
     EpisodeStatus,
     ScriptPackage,
     ScriptSection,
-    utc_now,
 )
 from app.montage import (
     CreationTaskMontagePlan,
@@ -53,9 +52,9 @@ from app.montage import (
     select_presenter_sections,
 )
 from app.production import (
-    Authorization,
     CoverAsset,
     CreationPlan,
+    CreationPlanPersonReference,
     CreationPlanVoiceReference,
     CreationTask,
     CreationTaskScript,
@@ -65,7 +64,6 @@ from app.production import (
     MaterialSegmentMatch,
     NarrationArtifactRecord,
     NarrationSegment,
-    PersonProfile,
     PersonRender,
     ProductionBatch,
     ProductionProfile,
@@ -73,9 +71,9 @@ from app.production import (
     SubtitleCue as ProductionSubtitleCue,
     SubtitleTrack,
     TimelineVersion,
-    VersionedVoiceProfile,
 )
 from app.video_jobs import VideoJobRunner
+from _media_preview_test_fixtures import register_synthetic_profiles, synthetic_wav_bytes, write_synthetic_video
 
 
 def _assert_retired_montage_endpoint(client, production, workspace_id, task_id, stage):
@@ -380,10 +378,11 @@ def _asset(
     *,
     with_metadata: bool = True,
     workspace_id: str = "workspace_a",
+    owner_user_id: str | None = None,
 ) -> MaterialAsset:
     path = tmp_path / "人工智能工具演示.mp4"
-    path.write_bytes(b"video")
-    now = utc_now()
+    write_synthetic_video(path)
+    modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
     descriptions = (
         ["人工智能工具界面和团队效率演示", "自动化处理重复工作流程", "人工审核最终结果"]
         if with_metadata
@@ -395,8 +394,10 @@ def _asset(
         file_name=path.name,
         path=str(path),
         size_bytes=path.stat().st_size,
-        modified_at=now,
+        modified_at=modified_at,
         duration_seconds=24,
+        media_type="video",
+        owner_user_id=owner_user_id,
         usage_role="b_roll",
         review_status="approved",
         analysis_status="ready",
@@ -426,16 +427,17 @@ def _batch(workspace_id: str = "workspace_a") -> ProductionBatch:
 
 def _a_roll_asset(tmp_path: Path) -> MaterialAsset:
     path = tmp_path / "人物主镜头.mp4"
-    path.write_bytes(b"a-roll")
-    now = utc_now()
+    write_synthetic_video(path)
+    modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
     return MaterialAsset(
         id="asset_a_roll",
         workspace_id="workspace_a",
         file_name=path.name,
         path=str(path),
         size_bytes=path.stat().st_size,
-        modified_at=now,
+        modified_at=modified_at,
         duration_seconds=24,
+        media_type="video",
         usage_role="a_roll",
         review_status="approved",
         analysis_status="ready",
@@ -461,7 +463,8 @@ def _profile() -> ProductionProfile:
 
 
 def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
-    # Route fixtures use placeholder media; preview encoding is not a media test.
+    from app.local_members import LocalMemberService
+
     monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
         SimpleNamespace(id="fixture-visual-preview", logical_ref="artifacts/fixture-visual-preview.mp4"))
     output_root = tmp_path / "output"
@@ -469,74 +472,31 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         database_path=tmp_path / "studio.sqlite3",
         video_library_path=tmp_path,
     )
-    asset = _asset(tmp_path, workspace_id=workspace_id)
+    members = LocalMemberService(production.database_path)
+    member, member_token = members.join(members.create_invite_code(), "合成测试成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
+        production, workspace_id=workspace_id, member_id=member.member_id,
+        person_id="person-a", voice_id="voice-person", language="zh",
+    )
+    asset = _asset(tmp_path, workspace_id=workspace_id, owner_user_id=member.member_id)
     production._save_asset(asset)
     visual_reference = production.workspace_media_reference_for_asset(
         workspace_id, asset.id
     )
-    voice_path = tmp_path / "voice-reference.wav"
-    voice_path.write_bytes(b"voice-reference")
-    voice_reference = "workspace://voice-reference.wav"
-    effective_from = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    person_authorization = Authorization(
-        id="person-authorization",
-        workspace_id=workspace_id,
-        version="v1",
-        rights_holder="本人",
-        content_types=("person_likeness", "avatar_video"),
-        usage_scopes=("avatar_lipsync",),
-        effective_from=effective_from,
-        expires_at=None,
-        evidence_reference="consent://person/v1",
-        status="active",
-    )
-    person = production.save_person_profile(
-        PersonProfile(
-            id="person-a",
-            workspace_id=workspace_id,
-            display_name="cc",
-            version="v1",
-            avatar_reference=visual_reference,
-            background_capabilities=("office",),
-            shot_capabilities=("medium",),
-            authorization=person_authorization,
+    with production._connect() as conn:
+        production._claim_workspace_media_reference(
+            conn, workspace_id=workspace_id, reference=visual_reference
         )
-    )
-    voice_authorization = Authorization(
-        id="voice-authorization",
-        workspace_id=workspace_id,
-        version="v1",
-        rights_holder="本人",
-        content_types=("voice",),
-        usage_scopes=("avatar_lipsync",),
-        effective_from=effective_from,
-        expires_at=None,
-        evidence_reference="consent://voice/v1",
-        status="active",
-    )
-    voice = production.save_versioned_voice_profile(
-        VersionedVoiceProfile(
-            id="voice-person",
-            workspace_id=workspace_id,
-            person_profile_id=person.id,
-            person_version=person.version,
-            version="v1",
-            language="zh",
-            reference_audio_path=voice_reference,
-            reference_text="参考声音",
-            model_id="qwen3-tts",
-            authorization=voice_authorization,
-        )
-    )
     selected_voice = CreationPlanVoiceReference(
         profile_id=voice.id,
         version=voice.version,
         person_profile_id=person.id,
         person_version=person.version,
-        person_authorization_id=person_authorization.id,
-        person_authorization_version=person_authorization.version,
-        authorization_id=voice_authorization.id,
-        authorization_version=voice_authorization.version,
+        person_authorization_id=person.authorization.id,
+        person_authorization_version=person.authorization.version,
+        authorization_id=voice.authorization.id,
+        authorization_version=voice.authorization.version,
         language="zh",
         model_id=voice.model_id,
     )
@@ -560,6 +520,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         confirmation_points=[],
         blockers=[],
         preflight_fingerprint="p" * 64,
+        selected_person=CreationPlanPersonReference(person.id, person.version),
         material_matches=[
             MaterialSegmentMatch(
                 asset_ref=f"asset:{asset.id}",
@@ -575,8 +536,9 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         plan_id=creation_plan.id,
         name=creation_plan.name,
         scenario=creation_plan.goal,
+        owner_user_id=member.member_id,
     )
-    production.confirm_creation_plan(creation_plan, task)
+    production.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
     now = datetime.now(timezone.utc)
     script = CreationTaskScript(
         id="script-person-edit",
@@ -634,9 +596,9 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
                 workspace_id,
                 task.id,
             ),
-        )
+    )
     narration_path = tmp_path / "person-narration.wav"
-    narration_path.write_bytes(b"person-narration")
+    narration_path.write_bytes(synthetic_wav_bytes(4))
     narration_cache_key = "person-segment-cache"
     narration_reference = production.narration_artifact_reference(
         narration_cache_key
@@ -709,9 +671,10 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         language="zh",
         motion="natural",
         expression="neutral",
-        authorization_id=person_authorization.id,
-        authorization_version=person_authorization.version,
+        authorization_id=person.authorization.id,
+        authorization_version=person.authorization.version,
         model_id=provider.model_id,
+        viewer_user_id=member.member_id,
     )
     base_cache_key = avatar_lipsync_cache_key(render_request)
     old_render = production.create_person_render(
@@ -821,11 +784,14 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     return SimpleNamespace(
         workspace_id=workspace_id,
         production=production,
+        members=members,
+        member=member,
+        member_token=member_token,
         task=task,
         montage=montage,
         old_render=old_render,
         provider=provider,
-        client=TestClient(main_module.app),
+        client=TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}),
     )
 
 
@@ -845,7 +811,6 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
                                        CreationStageGrantContext, CpuRenderLimits, revision_digest)
     from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent
     from app.host_resource_probes import HostBudget, HostResourceDecision, HostResourceProbe, MontageBudget, PresenterBudget
-    from app.local_members import LocalMemberService
     from app.member_permits import MemberDeviceAccess, permit_actor
     from app.repository import LEGACY_WORKSPACE_ID
 
@@ -854,8 +819,8 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     plan.presenter_share_target = 100
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
-    members = LocalMemberService(state.production.database_path)
-    actor = permit_actor(members.list_members()[0], state.workspace_id)
+    members = state.members
+    actor = permit_actor(state.member, state.workspace_id)
     access = MemberDeviceAccess(members)
     budget = PresenterBudget(1, 1024**2, 30, 4096, 1, 5, 64*1024**2, 32, .1, 64*1024**2, 4096)
     owner = CreationJobOwnerVerifier(state.production, presenter_budget=budget,
@@ -873,7 +838,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
         grant_context.check()
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        grant_context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'new-person-render')", str(output)],
+        grant_context.run([sys.executable, "-c", "import pathlib,sys,time; pathlib.Path(sys.argv[1]).write_bytes(b'new-person-render'); time.sleep(.25)", str(output)],
                           output_paths=(output,))
         state.provider.output_cache_keys.append(output.stem)
         state.provider.languages.append(request.language)
@@ -1083,7 +1048,7 @@ def test_planner_does_not_use_talking_head_assets_as_b_roll(tmp_path):
     asset = _asset(tmp_path)
     asset.usage_role = "a_roll"
 
-    with pytest.raises(ValueError, match="B-roll"):
+    with pytest.raises(ValueError, match="没有可自动选用的补充镜头"):
         MontagePlanner().build(
             workspace_id="workspace_a",
             batch=_batch(),
@@ -1954,19 +1919,25 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
 def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     tmp_path, monkeypatch, exact_replacement, language, mixed_color
 ):
+    from app.local_members import LocalMemberService
+
     workspace_id = "workspace_a"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
         video_library_path=tmp_path,
     )
-    asset = _asset(tmp_path, workspace_id=workspace_id)
+    members = LocalMemberService(production.database_path)
+    member, member_token = members.join(members.create_invite_code(), "合成测试成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    asset = _asset(tmp_path, workspace_id=workspace_id, owner_user_id=member.member_id)
     production._save_asset(asset)
     replacement_path = tmp_path / "replacement-outdoor.mp4"
-    replacement_path.write_bytes(b"replacement-video")
+    write_synthetic_video(replacement_path)
     replacement_segment = replace(
         asset.segments[0],
+        asset_id="asset_replacement",
         id="segment_replacement",
-        description="户外产品补充画面",
+        description="户外画面，产品补充素材",
         system_tags=["场景:户外"],
     )
     replacement_asset = replace(
@@ -1974,9 +1945,26 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         id="asset_replacement",
         file_name=replacement_path.name,
         path=str(replacement_path),
+        size_bytes=replacement_path.stat().st_size,
+        modified_at=datetime.fromtimestamp(replacement_path.stat().st_mtime, timezone.utc),
         segments=[replacement_segment],
+        owner_user_id=member.member_id,
     )
     production._save_asset(replacement_asset)
+    for source_asset in (asset, replacement_asset):
+        source_reference = production.workspace_media_reference_for_asset(
+            workspace_id, source_asset.id
+        )
+        with production._connect() as conn:
+            production._claim_workspace_media_reference(
+                conn, workspace_id=workspace_id, reference=source_reference
+            )
+    assert (replacement_asset.id, replacement_segment.id) in {
+        (candidate_asset.id, candidate_segment.id)
+        for candidate_asset, candidate_segment in production.automatic_material_segments(
+            workspace_id, viewer_user_id=member.member_id
+        )
+    }
     creation_plan = CreationPlan(
         id="plan-render-route",
         workspace_id=workspace_id,
@@ -1997,6 +1985,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         confirmation_points=[],
         blockers=[],
         preflight_fingerprint="f" * 64,
+        owner_user_id=member.member_id,
         material_matches=[
             MaterialSegmentMatch(
                 asset_ref=f"asset:{asset.id}",
@@ -2017,6 +2006,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         status="waiting_for_user",
         progress=70,
         recovery_point="montage",
+        owner_user_id=member.member_id,
     )
     production.confirm_creation_plan(creation_plan, task)
     plan = CreationTaskMontagePlan(
@@ -2098,7 +2088,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         main_module, "_render_montage_with_resolved_clip_sources", fake_render
     )
 
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
     # Existing helper remains diagnostic-only: no public execution fallback or real FFmpeg here.
     original_create_artifact_record = production.create_artifact_record
@@ -4602,7 +4592,10 @@ def test_person_generation_reads_narration_language(permitted_person_edit_state,
     state = permitted_person_edit_state
     segment = state.production.get_narration_segment(state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id)
     voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id, segment.voice_version)
-    state.production.save_versioned_voice_profile(replace(voice, version='v2', language='en'))
+    state.production.save_versioned_voice_profile(
+        replace(voice, version='v2', language='en'),
+        verified_owner_user_id=state.member.member_id,
+    )
     state.production.save_narration_segments(state.workspace_id, state.task.id, segment.script_id,
                                             [replace(segment, voice_version='v2', language='en')])
     plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)

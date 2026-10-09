@@ -1,9 +1,11 @@
 """Private fixtures for profile-preview tests; all media and identities are synthetic."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import io
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import wave
 
 from PIL import Image
@@ -13,7 +15,7 @@ from app.creation_execution import CreationExecutionActor
 from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity
 from app.host_resource_probes import NarrationBudget, PresenterBudget
-from app.production import MaterialAsset, ProductionRepository
+from app.production import MaterialAsset, MaterialSegment, ProductionRepository
 from app.profile_preview_execution import profile_preview_registration, submit_profile_preview
 
 
@@ -27,9 +29,60 @@ def synthetic_wav_bytes(seconds: int = 2) -> bytes:
     return buffer.getvalue()
 
 
+def write_synthetic_video(path: Path, *, seconds: int = 24) -> Path:
+    """Create a small, decodable audio/video source without external media."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise FileNotFoundError("ffmpeg is required to create the synthetic video fixture")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", f"color=c=blue:s=64x64:r=1:d={seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=24000:duration={seconds}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "24k", "-shortest", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return path
+
+
+def register_synthetic_video_asset(
+    repository: ProductionRepository, *, workspace_id: str, member_id: str,
+    path: Path, asset_id: str, seconds: int = 24,
+) -> tuple[MaterialAsset, str]:
+    write_synthetic_video(path, seconds=seconds)
+    asset = repository._save_asset(MaterialAsset(
+        id=asset_id, workspace_id=workspace_id, file_name=path.name, path=str(path),
+        size_bytes=path.stat().st_size,
+        modified_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+        duration_seconds=seconds, usage_role="b_roll", review_status="approved",
+        analysis_status="ready", media_type="video", owner_user_id=member_id,
+        segments=[MaterialSegment(
+            id=f"{asset_id}-segment-{index}", asset_id=asset_id,
+            start_seconds=float(index * seconds / 3), end_seconds=float((index + 1) * seconds / 3),
+            description=f"合成片段 {index + 1}", review_status="approved",
+        ) for index in range(3)],
+    ))
+    reference = repository.workspace_media_reference_for_asset(workspace_id, asset.id)
+    with repository._connect() as conn:
+        repository._claim_workspace_media_reference(
+            conn, workspace_id=workspace_id, reference=reference
+        )
+    return asset, reference
+
+
 def register_synthetic_profiles(
     repository: ProductionRepository, *, workspace_id: str, member_id: str,
     person_id: str = "person_a", voice_id: str = "voice_a",
+    person_version: str = "person-v1", voice_version: str = "voice-v1",
+    language: str = "zh-en", model_id: str = "fixture-voice-runtime-v1",
+    person_authorization_id: str | None = None,
+    voice_authorization_id: str | None = None,
+    person_usage_scopes: tuple[str, ...] = ("avatar_lipsync",),
+    voice_usage_scopes: tuple[str, ...] = ("narration", "avatar_lipsync"),
 ):
     voice_reference, _size, _duration = repository.import_voice_reference_wav(
         workspace_id, synthetic_wav_bytes(), verified_owner_user_id=member_id
@@ -50,28 +103,34 @@ def register_synthetic_profiles(
 
     def authorization(suffix: str, content_type: str, scopes: tuple[str, ...]) -> Authorization:
         return Authorization(
-            id=f"{person_id}-{suffix}", version="v1", rights_holder="合成测试成员",
+            id=(person_authorization_id if suffix == "person-auth" and person_authorization_id else
+                voice_authorization_id if suffix == "voice-auth" and voice_authorization_id else
+                f"{person_id}-{suffix}"), version="v1", rights_holder="合成测试成员",
             content_types=(content_type,), usage_scopes=scopes,
             effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc), expires_at=None,
             evidence_reference=f"fixture://{person_id}/{suffix}", status="active",
             workspace_id=workspace_id,
         )
 
-    person_authorization = authorization("person-auth", "person_likeness", ("avatar_lipsync",))
-    voice_authorization = authorization("voice-auth", "voice", ("narration", "avatar_lipsync"))
+    person_authorization = authorization("person-auth", "person_likeness", person_usage_scopes)
+    person_authorization = replace(
+        person_authorization,
+        content_types=("person_likeness", "avatar_video"),
+    )
+    voice_authorization = authorization("voice-auth", "voice", voice_usage_scopes)
     avatar_authorization = authorization("avatar-auth", "avatar_video", ("avatar_lipsync",))
     person = PersonProfile(
-        id=person_id, workspace_id=workspace_id, display_name="合成主播", version="person-v1",
+        id=person_id, workspace_id=workspace_id, display_name="合成主播", version=person_version,
         avatar_reference=repository.workspace_media_reference_for_asset(workspace_id, image_asset.id),
         background_capabilities=("studio",), shot_capabilities=("medium",),
         authorization=person_authorization, reference=ProfileReference(asset_id=image_asset.id),
     )
     voice = VoiceProfile(
         id=voice_id, workspace_id=workspace_id, person_profile_id=person.id,
-        person_version=person.version, version="voice-v1", language="zh-en",
+        person_version=person.version, version=voice_version, language=language,
         display_name="合成声音",
         reference_audio_path=voice_reference, reference_text="合成测试参考文字",
-        model_id="fixture-voice-runtime-v1", authorization=voice_authorization,
+        model_id=model_id, authorization=voice_authorization,
         reference=ProfileReference(asset_id=voice_asset.id),
     )
     person = repository.save_person_profile(person, verified_owner_user_id=member_id)

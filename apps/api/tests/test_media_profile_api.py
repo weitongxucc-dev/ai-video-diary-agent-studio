@@ -11,6 +11,10 @@ from app.avatar_lipsync import UnavailableAvatarAndLipSyncProvider
 from app.external_sources import ExternalSourceResponseError
 from app.production import ProductionRepository
 from app.source_repository import SourceRepository
+from app.production import MaterialAsset
+from app.local_members import LocalMemberService
+from _media_preview_test_fixtures import synthetic_wav_bytes, write_synthetic_video
+from PIL import Image
 
 
 class _UnavailableVoiceCloneProvider:
@@ -46,7 +50,30 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "workspace-a"),
     )
-    return TestClient(main_module.app)
+    repository = main_module.production_repo
+    members = LocalMemberService(database_path)
+    owner, token = members.whoami(None)
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    approved = library / "approved"
+    approved.mkdir(exist_ok=True)
+    image_path = approved / "profile-reference.png"
+    Image.new("RGB", (16, 16), (32, 96, 160)).save(image_path, format="PNG")
+    repository._save_asset(MaterialAsset(
+        id="profile-reference", workspace_id="workspace-a", file_name=image_path.name,
+        path=str(image_path), size_bytes=image_path.stat().st_size,
+        modified_at=datetime.fromtimestamp(image_path.stat().st_mtime, timezone.utc),
+        media_type="image", owner_user_id=owner.member_id,
+    ))
+    voice_reference, _, _ = repository.import_voice_reference_wav(
+        "workspace-a", synthetic_wav_bytes(), verified_owner_user_id=owner.member_id,
+    )
+    voice_path = repository.resolve_workspace_media_reference("workspace-a", voice_reference)
+    voice_asset = repository._asset_by_path("workspace-a", str(voice_path))
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": token})
+    client.profile_owner_id = owner.member_id
+    client.voice_reference = voice_reference
+    client.voice_asset_id = voice_asset.id
+    return client
 
 
 def _authorization_payload(
@@ -79,12 +106,13 @@ def _person_payload(
         "id": "person-a",
         "display_name": "主播 A",
         "version": version,
-        "avatar_reference": "asset://avatar/person-a",
+        "avatar_reference": "workspace://approved/profile-reference.png",
         "background_capabilities": ["studio"],
         "shot_capabilities": ["medium"],
         "authorization": _authorization_payload(
             "person-authorization", version=authorization_version
         ),
+        "reference": {"asset_id": "profile-reference"},
     }
 
 
@@ -97,7 +125,7 @@ def test_person_profile_allows_empty_optional_capabilities(
 
     saved = client.post("/api/media/person-profiles", json=payload)
 
-    assert saved.status_code == 200
+    assert saved.status_code == 200, saved.text
     assert saved.json()["background_capabilities"] == []
     assert saved.json()["shot_capabilities"] == []
     listed = client.get("/api/media/person-profiles")
@@ -110,18 +138,30 @@ def test_person_profile_reports_body_reference_source_and_missing_file(
     client: TestClient,
 ) -> None:
     asset_backed = client.post("/api/media/person-profiles", json=_person_payload())
-    assert asset_backed.status_code == 200
-    assert asset_backed.json()["body_reference_kind"] == "asset"
-    assert asset_backed.json()["body_reference_available"] is False
-    assert asset_backed.json()["body_reference_reason"]
+    assert asset_backed.status_code == 200, asset_backed.text
+    assert asset_backed.json()["body_reference_kind"] == "workspace"
+    assert asset_backed.json()["body_reference_available"] is True
+    (main_module.production_repo.video_library_path / "approved" / "profile-reference.png").unlink()
+    missing = client.get("/api/media/person-profiles/person-a")
+    assert missing.status_code == 200
+    assert missing.json()["body_reference_available"] is False
+    assert missing.json()["body_reference_reason"]
     assert asset_backed.json()["runnable"] is True
 
     library = main_module.production_repo.video_library_path
-    (library / "approved").mkdir()
-    (library / "approved" / "person-a.mp4").write_bytes(b"body reference")
+    (library / "approved").mkdir(exist_ok=True)
+    video_path = write_synthetic_video(library / "approved" / "person-a.mp4", seconds=10)
+    stat = video_path.stat()
+    main_module.production_repo._save_asset(MaterialAsset(
+        id="person-a-video", workspace_id="workspace-a", file_name=video_path.name,
+        path=str(video_path), size_bytes=stat.st_size,
+        modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
+        media_type="video", duration_seconds=10, owner_user_id=client.profile_owner_id,
+    ))
     payload = _person_payload()
     payload["version"] = "person-v1-workspace"
     payload["avatar_reference"] = "workspace://approved/person-a.mp4"
+    payload["reference"] = {"asset_id": "person-a-video"}
 
     saved = client.post("/api/media/person-profiles", json=payload)
     assert saved.status_code == 200
@@ -232,7 +272,9 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
             "person_version": "person-v2",
             "version": "voice-v1",
             "language": "zh-en",
-            "reference_audio_path": "workspace://approved/voice-a.wav",
+            "display_name": "主播声音 A",
+            "reference_audio_path": client.voice_reference,
+            "reference": {"asset_id": client.voice_asset_id},
             "reference_text": "主播 A 的声音参考文字。",
             "model_id": "qwen3-tts-v1",
             "authorization": _authorization_payload(
@@ -257,8 +299,8 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
 
     assert person_v1.status_code == 200
     assert person_v2.status_code == 200
-    assert voice.status_code == 200
-    assert voice.json()["reference_audio_path"] == "workspace://approved/voice-a.wav"
+    assert voice.status_code == 200, voice.text
+    assert voice.json()["reference_audio_path"] == client.voice_reference
     assert pronunciation.status_code == 200
     assert client.get("/api/media/person-profiles").json()["items"][0]["version"] == "person-v2"
     assert [item["version"] for item in client.get(
@@ -289,7 +331,7 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
     assert historical.json()["authorization"]["status"] == "active"
     assert historical.json()["current_authorization"]["status"] == "revoked"
     assert historical.json()["runnable"] is False
-    assert historical.json()["runnable_reason"] == "authorization_revoked"
+    assert historical.json()["runnable_reason"] == "参考使用受限：authorization_revoked"
     assert client.get(
         "/api/media/person-profiles/person-a", headers={"x-test-workspace": "workspace-b"}
     ).status_code == 404
@@ -336,7 +378,9 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
                 "person_version": "person-v1",
                 "version": "voice-v1",
                 "language": "zh",
-                "reference_audio_path": "workspace://approved/voice-a.wav",
+                "display_name": "声音 A",
+                "reference_audio_path": "__VOICE_REFERENCE__",
+                "reference": {"asset_id": "__VOICE_ASSET_ID__"},
                 "reference_text": "   ",
                 "model_id": "voice-model-v1",
                 "authorization": _authorization_payload(
@@ -351,6 +395,13 @@ def test_media_management_rejects_blank_required_values(
     path: str,
     payload: dict[str, object],
 ) -> None:
+    if path == "/api/media/voice-profiles":
+        assert client.post("/api/media/person-profiles", json=_person_payload()).status_code == 200
+        payload = {
+            **payload,
+            "reference_audio_path": client.voice_reference,
+            "reference": {"asset_id": client.voice_asset_id},
+        }
     assert client.post(path, json=payload).status_code == 422
 
 
@@ -362,7 +413,7 @@ def test_media_management_rejects_semantic_change_without_new_version_and_report
         "/api/media/person-profiles",
         json={
             **_person_payload(),
-            "avatar_reference": "asset://avatar/person-a-revised",
+            "display_name": "主播 A 修订",
         },
     )
     voice_capability = client.get("/api/media/capabilities/voice-clone")
@@ -421,7 +472,9 @@ def test_voice_write_endpoints_reject_nonlogical_or_escaping_references(
             "person_version": "person-v1",
             "version": "voice-v1",
             "language": "zh",
+            "display_name": "声音 A",
             "reference_audio_path": reference,
+            "reference": {"asset_id": client.voice_asset_id},
             "reference_text": "参考文字",
             "model_id": "voice-model-v1",
             "authorization": _authorization_payload(

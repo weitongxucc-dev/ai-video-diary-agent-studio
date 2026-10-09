@@ -218,36 +218,36 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
     from datetime import datetime, timezone
     from types import SimpleNamespace
 
-    from app.avatar_lipsync import Authorization, PersonProfile, VoiceProfile
     from app.creation_execution import (
         CreationExecution, CreationJobOwnerVerifier, revision_digest, submit_creation_stage,
     )
     from app.device_scheduler import DeviceScheduler
     from app.host_resource_probes import NarrationBudget
-    from app.production import CreationPlan, CreationPlanVoiceReference, CreationTask
+    from app.production import CreationPlan, CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
+    from _media_preview_test_fixtures import register_synthetic_profiles
 
     repository = _repository(tmp_path)
     members = LocalMemberService(repository.database_path)
     joined, token = members.join(members.create_invite_code(), "制作成员")
     actor = permit_actor(members.resolve_member(token), WORKSPACE)
     access = MemberDeviceAccess(members)
-    reference = tmp_path / "library/reference.wav"
-    reference.write_bytes(b"synthetic reference; no inference in this test")
-    auth = Authorization("auth", "v1", "fixture", ("voice",), ("narration",),
-        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "synthetic fixture", "active", WORKSPACE)
-    repository.save_person_profile(PersonProfile("person", WORKSPACE, "夹具", "v1",
-        "fixture://unused-avatar", (), (), auth))
-    repository.save_versioned_voice_profile(VoiceProfile("voice", WORKSPACE, "person", "v1",
-        "v1", "zh", "workspace://reference.wav", "参考", "fixture-model", auth))
+    person, voice, _avatar_auth, _voice_path, _image_path = register_synthetic_profiles(
+        repository, workspace_id=WORKSPACE, member_id=joined.member_id,
+        person_id="person", voice_id="voice", person_version="v1", voice_version="v1",
+        language="zh", model_id="fixture-model", person_authorization_id="person-auth",
+        voice_authorization_id="voice-auth", voice_usage_scopes=("narration",),
+    )
     plan = CreationPlan(id="plan", workspace_id=WORKSPACE, goal="测试", name="测试", target_count=1,
         language="zh-CN", aspect_ratio="9:16", duration_target_seconds=15,
         knowledge_references=[], source_references=[],
-        selected_voice=CreationPlanVoiceReference("voice", "v1", "person", "v1", "auth", "v1",
-            "auth", "v1", "zh-CN", "fixture-model"), pronunciation_references=[],
+        selected_person=CreationPlanPersonReference(person.id, person.version),
+        selected_voice=CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
+            person.authorization.id, person.authorization.version, voice.authorization.id,
+            voice.authorization.version, "zh-CN", "fixture-model"), pronunciation_references=[],
         approved_asset_count=0, approved_clip_count=0, material_rule_summary="测试", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
-    task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation")
-    repository.confirm_creation_plan(plan, task)
+    task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=joined.member_id)
+    repository.confirm_creation_plan(plan, task, verified_owner_user_id=joined.member_id)
     now = datetime.now(timezone.utc).isoformat()
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="测试",
@@ -307,11 +307,12 @@ def presenter_permit_case(tmp_path, monkeypatch):
     from datetime import datetime, timezone
     from pathlib import Path
     from types import SimpleNamespace
-    from app.avatar_lipsync import Authorization, PersonProfile, VoiceProfile
     from app.creation_execution import CreationExecution, revision_digest
     from app.host_resource_probes import MontageBudget, PresenterBudget
     from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                                MaterialAsset, NarrationArtifactRecord, NarrationSegment)
+                                NarrationArtifactRecord, NarrationSegment)
+    from app.production import CreationPlanPersonReference
+    from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 
     import psutil
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1024**3))
@@ -322,36 +323,32 @@ def presenter_permit_case(tmp_path, monkeypatch):
     access = MemberDeviceAccess(members)
     actor = permit_actor(members.resolve_member(token), WORKSPACE)
     now = datetime.now(timezone.utc)
-    for name in ("reference.wav", "person.mp4"):
-        path = tmp_path / "library" / name
-        path.write_bytes(b"synthetic authorized input; no decoding")
-        repo._save_asset(MaterialAsset(id=name, workspace_id=WORKSPACE, file_name=name,
-            path=str(path), size_bytes=path.stat().st_size, modified_at=now,
-            review_status="approved", analysis_status="ready", duration_seconds=1))
-    person_auth = Authorization("person-auth", "v1", "fixture", ("person_likeness", "avatar_video"), ("avatar_lipsync",),
-        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "consent://synthetic", "active", WORKSPACE)
-    voice_auth = Authorization("voice-auth", "v1", "fixture", ("voice",), ("avatar_lipsync", "narration"),
-        datetime(2020, 1, 1, tzinfo=timezone.utc), None, "consent://synthetic", "active", WORKSPACE)
-    repo.save_person_profile(PersonProfile("person", WORKSPACE, "合成人物", "v1",
-        "workspace://person.mp4", (), (), person_auth))
-    repo.save_versioned_voice_profile(VoiceProfile("voice", WORKSPACE, "person", "v1", "v1", "zh",
-        "workspace://reference.wav", "参考", "synthetic-model", voice_auth))
+    person, voice, _avatar_auth, _voice_path, _image_path = register_synthetic_profiles(
+        repo, workspace_id=WORKSPACE, member_id=member.member_id, person_id="person", voice_id="voice",
+        person_version="v1", voice_version="v1", language="zh", model_id="synthetic-model",
+        person_authorization_id="person-auth", voice_authorization_id="voice-auth",
+    )
+    person_auth = person.authorization
+    register_synthetic_video_asset(repo, workspace_id=WORKSPACE, member_id=member.member_id,
+        path=tmp_path / "library" / "person.mp4", asset_id="person-video", seconds=1)
     plan = CreationPlan(id="plan", workspace_id=WORKSPACE, goal="测试", name="测试", target_count=1,
         language="zh-CN", aspect_ratio="9:16", duration_target_seconds=15,
         knowledge_references=[], source_references=[], selected_voice=CreationPlanVoiceReference(
-            "voice", "v1", "person", "v1", "person-auth", "v1", "voice-auth", "v1", "zh-CN", "synthetic-model"),
+            voice.id, voice.version, person.id, person.version, person.authorization.id,
+            person.authorization.version, voice.authorization.id, voice.authorization.version, "zh-CN", "synthetic-model"),
+        selected_person=CreationPlanPersonReference(person.id, person.version),
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary="测试", model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="fixture",
         presenter_share_target=20)
     assert plan.presenter_share_target == 20
-    task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation")
-    repo.confirm_creation_plan(plan, task)
+    task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=member.member_id)
+    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="合成文案",
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
         created_at=now.isoformat(), updated_at=now.isoformat(), confirmed_at=now.isoformat())
     audio = tmp_path / "spoken.wav"
-    audio.write_bytes(b"synthetic narration output")
+    audio.write_bytes(synthetic_wav_bytes())
     repo.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
         task_id=task.id, script_id="script", voice_profile_id="voice", cache_key="narration",
         audio_path=str(audio), duration_seconds=1, sample_rate=16000, model_id="fixture"))
@@ -685,7 +682,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     class SyntheticService:
         def __init__(self, root, provider):
             self.root = Path(root)
-        def render(self, request, *, output_cache_key, grant_context):
+        def render(self, request, *, output_cache_key, grant_context, **_kwargs):
             assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "person_render"
             output = self.root / "synthetic-provider.mp4"
             grant_context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'synthetic-person')",
