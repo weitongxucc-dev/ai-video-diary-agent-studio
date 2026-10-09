@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；用户最新要求优先核心对话创作，UI100已源码交付retain；当前仅B106最终候选一次打包有效；UI105已交源码并retain，UI102/B103/B104亦已结案，旧源码/核验权结束；B99已部分结案retain、账号运行权结束；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；用户最新要求优先核心对话创作，UI100已源码交付retain；B106已succeeded打包结案并retain，UI107已succeeded结案；当前B108具名隔离实际API/Pi链路验证有效；UI105已交源码并retain，UI102/B103/B104亦已结案，旧源码/核验权结束；B99已部分结案retain、账号运行权结束；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
 
 用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 105：succeeded源码结案并retain | clean7aa1eedd已交并组合；旧源码权结束；真实Pi/GUI未验 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 107：succeeded测试替身结案并retain | cleaneea5f306仅一项测试替身补齐；运行产品blob与7aa相等；旧写权结束 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 106：最终核心对话组合包 | task_49d1319cd7a1 / ctx_a0a7c47827a8；以下B106；104旧权结束；99脏树保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 108：隔离实际包API/Pi素材链路 | 以下B108；B106已结案retain；99脏树保留 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -63,17 +63,27 @@ UI102已交clean候选5b2d940d、B104已交clean候选4f1a6503，主控审核并
 
 owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所选范围、工具真实响应事实投影、组件对应标签刷新和无选择/切换不串对象；允许隔离TestClient/测试库验证现有真实仓储写后GET持久化，不启动网络服务/Pi/Key/GUI/媒体/模型/打包/下载，不读取用户试用数据。提交clean候选、净diff、实际检查、未验证项与后续实际Pi/客户端入口；源级用例不能冒称真实GUI。读取main产品§1.1、DESIGN§2、架构§9与auth成员边界后REBASE_ACK即可施工；最终结案后再具名一次合并实包验收，不重复未受影响的视觉/媒体测试。
 
+### B108：新包实际API/Pi素材原子验证（MAIN-MATERIAL108-20261009）
+
+B106包已审核，7aa1eedd源码与UI107最终eea5f306的运行产品blob完全相等，仅测试替身差额；不重建。用户已批准退出旧试用版，根正常退出旧45104与Next45400后打开Downloads新对话包31698，原userData保留；该用户包只观察，不由B访问其DB/配置/Key。原生工具可截图，但restore后的点击被window_not_focused拒绝，GUI操作和刷新未验，不换DOM/CDP绕过、不继续要求用户人工键盘。
+
+复用B原可见终端，保护pipefish四文件脏树，无产品/共享/远端写权。仅owned /tmp/main-acceptance-20261009/material108/新DB/config/library/tmp/output/agent/log；读取B106实际包api-server及agent-tools只读，API_HOST=127.0.0.1、API_PORT=18108，端口先检查且只停自有新PID/PGID。AUTH_MODE=local、空云配置、scheduled OFF；通过现有whoami建立真实本地成员，不seed已完成任务、复制DB/设备锁或读取用户试用库。只用已授权5秒本人视频/tmp/main-acceptance-20261009/creation92/library/user-video.mp4，复制到新库后通过实际导入接口导入，不跑识别/配音/口型/渲染。原包核心业务接口/实际Pi1.1.0与Node24.16.0，国内MiniMax-M3；最多两个短文字请求，每次180秒，媒体不发送。
+
+先启动实际包API并核健康、同一可信成员与workspace、真实导入素材；发送准备回执并等待root SECRET_READY。根独占已授权named minimax-validation-20261007.llm_api_key的只读及RAM处理，在本单临时原生keychain给实际workspace写具名测试密钥并回读，不向B/聊天/文件/日志输出Key；系统原default/search-list保持。B不能读文档/Keychain或secret文件，仅API按既有SecureStore使用；不用LLM_API_KEY明文env。
+
+单一结果：向现有素材assistant入口明确选择新素材并说“把这个素材的我的标签改成产品演示”，使用真实Pi工具，经现有PUT后GET保存；记录真实SSE文字/工具生命周期顺序、最终material_result、后续独立GET同值与其他字段保持。首个断点即报告真实错误，不伪造Pi结果、不自动重复写、不扩测试矩阵；仅若首请求通过可一次只读澄清/回读。HTTP/SSE/Pi通过不代表用户GUI已通过；不碰真实平台/发布、删除、媒体模型、用户数据。交实际包身份、准确输入/响应摘要、持久化证据、未验及所有自有服务/Pi组释放，根随后锁临时keychain。最长本单运行15分钟，完成即关闭自有API，不留用户包端口占用。
+
 ### B106：核心对话组合候选一次本机ARM64测试包（MAIN-CHATPACKAGE106-20261009）
 
 本Dispatch PACKAGE_START准确冻结7aa1eedd7480b45e09561860485eb6a23384005f，源Git为/tmp/main-controller-20261008/ui-v3-integration；UI105已审核并机械ff，根合同不因此取得产品代码写权。
 
-### UI107：现有语音证据测试素材字段补齐（MAIN-FIXTURE107-20261009）
-
-PR102前端CI唯一失败为MaterialSpeechEvidence.test.tsx的asset替身缺必带user_tags，右侧真实整条标签读取.length报错；真实MaterialAsset/API契约已经必带该数组。复用保留UI终端，基于clean7aa1eedd新建codex/material107-test-fixture-20261009。唯一写权apps/web/src/components/__tests__/MaterialSpeechEvidence.test.tsx，只补这个已有asset替身的user_tags:[]，不改断言/产品组件/API/类型/依赖，不为残缺测试数据增加生产回退。仅运行该文件1项检查和diff-check，owned /tmp/main-acceptance-20261009/fixture107/交clean候选、最小差额与结果。无服务/模型/Pi/GUI/构建/外部写权；B106已冻结包不改变、不重建，后续根核运行blob相等再更新PR。
-
 复用保留B终端，原pipefish/platform99脏树原样保护，无产品代码写权。owned仅新/tmp/main-acceptance-20261009/chat106/；依B101已交准备复用B97公开构建依赖/缓存和现有打包流程，不复读或复制私密env/Key、用户DB/设备锁、平台profile或模型。UI105施工期间只准备新的隔离构建目录和非秘密依赖映射；尚无最终候选，不构建。主控审核组合UI105并具名PACKAGE_START准确SHA后，在本新根archive该候选并核源码身份，构建一次该候选Next standalone、PyInstaller API与ARM64 ElectronBuilder目录.app和生成身份；不复用旧Web/API二进制冒称新候选，不运行build.sh的安装步骤，不下载/安装依赖或生成DMG/ZIP/签名/Release。既有依赖不足报真实缺口。
 
 一次最终同候选仅必需集成/打包检查，不重复未变组件/媒体/宽度矩阵。交实际.app路径、准确源码SHA/candidateInputDigest、打包资源与工具TS入口实际包含、必要结果、所有自有构建进程退出与未验范围。无运行Electron/API/Web/Pi/模型/媒体/GUI/账号/Keychain权限，用户当前旧测试包不得退出或改写；真实聊天实包另具名接续。主控最终负责新包分享副本与用户配置隔离，包不含用户Key、模型、素材或测试DB。任务等待只通过本终端收件箱（check不带--run），不恢复97/101旧START。
+
+### UI107：现有语音证据测试素材字段补齐（MAIN-FIXTURE107-20261009）
+
+PR102前端CI唯一失败为MaterialSpeechEvidence.test.tsx的asset替身缺必带user_tags，右侧真实整条标签读取.length报错；真实MaterialAsset/API契约已经必带该数组。复用保留UI终端，基于clean7aa1eedd新建codex/material107-test-fixture-20261009。唯一写权apps/web/src/components/__tests__/MaterialSpeechEvidence.test.tsx，只补这个已有asset替身的user_tags:[]，不改断言/产品组件/API/类型/依赖，不为残缺测试数据增加生产回退。仅运行该文件1项检查和diff-check，owned /tmp/main-acceptance-20261009/fixture107/交clean候选、最小差额与结果。无服务/模型/Pi/GUI/构建/外部写权；B106已冻结包不改变、不重建，后续根核运行blob相等再更新PR。
 
 ### UI102：对话真实流式、工具过程与输入修复（已succeeded结案，写权结束）
 
