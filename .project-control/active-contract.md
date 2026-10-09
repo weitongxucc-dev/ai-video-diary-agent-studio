@@ -35,11 +35,19 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 87/88已交源码并retain | 96785d0 / fe04d81已审，当前无新增写入或运行权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 90：录音差额CI真实失败修复 | 仅下方90迁移与直接测试；87/88保留，不重做页面 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 89：录音新候选入包及真实媒体 | task_a4b667ebe4c2 / ctx_ff20ae5e926f；下方89具名源与隔离运行，无产品源码写权 |
 
-## 当前波次：B89新包录音→成片→修改重出（2026-10-09）
+## 当前波次：B89新包录音／资源定位，UI90定向CI修复（2026-10-09）
+
+### UI90：CI37862398673的迁移与旧测试替身缺口
+
+PR101准确1767e11的远端CI已回读：Desktop syntax成功，Backend五失败／1659通过／20跳过，Frontend七失败／570通过。具名失败日志/tmp/main-controller-20261009/pr101-ci-failed.log。前端六项保存反馈缺listCreationTaskRecordings mock，另一项仍断言已替换的旧提示；后端四项裸auth/shared DB及旧v5迁移遇v15假定narration_segments必在，另一项Webm测试被WAV-only probe替身误读。这是本次真实失败，不能用吞错或修改通过数量掩盖。
+
+复用原UI可见线程，从cleanfe04d81建立codex/recording90-ci-fix-20261009，保留87/88。唯一写权apps/api/app/database_migrations.py、production.py的必要初始化直接消费者及既有tests/test_local_members_auth.py、test_production_foundation.py、test_task_recording.py；Web仅CreationTaskWorkspace.test.tsx和CreationTaskWorkspaceSaveFeedback.test.tsx的既有替身／断言。不改产品文案/页面逻辑、其他认证/发布/配音/资源代码、共享权威或依赖，不写真实库。沿既有迁移机制保证裸共享DB可重复初始化，narration表后建立时确实完成v15，不错误记录已升级、不丢旧generated身份/数据/索引；只处理本次明确表前提，不新增通用兼容框架。Webm替身必须符合容器事实，不能把Webm冒称WAV；前端替身同步真实新增API，不删相关保存反馈覆盖。
+
+仅自有/tmp/main-acceptance-20261009/recording90/隔离HOME/XDG/DB/tmp做这些失败项和必要迁移回归；不全量本机检查。既有Webm用例如需合成最多1秒音频，允许已有FFmpeg/ffprobe单线程单步15秒，只在B89未执行媒体子进程时运行，不碰用户媒体／模型／GUI／服务或下载。报report.md净候选、最小结果和未验。B89保持冻结1767e11实际包继续只读诊断与结算，不更改其源/包、不等待UI90；主控后续机械集成、判断未变证据及必要新包差额，不以旧包验新迁移。
 
 UI88 task_238fb365c116 / ctx_29444be61a36已交cleanfe04d8111e3601f5e05c4ad48da0d0f6ba6f94a6，主控复核预检recorded优先、页面按钮与Inspector真实表达，接受隔离专项且retain。87/88与两处唯一权威差额机械组合为clean1767e11d411e40812d3b7fa7990973c5741e0c1b，位置/tmp/main-controller-20261008/ui-v3-integration、分支codex/recorded-narration-delivery-20261009；运行源码逐blob与fe04d81相同，仅两权威文档不同。87/88旧任务结束，以下旧条文不是新写权。
 
