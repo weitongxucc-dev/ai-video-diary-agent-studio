@@ -447,6 +447,16 @@ UI新QA-V2-UI-DRAFT-READ-RACES从准确2a1de3c新clone/tmp/main-acceptance-20261
 
 当前root2a1de3c实际Ruff仅tests/test_assistant_pi.py:739未用conversation_id（不是main未用变量，dispatch消息误称已更正），C阶段2追加该直接test file及test_assistant_script.py为N14/Agent真实draft CAS唯一测试owner，原身份/工具/路由断言保持；这两file不由新UI hook任务修改。组合全ESLint实际0errors/53warnings，日志/tmp/main-controller-20261009/review-v2/cas-eslint.log，不冒称无warnings。
 
+### 预检返回组合后的实际消费者释放与检查残差
+
+F返回连续性7610c905已审并机械组合dc4bed2，原Dispatch succeeded/retain，59受控案例通过；真实settings/source导航与GUI未验。C当前N14 ctx_14f4fd2f3670正式追加CreateProductionTaskForm.tsx、production/page.tsx、preflight-draft.ts中必要reply_origin字段/实际消费者及其直接测试：fetch准确dc4bed2，仅组合F净差额，不丢自身N14整改。原表单确认必须传真实conversation_id/turn_id/稳定request_id，由服务端再读可信完成轮次；只存定位不存重复正文/凭据。临时修复草稿按当前成员空间保存此来源，修复返回及显式模板换版保持，普通没有来源的创建维持原行为。不另造Plan表单、跳过预检/Topic/文案资料确认，也不改F marker/模板资格规则。C需REBASE_ACK后继续纵向交付。
+
+root b9ddbd8完整tsc唯一错误是AppShell.test.tsx:38的既有conversation fixture缺mandatory draft_version（日志combined-tsc.log）；F新QA-V2-F-APPSHELL-TYPE仅这一个测试文件，补当前真实字段并准确文件专项，不写AppShell/其他产品/会话hook。UI迟到读取0ee1593已组合b9ddbd8并retain，其5新负例/23相关受控PASS不重做。
+
+D旧profile迁移0cb7b000为测试源码交付，不是CI通过：整指定集379PASS/31FAIL/零setup errors，随后仅模板一个fixture修正PASS。D新QA-V2-D-PROFILE-RESIDUAL保留原具名测试所有权，在原clean candidate新公开分支，定向fetch主控准确dc4bed2后机械组合避免丢已有fixtures；只修当前残差中确实过期的fixture/调用与已退役前提，不重测379未影响案例。领域独立人物固定版本/0%无人物、真正文件身份/许可/确认摘要均按当前源核。授权撤销/来源失联/真实执行失败负例保留，不用额外许可/任意私有可见/宽松assert绕过；生产缺口必须精确交主控，不写生产。报告每类根因、case、最小复现以及仍失败项，clean提交只含具名测试。
+
+E新QA-V2-E-SEARCH-RESIDUAL仅只读实际dc4bed2源码和D准确0cb7b000候选/失败日志；在自有/tmp隔离控制复现四个montage replacement_clip_unavailable及person缓存来源身份残差，确认是fixture失配、召回权限/语义还是实际漏接独立人物。不得写产品/测试仓库文件，不重复全仓，不改D原case、不赋所有私有或诊断权限。临时合成媒体/TestClient/mock许可允许，模型/Pi/App服务/GUI/Key/用户数据/账户/安装/远端仍不允许；交准确根因和必要源writer差额，不冒称已修。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
