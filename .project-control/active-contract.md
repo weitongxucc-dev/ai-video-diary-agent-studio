@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；当前仅下方B99账号身份收口具名范围有效；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；用户最新要求优先核心对话创作，当前仅下方UI100接线源码准备有效；B99已部分结案retain、账号运行权结束；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
 
 用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
@@ -26,7 +26,7 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新运行操作仅下方B99账号只读具名范围，UI98/B97运行权已收回，UI96账号运行和B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，UI98/B99/B97运行权已收回，暂不运行账号浏览器或模型/媒体；后续核心聊天实包验证另按具名差额接续，UI96账号运行和B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 98：部分交付已结案retain | 09680ab7候选与证据保留；无新增源码/运行权；96已结案retain |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 100：核心聊天到实际创作动作接线 | 准确4c748dfc新分支，以下UI100具名源码；98/96已结案retain |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 99：收口真实账号身份 | task_fd5f4a5c473e / ctx_1afd619bc520；下方B99限定源码与账号只读；97已succeeded结案retain、服务/媒体权结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 99：用户转向后部分结案retain | 未提交4文件diff/私有证据保留；无新增源码/运行权；97已结案 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -49,7 +49,21 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
-### B99：真实账号身份收口（MAIN-ACCOUNT99-20261009）
+### UI100：核心对话创作接线（MAIN-CHAT100-20261009）
+
+用户09:47最新明确不做无谓测试，首先关注对话框输入需求能否完成对应操作。暂停账号适配新增工作，B99已按转向failed部分结案：生产视频号verify/persist回读成功，自有34进程均退出；4个未提交源码文件与patch保留，不强制提交未测差额。UI98/99成果不进本次核心基线，不继续三平台浏览器。
+
+复用UI原可见终端，保护98 clean分支，从准确4c748dfc45229b879e9e1daf473b309432899f4c建立codex/chat100-actions-20261009。主控静态已核HomeCommandComposer有创建方案/确认创建，assistant_pi与diary_tools仅提供读上下文/资料/素材、文案草稿与编辑预览，没有启动/继续制作工具；不能将B86两次真实Pi创建和B92/97实际成片分项证据称聊天闭环。
+
+目标是用户对话指令→当前任务的真实创作动作→持久作业/版本/可用结果→界面回读。沿现有HomeCommandComposer、CreationTaskWorkspace、assistant_pi、diary_tools和真实API命令链，补上核心流程所需的动作接线，不另建Agent、调度器、通用任意HTTP调用器或前端事实源。优先处理明确“开始制作／生成成片／修改后重新生成／继续制作／取消制作”；核对新建后选题/文案阶段的聊天入口，若现有工具不能推动实际生成选题/文案，按实际缺口复用既有入口。用户明确选题、确认文案等阶段动作只执行一次，不新增二次确认；自然语言编辑仍选择应用到草稿，不自动生成。不得把收到消息/预览/queued写成执行成功或成片已完成。
+
+源码所有权：apps/api/app/assistant_pi.py、apps/api/agent_tools/diary_tools.ts；确有现有接口缺口时apps/api/app/main.py的assistant/creation-task直接接线（不改调度/Grant/cap/持久schema/认证规则）；apps/web/src/components/HomeCommandComposer.tsx、CreationTaskWorkspace.tsx及直接必要lib/api.ts、lib/types.ts；直接已有API assistant与Web消费者测试。不改platform_*、AppShell/CSS/视觉、桌面/依赖、共享文档/Linear/GitHub。新owned /tmp/main-acceptance-20261009/chat100/保存最小报告和证据。按活动产品§4/§9/§11、domain目标阶段与auth§2读必要章节，不读全仓或全部历史。
+
+真实操作必须由现有服务端可信成员/工作区和当前任务解析；只允许具名创作动作，不让模型指定任意路径/task/owner，不绕过已确认文案、制作要求、当前输入版本、声音/素材授权或整机许可。已有开始/继续/取消与作业回读接口优先复用；需要用户明确选择的对象不得由模型代确认。没有前提准确给下一步；模型选错或不支持说明具体动作，不能假执行、预先seed状态。没有产品收费，不新增报价/扣费/付费确认；禁止真实发布/删用户数据。
+
+本单先实施当前源码缺口及一次最小直接检查，不重复旧成片/全CI/宽度矩阵。无运行服务、桌面包、浏览器、Pi/Key、模型/媒体/下载权限。交clean候选与相关diff：实际开放的聊天动作、仍需点击的必要步骤、具体未接通项，代码/fixture不得写GUI或真实Pi通过。主控审核后机械集成，再由原B终端仅跑一次同候选真实聊天主线（不从旧START运行）；发生首个真实断点即交原写者修复，不为测试数量扩范围。
+
+### B99：真实账号身份收口（已用户转向结案，源码/运行权结束）
 
 UI98已部分结案、主控已读报告/diff，最终clean09680ab7de78070dda8e67f9c0035669eb593b84基于4c748dfc；connect/verify三平台入口已准备，视频号实际span#finder-uid-copy已观察，但最终生产login/verify/persist未执行，抖音label正则无实证、小红书ID未找到。只接受部分源码与DOM发现，不接受真实账号核验完成。98原15分钟租约已结束，自有浏览器已关闭；新99不是延长旧START。
 
