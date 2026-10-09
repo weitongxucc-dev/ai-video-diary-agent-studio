@@ -1,5 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event
 
 import pytest
 
@@ -185,7 +186,8 @@ def test_draft_cas_serializes_two_repository_instances(tmp_path):
     assert first.save_draft(conversation["id"], "workspace-one", "wrong-member", "越权", 1) is None
 
 
-def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_content_or_scope(tmp_path):
+@pytest.mark.parametrize("winner_index", [0, 1])
+def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_content_or_scope(tmp_path, winner_index):
     database = tmp_path / "turn-request.sqlite3"
     repository = ConversationRepository(database)
     second_repository = ConversationRepository(database)
@@ -193,19 +195,59 @@ def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_conte
     draft = repository.save_draft(home["id"], "workspace-one", "member-one", "读取现在的方案", 0)
     assert draft is not None
 
+    repositories = [repository, second_repository]
+    both_started = Barrier(2)
+    winner_reading_receipt = Event()
+    loser_waiting_to_begin = Event()
+    synchronization_errors: list[str] = []
+
+    for index, repo in enumerate(repositories):
+        original_connect = repo._connect
+
+        def connect(*, index=index, original_connect=original_connect):
+            connection = original_connect()
+
+            def coordinate_lock(statement: str) -> None:
+                normalized = statement.lstrip().upper()
+                if index == winner_index and normalized.startswith(
+                    "SELECT * FROM ASSISTANT_CONVERSATION_REQUEST_RECEIPTS"
+                ):
+                    winner_reading_receipt.set()
+                    if not loser_waiting_to_begin.wait(timeout=10):
+                        synchronization_errors.append("loser did not contend for the write lock")
+                elif index != winner_index and normalized == "BEGIN IMMEDIATE":
+                    if not winner_reading_receipt.wait(timeout=10):
+                        synchronization_errors.append("designated winner did not reach the receipt read")
+                    loser_waiting_to_begin.set()
+
+            connection.set_trace_callback(coordinate_lock)
+            return connection
+
+        repo._connect = connect
+
     def send(repo: ConversationRepository):
+        both_started.wait()
         return repo.create_turn_idempotent(
             home["id"], "workspace-one", "member-one", "读取现在的方案", "request-one", draft["draft_version"],
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(send, [repository, second_repository]))
-    (turn, created), (replay, replay_created) = results
+        results = list(executor.map(send, repositories))
+    assert synchronization_errors == []
+    assert results[winner_index][1] is True
+    assert results[1 - winner_index][1] is False
+    turn = results[winner_index][0]
+    replay = results[1 - winner_index][0]
     assert turn is not None and replay is not None
-    assert created is True
-    assert replay_created is False
     assert replay["id"] == turn["id"]
+    assert turn["user_message"] == "读取现在的方案"
     assert len(repository.list_turns(home["id"])) == 1
+    with repository._connect() as connection:
+        receipt_count = connection.execute(
+            "SELECT COUNT(*) FROM assistant_conversation_request_receipts WHERE client_request_id=?",
+            ("request-one",),
+        ).fetchone()[0]
+    assert receipt_count == 1
     repository.finish_turn(turn["id"], "completed", "动作已完成")
     terminal_replay, terminal_replay_created = repository.create_turn_idempotent(
         home["id"], "workspace-one", "member-one", "读取现在的方案", "request-one", draft["draft_version"],
