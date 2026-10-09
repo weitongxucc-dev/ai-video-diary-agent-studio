@@ -108,6 +108,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         setModel(`${result.provider} / ${result.model}`);
+        if (result.execution_action || result.topic_candidates) onTaskUpdated?.();
       } else {
         conversationId.current ??= crypto.randomUUID();
         const result = await sendWorkspaceAssistantPlanTurn(command, conversationId.current);

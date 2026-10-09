@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
     checkQuality: vi.fn(),
     initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
+    getTopics: vi.fn(),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
   getJobProgress: vi.fn().mockResolvedValue({ task_id: "task-1", current: null, items: [], total_count: 0 }),
     previewExecution: vi.fn().mockResolvedValue(null),
@@ -98,7 +99,7 @@ vi.mock("@/lib/api", () => ({
   generateCreationTaskScript: vi.fn(),
   generateCreationTaskTopics: vi.fn(),
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
-  getCreationTaskTopics: vi.fn(),
+  getCreationTaskTopics: mocks.getTopics,
   getCreationTaskWorkspace: mocks.getWorkspace,
   getCreationTaskQualityCheck: mocks.getQualityCheck,
   checkCreationTaskQuality: mocks.checkQuality,
@@ -439,6 +440,7 @@ afterEach(() => {
   mocks.realShell = false;
   mocks.showQuickInspector = false;
   vi.clearAllMocks();
+  mocks.getTopics.mockReset();
   mocks.getQualityCheck.mockReset().mockResolvedValue({ check_state: "none", result_status: null,
     stale: false, timeline_version_id: null, findings: [], unavailable: [] });
   mocks.checkQuality.mockReset();
@@ -475,6 +477,48 @@ it("stops the old trim interval when a playing preview receives a new source URL
 });
 
 describe("CreationTaskWorkspace", () => {
+  it("keeps generated topic candidates in the current task after its chat refresh", async () => {
+    const topicTask: CreationTask = {
+      ...baseTask,
+      stage: "topic",
+      stage_status: "waiting_for_user",
+      status: "waiting_for_user",
+      progress: 5,
+      recovery_point: "",
+      confirmed_script_id: null,
+      stage_reason: null,
+      stage_impact: null,
+      stage_repair_action: null,
+    };
+    const initial = workspace(topicTask);
+    const topics: CreationTaskTopicsResponse = {
+      task: topicTask,
+      candidates: [{ id: "topic-chat-1", run_id: "run-chat-1", title: "从三个场景讲清一个误区",
+        angle: "生活中的常见误区", audience: "普通用户", outline: ["现象", "原因", "做法"],
+        score: 91, selection_status: "unselected", created_at: topicTask.created_at }],
+      evidence_references: [], selected_topic_id: null, latest_run: null,
+      route_preflight: { provider_kind: "minimax", execution_location: "cloud", model_id: "MiniMax-M3",
+        endpoint_identity: "ep", connection_version: "1", availability: "succeeded", checked_at: topicTask.created_at },
+      egress_preflight: { cloud_egress: true, source_count: 1, text_excerpt_count: 1,
+        reason: null, impact: null, repair_action: null },
+    };
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getTopics.mockResolvedValue(topics);
+    mocks.askAssistant.mockResolvedValue({ reply: "选题候选已生成，请检查并明确选择。",
+      provider: "minimax", model: "test", edit_preview: null, script_draft: null,
+      execution_action: null, execution_status: null, topic_candidates: topics });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "制作指令" }), {
+      target: { value: "请结合当前已确认的目标生成几个选题方向" },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(topicTask.id,
+      expect.objectContaining({ context_stage: "topic" })));
+    expect(await screen.findByText("从三个场景讲清一个误区")).toBeInTheDocument();
+    expect(mocks.getTopics).toHaveBeenCalledWith(topicTask.id);
+  });
+
   it("shows task script dialogue and refreshes the saved draft after the assistant reply", async () => {
     const task = { ...baseTask, stage: "script" as const, stage_status: "not_started" as const,
       status: "running" as const, confirmed_script_id: null };
@@ -501,6 +545,24 @@ describe("CreationTaskWorkspace", () => {
     })));
     expect(await screen.findByText("真实草稿正文。", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("草稿已保存，请检查。")).toBeInTheDocument();
+  });
+
+  it("reads an assistant start action back as the real queued execution state", async () => {
+    const initial = subtitleCoverWorkspace();
+    const queued = queueStatus("queued");
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue(queued);
+    mocks.askAssistant.mockResolvedValue({ reply: "已提交并排队，尚未完成。", provider: "minimax", model: "test",
+      edit_preview: null, script_draft: null, execution_action: "start", execution_status: queued,
+      topic_candidates: null });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const input = screen.getByLabelText("局部修改要求");
+    fireEvent.change(input, { target: { value: "就按已确认的文案开始制作并回报当前作业状态" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id,
+      expect.objectContaining({ message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover" })));
+    expect(await screen.findByText(/连续制作：已排队/)).toBeInTheDocument();
   });
 
   it("restores task dialogue from persisted history after reopening", async () => {

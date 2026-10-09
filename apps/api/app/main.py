@@ -21,7 +21,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import httpx
 
@@ -5217,6 +5217,12 @@ def _assistant_turn_scope(
 ) -> tuple[str, list[str]]:
     """Authorize the requested view and selection from persisted task objects before Pi runs."""
     stage = payload.context_stage
+    if task.stage == "topic":
+        if stage != "topic":
+            raise HTTPException(status_code=409, detail="当前任务只能在选题阶段使用对话")
+        if payload.selected_object_refs or payload.playhead_ms is not None:
+            raise HTTPException(status_code=422, detail="选题对话不能选择剪辑对象")
+        return "topic", []
     if task.stage == "script" or task.confirmed_script_id is None:
         if stage != "script":
             raise HTTPException(status_code=409, detail="当前任务尚未完成文案确认，不能使用剪辑对话")
@@ -5334,6 +5340,9 @@ def creation_task_assistant_turn(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     reply = _assistant_text_without_credentials(reply, workspace_id)
     script_draft = None
+    execution_action = None
+    execution_status = None
+    topic_candidates = None
     if preview is not None and trusted_stage == "script":
         script_id = preview.get("script_id") if isinstance(preview, dict) else None
         if not isinstance(script_id, str):
@@ -5345,6 +5354,26 @@ def creation_task_assistant_turn(
         if candidate.task_id != task_id or candidate.selection_status != "draft":
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
         script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get("kind") == "topic_generation":
+        try:
+            topics = CreationTaskTopicsResponse.model_validate(preview.get("topics"))
+        except ValidationError as exc:
+            raise HTTPException(status_code=502, detail="对话没有返回可核实的选题候选。") from exc
+        if topics.task.id != task_id:
+            raise HTTPException(status_code=502, detail="对话生成的选题不属于当前任务。")
+        topic_candidates = topics
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get("kind") == "execution_action":
+        action = preview.get("action")
+        status = preview.get("status")
+        if trusted_stage in {"topic", "script"}:
+            raise HTTPException(status_code=502, detail="选题和待确认文案阶段不能开始、继续或取消制作。")
+        if (action not in {"start", "resume", "cancel"} or not isinstance(status, dict)
+                or status.get("task_id") != task_id):
+            raise HTTPException(status_code=502, detail="对话没有返回可核实的制作作业状态。")
+        execution_action = action
+        execution_status = status
         edit_preview = None
     elif preview is not None:
         edit_preview = CreationTaskEditPreviewResponse.model_validate(preview)
@@ -5365,6 +5394,9 @@ def creation_task_assistant_turn(
         model=_workspace_settings_for(workspace_id).effective_llm_model,
         edit_preview=edit_preview,
         script_draft=script_draft,
+        execution_action=execution_action,
+        execution_status=execution_status,
+        topic_candidates=topic_candidates,
     )
 
 

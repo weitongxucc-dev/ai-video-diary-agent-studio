@@ -29,6 +29,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
 import { AppShell } from "@/components/AppShell";
+import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import {
   apiUrl,
   checkCreationTaskQuality,
@@ -1933,6 +1934,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
       });
+      if (result.execution_status) setExecution(result.execution_status);
+      pollExecutionRef.current();
       const contextStillCurrent = revision === editContextRevision.current;
       if (result.script_draft) await refresh(true);
       if (contextStillCurrent) {
@@ -2242,8 +2245,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     </div>
   );
 
+  const hasContextConversation = !savingTemplate && (
+    (activeView === "script" && task.stage === "script" && !task.confirmed_script_id)
+    || ((activeView === "montage" || activeView === "review") && workspace.montage)
+    || (activeView === "narration" && workspace.narration)
+    || (activeView === "subtitle_cover" && activeSubtitleTrack)
+  );
+  const conversation = hasContextConversation
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={editPreview?.proposal.id ?? task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
+    : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
+
   return (
-    <AppShell inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={(!savingTemplate && ((activeView === "script" && task.stage === "script" && !task.confirmed_script_id) || (((activeView === "montage" || activeView === "review") && workspace.montage) || (activeView === "narration" && workspace.narration) || (activeView === "subtitle_cover" && activeSubtitleTrack)))) ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={editPreview?.proposal.id??task.id} onSelectionPreview={indices=>void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if(editPreview?.proposal.operation.operation_type!=="EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onPreview={() => void askAssistant()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantReply={assistantReply} assistantTurns={assistantTurns} assistantModel={assistantModel} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} /> : null} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span>
+    <AppShell inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span>
       <button aria-haspopup="dialog" aria-expanded={sharingOpen} className={editorUi.button} onClick={() => setSharingOpen(true)} type="button">共享设置</button>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button><button className={editorUi.iconButton} aria-label="电脑录音替换旁白" title="用本机录音替换整条旁白" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={17} /></button><button className={editorUi.iconButton} aria-label="历史时间线版本" title="查看这个任务的历史时间线版本" onClick={() => setHistoryOpen((open) => !open)} type="button"><History size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <div className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>

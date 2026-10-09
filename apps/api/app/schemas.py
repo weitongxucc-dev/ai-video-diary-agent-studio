@@ -1581,6 +1581,9 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     model: str
     edit_preview: CreationTaskEditPreviewResponse | None = None
     script_draft: CreationTaskScriptResponse | None = None
+    execution_action: Literal["start", "resume", "cancel"] | None = None
+    execution_status: dict[str, object] | None = None
+    topic_candidates: CreationTaskTopicsResponse | None = None
 
 
 class CreationTaskAssistantHistoryEntry(BaseModel):

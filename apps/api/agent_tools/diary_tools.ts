@@ -35,6 +35,7 @@ async function request(path: string, init?: RequestInit) {
 }
 
 export default function (pi: { registerTool: (tool: unknown) => void }) {
+  let creationActionApplied = false;
   pi.registerTool({
     name: "read_workspace_context",
     label: "读取当前工作区",
@@ -334,6 +335,28 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
     },
   });
 
+  if (stage === "topic") {
+    pi.registerTool({
+      name: "generate_creation_task_topics",
+      label: "生成选题候选",
+      description: "仅在用户明确要求生成选题时，调用当前任务已有选题阶段；只生成候选，绝不代替用户选择或确认。",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        if (!taskId || !currentTaskRead) throw new Error("请先读取当前创作任务");
+        if (previewCreated) throw new Error("本轮已生成选题候选，请用户检查并选择");
+        const topics = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics/generate`, { method: "POST", body: JSON.stringify({}) });
+        previewCreated = true;
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            candidate_count: topics.candidates?.length ?? 0,
+            instruction: "候选已由当前任务阶段生成，尚未选择或确认；请用户在工作台查看并明确选择。",
+          }) }],
+          details: { kind: "topic_generation", topics },
+        };
+      },
+    });
+  }
+
   pi.registerTool({
     name: "find_knowledge",
     label: "检索已保存资料",
@@ -432,6 +455,7 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
     },
     execute: async (_id: string, params: { command: string; context_stage?: string; selected_refs?: string[] }) => {
       if (!taskId || !currentTaskRead) throw new Error("请先读取当前创作任务，再预览修改");
+      if (creationActionApplied) throw new Error("本轮已执行制作动作，不再创建修改预览");
       const effectiveStage = params.context_stage || stage;
       const effectiveRefs = params.selected_refs?.length ? params.selected_refs : selectedRefs;
       if (!effectiveStage) throw new Error("请先选择要修改的任务阶段");
@@ -463,4 +487,56 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
       };
     },
   });
+
+  if (taskId && stage !== "topic" && stage !== "script") {
+    const perform = async (action: "start" | "resume" | "cancel") => {
+      if (!currentTaskRead) throw new Error("请先读取当前创作任务");
+      if (creationActionApplied) throw new Error("本轮制作动作已经提交，不重复执行");
+      if (previewCreated) throw new Error("本轮已请求修改预览，不能同时开始、继续或取消制作");
+      creationActionApplied = true;
+      let status: Record<string, unknown>;
+      if (action === "start") {
+        const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`);
+        const requirements = preview.requirements as { can_continue?: boolean; continuation_blocker?: string | null } | undefined;
+        if (!requirements?.can_continue) {
+          throw new Error(requirements?.continuation_blocker || "当前制作条件尚未就绪，未提交制作");
+        }
+        const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution`);
+        const existingJob = current.job as { input_digest?: string; status?: string } | null;
+        const canRetryCurrent = existingJob?.input_digest === preview.input_digest
+          && (existingJob.status === "failed" || existingJob.status === "interrupted"
+            || existingJob.status === "cancelled" || !current.video_ready);
+        status = canRetryCurrent
+          ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume`, {
+            method: "POST", body: JSON.stringify({}),
+          })
+          : await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start`, {
+            method: "POST",
+            body: JSON.stringify({ script_id: preview.script_id, input_digest: preview.input_digest, requirements_confirmed: true }),
+          });
+      } else {
+        status = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/${action}`, {
+          method: "POST", body: JSON.stringify({}),
+        });
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ action, status }) }],
+        details: { kind: "execution_action", action, status },
+      };
+    };
+    const actionTools = [
+      ["start_creation_execution", "开始连续制作", "仅当用户明确要求开始制作、开始生成成片或修改后重新生成时调用。使用当前任务已确认的文案与制作要求；不提交文案或编辑草稿。"],
+      ["resume_creation_execution", "继续连续制作", "仅当用户明确要求继续或恢复当前制作作业时调用。"],
+      ["cancel_creation_execution", "取消连续制作", "仅当用户明确要求取消或停止当前制作作业时调用；取消不修改任务草稿。"],
+    ] as const;
+    for (const [name, label, description] of actionTools) {
+      const action = name === "start_creation_execution" ? "start"
+        : name === "resume_creation_execution" ? "resume" : "cancel";
+      pi.registerTool({
+        name, label, description,
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: async () => perform(action),
+      });
+    }
+  }
 }

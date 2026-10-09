@@ -1647,6 +1647,9 @@ export type CreationTaskAssistantTurnResponse = {
   model: string;
   edit_preview: CreationTaskEditPreviewResponse | null;
   script_draft: CreationTaskScript | null;
+  execution_action: "start" | "resume" | "cancel" | null;
+  execution_status: CreationExecutionStatus | null;
+  topic_candidates: CreationTaskTopicsResponse | null;
 };
 
 export type CreationTaskAssistantHistory = {

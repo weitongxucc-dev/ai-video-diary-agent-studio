@@ -182,6 +182,27 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask).not.toHaveBeenCalled();
   });
 
+  it("refreshes the task consumer after a natural-language action reports real queue status", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "产品介绍" } as CreationTask;
+    const onTaskUpdated = vi.fn();
+    mocks.editAsk.mockResolvedValue({
+      reply: "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。",
+      provider: "minimax", model: "MiniMax-M3", edit_preview: null, script_draft: null,
+      execution_action: "start", execution_status: { task_id: "task-1", job: { id: "job-1", status: "queued" } },
+      topic_candidates: null,
+    });
+    render(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={task} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "制作指令" }), { target: { value: "就按已确认的文案开始做成片，请回报真实作业进度" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText(/已提交并排队，尚未完成/)).toBeInTheDocument();
+    expect(mocks.editAsk).toHaveBeenCalledWith("task-1", expect.objectContaining({
+      message: "就按已确认的文案开始做成片，请回报真实作业进度", context_stage: "montage",
+    }));
+    expect(onTaskUpdated).toHaveBeenCalledOnce();
+  });
+
   it("keeps a queued person proposal pending without enabling an uncommitted undo", async () => {
     configuredModel();
     const task = { id: "task-1", stage: "montage", name: "产品介绍" } as CreationTask;

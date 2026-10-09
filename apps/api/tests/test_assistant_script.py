@@ -100,8 +100,18 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(monkey
                         (_ for _ in ()).throw(HTTPException(status_code=404, detail="task not found")))
     monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
     monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
-    monkeypatch.setattr(main_module, "run_task_turn", lambda _settings, **kwargs:
-                        (calls.append(kwargs) or ("请检查修改。", None)))
+    def run_turn(_settings, **kwargs):
+        calls.append(kwargs)
+        if "把真实排队状态显示给我" in kwargs["message"]:
+            return "连续制作已提交并排队，尚未完成。", {
+                "kind": "execution_action", "action": "start",
+                "status": {"task_id": task.id, "job": {"id": "job-one", "status": "queued"},
+                           "stages": [], "current_stage": "narration", "waiting_reason": None,
+                           "status_updated_at": None, "video_ready": False,
+                           "cover_status": "pending", "cover_message": "尚未生成封面。"},
+            }
+        return "请检查修改。", None
+    monkeypatch.setattr(main_module, "run_task_turn", run_turn)
     client = TestClient(main_module.app)
     for stage, ref in (("montage", "clip:clip-current"), ("review", "narration:segment-current")):
         response = client.post("/api/creation-tasks/task-one/assistant/turn", json={
@@ -122,10 +132,35 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(monkey
         "message": "请检查旧镜头", "context_stage": "montage", "selected_object_refs": [],
     })
     assert premature.status_code == 409
+    started = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+        "message": "请现在按当前已确认文案制作视频，并把真实排队状态显示给我",
+        "context_stage": "narration", "selected_object_refs": [],
+    })
+    assert started.status_code == 200, started.text
+    assert started.json()["reply"] == "连续制作已提交并排队，尚未完成。"
+    assert started.json()["edit_preview"] is None
+    assert started.json()["execution_action"] == "start"
+    assert started.json()["execution_status"]["job"]["id"] == "job-one"
+    assert calls[-1]["message"] == "请现在按当前已确认文案制作视频，并把真实排队状态显示给我"
+    assert "allowed_action" not in calls[-1]
+    mixed = client.post("/api/creation-tasks/task-one/assistant/turn", json={
+        "message": "开始制作，另外把字幕放大", "context_stage": "narration", "selected_object_refs": [],
+    })
+    assert mixed.status_code == 200, mixed.text
+    assert "allowed_action" not in calls[-1]
     assert [(call["stage"], call["selected_refs"]) for call in calls] == [
         ("montage", ["clip:clip-current"]), ("review", ["narration:segment-current"]),
+        ("narration", []), ("narration", []),
     ]
-    assert len(events) == 4
+    assert len(events) == 8
+
+
+def test_topic_scope_is_current_task_only():
+    topic_task = SimpleNamespace(id="task-one", stage="topic")
+    request = main_module.CreationTaskAssistantTurnRequest(
+        message="请生成选题", context_stage="topic", selected_object_refs=[],
+    )
+    assert main_module._assistant_turn_scope("local", topic_task, request) == ("topic", [])
 
 
 def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_path, monkeypatch):

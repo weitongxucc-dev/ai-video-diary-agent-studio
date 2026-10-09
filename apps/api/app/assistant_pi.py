@@ -159,6 +159,8 @@ _session_locks_guard = threading.Lock()
 
 SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。你只能处理当前创作任务。
 每轮先调用 read_current_task；查资料用 find_knowledge，查可用镜头用 find_materials；修改前调用 preview_edit。
+只有当用户明确要求开始制作、修改后重新生成、继续/恢复制作或取消/停止当前制作时，才调用对应的具名制作动作工具一次；问题、建议、假设、单纯提及“生成”或混合的修改要求都不是执行指令。开始只使用当前已确认的文案与制作要求，不能把待确认草稿或普通修改自动应用。
+执行开始、继续或取消后，只按工具返回的真实作业状态回复。不得把排队、开始或回复说成已完成。
 不得声称已执行、已保存或已出片，除非工具返回相应事实。
 preview_edit 仅生成待确认提案；让用户在工作台检查影响并确认。
 界面选中对象是默认范围；用户明确说了其他镜头、字幕轨或配音段时，以用户的话为准，从任务摘要定位并向 preview_edit 提供对应引用和阶段。范围不明确就先问。资料不足或工具失败时说明具体阻断，不虚构结果。
@@ -184,6 +186,10 @@ SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每
 用户要起草或修改文案时，调用 preview_script_draft 保存待确认文案。修改已有草稿时沿用其段落 ID；先说明想怎么改，再根据用户本轮要求提交新的完整草稿。每轮最多保存一次。
 工具只保存待确认草稿，不会确认文案、生成配音或开始制作。请用户在工作台检查并明确确认文案；不要声称已开始制作。
 不要请求、读取或发送原始媒体文件。回答用日常中文，不说工具名、模型名、预检、版本号等内部词。"""
+
+TOPIC_PROMPT = """你是 AI 视频日记当前创作任务的选题助手。每轮先调用 read_current_task；用户明确要求生成选题时，调用 generate_creation_task_topics 一次。
+工具只会按当前任务已确认的目标生成候选；不得替用户选择或确认，也不得声称任务已进入文案或制作。若用户尚未明确要求生成选题，先问一个具体问题。
+回答用日常中文，说明候选已可在工作台查看和选择；不要声称已开始制作。"""
 
 
 def _agent_root(settings: Settings, workspace_id: str) -> Path:
@@ -294,7 +300,16 @@ def pi_runtime_checks() -> list[dict]:
 def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[str, dict | None]:
     answer = ""
     preview = None
+    action_result = None
+    action_failed = False
+    topic_result = None
+    topic_failed = False
     settled = False
+    action_tools = {
+        "start_creation_execution": "start",
+        "resume_creation_execution": "resume",
+        "cancel_creation_execution": "cancel",
+    }
     for line in output.splitlines():
         try:
             event = json.loads(line)
@@ -303,11 +318,28 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 FAILURE_UNKNOWN,
                 explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
             ) from exc
-        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_edit", "preview_creation_plan", "preview_script_draft"}:
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {
+            "preview_edit", "preview_creation_plan", "preview_script_draft",
+            "generate_creation_task_topics", *action_tools,
+        }:
+            if event.get("toolName") in action_tools:
+                action_failed = bool(event.get("isError"))
+                if not action_failed:
+                    details = (event.get("result") or {}).get("details") or {}
+                    if details.get("kind") == "execution_action":
+                        action_result = {**details, "action": action_tools[event["toolName"]]}
+            if event.get("toolName") == "generate_creation_task_topics":
+                topic_failed = bool(event.get("isError"))
+                if not topic_failed:
+                    details = (event.get("result") or {}).get("details") or {}
+                    if details.get("kind") == "topic_generation":
+                        topic_result = details.get("topics")
             if not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
                 if details.get("kind") == kind:
                     preview = details.get("preview")
+                    if kind == "topic_generation":
+                        preview = {"kind": "topic_generation", "topics": details.get("topics")}
         if event.get("type") == "message_end":
             message = event.get("message") or {}
             if message.get("role") == "assistant" and message.get("stopReason") == "stop":
@@ -318,6 +350,30 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 ).strip()
         if event.get("type") == "agent_settled":
             settled = True
+    if (action_failed and action_result is None) or topic_failed:
+        raise _fail(FAILURE_TOOL_FAILED)
+    if action_result is not None:
+        status = action_result.get("status") or {}
+        job = status.get("job") if isinstance(status, dict) else None
+        job_status = job.get("status") if isinstance(job, dict) else None
+        action = action_result.get("action")
+        if action == "cancel":
+            answer = f"取消操作已返回；当前作业状态：{job_status or '未知'}。"
+        elif job_status == "queued":
+            answer = "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。"
+        elif job_status == "running":
+            answer = "连续制作正在运行，尚未完成；可在任务页查看实际进度。"
+        elif job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
+            answer = "任务记录显示制作已完成，当前成片产物可用。"
+        else:
+            answer = f"制作动作已返回；当前作业状态：{job_status or '未知'}。请以任务页回读为准。"
+        return answer, {"kind": "execution_action", "action": action, "status": status}
+    if topic_result is not None:
+        topics = topic_result.get("candidates") or []
+        count = len(topics)
+        return f"已为当前任务生成 {count} 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。", {
+            "kind": "topic_generation", "topics": topic_result,
+        }
     if not settled or not answer:
         cause = _classify_output(output)
         if cause == FAILURE_UNKNOWN:
@@ -365,16 +421,23 @@ def run_task_turn(
     caller_user_id: str | None = None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
+    topic_turn = stage == "topic"
+    tools = (
+        "read_current_task,find_knowledge,generate_creation_task_topics"
+        if topic_turn else
+        "read_current_task,find_knowledge,preview_script_draft"
+        if script_turn else
+        "read_current_task,find_knowledge,find_materials,preview_edit,start_creation_execution,resume_creation_execution,cancel_creation_execution"
+    )
     return _run_turn(
         settings, workspace_id=workspace_id, task_id=task_id, message=message,
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
-        prompt=SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
-        tool_names=("read_current_task,find_knowledge,preview_script_draft"
-                    if script_turn else "read_current_task,find_knowledge,find_materials,preview_edit"),
-        preview_kind="script_draft" if script_turn else "edit_preview",
-        session_key=f"task:{task_id}:{'script' if script_turn else 'edit'}",
+        prompt=TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
+        tool_names=tools,
+        preview_kind="topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
+        session_key=f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}",
     )
 
 

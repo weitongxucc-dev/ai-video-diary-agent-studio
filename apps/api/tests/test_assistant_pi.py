@@ -103,6 +103,78 @@ console.log(JSON.stringify({calls, result, error, duplicateError, unreadError, u
     assert observed["result"]["details"] == {"kind": "edit_preview", "preview": preview}
 
 
+def test_requested_execution_tool_uses_fixed_task_routes_and_real_start_facts(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Pi business tools require Node.js")
+    extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+    script = r"""
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const tools = new Map();
+const calls = [];
+globalThis.fetch = async (url, init) => {
+  calls.push({url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : null});
+  const path = new URL(url).pathname;
+  const payload = path.endsWith('/execution/preview')
+    ? {script_id: 'confirmed-script', input_digest: 'a'.repeat(64), requirements: {can_continue: true}}
+    : path.endsWith('/execution')
+      ? {job: null, video_ready: false}
+      : path.endsWith('/execution/start') || path.endsWith('/execution/resume') || path.endsWith('/execution/cancel')
+        ? {job: {status: 'queued'}, video_ready: false}
+        : {task: {name: '当前任务', stage: 'montage'}, montage: {clips: []}};
+  return new Response(JSON.stringify(payload), {status: 200});
+};
+const {default: register} = await import(input.extension);
+register({registerTool: tool => tools.set(tool.name, tool)});
+let beforeReadError;
+try { await tools.get('start_creation_execution').execute('start', {}); }
+catch (e) { beforeReadError = e.message; }
+await tools.get('read_current_task').execute('read', {});
+const result = await tools.get('start_creation_execution').execute('start', {});
+let duplicateError;
+try { await tools.get('cancel_creation_execution').execute('again', {}); }
+catch (e) { duplicateError = e.message; }
+let mixedEditError;
+try { await tools.get('preview_edit').execute('edit', {command: '换镜头'}); }
+catch (e) { mixedEditError = e.message; }
+const followUpTools = new Map();
+register({registerTool: tool => followUpTools.set(tool.name, tool)});
+await followUpTools.get('read_current_task').execute('read', {});
+const resume = await followUpTools.get('resume_creation_execution').execute('resume', {});
+const cancelTools = new Map();
+register({registerTool: tool => cancelTools.set(tool.name, tool)});
+await cancelTools.get('read_current_task').execute('read', {});
+const cancel = await cancelTools.get('cancel_creation_execution').execute('cancel', {});
+console.log(JSON.stringify({calls, result, resume, cancel, beforeReadError, duplicateError, mixedEditError}));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        input=json.dumps({"extension": extension.as_uri()}),
+        capture_output=True, text=True, check=True, timeout=15, cwd=tmp_path,
+        env={"PATH": str(Path(node).parent), "HOME": str(tmp_path),
+             "AI_VIDEO_DIARY_AGENT_API_BASE": "http://127.0.0.1:1",
+             "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",
+             "AI_VIDEO_DIARY_AGENT_STAGE": "montage"},
+    )
+    observed = json.loads(result.stdout)
+    assert observed["beforeReadError"] == "请先读取当前创作任务"
+    assert "本轮制作动作已经提交" in observed["duplicateError"]
+    assert "本轮已执行制作动作" in observed["mixedEditError"]
+    assert observed["resume"]["details"]["action"] == "resume"
+    assert observed["cancel"]["details"]["action"] == "cancel"
+    assert [(call["url"].rsplit("/", 1)[-1], call["method"]) for call in observed["calls"]] == [
+        ("task-one", "GET"), ("preview", "GET"), ("execution", "GET"), ("start", "POST"),
+        ("task-one", "GET"), ("resume", "POST"), ("task-one", "GET"), ("cancel", "POST"),
+    ]
+    assert observed["calls"][3]["body"] == {
+        "script_id": "confirmed-script", "input_digest": "a" * 64,
+        "requirements_confirmed": True,
+    }
+    assert observed["result"]["details"]["kind"] == "execution_action"
+    assert observed["result"]["details"]["status"]["job"]["status"] == "queued"
+
+
 @pytest.mark.parametrize("operation_type,before,after", [
     ("ChangeCrop", "填满画面 · 水平 60% · 垂直 30%", "填满画面 · 水平 25% · 垂直 30%"),
     ("TrimClip", "源片段 0.0–2.0秒", "源片段 0.25–2.0秒"),
@@ -149,6 +221,53 @@ def test_pi_events_leave_failed_edit_reply_without_a_proposal():
 def test_pi_events_reject_incomplete_turn():
     with pytest.raises(AssistantUnavailable, match="完整回复"):
         _last_answer_and_preview('{"type":"agent_settled"}')
+
+
+def test_pi_execution_action_reply_uses_returned_job_state_not_model_claim():
+    output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
+        {"type": "tool_execution_end", "toolName": "start_creation_execution", "isError": False,
+         "result": {"details": {"kind": "execution_action", "action": "start",
+         "status": {"job": {"status": "queued"}, "video_ready": False}}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "成片已经做好了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    assert _last_answer_and_preview(output, "execution_action") == (
+        "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。",
+        {"kind": "execution_action", "action": "start",
+         "status": {"job": {"status": "queued"}, "video_ready": False}},
+    )
+
+
+def test_pi_topic_generation_reply_preserves_real_candidates_and_unconfirmed_state():
+    topics = {"task": {"id": "task-one"}, "candidates": [{"id": "topic-one"}],
+              "evidence_references": [], "selected_topic_id": None, "latest_run": None,
+              "route_preflight": {}, "egress_preflight": {}}
+    output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
+        {"type": "tool_execution_end", "toolName": "generate_creation_task_topics", "isError": False,
+         "result": {"details": {"kind": "topic_generation", "topics": topics}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "已经替你选好了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    reply, generated = _last_answer_and_preview(output, "topic_generation")
+    assert reply == "已为当前任务生成 1 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。"
+    assert generated == {"kind": "topic_generation", "topics": topics}
+
+
+def test_task_turn_exposes_only_stage_tools_and_named_actions(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.assistant_pi._run_turn", lambda _settings, **kwargs: calls.append(kwargs) or ("ok", None))
+    for stage in ("topic", "script", "narration"):
+        run_task_turn(None, workspace_id="local", task_id="task-one", message="用自然语言表达意图",
+                      stage=stage, selected_refs=[], playhead_ms=None)
+    assert "generate_creation_task_topics" in calls[0]["tool_names"]
+    assert "start_creation_execution" not in calls[0]["tool_names"]
+    assert "start_creation_execution" not in calls[1]["tool_names"]
+    assert "preview_script_draft" in calls[1]["tool_names"]
+    assert all(name in calls[2]["tool_names"] for name in (
+        "start_creation_execution", "resume_creation_execution", "cancel_creation_execution",
+    ))
 
 
 def test_pi_events_keep_plan_preview_separate_from_edit_preview():
@@ -198,7 +317,10 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
     assert edit_preview is None
     assert commands[3][commands[3].index("--session-id") + 1] != commands[0][commands[0].index("--session-id") + 1]
-    assert commands[3][commands[3].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_edit"
+    assert commands[3][commands[3].index("--tools") + 1] == (
+        "read_current_task,find_knowledge,find_materials,preview_edit,"
+        "start_creation_execution,resume_creation_execution,cancel_creation_execution"
+    )
 
 
 def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_path):
