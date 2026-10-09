@@ -587,7 +587,7 @@ class VoicePreviewService:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
-        from app.production import MediaPreviewRunRecord
+        from app.production import MediaAuthorityError, MediaPreviewRunRecord
 
         inputs = repository.resolve_narration_inputs(
             workspace_id=workspace_id,
@@ -608,12 +608,18 @@ class VoicePreviewService:
             provider_model_id=self.provider.model_id,
         )
         reference_error = None
+        reference_failure_reason = "reference_audio_invalid"
+        reference_failure_impact = "原参考不可用于本次预览，未生成或复用音频。"
         try:
             reference_input = repository.profile_reference_input(voice, viewer_user_id=viewer_user_id,
                                                                  local_diagnostic=local_diagnostic, for_generation=False)
             reference = Path(reference_input.source_path)
             if reference_input.needs_derivation and grant_context is None and not prepare_only:
                 raise ValueError("所选声音范围需要设备许可内的精确派生")
+        except MediaAuthorityError as exc:
+            reference_error = str(exc)
+            reference_failure_reason = exc.reason
+            reference_failure_impact = exc.impact
         except (ValueError, KeyError) as exc:
             reference_error = str(exc)
         # Recheck eligibility and source revision before reusing any successful preview.
@@ -660,8 +666,8 @@ class VoicePreviewService:
                 impact="声音预览被使用资格或授权限制阻断，不会生成或复用音频。",
                 repair_action="确认该档案的使用限制和授权状态后，以有效版本重试。")
         if reference_error is not None:
-            return self._finish(repository, running, status="blocked", reason="reference_audio_invalid",
-                                impact="原参考不可用于本次预览，未生成或复用音频。",
+            return self._finish(repository, running, status="blocked", reason=reference_failure_reason,
+                                impact=reference_failure_impact,
                                 repair_action=reference_error)
         if existing is not None and existing.status == "succeeded":
             return self._finish(

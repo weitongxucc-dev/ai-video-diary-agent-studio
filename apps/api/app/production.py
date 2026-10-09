@@ -1977,7 +1977,9 @@ class ProductionRepository:
             if isinstance(profile, VersionedVoiceProfile) and asset.media_type not in {"audio", "video"}:
                 raise ValueError("声音参考需要已登记音频或视频")
             if asset.use_state == "excluded" or (for_generation and asset.use_state not in {"available", "not_for_publish"}):
-                raise ValueError(f"来源素材使用状态限制：{asset.use_state}")
+                raise MediaAuthorityError(reason=f"source_{asset.use_state}",
+                    impact="来源素材的使用限制阻断本次预览或生成，未采用该参考。",
+                    repair_action=f"来源素材使用状态限制：{asset.use_state}；请在来源详情确认允许的用途或选择其他参考。")
             duration = asset.duration_seconds
             if asset.media_type != "image" and (duration is None or not math.isfinite(duration) or duration <= 0):
                 raise ValueError("来源时长未知，请重新定位有效参考范围")

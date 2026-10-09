@@ -692,7 +692,7 @@ class AvatarPreviewService:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
-        from app.production import MediaPreviewRunRecord
+        from app.production import MediaAuthorityError, MediaPreviewRunRecord
 
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -721,9 +721,12 @@ class AvatarPreviewService:
                     local_diagnostic=local_diagnostic, for_generation=False)
                 if profile is request.person:
                     request = replace(request, visual_path=source.source_path, visual_reference_input=source)
+            except MediaAuthorityError as exc:
+                if reference_failure is None:
+                    reference_failure = (exc.reason, exc.impact, exc.repair_action)
             except (ValueError, KeyError) as exc:
                 if reference_failure is None:
-                    reference_failure = (reason, str(exc))
+                    reference_failure = (reason, "原参考不可用于本次预览，未生成或复用视频。", str(exc))
         identity = _avatar_preview_identity(
             request,
             capability_id=self.capability_id,
@@ -769,7 +772,7 @@ class AvatarPreviewService:
                 repair_action="确认档案使用限制、授权和所选声音版本后，以有效版本重试。")
         if reference_failure is not None:
             return self._finish(repository, running, status="blocked", reason=reference_failure[0],
-                impact="原参考不可用于本次预览，未生成或复用视频。", repair_action=reference_failure[1])
+                impact=reference_failure[1], repair_action=reference_failure[2])
         if existing is not None and existing.status == "succeeded":
             return self._finish(
                 repository,

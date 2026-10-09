@@ -398,6 +398,24 @@ def test_preview_restriction_fact_read_does_not_grant_generation(repo,restricted
     assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
 
 
+@pytest.mark.parametrize('kind',['voice','avatar'])
+def test_preview_source_excluded_is_explicit_use_restriction(repo,restricted_preview,kind):
+    f=restricted_preview
+    profile=f.voice if kind=='voice' else f.person
+    assert profile.use_state=='available'
+    repo.update_asset_use_state('ws',profile.reference.asset_id,'excluded')
+    service=f.voice_service if kind=='voice' else f.avatar_service
+    params=f.voice_params if kind=='voice' else f.avatar_params
+    result=service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    assert (result.status,result.reason,result.output_path)==('blocked','source_excluded',None)
+    assert 'excluded' in result.repair_action
+    assert f.voice_provider.calls==1 and f.avatar_provider.calls==0
+    assert repo.get_media_preview_run('ws','voice',f.audio.identity)==f.audio
+    assert Path(f.audio.output_path).is_file()
+    with pytest.raises(ValueError,match='使用状态限制'):
+        repo.profile_reference_input(profile,viewer_user_id='member')
+
+
 def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo,tmp_path):
     runtime,resources,provider,queued=setup_preview(repo,tmp_path)
     try:
