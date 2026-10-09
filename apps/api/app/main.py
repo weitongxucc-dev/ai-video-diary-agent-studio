@@ -450,6 +450,7 @@ from app.sources import (
     SourceConnector,
     SourceItem,
     SourceSyncFailedError,
+    content_allows_use,
     sync_source_connector,
 )
 from app.topics import (
@@ -2722,9 +2723,10 @@ def _creation_plan_preflight(
             authorization=item.authorization,
             ownership=item.ownership,
         )
-        for item in source_repository.list_knowledge_items_readable_by(
-            workspace_id, user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic,
-        )
+        for item in source_repository.list_knowledge_items_for_use(
+            workspace_id, purpose="reference", user_id=_plan_user_id,
+            local_diagnostic=_plan_local_diagnostic,
+        ) if item.use_state != "not_for_automation"
     ]
     source_references = [
         CreationPlanSourceReference(
@@ -2735,7 +2737,9 @@ def _creation_plan_preflight(
             license=item.license,
             identity=_source_item_identity(item),
         )
-        for item in source_repository.list_source_items(workspace_id)
+        for item in source_repository.list_source_items_for_use(
+            workspace_id, purpose="reference"
+        ) if item.use_state != "not_for_automation"
     ]
     usable = production_repo.automatic_material_segments(workspace_id, viewer_user_id=_plan_user_id,
                                                           local_diagnostic=_plan_local_diagnostic)
@@ -2746,15 +2750,17 @@ def _creation_plan_preflight(
         query=payload.goal,
         usage_roles=["a_roll", "b_roll"],
         limit=8,
+        viewer_user_id=_plan_user_id,
+        local_diagnostic=_plan_local_diagnostic,
     )
     if not material_matches and template is None:
         material_matches = production_repo.search_material_segments(
             workspace_id,
             usage_roles=["a_roll", "b_roll"],
             limit=8,
+            viewer_user_id=_plan_user_id,
+            local_diagnostic=_plan_local_diagnostic,
         )
-    readable_ids = {asset.id for asset in production_repo.list_assets(workspace_id, viewer_user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic)}
-    material_matches = [match for match in material_matches if match.asset_id in readable_ids]
     language_to_voice_language = {
         "zh-CN": "zh",
         "en-US": "en",
@@ -3150,11 +3156,12 @@ def _creation_task_topic_inputs(
                 repair_action="重新执行内容预检并确认最新知识版本。",
                 retryable=True,
             )
-        if not item.ownership.strip() or not item.authorization.strip():
+        if (not content_allows_use(item.use_state, "reference")
+                or item.use_state == "not_for_automation"):
             raise _CreationTaskTopicPreflightError(
-                reason="knowledge_authorization_invalid",
-                impact="知识资料缺少可验证的拥有权或授权，不能发送给文字模型。",
-                repair_action="补齐该知识条目的拥有权、授权和版本后重新预检。",
+                reason="knowledge_use_restricted",
+                impact="知识资料的使用范围不允许用于本次创作参考。",
+                repair_action="调整资料使用范围，或从当前方案移除此资料后重新预检。",
                 retryable=True,
             )
         text = _topic_text_excerpt(item.body)
@@ -3162,7 +3169,7 @@ def _creation_task_topic_inputs(
             raise _CreationTaskTopicPreflightError(
                 reason="knowledge_text_unavailable",
                 impact="知识资料没有可发送的文字摘录，未调用文字模型。",
-                repair_action="保存已授权的文字内容后重新预检；本机文件路径不会发送给模型。",
+                repair_action="补充可读取的文字内容后重新预检；本机文件路径不会发送给模型。",
                 retryable=True,
             )
         reference_id = f"knowledge:{item.id}:{item.version}"
@@ -3197,7 +3204,9 @@ def _creation_task_topic_inputs(
         }
     for reference in plan.source_references:
         try:
-            item = source_repository.get_source_item(workspace_id, reference.id)
+            item = source_repository.get_source_item_for_use(
+                workspace_id, reference.id, purpose="reference"
+            )
         except KeyError as exc:
             raise _CreationTaskTopicPreflightError(
                 reason="source_reference_missing",
@@ -3218,23 +3227,21 @@ def _creation_task_topic_inputs(
                 repair_action="重新执行内容预检并确认最新信息源条目。",
                 retryable=True,
             )
-        license_value = item.license.strip()
-        if cloud_egress and (
-            not license_value
-            or license_value.casefold() in {"unknown", "unverified"}
-        ):
+        if (not content_allows_use(item.use_state, "reference")
+                or item.use_state == "not_for_automation"):
             raise _CreationTaskTopicPreflightError(
-                reason="source_license_unverified",
-                impact="信息源许可未知或未验证，不能发送到云端文字模型。",
-                repair_action="补齐该信息源条目的许可后重新预检。",
+                reason="source_use_restricted",
+                impact="信息源的使用范围不允许用于本次创作参考。",
+                repair_action="调整资料使用范围，或从当前方案移除此来源后重新预检。",
                 retryable=True,
             )
+        license_value = item.license.strip()
         text = _topic_text_excerpt(item.body or item.subtitles)
         if not text:
             raise _CreationTaskTopicPreflightError(
                 reason="source_text_unavailable",
                 impact="信息源没有可发送的文字摘录，未调用文字模型。",
-                repair_action="保存该来源的已授权正文或字幕后重新预检。",
+                repair_action="补充有可用正文或字幕的来源后重新预检。",
                 retryable=True,
             )
         reference_id = f"source:{item.id}"
@@ -3267,7 +3274,7 @@ def _creation_task_topic_inputs(
         raise _CreationTaskTopicPreflightError(
             reason="content_sources_missing",
             impact="当前方案没有可发送的已授权文字资料，未调用文字模型。",
-            repair_action="保存知识或同步已授权的信息源后重新预检。",
+            repair_action="保存有正文且允许本次使用的知识或信息源后重新预检。",
             retryable=True,
         )
     return tuple(provider_sources), input_references, evidence_by_reference_id
@@ -4878,9 +4885,9 @@ def _script_library_sources(
                         state, source_repository, item.workspace_id, item_id, version
                     )
                     if (item.version != version or item.version != original.version
-                            or item.authorization != original.authorization or item.ownership != original.ownership):
+                            or not content_allows_use(item.use_state, "reference")):
                         state.status = "version_changed"
-                    elif item.authorization.strip() and item.ownership.strip():
+                    else:
                         state.status = "readable"
                         state.title = item.title
                         state.version_or_identity = item.version
@@ -4896,7 +4903,7 @@ def _script_library_sources(
                 if (not original.identity or _source_item_identity(item) != original.identity
                         or item.connector_id != original.connector_id or item.license != original.license):
                     state.status = "version_changed"
-                elif item.license.strip() and item.license.casefold() not in {"unknown", "unverified"}:
+                elif content_allows_use(item.use_state, "reference"):
                     state.status = "readable"
                     state.title = item.title
                     state.source_url = item.source_url
@@ -13367,9 +13374,11 @@ def search_production_material_segments(
 ) -> list[MaterialSegmentMatchResponse]:
     if usage_role not in {None, "a_roll", "b_roll"}:
         raise HTTPException(status_code=422, detail="invalid material usage role")
+    workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     try:
         matches = production_repo.search_material_segments(
-            current_workspace_id(request),
+            workspace_id,
             query=q,
             usage_roles=[usage_role] if usage_role else ["a_roll", "b_roll"],
             tags=[item.strip() for item in tags.split(",") if item.strip()]
@@ -13378,6 +13387,8 @@ def search_production_material_segments(
             min_duration_seconds=min_duration_seconds,
             max_duration_seconds=max_duration_seconds,
             limit=limit,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -14527,6 +14538,7 @@ def create_manual_source_item(
                         if payload.file_reference
                         else None
                     ),
+                    use_state=payload.use_state,
                 )
             ],
         )[0]
@@ -14549,9 +14561,6 @@ def save_source_item_to_knowledge(
         item = source_repository.save_source_item_to_knowledge(
             workspace_id,
             source_item_id,
-            ownership=payload.ownership.strip(),
-            authorization=payload.authorization.strip(),
-            version=payload.version.strip(),
             verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except KeyError as exc:
@@ -14561,6 +14570,7 @@ def save_source_item_to_knowledge(
     response = _knowledge_item_response(
         item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
     )
+    response.saved_source_item_id = source_item_id
     # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
     if item.content_hash is not None and response.duplicate_of_version is None:
         source = source_repository.get_source_item(workspace_id, source_item_id)
@@ -14569,6 +14579,7 @@ def save_source_item_to_knowledge(
                 workspace_id,
                 source.content_hash,
                 knowledge_item_id=item.id if source.source_label == "web_snapshot" else None,
+                verified_owner_user_id=_content_reader(request, workspace_id)[0],
             )
             response.duplicate_of_version = stored.version if stored else None
     return response
@@ -14621,6 +14632,7 @@ def import_knowledge_file(
                     content_hash=parsed.content_hash,
                     sections=parsed.sections,
                     parameters=parsed.parameters,
+                    use_state=payload.use_state,
                 )
             ],
         )[0]
@@ -14767,7 +14779,8 @@ def ingest_manual_link(
         raise _source_failure_http_exception(failure) from exc
     source_repository.save_source_items(
         workspace_id,
-        [item.to_source_item(workspace_id, connector.id) for item in topic_items],
+        [replace(item.to_source_item(workspace_id, connector.id), use_state=payload.use_state)
+         for item in topic_items],
     )
     return _legacy_source_items_response(
         workspace_id,
@@ -14836,6 +14849,7 @@ def capture_web_snapshot(
                 sections=snapshot.sections,
                 parameters=(),
                 fetched_at=fetched.fetched_at,
+                use_state=payload.use_state,
             )
         ],
     )[0]

@@ -281,7 +281,6 @@ class SourceRepository:
         *,
         ownership: str = "",
         authorization: str = "",
-        version: str = "1",
         verified_owner_user_id: str | None = None,
     ) -> KnowledgeItem:
         """保存为知识条目。手动来源保持原有行为，不参与文件版本链。
@@ -292,10 +291,16 @@ class SourceRepository:
         owner = str(verified_owner_user_id or "").strip() or None
         source = self.get_source_item(workspace_id, source_item_id)
         if source.content_hash is None:
-            # 未经过文件解析的来源（如手动链接）保持原有行为。
-            return self.create_knowledge_item(
+            # 重试同一来源只返回本成员首次保存的知识对象，并同步用户当前限制状态。
+            with self._connect() as conn:
+                existing = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND source_item_id = ? AND owner_user_id IS ? ORDER BY created_at LIMIT 1",
+                    (workspace_id, source.id, owner),
+                ).fetchone()
+                if existing is not None:
+                    return self._knowledge_item_from_row(existing)
+            return self.create_knowledge_item_owned(
                 KnowledgeItem(
-                    owner_user_id=owner,
                     id=f"ki_{uuid4().hex}",
                     workspace_id=workspace_id,
                     content_type=source.content_type,
@@ -305,9 +310,10 @@ class SourceRepository:
                     authorization=authorization,
                     ownership=ownership,
                     source_item_id=source.id,
-                    version=version,
+                    version="1",
                     use_state=source.use_state,
-                )
+                ),
+                verified_user_id=owner,
             )
         return self._save_parsed_source_to_knowledge(
             workspace_id, source, ownership=ownership, authorization=authorization,
@@ -338,10 +344,10 @@ class SourceRepository:
             same_head = conn.execute(
                 f"""
                 SELECT * FROM knowledge_items
-                WHERE workspace_id = ? AND content_hash = ? {scope_sql}
+                WHERE workspace_id = ? AND owner_user_id IS ? AND content_hash = ? {scope_sql}
                 ORDER BY created_at LIMIT 1
                 """,
-                (workspace_id, source.content_hash, *scope),
+                (workspace_id, verified_owner_user_id, source.content_hash, *scope),
             ).fetchone()
             if same_head is not None:
                 return self._knowledge_item_from_row(same_head)
@@ -352,11 +358,11 @@ class SourceRepository:
                 FROM knowledge_item_versions v
                 JOIN knowledge_items k ON k.id = v.knowledge_item_id
                 WHERE v.workspace_id = ? AND v.content_hash = ?
-                  AND k.workspace_id = ? AND k.content_hash <> v.content_hash
+                  AND k.workspace_id = ? AND k.owner_user_id IS ? AND k.content_hash <> v.content_hash
                   {"AND k.file_reference = ?" if is_web_snapshot else ""}
                 ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
                 """,
-                (workspace_id, source.content_hash, workspace_id, *scope),
+                (workspace_id, source.content_hash, workspace_id, verified_owner_user_id, *scope),
             ).fetchone()
             if stored_version is not None:
                 head = conn.execute(
@@ -371,10 +377,10 @@ class SourceRepository:
                     """
                     SELECT * FROM knowledge_items
                     WHERE workspace_id = ? AND file_reference = ?
-                      AND content_hash IS NOT NULL
+                      AND owner_user_id IS ? AND content_hash IS NOT NULL
                     ORDER BY created_at DESC LIMIT 1
                     """,
-                    (workspace_id, source.file_reference),
+                    (workspace_id, source.file_reference, verified_owner_user_id),
                 ).fetchone()
                 if source.file_reference
                 else None
@@ -384,10 +390,10 @@ class SourceRepository:
                     """
                     SELECT * FROM knowledge_items
                     WHERE workspace_id = ? AND source_item_id = ?
-                      AND content_hash IS NOT NULL
+                      AND owner_user_id IS ? AND content_hash IS NOT NULL
                     ORDER BY created_at DESC LIMIT 1
                     """,
-                    (workspace_id, source.id),
+                    (workspace_id, source.id, verified_owner_user_id),
                 ).fetchone()
         if parent is None:
             item = KnowledgeItem(
@@ -448,6 +454,7 @@ class SourceRepository:
                 content_hash=source.content_hash,
                 sections=source.sections,
                 parameters=source.parameters,
+                use_state=previous.use_state,
             )
         )
         # 当前版本头与新版本快照在同一个事务里写入，回查不会看到半套状态。
@@ -457,7 +464,7 @@ class SourceRepository:
                 UPDATE knowledge_items SET
                     content_type = ?, title = ?, body = ?, file_reference = ?,
                     version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?, fetched_at = ?, source_url = ?
+                    source_item_id = ?, fetched_at = ?, source_url = ?, use_state = ?
                 WHERE id = ? AND workspace_id = ?
                 """,
                 (
@@ -472,6 +479,7 @@ class SourceRepository:
                     source.id,
                     source.fetched_at.isoformat() if source.fetched_at else None,
                     source.source_url,
+                    previous.use_state,
                     previous.id,
                     workspace_id,
                 ),
@@ -500,6 +508,7 @@ class SourceRepository:
         content_hash: str,
         *,
         knowledge_item_id: str | None = None,
+        verified_owner_user_id: str | None = None,
     ) -> KnowledgeItemVersion | None:
         """查出某个内容指纹对应的已保存历史版本（重复结果定位）。
 
@@ -512,10 +521,14 @@ class SourceRepository:
                 f"""
                 SELECT * FROM knowledge_item_versions
                 WHERE workspace_id = ? AND content_hash = ?
+                  AND knowledge_item_id IN (
+                    SELECT id FROM knowledge_items WHERE workspace_id = ? AND owner_user_id IS ?
+                  )
                 {"AND knowledge_item_id = ?" if knowledge_item_id else ""}
                 ORDER BY saved_at DESC LIMIT 1
                 """,
-                (workspace_id, content_hash, *((knowledge_item_id,) if knowledge_item_id else ())),
+                (workspace_id, content_hash, workspace_id, verified_owner_user_id,
+                 *((knowledge_item_id,) if knowledge_item_id else ())),
             ).fetchone()
         if row is None:
             return None

@@ -41,7 +41,7 @@ const item: KnowledgeItem = {
   id: "knowledge-one", workspace_id: "workspace-one", content_type: "file",
   title: "设备说明书", body: "设备运行前请先检查电源。",
   file_reference: "/local/reference/manual.pdf", authorization: "内部使用",
-  ownership: "当前工作区", source_item_id: "source-one", version: "v2",
+  ownership: "当前工作区", source_item_id: "source-one", version: "v2", use_state: "available",
   visibility: "private",
   content_hash: null, sections: [], parameters: [],
   fetched_at: null, source_url: null,

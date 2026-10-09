@@ -46,6 +46,7 @@ export type SourceItem = {
   title: string;
   file_reference: string | null;
   content_hash: string | null;
+  use_state: ContentUseState;
   sections: KnowledgeSection[];
   parameters: KnowledgeParameter[];
   // 网页快照的抓取时间；不是网页抓取时为 null。
@@ -77,6 +78,7 @@ export type KnowledgeItem = {
   ownership: string;
   source_item_id: string | null;
   version: string;
+  use_state: ContentUseState;
   // 当前可见范围：shared / private，与服务端同一列。
   visibility?: string;
   content_hash: string | null;
@@ -87,6 +89,7 @@ export type KnowledgeItem = {
   source_url: string | null;
   created_at: string;
   duplicate_of_version?: string | null;
+  saved_source_item_id?: string | null;
 };
 
 export type KnowledgeItemVersion = {

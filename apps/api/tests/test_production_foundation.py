@@ -3353,28 +3353,12 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
     assert unavailable_state.json()["latest_run"]["route_snapshot"]["availability"] == "unconfigured"
     assert unavailable_state.json()["candidates"] == []
 
-    _configure_workspace_text_service(
-        "workspace_a",
-        provider="custom",
-        base_url="https://model.example/v1",
-        model="topic-test",
-        api_key="test-key",
-    )
     source = sources.get_source_item("workspace_a", "source-workspace_a")
     sources.save_source_items(
         "workspace_a",
         [replace(source, license="unknown")],
     )
     license_task = create_task("许可未知")
-    blocked = client.post(
-        f"/api/creation-tasks/{license_task}/topics/generate", json={}
-    )
-    assert blocked.status_code == 503
-    assert blocked.json()["detail"]["reason"] == "source_license_unverified"
-    blocked_state = client.get(f"/api/creation-tasks/{license_task}/topics").json()
-    assert blocked_state["latest_run"]["status"] == "failed"
-    assert blocked_state["latest_run"]["route_snapshot"]["availability"] == "unverified"
-
     local_calls = []
 
     class LocalGenerator:
@@ -3403,6 +3387,13 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         "_creation_task_topic_generator_for",
         lambda _settings: LocalGenerator(),
     )
+    task = production.get_creation_task("workspace_a", license_task)
+    plan = production.get_creation_plan("workspace_a", task.plan_id)
+    prepared, references, _ = main_module._creation_task_topic_inputs(
+        "workspace_a", task, plan, cloud_egress=True,
+    )
+    assert any(item.reference_id == "source:source-workspace_a" for item in prepared)
+    assert any(item["object_id"] == "source-workspace_a" for item in references)
     local_allowed = client.post(
         f"/api/creation-tasks/{license_task}/topics/generate", json={}
     )

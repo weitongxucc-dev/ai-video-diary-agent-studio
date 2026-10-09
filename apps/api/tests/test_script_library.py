@@ -139,6 +139,44 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
     assert states[0]["status"] == "missing" and states[0]["title"] is None
 
 
+def test_reference_only_source_remains_a_reference_but_excluded_knowledge_is_blocked(library):
+    client, _, sources = library
+    entry = save(client)
+    sources.set_knowledge_item_use_state("local", "knowledge_own", "reference_only")
+    readable = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
+    assert readable[0]["status"] == "readable"
+    sources.set_knowledge_item_use_state("local", "knowledge_own", "excluded")
+    excluded = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
+    assert excluded[0]["status"] == "missing"
+    assert excluded[0]["title"] is None
+    assert reuse(client, entry["id"]).status_code == 409
+
+
+def test_library_rechecks_reference_without_legacy_rights_proof_fields(library):
+    client, repo, sources = library
+    with sources._connect() as conn:
+        conn.execute(
+            "UPDATE knowledge_items SET authorization='', ownership='' WHERE id='knowledge_own'"
+        )
+    with repo._connect() as conn:
+        row = conn.execute(
+            "SELECT payload FROM creation_plans WHERE id='plan_original'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        payload["knowledge_references"][0]["authorization"] = ""
+        payload["knowledge_references"][0]["ownership"] = ""
+        conn.execute(
+            "UPDATE creation_plans SET payload=? WHERE id='plan_original'",
+            (json.dumps(payload),),
+        )
+    entry = save(client)
+    sources_state = client.get(
+        f"/api/production/script-library/{entry['id']}/sources"
+    ).json()
+    assert sources_state[0]["status"] == "readable"
+    assert reuse(client, entry["id"]).status_code == 200
+
+
 def test_citation_reports_the_cited_version_facts_after_the_current_version_moved(library):
     """引用回查必须给引用绑定那一版的真实快照事实，而不是当前版。"""
     client, repo, sources = library

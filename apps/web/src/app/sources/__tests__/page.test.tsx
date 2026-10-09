@@ -39,6 +39,7 @@ const parsed = {
   license: "user_provided", title: "说明书", file_reference: "说明书.md",
   content_hash: "hash-file", sections: [{ locator: "第1段", title: "说明书", text: "# 说明书" }],
   parameters: [{ key: "净重", value: "500", unit: "g", locator: "第1段" }],
+  use_state: "available",
   created_at: "2026-10-04T09:00:00Z",
 };
 
@@ -55,6 +56,7 @@ beforeEach(() => {
   });
   api.saveSourceItemToKnowledge.mockResolvedValue({
     id: "ki-one", version: "1", content_hash: "hash-file", source_item_id: parsed.id,
+    saved_source_item_id: parsed.id, use_state: "available",
   });
 });
 
@@ -83,7 +85,7 @@ describe("sources file import", () => {
     await waitFor(() => expect(api.saveSourceItemToKnowledge).toHaveBeenCalledTimes(1));
     expect(api.saveSourceItemToKnowledge.mock.calls[0][0]).toBe("source-file");
     expect(api.saveSourceItemToKnowledge.mock.calls[0][1]).toEqual({});
-    expect(api.listKnowledgeItems).toHaveBeenCalledTimes(1);
+    expect(api.listKnowledgeItems).not.toHaveBeenCalled();
     expect(await screen.findByRole("link", { name: "查看我的资料" })).toHaveAttribute("href", "/knowledge");
   });
 
@@ -204,19 +206,34 @@ describe("content entry intent and preparation", () => {
   });
 });
 
-it("retains the selected source and reports an unconfirmed save when readback omits it", async () => {
+it("retains the selected source and reports a mismatched save receipt", async () => {
   api.listSourceItems.mockResolvedValue({ items: [parsed], total_count: 1 });
-  api.saveSourceItemToKnowledge.mockResolvedValue({ id: "ki-missing" });
-  api.listKnowledgeItems.mockResolvedValue({ items: [], total_count: 0 });
+  api.saveSourceItemToKnowledge.mockResolvedValue({ id: "ki-missing", version: "1", saved_source_item_id: "source-other", use_state: "available" });
   api.sourceErrorMessage.mockImplementation((cause: Error) => cause.message);
   render(<SourcesPage />);
   const item = await screen.findByRole("button", { name: /说明书/ });
   fireEvent.click(item);
   const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
   fireEvent.click(within(inspector).getByRole("button", { name: /保存到知识库/ }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("回读未确认");
+  expect(await screen.findByRole("alert")).toHaveTextContent("回执与当前来源不一致");
   expect(within(inspector).getByRole("heading", { name: "说明书" })).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "查看我的资料" })).not.toBeInTheDocument();
+});
+
+it("does not attach a late save receipt to a newly selected source", async () => {
+  const other = { ...parsed, id: "source-other", title: "另一条资料" };
+  api.listSourceItems.mockResolvedValue({ items: [parsed, other], total_count: 2 });
+  let resolveSave!: (value: unknown) => void;
+  api.saveSourceItemToKnowledge.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
+  render(<SourcesPage />);
+  fireEvent.click((await screen.findAllByRole("button", { name: /说明书/ }))[0]);
+  const firstInspector = await screen.findByRole("complementary", { name: "信息条目详情" });
+  fireEvent.click(within(firstInspector).getByRole("button", { name: /保存到知识库/ }));
+  fireEvent.click(screen.getByRole("button", { name: /另一条资料/ }));
+  resolveSave({ id: "ki-one", version: "1", saved_source_item_id: parsed.id, use_state: "available" });
+  await waitFor(() => expect(screen.queryByRole("link", { name: "查看我的资料" })).not.toBeInTheDocument());
+  const selected = await screen.findByRole("complementary", { name: "信息条目详情" });
+  expect(within(selected).getByRole("heading", { name: "另一条资料" })).toBeInTheDocument();
 });
 
 it("defaults ordinary pasted content to available and preserves only a supplied source license", async () => {

@@ -10,7 +10,6 @@ import {
   createSourceConnector,
   captureWebSnapshot,
   importKnowledgeFile,
-  listKnowledgeItems,
   listSourceConnectors,
   listSourceItems,
   saveSourceItemToKnowledge,
@@ -39,6 +38,10 @@ function platformLabel(value: string) {
 
 function sourceLabel(value: string) {
   return value === "manual" ? "手工添加" : platformLabel(value);
+}
+
+function useStateLabel(value: ContentUseState) {
+  return ({ available: "可用于创作", reference_only: "仅供参考", excluded: "不使用", not_for_automation: "不用于自动任务", not_for_publish: "不用于发布" })[value];
 }
 
 function frequencyLabel(value: string) {
@@ -80,7 +83,7 @@ export default function SourcesPage() {
   const [subscriptionPlatform, setSubscriptionPlatform] = useState("external_urls");
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [savedToKnowledge, setSavedToKnowledge] = useState(false);
+  const [savedReceipt, setSavedReceipt] = useState<{ sourceItemId: string; knowledgeItemId: string; useState: ContentUseState } | null>(null);
   const [connectors, setConnectors] = useState<SourceConnector[]>([]);
   const [items, setItems] = useState<SourceItem[]>([]);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
@@ -118,7 +121,7 @@ export default function SourcesPage() {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    setBusy("create-connector"); setError(null); setNotice(null); setSavedToKnowledge(false);
+    setBusy("create-connector"); setError(null); setNotice(null); setSavedReceipt(null);
     try {
       const connector = await createSourceConnector({ platform: String(form.get("platform") ?? ""), protocol: "https", account_or_rule: String(form.get("account_or_rule") ?? ""), frequency: String(form.get("frequency") ?? "每天"), permissions: ["读取公开内容"] });
       setConnectors((current) => [connector, ...current.filter((item) => item.id !== connector.id)]);
@@ -132,7 +135,7 @@ export default function SourcesPage() {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    setBusy("manual-item"); setError(null); setNotice(null); setSavedToKnowledge(false);
+    setBusy("manual-item"); setError(null); setNotice(null); setSavedReceipt(null);
     try {
       const license = String(form.get("license") ?? "").trim();
       const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, ...(license ? { license } : {}), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
@@ -146,7 +149,7 @@ export default function SourcesPage() {
     // 先记住表单：await 之后 currentTarget 已经失效，reset 会报错。
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    setBusy("web-snapshot"); setError(null); setNotice(null); setSavedToKnowledge(false);
+    setBusy("web-snapshot"); setError(null); setNotice(null); setSavedReceipt(null);
     try {
       const item = await captureWebSnapshot({ url: String(form.get("url") ?? ""), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
       // 选中快照自己的连接器，否则列表刷新会跳回第一个旧信息源，快照立刻被刷掉。
@@ -166,7 +169,7 @@ export default function SourcesPage() {
     const validation = validateKnowledgeFile(file);
     if (!file || validation) { setFileError(validation); return; }
     setFileError(null);
-    setBusy("import-file"); setError(null); setNotice(null); setSavedToKnowledge(false);
+    setBusy("import-file"); setError(null); setNotice(null); setSavedReceipt(null);
     try {
       const buffer = await file.arrayBuffer();
       let binary = "";
@@ -187,7 +190,7 @@ export default function SourcesPage() {
   }
 
   async function sync(connector: SourceConnector) {
-    setBusy(`sync-${connector.id}`); setError(null); setNotice(null); setSavedToKnowledge(false);
+    setBusy(`sync-${connector.id}`); setError(null); setNotice(null); setSavedReceipt(null);
     try {
       const response = await syncSourceConnector(connector.id);
       setLastRuns((current) => ({ ...current, [connector.id]: response.run }));
@@ -202,14 +205,20 @@ export default function SourcesPage() {
 
   async function saveToKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selectedItem) return;
-    setBusy(`save-${selectedItem.id}`); setError(null); setNotice(null); setSavedToKnowledge(false);
+    const source = selectedItem;
+    setBusy(`save-${source.id}`); setError(null); setNotice(null); setSavedReceipt(null);
     try {
-      const saved = await saveSourceItemToKnowledge(selectedItem.id, {});
-      const { items: knowledgeItems } = await listKnowledgeItems();
-      if (!knowledgeItems.some((item) => item.id === saved.id)) throw new Error("保存请求已返回，但回读未确认这条资料；原信息条目仍保留，可重试。");
-      setSavedToKnowledge(true); setNotice("已回读确认保存到知识库，可在“内容资料”中继续查看。");
+      const saved = await saveSourceItemToKnowledge(source.id, {});
+      if (!saved.id || !saved.version || saved.saved_source_item_id !== source.id ||
+          !["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"].includes(saved.use_state)) {
+        throw new Error("保存回执与当前来源不一致；原信息条目仍保留，可重试。");
+      }
+      setSavedReceipt({ sourceItemId: source.id, knowledgeItemId: saved.id, useState: saved.use_state });
+      setNotice(saved.use_state === "excluded"
+        ? `已登记“${source.title}”并回读确认；当前标记为不使用，因此不会进入知识检索。`
+        : `已回读确认“${source.title}”保存到知识库，使用范围：${useStateLabel(saved.use_state)}。`);
     }
-    catch (cause) { setError(sourceErrorMessage(cause)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
 
@@ -217,7 +226,7 @@ export default function SourcesPage() {
     <AppShell inspector={selectedItem ? <SourceItemInspector item={selectedItem} busy={busy} onSave={saveToKnowledge} /> : selectedConnector ? <SourceInspector connector={selectedConnector} lastRun={lastRuns[selectedConnector.id] ?? null} /> : undefined} inspectorTitle={selectedItem ? "信息条目详情" : "信息源详情"}>
       <div className="source-workspace">
         {error ? <section className="source-error" role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>已有信息不会被改写；修复连接、登录或权限后再重试。</p></div></section> : null}
-        {notice ? <p className="source-notice" role="status">{notice} {savedToKnowledge ? <Link href="/knowledge">查看我的资料</Link> : null}</p> : null}
+        {notice ? <p className="source-notice" role="status">{notice} {savedReceipt?.sourceItemId === selectedItemId && savedReceipt.useState !== "excluded" ? <Link href="/knowledge">查看我的资料</Link> : null}</p> : null}
         <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><Link href="/knowledge">我的资料</Link><span aria-current="page">资料来源</span></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh(selectedConnectorId)} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
         <section className={styles.entry} aria-label="添加内容">
           <nav className={styles.methods} aria-label="添加方式">

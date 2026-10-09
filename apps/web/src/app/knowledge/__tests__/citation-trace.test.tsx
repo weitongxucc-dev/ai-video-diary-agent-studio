@@ -48,7 +48,7 @@ function detail(overrides: Partial<KnowledgeItemDetail> = {}): KnowledgeItemDeta
   return {
     id: "ki-one", workspace_id: "workspace-one", content_type: "file", title: "设备说明书",
     body: "当前版正文：先通电。", file_reference: "/manual.pdf", authorization: "内部使用",
-    ownership: "我的内容", source_item_id: "source-one", version: "3", content_hash: "hash-v3",
+    ownership: "我的内容", source_item_id: "source-one", version: "3", use_state: "available", content_hash: "hash-v3",
     sections: [{ locator: "第3段", title: "新版", text: "当前版第3段" }],
     parameters: [{ key: "净重", value: "700", unit: "g", locator: "第3段" }],
     fetched_at: null, source_url: null, created_at: "2026-10-03T00:00:00Z",

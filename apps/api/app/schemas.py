@@ -2211,7 +2211,10 @@ class SourceItemsResponse(BaseModel):
 
 
 class ManualLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str
+    use_state: ContentUseState = "available"
 
 
 class SourceConnectorCreateRequest(BaseModel):
@@ -2290,6 +2293,7 @@ class SourceItemDetailResponse(BaseModel):
     content_hash: str | None = None
     sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
     parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    use_state: ContentUseState = "available"
     # 网页快照的抓取时间；不是网页抓取时为空。
     fetched_at: datetime | None = None
     created_at: datetime
@@ -2313,14 +2317,11 @@ class ManualSourceItemRequest(BaseModel):
     author: str | None = Field(default=None, max_length=300)
     published_at: datetime | None = None
     license: str = Field(default="unknown", min_length=1, max_length=300)
+    use_state: ContentUseState = "available"
 
 
 class SaveSourceItemToKnowledgeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    ownership: str = Field(min_length=1, max_length=300)
-    authorization: str = Field(min_length=1, max_length=2000)
-    version: str = Field(default="1", min_length=1, max_length=100)
 
 
 class KnowledgeFileImportRequest(BaseModel):
@@ -2328,6 +2329,7 @@ class KnowledgeFileImportRequest(BaseModel):
 
     filename: str = Field(min_length=1, max_length=400)
     content_base64: str = Field(min_length=1, max_length=40_000_000)
+    use_state: ContentUseState = "available"
 
 
 class KnowledgeItemResponse(BaseModel):
@@ -2341,6 +2343,7 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    use_state: ContentUseState = "available"
     # 当前可见范围：shared / private。回读同一列，与保存时写入的值一致。
     visibility: str = CONTENT_VISIBILITY_LEGACY
     content_hash: str | None = None
@@ -2352,6 +2355,8 @@ class KnowledgeItemResponse(BaseModel):
     created_at: datetime
     # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
     duplicate_of_version: str | None = None
+    # 仅保存接口用于确认此次请求绑定的来源；不改变知识条目的原始来源关系。
+    saved_source_item_id: str | None = None
 
 
 class ContentVisibilityRequest(BaseModel):

@@ -159,29 +159,6 @@ def test_connector_rejects_whitespace_required_fields(tmp_path, field):
         repo.upsert_connector(replace(_connector("workspace-a"), **{field: "  "}))
 
 
-@pytest.mark.parametrize("field", ["version"])
-def test_knowledge_write_rejects_whitespace_required_fields(tmp_path, field):
-    repo = SourceRepository(tmp_path / "agent.sqlite3")
-    repo.upsert_connector(_connector("workspace-a"))
-    source = repo.save_source_items("workspace-a", [_item("workspace-a", "connector_1")])[0]
-
-    with pytest.raises(ValueError, match="knowledge item requires"):
-        repo.save_source_item_to_knowledge(
-            "workspace-a",
-            source.id,
-            **{field: "  "},
-            **{
-                name: value
-                for name, value in {
-                    "ownership": "user-owned",
-                    "authorization": "approved",
-                    "version": "1",
-                }.items()
-                if name != field
-            },
-        )
-
-
 def test_use_state_is_persisted_and_controls_knowledge_consumption(tmp_path):
     database_path = tmp_path / "agent.sqlite3"
     repo = SourceRepository(database_path)
