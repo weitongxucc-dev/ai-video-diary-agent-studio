@@ -249,6 +249,8 @@ granted_subprocess仅将准确owner_type=media_preview与voice:/avatar_lipsync:�
 
 B-PROFILE-API C2直接自动选片消费者：主控回读montage.py三处approved限定确认N33预检单改会造成实际执行冲突，追加B独占montage.py仅这些选择消费者及必要直接专项，消费production同一真实用途资格方法，不在montage复制新一套公式。保留ready、可读来源/实际媒体范围、明确rejected/use_state/段exclude与真实主题/结构选择区别；低语义候选仍需实际人工选择，删除全体默认审批门槛不表示模型可随意采用无关镜头。既有渲染、时间轴、预算/输出和UI-TASK不改，准确回读主控候选后ACK继续当前单。
 
+UI-TASK C1真实会话残差：主控804dcf3回读useAssistantConversation.failUnpersistedTurn签名第三参为failure消息，Home/Task调用均传错误说明；切走原会话后该函数PATCH draft_text=错误说明，会把用户原句恢复成错误并可能覆盖该旧会话后写草稿。另beginTurn后等待draftCheckpoint，scope改变直接return可能没有POST也没有收束本地pending轮次。追加UI独占useAssistantConversation.ts、HomeCommandComposer.tsx及直接会话专项，CreationTask调用仍自己owned。待发原句、错误说明和新草稿分别管理，不能拿错误当正文；导航/未建立持久轮次的取消保留原句及状态，不留下假running。晚失败不得覆盖任意较新草稿/新会话，不凭时间猜文本等于同一轮次；已有真实持久轮次可独立继续并恢复。共享API/Repository仍B写；若需原子服务器恢复，请只给具体接口差额，主控交单写者，不暗加无版本覆盖或内存fallback。只新增迟到失败→切新会话/旧会话已有新草稿、checkpoint等待期间切scope的必要受控证据，复用未影响125检查；不重新加载Pi或模型。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
