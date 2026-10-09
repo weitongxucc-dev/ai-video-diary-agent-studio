@@ -7462,7 +7462,8 @@ def _creation_task_montage_candidates(
     cue_tokens = set((cue.text if cue else "").lower())
     candidates: list[MontageClipCandidateResponse] = []
     for asset in production_repo.list_assets(
-        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
+        workspace_id, include_private=viewer_user_id is not None or local_diagnostic,
+        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
     ):
         if asset.review_status != "approved" or not material_allows_footage(asset):
             continue
@@ -10354,7 +10355,7 @@ def confirm_creation_task_edit(
         new_clip = _creation_task_insert_clip(workspace_id, CreationTaskExactEditRequest(
             operation_type="InsertClip", clip_id=operation_payload["clip_id"],
             asset_id=operation_payload["asset_id"], segment_id=operation_payload["segment_id"],
-            source_start_seconds=float(source_start) if source_start is not None else None))
+            source_start_seconds=float(source_start) if source_start is not None else None), request=request)
         try:
             updated, tracks = insert_clip(plan, tracks, _effective_audio_timeline(plan),
                 operation_payload["clip_id"], new_clip)
@@ -10416,6 +10417,7 @@ def confirm_creation_task_edit(
         plan,
         required_strings["clip_id"],
         update,
+        request=request,
     )
     updated_plan, _payload = _prepare_changed_montage(
         updated_plan,
@@ -11351,7 +11353,9 @@ def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationT
     return CreationTaskEditPreviewResponse.model_validate({"intent": asdict(intent), "proposal": asdict(proposal)})
 
 
-def _creation_task_insert_clip(workspace_id: str, payload: CreationTaskExactEditRequest) -> MontageClip:
+def _creation_task_insert_clip(
+    workspace_id: str, payload: CreationTaskExactEditRequest, *, request: Request,
+) -> MontageClip:
     """Build the shot an InsertClip adds, picking material the way ReplaceClip does."""
     if not payload.asset_id or not payload.segment_id:
         raise HTTPException(status_code=422, detail="插入镜头需要指定素材片段")
@@ -11360,6 +11364,8 @@ def _creation_task_insert_clip(workspace_id: str, payload: CreationTaskExactEdit
         segment = next(item for item in asset.segments if item.id == payload.segment_id)
     except (KeyError, StopIteration) as exc:
         raise HTTPException(status_code=404, detail="material segment not found") from exc
+    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+        raise HTTPException(status_code=403, detail="当前成员无权使用该素材")
     if (
         asset.review_status != "approved"
         or not material_allows_footage(asset)
@@ -11397,7 +11403,7 @@ def _preview_insert(task_id: str, request: Request, payload: CreationTaskExactEd
         raise HTTPException(status_code=422, detail="插入镜头只接受一个插入位置和一段素材，不混入其他修改")
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    new_clip = _creation_task_insert_clip(workspace_id, payload)
+    new_clip = _creation_task_insert_clip(workspace_id, payload, request=request)
     plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
     base = _ensure_montage_base_version(workspace_id, task, plan)
     tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
@@ -11541,7 +11547,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         confirmed=True if payload.operation_type == "ConfirmClip" else None,
     )
     plan, edited_tracks, linkage = _apply_creation_task_montage_clip_update(
-        workspace_id, task_id, plan, payload.clip_id, update
+        workspace_id, task_id, plan, payload.clip_id, update, request=request,
     )
     after_clip = next(item for item in plan.clips if item.id == payload.clip_id)
     if creation_task_montage_plan_to_payload(plan)["clips"] == creation_task_montage_plan_to_payload(persisted_plan)["clips"]:
@@ -11920,6 +11926,8 @@ def _apply_creation_task_montage_clip_update(
     plan: CreationTaskMontagePlan,
     clip_id: str,
     payload: CreationTaskMontageClipUpdateRequest,
+    *,
+    request: Request,
 ) -> CreationTaskMontagePlan:
     try:
         clip = next(item for item in plan.clips if item.id == clip_id)
@@ -11978,6 +11986,8 @@ def _apply_creation_task_montage_clip_update(
             segment = next(item for item in asset.segments if item.id == segment_id)
         except (KeyError, StopIteration) as exc:
             raise HTTPException(status_code=404, detail="material segment not found") from exc
+        if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+            raise HTTPException(status_code=403, detail="当前成员无权使用该素材")
         if (
             asset.review_status != "approved"
             or not material_allows_footage(asset)
