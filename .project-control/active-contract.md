@@ -586,6 +586,10 @@ B-FOUNDATION-FACTS已cf3ee279交付retain、组合ef76fd8并推draft113，新Web
 
 本单 task_a12d6334a6c4 / ctx_5558e369363b 已交 e78f5d9fcb33f561b1299d549781d818f42b8a2d，主控审查并retain、处理消息后ACK；UI本单源码权结束。机械组合公开候选 cfaa83ee914427f1d6765a7ca0c7fb5825de4de4，主控第三轮owned ARM包输入摘要6c819fd5…、API/Web ready；仅首页当前单历史/收起诊断的可见状态有原生截图，不推导其他操作或展开组合通过。三轮owned实例与API/Web均正向核实退出、端口无监听，运行租约结束，owned资料和证据保留；真实用户实例及数据未改。原生业务操作仍未验证，旧Task/运行权不恢复；后续独立实施或验收须具名新单，Issue开放与否以GitHub实时事实为准。
 
+### QA-V2-USER-PREVIEW：用户要求打开最新包
+
+用户最新明确要求“现在最新的包是哪个，你打开给我看下”，授权主控重新打开已核对的cfaa83e owned ARM候选，输入摘要6c819fd5…；本次是新预览租约，不恢复旧Dispatch。只沿用final-client/runtime绝对隔离路径、固定32124、已有owned userData及禁用Pi的环境，原3000用户实例和资料保留。允许系统正常打开该精确.app并前置显示、按新PID只读原生核对；不操作真实Key/模型/媒体/账号/发布或替换Downloads。用户要观看，本次成功打开后保留该预览实例，准确PID/端口记在同owned runtime的launch-preview记录，后续用户关闭或明确结束预览时再收回；不据打开成功宣布业务路径验收通过。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
