@@ -89,7 +89,7 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
       const latest = conversationRef.current;
       if (latest) replace({
         ...latest,
-        draft_text: draftValue.current,
+        draft_text: updated.draft_text,
         draft_version: updated.draft_version,
         updated_at: updated.updated_at,
       });
@@ -139,8 +139,10 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
     const current = conversationRef.current;
     if (!current) return null;
     const observedStreamRevision = streamRevision.current;
+    const observedRevision = revision.current;
+    const observedDraftRevision = draftRevisionFor(draftRevisionByConversation.current, current.id);
+    const hasUnpersistedDraft = draftValue.current !== current.draft_text;
     const fresh = await getAssistantConversation(current.id);
-    draftVersionByConversation.current.set(fresh.id, fresh.draft_version);
     if (activeScopeKey.current === scopeKey
       && conversationRef.current?.id === fresh.id && matchesScope(fresh)
       && streamRevision.current === observedStreamRevision) {
@@ -149,9 +151,20 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
       const localPendingTurns = latestLocal?.turns.filter((turn) => {
         return turn.id.startsWith("pending-") && !freshTurnIds.has(turn.id);
       }) ?? [];
-      const currentConversation = localPendingTurns.length
-        ? { ...fresh, turns: [...fresh.turns, ...localPendingTurns] }
-        : fresh;
+      const preserveDraft = hasUnpersistedDraft || revision.current !== observedRevision
+        || draftRevisionFor(draftRevisionByConversation.current, fresh.id) !== observedDraftRevision;
+      const knownDraftVersion = Math.max(
+        fresh.draft_version,
+        draftVersionByConversation.current.get(fresh.id) ?? 0,
+        latestLocal?.draft_version ?? 0,
+      );
+      draftVersionByConversation.current.set(fresh.id, knownDraftVersion);
+      const currentConversation = {
+        ...fresh,
+        draft_text: preserveDraft ? draftValue.current : fresh.draft_text,
+        draft_version: knownDraftVersion,
+        turns: localPendingTurns.length ? [...fresh.turns, ...localPendingTurns] : fresh.turns,
+      };
       replace(currentConversation);
       setConversations((items) => [currentConversation, ...items.filter((item) => item.id !== currentConversation.id)]
         .sort((left, right) => right.updated_at.localeCompare(left.updated_at)));
@@ -274,12 +287,53 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
   const failUnpersistedTurn = useCallback(async (conversationId: string, localTurnId: string, _message: string) => {
     const recovery = localTurnRecovery.current.get(localTurnId);
     if (recovery?.conversationId !== conversationId) return false;
-    const current = conversationRef.current;
-    const activeHere = activeScopeKey.current === scopeKey
-      && current?.id === conversationId && matchesScope(current);
+    const observedRevision = revision.current;
+    const observedDraftRevision = draftRevisionFor(draftRevisionByConversation.current, conversationId);
+    const observedStreamRevision = streamRevision.current;
+    const isActiveHere = () => activeScopeKey.current === scopeKey
+      && conversationRef.current?.id === conversationId && matchesScope(conversationRef.current);
+    const canReplaceDraft = () => isActiveHere()
+      && revision.current === observedRevision
+      && draftRevisionFor(draftRevisionByConversation.current, conversationId) === observedDraftRevision
+      && observedDraftRevision === recovery.draftRevision;
     const dropPending = (value: AssistantConversation) => ({
       ...value, turns: value.turns.filter((turn) => turn.id !== localTurnId),
     });
+    const mergeRead = (fresh: AssistantConversation, replaceDraft: boolean) => {
+      const latest = conversationRef.current;
+      if (!latest || latest.id !== conversationId) return;
+      const freshTurnIds = new Set(fresh.turns.map((turn) => turn.id));
+      const streamAdvanced = streamRevision.current !== observedStreamRevision;
+      const currentTurns = streamAdvanced
+        ? latest.turns.filter((turn) => turn.id !== localTurnId)
+        : latest.turns.filter((turn) => turn.id.startsWith("pending-")
+          && !freshTurnIds.has(turn.id) && turn.id !== localTurnId);
+      const mergedTurns = [...fresh.turns];
+      for (const turn of currentTurns) {
+        const index = mergedTurns.findIndex((candidate) => candidate.id === turn.id);
+        if (index < 0) mergedTurns.push(turn);
+        else if (streamAdvanced) mergedTurns[index] = turn;
+      }
+      const knownDraftVersion = Math.max(
+        fresh.draft_version,
+        draftVersionByConversation.current.get(conversationId) ?? 0,
+        latest.draft_version,
+      );
+      draftVersionByConversation.current.set(conversationId, knownDraftVersion);
+      const next = {
+        ...fresh,
+        draft_text: replaceDraft ? fresh.draft_text : draftValue.current,
+        draft_version: knownDraftVersion,
+        turns: mergedTurns,
+      };
+      replace(next);
+      if (replaceDraft) {
+        revision.current += 1;
+        advanceDraftRevision(draftRevisionByConversation.current, conversationId);
+        draftValue.current = fresh.draft_text;
+        setDraftTextState(fresh.draft_text);
+      }
+    };
 
     try {
       const restored = await restoreUnpersistedAssistantTurnDraft(conversationId, {
@@ -288,38 +342,26 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
         expected_draft_version: recovery.expectedDraftVersion ?? recovery.initialDraftVersion,
       });
       const saved = restored.conversation;
-      draftVersionByConversation.current.set(conversationId, saved.draft_version);
-      if (activeHere && draftRevisionFor(draftRevisionByConversation.current, conversationId) === recovery.draftRevision
-          && conversationRef.current?.id === conversationId) {
+      const knownDraftVersion = draftVersionByConversation.current.get(conversationId) ?? 0;
+      draftVersionByConversation.current.set(conversationId, Math.max(knownDraftVersion, saved.draft_version));
+      if (isActiveHere()) {
         if (restored.status === "already_persisted") {
           const refreshed = await getAssistantConversation(conversationId);
-          draftVersionByConversation.current.set(conversationId, refreshed.draft_version);
-          replace(refreshed);
-          draftValue.current = refreshed.draft_text;
-          setDraftTextState(refreshed.draft_text);
+          if (isActiveHere()) mergeRead(refreshed, canReplaceDraft());
         } else {
-          replace(saved);
-          draftValue.current = saved.draft_text;
-          setDraftTextState(saved.draft_text);
+          mergeRead(saved, canReplaceDraft());
         }
-      } else if (activeHere && current?.id === conversationId) {
-        replace(dropPending(current));
       }
       return restored.status !== "already_persisted" || Boolean(saved.turns.some((turn) => turn.id === recovery.persistedTurnId));
     } catch (cause) {
-      if (activeHere && conversationRef.current?.id === conversationId) {
+      if (isActiveHere()) {
         const latest = conversationRef.current;
         if (latest) replace(dropPending(latest));
-        const observedDraftRevision = draftRevisionFor(draftRevisionByConversation.current, conversationId);
         const refreshed = await getAssistantConversation(conversationId).catch(() => null);
-        if (refreshed && draftRevisionFor(draftRevisionByConversation.current, conversationId) === observedDraftRevision
-          && conversationRef.current?.id === conversationId) {
-          draftVersionByConversation.current.set(conversationId, refreshed.draft_version);
-          replace(refreshed);
-          draftValue.current = refreshed.draft_text;
-          setDraftTextState(refreshed.draft_text);
+        if (refreshed && isActiveHere()) mergeRead(refreshed, canReplaceDraft());
+        if (isActiveHere()) {
+          setError(cause instanceof Error ? cause.message : "未发送草稿没有恢复；较新的草稿未被覆盖。请重新读取后确认。");
         }
-        setError(cause instanceof Error ? cause.message : "未发送草稿没有恢复；较新的草稿未被覆盖。请重新读取后确认。");
       }
       return false;
     }
