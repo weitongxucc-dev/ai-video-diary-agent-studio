@@ -269,6 +269,8 @@ QA-V2-UI-DRAFT-CAS：UI-CONVERSATION-REVIEW task_6f66b0be7d3e/ctx_fd98306bec7d�
 
 C恢复精确错误复核：第二attempt ctx_094d4f64acbd已经3bd6622 clean交源与11项/tsc报告，但provider最终轮仍未worker_done。主控回读准确原始check argv发现用了不存在的`term_d53c0c65-39c8-4ced-af2c-deeb0a842718`（4ced误拼），真实启动回执handle为`term_d53c0c65-39c8-4edd-af2c-deeb0a842718`（4edd）；随后--run读取的是协调者收件箱，consumer_fenced指该协调者绑定，不能据此重绑接管主控。原attempt按最终停工正证abandon/retain；同Task精确第三接续仅用新注入的真实4edd handle消费自身mail并提交现有clean差额/报告，不重复源码/测试、不访问Run协调者信箱。若新注入handle和真实start回执不一致，原样报给主控，不自行翻译或改身份；第三失败不得新Task绕路。该准确更正解决的是handle抄写，不授予绕过真实Dispatch fence。
 
+D-PRONUNCIATION task_e7422e8b4b77/ctx_4cd075e6a91b已6a97d84源码交付retain；主控复用真实现有`/tmp/manta-wil108-20261007/venv/bin/python`跑两文件pytest：24通过、1旧cache测试失败。失败要求voice.person_version改变必须重配音，与本次人物/声音独立及既有_voice_cache_identity不消费person_version冲突，不能因此把已批准缓存改回耦合。D新QA-V2-D-PRONUNCIATION-CHECK仅在原clean候选6a97d84上复核其父aa2e431相同case的未影响基线，并更新该直接test_voice_clone专项为人物版本不无故失效、真正声音/模型/语言/词典版本仍失效；不改narration/生产代码或删除词典版本断言。直接两文件运行用上述已安装pytest，不下载/服务/模型/用户库；report追加精确复核结果与原false环境阻断纠正，公开Git clean delta，音频听感仍未验。原提交保留不amend。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
