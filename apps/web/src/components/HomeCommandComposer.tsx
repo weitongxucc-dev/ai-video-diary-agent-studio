@@ -373,7 +373,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       {showEntry && !task && !materialContext && pageEntry ? <nav className="assistant-suggestions" aria-label="当前页面建议入口"><p>{pageEntry.label}：以下入口只跳转页面，不会发送对话。</p>{pageEntry.links.map(item => <Link key={item.href} href={item.href}>{item.label}</Link>)}</nav> : null}
       {showEntry && suggestions.length ? <p className="assistant-entry-hint">点击建议只填入草稿，发送后才处理。</p> : null}
       {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
-        {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "尚未选择素材：请从右侧选择整条素材或一个片段。"}
+        {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "当前未选中素材或片段。"}
       </p> : null}
       {materialContext ? <p className="home-composer__context">
         {materialContext.selection
