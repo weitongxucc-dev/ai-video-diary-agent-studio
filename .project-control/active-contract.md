@@ -49,7 +49,9 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
-### B92准备范围：组合修复的API增量入包与实际成片（待准确候选和新Dispatch）
+### B92：组合修复的API增量入包与实际成片
+
+B91 task_1a9de32d4beb / ctx_4cdf9a1f3e03已succeeded，主控审clean a2e2f2cf834578eabe98250b8ca86e7439d9bb86四owned路径及22项真实POSIX/模拟冻结专项；未当实际包通过。UI90/B91机械组合clean2c896f24bad4ff7e2d107edb7ba59a61b33e2749，位置/tmp/main-controller-20261008/ui-v3-integration。相对1767e11运行差额仅database_migrations.py、granted_subprocess.py、server.py；Web/桌面/worker/agent运行blob逐路径未变，允许下面只读复用89已物化Web，不重跑Next。新B92读取本条语义ACK后直接按具名完整候选运行；不需再次用户批准或START。
 
 仅B91净候选经主控审、与UI90机械组合并给出完整SHA后，复用B可见线程启动新B92；当前不是START、不恢复89租约。新owned根/tmp/main-acceptance-20261009/creation92/，冻结新输入；相对1767e11的运行差额只允许已审迁移和冻结入口。主控先证明Web/桌面/worker/agent运行输入未变；B可只读复用89公开已物化Web/依赖，不重复Next构建。仅API按当前PyInstaller spec增量重建一次，再走既有Electron Builder重新生成实际候选身份与arm64 .app；不是将二进制热换进旧包并沿用旧digest。所有缓存/生成物/隔离HOME/XDG/userData/DB/library/output/log均归新根，旧89输入/失败DB/包/证据不覆盖，无模型/浏览器/全局下载、DMG/ZIP/签名/Release/Applications写入。
 
