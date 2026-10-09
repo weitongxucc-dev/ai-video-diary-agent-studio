@@ -323,7 +323,7 @@ def presenter_permit_case(tmp_path, monkeypatch):
     access = MemberDeviceAccess(members)
     actor = permit_actor(members.resolve_member(token), WORKSPACE)
     now = datetime.now(timezone.utc)
-    person, voice, _avatar_auth, _voice_path, _image_path = register_synthetic_profiles(
+    person, voice, _avatar_auth, _voice_path, person_reference_path = register_synthetic_profiles(
         repo, workspace_id=WORKSPACE, member_id=member.member_id, person_id="person", voice_id="voice",
         person_version="v1", voice_version="v1", language="zh", model_id="synthetic-model",
         person_authorization_id="person-auth", voice_authorization_id="voice-auth",
@@ -379,7 +379,8 @@ def presenter_permit_case(tmp_path, monkeypatch):
         verify_identity=access.verify_identity)
     case = SimpleNamespace(repo=repo, task=task, job=job, actor=actor, members=members, member=member,
         access=access, registration=registration, execution=execution, budget=budget, cpu=cpu,
-        person_auth=person_auth, tmp_path=tmp_path, child_identities=[])
+        person_auth=person_auth, person_reference_path=person_reference_path,
+        tmp_path=tmp_path, child_identities=[])
     yield case
     import fcntl
     processes = HostProcessProbe()
@@ -650,7 +651,7 @@ def test_presenter_composition_accounts_for_actual_person_media_and_uses_its_own
         case.repo.save_authorization(replace(case.person_auth, version="v2", status="revoked"))
         with pytest.raises(PermissionError):
             scheduler.assert_grant(grant)
-        with case.repo._connect() as conn, pytest.raises(PermissionError, match="授权已失效"):
+        with case.repo._connect() as conn, pytest.raises(ValueError, match="authorization_revoked"):
             case.registration.owner.render_facts(conn, task, plan)
     finally:
         if grant is not None:
@@ -739,7 +740,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         scheduler.close()
 
 
-@pytest.mark.parametrize("source", ["spoken.wav", "library/person.mp4", "legacy_transform"])
+@pytest.mark.parametrize("source", ["spoken.wav", "person_reference", "legacy_transform"])
 def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_reference(presenter_permit_case, source):
     case = presenter_permit_case
     import os
@@ -752,6 +753,12 @@ def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_refere
         with case.repo._connect() as conn:
             conn.execute("UPDATE transform_runs SET parameters_json=? WHERE id=?",
                          ('{"language":"zh"}', "person-transform"))
+    elif source == "person_reference":
+        from PIL import Image
+        original = case.person_reference_path
+        stat = original.stat()
+        Image.new("RGB", (16, 16), (220, 40, 80)).save(original, format="PNG")
+        os.utime(original, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     else:
         original = case.tmp_path / source
         stat = original.stat()

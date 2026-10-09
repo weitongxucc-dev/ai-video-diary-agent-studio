@@ -179,7 +179,10 @@ def _render_version_fixture(tmp_path):
     scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock", owners=owner,
         resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
                                   released=lambda _grant: True), processes=HostProcessProbe())
-    return repo, task_id, script_id, digest, actor, execution, owner, scheduler, version, members
+    persisted_script = repo.get_creation_task_script("local", script_id)
+    persisted_plan = repo.get_creation_plan("local", plan.id)
+    return (repo, task_id, script_id, revision_digest(persisted_script, persisted_plan),
+            actor, execution, owner, scheduler, version, members)
 
 
 @pytest.mark.parametrize("mutation", ["version", "source", "revoked"])
@@ -1588,7 +1591,8 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
             (json.dumps(asdict(plan), default=str), "local", plan.id))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
-            (json.dumps(asdict(task), default=str), "local", task_id))
+                     (json.dumps(asdict(task), default=str), "local", task_id))
+    digest = revision_digest(repo.get_creation_task_script("local", script_id), plan)
     narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.

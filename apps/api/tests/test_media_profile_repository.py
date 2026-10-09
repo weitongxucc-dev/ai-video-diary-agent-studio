@@ -179,7 +179,7 @@ def test_versioned_media_profiles_survive_restart_and_resolve_task_inputs(tmp_pa
         workspace_id="workspace_a",
         episode_id="episode_a",
         voice_profile_id=voice.id,
-        voice_version=voice.version, viewer_user_id=repository.fixture_owner_id,
+        voice_version=voice.version,
     )
 
     assert inputs.voice == voice

@@ -3124,9 +3124,9 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
     assert workspace_response.status_code == 200, workspace_response.text
     assert workspace_response.json()["person_render_capability"] == {
         "available": False,
-        "model_id": unavailable_provider.model_id,
-        "message": unavailable_provider.message,
-        "repair_action": "配置本地人物口型运行环境后重试。",
+        "model_id": "",
+        "message": "0%人物，本任务不需要口型能力。",
+        "repair_action": None,
     }
 
     response = state.client.post(

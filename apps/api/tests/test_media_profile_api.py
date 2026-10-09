@@ -172,20 +172,31 @@ def test_person_profile_reports_body_reference_source_and_missing_file(
 
     payload["version"] = "person-v2-missing"
     payload["avatar_reference"] = "workspace://approved/removed.mp4"
+    missing_path = write_synthetic_video(library / "approved" / "removed.mp4", seconds=10)
+    missing_stat = missing_path.stat()
+    main_module.production_repo._save_asset(MaterialAsset(
+        id="person-a-removed-video", workspace_id="workspace-a", file_name=missing_path.name,
+        path=str(missing_path), size_bytes=missing_stat.st_size,
+        modified_at=datetime.fromtimestamp(missing_stat.st_mtime, timezone.utc),
+        media_type="video", duration_seconds=10, owner_user_id=client.profile_owner_id,
+    ))
+    payload["reference"] = {"asset_id": "person-a-removed-video"}
     missing = client.post("/api/media/person-profiles", json=payload)
     assert missing.status_code == 200
+    assert missing.json()["body_reference_available"] is True
+    missing_path.unlink()
+    missing = client.get("/api/media/person-profiles/person-a?version=person-v2-missing")
+    assert missing.status_code == 200
     assert missing.json()["body_reference_available"] is False
-    assert missing.json()["body_reference_name"] == "removed.mp4"
-    assert missing.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
+    assert missing.json()["reference"]["asset_id"] == "person-a-removed-video"
+    assert missing.json()["body_reference_reason"] == "参考文件失联或为空，请重新定位原参考"
     assert missing.json()["body_reference_repair_action"]
 
     (library / "approved" / "a-folder.mp4").mkdir()
     payload["version"] = "person-v3-directory"
     payload["avatar_reference"] = "workspace://approved/a-folder.mp4"
     directory = client.post("/api/media/person-profiles", json=payload)
-    assert directory.status_code == 200
-    assert directory.json()["body_reference_available"] is False
-    assert directory.json()["body_reference_reason"] == "工作区里已没有这个人物参考文件。"
+    assert directory.status_code == 422
 
     versions = client.get("/api/media/person-profiles/person-a/versions")
     assert versions.status_code == 200
@@ -194,7 +205,6 @@ def test_person_profile_reports_body_reference_source_and_missing_file(
         "person-v1",
         "person-v1-workspace",
         "person-v2-missing",
-        "person-v3-directory",
     }
     assert by_version["person-v1-workspace"]["body_reference_available"] is True
     assert by_version["person-v2-missing"]["body_reference_available"] is False
