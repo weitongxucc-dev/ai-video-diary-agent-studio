@@ -566,6 +566,18 @@ UI-CI-IDEMPOTENCE已9ed99455 test-only交付并retain，主控组合22130b2，Py
 
 VISIBLE-DIAGNOSTICS已5ddf4c82交付retain、组合22fdcf8；当前owned新包全部27794/27961/27991/28192及58205/32124已释放，原3000和微信32123未动。主控另定位Panel状态矛盾：submit在模型调用前本地执行/new/name/resume/help，但sendDisabled一律!configured，未配置时按钮禁用而Enter会本地执行。原UI新单从22fdcf8，只独占AssistantConversationPanel.tsx及直接Panel/SendControl测试；普通文字服务未配置保持真实阻断，纯本地会话控制/未知命令校验不要求模型，不发送模型，不改backend/hook或F占有的Home文件/CSS。提交、Enter、按钮与禁用/运行原因统一，保持IME/草稿/停止/当前会话身份边界。真实无配置/new/name/resume/help/未知命令、本轮运行与普通消息的必要组件验证，不以模型mock响应代替本地分派；仅owned测试、无服务/GUI/模型/用户数据/远端。单次与F收口后主控组合重建，不重复未变API构建/模型测试。
 
+### QA-V2-UI-DIAGNOSTIC-ENTRY：默认输入动作区收口
+
+LOCAL-CONTROL已0152d92a交付retain、组合8b5ed5c；此前11:34追加的诊断入口位置要求晚于提交，未进入该差额，不从已结案Dispatch恢复写入。原UI终端新单从准确8b5ed5c建立owned review-v2-diagnostic-entry/candidate，唯一写权AssistantConversationPanel.tsx及直接Panel测试。将已受控的技术诊断开关移至会话头部紧凑次要入口，输入动作行保留会话操作、真实停止、状态和发送；保留可访问名称、aria-expanded/controls、默认收起、完整诊断内容。已有CSS可直接复用，不新增共享CSS/Home/API/hooks/锁文件写权。既有三栏/13px/56px和本地命令/输入草稿/IME/停止语义不变，仅已装组件检查，无服务/GUI/模型/用户数据/远端。交clean差额后主控与F单次组合重建及原生截图；组件通过不等于业务路径通过。
+
+### QA-V2-B-FOUNDATION-FACTS：准备事项复用真实读取与资格
+
+Home核验进一步证明foundation路由没有向readiness传当前可信reader/local_diagnostic；readiness用全库默认list_assets聚合，声音参考解析却匿名，且镜头计数绕共同material_segment_eligible。选题实际topic_generator_from_settings按vault.exists/product_hunt_token/topic_source_urls/hermes_radar_path选择能力，readiness却仅按旧profile.source_urls/use_obsidian/use_hermes判据；字段不同本身不算故障，须同一配置在实际生成器和准备状态复现后修正。原B终端新单独立候选准确6ceb0de，唯一写权main.py的foundation读取接线、production.py的readiness、topics.py现有来源配置判据及直接production_foundation/topics测试。保持认证规则，传播既有可信reader，不新增身份/授权回退；聚合仅可读素材/声音，镜头资格复用活跃统一判据，不把失联/已变源/明确限制计为可用。来源准备使用与真实生成器同一配置判据（可提取该既有表达式供两个消费者复用），配置不等于抓取成功，不运行抓取；旧profile布尔不得伪称实际来源可用。保留现有响应字段/错误结构和当前模型实时状态，不改生成/确认/收费/发布/设备队列。不再把旧授权措辞用于普通未登记参考，但主动限制及真实媒体/引擎条件不放宽。
+
+同一准备消费者还须复用现有profile_reference_input验证视频原声/准确片段参考，不以resolve_voice_reference末尾整片WAV解码阻断合法待派生输入；保持reader、源修订、范围及for_generation主动限制/引擎文字条件，派生仍只在实际Grant下执行，不改解析/派生实现或把准备通过称生成成功。
+
+仅owned合成SQLite/WAV/video字节和TestClient，验当前本人/其他成员private/无效身份、同一现配来源与旧字段矛盾、源失联与资格计数、缺参考/缺模型独立事实；无真实用户库、Key、网络抓取/服务/GUI/Pi/模型/下载/远端。保护B99四文件脏树不移动；交clean差额与报告后主控组合并因真实API源码改变重新构建API，未改的模型/媒体质量不重复。问题开放直到相应真实用户路径有证据。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
