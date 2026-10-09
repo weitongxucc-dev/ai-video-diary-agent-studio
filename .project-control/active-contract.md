@@ -538,7 +538,7 @@ root957整Web为849PASS/4FAIL、tsc/ESLint零错误，52既有warnings。两个�
 
 源码整改授权内，主控在两消费者交付和必要检查收口后，将准确组合SHA绑定至owned `/tmp/main-acceptance-20261009/review-v2-final-client/candidate`；不创建Run/自派worker。只复用lock摘要一致的公开依赖的自有APFS副本、已装PyInstaller与arm64 Electron33.4.11，构建Next standalone/API和arm64 dir.app，publish never、无Apple签名/公证/DMG/ZIP/安装或替换用户包。准备不是通过，实际输入digest和源码绑定另回读。
 
-仅主控可运行此新包，固定自有32123 origin与绝对新userData；HOME/XDG/DB/inbox/output/models/temp/agent完全位于同owned runtime，空DB/空inbox/空模型、local auth、scheduled OFF，不复制真实用户配置/Key/媒体/身份或模型。允许原生computer-use查看并操作自己的新PID窗口，合成文字草稿/页面导航/开关创建卡/原生选择器取消等不依赖模型的可见验收；只在确需路径时明确导入client-prep具名合成WAV/video，不能称真实声音/人物质量。业务操作来自GUI，API/SQL只读核对，不绕工具拒绝改DOM/CDP/API写冒称GUI；window_not_focused仅按指南restore一次，仍拒绝则标具体未验，不重复要求用户代按键。无Pi/模型/云/收费/发布/真实资料权限，原3000实例保留。结束正常退出自己的包，并核自有Electron/API/Web子进程与端口释放，持久unknown不手清；原用户包和资料不动。
+仅主控可运行此新包，固定自有32124 origin与绝对新userData（初拟32123在启动前被真实微信开发者工具占用，未启动本包、不碰该进程；主控核可用32124后明确重绑，不自动选端口）；HOME/XDG/DB/inbox/output/models/temp/agent完全位于同owned runtime，空DB/空inbox/空模型、local auth、scheduled OFF，不复制真实用户配置/Key/媒体/身份或模型。允许原生computer-use查看并操作自己的新PID窗口，合成文字草稿/页面导航/开关创建卡/原生选择器取消等不依赖模型的可见验收；只在确需路径时明确导入client-prep具名合成WAV/video，不能称真实声音/人物质量。业务操作来自GUI，API/SQL只读核对，不绕工具拒绝改DOM/CDP/API写冒称GUI；window_not_focused仅按指南restore一次，仍拒绝则标具体未验，不重复要求用户代按键。无Pi/模型/云/收费/发布/真实资料权限，原3000实例保留。结束正常退出自己的包，并核自有Electron/API/Web子进程与端口释放，持久unknown不手清；原用户包和资料不动。
 
 ### QA-V2-D-STANDALONE：实际桌面物化断点
 
@@ -547,6 +547,12 @@ root957整Web为849PASS/4FAIL、tsc/ESLint零错误，52既有warnings。两个�
 ### QA-V2-UI-CI-IDEMPOTENCE：并发测试的合法胜者
 
 PR113首次后端CI真实1982通过/20跳过/1失败：两个Repository实例同时发送同一request_id，合法第二线程抢先提交，旧测试却要求executor输入顺序第一项created=True。原UI终端新单从准确bc37469建立owned review-v2-ci-idempotence/candidate，唯一写权tests/test_conversation_repository.py对应幂等测试。先核生产事务事实；验证返回相同turn且恰好一个created=True、另一项False、用户消息/草稿消费一次、不同内容/范围复用身份拒绝；不按完成顺序猜胜者，不移除并发或只断言状态。至少覆盖两种胜者顺序及重复运行。生产仓储/API/Web无新增写权；若真实事务不满足原不变量，先报证据给主控。仅owned临时SQLite/已装pytest，无模型/服务/用户数据/远端。主控与D物化独立集成；测试-only差额不要求重建未变API/Web二进制。
+
+### QA-V2-UI-VISIBLE-DIAGNOSTICS：新包默认对话区实际显示残差
+
+UI-CI-IDEMPOTENCE已9ed99455 test-only交付并retain，主控组合22130b2，Python3.11两参数通过；D-STANDALONE已1c76af35交付retain并组合6646b19，真实trace物化/ARM dir.app成功。前述写权结束。新包27794实际API/Web ready、首页原生截图证明诊断长文在未操作的默认会话区直接显示，撑高输入区、操作按钮挤成竖排且右侧文字裁切；现有JS DOM断言details无open不能替代真实显示。证据owned runtime/gui-home.json及其截图、gui-home-restored.json；一次restore后coordinate click仍window_not_focused，本次GUI业务动作停止，不记导航/保存通过。
+
+原UI终端新单从准确6646b19创建owned review-v2-visible-diagnostics/candidate，唯一生产写权AssistantConversationPanel.tsx、modern-overrides.css相关共享会话规则和必要EditorShell.module.css对应消费者，以及直接专项测试。先证明显示根因，再统一对话操作/诊断展开、窄栏min-width/换行/滚动及输入/发送布局；默认只有紧凑必要操作，诊断按需可发现且完整可读，不删除真实技术信息/失败或改服务事实。保留批准三栏/13px/56px/右侧壳，禁止大布局重做、猜测fallback或每页一套补丁。可仅用自有静态合成渲染fixture与已装公共Electron/浏览器做CSS复现/像素对比；不运行产品API/Web服务、模型、真实资料或当前27794业务DOM，不将fixture/程序截图冒称真实GUI操作通过。若现有浏览器环境不足，准确说明、不下载；主控负责同候选Web重建/机械打包和新PID原生只读截图。真实交互工具拒绝边界保留，不另走CDP/HTTP业务写来宣称导航或保存成功。
 
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
