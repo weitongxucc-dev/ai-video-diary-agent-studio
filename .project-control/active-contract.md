@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；用户最新要求优先核心对话创作，UI100已源码交付retain；当前仅下方UI105素材标签对话纵向接线和B106最终候选一次打包有效；UI102/B103/B104已源码或核验结案，旧权结束；B99已部分结案retain、账号运行权结束；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；用户最新要求优先核心对话创作，UI100已源码交付retain；当前仅B106最终候选一次打包有效；UI105已交源码并retain，UI102/B103/B104亦已结案，旧源码/核验权结束；B99已部分结案retain、账号运行权结束；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
 
 用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 105：所选素材标签对话纵向接线 | task_c41aa634559e / ctx_3f23fdc0afad；以下UI105；准确a2752976；102旧权结束 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 105：succeeded源码结案并retain | clean7aa1eedd已交并组合；旧源码权结束；真实Pi/GUI未验 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 106：最终核心对话组合包 | task_49d1319cd7a1 / ctx_a0a7c47827a8；以下B106；104旧权结束；99脏树保留 |
 
@@ -53,7 +53,7 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 用户最新指出不止流式四项：选中素材后一句话改标签，右侧实际变更且刷新回读；随后明确飞书仅举例、本人创建应用、本期不做。产品§1.1明确飞书后置，DESIGN§2保留素材对象对话，架构§9只保留未来消息接入方向；auth既有外部身份规则不变。不派飞书源码、配置、凭据或运行工作，不列为本期缺口。UI102仍完成流式/输入/首次开始scope断点，B104实施素材工具；两者写权互斥，随后由同一UI线程接通素材选择/真实写入/工作台与刷新回读。不从本段扩大代码/云/外发权限。
 
-### UI105：素材选择到对话标签写入与右侧回读（MAIN-MATERIAL105-20261009）
+### UI105：素材选择到对话标签写入与右侧回读（已succeeded源码结案，写权结束）
 
 UI102已交clean候选5b2d940d、B104已交clean候选4f1a6503，主控审核并仅在候选集成分支机械组合为a2752976a2293a4dce07bb072fea08b2c00357f9；源码检查不等于真实Pi或GUI通过。两项原写权结束，B保留原脏树与终端。UI105复用同一UI终端，从准确a2752976本地fetch并新建codex/material105-chat-20261009，保护既有成果；不merge main或旧混合分支。
 
@@ -64,6 +64,8 @@ UI102已交clean候选5b2d940d、B104已交clean候选4f1a6503，主控审核并
 owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所选范围、工具真实响应事实投影、组件对应标签刷新和无选择/切换不串对象；允许隔离TestClient/测试库验证现有真实仓储写后GET持久化，不启动网络服务/Pi/Key/GUI/媒体/模型/打包/下载，不读取用户试用数据。提交clean候选、净diff、实际检查、未验证项与后续实际Pi/客户端入口；源级用例不能冒称真实GUI。读取main产品§1.1、DESIGN§2、架构§9与auth成员边界后REBASE_ACK即可施工；最终结案后再具名一次合并实包验收，不重复未受影响的视觉/媒体测试。
 
 ### B106：核心对话组合候选一次本机ARM64测试包（MAIN-CHATPACKAGE106-20261009）
+
+本Dispatch PACKAGE_START准确冻结7aa1eedd7480b45e09561860485eb6a23384005f，源Git为/tmp/main-controller-20261008/ui-v3-integration；UI105已审核并机械ff，根合同不因此取得产品代码写权。
 
 复用保留B终端，原pipefish/platform99脏树原样保护，无产品代码写权。owned仅新/tmp/main-acceptance-20261009/chat106/；依B101已交准备复用B97公开构建依赖/缓存和现有打包流程，不复读或复制私密env/Key、用户DB/设备锁、平台profile或模型。UI105施工期间只准备新的隔离构建目录和非秘密依赖映射；尚无最终候选，不构建。主控审核组合UI105并具名PACKAGE_START准确SHA后，在本新根archive该候选并核源码身份，构建一次该候选Next standalone、PyInstaller API与ARM64 ElectronBuilder目录.app和生成身份；不复用旧Web/API二进制冒称新候选，不运行build.sh的安装步骤，不下载/安装依赖或生成DMG/ZIP/签名/Release。既有依赖不足报真实缺口。
 
