@@ -2042,7 +2042,7 @@ class ProductionRepository:
         if grant_context.grant.workspace_id != profile.workspace_id:
             raise PermissionError("参考派生许可工作区不匹配")
         expected_stages = (("person_render:", "person_edit:") if isinstance(profile, PersonProfile)
-                           else ("narration:",))
+                           else ("narration:", "narration_edit:"))
         if (not ((grant_context.grant.owner_type == "creation_job"
                       and grant_context.grant.unit_key.startswith(expected_stages))
                      or (grant_context.grant.owner_type == "media_preview"
