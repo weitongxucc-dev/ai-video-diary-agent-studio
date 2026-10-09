@@ -109,12 +109,14 @@ def test_voice_provider_requires_wav_and_validates_worker_result(tmp_path):
         )
 
 
-def test_qwen_tts_declares_language_and_pronunciation_limits_before_worker(tmp_path):
+def test_qwen_tts_accepts_pronunciation_rules_and_keeps_language_limits(tmp_path):
     worker_calls = 0
+    seen_requests = []
 
     def responder(request, response_path):
         nonlocal worker_calls
         worker_calls += 1
+        seen_requests.append(request)
         output = Path(request["output_path"])
         _write_wav(output)
         response_path.write_text(
@@ -155,27 +157,32 @@ def test_qwen_tts_declares_language_and_pronunciation_limits_before_worker(tmp_p
         )
         assert failure is not None
         assert (failure.reason, failure.retryable) == ("language_unavailable", False)
-    dictionary_failure = text_to_speech_preflight(
-        provider, language="zh", pronunciation_dictionary=dictionary
-    )
-    assert dictionary_failure is not None
-    assert dictionary_failure.reason == "pronunciation_dictionary_unavailable"
+    assert text_to_speech_preflight(
+        provider, language="en", pronunciation_dictionary=dictionary
+    ) is None
 
-    for language, entries, reason in (
-        ("zh-en", (), "language_unavailable"),
-        ("zh", dictionary, "pronunciation_dictionary_unavailable"),
-    ):
-        with pytest.raises(VoiceCloneError) as exc_info:
-            provider.generate(
-                text="预检不能进入 worker。",
-                reference_audio_path=reference,
-                reference_text="参考文字。",
-                language=language,
-                pronunciation_dictionary=entries,
-                output_path=tmp_path / f"{language}.wav",
-            )
-        assert exc_info.value.failure.reason == reason
-    assert worker_calls == 0
+    with pytest.raises(VoiceCloneError) as exc_info:
+        provider.generate(
+            text="This Codex rule is read aloud.",
+            reference_audio_path=reference,
+            reference_text="原样参考文字",
+            language="zh-en",
+            pronunciation_dictionary=(),
+            output_path=tmp_path / "unsupported.wav",
+        )
+    assert exc_info.value.failure.reason == "language_unavailable"
+    provider.generate(
+        text="This Codex rule is read aloud.",
+        reference_audio_path=reference,
+        reference_text="原样参考文字",
+        language="en",
+        pronunciation_dictionary=dictionary,
+        output_path=tmp_path / "pronounced.wav",
+    )
+    assert seen_requests[0]["text"] == "This Codex rule is read aloud."
+    assert seen_requests[0]["reference_text"] == "原样参考文字"
+    assert seen_requests[0]["pronunciation_dictionary"] == list(dictionary)
+    assert worker_calls == 1
 
 
 def test_narration_generator_enforces_consent_and_uses_safe_output_path(tmp_path):
