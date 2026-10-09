@@ -188,6 +188,9 @@ def test_use_state_is_persisted_and_controls_knowledge_consumption(tmp_path):
     repo.upsert_connector(_connector("workspace-a"))
     source = repo.save_source_items("workspace-a", [_item("workspace-a", "connector_1")])[0]
     repo.set_source_item_use_state("workspace-a", source.id, "excluded")
+    assert repo.list_source_items_for_use(
+        "workspace-a", purpose="reference"
+    ) == []
     with pytest.raises(KeyError):
         repo.get_source_item_for_use("workspace-a", source.id, purpose="reference")
     source = repo.set_source_item_use_state("workspace-a", source.id, "reference_only")
@@ -204,6 +207,12 @@ def test_use_state_is_persisted_and_controls_knowledge_consumption(tmp_path):
     assert repo.get_knowledge_item_for_use(
         "workspace-a", item.id, purpose="understanding", user_id="user-alice"
     ).id == item.id
+    assert [row.id for row in repo.list_knowledge_items_for_use(
+        "workspace-a", purpose="understanding", user_id="user-alice"
+    )] == [item.id]
+    assert repo.list_knowledge_items_for_use(
+        "workspace-a", purpose="media", user_id="user-alice"
+    ) == []
     for purpose in ("media", "publish"):
         with pytest.raises(KeyError):
             repo.get_knowledge_item_for_use(
