@@ -522,6 +522,8 @@ B后端328e201已审，机械组合至准确c64ddecc06d8da5a033203357da8e536c4d2
 
 B后端只读自审msg_a6611c9c25b6提出同工作区其他段artifact元数据也被combine读取；root源确认当前seal只封段与文件修订、仅目标artifact核Task/Script。B当前Task追加唯一creation_execution.py该manifest与直接tests/test_narration_edit_execution.py：逐个真实读取artifact的Task/Script归属及实际消费元数据同次封存，拒绝异Task/旧Script且等待变更不执行，保留来源身份/预算/原音频，不新增全文件hash/第二探测。另仅test_material_edit_qualification.py两个无定义fixture值改真实excluded及usage_role=exclude，并新增use_state=reference_only负例；不得以未知枚举拒绝冒充业务限制已验。此补点可与同一B Web源码在隔离候选串行完成、单独后台叶先交，不阻断F已授权等待消费者；F不改这些文件。其余后台写权仍结束，无新增真实操作许可。
 
+E原消费者审阅已retain。新QA-V2-E-47-COVERAGE只读准确c64ddecc组合与v2新版U/N47入口、GitHub既有九组映射，不遍历全部历史。唯一输出/tmp/main-acceptance-20261009/review-v2-47-coverage/report.md，逐ID记录共同机制、准确活跃消费者符号、已具备源码/明显仍缺/需可见或真实条件验证三类，不把源码当GUI或猜测试覆盖；最多列实际遗漏的必要后续差额，F01/F02与历史只挂接、不重复凑数。B当前补点/Web及F队列测试在工作，审阅不能写他们任何产品/测试或扩大既有API/GUI权限。无测试/常驻服务/模型/用户资料/安装/远端写权；只读必要源码和本次明确报告即可，原错误报告校正保持。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
