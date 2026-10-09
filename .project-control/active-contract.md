@@ -65,7 +65,7 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 目标是用户对话指令→当前任务的真实创作动作→持久作业/版本/可用结果→界面回读。沿现有HomeCommandComposer、CreationTaskWorkspace、assistant_pi、diary_tools和真实API命令链，补上核心流程所需的动作接线，不另建Agent、调度器、通用任意HTTP调用器或前端事实源。优先处理明确“开始制作／生成成片／修改后重新生成／继续制作／取消制作”；核对新建后选题/文案阶段的聊天入口，若现有工具不能推动实际生成选题/文案，按实际缺口复用既有入口。用户明确选题、确认文案等阶段动作只执行一次，不新增二次确认；自然语言编辑仍选择应用到草稿，不自动生成。不得把收到消息/预览/queued写成执行成功或成片已完成。
 
-源码所有权：apps/api/app/assistant_pi.py、apps/api/agent_tools/diary_tools.ts；确有现有接口缺口时apps/api/app/main.py的assistant/creation-task直接接线（不改调度/Grant/cap/持久schema/认证规则）；apps/web/src/components/HomeCommandComposer.tsx、CreationTaskWorkspace.tsx及直接必要lib/api.ts、lib/types.ts；直接已有API assistant与Web消费者测试。不改platform_*、AppShell/CSS/视觉、桌面/依赖、共享文档/Linear/GitHub。新owned /tmp/main-acceptance-20261009/chat100/保存最小报告和证据。按活动产品§4/§9/§11、domain目标阶段与auth§2读必要章节，不读全仓或全部历史。
+源码所有权：apps/api/app/assistant_pi.py、apps/api/agent_tools/diary_tools.ts、apps/api/app/schemas.py中直接assistant请求/响应模型（不是持久schema迁移）；确有现有接口缺口时apps/api/app/main.py的assistant/creation-task直接接线（不改调度/Grant/cap/持久schema/认证规则）；apps/web/src/components/HomeCommandComposer.tsx、CreationTaskWorkspace.tsx及直接必要lib/api.ts、lib/types.ts；直接已有API assistant与Web消费者测试。不改platform_*、AppShell/CSS/视觉、桌面/依赖、共享文档/Linear/GitHub。新owned /tmp/main-acceptance-20261009/chat100/保存最小报告和证据。按活动产品§4/§9/§11、domain目标阶段与auth§2读必要章节，不读全仓或全部历史。
 
 真实操作必须由现有服务端可信成员/工作区和当前任务解析；只允许具名创作动作，不让模型指定任意路径/task/owner，不绕过已确认文案、制作要求、当前输入版本、声音/素材授权或整机许可。已有开始/继续/取消与作业回读接口优先复用；需要用户明确选择的对象不得由模型代确认。没有前提准确给下一步；模型选错或不支持说明具体动作，不能假执行、预先seed状态。没有产品收费，不新增报价/扣费/付费确认；禁止真实发布/删用户数据。
 
