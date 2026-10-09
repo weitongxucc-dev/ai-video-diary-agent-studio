@@ -125,6 +125,8 @@ C来源第一批d16b9c0已交/retain。C新知识核心迁移：从准确f595eaf
 
 会话UI待M5/M6/M7任务错误/历史消费者接续，B待F01/F02 API/Web和范围派生接续，知识H-D006集合布局仍待C后续消费者；定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
 
+F第二单定时入口承诺整改：依用户自主决策授权、产品§2.5及main DESIGN主导航最新条款，定时定义未接执行时普通入口退役、保留只读明确预览；不删除定义、后台接口或0.11真实定时交付目标。F从准确a2e537c的主控组合树到/tmp/main-acceptance-20261009/review-v2-scheduled-preview/candidate新分支codex/review-v2-scheduled-preview-20261009，唯一owned ScheduledTasksWorkspace.tsx/.module.css及直接测试、production/page.tsx仅automations分支。退役普通创建/启动/删除/JSON时间窗/手填内部引用的活跃页面消费者；只读已保存定义显示真实“尚未执行接通”状态，内部字段在按需诊断，保留原数据和业务事实。N25整改证明默认入口与能力一致；N26/27为旧不可依赖编辑消费者退役，不宣称真实排程/时间配置已做通。AppShell主导航及route标签由当前UI唯一写者按同条款改，F不争写，不启动任务/服务/模型/媒体/GUI/打包。不新增开关、模拟任务、倒计时或无效按钮。直接专项核无写API动作、无普通JSON/内部引用输入、数据空/失败/已保存分清；截图统一候选后补。语义REBASE_ACK后实施并交clean/报告，不关闭真实定时交付缺口。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
