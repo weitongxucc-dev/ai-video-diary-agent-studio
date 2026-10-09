@@ -71,6 +71,7 @@ def _verdict(probe: HostResourceProbe, resources: dict) -> bool | None:
     class _Request:
         pass
     request = _Request()
+    request.id = "resource-contract-fixture"
     request.resources = resources
     return probe.admit(request)
 
