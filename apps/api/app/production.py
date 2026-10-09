@@ -396,10 +396,11 @@ _MATERIAL_COVERAGE_TERMS = {
     "镜头:特写": ("镜头:特写", "特写", "close-up"),
 }
 
-def automatic_segment_eligible(asset, segment, workspace_id):
+def material_segment_eligible(asset, segment, workspace_id, *, automation_only=False):
     """Metadata/file qualification; deep decoding remains under the executing Grant."""
     if (asset.workspace_id != workspace_id or asset.review_status == "rejected"
-            or segment.review_status == "rejected" or not material_allows_automation(asset)
+            or segment.asset_id != asset.id or segment.review_status == "rejected"
+            or not (material_allows_automation(asset) if automation_only else material_allows_footage(asset))
             or asset.analysis_status != "ready" or asset.media_type != "video"
             or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
             or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
@@ -413,6 +414,10 @@ def automatic_segment_eligible(asset, segment, workspace_id):
                 and abs(stat.st_mtime - asset.modified_at.timestamp()) < 0.001)
     except OSError:
         return False
+
+
+def automatic_segment_eligible(asset, segment, workspace_id):
+    return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
 
 
 def _material_analysis_public_error(error: Exception) -> str:
@@ -2981,25 +2986,29 @@ class ProductionRepository:
     def save_narration_artifact(
         self,
         artifact: NarrationArtifactRecord,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> NarrationArtifactRecord:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
-                    id = excluded.id,
-                    payload = excluded.payload,
-                    created_at = excluded.created_at
-                """,
-                (
-                    artifact.id,
-                    artifact.workspace_id,
-                    artifact.cache_key,
-                    _json_payload(artifact),
-                    artifact.created_at.isoformat(),
-                ),
-            )
+        if connection is None:
+            with self._connect() as conn:
+                return self.save_narration_artifact(artifact, connection=conn)
+        connection.execute(
+            """
+            INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
+                id = excluded.id,
+                payload = excluded.payload,
+                created_at = excluded.created_at
+            """,
+            (
+                artifact.id,
+                artifact.workspace_id,
+                artifact.cache_key,
+                _json_payload(artifact),
+                artifact.created_at.isoformat(),
+            ),
+        )
         return artifact
 
     def get_media_preview_run(

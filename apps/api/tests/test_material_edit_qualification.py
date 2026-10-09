@@ -5,13 +5,11 @@ import pytest
 
 import app.main as main_module
 from app.montage import creation_task_montage_plan_from_payload
-from test_montage_pipeline import write_synthetic_video
-
-pytest_plugins = ["test_montage_pipeline"]
+from test_montage_pipeline import person_render_edit_state, write_synthetic_video  # noqa: F401
 
 
 @pytest.fixture
-def material_edit_state(person_render_edit_state, tmp_path):
+def material_edit_state(person_render_edit_state, tmp_path):  # noqa: F811 (explicit existing pytest fixture import)
     state = person_render_edit_state
     state.clip = state.montage.clips[1]
     main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
@@ -84,3 +82,55 @@ def test_private_permission_changed_after_preview_cannot_be_confirmed(material_e
     assert response.status_code == 403, response.text
     assert _current(state) == before
     assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+
+
+@pytest.mark.parametrize("operation", ["ReplaceClip", "InsertClip"])
+def test_raw_valid_owned_material_can_be_chosen_and_committed(material_edit_state, operation):
+    state = material_edit_state
+    state.asset.review_status = "raw"
+    for segment in state.asset.segments:
+        segment.review_status = "raw"
+    state.production._save_asset(state.asset)
+    response = _preview(state, operation)
+    assert response.status_code == 200, response.text
+    confirmed = state.client.post(f"{state.base_url}/edits/{response.json()['proposal']['id']}/confirm", json={})
+    assert confirmed.status_code == 200, confirmed.text
+    assert any(clip[1] == state.asset.id for clip in _current(state)[1])
+
+
+@pytest.mark.parametrize("condition", ["rejected", "restricted", "reference", "missing", "changed", "range", "analysis"])
+def test_current_material_qualification_blocks_invalid_source(material_edit_state, condition):
+    state = material_edit_state
+    if condition == "rejected":
+        state.asset.review_status = "rejected"
+    elif condition == "restricted":
+        state.asset.use_state = "unavailable"
+    elif condition == "reference":
+        state.asset.segments[0].usage_role = "reference_only"
+    elif condition == "missing":
+        from pathlib import Path
+        Path(state.asset.path).unlink()
+    elif condition == "changed":
+        from pathlib import Path
+        with Path(state.asset.path).open("ab") as stream:
+            stream.write(b"changed")
+    elif condition == "range":
+        state.asset.segments[0].end_seconds = state.asset.duration_seconds + 1
+    else:
+        state.asset.analysis_status = "failed"
+    state.production._save_asset(state.asset)
+    before = _current(state)
+    response = _preview(state, "ReplaceClip")
+    assert response.status_code == 409, response.text
+    assert _current(state) == before
+
+
+def test_manual_choice_keeps_not_for_automation_but_automatic_list_excludes(material_edit_state):
+    state = material_edit_state
+    state.asset.use_state = "not_for_automation"
+    state.production._save_asset(state.asset)
+    viewer = state.asset.owner_user_id
+    manual = main_module._creation_task_montage_candidates(state.workspace_id, state.montage, state.clip, viewer_user_id=viewer)
+    automatic = main_module._creation_task_montage_candidates(state.workspace_id, state.montage, state.clip, automation_only=True, viewer_user_id=viewer)
+    assert state.asset.id in {item.asset_id for item in manual}
+    assert state.asset.id not in {item.asset_id for item in automatic}

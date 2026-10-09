@@ -262,14 +262,31 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget):
     stat = original.stat()
     if not original.is_file() or stat.st_size <= 0:
         raise ValueError("原配音来源缺失，未安排局部重做")
+    segments = repository.list_narration_segments(task.workspace_id, task.id, script.id)
+    source_audio = []
+    total_duration = 0.0
+    for item in segments:
+        if (item.status != "ready" or item.script_id != script.id or not item.duration_seconds
+                or item.duration_seconds <= 0 or not item.audio_reference):
+            raise ValueError("合并配音存在不可用片段，未安排局部重做")
+        path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, item.audio_reference)
+        info = path.stat()
+        if not path.is_file() or info.st_size <= 0:
+            raise ValueError("合并配音来源缺失，未安排局部重做")
+        source_audio.append([item.id, str(path.resolve()), info.st_size, info.st_mtime_ns,
+                             info.st_ctime_ns, info.st_ino, info.st_dev])
+        total_duration += item.duration_seconds
+    montage = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                  "text_chars": len(section.content) + len(inputs.voice.reference_text),
                  "section_count": 1, "reference_bytes": reference.size_bytes,
-                 "duration_seconds": segment.duration_seconds,
+                 "duration_seconds": total_duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
     manifest = {"operation": operation, "script": asdict(script), "segment": asdict(segment),
                 "voice": asdict(inputs.voice), "reference_input": asdict(reference),
+                "segments": [asdict(item) for item in segments], "source_audio": source_audio,
+                "montage": montage,
                 "rules": [asdict(item) for item in inputs.pronunciation_entries],
                 "model_id": plan.selected_voice.model_id, "language": segment.language,
                 "original_audio": [str(original.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
@@ -756,7 +773,8 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
     """Queue exactly the next persisted stage; repeated submissions reuse one request."""
     if job.status not in {"queued", "interrupted"}:
         return None
-    return scheduler.submit(next_creation_intent(execution.repository, scheduler, job), actor).id
+    intent = next_creation_intent(execution.repository, scheduler, job)
+    return scheduler.submit(intent, actor).id if intent is not None else None
 
 
 def upstream_stage_valid(repository, task, stage):
@@ -776,6 +794,17 @@ def upstream_stage_valid(repository, task, stage):
     return plan.get("script_id") == task.confirmed_script_id and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
 
 
+def montage_waiting_for_confirmation(repository, task):
+    if not task.montage_plan_id:
+        return False
+    try:
+        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
+    except KeyError:
+        return False
+    return (plan.get("script_id") == task.confirmed_script_id
+            and plan.get("status") == "waiting_for_user")
+
+
 def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
     task = repository.get_creation_task(job.workspace_id, job.task_id)
     owner = scheduler.owners
@@ -789,6 +818,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
         stage = "narration"
     elif plan.presenter_share_target and not owner.person_valid(task):
         stage = "person_render"
+    elif montage_waiting_for_confirmation(repository, task):
+        return None  # User confirmation is a business gate, not another work unit.
     elif not upstream_stage_valid(repository, task, "montage_plan"):
         stage = "montage_plan"
     else:
@@ -949,7 +980,8 @@ class CreationJobUnitExecutor:
                 owner = owner.registrations[DEVICE_OWNER_TYPE].owner
             def valid(current):
                 return (owner.person_valid(current) if stage == "person_render"
-                        else upstream_stage_valid(self.repository, current, stage))
+                        else upstream_stage_valid(self.repository, current, stage)
+                        or (stage == "montage_plan" and montage_waiting_for_confirmation(self.repository, current)))
             if not valid(current_task):
                 self.stage_actions[stage](job.workspace_id, job.task_id, context)
             context.check()
@@ -964,7 +996,9 @@ class CreationJobUnitExecutor:
                                if item.status == "ready") if stage == "person_render" else task.montage_plan_id)
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
-                    status="queued", output=output, stage=stage), next_intent=next_intent, actor=original)
+                    status="queued", output=output, stage=stage,
+                    reason="waiting_for_user" if next_intent is None else None),
+                next_intent=next_intent, actor=original)
         except HostResourceRefusal as exc:
             self.last_resource_refusal = exc
             if not exc.recoverable_pressure:
