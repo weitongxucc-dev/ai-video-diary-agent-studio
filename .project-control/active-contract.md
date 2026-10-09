@@ -357,6 +357,18 @@ C新QA-V2-C-SOURCE-TEST-MIGRATION基于3035a25新隔离clone `/tmp/main-acceptan
 
 两单仅测试夹具/断言/规范化，不做产品修复；若失败是实际产品缺口，保留准确case/rootcause并交主控指定源owner，不绕过或私有改生产。均使用临时DB/合成媒体/既有依赖和受控provider，不运行真实模型/App/Pi/用户DB/Key/媒体/账号/常驻服务/安装/远端。必要真实ffmpeg合成解码允许自有/tmp范围，queued与完成不能混淆；源目录read仅故障定位，不扫旧历史。先ACK精确file名单再改，受影响file完整一轮必要pytest和准确Ruff；未影响的PASS复用。报告clean准确SHA/改前实际失败类别/改后行为/残余生产缺口，主控最终CI保留独立验收。
 
+### QA-V2-E-READ-STATE-TEST-MIGRATION / D与UI检查边界补充
+
+D前节测试迁移追加仅tests/test_production_foundation.py（其中旧档案/搜索fixture共享单file，整file唯一D）；不要拆给E造成并行写。同一当前root全API证据依然有效，不重跑全仓。UI会话直接tests/test_assistant_script.py/test_assistant_pi.py归当前UI唯一写者（前者旧保存proof fixture需{}，实际CAS新请求字段也由UI一起消费；后者仅一个无用变量及必要phase2直接变化），E不得写。
+
+E新QA-V2-E-READ-STATE-TEST-MIGRATION精确3035a25 clone `/tmp/main-acceptance-20261009/review-v2-read-state-test-migration/candidate`公开分支codex/review-v2-read-state-test-migration-20261009。唯一owned tests/test_material_search_candidates.py、test_agent_seam_regression.py、test_material_automation_gate.py、test_material_ingestion.py、test_material_speech.py、test_material_tag_navigation.py、test_visual_understanding.py、test_local_model_health.py、test_2_0_foundation.py、test_device_runtime_wiring.py、test_workspace_llm_secrets.py、test_qwen_tts_worker.py（最后仅无用payload）。不得任何生产、main/schema、Web或D/C/UI/B测试，发现真产品缺口只精确上报不得自行扩源。
+
+真实召回权限新契约先身份过滤再排序/limit：旧检索/录入模拟需可信可读owner/member或明确测试所需已共享范围，真实入库fixture需对应模态/范围事实；不得给所有调用local_diagnostic=True或include_private=True兜底、假成员ID绕读，特别私有/撤销负例保持。旧update_segment helper缺required transcript时使用该fixture原片段真实值/明确输入，不为了消错清转写。主体身份/当前use_state和自动资格与手动检索分开，旧默认必须approved的期望按活动权威迁移，明确rejected/排除/不自动仍阻断。
+
+N32运行事实用当前工作区Vault/配置/最近真实探测，未验证配置不是当前调用成功或失败；健康测试需要分未配、待真实验证、最近成功、真实失败/诊断，不把旧全局配置/无工作区mock当用户实况，也不能移除失败/修复证据。设备注册只用当前唯一DeviceRuntime真实新增media_preview业务owner，旧精确集合断言要包含真实注册及owner/executor事实，不放宽any-set。成员Key/Vault用既有内存工具替身，固定模型port替身/合成文本/媒体/临时DB允许，绝不真实Key/AppSupport/用户媒体/模型/Pi/App/API服务/GUI/远端/安装。
+
+先读权威/当前失败日志后REBASE_ACK；只这些已失败files必要pytest一次和Ruff，语义不变lint不需新测试。root完整API日志及精确ruff日志前节路径可定向读，逐rootcause解释既有实现/fixture/待源fix，不机械改所有assert。clean准确SHA/report `/tmp/main-acceptance-20261009/review-v2-read-state-test-migration/report.md`；未修产品fail维持原断言，交主控单写者修。主控最终CI与真机验收独立，受控mock不能证明新真实模型/媒体链通。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
