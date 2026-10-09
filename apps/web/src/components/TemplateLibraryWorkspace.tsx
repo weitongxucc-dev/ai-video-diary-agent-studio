@@ -4,8 +4,9 @@ import Link from "next/link";
 import { ArrowRight, History, Layers3, Library, Search, WifiOff } from "lucide-react";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { setVideoTemplateVisibility } from "@/lib/api";
-import type { ContentVisibility, VideoTemplate } from "@/lib/types";
+import type { ContentTemplate, ContentVisibility, VideoTemplate } from "@/lib/types";
 import styles from "./ProductWorkspace.module.css";
 import own from "./TemplateLibraryWorkspace.module.css";
 
@@ -37,7 +38,8 @@ const emptyCopy: Record<TemplateView, { title: string; hint: string; href: strin
   },
 };
 
-export function TemplateLibraryWorkspace({ offline, templates }: { offline: boolean; templates: VideoTemplate[] }) {
+export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: { offline: boolean; templates: VideoTemplate[]; catalog?: ContentTemplate[] }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [view, setView] = useState<TemplateView>("mine");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -72,10 +74,14 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
   const visible = haystack ? byVersion.filter((item) => item.name.toLowerCase().includes(haystack)) : byVersion;
   const selected = visible.find((item) => `${item.id}:${item.version}` === selectedKey) ?? visible[0];
   const settings = selected?.settings;
+  const creationHref = selected ? `/production?new=1&template_id=${encodeURIComponent(selected.id)}&template_version=${selected.version}` : "";
+  const useLabel = selected?.origin === "built_in" ? "使用此制作结构" : "使用此模板";
   const hasQuery = haystack.length > 0;
   const empty = visible.length === 0;
   const inspector = canAct && selected && settings ? <div className={styles.inspector}>
     <h3>{selected.name} · 第{selected.version}版</h3>
+    <TemplateStructurePreview template={selected} contentTemplate={catalog.find(item => `builtin_${item.template_id}` === selected.id)} />
+    <Link className={styles.primaryButton} href={creationHref}>{useLabel} <ArrowRight size={15} /></Link>
     <dl>
       <div><dt>来源</dt><dd>{selected.source_task_id ? <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原片</Link> : "内置制作结构"}</dd></div>
       <div><dt>文案风格</dt><dd>{settings.style_instruction || "未指定额外风格"}</dd></div>
@@ -99,24 +105,48 @@ export function TemplateLibraryWorkspace({ offline, templates }: { offline: bool
 
   const grid = <div className={styles.templateGrid}>{visible.map((item) => {
     const key = `${item.id}:${item.version}`;
-    const body = <span className={styles.templateCopy}><strong>{item.name} · 第{item.version}版</strong><small>{item.settings.style_instruction || "复用制作设置，用新主题创作"}</small><span>{item.settings.duration_target_seconds} 秒 · {item.settings.fit_mode === "fit" ? "完整显示" : "填满画面"}</span></span>;
+    const body = <span className={styles.templateCopy}><strong>{item.name} · 第{item.version}版</strong><span className={own.structureLabel}>{item.origin === "built_in" ? "制作结构" : "制作模板"}</span><small>{item.settings.style_instruction || "复用制作设置，用新主题创作"}</small><span>{item.settings.duration_target_seconds} 秒 · {item.settings.fit_mode === "fit" ? "完整显示" : "填满画面"}</span><span className={own.structureStrip} aria-label="文案结构预览">{item.settings.script_structure?.join(" → ") || (item.settings.script_section_count ? `${item.settings.script_section_count} 段，按新主题重新撰写` : "按新主题生成")}</span></span>;
     if (!canAct) {
       return <div key={key} className={styles.templateCard} data-offline-inert>{body}</div>;
     }
     const isSelected = selected === item;
-    return <button type="button" key={key} aria-pressed={isSelected} data-open-details onClick={() => setSelectedKey(key)} className={`${styles.templateCard}${isSelected ? ` ${styles.selectedCard}` : ""}`}>{body}</button>;
+    return <button type="button" key={key} aria-pressed={isSelected} onClick={() => { setSelectedKey(key); setDetailsOpen(true); }} className={`${styles.templateCard}${isSelected ? ` ${styles.selectedCard}` : ""}`}>{body}</button>;
   })}</div>;
 
   const emptyStage = hasQuery
     ? <section className={styles.emptyStage}><p>没有找到名称匹配“{trimmed}”的模板。</p><button type="button" onClick={() => setQuery("")}>清除搜索</button></section>
     : <section className={styles.emptyStage}><p>{emptyCopy[view].title} {emptyCopy[view].hint}</p><Link href={emptyCopy[view].href}>{emptyCopy[view].action}</Link></section>;
 
-  return <AppShell inspector={inspector} inspectorTitle="模板详情"><div className={styles.page}>
+  return <AppShell><div className={styles.page}>
     {offline ? <section className={styles.capabilityBanner}><span><WifiOff size={16} /></span><div><strong>暂时无法读取模板</strong><p>请检查本地服务后刷新；已保存的模板暂不可操作。</p></div><Link href="/health">检查运行情况</Link></section> : null}
-    <div className={styles.viewBar}><nav className={styles.tabs} aria-label="模板视图">{views.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-pressed={view === id} className={view === id ? styles.activeTab : undefined} onClick={() => { setView(id); setSelectedKey(null); setQuery(""); }}><Icon size={15} />{label}</button>)}</nav>
+    <div className={styles.viewBar}><nav className={styles.tabs} aria-label="模板视图">{views.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-pressed={view === id} className={view === id ? styles.activeTab : undefined} onClick={() => { setView(id); setSelectedKey(null); setQuery(""); setDetailsOpen(false); }}><Icon size={15} />{label}</button>)}</nav>
       <label className={own.search}><Search size={15} /><input type="search" aria-label="搜索模板名称" placeholder="搜索模板名称…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-      {canAct && selected ? <Link className={styles.primaryButton} href={`/production?new=1&template_id=${encodeURIComponent(selected.id)}&template_version=${selected.version}`}>用这个做 <ArrowRight size={15} /></Link> : null}
+      {canAct && selected ? <><button className={styles.secondaryButton} type="button" onClick={() => setDetailsOpen(true)}>查看详情</button><Link className={styles.primaryButton} href={creationHref}>用这个做 <ArrowRight size={15} /></Link></> : null}
     </div>
     {empty ? (offline ? null : emptyStage) : grid}
-  </div></AppShell>;
+  </div>
+    <HomeCardDialog kind="detail" title="模板详情" open={detailsOpen && canAct && Boolean(selected)} onClose={() => setDetailsOpen(false)} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span><Link className={styles.primaryButton} href={creationHref}>{useLabel} <ArrowRight size={15} /></Link></div> : null}>{inspector}</HomeCardDialog>
+  </AppShell>;
+}
+
+// 文案仅演示已保存的段落结构，不引用用户资料，也不代表预览成片。
+const structureExamples: Record<string, string[]> = {
+  builtin_video_diary: ["今天整理资料时，我发现一个反复出现的问题。", "我记录过程，对比了两种处理方式。", "真正影响效率的是先明确要保留什么。", "下一次先列出目标，再开始整理。"],
+  builtin_tool_review: ["这款工具适合快速整理初稿。", "它把零散笔记整理成可编辑的提纲。", "我用同一份测试资料比较了整理前后的结果。", "重要参数仍需要回到原资料核对。", "需要保留来源、再人工审核的团队可以尝试。"],
+  builtin_product_intro: ["面对这个使用问题，先明确需要解决什么。", "这款产品用于处理资料中描述的场景。", "展示一项已有资料支持的能力与操作过程。", "说明适用对象、条件和限制。", "准备自己的资料，再选择下一步。"],
+  builtin_customer_faq: ["客户问：这个功能应该怎样使用？", "先给出已确认的简短答复。", "展示说明书中的依据和对应条件。", "按已验证的步骤操作，再核对结果。", "遇到例外情况时，补充信息后再判断。"],
+  builtin_customer_case: ["这个案例从一个具体的使用问题开始。", "团队按确认方案完成了这些步骤。", "展示可公开的过程资料与记录。", "引用有出处的结果，并说明限制。", "具备相同条件时，才考虑复用做法。"],
+  builtin_tutorial_demo: ["把一份已有资料整理成可复用的内容。", "先准备资料和明确的目标。", "按目标整理正文与关键参数。", "核对出处，再保存当前版本。", "不要把示例参数当作真实产品事实。", "保存后用新主题重新创作。"],
+};
+
+function TemplateStructurePreview({ template, contentTemplate }: { template: VideoTemplate; contentTemplate?: ContentTemplate }) {
+  const { settings } = template;
+  const sections = settings.script_structure?.length ? settings.script_structure : Array.from({ length: settings.script_section_count ?? 0 }, (_, index) => `第${index + 1}段`);
+  return <section className={own.preview} aria-label="制作结构预览">
+    <h4>制作结构 · 第{template.version}版</h4>
+    <p>{settings.style_instruction || "按本次主题重新撰写。"}</p>
+    {sections.length ? <><small>示例文案 · 展示结构，不是成片</small><ol>{sections.map((section, index) => <li key={`${index}:${section}`}><strong>{section}</strong><p>{structureExamples[template.id]?.[index] ?? `围绕「本次主题」填写${section}的内容，并核对事实出处。`}</p></li>)}</ol></> : <p>此版本未保存固定段落结构，创作时按新主题生成。</p>}
+    {contentTemplate ? <section aria-label="必要输入"><h4>需要准备</h4><ul>{contentTemplate.material_requirements.map(requirement => <li key={requirement}>{requirement}</li>)}</ul></section> : null}
+    <p>需要准备本次主题、可用资料与素材；声音、人物和制作条件将在新任务中核对。</p>
+  </section>;
 }

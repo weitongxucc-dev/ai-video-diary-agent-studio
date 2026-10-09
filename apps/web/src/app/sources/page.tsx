@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, ExternalLink, FileText, Link2, LoaderCircle,
 import Link from "next/link";
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import styles from "./SourcesPage.module.css";
 import {
   createManualSourceItem,
   createSourceConnector,
@@ -71,6 +72,13 @@ function formatFetchTime(value: string | null) {
 }
 
 export default function SourcesPage() {
+  const [entryMode, setEntryMode] = useState<"text" | "file" | "web">("text");
+  const [manualType, setManualType] = useState("text");
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
+  const [subscriptionPlatform, setSubscriptionPlatform] = useState("external_urls");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [savedToKnowledge, setSavedToKnowledge] = useState(false);
   const [connectors, setConnectors] = useState<SourceConnector[]>([]);
   const [items, setItems] = useState<SourceItem[]>([]);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
@@ -106,24 +114,26 @@ export default function SourcesPage() {
 
   async function addConnector(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setBusy("create-connector"); setError(null); setNotice(null);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setBusy("create-connector"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const connector = await createSourceConnector({ platform: String(form.get("platform") ?? ""), protocol: "https", account_or_rule: String(form.get("account_or_rule") ?? ""), frequency: String(form.get("frequency") ?? "每天"), permissions: ["读取公开内容"] });
       setConnectors((current) => [connector, ...current.filter((item) => item.id !== connector.id)]);
       setSelectedConnectorId(connector.id); setNotice("信息源已保存，可执行同步。");
-      event.currentTarget.reset();
+      formElement.reset();
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
 
   async function addManualItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setBusy("manual-item"); setError(null); setNotice(null);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setBusy("manual-item"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, license: String(form.get("license") ?? "使用范围待确认") });
-      setSelectedConnectorId(null); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，确认授权后可保存到知识库。"); event.currentTarget.reset();
+      setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，确认授权后可保存到知识库。"); formElement.reset(); setManualType("text");
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -133,7 +143,7 @@ export default function SourcesPage() {
     // 先记住表单：await 之后 currentTarget 已经失效，reset 会报错。
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    setBusy("web-snapshot"); setError(null); setNotice(null);
+    setBusy("web-snapshot"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const item = await captureWebSnapshot(String(form.get("url") ?? ""));
       // 选中快照自己的连接器，否则列表刷新会跳回第一个旧信息源，快照立刻被刷掉。
@@ -149,8 +159,10 @@ export default function SourcesPage() {
     const formElement = event.currentTarget;
     const input = formElement.elements.namedItem("file") as HTMLInputElement;
     const file = input.files?.[0];
-    if (!file) { setError("请先选择一个 Markdown、文本或 PDF 文件。"); return; }
-    setBusy("import-file"); setError(null); setNotice(null);
+    const validation = validateKnowledgeFile(file);
+    if (!file || validation) { setFileError(validation); return; }
+    setFileError(null);
+    setBusy("import-file"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const buffer = await file.arrayBuffer();
       let binary = "";
@@ -165,13 +177,13 @@ export default function SourcesPage() {
       setSelectedConnectorId(item.connector_id);
       setSelectedItemId(item.id);
       setNotice(`已解析《${item.title}》：全文 ${(item.body ?? "").length} 字，出处 ${item.sections.length} 处，参数 ${item.parameters.length} 项。确认授权后保存到知识库。`);
-      formElement.reset();
+      formElement.reset(); setFileName(null);
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
 
   async function sync(connector: SourceConnector) {
-    setBusy(`sync-${connector.id}`); setError(null); setNotice(null);
+    setBusy(`sync-${connector.id}`); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const response = await syncSourceConnector(connector.id);
       setLastRuns((current) => ({ ...current, [connector.id]: response.run }));
@@ -187,8 +199,8 @@ export default function SourcesPage() {
   async function saveToKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selectedItem) return;
     const form = new FormData(event.currentTarget);
-    setBusy(`save-${selectedItem.id}`); setError(null); setNotice(null);
-    try { await saveSourceItemToKnowledge(selectedItem.id, { ownership: String(form.get("ownership") ?? ""), authorization: String(form.get("authorization") ?? ""), version: String(form.get("version") ?? "1") }); setNotice("已保存到知识库，可在“内容资料”中继续查看。"); }
+    setBusy(`save-${selectedItem.id}`); setError(null); setNotice(null); setSavedToKnowledge(false);
+    try { await saveSourceItemToKnowledge(selectedItem.id, { ownership: String(form.get("ownership") ?? ""), authorization: String(form.get("authorization") ?? ""), version: String(form.get("version") ?? "1") }); setSavedToKnowledge(true); setNotice("已保存到知识库，可在“内容资料”中继续查看。"); }
     catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -197,20 +209,67 @@ export default function SourcesPage() {
     <AppShell inspector={selectedItem ? <SourceItemInspector item={selectedItem} busy={busy} onSave={saveToKnowledge} /> : selectedConnector ? <SourceInspector connector={selectedConnector} lastRun={lastRuns[selectedConnector.id] ?? null} /> : undefined} inspectorTitle={selectedItem ? "信息条目详情" : "信息源详情"}>
       <div className="source-workspace">
         {error ? <section className="source-error" role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>已有信息不会被改写；修复连接、登录或权限后再重试。</p></div></section> : null}
-        {notice ? <p className="source-notice" role="status">{notice}</p> : null}
+        {notice ? <p className="source-notice" role="status">{notice} {savedToKnowledge ? <Link href="/knowledge">查看我的资料</Link> : null}</p> : null}
         <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><Link href="/knowledge">我的资料</Link><span aria-current="page">资料来源</span></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh(selectedConnectorId)} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
-        <section className="source-platforms" aria-label="可连接平台">{platformEntries.map(({ key, label, available, connector }) => <button className={`source-platform${selectedConnectorId === connector?.id ? " is-selected" : ""}`} key={key} onClick={() => connector && setSelectedConnectorId(connector.id)} type="button"><span>{label}</span><small className={available ? "status-success" : "status-warning"}>{connector ? connectorState(connector).label : available ? "可配置" : "尚未支持"}</small></button>)}</section>
-        <div className="source-workspace__grid">
-          <section className="source-panel"><header><h2>已配置信息源</h2><small>{connectors.length} 个</small></header>{loading ? <p className="source-panel__state"><LoaderCircle className="is-spinning" size={16} />正在读取本地服务…</p> : connectors.length ? <div className="source-connector-list">{connectors.map((connector) => { const state = connectorState(connector); const run = lastRuns[connector.id]; return <article className={`source-connector${selectedConnectorId === connector.id ? " is-selected" : ""}`} key={connector.id}><button onClick={() => { setSelectedConnectorId(connector.id); setSelectedItemId(null); }} type="button"><span className={`source-state-dot status-${state.tone}`} /><div><strong>{platformLabel(connector.platform)}</strong><p>{connector.account_or_rule === "user-provided content" ? "由你手工添加的内容" : connector.account_or_rule}</p><small>{state.label} · 最近运行 {run ? formatTime(run.finished_at) : connector.latest_run_id ? "有记录" : "暂无记录"}</small></div></button><button aria-label={`同步 ${platformLabel(connector.platform)}`} className="source-sync-button" disabled={busy === `sync-${connector.id}`} onClick={() => void sync(connector)} type="button"><RefreshCw className={busy === `sync-${connector.id}` ? "is-spinning" : ""} size={14} />同步</button></article>; })}</div> : <Empty icon={<Link2 size={20} />} title="还没有信息源" text="选择平台并填写可访问的地址或规则。" />}</section>
-          <section className="source-panel source-panel--form"><header><h2>添加信息源</h2></header><form onSubmit={addConnector}><label><span>平台</span><select defaultValue="external_urls" name="platform">{platforms.map((platform) => <option key={platform.key} value={platform.key}>{platform.label}{platform.available ? "" : "（尚未支持）"}</option>)}</select></label><label><span>地址或规则</span><input name="account_or_rule" placeholder="粘贴网页地址" required /></label><label><span>同步频率</span><select defaultValue="每天" name="frequency"><option>每天</option><option>每周</option><option>手动</option></select></label><button disabled={busy === "create-connector"} type="submit"><Plus size={15} />保存信息源</button></form></section>
-        </div>
-        <section className="source-manual-entry"><header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF；扫描件会明确报错，不做 OCR 或猜参数。</p></div><span><Upload size={15} />解析全文、出处与参数</span></header><form onSubmit={importFile}><label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf" name="file" required type="file" /></label><button disabled={busy === "import-file"} type="submit"><Upload size={15} />解析并导入</button></form></section>
-        <section className="source-manual-entry"><header><div><h2>网页快照</h2><p>粘贴一个普通网址，保存当时的完整正文、原网址和抓取时间；以后内容更新会另存新版本，旧版本保留。</p></div><span><Link2 size={15} />网页快照</span></header><form onSubmit={captureWebPage}><label><span>网页地址</span><input name="url" placeholder="https://example.com/article" required type="url" /></label><button disabled={busy === "web-snapshot"} type="submit"><Link2 size={15} />抓取网页快照</button></form></section>
-        <section className="source-manual-entry"><header><div><h2>手工添加内容</h2><p>也可以直接登记文字、链接、视频或本机文件引用。</p></div><span><FileText size={15} />手工登记</span></header><form onSubmit={addManualItem}><label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label><label><span>类型</span><select defaultValue="text" name="content_type"><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件</option></select></label><label><span>链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label><label><span>文件引用（可选）</span><input name="file_reference" placeholder="例如：本机导入目录中的文件路径" /></label><label className="source-manual-entry__body"><span>正文或说明（可选）</span><textarea name="body" placeholder="粘贴文字，或说明视频、文件的内容与出处。" rows={3} /></label><label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label><button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button></form></section>
+        <section className={styles.entry} aria-label="添加内容">
+          <nav className={styles.methods} aria-label="添加方式">
+            {([['text', '粘贴文字'], ['file', '导入文件'], ['web', '保存网页']] as const).map(([mode, label]) => <button aria-pressed={entryMode === mode} key={mode} type="button" onClick={() => setEntryMode(mode)}>{label}</button>)}
+          </nav>
+          <section hidden={entryMode !== "text"} className="source-manual-entry">
+            <header><div><h2>粘贴文字</h2><p>保存已有笔记或产品资料，核对后加入知识库。</p></div></header>
+            <form className={styles.entryForm} onSubmit={addManualItem}>
+              <label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label>
+              <label><span>正文</span><textarea name="body" placeholder="粘贴已有资料正文" required={manualType === "text"} rows={5} /></label>
+              <details className={styles.more}><summary>出处与使用范围</summary>
+                <label><span>类型</span><select name="content_type" value={manualType} onChange={event => setManualType(event.target.value)}><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件引用</option></select></label>
+                <label><span>原文链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label>
+                <label><span>文件引用（可选）</span><input name="file_reference" placeholder="已有文件的路径" /></label>
+                <label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label>
+              </details>
+              <button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button>
+            </form>
+          </section>
+          <section hidden={entryMode !== "file"} className="source-manual-entry">
+            <header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF。</p></div></header>
+            <form className={styles.entryForm} onSubmit={importFile}>
+              <label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf" name="file" required type="file" aria-describedby="knowledge-file-state" aria-invalid={Boolean(fileError)} onInvalid={event => { event.preventDefault(); setFileError("请先选择一个 Markdown、文本或 PDF 文件。"); }} onChange={event => {
+                const file = event.target.files?.[0];
+                setFileName(file?.name ?? null);
+                setFileError(file ? validateKnowledgeFile(file) : null);
+              }} /></label>
+              <p id="knowledge-file-state" className={styles.fieldState} role={fileError ? "alert" : "status"}>{fileError ?? (fileName ? `已选择 ${fileName}，可解析并导入。` : "请先选择文件，再解析并导入。")}</p>
+              <button disabled={!fileName || Boolean(fileError) || busy === "import-file"} type="submit"><Upload size={15} />解析并导入</button>
+            </form>
+          </section>
+          <section hidden={entryMode !== "web"} className="source-manual-entry">
+            <header><div><h2>网页快照</h2><p>保存当时的正文、原网址与抓取时间；需登录或无法访问时会说明原因。</p></div></header>
+            <form className={styles.entryForm} onSubmit={captureWebPage}><label><span>网页地址</span><input name="url" placeholder="https://example.com/article" required type="url" /></label><button disabled={busy === "web-snapshot"} type="submit"><Link2 size={15} />抓取网页快照</button></form>
+          </section>
+        </section>
+        <details className={styles.subscriptions} open={subscriptionOpen} onToggle={event => setSubscriptionOpen(event.currentTarget.open)}>
+          <summary>持续订阅与信息源 · 高级</summary>
+          <section className="source-platforms" aria-label="可连接平台">{platformEntries.map(({ key, label, available, connector }) => available ? <button className={`source-platform${subscriptionPlatform === key ? " is-selected" : ""}`} key={key} onClick={() => { setSubscriptionPlatform(key); setSelectedItemId(null); if (connector) setSelectedConnectorId(connector.id); }} type="button"><span>{label}</span><small className="status-success">{connector ? connectorState(connector).label : "可配置"}</small></button> : <div className="source-platform" key={key}><span>{label}</span><small className="status-warning">尚未支持</small></div>)}</section>
+          <div className="source-workspace__grid">
+            <section className="source-panel"><header><h2>已配置信息源</h2><small>{connectors.length} 个</small></header>{loading ? <p className="source-panel__state"><LoaderCircle className="is-spinning" size={16} />正在读取本地服务…</p> : connectors.length ? <div className="source-connector-list">{connectors.map((connector) => { const state = connectorState(connector); const run = lastRuns[connector.id]; return <article className={`source-connector${selectedConnectorId === connector.id ? " is-selected" : ""}`} key={connector.id}><button onClick={() => { setSelectedConnectorId(connector.id); setSelectedItemId(null); }} type="button"><span className={`source-state-dot status-${state.tone}`} /><div><strong>{platformLabel(connector.platform)}</strong><p>{connector.account_or_rule === "user-provided content" ? "由你手工添加的内容" : connector.account_or_rule}</p><small>{state.label} · 最近运行 {run ? formatTime(run.finished_at) : connector.latest_run_id ? "有记录" : "暂无记录"}</small></div></button><button aria-label={`同步 ${platformLabel(connector.platform)}`} className="source-sync-button" disabled={busy === `sync-${connector.id}`} onClick={() => void sync(connector)} type="button"><RefreshCw className={busy === `sync-${connector.id}` ? "is-spinning" : ""} size={14} />同步</button></article>; })}</div> : <Empty icon={<Link2 size={20} />} title="还没有信息源" text="选择平台并填写可访问的地址或规则。" />}</section>
+            <section className="source-panel source-panel--form"><header><h2>添加信息源</h2></header><form className={styles.entryForm} onSubmit={addConnector}>
+              <label><span>平台</span><select name="platform" value={subscriptionPlatform} onChange={event => setSubscriptionPlatform(event.target.value)}>{platforms.filter(platform => platform.available).map(platform => <option key={platform.key} value={platform.key}>{platform.label}</option>)}</select></label>
+              <label><span>地址或规则</span><input name="account_or_rule" placeholder="粘贴网页地址" required /></label>
+              <label><span>同步频率</span><select defaultValue="每天" name="frequency"><option>每天</option><option>每周</option><option>手动</option></select></label>
+              <button disabled={busy === "create-connector"} type="submit"><Plus size={15} />保存信息源</button>
+            </form></section>
+          </div>
+        </details>
         <section className="source-items"><header><h2>{selectedConnector ? `${platformLabel(selectedConnector.platform)}最近获取` : "最近获取"}</h2><small>{items.length} 条</small></header>{loading ? null : items.length ? <div className="source-item-list">{items.map((item) => <button data-open-details className={`source-item${selectedItemId === item.id ? " is-selected" : ""}`} key={item.id} onClick={() => setSelectedItemId(item.id)} type="button"><span className="source-item__type">{{text:"文字",video:"视频",file:"文件",link:"链接"}[item.content_type] ?? "内容"}</span><div><strong>{item.title}</strong><p>{item.body || item.subtitles || item.source_url || item.file_reference || "没有可预览的正文。"}</p><small>{sourceLabel(item.source_label)} · {formatTime(item.created_at)} · {item.license}</small></div><Save size={15} /></button>)}</div> : <Empty icon={<FileText size={20} />} title="还没有信息条目" text="同步已配置的信息源，或手工添加已有内容。" />}</section>
       </div>
     </AppShell>
   );
+}
+
+function validateKnowledgeFile(file: File | undefined): string | null {
+  if (!file) return "请先选择一个 Markdown、文本或 PDF 文件。";
+  if (!/\.(md|markdown|txt|pdf)$/i.test(file.name)) return "请选择 Markdown、文本或 PDF 文件。";
+  if (file.size === 0) return "文件为空，请选择有正文的文件。";
+  return null;
 }
 
 function Empty({ icon, title, text }: { icon: ReactNode; title: string; text: string }) { return <div className="source-panel__empty">{icon}<strong>{title}</strong><p>{text}</p></div>; }
