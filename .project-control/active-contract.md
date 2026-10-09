@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 93：三平台账号只读准备 | task_9434a33b2ebb / ctx_b3f6bc2405eb；仅下方93owned观测，无产品写权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 96：视频号登录页定向补验 | 仅下方96具名新窗口；93旧租约结束，无产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 95：旧资源测试替身补请求ID | task_0f405d34b605 / ctx_fc226a0c7c32；仅下方95单个测试文件，94/92旧权限结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 95：succeeded结案，已retain | task_0f405d34b605 / ctx_fc226a0c7c32；源码/证据保留，无新写权/运行权 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -49,7 +49,15 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
-### UI93：三平台真实账号只读接入与适配证据
+### UI96：视频号登录页定向补验
+
+UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号标签与小红书空file input正证接受，抖音表单/回执、小红书稳定ID/媒体后字段/回执、视频号登录均未验。element_not_found是旧AX快照索引失效，不是权限或策略拒绝，不把它当平台不支持或用户尚未批准。用户本人扫码/账号控件只读批准继续有效。复用UI终端，唯一新root /tmp/main-acceptance-20261009/platform96/ 写准备脚本/非秘密报告与临时证据；仅视频号可以在原93私有微信profile中继续浏览器本机会话写入（保持原workspace/member/platform归属、0700，不复制/导出/迁移会话）。原93另两平台profiles只读保留，不重启。
+
+只读平台运行blob准确2c896f24（与最新4c748df平台目录相同），无产品Git/依赖/共享文档写权；使用已核3.12.13/Playwright1.63.0和现有PlaywrightSessionManager/channel=chrome。开一个官方channels.weixin.qq.com登录新窗口，固定10分钟lease，从fresh页面状态判断当前控件。不要复用已过期AX索引；当前有实际名字的“使用其他头像、昵称或账号”或“加载失败，点击重试”是已批准扫码流程的普通入口/错误恢复，不再问权限。沿现有页面工具在新会话观察实际role/文本/官方iframe host后至多一次登录方式切换、一次明确重试；未发生的旧AX点击不算已执行登录请求。若出现权限/策略拒绝，不切表面绕过；实际一次重试仍失败、验证码、陌生域或新权限则保留具体错误，停止该动作。不得点微信快捷登录、启动/读取桌面微信已有会话、代用户选择账号或确认授权，不运行模型/媒体/产品服务，不下载/改代理/浏览器设置。
+
+二维码实际可见后及时给root临时截图/真实host/窗口，root提示用户本人扫码；扫码后只读账号标识、空上传控件和现有回执入口，不上传/选文件/填草稿/保存/发布。各批消息处理后ACK以取得用户回报。到期或真实拒绝关闭所有自有浏览器/driver并核PID/PGID释放，保留profile，交最小实际结果/未验，不把工具定位失败写成平台能力结论。本次仅补原缺口，不重跑抖音/小红书，不恢复93旧租约。
+
+### UI93：三平台真实账号只读接入与适配证据（已交只读报告，运行权结束）
 
 用户2026-10-09已明确答复“允许账号接入，准备好后提示我扫码”，仅批准新的本机测试Chrome配置打开抖音、小红书、视频号官方创作后台，由用户本人扫码登录，只读核对账号标识、上传控件及已有发布回执页面。不上传/选文件、不填写或保存平台草稿、不点击发布/发送、不修改账号/设置/内容；授权不等于外发批准。此前全局无真实账号条款仅为本条具名范围解除，其他线程无账号操作权。
 
@@ -59,7 +67,9 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 准备/扫码窗口真实显示后发root状态，由root提示用户，worker不反复催问、不自动代替扫码。识别昵称与稳定ID区别，无可读稳定ID/回执则明确缺口；DOM/HTTP/截图/用户扫码回执分别记录，不把本次登入与控件存在标成自动发布通过。逐平台关闭owned浏览器释放PID/PGID，保留profile但不删除会话；实际账号浏览器本轮固定30分钟上限，可完成平台先交结果，未扫码/工具拒绝列未验，不把等待当答案。最终交最小选择器/能力缺口、下步所需适配路径、实际证据和未验到report.md并Task结算，root安排具名产品施工/外发验收。当前B92源冻结不因本只读任务失效。
 
-### B95：CI旧测试替身的请求ID
+### B95：CI旧测试替身的请求ID（已succeeded结案，写权结束）
+
+主控审clean556b4624e646c20f1e6e5e509649ae1351104301的一行测试ID差额及18项原失败专项，机械组合4c748dfc45229b879e9e1daf473b309432899f4c，推草稿PR101并回读head相同；产品blob相对26911a1未变，新CI37867055308待回读。报告/tmp/main-acceptance-20261009/resource95/report.md，测试组释放，Dispatch已retain，无新产品或运行权限。
 
 准确26911a1的CI37866253751前端/桌面通过，后端18失败/1671通过/20跳过：全部18失败来自tests/test_creation_resource_contract.py::_verdict的_Request无id，而真实WorkRequest必有id。主控已读该共用替身及实际AttributeError，不为旧测试添加getattr兜底或改准入契约。复用retain的B终端，从clean26911a1339bfb140c6f01fc3a01bea277ed5d90b建立codex/resource95-test-fixture-20261009，仅apps/api/tests/test_creation_resource_contract.py写权，为该既有替身补明确fixture request ID，不更改断言/删除用例或修改任何产品代码。仅/tmp/main-acceptance-20261009/resource95/隔离HOME/XDG/DB/tmp跑该文件失败的18项，无服务/媒体/模型/Pi/Key/GUI/账号/下载/打包或外部写入；不全量本机检查。交clean候选、净diff、必要结果及未验，主控审/集成/CI回读。UI93账号观察继续，不受纯测试差额影响。
 
