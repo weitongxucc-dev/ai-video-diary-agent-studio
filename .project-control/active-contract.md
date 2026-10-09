@@ -562,6 +562,10 @@ UI-CI-IDEMPOTENCE已9ed99455 test-only交付并retain，主控组合22130b2，Py
 
 从准确6646b19建立owned review-v2-home-facts/candidate，公开身份。必要组件回归覆盖实际zero-filled日序列、非零、时段零但全库有资料、未知/失败、按实际blocker正确修复入口。允许自有静态合成浏览器fixture核CSS/像素，不启动产品API/Web或控制现存主控GUI；不以fixture宣称真实导航/保存已通，无模型/Key/用户库/收费/账号/云/下载/远端。主控负责与UI候选组合、同一Web重新构建及原生截图；47及历史问题保持开放，观察缺陷继续修。
 
+### QA-V2-UI-LOCAL-CONTROL：会话控制不依赖模型连接
+
+VISIBLE-DIAGNOSTICS已5ddf4c82交付retain、组合22fdcf8；当前owned新包全部27794/27961/27991/28192及58205/32124已释放，原3000和微信32123未动。主控另定位Panel状态矛盾：submit在模型调用前本地执行/new/name/resume/help，但sendDisabled一律!configured，未配置时按钮禁用而Enter会本地执行。原UI新单从22fdcf8，只独占AssistantConversationPanel.tsx及直接Panel/SendControl测试；普通文字服务未配置保持真实阻断，纯本地会话控制/未知命令校验不要求模型，不发送模型，不改backend/hook或F占有的Home文件/CSS。提交、Enter、按钮与禁用/运行原因统一，保持IME/草稿/停止/当前会话身份边界。真实无配置/new/name/resume/help/未知命令、本轮运行与普通消息的必要组件验证，不以模型mock响应代替本地分派；仅owned测试、无服务/GUI/模型/用户数据/远端。单次与F收口后主控组合重建，不重复未变API构建/模型测试。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
