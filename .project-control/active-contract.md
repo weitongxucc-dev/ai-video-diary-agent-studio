@@ -35,7 +35,7 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 107：succeeded测试替身结案并retain | cleaneea5f306仅一项测试替身补齐；运行产品blob与7aa相等；旧写权结束 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 109：当前文案确认后对话测试契约 | cleaneea5f306仅一项测试替身补齐；运行产品blob与7aa相等；旧写权结束 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
 | B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 108：隔离实际包API/Pi素材链路 | task_6b2bd981a37c / ctx_12d7b1c70be7；以下B108；B106已结案retain；99脏树保留 |
 
@@ -62,6 +62,12 @@ UI102已交clean候选5b2d940d、B104已交clean候选4f1a6503，主控审核并
 唯一产品写者UI：assistant_pi.py、agent_tools/diary_tools.ts注册与B104接入、main.py素材助手直接入口/授权/结果投影、schemas.py直接素材请求响应；HomeCommandComposer.tsx、MaterialLibraryWorkspace.tsx、lib/api.ts、lib/types.ts及素材/聊天局部样式，最小相关既有测试。B104模块只在真实接线契约缺口时定向修改并说明；不得写AppShell布局、CreationTaskWorkspace无关消费者、领域/DB迁移/Grant/cap/平台/桌面/依赖/共享文档/GitHub/Linear，不实现飞书。所有源码以准确组合基线为准，不回退已交流式和输入行为。
 
 owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所选范围、工具真实响应事实投影、组件对应标签刷新和无选择/切换不串对象；允许隔离TestClient/测试库验证现有真实仓储写后GET持久化，不启动网络服务/Pi/Key/GUI/媒体/模型/打包/下载，不读取用户试用数据。提交clean候选、净diff、实际检查、未验证项与后续实际Pi/客户端入口；源级用例不能冒称真实GUI。读取main产品§1.1、DESIGN§2、架构§9与auth成员边界后REBASE_ACK即可施工；最终结案后再具名一次合并实包验收，不重复未受影响的视觉/媒体测试。
+
+### UI109：确认文案后的任务对话测试契约更新（MAIN-SCRIPT109-20261009）
+
+PR102后端CI唯一失败test_assistant_script.py::test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted：旧用例在确认文案后断言六个context_stage一律409；UI102已按用户核心聊天要求开放当前narration任务范围无选中对象的只读/开始对话，不能再全禁。旧mock始终回script_id导致该允许轮被当编辑提案验证而失败；前面的文案草稿、未确认、来源、历史及Key拒绝已通过。不是给生产新增兜底或恢复旧禁令。
+
+复用UI原终端，基于准确clean eea5f306建立codex/script109-test-contract-20261009。唯一写权apps/api/tests/test_assistant_script.py，保持确认文案后禁止script-draft写入与script/topic/不匹配未来阶段拒绝，确认文案ID不变；给新允许的当前narration无对象对话一个合法只读无提案替身，验证200、不返回新script_draft/编辑提案、正确新增两条对话历史。不得靠删除断言掩盖既有不变量；仅调整已批准开始对话对应旧断言，不改产品/类型/依赖、无服务/Pi/GUI/打包。跑此已有测试文件及diff-check，owned /tmp/main-acceptance-20261009/script109/交clean候选/净diff/实际检查；缺口若并非测试旧契约，报告主控而不扩大产品写权。B108运行包冻结不动，根机械集成且证明运行产品blob相等，不重建。
 
 ### B108：新包实际API/Pi素材原子验证（MAIN-MATERIAL108-20261009）
 
