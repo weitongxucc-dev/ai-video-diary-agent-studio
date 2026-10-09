@@ -49,6 +49,14 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
+### B92准备范围：组合修复的API增量入包与实际成片（待准确候选和新Dispatch）
+
+仅B91净候选经主控审、与UI90机械组合并给出完整SHA后，复用B可见线程启动新B92；当前不是START、不恢复89租约。新owned根/tmp/main-acceptance-20261009/creation92/，冻结新输入；相对1767e11的运行差额只允许已审迁移和冻结入口。主控先证明Web/桌面/worker/agent运行输入未变；B可只读复用89公开已物化Web/依赖，不重复Next构建。仅API按当前PyInstaller spec增量重建一次，再走既有Electron Builder重新生成实际候选身份与arm64 .app；不是将二进制热换进旧包并沿用旧digest。所有缓存/生成物/隔离HOME/XDG/userData/DB/library/output/log均归新根，旧89输入/失败DB/包/证据不覆盖，无模型/浏览器/全局下载、DMG/ZIP/签名/Release/Applications写入。
+
+新包真实API/Web启动及全新裸DB/合法本机成员/设备/可信owner，复用89只读五秒本人音视频作为输入，确认单段文案、纯素材0%测试要求、实际录音save→explicit adopt→预检→DeviceRuntime/Grant制作故事板/成片→一个普通可撤销精确修改及undo/redo→仅重出→当前视频读取/保存。输入语义/听感未核保持未验；默认20%不改，不seed Narration/故事板/输出、不跨许可。只用原89有限录音CPU实验caps，fresh swap基线+64MiB；不抬阈值、不运行Qwen/人物/Pi/平台/Key或真实用户库。本阶段重处理串行、既有FFmpeg每步60秒/一线程/15秒成片/8MiB输出等89上限继续；首次服务起固定20分钟租约，不自动续租。
+
+允许新包必要native GUI一次代表任务/保存截图；window_not_found先fresh list-windows核实际selector，window_not_focused按当前工具规范最多一次恢复，失败仅具体验收项未验，不CDP或API冒称GUI、不重复让用户按键/拖窗。API和文件链继续。正常停止仅登记自有PID/PGID，核全部释放。若真实失败，交首因及最小建议，不热修冻结副本/手工清许可锁/反复重试。报告同时列实际包身份、源复用证明、媒体文件与版本及GUI证据类别，主控审核后结算；完整模型/人物/三平台仍未验。
+
 ### UI90：CI37862398673的迁移与旧测试替身缺口
 
 task_1e35130530df / ctx_302e5db92ca5已succeeded，交clean5da2fbbfd52b77d049e51503f1e0b4186d806fd0，5授权路径+48/-6。主控审核缺表时重放原v4真实schema后执行v15，保留实际已有generated身份；迁移5/Webm1/Web7专项通过。主控机械集成c446d60，逐blob仅两已批准权威文档与执行源不同。原UI终端retain，下面施工条款只供证据索引，不提供新写权。此前Corepack启动提示如实记录，已停该路径并使用已有Node/Vitest完成专项，无锁/依赖变更。
