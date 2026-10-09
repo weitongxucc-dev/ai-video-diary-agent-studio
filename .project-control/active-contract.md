@@ -407,6 +407,14 @@ B前preview已69a4f85 succeeded/retain源权结束，C当前唯一production.py�
 
 本单只有源码与临时DB/可信合成Task/媒体来源/受控Provider与DeviceRuntime/资源替身专项许可：等待零执行、成功精确回读一次、重复/跨空间/错grant/旧时间线/声音撤销/失败取消/恢复未知不改旧版本、实际checkpoint绑定。sourcefixture是owned临时输入，不是真模型/已出片/GUI；不启动App/API/Pi/模型/真实Key/用户DB/媒体/账号/外发/收费/安装/远端。必要本单专项+Ruff，前音频/人员35/26/8及未影响checks不重跑。交clean精确SHA/report `/tmp/main-acceptance-20261009/review-v2-narration-edit/report.md`，源+接口+GUI未验分开，持续完成当前独立阶段。
 
+### 当前来源修订事实与N14独立审阅
+
+B阶段1输入按现有ProfileReferenceInput完整identity封登记来源与size/mtime_ns/ctime_ns/inode/device、固定档案版本/范围；该identity是事实摘要，不称文件字节SHA。已有持久素材hash仅在已存在且与同次登记修订一致时采用；未具备hash不编造，也不为普通保存新增全文件hash、解码或第二入库流程。当前阶段1不因缺hash停其它独立源码，阶段2仍使用相同Grant下materialize_reference的实际输入核验/派生与前后来源修订再核；与现有来源检查点的字段扩充只能由production.py唯一负责人具名接入，不由B越界。声音narration_edit专属许可的materialize入口由主控在C生产文件释放后再指定，不借person许可，也不声称当前完整范围生成已通。
+
+C阶段1f76021d已worker_done/retain，阶段2需UI-CAS准确完成后新Dispatch显式释放；不向已结束Dispatch发送施工，不先组合仍有可选旧版本写接口的阶段1。其独立tag叶72341dd已组合4d4cee2，原失败及不丢标签专项2PASS；健康叶232c0b已组合2147b83，13PASS与Ruff复用，不关GUI问题。
+
+E新QA-V2-E-REPLY-SCRIPT-REVIEW只读审阅C clean f76021d候选及main当前产品2.1/领域5与7.5/DESIGN2、实际main.py/Agent的update/confirm调用；唯一输出/tmp/main-acceptance-20261009/review-v2-reply-script-review/report.md，不改C产品或测试/共享文档/GitHub。重点真实会话来源还需HTTP校验、当前读者/空间/use_state/固定版本、现有事实依据确认规则是否被新reply旁路削弱、稳定请求重复与当前撤销/修订关系、阶段2必须退役的无条件写消费者，按具体证据给阻断/建议/已证实三类，不因未接Phase2就假报已完成产品故障。不运行测试/模型/App/用户库/Key/媒体/服务/GUI/远端，不复制dirty UI，C阶段2实施仍唯一C。先REBASE_ACK后定向读、报告完成结算；主控审阅决定是否授权修订。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
