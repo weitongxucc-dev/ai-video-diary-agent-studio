@@ -544,6 +544,10 @@ root957整Web为849PASS/4FAIL、tsc/ESLint零错误，52既有warnings。两个�
 
 主控在准确bc37469的owned ARM候选上完成Next/API生产构建；现有bundle-standalone.js随后真实ENOENT：Next的standalone只追踪next/react等运行依赖，脚本却遍历Web package.json全部开发输入，首个缺失@supabase/ssr导致中断。原D终端新单从bc37469 clone至owned review-v2-standalone/candidate，唯一源码写权apps/desktop/scripts/bundle-standalone.js及直接专项脚本测试。以实际standalone已追踪依赖为打包事实源，保留所有真实运行依赖、static/public及传递依赖物化；真实断链/缺必需Next/react必须明确失败，不补开发依赖或静默猜测回退。测试实际追踪子集、缺失必需项、断链和生成树无symlink；不得修改Web/API业务、锁文件、身份算法或共享权威。可在准确同候选复用主控已产出的owned .next/standalone，只运行物化/模块解析，不下载/运行模型/启动服务/GUI/用户数据/远端。交clean差额及必要证据后主控机械组合、刷新输入身份、继续dir.app构建；已有Next/API源码未改变则复用对应构建，不重复模型或业务测试。
 
+### QA-V2-UI-CI-IDEMPOTENCE：并发测试的合法胜者
+
+PR113首次后端CI真实1982通过/20跳过/1失败：两个Repository实例同时发送同一request_id，合法第二线程抢先提交，旧测试却要求executor输入顺序第一项created=True。原UI终端新单从准确bc37469建立owned review-v2-ci-idempotence/candidate，唯一写权tests/test_conversation_repository.py对应幂等测试。先核生产事务事实；验证返回相同turn且恰好一个created=True、另一项False、用户消息/草稿消费一次、不同内容/范围复用身份拒绝；不按完成顺序猜胜者，不移除并发或只断言状态。至少覆盖两种胜者顺序及重复运行。生产仓储/API/Web无新增写权；若真实事务不满足原不变量，先报证据给主控。仅owned临时SQLite/已装pytest，无模型/服务/用户数据/远端。主控与D物化独立集成；测试-only差额不要求重建未变API/Web二进制。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
