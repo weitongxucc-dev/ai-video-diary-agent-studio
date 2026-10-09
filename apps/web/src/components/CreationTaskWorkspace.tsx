@@ -646,14 +646,17 @@ function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: { taskId: 
     return () => { active = false; };
   }, [taskId]);
   async function saveDraft() {
+    const submittedDraft = draft;
     setSavingDraft(true); setDraftError(null);
     try {
       const saved = await saveAssistantScriptDraft(taskId, {
-        title: draft.title,
-        sections: draft.sections,
-        expected_updated_at: draft.updated_at,
+        title: submittedDraft.title,
+        sections: submittedDraft.sections,
+        expected_updated_at: submittedDraft.updated_at,
       });
-      setDraft(saved);
+      setDraft((current) => current === submittedDraft
+        ? saved
+        : { ...current, updated_at: saved.updated_at });
     } catch (cause) {
       setDraftError(cause instanceof Error ? cause.message : "草稿没有保存成功；当前编辑内容仍保留在本页。");
     } finally { setSavingDraft(false); }

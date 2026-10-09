@@ -680,6 +680,52 @@ describe("CreationTaskWorkspace", () => {
     })));
   });
 
+  it("keeps edits made during draft save and uses the returned version for the next save", async () => {
+    const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, confirmed_script_id: null };
+    const draft: WorkspaceState["scripts"][number] = {
+      id: "late-edit-draft", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
+      title: "待确认文案", language: "zh-CN", selection_status: "draft",
+      created_at: task.created_at, updated_at: "v1", confirmed_at: null,
+      sections: [{ id: "section-1", title: "开头", content: "提交时正文",
+        visual_prompt: "提交时画面", evidence_reference_ids: ["source:one"] }],
+    };
+    const initial = workspace(task);
+    initial.scripts = [draft];
+    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [
+      { reference_id: "source:one", title: "资料一", text: "第一份资料" },
+      { reference_id: "source:two", title: "资料二", text: "第二份资料" },
+    ] });
+    let resolveSave!: (saved: typeof draft) => void;
+    mocks.saveScriptDraft.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const content = await screen.findByRole("textbox", { name: "第 1 段正文" });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(mocks.saveScriptDraft).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      expected_updated_at: "v1",
+      sections: [expect.objectContaining({ content: "提交时正文", visual_prompt: "提交时画面", evidence_reference_ids: ["source:one"] })],
+    })));
+
+    fireEvent.change(content, { target: { value: "保存期间新正文" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), { target: { value: "保存期间新画面" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "资料二" }));
+    const saved = { ...draft, updated_at: "v2" };
+    await act(async () => resolveSave(saved));
+
+    expect(screen.getByRole("textbox", { name: "第 1 段正文" })).toHaveValue("保存期间新正文");
+    expect(screen.getByRole("textbox", { name: "第 1 段画面建议" })).toHaveValue("保存期间新画面");
+    expect(screen.getByRole("checkbox", { name: "资料一" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "资料二" })).toBeChecked();
+
+    mocks.saveScriptDraft.mockResolvedValueOnce({ ...draft, updated_at: "v3" });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(mocks.saveScriptDraft).toHaveBeenLastCalledWith(task.id, expect.objectContaining({
+      expected_updated_at: "v2",
+      sections: [expect.objectContaining({ content: "保存期间新正文", visual_prompt: "保存期间新画面", evidence_reference_ids: ["source:one", "source:two"] })],
+    })));
+  });
+
   it("streams the real task action, keeps Space/Shift+Enter/IME Enter in the input, then restores focus", async () => {
     const initial = subtitleCoverWorkspace();
     const queued = queueStatus("queued");
