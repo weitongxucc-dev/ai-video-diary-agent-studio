@@ -267,6 +267,33 @@ describe("HomeWorkspace", () => {
     expect(stage).toHaveTextContent("素材被数据盘阻塞 2");
   });
 
+  it("keeps a current repair action visible when the task still has a ready local output", () => {
+    const readyButFailedTask: CreationTask = {
+      ...task,
+      id: "task-one",
+      stage_status: "failed",
+      status: "failed",
+      output_ready: true,
+      stage_reason: "新版本输出检查失败",
+      stage_impact: "已有成片仍可查看",
+      stage_repair_action: "选择可写位置后重试",
+    };
+    const withTodo = {
+      ...home,
+      entries: {
+        ...home.entries,
+        todos: [{ task_id: "task-one", title: "设备演示", stage: "视频剪辑", reason: "新版本输出检查失败", repair_action: "选择可写位置后重试" }],
+      },
+    };
+    render(<HomeWorkspace foundation={null} live={{ data: withTodo, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[readyButFailedTask]} />);
+
+    const todos = screen.getByRole("heading", { name: "需要处理" }).closest("section") as HTMLElement;
+    expect(within(todos).getByRole("link", { name: /设备演示/ })).toHaveTextContent("新版本输出检查失败");
+    expect(within(todos).getByRole("link", { name: /设备演示/ })).toHaveTextContent("选择可写位置后重试");
+    const works = screen.getByRole("heading", { name: "近期成果" }).closest("section") as HTMLElement;
+    expect(within(works).getByRole("link", { name: /设备演示.*本地成片/ })).toHaveAttribute("href", "/tasks/task-one");
+  });
+
   it("keeps a real retry action when a later read fails, and shows loading before any data", async () => {
     const onRetry = vi.fn();
     const { rerender } = render(<HomeWorkspace foundation={null} live={{ data: null, loading: true, error: null, days: 7, onDays: vi.fn(), onRetry }} tasks={[]} />);

@@ -156,7 +156,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
     ...(home?.entries.works ?? []),
     ...readyOutputTasks.filter((task) => !workIds.has(task.id)).map((task) => ({ task_id: task.id, title: task.name, updated_at: task.updated_at })),
   ];
-  const homeTodos = (home?.entries.todos ?? []).filter((item) => !readyOutputIds.has(item.task_id));
+  const homeTodos = home?.entries.todos ?? [];
   const homeQueue = (home?.entries.queue ?? []).filter((item) => !todoIds.has(item.task_id) && !workIds.has(item.task_id) && !readyOutputIds.has(item.task_id));
   const filteredExampleAssets = dashboard?.assets.filter((asset) => selectedFilter?.kind === "industry" ? asset.industry === selectedFilter.key : asset.tags.includes(selectedFilter?.key ?? "")) ?? [];
   const trendRangePicker = <div aria-label="趋势范围" className={styles.range}><button aria-pressed={range === 7} onClick={() => { setRange(7); live?.onDays(7); }} type="button">7 天</button><button aria-pressed={range === 30} onClick={() => { setRange(30); live?.onDays(30); }} type="button">30 天</button></div>;
