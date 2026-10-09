@@ -10,11 +10,13 @@ import {
   createSourceConnector,
   captureWebSnapshot,
   importKnowledgeFile,
+  listKnowledgeItems,
   listSourceConnectors,
   listSourceItems,
   saveSourceItemToKnowledge,
   sourceErrorMessage,
   SourceApiError,
+  type ContentUseState,
   SourceConnector,
   SourceItem,
   SourceRun,
@@ -132,7 +134,8 @@ export default function SourcesPage() {
     const form = new FormData(formElement);
     setBusy("manual-item"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
-      const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, license: String(form.get("license") ?? "使用范围待确认") });
+      const license = String(form.get("license") ?? "").trim();
+      const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, ...(license ? { license } : {}), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
       setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，可查看正文并保存到知识库。"); formElement.reset(); setManualType("text");
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
@@ -145,7 +148,7 @@ export default function SourcesPage() {
     const form = new FormData(formElement);
     setBusy("web-snapshot"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
-      const item = await captureWebSnapshot(String(form.get("url") ?? ""));
+      const item = await captureWebSnapshot({ url: String(form.get("url") ?? ""), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
       // 选中快照自己的连接器，否则列表刷新会跳回第一个旧信息源，快照立刻被刷掉。
       setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id);
       setNotice("网页正文已存为快照，可查看正文并保存到知识库。");
@@ -157,6 +160,7 @@ export default function SourcesPage() {
   async function importFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const input = formElement.elements.namedItem("file") as HTMLInputElement;
     const file = input.files?.[0];
     const validation = validateKnowledgeFile(file);
@@ -171,7 +175,7 @@ export default function SourcesPage() {
       for (let index = 0; index < bytes.length; index += chunk) {
         binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
       }
-      const item = await importKnowledgeFile({ filename: file.name, content_base64: btoa(binary) });
+      const item = await importKnowledgeFile({ filename: file.name, content_base64: btoa(binary), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
       setItems((current) => [item, ...current]);
       // 列表按当前平台筛选，导入后要落在文件所属的来源上。
       setSelectedConnectorId(item.connector_id);
@@ -198,9 +202,13 @@ export default function SourcesPage() {
 
   async function saveToKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selectedItem) return;
-    const form = new FormData(event.currentTarget);
     setBusy(`save-${selectedItem.id}`); setError(null); setNotice(null); setSavedToKnowledge(false);
-    try { await saveSourceItemToKnowledge(selectedItem.id, { ownership: String(form.get("ownership") ?? ""), authorization: String(form.get("authorization") ?? ""), version: String(form.get("version") ?? "1") }); setSavedToKnowledge(true); setNotice("已保存到知识库，可在“内容资料”中继续查看。"); }
+    try {
+      const saved = await saveSourceItemToKnowledge(selectedItem.id, {});
+      const { items: knowledgeItems } = await listKnowledgeItems();
+      if (!knowledgeItems.some((item) => item.id === saved.id)) throw new Error("保存请求已返回，但回读未确认这条资料；原信息条目仍保留，可重试。");
+      setSavedToKnowledge(true); setNotice("已回读确认保存到知识库，可在“内容资料”中继续查看。");
+    }
     catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -224,7 +232,8 @@ export default function SourcesPage() {
                 <label><span>类型</span><select name="content_type" value={manualType} onChange={event => setManualType(event.target.value)}><option value="text">文字</option><option value="link">链接</option><option value="video">视频</option><option value="file">文件引用</option></select></label>
                 <label><span>原文链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label>
                 <label><span>文件引用（可选）</span><input name="file_reference" placeholder="已有文件的路径" /></label>
-                <label><span>授权/使用范围</span><input defaultValue="使用范围待确认" name="license" required /></label>
+                <label><span>来源许可记录（可选）</span><input name="license" placeholder="记录来源中已有的许可说明" /></label>
+                <UseStateField />
               </details>
               <button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button>
             </form>
@@ -238,12 +247,13 @@ export default function SourcesPage() {
                 setFileError(file ? validateKnowledgeFile(file) : null);
               }} /></label>
               <p id="knowledge-file-state" className={styles.fieldState} role={fileError ? "alert" : "status"}>{fileError ?? (fileName ? `已选择 ${fileName}，可解析并导入。` : "请先选择文件，再解析并导入。")}</p>
+              <UseStateField />
               <button disabled={!fileName || Boolean(fileError) || busy === "import-file"} type="submit"><Upload size={15} />解析并导入</button>
             </form>
           </section>
           <section hidden={entryMode !== "web"} className="source-manual-entry">
             <header><div><h2>网页快照</h2><p>保存当时的正文、原网址与抓取时间；需登录或无法访问时会说明原因。</p></div></header>
-            <form className={styles.entryForm} onSubmit={captureWebPage}><label><span>网页地址</span><input name="url" placeholder="https://example.com/article" required type="url" /></label><button disabled={busy === "web-snapshot"} type="submit"><Link2 size={15} />抓取网页快照</button></form>
+            <form className={styles.entryForm} onSubmit={captureWebPage}><label><span>网页地址</span><input name="url" placeholder="https://example.com/article" required type="url" /></label><UseStateField /><button disabled={busy === "web-snapshot"} type="submit"><Link2 size={15} />抓取网页快照</button></form>
           </section>
         </section>
         <details className={styles.subscriptions} open={subscriptionOpen} onToggle={event => setSubscriptionOpen(event.currentTarget.open)}>
@@ -274,6 +284,10 @@ function validateKnowledgeFile(file: File | undefined): string | null {
 
 function Empty({ icon, title, text }: { icon: ReactNode; title: string; text: string }) { return <div className="source-panel__empty">{icon}<strong>{title}</strong><p>{text}</p></div>; }
 
+function UseStateField() {
+  return <label><span>保存后的使用范围</span><select defaultValue="available" name="use_state"><option value="available">可正常使用</option><option value="reference_only">仅作参考，不直接进入成片</option><option value="excluded">排除，不用于检索、生成或成片</option><option value="not_for_automation">不进入自动选片，可由我手动选择</option><option value="not_for_publish">可制作预览，不进入发布产物</option></select></label>;
+}
+
 function SourceInspector({ connector, lastRun }: { connector: SourceConnector | null; lastRun: SourceRun | null }) {
   if (!connector) return <p className="source-inspector-empty">选择一个信息源或信息条目，查看来源、授权与可执行操作。</p>;
   const state = connectorState(connector);
@@ -281,5 +295,5 @@ function SourceInspector({ connector, lastRun }: { connector: SourceConnector | 
 }
 
 function SourceItemInspector({ item, busy, onSave }: { item: SourceItem; busy: string | null; onSave: (event: FormEvent<HTMLFormElement>) => Promise<void> }) {
-  return <div className="source-inspector"><span className="source-inspector__status">信息条目</span><h3>{item.title}</h3><dl><div><dt>来源</dt><dd>{sourceLabel(item.source_label)}</dd></div><div><dt>原始地址</dt><dd>{item.source_url ? <a href={item.source_url} rel="noreferrer" target="_blank">打开原文 <ExternalLink size={12} /></a> : "无"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div>{item.fetched_at ? <div><dt>抓取时间</dt><dd>{formatFetchTime(item.fetched_at)}</dd></div> : null}<div><dt>当前使用范围</dt><dd>{item.license}</dd></div></dl><form className="source-save-form" onSubmit={(event) => void onSave(event)}><h4>保存到知识库</h4><label><span>归属</span><input defaultValue="我的内容" name="ownership" required /></label><label><span>授权/使用范围</span><input defaultValue={item.license === "unknown" ? "使用范围待确认" : item.license} name="authorization" required /></label><label><span>版本</span><input defaultValue="1" name="version" required /></label><button disabled={busy === `save-${item.id}`} type="submit"><CheckCircle2 size={14} />保存到知识库</button></form></div>;
+  return <div className="source-inspector"><span className="source-inspector__status">信息条目</span><h3>{item.title}</h3><dl><div><dt>来源</dt><dd>{sourceLabel(item.source_label)}</dd></div><div><dt>原始地址</dt><dd>{item.source_url ? <a href={item.source_url} rel="noreferrer" target="_blank">打开原文 <ExternalLink size={12} /></a> : "无"}</dd></div><div><dt>文件引用</dt><dd>{item.file_reference || "无"}</dd></div>{item.fetched_at ? <div><dt>抓取时间</dt><dd>{formatFetchTime(item.fetched_at)}</dd></div> : null}<div><dt>来源许可记录</dt><dd>{item.license === "unknown" ? "未记录" : item.license}</dd></div></dl><form className="source-save-form" onSubmit={(event) => void onSave(event)}><h4>保存到知识库</h4><button disabled={busy === `save-${item.id}`} type="submit"><CheckCircle2 size={14} />保存到知识库</button></form></div>;
 }

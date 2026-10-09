@@ -172,8 +172,13 @@ export class SourceApiError extends Error {
 }
 
 type ConnectorCreate = Pick<SourceConnector, "platform" | "protocol" | "account_or_rule" | "frequency" | "permissions">;
-type ManualSourceItem = Pick<SourceItem, "title" | "content_type" | "source_url" | "body" | "subtitles" | "media_references" | "file_reference" | "author" | "license">;
-type SaveToKnowledge = Pick<KnowledgeItem, "ownership" | "authorization" | "version">;
+export type ContentUseState = "available" | "reference_only" | "excluded" | "not_for_automation" | "not_for_publish";
+type ManualSourceItem = Pick<SourceItem, "title" | "content_type" | "source_url" | "body" | "subtitles" | "media_references" | "file_reference" | "author"> & {
+  license?: string;
+  use_state: ContentUseState;
+};
+// 归属和版本由服务端派生；调用方不伪造旧接口要求的授权文本。
+type SaveToKnowledge = Record<string, never>;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -264,7 +269,7 @@ export function setKnowledgeItemVisibility(id: string, visibility: "shared" | "p
   });
 }
 
-export type KnowledgeFileImport = { filename: string; content_base64: string };
+export type KnowledgeFileImport = { filename: string; content_base64: string; use_state: ContentUseState };
 
 export function importKnowledgeFile(input: KnowledgeFileImport) {
   return request<SourceItem>("/api/source-items/file", { method: "POST", body: JSON.stringify(input) });
@@ -274,8 +279,8 @@ export function importKnowledgeFile(input: KnowledgeFileImport) {
  * 抓一个普通网址的完整正文快照，保存原网址和抓取时间。
  * 返回的是这一次的抓取结果；相同正文不新增版本由保存到知识库时判定。
  */
-export function captureWebSnapshot(url: string) {
-  return request<SourceItem>("/api/source-items/link", { method: "POST", body: JSON.stringify({ url }) });
+export function captureWebSnapshot(input: { url: string; use_state: ContentUseState }) {
+  return request<SourceItem>("/api/source-items/link", { method: "POST", body: JSON.stringify(input) });
 }
 
 export function sourceErrorMessage(error: unknown): string {

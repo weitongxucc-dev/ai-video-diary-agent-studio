@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   listSourceItems: vi.fn(),
   listSourceConnectors: vi.fn(),
+  listKnowledgeItems: vi.fn(),
   createManualSourceItem: vi.fn(),
   createSourceConnector: vi.fn(),
   syncSourceConnector: vi.fn(),
@@ -16,6 +17,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@/lib/source-api", () => ({
   listSourceItems: api.listSourceItems,
   listSourceConnectors: api.listSourceConnectors,
+  listKnowledgeItems: api.listKnowledgeItems,
   createManualSourceItem: api.createManualSourceItem,
   createSourceConnector: api.createSourceConnector,
   syncSourceConnector: api.syncSourceConnector,
@@ -44,6 +46,7 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.listSourceItems.mockResolvedValue({ items: [], total_count: 0 });
   api.listSourceConnectors.mockResolvedValue({ items: [] });
+  api.listKnowledgeItems.mockResolvedValue({ items: [{ id: "ki-one" }], total_count: 1 });
   api.sourceErrorMessage.mockReturnValue("请求失败：500");
   // 初始没有这份文件；实际提交成功后，列表刷新才读到新条目。
   api.importKnowledgeFile.mockImplementation(async () => {
@@ -68,17 +71,19 @@ describe("sources file import", () => {
     render(<SourcesPage />);
     fireEvent.click(screen.getByRole("button", { name: "导入文件" }));
     await screen.findByRole("heading", { name: "上传知识文件" });
+    fireEvent.change(within(document.querySelector('input[type=file]')!.closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "reference_only" } });
     selectFile();
     await waitFor(() => expect(api.importKnowledgeFile).toHaveBeenCalledTimes(1));
     expect(api.importKnowledgeFile.mock.calls[0][0].filename).toBe("说明书.md");
+    expect(api.importKnowledgeFile.mock.calls[0][0].use_state).toBe("reference_only");
     expect(await screen.findByText(/已解析《说明书》/)).toHaveTextContent("出处 1 处");
 
     const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
-    fireEvent.change(within(inspector).getByLabelText(/归属/) as HTMLInputElement, { target: { value: "我的内容" } });
-    fireEvent.change(within(inspector).getByLabelText(/授权\/使用范围/) as HTMLInputElement, { target: { value: "用户提供" } });
     fireEvent.click(within(inspector).getByRole("button", { name: /保存到知识库/ }));
     await waitFor(() => expect(api.saveSourceItemToKnowledge).toHaveBeenCalledTimes(1));
     expect(api.saveSourceItemToKnowledge.mock.calls[0][0]).toBe("source-file");
+    expect(api.saveSourceItemToKnowledge.mock.calls[0][1]).toEqual({});
+    expect(api.listKnowledgeItems).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("link", { name: "查看我的资料" })).toHaveAttribute("href", "/knowledge");
   });
 
@@ -115,8 +120,9 @@ describe("sources web snapshot", () => {
     await screen.findByRole("heading", { name: "网页快照" });
     const urlInput = screen.getByPlaceholderText("https://example.com/article") as HTMLInputElement;
     fireEvent.change(urlInput, { target: { value: "https://example.com/v1" } });
+    fireEvent.change(within(urlInput.closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "not_for_publish" } });
     fireEvent.submit(urlInput.closest("form") as HTMLFormElement);
-    await waitFor(() => expect(api.captureWebSnapshot).toHaveBeenCalledWith("https://example.com/v1"));
+    await waitFor(() => expect(api.captureWebSnapshot).toHaveBeenCalledWith({ url: "https://example.com/v1", use_state: "not_for_publish" }));
     expect(await screen.findByText(/网页正文已存为快照/)).toBeInTheDocument();
     const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
     expect(within(inspector).getByRole("link", { name: /打开原文/ })).toHaveAttribute("href", "https://example.com/v1");
@@ -188,13 +194,41 @@ describe("content entry intent and preparation", () => {
     render(<SourcesPage />);
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "说明书" } });
     fireEvent.change(screen.getByLabelText("正文"), { target: { value: "全文正文" } });
+    fireEvent.change(within(screen.getByLabelText("正文").closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "excluded" } });
     fireEvent.submit(screen.getByLabelText("正文").closest("form")!);
-    await waitFor(() => expect(api.createManualSourceItem).toHaveBeenCalledWith(expect.objectContaining({ title: "说明书", body: "全文正文", content_type: "text" })));
+    await waitFor(() => expect(api.createManualSourceItem).toHaveBeenCalledWith(expect.objectContaining({ title: "说明书", body: "全文正文", content_type: "text", use_state: "excluded" })));
     expect(await screen.findByText("信息条目已添加，可查看正文并保存到知识库。")).toBeInTheDocument();
     expect(screen.getByLabelText("正文")).toHaveValue("");
     expect(api.listSourceItems).toHaveBeenCalledWith("manual-connector");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+});
+
+it("retains the selected source and reports an unconfirmed save when readback omits it", async () => {
+  api.listSourceItems.mockResolvedValue({ items: [parsed], total_count: 1 });
+  api.saveSourceItemToKnowledge.mockResolvedValue({ id: "ki-missing" });
+  api.listKnowledgeItems.mockResolvedValue({ items: [], total_count: 0 });
+  api.sourceErrorMessage.mockImplementation((cause: Error) => cause.message);
+  render(<SourcesPage />);
+  const item = await screen.findByRole("button", { name: /说明书/ });
+  fireEvent.click(item);
+  const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
+  fireEvent.click(within(inspector).getByRole("button", { name: /保存到知识库/ }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("回读未确认");
+  expect(within(inspector).getByRole("heading", { name: "说明书" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "查看我的资料" })).not.toBeInTheDocument();
+});
+
+it("defaults ordinary pasted content to available and preserves only a supplied source license", async () => {
+  api.createManualSourceItem.mockResolvedValue({ ...parsed, connector_id: "manual-connector", license: "CC BY 4.0" });
+  render(<SourcesPage />);
+  const form = screen.getByLabelText("正文").closest("form")!;
+  fireEvent.change(screen.getByLabelText("标题"), { target: { value: "许可记录" } });
+  fireEvent.change(screen.getByLabelText("正文"), { target: { value: "用户提供的文字" } });
+  fireEvent.click(within(form).getByText("出处与使用范围"));
+  fireEvent.change(within(form).getByLabelText("来源许可记录（可选）"), { target: { value: "CC BY 4.0" } });
+  fireEvent.submit(form);
+  await waitFor(() => expect(api.createManualSourceItem).toHaveBeenCalledWith(expect.objectContaining({ title: "许可记录", use_state: "available", license: "CC BY 4.0" })));
 });
 
 
