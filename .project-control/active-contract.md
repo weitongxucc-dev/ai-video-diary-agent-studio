@@ -167,6 +167,14 @@ D首页a0d56a0已结算retain、主控组合ff153f0；新单先纠正一个具�
 
 其余是只读N06–N12/N33–N37/N13素材消费者定向诊断：准确ff153f0主控组合树和用户ZIP指定对应TXT/JSON/PNG；活动DESIGN素材/预检与领域§3/use_state、产品默认导入可用规则优先，不扫描历史输出或真实用户数据。不写MaterialLibraryWorkspace/HomeCommandComposer/CreationTaskWorkspace（UI）、main/schema/libapi/types（UI）、production/avatar/narration（B）；不按症状建平行规则。指出搜索结果和库总体/选中失效的真实状态来源、对象引用文件及时间、分析分项、人物/同义标签覆盖归并、候选与可用及语义评分范围、分阶段阻断与修复返回路径；每个ID静态确认/未复现/已改善分开，并给唯一写者及最小后续共同机制。API测试/纯合成fixture可只沿已存在公开依赖，不下载安装、启动服务/GUI/Pi/模型/媒体、访问用户库/Key或账号。读报告不取得媒体操作许可。owned新候选/tmp/main-acceptance-20261009/review-v2-material-audit/candidate从ff153f0新分支codex/review-v2-material-audit-20261009，证据同父目录。交clean首页差额与材料诊断矩阵，不把只读报告算已修。
 
+### QA-V2-F-MEDIA-VIEW：缩略图与原片预览事实
+
+F导航503caa1已结算retain并组合ff153f0。新单从准确ff153f0到/tmp/main-acceptance-20261009/review-v2-media-view/candidate，分支codex/review-v2-media-view-20261009；唯一owned VideoEditor.tsx的ClipThumbnail及原片/成片播放状态直接消费者、必要新增局部缩略图CSS模块和直接专项。UI仍持有VideoEditor.module.css的会话样式，本单不得改该共享文件、CreationTaskWorkspace/libapi/types/main、渲染/时间线/素材数据或其他编辑器。读main DESIGN剪辑/信息层、领域Timeline范围后具名ACK开始。
+
+主控源码确认ClipThumbnail只有video/onLoadedMetadata，读取中/媒体读取失败都为同一灰块，源相同但范围变化未重新定位取帧；源预览缺明确onError状态。处理H-B016与范围一致性：只依实际media事件区分读取中、已定位可用帧、读取失败；缺引用只有真实缺失才称缺素材，失败不得断言文件已丢失或访问权限/密钥错误。文件/人物产物与准确所选起点改变时重置状态/定位，旧media事件不能串新clip或范围，不播放/改写原件。成片预览与原始参考明确不同身份，旧播放错误不得粘到新版本；已有实际onError及视频比例保持，不用AX单一文字判无法播放。必要恢复入口使用现有重新读取/选择对象机制，禁止在故事板外层button中嵌套button，状态读屏可辨而不把全部装饰缩略图重复朗读。保持三轨/56px密度/三栏，不能借此重排编辑器。
+
+只用既有公开manta缓存的受控media事件专项及tsc，不安装下载/真实媒体/服务/模型/Key/GUI/账号/打包；未看到真实画面就不宣称实际播放器故障或图像已通过。交clean、逐来源结果和GUI残余，H-B013/H-B017等完整任务剪辑仍待主控同候选验收。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
