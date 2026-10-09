@@ -264,11 +264,18 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget):
         raise ValueError("原配音来源缺失，未安排局部重做")
     segments = repository.list_narration_segments(task.workspace_id, task.id, script.id)
     source_audio = []
+    segment_artifacts = []
     total_duration = 0.0
     for item in segments:
         if (item.status != "ready" or item.script_id != script.id or not item.duration_seconds
                 or item.duration_seconds <= 0 or not item.audio_reference):
             raise ValueError("合并配音存在不可用片段，未安排局部重做")
+        record = repository.get_narration_artifact(task.workspace_id,
+            item.audio_reference.removeprefix("narration://artifact/"))
+        if (not item.audio_reference.startswith("narration://artifact/") or record is None
+                or record.task_id != task.id or record.script_id != script.id):
+            raise ValueError("合并配音产物不属于当前任务及文案版本")
+        segment_artifacts.append(asdict(record))
         path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, item.audio_reference)
         info = path.stat()
         if not path.is_file() or info.st_size <= 0:
@@ -286,6 +293,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget):
     manifest = {"operation": operation, "script": asdict(script), "segment": asdict(segment),
                 "voice": asdict(inputs.voice), "reference_input": asdict(reference),
                 "segments": [asdict(item) for item in segments], "source_audio": source_audio,
+                "segment_artifacts": segment_artifacts,
                 "montage": montage,
                 "rules": [asdict(item) for item in inputs.pronunciation_entries],
                 "model_id": plan.selected_voice.model_id, "language": segment.language,

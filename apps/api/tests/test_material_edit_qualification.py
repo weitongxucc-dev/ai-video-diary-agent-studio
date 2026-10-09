@@ -98,15 +98,17 @@ def test_raw_valid_owned_material_can_be_chosen_and_committed(material_edit_stat
     assert any(clip[1] == state.asset.id for clip in _current(state)[1])
 
 
-@pytest.mark.parametrize("condition", ["rejected", "restricted", "reference", "missing", "changed", "range", "analysis"])
+@pytest.mark.parametrize("condition", ["rejected", "restricted", "reference", "reference_use", "missing", "changed", "range", "analysis"])
 def test_current_material_qualification_blocks_invalid_source(material_edit_state, condition):
     state = material_edit_state
     if condition == "rejected":
         state.asset.review_status = "rejected"
     elif condition == "restricted":
-        state.asset.use_state = "unavailable"
+        state.asset.use_state = "excluded"
     elif condition == "reference":
-        state.asset.segments[0].usage_role = "reference_only"
+        state.asset.segments[0].usage_role = "exclude"
+    elif condition == "reference_use":
+        state.asset.use_state = "reference_only"
     elif condition == "missing":
         from pathlib import Path
         Path(state.asset.path).unlink()

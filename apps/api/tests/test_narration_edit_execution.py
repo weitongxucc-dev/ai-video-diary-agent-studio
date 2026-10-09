@@ -696,3 +696,36 @@ def test_wrong_grant_cannot_enter_narration_callback(fixture):
         checkpoint_write=lambda *_: "fixture-cleanup",
         cancelled=True,
     )
+
+
+@pytest.mark.parametrize("scope", ["other_task", "old_script"])
+def test_combination_rejects_other_segment_artifact_scope_before_dispatch(fixture, scope):
+    state = fixture
+    record = state.repo.get_narration_artifact("local", "old")
+    state.repo.save_narration_artifact(replace(record, id="other-source", cache_key="other-source",
+        task_id="other-task" if scope == "other_task" else state.task.id,
+        script_id="old-script" if scope == "old_script" else "script"))
+    state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
+    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    with pytest.raises(ValueError, match="合并配音产物不属于当前任务及文案版本"):
+        submit(state)
+    assert not state.calls
+    unchanged(state)
+    with state.repo._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 0
+
+
+def test_combination_artifact_metadata_change_while_waiting_blocks_dispatch(fixture):
+    state = fixture
+    record = state.repo.get_narration_artifact("local", "old")
+    other = replace(record, id="other-source", cache_key="other-source")
+    state.repo.save_narration_artifact(other)
+    state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
+    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    request = submit(state)
+    state.repo.save_narration_artifact(replace(other, sample_rate=16000))
+    state.resources.allowed = True
+    assert not state.runtime.run_once()
+    assert not state.calls
+    unchanged(state)
+    assert state.runtime.scheduler._get(request.id).state == "blocked"
