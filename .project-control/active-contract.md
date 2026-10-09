@@ -590,6 +590,20 @@ B-FOUNDATION-FACTS已cf3ee279交付retain、组合ef76fd8并推draft113，新Web
 
 用户最新明确要求“现在最新的包是哪个，你打开给我看下”，授权主控重新打开已核对的cfaa83e owned ARM候选，输入摘要6c819fd5…；本次是新预览租约，不恢复旧Dispatch。只沿用final-client/runtime绝对隔离路径、固定32124、已有owned userData及禁用Pi的环境，原3000用户实例和资料保留。允许系统正常打开该精确.app并前置显示、按新PID只读原生核对；不操作真实Key/模型/媒体/账号/发布或替换Downloads。用户要观看，本次成功打开后保留该预览实例，准确PID/端口记在同owned runtime的launch-preview记录，后续用户关闭或明确结束预览时再收回；不据打开成功宣布业务路径验收通过。
 
+### QA-V2-TEST4-KEYCHAIN：新版本与保存连接实机故障
+
+用户当前要求发布本机候选标识为0.11.0-test.4并清理过时产物，且提供原生“找不到用于储存local的钥匙串”截图。preview请求POST runtime 503，当前隔离HOME未显式指定配套KEYCHAIN_PATH；没有取得登录钥匙串损坏证据。此为C0/C1环境及实现核验，不改变系统安全存储规则。原D可见终端term_348145c1-121a-40ef-825a-c0d41739ff88新单，从准确cfaa83e clone至owned review-v2-test4-keychain/candidate、公开新分支，保护原foxface树。唯一产品写权desktop/package.json版本字段及只在真实生产错误被最小证据确认时workspace_settings.py的security实参处理和一个直接测试；不凭假设改持久化/桌面壳/UI、默认钥匙串或加明文回退。根锁文件若纯版本必须同步先报范围，不改依赖。
+
+仅owned隔离HOME/XDG/TMP及本任务临时钥匙串，使用明显虚构无效Key核真实security命令的local账号、默认存储缺失和明确临时路径差异；不读取用户输入Key、登录钥匙串/用户库，不枚举系统钥匙串、不改用户搜索列表/default/unlock/reset、启动真实服务或模型。若create-keychain会作用用户搜索列表则不得运行，改受控实参/临时环境核验并报条件；所有临时对象保留精确位置、无秘密输出。交根因证据、clean SHA和最小检查。主控新test4包只沿用owned路径；必要时创建独立预览钥匙串并显式绑定，不能因HOME缺失去还原系统默认。原用户钥匙串和真实资料保持。用户输入的未成功保存Key不由主控读取/复制或重复点击提交。
+
+主控独占过时产物核对与清理：先列精确目标与影响，在test4构建、启动与身份检查通过后退役旧.app和重复安装/构建缓存；不得删除评审/设计证据、源码/脏树/工作树、userData/DB/素材/Keychain或仍承担构建/运行依赖的文件。Downloads现存两个旧试用包为具体退休候选，需先核实际运行及包内容，未知文件不删除。保留最小包身份/删除清单与回读证据，清理无需重复审批，因为用户本次已明确授权；无Release/签名/公证/云上传或真实模型请求。
+
+主控只读security default-keychain位置元数据核验：隔离HOME确实返回默认钥匙串不存在，正常桌面HOME返回登录钥匙串路径；未读任何条目或改钥匙串。D本单仅版本10f77bb已审、retain和ACK，产品保存命令语法无新修改。test4采用正常操作系统HOME，仍使用绝对owned userData/DB/inbox/output/model/tmp/agent与API配置路径，禁用Pi；不创建钥匙串或更改系统默认来补隔离HOME。用户当前已实际手工输入并保存API Key，允许新包沿正常系统安全存储回应用户自己的手工设置操作；主控不获取、输出、复制或代填Key，不访问其他条目、账号或调用模型。新test4构建在独立review-v2-test4-client/candidate，因只有桌面版本字段变化，Web/API精确构建输入复用并核身份，不重复未影响测试/构建。旧preview的只读证据保留，后续停止其精确进程并从Downloads test4打开正常HOME的新预览，保留用户观看实例。
+
+用户已在test4 GUI手工保存连接并提交“你好”，原生已配置与runtime保存200可见；主控不获取Key。现有启动器故意指定不存在的Pi入口导致用户自己的对话被阻断，恢复本机已存在的Node24/Pi准确公共入口，撤销上一段“禁用Pi”的用户交互阻断；仅让应用响应用户在GUI主动提交的文字，不授权主控/worker代发probe、读取Key、上传媒体、启动重模型、收费生成或账号发布。保持产品资料隔离，不复制原试用数据。旧失败轮次事实保留，新运行权只由本段当前用户交互取得，不复活旧Dispatch。
+
+TEST4当前具名Task task_6866652452a8 / ctx_f058e3836b45已交付并retain/ACK，D本单写权结束；组合84cabb2d3f06e2bf87e3fa613d3d6734fbe6cd00已推draft113。test4包输入摘要124fdca1…、Info.plist版本/构建均0.11.0-test.4，Downloads唯一新入口目录智能视频日记_test4_20261009，当前新预览PID46912、固定32124/API Web ready、用户观看租约保留，详情同owned launch-preview记录。主控精确核完9份旧test3包与其缓存23目录后删除并回读不存在，清单/包回执在review-v2-test4-cleanup；原Application Support试用数据、源码/工作树/评审ZIP及runtime均保留，旧test3和第一次test4预览进程已退出。产品完整验收及真实模型结果不由版本/清理成功推导。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
