@@ -602,7 +602,7 @@ B-FOUNDATION-FACTS已cf3ee279交付retain、组合ef76fd8并推draft113，新Web
 
 用户已在test4 GUI手工保存连接并提交“你好”，原生已配置与runtime保存200可见；主控不获取Key。现有启动器故意指定不存在的Pi入口导致用户自己的对话被阻断，恢复本机已存在的Node24/Pi准确公共入口，撤销上一段“禁用Pi”的用户交互阻断；仅让应用响应用户在GUI主动提交的文字，不授权主控/worker代发probe、读取Key、上传媒体、启动重模型、收费生成或账号发布。保持产品资料隔离，不复制原试用数据。旧失败轮次事实保留，新运行权只由本段当前用户交互取得，不复活旧Dispatch。
 
-TEST4当前具名Task task_6866652452a8 / ctx_f058e3836b45已交付并retain/ACK，D本单写权结束；组合84cabb2d3f06e2bf87e3fa613d3d6734fbe6cd00已推draft113。test4包输入摘要124fdca1…、Info.plist版本/构建均0.11.0-test.4，Downloads唯一新入口目录智能视频日记_test4_20261009，当前新预览PID46912、固定32124/API Web ready、用户观看租约保留，详情同owned launch-preview记录。主控精确核完9份旧test3包与其缓存23目录后删除并回读不存在，清单/包回执在review-v2-test4-cleanup；原Application Support试用数据、源码/工作树/评审ZIP及runtime均保留，旧test3和第一次test4预览进程已退出。产品完整验收及真实模型结果不由版本/清理成功推导。
+TEST4当前具名Task task_6866652452a8 / ctx_f058e3836b45已交付并retain/ACK，D本单写权结束；组合84cabb2d3f06e2bf87e3fa613d3d6734fbe6cd00已推draft113。test4包输入摘要124fdca1…、Info.plist版本/构建均0.11.0-test.4，Downloads唯一新入口目录智能视频日记_test4_20261009，当前新预览PID46912、固定32124/API Web ready、用户观看租约保留，详情同owned launch-preview记录。主控精确核完10份旧test3包与其缓存26目录后删除并回读不存在（补查另一个desktop77旧构建），清单/包回执在review-v2-test4-cleanup；原Application Support试用数据、源码/工作树/评审ZIP及runtime均保留，旧test3和第一次test4预览进程已退出。产品完整验收及真实模型结果不由版本/清理成功推导。
 
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
