@@ -493,8 +493,13 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
     from uuid import uuid4
     from app.auth import AuthPrincipal
 
-    workspace, device, user = (str(uuid4()) for _ in range(3))
+    workspace, device = (str(uuid4()) for _ in range(2))
     repo, task_id, script_id, _digest = _seed(tmp_path, workspace_id=workspace)
+    members = LocalMemberService(repo.database_path)
+    member, member_token = members.join(members.create_invite_code(), "队列镜头确认成员")
+    user = member.member_id
+    assert members.resolve_member(member_token) == member
+    monkeypatch.setattr(main_module, "local_members_service", members)
     plan = repo.get_creation_plan(workspace, f"plan_{workspace}")
     plan.presenter_share_target = 0
     person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
@@ -610,8 +615,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         video_inbox_path=str(tmp_path / "library"), effective_temporary_root_path=tmp_path / "temp",
         native_portrait_worker_path=None))
     principal = AuthPrincipal(user_id=user, workspace_id=workspace, access_token="ephemeral-fixture-token")
-    monkeypatch.setattr(main_module, "auth_context", SimpleNamespace(enabled=True,
-        authenticate=lambda _request: principal, is_onboarding_complete=lambda *_args: True))
+    def authenticate(request):
+        token = request.headers.get("X-Local-Member-Token")
+        if token:
+            assert members.resolve_member(token).member_id == principal.user_id == actor.user_id
+        return principal
+
+    account_context = SimpleNamespace(enabled=True, authenticate=authenticate,
+        is_onboarding_complete=lambda *_args: True)
+    monkeypatch.setattr(main_module, "auth_context", account_context)
     monkeypatch.setattr(main_module, "_verify_creation_identity", verify)
     monkeypatch.setattr(main_module, "trusted_device_credential", lambda: SimpleNamespace(device_id=device))
     runtime = SimpleNamespace(scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
@@ -620,6 +632,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(submit=lambda *_args:
         pytest.fail("product cannot use diagnostic execute/thread fallback")))
     calls = []
+    render_calls = []
 
     def narration_action(*args):
         calls.append("narration")
@@ -636,6 +649,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         return main_module._montage_stage_with_grant(*args)
 
     def render_action(*args):
+        render_calls.append("render")
         result = main_module._render_creation_stage_with_grant(*args)
         if stop == "render_commit_unknown":
             state["identity"] = "unknown"
@@ -739,6 +753,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         assert repo.get_creation_task(workspace, task_id).narration_cache_key
         retry = execution.retry(workspace, task_id, member_id=actor.member_id)
         submit_creation_stage(execution, scheduler, retry, actor)
+        monkeypatch.setattr(main_module, "auth_context", account_context)
         for stage in ("montage_plan", "render"):
             grant = scheduler.pick_and_grant()
             with repo._connect() as conn:
@@ -757,6 +772,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 assert not any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed"
                                for event in repo.list_task_events(workspace, task_id))
                 assert scheduler.processes.children_released(tuple(children)) is True
+                assert render_calls == ([] if stop == "render_revoked" else ["render"])
                 return
             if stage == "montage_plan":
                 try:
@@ -764,6 +780,53 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 except KeyError:
                     pytest.fail(repo.get_job_run(workspace, retry.id).failure_reason)
                 assert "未运行视觉语义模型" in montage["message"]
+                assert montage["status"] == "waiting_for_user"
+                pending = [clip["id"] for clip in montage["clips"] if clip["needs_confirmation"]]
+                assert len(pending) == montage["low_confidence_clip_count"] > 0
+                assert repo.get_creation_task(workspace, task_id).stage_status == "waiting_for_user"
+                assert repo.get_job_run(workspace, retry.id).status == "queued"
+                assert repo.get_job_run(workspace, retry.id).failure_reason == "waiting_for_user"
+                assert repo.get_job_run(workspace, retry.id).finished_at is None
+                assert render_calls == []
+                assert scheduler.pick_and_grant() is None
+                with repo._connect() as conn:
+                    requests_before = [dict(row) for row in conn.execute(
+                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))]
+                assert not any(row["unit_key"].startswith("render:") for row in requests_before)
+                waiting = client.post(base + "/resume")
+                assert waiting.status_code == 202, waiting.json()
+                assert waiting.json()["job"]["id"] == retry.id
+                assert waiting.json()["job"]["status"] == "queued"
+                assert calls == ["narration", "montage_plan", "montage_plan"]
+                with repo._connect() as conn:
+                    assert [dict(row) for row in conn.execute(
+                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))] == requests_before
+                for clip_id in pending:
+                    before = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
+                    preview = client.post(f"/api/creation-tasks/{task_id}/edits/exact/preview",
+                        headers={"X-Local-Member-Token": member_token},
+                        json={"operation_type": "ConfirmClip", "clip_id": clip_id})
+                    assert preview.status_code == 200, preview.json()
+                    proposal = preview.json()["proposal"]
+                    assert proposal["preview"]["before"]["detail"] == "待确认"
+                    assert proposal["preview"]["after"]["detail"] == "已确认"
+                    assert repo.get_creation_task_montage_plan(workspace, task_id)["clips"] == before
+                    confirmed = client.post(f"/api/creation-tasks/{task_id}/edits/{proposal['id']}/confirm",
+                        headers={"X-Local-Member-Token": member_token})
+                    assert confirmed.status_code == 200, confirmed.json()
+                    after = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
+                    expected = [{**clip, "needs_confirmation": False} if clip["id"] == clip_id else clip for clip in before]
+                    assert after == expected
+                    assert render_calls == []
+                    assert scheduler.pick_and_grant() is None
+                confirmed_plan = repo.get_creation_task_montage_plan(workspace, task_id)
+                assert confirmed_plan["status"] == "ready"
+                assert confirmed_plan["low_confidence_clip_count"] == 0
+                resumed = client.post(base + "/resume")
+                assert resumed.status_code == 202, resumed.json()
+                assert resumed.json()["job"]["id"] == retry.id
+                assert resumed.json()["job"]["status"] == "queued"
+                assert calls == ["narration", "montage_plan", "montage_plan"]
         finished = repo.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
         assert calls == ["narration", "montage_plan", "montage_plan"]
