@@ -282,6 +282,14 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
   const bindTurnEvents = useCallback((conversationId: string, localTurnId: string) => {
     let persistedTurnId = localTurnId;
     return (event: AssistantStreamEvent) => {
+      // The stream receipt belongs to the submitted turn even after navigation
+      // has moved the visible hook to another scope. Record its durable identity
+      // before deciding whether this hook should render the event.
+      if (event.type === "turn_started") {
+        persistedTurnId = event.turn_id;
+        const recovery = localTurnRecovery.current.get(localTurnId);
+        if (recovery?.conversationId === conversationId) recovery.persistedTurnId = event.turn_id;
+      }
       const current = conversationRef.current;
       if (!current || current.id !== conversationId) return;
       const turns = [...current.turns];
@@ -290,9 +298,6 @@ export function useAssistantConversation(scope: AssistantConversationScope) {
       if (index < 0) return;
       const turn = turns[index];
       if (event.type === "turn_started") {
-        persistedTurnId = event.turn_id;
-        const recovery = localTurnRecovery.current.get(localTurnId);
-        if (recovery?.conversationId === conversationId) recovery.persistedTurnId = event.turn_id;
         turns[index] = { ...turn, id: event.turn_id, status: "running", updated_at: new Date().toISOString() };
       } else if (event.type === "turn_status") {
         turns[index] = { ...turn, status: event.turn_state, updated_at: new Date().toISOString() };

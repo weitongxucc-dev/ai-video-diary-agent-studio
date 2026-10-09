@@ -180,6 +180,44 @@ describe("AssistantConversationPanel", () => {
     expect(result.current.conversation?.turns).toHaveLength(0);
   });
 
+  it("records turn_started before the active scope gate so a late failure cannot restore a submitted message", async () => {
+    const first = { ...conversation(), turns: [], draft_text: "" };
+    const second = { ...conversation(), id: "task-conversation", scope_kind: "task" as const,
+      scope_id: "task-one", turns: [], draft_text: "" };
+    api.getCurrentAssistantConversation.mockImplementation(async (scope: { scope_kind: string; scope_id: string }) =>
+      scope.scope_kind === "home" ? first : second);
+    api.listAssistantConversations.mockImplementation(async (scope: { scope_kind: string; scope_id: string }) => ({
+      items: scope.scope_kind === "home" ? [first] : [second],
+    }));
+    api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string }) => ({
+      ...(id === first.id ? first : second), draft_text: update.draft_text ?? "",
+    }));
+
+    const { result, rerender } = renderHook(({ scope }) => useAssistantConversation(scope), {
+      initialProps: { scope: { scope_kind: "home" as const, scope_id: "home" } },
+    });
+    await waitFor(() => expect(result.current.conversation?.id).toBe(first.id));
+    let pending!: ReturnType<typeof result.current.beginTurn>;
+    let stream!: (event: AssistantStreamEvent) => void;
+    act(() => {
+      pending = result.current.beginTurn("上一范围已提交的请求");
+      stream = result.current.bindTurnEvents(pending.conversationId, pending.localTurnId);
+    });
+
+    rerender({ scope: { scope_kind: "task", scope_id: "task-one" } });
+    await waitFor(() => expect(result.current.conversation?.id).toBe(second.id));
+    act(() => stream({ type: "turn_started", turn_id: "persisted-old-turn", turn_state: "running" }));
+    const updateCount = api.updateAssistantConversation.mock.calls.length;
+
+    await act(async () => {
+      expect(await result.current.failUnpersistedTurn(pending.conversationId, pending.localTurnId, "连接中断")).toBe(true);
+    });
+
+    expect(api.updateAssistantConversation).toHaveBeenCalledTimes(updateCount);
+    expect(result.current.conversation?.id).toBe(second.id);
+    expect(result.current.draftText).toBe("");
+  });
+
   it("shows a sent user turn immediately without waiting for the server request", async () => {
     const initial = { ...conversation(), draft_text: "上次未提交草稿", turns: [] };
     api.getCurrentAssistantConversation.mockResolvedValue(initial);
