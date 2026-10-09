@@ -255,6 +255,10 @@ UI-TASK b3afb5d已部分源码交付/retain并按公开提交身份机械组合�
 
 F新QA-V2-LOCAL-CLIENT-PORT：原F候选retain，仅复用已有终端，从准确03abe39到`/tmp/main-acceptance-20261009/review-v2-client-port/candidate`，分支`codex/review-v2-client-port-20261009`。主控只读lsof确认当前用户原应用持有3000，不能关闭原应用来为验收让路。允许一个必要且显式的独立本地实例端口入口`--local-web-port=<1..65535>`，仅配合已有绝对`--user-data-dir`且确认为local auth构建时使用；默认仍3000，Supabase稳定callback origin保持3000并拒绝该覆盖。不能默默换端口、借启动失败回退到旧服务或改变用户原数据/认证逻辑。所选端口是本独立userData的固定显式origin，避免每次随机端口丢成员凭据；占用即真实报错，启动和BrowserWindow读同一准确新端口。唯一owned desktop/main.js及既有scripts/lifecycle-smoke.js直接专项，必要desktop README接口说明由主控共享写，不改preload/API/Web/身份/自动更新/外链权限或其他桌面路径。语义ACK后仅源码/节点语法和受控stub验证默认/合法local隔离/无userdata/非法或占用端口/Supabase拒绝/失败释放。公开现有依赖，可启动专项自有无秘密loopback Node fixture；不能启动真实应用/API/Web/GUI/打包/Pi/模型或接触用户服务。具体新测试不得绑定真实3000，免干扰用户App；拒绝清楚，所有ownedfixture PID/端口释放。交clean、两种origin的不存在回退证据与未验，后续真实客户端统一候选再具名运行。
 
+当前接续回执：UI-TASK-REVIEW task_a97db98c7173 / ctx_2ff5da8db295已源码交付32f01e9、133项组件/tsc通过并retain；F-LOCAL-CLIENT-PORT task_f7c4d2d59932 / ctx_3664d4a17ddc已源码交付95581f4、26项受控生命周期门禁通过并retain。两者原写权结束，均未实际GUI验收，主控继续差额审查与机械集成。
+
+C-SOURCE-FORM原ctx_32bdf6c226be的provider最终轮明确consumer_fenced后停止，未发worker_done，三文件未提交差额保留。主控按orchestration恢复指南以该正证abandon原attempt，不停止/删除终端或候选；同一task_dd0225de596e可用--retry-of接续原C可见终端及原arrowworm placement。新attempt必须保留并复核既有`/tmp/main-acceptance-20261009/review-v2-source-form/candidate`三文件差额，禁止重新clone覆盖；先核Task/Dispatch新注入身份和本合同。已有10项sources专项正证可复用，公开依赖改复用当前main-ui-linear/apps/web/node_modules（其中已有react-markdown/remark-gfm），仅必要tsc/diff及变动专项，不安装。新候选repo本地设公开Git身份，交clean提交/报告及准确后端接线未验。消费收件箱使用新注入handle和命令；若仍有fence，停止并报告准确错误，不能用其他Run/旧Dispatch绕过。共享main/schema/api/types仍仅B写，原普通导入默认可用性与使用限制边界保持。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
