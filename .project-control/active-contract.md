@@ -243,6 +243,10 @@ C独占来源表单消费者，基于804dcf3新clone到`/tmp/main-acceptance-202
 
 E另接QA-V2-ACCEPTANCE-PREP：原终端/原旧集成树保留，仅准确804dcf3只读源码和本机公开可执行/依赖版本。输出`/tmp/main-acceptance-20261009/review-v2-client-prep/`的验收准备：本机构建ARM测试包的实际可复用Electron/Next/PyInstaller/Python/ffmpeg路径、独立userData/HOME/XDG/DB/output配置所需字段和端口/进程退出检查；只定向查现有具名依赖缓存及工具metadata，不扫描下载目录/旧证据/ZIP/用户AppSupport/配置/密钥/媒体。可在owned根用真实ffmpeg/标准库生成标为合成的30秒双画面视频、中文资料和WAV参考，保留来源与时长/范围/哈希，自制样本不是个人声音/模型结果。可写owned验收脚本/无秘密env模板，基于现有API/仓储和可信本地测试成员准备最小样本；不改产品代码/共享权威，不实际运行应用/API/Web/Pi/模型/资源队列、不打包安装下载、不碰原试用数据。需核默认配置不会偷偷触发后台模型、定时/账号外发，缺口准确标明，真实窗口接续仅主控具名运行许可之后。报告可复用检查与候选变化必须重绑的字段，不提前称已通过GUI或完成构建。
 
+B-PROFILE-API C2准确接线差额：msg_dcd1cf6e82ae/msg_d46e1fe30715经主控804dcf3回读确认，B追加独占lib/media-profiles-api.ts（实际人物声音类型/请求模块）、granted_subprocess.py及其最小直接专项。复用原request框架与稳定可读素材分页，不复制API客户端；旧listApprovedMaterials默认审核/第一页24条消费者退役，旧授权/人物必填类型改同一新契约。settings声音直接复用同一真实PeopleAndVoiceWorkspace voices入口可行，legacy actions写入消费者必须退出活跃路径，历史只读保留，不写actions.ts其他设置行为。
+
+granted_subprocess仅将准确owner_type=media_preview与voice:/avatar_lipsync:单位加入既有真实HostResourceProbe/scene_runtime_limits要求及运行中scheduler.assert_grant循环；复用creation_narration/creation_person_render同类已标定资源预算，不放宽cap或参数、不新增采样/运行队列。类型化单位与注册owner绑定，未知owner/单位不能因字符串前缀获得许可；无真实探针/预算即拒绝。必要测试覆盖许可前零exec、撤销/资源越限/超时真实注册子进程组释放和失败无成功产物，原creation_job规则保持；自制媒体/受控Grant仍只是隔离证据，真实设备/模型运行权不扩大。ACK后继续当前Task，不另起重复任务。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
