@@ -96,7 +96,7 @@ export default async function ProductionPage({
 
   if (params.view === "automations") {
     return (
-      <AppShell creationTasks={creationTasks}>
+      <AppShell creationTasks={creationTasks} workspaceStatus={{ kind: "attention", label: "定时任务仅供只读预览，尚未接通执行" }}>
         <ScheduledTasksWorkspace />
       </AppShell>
     );
