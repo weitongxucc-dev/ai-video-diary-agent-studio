@@ -485,7 +485,8 @@
   font: inherit;
 }
 
-.segmentedControl button[aria-pressed="true"] {
+.segmentedControl button[aria-pressed="true"],
+.segmentedControl button[aria-checked="true"] {
   background: var(--surface-1);
   color: var(--text-1);
   box-shadow: 0 0 0 1px var(--border-1);

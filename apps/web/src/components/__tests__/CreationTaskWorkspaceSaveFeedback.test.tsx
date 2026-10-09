@@ -355,9 +355,13 @@ describe("CreationTaskWorkspace 字幕保存", () => {
     }));
     await waitFor(() => expect(save).toBeEnabled());
     expect(screen.queryByText(/字幕已保存/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "本地未提交草稿" } });
     fireEvent.click(save);
     expect(await screen.findByRole("alert")).toHaveTextContent("当前字幕版本已变化");
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("本地未提交草稿");
+    expect(screen.getByRole("alert")).toHaveTextContent("当前任务与字幕草稿未修改");
     fireEvent.click(save);
     expect(await screen.findByText(/字幕已保存：task-1-zh-en.srt/)).toBeInTheDocument();
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("本地未提交草稿");
   });
 });

@@ -1106,6 +1106,20 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByText(/封面已保存/)).not.toBeInTheDocument();
   });
 
+  it("seeks the subtitle preview to the selected cue", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.subtitle_tracks[0].cues.push({
+      id: "subtitle-cue-2", source_cue_id: null, text: "第二句字幕", start_seconds: 4.5,
+      end_seconds: 6.2, speaker: null, line_breaks: [], emphasis: [],
+    });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
+    const player = screen.getByLabelText("字幕成片预览") as HTMLVideoElement;
+    fireEvent.change(screen.getByLabelText("选择字幕"), { target: { value: "subtitle-cue-2" } });
+    await waitFor(() => expect(player.currentTime).toBe(4.5));
+    expect(screen.getByRole("button", { name: "选择中文字幕 2" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("saves only the current valid subtitle draft directly and leaves a later edit unsaved", async () => {
     const initial = subtitleCoverWorkspace();
     mocks.exactEdit.mockResolvedValue({ operation: { id: "operation-subtitle" } });
@@ -1213,6 +1227,9 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(repaired);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const stageFailure = await screen.findByRole("alert", { name: `${stage === "script" ? "文案" : "配音"}失败` });
+    expect(stageFailure).toHaveTextContent("文字模型服务拒绝了文案请求。");
+    expect(stageFailure).toHaveTextContent("手动修订并重新确认文案。");
     if (stage === "narration") fireEvent.click(screen.getByRole("button", { name: "修改文案" }));
     expect(screen.getByRole("heading", { name: "压缩并重新确认文案" })).toBeInTheDocument();
     fireEvent.change(screen.getByDisplayValue("原来的正文过长。"), { target: { value: "压缩后的三十秒正文。" } });
@@ -1298,6 +1315,7 @@ describe("CreationTaskWorkspace", () => {
     const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
     const initial = workspace(task);
     initial.plan.presenter_share_target = 0;
+    initial.person_render_capability = { available: false, model_id: null, message: "本地人物口型模型未配置。", repair_action: "配置模型后重试。" };
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
       sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
@@ -1322,6 +1340,8 @@ describe("CreationTaskWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "本阶段明确跳过" })).toBeInTheDocument();
     expect(screen.getByText("0% · 实际 0%")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "人物口型暂不可用" })).not.toBeInTheDocument();
+    expect(screen.queryByText("当前口型能力")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /生成人物口型预览/ })).not.toBeInTheDocument();
     expect(screen.getByTitle("人物与口型：明确跳过 · 全素材画面")).not.toHaveAttribute("aria-current");
   });
@@ -1811,9 +1831,8 @@ describe("CreationTaskWorkspace", () => {
     initial.subtitle_tracks = [{ ...initial.subtitle_tracks[0], language: "en-US", source_language: null }];
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
-    expect(screen.getByRole("button", { name: "中文" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "中英双语" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "英文" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("switch", { name: "中文轨开关" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "英文轨开关" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("applies hiding subtitles directly without generating a translation", async () => {
@@ -1821,14 +1840,45 @@ describe("CreationTaskWorkspace", () => {
     mocks.exactEdit.mockResolvedValue({ operation: { id: "subtitle-display-edit" } });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
-    fireEvent.click(screen.getByRole("button", { name: "无字幕" }));
+    fireEvent.click(screen.getByRole("switch", { name: "中文轨开关" }));
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", {
       operation_type: "ConfigureSubtitleTrack", subtitle_display: "none",
     }));
     expect(mocks.exactPreview).not.toHaveBeenCalled();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "英文" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "中文" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles Chinese and English subtitle tracks independently using current workspace facts", async () => {
+    const initial = subtitleCoverWorkspace();
+    const english = {
+      ...initial.subtitle_tracks[0],
+      id: "subtitle-track-en", language: "en-US" as const, source_language: "zh-CN" as const,
+      style: { ...initial.subtitle_tracks[0].style, enabled: false },
+      cues: [{ ...initial.subtitle_tracks[0].cues[0], id: "subtitle-cue-en", text: "English line" }],
+    };
+    initial.subtitle_tracks = [...initial.subtitle_tracks, english];
+    const bothEnabled = { ...initial, subtitle_tracks: initial.subtitle_tracks.map(track => track.id === english.id
+      ? { ...track, style: { ...track.style, enabled: true } } : track) };
+    const englishOnly = { ...bothEnabled, subtitle_tracks: bothEnabled.subtitle_tracks.map(track => track.id === "subtitle-track-zh"
+      ? { ...track, style: { ...track.style, enabled: false } } : track) };
+    mocks.exactEdit.mockResolvedValue({ operation: { id: "subtitle-display-edit" } });
+    mocks.getWorkspace.mockResolvedValueOnce(bothEnabled).mockResolvedValueOnce(englishOnly);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /^字幕与封面：/ }));
+
+    fireEvent.click(screen.getByRole("switch", { name: "英文轨开关" }));
+    await waitFor(() => expect(mocks.exactEdit).toHaveBeenNthCalledWith(1, "task-1", {
+      operation_type: "ConfigureSubtitleTrack", subtitle_display: "zh-en",
+    }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "英文轨开关" })).toHaveAttribute("aria-checked", "true"));
+    expect(screen.getByRole("switch", { name: "中文轨开关" })).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(screen.getByRole("switch", { name: "中文轨开关" }));
+    await waitFor(() => expect(mocks.exactEdit).toHaveBeenNthCalledWith(2, "task-1", {
+      operation_type: "ConfigureSubtitleTrack", subtitle_display: "en",
+    }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "中文轨开关" })).toHaveAttribute("aria-checked", "false"));
+    expect(screen.getByRole("switch", { name: "英文轨开关" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("applies bilingual configuration and keeps real-frame cover generation distinct from AI image success", async () => {
@@ -1859,7 +1909,7 @@ describe("CreationTaskWorkspace", () => {
       target_language: "en-US",
     }));
     await waitFor(() => expect(screen.getByRole("button", { name: "从画面生成封面" })).toBeEnabled());
-    expect(screen.getByRole("button", { name: "中文" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "中文轨开关" })).toBeEnabled();
 
     fireEvent.change(screen.getByLabelText("封面画面时间"), { target: { value: "4.2" } });
     fireEvent.change(screen.getByLabelText("封面标题"), { target: { value: "真实运行" } });
@@ -1910,7 +1960,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "字幕与封面：待补封面" }));
 
-    expect(screen.getByRole("button", { name: "中英双语" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "英文轨开关" })).toBeDisabled();
     expect(await screen.findByRole("link", { name: "连接文字模型" })).toHaveAttribute("href", "/settings");
     fireEvent.change(screen.getByLabelText("封面标题"), { target: { value: "真实运行" } });
     expect(screen.getByRole("button", { name: "从画面生成封面" })).toBeEnabled();
@@ -2973,6 +3023,7 @@ describe("CreationTaskWorkspace", () => {
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
+    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
     expect(mocks.listTimelineVersions).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
@@ -3144,8 +3195,31 @@ describe("作业进度读数", () => {
     expect(within(panel).getAllByText(/成片输出 · 正在处理 · 进度 40% · 已耗时 5 分/).length).toBeGreaterThan(0);
     // 没有可信样本：等待与处理估时都写未知，不编造倒计时。
     expect(within(panel).getByText(/预计等待：未知 · 预计处理：未知（尚无可信样本，无法预计）/)).toBeInTheDocument();
-    // 历史失败原因和修复动作仍在。
+    // 历史失败仍能按需查看，但不占任务首屏。
+    const history = within(panel).getByText("查看历史作业（2 条）");
+    expect(history.closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(history);
     expect(within(panel).getAllByText(/失败原因：输出磁盘写入失败/).length).toBeGreaterThan(0);
+  });
+
+  it("keeps completed jobs factual and folds long job history out of the primary view", async () => {
+    const items = Array.from({ length: 32 }, (_, index) => ({
+      id: `job-${index}`, kind: "creation_task_montage_render" as const, status: "succeeded" as const,
+      progress: 100, attempt: 1, started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:01:00Z",
+      updated_at: "2026-10-04T08:01:00Z", elapsed_seconds: 60, failure_reason: null, impact: null,
+      repair_action: null, wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null,
+    }));
+    mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", total_count: items.length, current: items[0], items });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+    const panel = await screen.findByRole("region", { name: "作业进度" });
+    expect(panel.querySelector("p")).toHaveTextContent(/成片输出 · 已完成 · 进度 100%/);
+    expect(within(panel).queryByText(/预计等待：|预计处理：/)).not.toBeInTheDocument();
+    const history = within(panel).getByText("查看历史作业（32 条）");
+    expect(history.closest("details")).not.toHaveAttribute("open");
+    expect(history.closest("details")?.querySelectorAll("li")).toHaveLength(32);
+    fireEvent.click(history);
+    expect(history.closest("details")).toHaveAttribute("open");
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(32);
   });
 
 

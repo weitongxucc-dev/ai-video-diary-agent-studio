@@ -288,9 +288,32 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
         <p>{viewingCurrentStage ? (task.stage_status === "failed" ? "当前步骤需要处理" : task.stage_status === "waiting_for_user" ? "正在等待你的确认" : task.stage_status === "running" ? "正在处理" : "可以开始下一步") : "这是已经持久化的任务结果，不会因为回看而重新运行。"}</p>
       </section>
       {viewingCurrentStage && error ? <section className={styles.blocker} role="alert"><AlertCircle size={17} /><div><strong>{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div></section> : null}
-      {viewingCurrentStage && task.stage_reason ? <section className={styles.blocker}><AlertCircle size={17} /><div><strong>{task.stage_impact ?? task.stage_reason}</strong>{task.stage_repair_action ? <p>处理方式：{task.stage_repair_action}</p> : null}</div></section> : null}
       {selectedNarration ? <section aria-label="已选配音详情"><span className={styles.eyebrow}>已选配音</span><h3>{selectedContext?.label}</h3><p>{selectedNarration.text}</p><dl><div><dt>片段时长</dt><dd>{selectedNarration.duration_seconds?.toFixed(1) ?? "—"} 秒</dd></div><div><dt>声音版本</dt><dd>{selectedNarration.voice_version}</dd></div><div><dt>模型</dt><dd>{selectedNarration.model_id}</dd></div><div><dt>状态</dt><dd>{narrationSegmentStatus(selectedNarration.status)}</dd></div></dl></section> : null}
-      {selectedClip ? <section aria-label="已选镜头详情"><span className={styles.eyebrow}>已选镜头</span><h3>{selectedContext?.label}</h3><dl><div><dt>用途</dt><dd>{selectedClip.person_render_id ? "人物口型" : selectedClip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div><div><dt>成片位置</dt><dd>{selectedClip.timeline_start_seconds.toFixed(1)}–{selectedClip.timeline_end_seconds.toFixed(1)} 秒</dd></div><div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : selectedClip.person_render_id ? "未读取到人物片段记录" : plan.selected_voice ? `${plan.selected_voice.person_profile_id} · ${plan.selected_voice.person_version}` : "当前任务人物"}</dd></div>{selectedPersonRender ? <><div><dt>声音版本</dt><dd>{selectedPersonRender.voice_profile_id} · {selectedPersonRender.voice_version}</dd></div><div><dt>语言</dt><dd>{selectedPersonNarration?.language === "zh" ? "中文" : "未记录"}</dd></div><div><dt>口型效果</dt><dd>{lipsyncLabel(selectedPersonRender.model_id)}</dd></div><div><dt>动作</dt><dd>{selectedPersonRender.motion === "natural" ? "自然（固定）" : selectedPersonRender.motion}</dd></div><div><dt>表情</dt><dd>{selectedPersonRender.expression === "neutral" ? "中性（固定）" : selectedPersonRender.expression}</dd></div><div><dt>口型偏移</dt><dd>自动匹配（暂不可手动调整）</dd></div></> : null}<div><dt>片段状态</dt><dd>{personRenderStatus}</dd></div><div><dt>锁定</dt><dd>{selectedClip.locked ? "已锁定" : "可调整"}</dd></div><div><dt>当前口型</dt><dd>{lipsyncLabel(personRenderCapability.model_id)} · {personRenderCapability.available ? "可用" : "不可用"}</dd></div></dl>{!personRenderCapability.available ? <div aria-label="人物口型不可用原因" className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{personRenderCapability.message}</p>{personRenderCapability.repair_action ? <small>处理方式：{personRenderCapability.repair_action}</small> : null}</div> : null}{selectedPersonRender ? <p className={styles.personCapability}>动作/表情沿用原人物素材，口型匹配当前配音。</p> : null}{!selectedClip.person_render_id ? <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available} onClick={() => onPreparePersonEdit(selectedClip.id, "这一段换成当前人物出镜")} type="button"><UserRound size={15} />换成当前人物出镜</button> : <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available || !personRenderCanRegenerate} onClick={() => onPreparePersonEdit(selectedClip.id, "这里只重做口型，其他都不要动")} type="button"><UserRound size={15} />重新对口型</button>}</section> : null}
+      {selectedClip ? <section aria-label="已选镜头详情">
+        <span className={styles.eyebrow}>已选镜头</span><h3>{selectedContext?.label}</h3>
+        <dl>
+          <div><dt>用途</dt><dd>{selectedClip.person_render_id ? "人物口型" : selectedClip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div>
+          <div><dt>成片位置</dt><dd>{selectedClip.timeline_start_seconds.toFixed(1)}–{selectedClip.timeline_end_seconds.toFixed(1)} 秒</dd></div>
+          <div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : selectedClip.person_render_id ? "未读取到人物片段记录" : plan.selected_voice ? `${plan.selected_voice.person_profile_id} · ${plan.selected_voice.person_version}` : "当前任务人物"}</dd></div>
+          {selectedPersonRender ? <>
+            <div><dt>声音版本</dt><dd>{selectedPersonRender.voice_profile_id} · {selectedPersonRender.voice_version}</dd></div>
+            <div><dt>语言</dt><dd>{selectedPersonNarration?.language === "zh" ? "中文" : "未记录"}</dd></div>
+            <div><dt>口型效果</dt><dd>{lipsyncLabel(selectedPersonRender.model_id)}</dd></div>
+            <div><dt>动作</dt><dd>{selectedPersonRender.motion === "natural" ? "自然（固定）" : selectedPersonRender.motion}</dd></div>
+            <div><dt>表情</dt><dd>{selectedPersonRender.expression === "neutral" ? "中性（固定）" : selectedPersonRender.expression}</dd></div>
+            <div><dt>口型偏移</dt><dd>自动匹配（暂不可手动调整）</dd></div>
+          </> : null}
+          <div><dt>片段状态</dt><dd>{personRenderStatus}</dd></div>
+          <div><dt>锁定</dt><dd>{selectedClip.locked ? "已锁定" : "可调整"}</dd></div>
+          {(plan.presenter_share_target ?? montage?.presenter_share_target) !== 0 ? <div><dt>当前口型</dt><dd>{lipsyncLabel(personRenderCapability.model_id)} · {personRenderCapability.available ? "可用" : "不可用"}</dd></div> : null}
+        </dl>
+        {(plan.presenter_share_target ?? montage?.presenter_share_target) !== 0 && !personRenderCapability.available ? <div aria-label="人物口型不可用原因" className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{personRenderCapability.message}</p>{personRenderCapability.repair_action ? <small>处理方式：{personRenderCapability.repair_action}</small> : null}</div> : null}
+        {selectedPersonRender ? <p className={styles.personCapability}>动作/表情沿用原人物素材，口型匹配当前配音。</p> : null}
+        {(plan.presenter_share_target ?? montage?.presenter_share_target) !== 0 ? !selectedClip.person_render_id
+          ? <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available} onClick={() => onPreparePersonEdit(selectedClip.id, "这一段换成当前人物出镜")} type="button"><UserRound size={15} />换成当前人物出镜</button>
+          : <button className={`modern-primary-button ${styles.personAction}`} disabled={busy || !personRenderCapability.available || !personRenderCanRegenerate} onClick={() => onPreparePersonEdit(selectedClip.id, "这里只重做口型，其他都不要动")} type="button"><UserRound size={15} />重新对口型</button>
+          : null}
+      </section> : null}
       {activeView === "topic" ? <section><span className={styles.eyebrow}>事实来源</span><dl><div><dt>知识库</dt><dd>{plan.knowledge_references.length} 条</dd></div><div><dt>信息源</dt><dd>{plan.source_references.length} 条</dd></div><div><dt>已确认选题</dt><dd>{topic?.title ?? "尚未确认"}</dd></div></dl></section> : null}
       {activeView === "script" ? <section><span className={styles.eyebrow}>文案版本</span><dl><div><dt>标题</dt><dd>{latestScript?.title ?? "尚未生成"}</dd></div><div><dt>段落</dt><dd>{latestScript?.sections.length ?? 0} 段</dd></div><div><dt>状态</dt><dd>{latestScript?.selection_status === "confirmed" ? "已确认" : "等待确认"}</dd></div></dl></section> : null}
       {activeView === "narration" ? <section><span className={styles.eyebrow}>{currentNarration?.source_kind === "recorded" ? "本人录音" : "声音与授权"}</span>
@@ -499,9 +522,9 @@ function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, selected
         <section><strong>露脸目标</strong><p>{presenterShareTarget === null ? "当前方案没有记录露脸占比。" : `${presenterShareTarget}% · 实际 ${montage?.presenter_share_actual ?? 0}%`}</p></section>
         <section><strong>口型档位</strong><p>{plan.lipsync_quality === "high" ? "高精度 · LatentSync" : plan.lipsync_quality === "fast" ? "低精度 · MuseTalk" : "方案未选择档位"}</p></section>
         <section><strong>人物素材</strong><p>{workspace.portrait_available === undefined ? "未返回该事实" : workspace.portrait_available ? "已就绪" : "没有可用人物素材"}</p></section>
-        <section><strong>当前口型能力</strong><p>{lipsyncLabel(capability.model_id)} · {capabilityLabel(capability.available)}</p></section>
+        {presenterShareTarget !== 0 ? <section><strong>当前口型能力</strong><p>{lipsyncLabel(capability.model_id)} · {capabilityLabel(capability.available)}</p></section> : null}
       </div>
-      {!capability.available ? <div className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{capability.message}</p>{capability.repair_action ? <small>处理方式：{capability.repair_action}</small> : null}</div> : null}
+      {presenterShareTarget !== 0 && !capability.available ? <div className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{capability.message}</p>{capability.repair_action ? <small>处理方式：{capability.repair_action}</small> : null}</div> : null}
       {!narration ? <div className={styles.emptyAction}><UserRound size={30} /><h2>还没有配音事实</h2><p>口型由最终配音驱动。先生成配音，才能为选中的露脸段制作口型。</p><button className="modern-primary-button" disabled={busy} onClick={onOpenNarration} type="button">前往配音</button></div> : null}
       {narration && presenterShareTarget === null ? <div className={styles.emptyAction}><UserRound size={30} /><h2>未记录露脸占比</h2><p>当前方案的露脸占比没有记录，不能按 0% 当作跳过处理。请先在制作方案中确认露脸占比，再回到本阶段生成口型。</p></div> : null}
       {narration && presenterShareTarget === 0 ? <div className={styles.emptyAction}><UserRound size={30} /><h2>本阶段明确跳过</h2><p>露脸占比为 0%，成片全部使用素材画面，不需要生成人物口型。这不是已完成，也不会被写成完成。</p></div> : null}
@@ -1049,6 +1072,10 @@ function SubtitleCoverView({
     if (videoRef.current) videoRef.current.currentTime = bounded;
   }
 
+  useEffect(() => {
+    if (selectedCueId && currentCue) seekFrame(currentCue.start_seconds);
+  }, [selectedCueId, activeTrack.id, currentCue?.start_seconds]);
+
   function enableBilingual() {
     onSelectTrack(sourceTrack.id);
     onPreviewExact({
@@ -1058,13 +1085,25 @@ function SubtitleCoverView({
     });
   }
 
+  function toggleSubtitleTrack(language: "zh-CN" | "en-US") {
+    const nextChinese = language === "zh-CN" ? !chineseVisible : chineseVisible;
+    const nextEnglish = language === "en-US" ? !englishVisible : englishVisible;
+    const subtitle_display = nextChinese ? nextEnglish ? "zh-en" : "zh" : nextEnglish ? "en" : "none";
+    onPreviewExact({ operation_type: "ConfigureSubtitleTrack", subtitle_display });
+  }
+
   return (
     <section aria-label="字幕与封面工作区" className={styles.subtitleCoverWorkspace}>
       <div className={styles.subtitleCoverToolbar}>
-        <div aria-label="字幕语言" className={styles.segmentedControl} role="group">
-          {([['none', '无字幕'], ['zh', '中文'], ['en', '英文'], ['zh-en', '中英双语']] as const).map(([mode, label]) => <button key={mode} type="button" aria-pressed={displayMode === mode}
-            disabled={busy || displayMode === mode || ((mode === "zh" || mode === "zh-en") && !tracks.some(track => track.language === "zh-CN" && track.status === "valid")) || ((mode === "en" || mode === "zh-en") && translationTrack?.status !== "valid")}
-            onClick={() => onPreviewExact({operation_type: "ConfigureSubtitleTrack", subtitle_display: mode})}>{label}</button>)}
+        <div aria-label="字幕轨道开关" className={styles.segmentedControl} role="group">
+          <button type="button" role="switch" aria-label="中文轨开关" aria-checked={chineseVisible}
+            disabled={busy || !tracks.some(track => track.language === "zh-CN" && track.status === "valid")}
+            onClick={() => toggleSubtitleTrack("zh-CN")}>中文轨</button>
+          <button type="button" role="switch" aria-label="英文轨开关" aria-checked={englishVisible}
+            disabled={busy || translationTrack?.status !== "valid"}
+            onClick={() => toggleSubtitleTrack("en-US")}>英文轨</button>
+          <button type="button" aria-pressed={displayMode === "none"} disabled={busy || displayMode === "none"}
+            onClick={() => onPreviewExact({ operation_type: "ConfigureSubtitleTrack", subtitle_display: "none" })}>关闭字幕</button>
           {translationTrack?.status !== "valid" ? <button type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15} />生成英文字幕</button> : null}
         </div>
         <button className={styles.secondaryButton} disabled={busy || !workspace.task.can_undo} onClick={onUndo} type="button">撤销</button>
@@ -1720,16 +1759,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (result.saved) setNotice(`字幕已保存${result.fileName ? `：${result.fileName}` : "到所选位置"}`);
     } catch (cause) {
       const details = errorDetails(cause);
-      let refreshed = false;
-      try {
-        await refresh(true);
-        refreshed = true;
-      } catch {
-        // Keep the original save failure visible when the workspace cannot refresh.
-      }
-      setError({ ...details, message: `字幕没有保存到本地。${details.message}`, repairAction: refreshed
-        ? "已重新读取当前任务。请检查字幕和保存位置后，重新选择语言并再次点击「保存字幕」。"
-        : "请先刷新任务并检查本地服务和保存位置，再重新选择语言保存字幕。" });
+      setError({ ...details, message: `字幕没有保存到本地。${details.message}`, repairAction:
+        "当前任务与字幕草稿未修改；检查保存位置后可直接重试保存。" });
     } finally {
       setBusy(null);
     }
@@ -2290,8 +2321,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           );
           const view = stageView(stage.id);
           const openable = canOpenStage(view);
-          return <li aria-current={presentation.state === "current" ? "step" : undefined} className={styles[presentation.state]} key={stage.id} title={`${stage.title}：${presentation.detail}`}>
-            <button aria-label={`${stage.title}：${presentation.detail}`} aria-pressed={openable && activeView === view} disabled={!openable} onClick={() => view && openView(view)} type="button">
+          const stageFailed = task.stage_status === "failed" && view === task.stage;
+          const detail = stageFailed ? task.stage_impact ?? task.stage_reason ?? "当前步骤失败，需要处理" : presentation.detail;
+          return <li aria-current={presentation.state === "current" ? "step" : undefined} className={styles[presentation.state]} key={stage.id} title={`${stage.title}：${detail}`}>
+            <button aria-label={`${stage.title}：${detail}`} aria-pressed={openable && activeView === view} disabled={!openable} onClick={() => view && openView(view)} type="button">
               <span>{presentation.state === "done" ? <Check size={14} /> : null}</span>
               <span className={styles.stageCopy}><strong>{stage.label}</strong></span>
             </button>
@@ -2304,6 +2337,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
         {error && (isEditor || activeView === "subtitle_cover" || activeView === "review") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
         {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span>{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(async () => { const preview = await previewCreationExecution(task.id); setExecutionPreview(preview); return getCreationExecution(task.id); })} type="button">重新核对文案和制作要求</button> : null}</div> : null}
+        {task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <section className={styles.blocker} role="alert" aria-label={`${stageLabels[activeView]}失败`}><AlertCircle size={17} /><div><strong>{task.stage_reason ?? task.stage_impact}</strong>{task.stage_impact && task.stage_reason ? <p>{task.stage_impact}</p> : null}{task.stage_repair_action ? <p>处理方式：{task.stage_repair_action}</p> : null}</div></section> : null}
         {!isEditor ? <JobProgressPanel key={task.id} pendingPersonEditJobId={pendingPersonEditJobId} onPersonEditSettled={personEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
         {task.confirmed_script_id && (executionPreview || execution?.job) && (["script", "narration", "montage", "review"].includes(activeView)) ? <CreationExecutionPanel compact={isEditor && Boolean(workspace.montage)} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {execution?.job && !["script", "narration", "montage", "review"].includes(activeView) ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? execution.video_ready ? "成片已生成" : "成片产物需要检查" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
@@ -2456,14 +2490,17 @@ function JobProgressPanel({ taskId, refreshToken, pendingPersonEditJobId, onPers
     {current ? <p>
       {jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}
     </p> : <p>这个任务还没有后台作业记录。</p>}
-    {current ? <p>
+    {current && (current.status === "queued" || current.status === "running") ? <p>
       预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}（尚无可信样本，无法预计）
     </p> : null}
     {current?.failure_reason ? <p>失败原因：{current.failure_reason}{current.impact ? ` · ${current.impact}` : ""}</p> : null}
     {current?.repair_action ? <p>下一步：{current.repair_action}</p> : null}
     {readError ? <p role="alert">最新一次刷新失败：{readError} <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button></p> : null}
-    {progress.items.length > 1 ? <ol>
-      {progress.items.map((item) => <li key={item.id}>{jobKindLabel(item.kind)} · {jobStatusLabel(item.status)} · 进度 {item.progress}% · 已耗时 {formatDuration(item.elapsed_seconds)} · 更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}{item.failure_reason ? ` · 失败原因：${item.failure_reason}${item.repair_action ? ` · 下一步：${item.repair_action}` : ""}` : ""}</li>)}
-    </ol> : null}
+    {progress.items.length > 1 ? <details>
+      <summary>查看历史作业（{progress.items.length} 条）</summary>
+      <ol>
+        {progress.items.map((item) => <li key={item.id}>{jobKindLabel(item.kind)} · {jobStatusLabel(item.status)} · 进度 {item.progress}% · 已耗时 {formatDuration(item.elapsed_seconds)} · 更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}{item.failure_reason ? ` · 失败原因：${item.failure_reason}${item.repair_action ? ` · 下一步：${item.repair_action}` : ""}` : ""}</li>)}
+      </ol>
+    </details> : null}
   </section>;
 }
