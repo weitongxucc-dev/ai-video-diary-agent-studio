@@ -67,7 +67,7 @@ owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所�
 
 B106包已审核，7aa1eedd源码与UI107最终eea5f306的运行产品blob完全相等，仅测试替身差额；不重建。用户已批准退出旧试用版，根正常退出旧45104与Next45400后打开Downloads新对话包31698，原userData保留；该用户包只观察，不由B访问其DB/配置/Key。原生工具可截图，但restore后的点击被window_not_focused拒绝，GUI操作和刷新未验，不换DOM/CDP绕过、不继续要求用户人工键盘。
 
-复用B原可见终端，保护pipefish四文件脏树，无产品/共享/远端写权。仅owned /tmp/main-acceptance-20261009/material108/新DB/config/library/tmp/output/agent/log；读取B106实际包api-server及agent-tools只读，API_HOST=127.0.0.1、API_PORT=18108，端口先检查且只停自有新PID/PGID。AUTH_MODE=local、空云配置、scheduled OFF；通过现有whoami建立真实本地成员，不seed已完成任务、复制DB/设备锁或读取用户试用库。只用已授权5秒本人视频/tmp/main-acceptance-20261009/creation92/library/user-video.mp4，复制到新库后通过实际导入接口导入，不跑识别/配音/口型/渲染。原包核心业务接口/实际Pi1.1.0与Node24.16.0，国内MiniMax-M3；最多两个短文字请求，每次180秒，媒体不发送。
+复用B原可见终端，保护pipefish四文件脏树，无产品/共享/远端写权。仅owned /tmp/main-acceptance-20261009/material108/新DB/config/library/tmp/output/agent/log；读取B106实际包api-server及agent-tools只读，API_HOST=127.0.0.1、API_PORT=18108，端口先检查且只停自有新PID/PGID。AUTH_MODE=local、空云配置、scheduled OFF；通过现有whoami建立真实本地成员，不seed已完成任务、复制DB/设备锁或读取用户试用库。只用已授权5秒本人视频/tmp/main-acceptance-20261009/creation92/library/user-video.mp4，复制到新库后通过实际导入接口导入。允许这条既有导入链内的FFprobe元数据、5秒FFmpeg拆分与空模型目录的缺失能力探测；MODEL_ROOT必须指向本单空目录，模型Python路径不指向外接运行环境，不加载或启动本地模型，不跑配音/口型/渲染。不得为了避免分析新增开关、patch或seed素材。原包核心业务接口/实际Pi1.1.0与Node24.16.0，国内MiniMax-M3；最多两个短文字请求，每次180秒，媒体不发送。
 
 先启动实际包API并核健康、同一可信成员与workspace、真实导入素材；发送准备回执并等待root SECRET_READY。根独占已授权named minimax-validation-20261007.llm_api_key的只读及RAM处理，在本单临时原生keychain给实际workspace写具名测试密钥并回读，不向B/聊天/文件/日志输出Key；系统原default/search-list保持。B不能读文档/Keychain或secret文件，仅API按既有SecureStore使用；不用LLM_API_KEY明文env。
 
