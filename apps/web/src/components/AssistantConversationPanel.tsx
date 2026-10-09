@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Send } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -129,7 +129,9 @@ export function AssistantConversationPanel({
   const [capabilities, setCapabilities] = useState<Awaited<ReturnType<typeof getAssistantCapabilities>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
+  const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
   const [focus, setFocus] = useState<HTMLTextAreaElement | null>(null);
+  const diagnosticsId = useId();
   const conversation = state.conversation;
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
@@ -211,18 +213,20 @@ export function AssistantConversationPanel({
       <textarea ref={setFocus} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "写下下一条要求；Enter 发送，Shift+Enter 换行"} rows={compact ? 2 : 3} />
       <div className="assistant-conversation-actions">
         {capabilities ? <>
-          <details><summary>对话操作</summary><p>{commandHelp.join("、")}</p></details>
-          <details className="assistant-capability-diagnostics"><summary>技术能力状态（诊断）</summary>
-            <p>{capabilities.pi_tui_commands.inventory_source}（命令清单基线 v{capabilities.pi_tui_commands.inventory_version}）：{capabilities.pi_tui_commands.commands.join("、")}</p>
-            <p>本机 Pi 隔离版本检查：{capabilities.pi_tui_commands.runtime_version ?? "未确认"}（{capabilities.pi_tui_commands.runtime_status}）；{capabilities.pi_tui_commands.runtime_reason} {capabilities.pi_tui_commands.runtime_check}。{capabilities.pi_tui_commands.runtime_version === capabilities.pi_tui_commands.inventory_version ? "本机版本号与清单基线相同。" : "本机版本未确认或与清单基线不同；命令清单仅适用于所示基线。"}当前产品模式：{capabilities.pi_tui_commands.product_mode}；这些 TUI 命令未接通。</p>
-            <p>扩展命令：{capabilities.extension_commands.available ? "可用" : capabilities.extension_commands.reason}；技能：{capabilities.skills.available ? "可用" : capabilities.skills.reason}；模板：{capabilities.prompt_templates.available ? "可用" : capabilities.prompt_templates.reason}</p>
-            {Object.entries(capabilities.business_tools).map(([scope, tools]) => <p key={scope}>{scope} 工具：{tools.join("、")}</p>)}
-          </details>
+          <details className="assistant-command-help"><summary>对话操作</summary><p>{commandHelp.join("、")}</p></details>
+          <button className="assistant-diagnostics-toggle" type="button" aria-expanded={diagnosticsExpanded}
+            aria-controls={diagnosticsId} onClick={() => setDiagnosticsExpanded((expanded) => !expanded)}>技术能力状态（诊断）</button>
         </> : null}
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <button type="button" onClick={() => void state.stop().catch((cause) => setError(cause.message))}>停止本轮</button> : null}
         <span className="assistant-send-state" role="status">{sendDisabled ? sendReason : null}</span>
         <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><Send aria-hidden="true" size={14} /></button>
       </div>
+      {capabilities && diagnosticsExpanded ? <div className="assistant-capability-diagnostics" id={diagnosticsId}>
+        <p>{capabilities.pi_tui_commands.inventory_source}（命令清单基线 v{capabilities.pi_tui_commands.inventory_version}）：{capabilities.pi_tui_commands.commands.join("、")}</p>
+        <p>本机 Pi 隔离版本检查：{capabilities.pi_tui_commands.runtime_version ?? "未确认"}（{capabilities.pi_tui_commands.runtime_status}）；{capabilities.pi_tui_commands.runtime_reason} {capabilities.pi_tui_commands.runtime_check}。{capabilities.pi_tui_commands.runtime_version === capabilities.pi_tui_commands.inventory_version ? "本机版本号与清单基线相同。" : "本机版本未确认或与清单基线不同；命令清单仅适用于所示基线。"}当前产品模式：{capabilities.pi_tui_commands.product_mode}；这些 TUI 命令未接通。</p>
+        <p>扩展命令：{capabilities.extension_commands.available ? "可用" : capabilities.extension_commands.reason}；技能：{capabilities.skills.available ? "可用" : capabilities.skills.reason}；模板：{capabilities.prompt_templates.available ? "可用" : capabilities.prompt_templates.reason}</p>
+        {Object.entries(capabilities.business_tools).map(([scope, tools]) => <p key={scope}>{scope} 工具：{tools.join("、")}</p>)}
+      </div> : null}
     </form>
     {error || state.error ? <p className="assistant-conversation-error" role="alert">{error ?? state.error}</p> : null}
   </section>;

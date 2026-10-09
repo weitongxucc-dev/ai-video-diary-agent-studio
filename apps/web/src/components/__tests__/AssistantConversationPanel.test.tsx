@@ -122,8 +122,11 @@ describe("AssistantConversationPanel", () => {
 
     await screen.findByText("技术能力状态（诊断）");
     expect(screen.getByText("对话操作").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("技术能力状态（诊断）").closest("details")).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByText("技术能力状态（诊断）"));
+    const diagnostics = screen.getByRole("button", { name: "技术能力状态（诊断）" });
+    expect(diagnostics).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/本机 Pi 隔离版本检查/)).not.toBeInTheDocument();
+    fireEvent.click(diagnostics);
+    expect(diagnostics).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/本机版本未确认或与清单基线不同/)).toBeInTheDocument();
   });
 
