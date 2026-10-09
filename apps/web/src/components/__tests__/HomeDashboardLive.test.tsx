@@ -58,9 +58,9 @@ function payload(days: 7 | 30, title: string): HomeAggregation {
 
 beforeEach(() => {
   api.getHomeDashboard.mockReset();
-  api.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
-  api.getProductionFoundation.mockResolvedValue(null);
-  api.getMaterialLibraryInsights.mockResolvedValue(null);
+  api.listCreationTasks.mockReset().mockResolvedValue({ items: [], total_count: 0 });
+  api.getProductionFoundation.mockReset().mockResolvedValue(null);
+  api.getMaterialLibraryInsights.mockReset().mockResolvedValue(null);
   identity.state = { token: "tok-a", ready: true };
   window.localStorage.clear();
   // 页面会读真实的 localStorage 令牌与钩子身份比对，令牌保持一致。
@@ -68,6 +68,45 @@ beforeEach(() => {
 });
 
 describe("首页真实数据容器", () => {
+  it("uses real zero-filled range responses and replaces the compact state with a nonzero trend", async () => {
+    api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => {
+      const data = payload(days, "unused");
+      return {
+        ...data,
+        counts: ["visible_assets", "analysis_ready", "analysis_pending", "knowledge_sources", "voices", "tasks", "works"]
+          .map(key => ({ key, label: key === "visible_assets" ? "可见素材" : key, value: key === "visible_assets" && days === 30 ? 2 : 0, meta })),
+        trend: { ...data.trend, points: Array.from({ length: days }, (_, index) => ({
+          date: new Date(Date.UTC(2026, 9, 9 - days + index + 1)).toISOString().slice(0, 10),
+          count: days === 30 && index === days - 1 ? 2 : 0,
+        })) },
+        entries: { ...data.entries, queue: [] },
+      };
+    });
+    render(<HomeDashboardLive />);
+    expect(await screen.findByRole("region", { name: "开始创作" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "工作空间七项概览" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "30 天" }));
+    const chart = await screen.findByRole("img", { name: "素材接收趋势" });
+    expect(api.getHomeDashboard).toHaveBeenLastCalledWith(30);
+    expect(chart.querySelectorAll("circle")).toHaveLength(30);
+    expect(within(chart).getByLabelText("2026-10-09 接收 2 条")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("2可见素材");
+  });
+
+  it("keeps a failed first read distinct from an empty workspace and retries the request", async () => {
+    api.getHomeDashboard.mockRejectedValueOnce(new Error("首页连接失败"));
+    render(<HomeDashboardLive />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("首页连接失败");
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.queryByText("这段时间没有素材接收记录")).not.toBeInTheDocument();
+    api.getHomeDashboard.mockResolvedValue(payload(7, "重读任务"));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("button", { name: /重读任务/ })).toBeInTheDocument();
+    expect(api.getHomeDashboard).toHaveBeenCalledTimes(2);
+  });
+
   it("does not send any request before the identity has converged", async () => {
     identity.state = { token: null, ready: false };
     render(<HomeDashboardLive />);

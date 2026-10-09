@@ -61,19 +61,23 @@ function taskName(name: string) {
   return name.replace(/\bb-?roll\b/gi, "补充画面").replace(/\bbatch\b/gi, "创作任务")
     .replace(/\bepisode\b/gi, "内容").replace(/\brecipe\b/gi, "制作方案").replace(/\bprovider\b/gi, "服务");
 }
-function readinessLabel(code?: string) {
+function readinessRepair(code: string) {
   switch (code) {
-    case "brand_profile_missing": return "品牌未设置";
-    case "versioned_voice_authorization_missing": return "声音未授权";
-    case "voice_reference_missing": return "声音缺资料";
-    case "voice_model_not_ready": return "配音未备好";
-    case "source_pool_empty": return "选题缺来源";
-    case "approved_materials_empty": return "素材未选好";
-    default: return "制作未备好";
+    case "versioned_voice_authorization_missing":
+    case "voice_reference_missing":
+    case "voice_reference_unavailable":
+      return { impact: "影响配音生成；可以先讨论目标和编写文案。", href: "/settings?section=voices", label: "添加或检查声音" };
+    case "voice_model_not_ready":
+      return { impact: "影响配音生成；可以先讨论目标和编写文案。", href: "/settings?section=paths", label: "检查本地模型" };
+    case "source_pool_empty":
+      return { impact: "影响自动选题的来源范围。", href: "/sources", label: "管理选题来源" };
+    case "approved_materials_empty":
+      return { impact: "影响后续画面选择与剪辑。", href: "/library", label: "补充或检查素材" };
+    default: return null;
   }
 }
 export function TrendChart({ values }: { values: TrendPoint[] }) {
-  if (!values.length) return <div className={styles.cardEmpty}>这段时间没有素材接收记录</div>;
+  if (!values.some(point => point.count > 0)) return <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p>;
   const maximum = Math.max(1, ...values.map((point) => point.count));
   const x = (index: number) => values.length === 1 ? 143 : 12 + index * 262 / (values.length - 1);
   const y = (count: number) => 66 - count / maximum * 48;
@@ -112,7 +116,7 @@ function IndustryDonut({ items, selected, onSelect }: { items: Entry[]; selected
 export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: { tasks: CreationTask[]; foundation: ProductionFoundation | null; dashboard?: HomeDashboardExample; insights?: MaterialLibraryInsights | null; live?: HomeLiveState }) {
   const router = useRouter();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [range, setRange] = useState<7 | 30>(7);
+  const [range, setRange] = useState<7 | 30>(live?.days ?? 7);
   const [selectedFilter, setSelectedFilter] = useState<HomeMaterialFilterIntent | null>(null);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const selectedTaskState = selectedTask ? creationTaskStatusPresentation(selectedTask.stage_status, selectedTask.stage) : null;
@@ -137,6 +141,16 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
   const displayedCounts = example
     ? example.counts.filter((item) => item.value >= 0)
     : home?.counts.map((fact) => ({ label: fact.label, value: fact.value })) ?? [];
+  const hasCounts = displayedCounts.some(item => item.value > 0);
+  const trendValues = example ? (range === 7 ? example.sevenDays : example.thirtyDays) : home?.trend.points ?? [];
+  const hasTrend = trendValues.some(point => point.count > 0);
+  // 只有七项真实计数都已读到且为零、也没有任务/趋势记录时，才称当前范围为空。
+  // 某个时段没接收素材或部分统计未知，都不能推成空库。
+  const emptyWorkspace = Boolean(home && !live?.loading && !live?.error
+    && ["visible_assets", "analysis_ready", "analysis_pending", "knowledge_sources", "voices", "tasks", "works"]
+      .every(key => home.counts.some(fact => fact.key === key && fact.value === 0))
+    && tasks.length === 0 && home.entries.queue.length === 0 && home.entries.todos.length === 0
+    && home.entries.works.length === 0 && !hasTrend);
   // 真实词云只认素材数量 asset_count；片段数量 segment_count 语义不同，不做兜底。
   // 服务端为默认分类表补了零值行，asset_count 为 0 的项没有任何素材，不能进词云。
   const realTags = !example && insights?.tags.length
@@ -171,11 +185,18 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
   if (live && live.loading && !live.data) {
     return <div className={styles.home}><p className={styles.cardEmpty} role="status">正在读取整机概览…</p></div>;
   }
+  if (live?.error && !home) {
+    return <div className={styles.home}><div className={styles.readiness} role="alert"><strong>首页数据读取失败</strong><button onClick={live.onRetry} type="button">重新读取</button><details><summary>查看详情</summary><p>{live.error}</p></details></div></div>;
+  }
 
   return <div className={styles.home}>
     {dashboard ? <header className={styles.heading}><div><p>{dashboard.scopeLabel}</p></div><span className={styles.exampleBadge}>示例数据 · 不连接真实服务</span></header> : null}
+    {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h2>从一个视频目标开始</h2><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library">去素材库导入</Link></div></section> : null}
     {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div>
-      : !foundation.readiness.ready && dependencyBlockers.length ? <div className={styles.readiness}><strong>{readinessLabel(dependencyBlockers[0]?.code)}</strong><Link href="/health">查看原因</Link></div> : null}
+      : !foundation.readiness.ready && dependencyBlockers.length ? <section aria-label="制作准备事项" className={styles.preparation}><h2>制作前需要准备</h2>{dependencyBlockers.map((blocker, index) => {
+        const repair = readinessRepair(blocker.code);
+        return <article className={styles.preparationRow} key={`${blocker.code}-${index}`}><div><p>{blocker.message}</p>{repair ? <small>{repair.impact}</small> : null}<details><summary>查看诊断</summary><p>{blocker.code}</p></details></div>{repair ? <Link href={repair.href}>{repair.label}<ArrowRight aria-hidden size={14} /></Link> : null}</article>;
+      })}</section> : null}
     {!dashboard && taskGroups.length > 0 ? <section className={styles.taskGroups} aria-label="创作任务状态分组">
       <div className={styles.taskGroupsHeading}><h2>创作任务</h2><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>
       {taskGroups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.key}>
@@ -206,10 +227,14 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
     {homeTodos.length ? <section className={styles.card}><h2>需要处理</h2>{homeTodos.map((item) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(item.task_id)} key={item.task_id}><div><strong>{taskName(item.title)}</strong><small>{homeStageLabel(item.stage)} · {item.reason}</small>{item.repair_action ? <small>下一步：{item.repair_action}</small> : null}</div><ArrowRight size={14} /></Link>)}</section> : null}
     {recentWorks.length ? <section className={styles.card}><h2>近期成果</h2>{recentWorks.map((item) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(item.task_id)} key={item.task_id}><span><PlayCircle size={16} /></span><div><strong>{taskName(item.title)}</strong><small>{new Date(item.updated_at).toLocaleString("zh-CN")} · 本地成片</small></div></Link>)}</section> : null}
     <div className={styles.dashboard}>
-      {displayedCounts.length > 0 ? <section aria-label="工作空间七项概览" className={styles.metrics}>{displayedCounts.map((item) => <div className={styles.metric} key={item.label}><strong>{item.value}</strong><small>{item.label}</small></div>)}</section> : null}
-      {home && home.counts.length > 0 ? <details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map((entry) => <div key={entry.key}><dt>{entry.label}</dt><dd>{scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details> : null}
-      {(Boolean(example) || Boolean(home?.trend.points.length)) ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>素材接收趋势</h2><small>{dashboard ? "示例素材接收日" : home ? `按接收日统计 · 近 ${home.trend.days} 天 · ${scopeLabel(home.trend.meta.scope)} · ${sourceLabel(home.trend.meta.source)} · 更新于 ${new Date(home.trend.meta.as_of).toLocaleString("zh-CN")}` : "尚无接收日聚合数据"}</small></div>{trendRangePicker}</div>{example ? <TrendChart values={range === 7 ? example.sevenDays : example.thirtyDays} /> : home ? (home.trend.points.length ? <TrendChart values={home.trend.points} /> : <div className={styles.cardEmpty}>这段时间没有素材接收记录</div>) : <div className={styles.cardEmpty}>接入按日素材统计后显示趋势</div>}</section> : null}
-      {!dashboard && home && home.trend.points.length === 0 ? <div className={styles.trendEmpty}><span>这段时间没有素材接收记录 · 近 {home.trend.days} 天 · {scopeLabel(home.trend.meta.scope)} · {sourceLabel(home.trend.meta.source)}</span>{trendRangePicker}</div> : null}
+      {hasCounts ? <section aria-label="工作空间七项概览" className={styles.metrics}>{displayedCounts.map((item) => <div className={styles.metric} key={item.label}><strong>{item.value}</strong><small>{item.label}</small></div>)}</section> : null}
+      {home && home.counts.length > 0 ? <details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map((entry) => <div key={entry.key}><dt>{entry.label}</dt><dd>{entry.value} · {scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details> : null}
+      {!hasCounts && home && home.counts.length > 0 && !emptyWorkspace ? <p className={styles.trendEmptyText}>当前已读取的统计暂无记录。</p> : null}
+      {example || home ? <section aria-label="素材接收趋势" className={hasTrend ? styles.card : styles.trendEmpty}>
+        <div className={styles.cardHeading}><div><h2>素材接收趋势</h2><small>{dashboard ? "示例素材接收日" : `按接收日统计 · 近 ${home?.trend.days} 天 · 单位：条`}</small></div>{trendRangePicker}</div>
+        {hasTrend ? <TrendChart values={trendValues} /> : <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p>}
+        {home ? <details className={styles.metaDetails}><summary>趋势口径与更新时间</summary><p>{scopeLabel(home.trend.meta.scope)} · {sourceLabel(home.trend.meta.source)} · 更新于 {new Date(home.trend.meta.as_of).toLocaleString("zh-CN")}</p>{trendValues.length ? <p>{trendValues[0].date} — {trendValues[trendValues.length - 1].date}</p> : null}</details> : null}
+      </section> : null}
       {dashboard ? <section className={styles.card}><h2>素材行业分布</h2>{example?.industries.length ? <div className={styles.donutLayout}><IndustryDonut items={example.industries} onSelect={setSelectedFilter} selected={selectedFilter} /><div className={styles.legend}>{example.industries.map((item) => <button aria-pressed={selectedFilter?.kind === "industry" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "industry", key: item.label, label: item.label })} type="button"><i />{item.label}<strong>{item.count}</strong></button>)}</div></div> : null}</section> : null}
       {dashboard ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>任务与处理阶段</h2><small>{"整机队列 · 示例"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>)}</section> : null}
       {dashboard || realTags.length > 0 ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>内容标签</h2><small>{dashboard ? "示例范围内可见素材的真实标签" : "按素材数排列 · 点击标签查看对应素材"}</small></div></div>{dashboard && example?.tags.length ? <div className={styles.cloudField}>{example.tags.map((item) => <button aria-pressed={selectedFilter?.kind === "tag" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "tag", key: item.label, label: item.label })} style={{ fontSize: 12 + Math.min(12, item.count * 2) }} type="button">{item.label}<sup>{item.count}</sup></button>)}</div> : null}{!dashboard && featuredTags.length ? <div className={styles.cloudField}>{featuredTags.map((item) => <Link className={styles.cloudLink} href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} style={{ fontSize: 12 + Math.min(12, item.asset_count * 2) }}>{item.tag}<sup>{item.asset_count}</sup></Link>)}</div> : null}{moreTags.length ? <details className={styles.moreTags}><summary>更多标签与详细观察（{moreTags.length}）</summary><ul>{moreTags.map((item) => <li key={item.tag}><Link href={"/library?tag=" + encodeURIComponent(item.tag)}>{item.tag}</Link><small>{item.asset_count} 条素材</small></li>)}</ul></details> : null}</section> : null}

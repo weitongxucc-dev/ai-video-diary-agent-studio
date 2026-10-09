@@ -38,7 +38,25 @@
 .card small { color: var(--text-2); font-size: 12px; }
 .cardHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .cardHeading a { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
-.trendEmpty { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; grid-column: 1 / -1; color: var(--text-2); font-size: 12px; }
+.trendEmpty { grid-column: 1 / -1; padding: 8px 0; border-top: 1px solid var(--border-1); color: var(--text-2); font-size: 12px; }
+.trendEmpty h2 { margin: 0; color: var(--text-1); font-size: 13px; font-weight: 500; }
+.trendEmptyText { margin: 6px 0; color: var(--text-2); font-size: 12px; }
+.dashboard > .trendEmptyText { grid-column: 1 / -1; }
+.startHere { margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); font-size: 13px; }
+.startHere h2, .preparation h2 { margin: 0; font-size: 14px; font-weight: 500; }
+.startHere p { margin: 6px 0 10px; color: var(--text-2); line-height: 1.6; }
+.startHere > div { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.startHere a, .preparationRow > a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 13px; text-decoration: none; }
+.startHere a:hover, .preparationRow > a:hover { text-decoration: underline; }
+.startHere a:focus-visible, .preparationRow > a:focus-visible, .range button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+.preparation { margin-bottom: 12px; }
+.preparationRow { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.preparationRow > div { flex: 1; min-width: 0; }
+.preparationRow p { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.preparationRow small, .preparationRow details { color: var(--text-2); font-size: 12px; }
+.preparationRow details { margin-top: 3px; }
+.preparationRow summary { cursor: pointer; }
+.preparationRow > a { flex-shrink: 0; max-width: 35%; line-height: 1.6; }
 .range { display: flex; flex-shrink:0; gap: 3px; }
 .range button { min-height: 26px; padding: 0 7px; white-space:nowrap; border: 1px solid var(--border-1); border-radius: 5px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .range button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-1); }

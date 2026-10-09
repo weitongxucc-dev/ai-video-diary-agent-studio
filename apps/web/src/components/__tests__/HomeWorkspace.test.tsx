@@ -130,7 +130,7 @@ describe("HomeWorkspace", () => {
   it("keeps all 0, 1 and 7 trend points inside the chart", () => {
     const zero = render(<TrendChart values={[]} />);
     expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
-    zero.rerender(<TrendChart values={points(1)} />);
+    zero.rerender(<TrendChart values={[{ date: "2026-09-01", count: 1 }]} />);
     expect(screen.getByRole("img", { name: "素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
     zero.rerender(<TrendChart values={points(7)} />);
     const circles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
@@ -223,6 +223,95 @@ describe("HomeWorkspace", () => {
     unknown: [{ key: "materials.by_industry", reason: "行业分类仍待定义，未统计" }],
   };
 
+  const emptyHome: HomeAggregation = {
+    ...home,
+    counts: ["visible_assets", "analysis_ready", "analysis_pending", "knowledge_sources", "voices", "tasks", "works"]
+      .map((key, index) => ({ key, label: ["可见素材", "分析可用", "待分析", "知识来源", "声音", "任务", "作品"][index], value: 0, meta })),
+    trend: { ...home.trend, meta: { ...meta, as_of: "2026-10-09T00:00:00Z" }, points: Array.from({ length: 7 }, (_, index) => ({ date: `2026-10-${String(3 + index).padStart(2, "0")}`, count: 0 })) },
+    device_queue: { ...home.device_queue, counts: {}, records_total: 0, running: 0, queued: 0 },
+    entries: { ...home.entries, queue: [], todos: [], works: [] },
+  };
+
+  it("replaces actual zero-filled daily records and seven zero counts with a compact start entry", () => {
+    const onDays = vi.fn();
+    const foundation = { readiness: { ready: false, blockers: [{ code: "versioned_voice_authorization_missing", message: "尚未登记可用于配音的版本化声音。" }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} live={{ data: emptyHome, loading: false, error: null, days: 7, onDays, onRetry: vi.fn() }} />);
+    const entry = screen.getByRole("region", { name: "开始创作" });
+    expect(within(entry).getByRole("link", { name: "说说视频目标" })).toHaveAttribute("href", "/?new=1");
+    expect(within(entry).getByRole("link", { name: "去素材库导入" })).toHaveAttribute("href", "/library");
+    expect(screen.queryByRole("region", { name: "工作空间七项概览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "素材接收趋势" })).toHaveTextContent("近 7 天");
+    fireEvent.click(screen.getByRole("button", { name: "30 天" }));
+    expect(onDays).toHaveBeenCalledWith(30);
+    expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "7 天" }));
+    expect(onDays).toHaveBeenLastCalledWith(7);
+  });
+
+  it("does not infer an empty workspace from a zero period when the visible library has older data", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data: { ...home, trend: emptyHome.trend }, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12可见素材");
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
+  });
+
+  it("preserves an actual 30-day selection when the workspace is mounted again", () => {
+    const data = { ...emptyHome, days: 30, trend: { ...emptyHome.trend, days: 30, points: Array.from({ length: 30 }, (_, index) => ({ date: new Date(Date.UTC(2026, 9, index - 20)).toISOString().slice(0, 10), count: 0 })) } };
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data, loading: false, error: null, days: 30, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("region", { name: "素材接收趋势" })).toHaveTextContent("近 30 天");
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+  });
+
+  it("keeps unknown counts distinct from a proven empty workspace", () => {
+    const data = { ...emptyHome, counts: emptyHome.counts.filter(item => item.key !== "voices"), unknown: [{ key: "voices", reason: "声音库统计暂不能读取" }] };
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByText("当前已读取的统计暂无记录。")).toBeInTheDocument();
+    expect(screen.getByText("声音库统计暂不能读取").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("does not call stale zero counts an empty workspace after a read failure", () => {
+    const onRetry = vi.fn();
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data: emptyHome, loading: false, error: "统计连接失败", days: 7, onDays: vi.fn(), onRetry }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByText("部分首页数据读取失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["versioned_voice_authorization_missing", "尚未登记可用于配音的版本化声音。", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_missing", "授权声音缺少工作区参考音频或对应文字。", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_unavailable", "参考文件失联或为空，请重新定位原参考", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_unavailable", "当前成员无权读取此参考素材", "/settings?section=voices", "添加或检查声音"],
+    ["voice_model_not_ready", "本地声音模型未安装", "/settings?section=paths", "检查本地模型"],
+    ["source_pool_empty", "自动选题来源池为空。", "/sources", "管理选题来源"],
+    ["approved_materials_empty", "可用素材库中还没有明确可作补充画面的镜头。", "/library", "补充或检查素材"],
+  ])("preserves the actual %s message and directs its repair to a real consumer", (code, message, href, label) => {
+    const foundation = { readiness: { ready: false, blockers: [{ code, message }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+    const preparation = screen.getByRole("region", { name: "制作准备事项" });
+    expect(preparation).toHaveTextContent(message);
+    expect(within(preparation).getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expect(within(preparation).queryByRole("link", { name: "查看原因" })).not.toBeInTheDocument();
+    expect(screen.queryByText("声音未授权")).not.toBeInTheDocument();
+    if (code.startsWith("voice") || code.startsWith("versioned_voice")) expect(preparation).toHaveTextContent("可以先讨论目标和编写文案");
+    expect(within(preparation).getByText("查看诊断").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("retains active use restrictions and unfamiliar blockers without inventing a repair route", () => {
+    const message = "声音已标记为仅参考，不可用于配音";
+    const foundation = { readiness: { ready: false, blockers: [{ code: "voice_use_restricted", message }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+    const preparation = screen.getByRole("region", { name: "制作准备事项" });
+    expect(preparation).toHaveTextContent(message);
+    expect(within(preparation).queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("renders the real anonymous overview, trend, storage and enterable entries", () => {
     render(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[]} />);
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
@@ -312,7 +401,8 @@ it("does not warn about optional brand information but retains other dependency 
   expect(screen.queryByText("品牌未设置")).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "查看原因" })).not.toBeInTheDocument();
   view.rerender(<HomeWorkspace foundation={{ ...foundation, readiness: { ...foundation.readiness, blockers: [...foundation.readiness.blockers, { code: "voice_model_not_ready", message: "声音模型" }] } }} tasks={[]} />);
-  expect(screen.getByRole("link", { name: "查看原因" })).toHaveAttribute("href", "/health");
+  expect(screen.getByRole("link", { name: "检查本地模型" })).toHaveAttribute("href", "/settings?section=paths");
+  expect(screen.getByRole("region", { name: "制作准备事项" })).toHaveTextContent("声音模型");
 });
 
 
