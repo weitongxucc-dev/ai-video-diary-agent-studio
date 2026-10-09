@@ -528,6 +528,12 @@ F确认消费者3dc5809已审、机械组合9a268d9；原三个参数真实IO/FF
 
 新QA-V2-UI-MATERIAL-ASSISTANT-ENTRY从准确9a268d9新隔离公开候选，唯一HomeCommandComposer.tsx、其直接测试以及MaterialLibraryWorkspace.test.tsx仅对应输入label消费者。素材入口改普通“素材对话”，无选择可询问全库/分析状态，有选择可问范围内容/用途或明确修改标签；首次少量建议点击仅填草稿，不直接修改。范围提示准确说明查询无需选择、局部修改需明确对象；不改后端工具/会话/CAS/MaterialLibrary生产/Task/B files或重复读写机制。最小组件实证无选择状态查询发送selection=null且无onResult写回；所选内容查询发送固定范围且无修改结果不调用onResult；已有真实标签结果写回保持。后端读工具已过证明复用，不新模型/服务/GUI/用户资料权限。报告/tmp/main-acceptance-20261009/review-v2-material-entry/report.md，语义ACK后直接实施并交clean叶。
 
+### 主控同候选机械构建与隔离可见核验
+
+源码整改授权内，主控在两消费者交付和必要检查收口后，将准确组合SHA绑定至owned `/tmp/main-acceptance-20261009/review-v2-final-client/candidate`；不创建Run/自派worker。只复用lock摘要一致的公开依赖的自有APFS副本、已装PyInstaller与arm64 Electron33.4.11，构建Next standalone/API和arm64 dir.app，publish never、无Apple签名/公证/DMG/ZIP/安装或替换用户包。准备不是通过，实际输入digest和源码绑定另回读。
+
+仅主控可运行此新包，固定自有32123 origin与绝对新userData；HOME/XDG/DB/inbox/output/models/temp/agent完全位于同owned runtime，空DB/空inbox/空模型、local auth、scheduled OFF，不复制真实用户配置/Key/媒体/身份或模型。允许原生computer-use查看并操作自己的新PID窗口，合成文字草稿/页面导航/开关创建卡/原生选择器取消等不依赖模型的可见验收；只在确需路径时明确导入client-prep具名合成WAV/video，不能称真实声音/人物质量。业务操作来自GUI，API/SQL只读核对，不绕工具拒绝改DOM/CDP/API写冒称GUI；window_not_focused仅按指南restore一次，仍拒绝则标具体未验，不重复要求用户代按键。无Pi/模型/云/收费/发布/真实资料权限，原3000实例保留。结束正常退出自己的包，并核自有Electron/API/Web子进程与端口释放，持久unknown不手清；原用户包和资料不动。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
