@@ -237,6 +237,10 @@ UI另接任务可见事实消费者，基于804dcf3新clone到`/tmp/main-accepta
 
 C独占来源表单消费者，基于804dcf3新clone到`/tmp/main-acceptance-20261009/review-v2-source-form/candidate`分支`codex/review-v2-source-form-20261009`。owned sources/page.tsx及必要局部组件/CSS、lib/source-api.ts的来源知识输入类型、直接专项；不写main/schema/lib/api.ts/lib/types.ts/生产仓储/知识集合/全局样式。按既有SourceRepository.use_state默认available，普通导入不要求权利人/授权字符串；保留来源、历史许可和真实主动限制，外发/订阅行为边界不放宽。复用同一粘贴/文件/网页录入流程，非当前表单收起，保存失败保留输入/原对象，真实结果回读再成功；prepared文件/格式就地校验，unsupported平台非交互，源技术参数按需诊断。后端当前schema旧必填仍未释放，报告精确API接线差额，不能提交假授权占位字符串绕过，前端专项是替身证据。B结束共享写权后C另接唯一main/schema接线单，届时验证默认available、excluded/restrictions按实际检索/计划用途消费与固定版本/grants不回退。本单仅现有公开缓存/受控检查/tsc，无安装、服务/Pi/GUI/媒体/Key/用户库/远端操作。
 
+当前回执：B-PROFILE-API task_36e5c2cf4607 / ctx_9a8640de4abf；UI-TASK task_696bf5705d60 / ctx_1736a2d44acd；C-SOURCE-FORM task_dd0225de596e / ctx_32bdf6c226be，实际启动均ready/turn_started，UI/C已语义ACK。共享main/schema/api/types仅B写，UI/C其他消费者独立，其他线程当前无产品写权。
+
+E另接QA-V2-ACCEPTANCE-PREP：原终端/原旧集成树保留，仅准确804dcf3只读源码和本机公开可执行/依赖版本。输出`/tmp/main-acceptance-20261009/review-v2-client-prep/`的验收准备：本机构建ARM测试包的实际可复用Electron/Next/PyInstaller/Python/ffmpeg路径、独立userData/HOME/XDG/DB/output配置所需字段和端口/进程退出检查；只定向查现有具名依赖缓存及工具metadata，不扫描下载目录/旧证据/ZIP/用户AppSupport/配置/密钥/媒体。可在owned根用真实ffmpeg/标准库生成标为合成的30秒双画面视频、中文资料和WAV参考，保留来源与时长/范围/哈希，自制样本不是个人声音/模型结果。可写owned验收脚本/无秘密env模板，基于现有API/仓储和可信本地测试成员准备最小样本；不改产品代码/共享权威，不实际运行应用/API/Web/Pi/模型/资源队列、不打包安装下载、不碰原试用数据。需核默认配置不会偷偷触发后台模型、定时/账号外发，缺口准确标明，真实窗口接续仅主控具名运行许可之后。报告可复用检查与候选变化必须重绑的字段，不提前称已通过GUI或完成构建。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
