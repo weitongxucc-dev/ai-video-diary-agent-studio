@@ -43,7 +43,6 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     effective_segment_usage_role,
-    material_allows_automation,
 )
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
