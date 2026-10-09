@@ -5,6 +5,11 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CardSelect, HomeCardDialog, homeCardParentForTarget } from "../HomeCardDialog";
 import { CommandPalette } from "../CommandPalette";
+import { HelpPanel } from "../HelpPanel";
+import { closeHelpPanel, openHelpPanel } from "@/lib/helpPanel";
+
+const navigation = vi.hoisted(() => ({ pathname: "/" }));
+vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
 
 function Cards() {
   const [open, setOpen] = useState(true);
@@ -21,6 +26,62 @@ function Cards() {
 }
 
 describe("v5.3 object card stack", () => {
+  it("omits unused footers and leaves the last reading item in the scrolling body", () => {
+    const view = render(<HomeCardDialog kind="detail" title="长阅读" onClose={vi.fn()}><p>正文末尾</p></HomeCardDialog>);
+    const card = screen.getByRole("dialog", { name: "长阅读" });
+    expect(card.querySelector(":scope > footer")).toBeNull();
+    expect(card.querySelector('[class*="body"]')).toContainElement(screen.getByText("正文末尾"));
+    view.rerender(<HomeCardDialog kind="detail" title="长阅读" onClose={vi.fn()} footer={<button>保存</button>}><p>正文末尾</p></HomeCardDialog>);
+    expect(card.querySelector(":scope > footer")).toContainElement(screen.getByRole("button", { name: "保存" }));
+    expect(card.querySelector('[class*="body"]')).not.toContainElement(screen.getByRole("button", { name: "保存" }));
+    view.rerender(<HomeCardDialog kind="detail" title="长阅读" onClose={vi.fn()} footer={false}><p>正文末尾</p></HomeCardDialog>);
+    expect(card.querySelector(":scope > footer")).toBeNull();
+  });
+
+  it.each(["/library", "/knowledge", "/profiles", "/tasks/fixture"])("uses the shell's single help title/close and current content boundary for %s", path => {
+    navigation.pathname = path;
+    openHelpPanel();
+    const view = render(<HelpPanel />);
+    try {
+      const card = screen.getByRole("dialog", { name: "应用帮助" });
+      expect(within(card).getAllByRole("button")).toHaveLength(1);
+      expect(within(card).getByRole("heading", { level: 2, name: "应用帮助" })).toBeInTheDocument();
+      expect(within(card).getByRole("heading", { level: 3 })).toBeInTheDocument();
+      expect(card.querySelector(":scope > footer")).toBeNull();
+      expect(card).not.toHaveTextContent(/已审核|授权证据|批准用途|生成授权配音/);
+      if (path === "/library") expect(card).toHaveTextContent("默认可用于创作");
+      if (path === "/profiles") {
+        expect(card).toHaveTextContent("声音可独立登记");
+        expect(card).toHaveTextContent("缺少模型只影响生成");
+        expect(card).toHaveTextContent("发送范围");
+      }
+      if (path === "/knowledge") expect(card).toHaveTextContent("外发和发布另行确认");
+      if (path === "/tasks/fixture") expect(card).toHaveTextContent("平台发布另行确认");
+      fireEvent.click(within(card).getByRole("button", { name: "关闭卡片" }));
+      expect(screen.queryByRole("dialog", { name: "应用帮助" })).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      closeHelpPanel();
+      navigation.pathname = "/";
+    }
+  });
+
+  it("closes help on Escape and returns focus to its actual trigger", () => {
+    closeHelpPanel();
+    const view = render(<><button onClick={openHelpPanel}>查看帮助</button><HelpPanel /></>);
+    try {
+      const trigger = screen.getByRole("button", { name: "查看帮助" });
+      trigger.focus(); fireEvent.click(trigger);
+      expect(screen.getByRole("dialog", { name: "应用帮助" })).toBeInTheDocument();
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "应用帮助" })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    } finally {
+      view.unmount();
+      closeHelpPanel();
+    }
+  });
+
   it("focuses the real navigation input when its portal mounts on first open", async () => {
     function SearchConsumer() {
       const [open, setOpen] = useState(false);

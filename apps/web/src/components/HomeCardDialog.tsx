@@ -174,7 +174,7 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     <section hidden={!active} aria-label={title} aria-modal={blocksApplication ? true : undefined} className={`${styles.card} ${styles[kind]}`} ref={node} role="dialog" style={{ ...position, zIndex }} data-card-kind={kind}>
       <header><h2>{title}</h2><button aria-label="关闭卡片" onClick={onClose} type="button"><X size={16} /></button></header>
       <div className={styles.body}>{layer ? children : null}</div>
-      {kind !== "selection" ? <footer>{footer ?? null}</footer> : null}
+      {kind !== "selection" && footer ? <footer>{footer}</footer> : null}
     </section>
   </ParentCard.Provider>;
   return clientReady ? createPortal(modal ? <div hidden={!active} className={styles.modalShade} style={{ zIndex: zIndex - 1 }}>{card}</div> : card, document.body) : null;

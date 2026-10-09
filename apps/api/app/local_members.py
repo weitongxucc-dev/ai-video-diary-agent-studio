@@ -73,12 +73,12 @@ def _open(database_path: str | Path) -> sqlite3.Connection:
 
 
 def _open_reserving(database_path: str | Path) -> sqlite3.Connection:
-    """Open for a seat-taking write with SQLite's write lock already held.
+    """Open for a roster-invariant write with SQLite's write lock already held.
 
     The lock must be held *before* the seat count is read; concurrent joins would
-    otherwise both observe "4 seats used" and both insert. Deliberately scoped to the two
-    seat-taking write paths: listing, token lookup, role changes and every
-    unrelated reader keep the ordinary connection and never wait on this lock.
+    otherwise both observe "4 seats used" and both insert. Owner removal and
+    demotion likewise reserve before reading the target and remaining owners.
+    Listing, token lookup and unrelated readers keep the ordinary connection.
     """
     conn = _open(database_path)
     conn.isolation_level = None
@@ -176,7 +176,7 @@ class LocalMemberService:
         return member
 
     def remove_member(self, member_id: str) -> None:
-        with _open(self._database_path) as conn:
+        with _open_reserving(self._database_path) as conn:
             row = conn.execute(
                 "SELECT role FROM local_members WHERE member_id = ?", (member_id,)
             ).fetchone()
@@ -188,7 +188,7 @@ class LocalMemberService:
 
     def set_role(self, member_id: str, role: str) -> LocalMember:
         _validate_role(role)
-        with _open(self._database_path) as conn:
+        with _open_reserving(self._database_path) as conn:
             row = conn.execute(
                 "SELECT role FROM local_members WHERE member_id = ?", (member_id,)
             ).fetchone()

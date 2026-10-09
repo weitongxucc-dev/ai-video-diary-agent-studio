@@ -22,22 +22,32 @@
 .sectionHeader p { margin: 6px 0 0; color: var(--text-2); font-size: 12px; }
 
 .memberList { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
-.memberRow { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border-1); border-radius: 8px; }
+.memberRow { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 56px; padding: 8px; border-bottom: 1px solid var(--border-1); }
 .memberIcon { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .memberMeta { display: grid; min-width: 0; flex: 1; }
-.memberMeta strong { font-size: 13px; font-weight: 500; }
+.memberMeta strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .memberMeta small { color: var(--text-3); font-size: 12px; }
-.badge { padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.badge { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; }
 .ownerBadge { background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
 .memberBadge { background: var(--surface-2); color: var(--text-2); }
 .memberActions { display: flex; flex: 0 0 auto; gap: 6px; }
-.memberActions button { min-height: 28px; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); cursor: pointer; font-size: 12px; }
+.memberActions button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .memberActions button:disabled { cursor: not-allowed; opacity: .5; }
+.actionMenu { display: grid; gap: 4px; }
+.actionMenu button { min-height: 32px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); text-align: left; font: inherit; cursor: pointer; }
+.actionMenu button:hover { background: var(--surface-3); }
+.actionMenu button:disabled { color: var(--text-3); cursor: not-allowed; }
+.actionMenu p { padding: 4px 8px; color: var(--text-2); }
 
-.inlineForm { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 14px; }
-.inlineForm label { display: grid; gap: 4px; }
+.inlineForm { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin-top: 14px; }
+.inlineForm label { display: grid; flex: 1 1 180px; min-width: 0; gap: 4px; }
+.inlineForm > button { margin-top: 22px; }
 .inlineForm label span { color: var(--text-2); font-size: 12px; }
-.inlineForm input { min-height: 34px; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
+.inlineForm input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 34px; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
+.inlineForm input[aria-invalid="true"] { border-color: var(--danger); }
+.fieldError, .formError { margin: 0; color: var(--danger); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.formError { flex: 0 0 100%; }
+.inlineForm input:focus-visible, .memberActions button:focus-visible, .actionMenu button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .inviteRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-1); }
 .inviteCode { display: grid; gap: 3px; }
