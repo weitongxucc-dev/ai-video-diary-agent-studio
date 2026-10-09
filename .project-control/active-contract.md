@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 102：真实流式与工具过程、输入修复 | task_05194521a5cd / ctx_fdf67be27ea0；以下UI102；准确4f4f1563新分支；100旧权结束 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 103：Pi原子工具覆盖只读核验 | task_987ce2f42945 / ctx_4665a969d39a；以下B103；纯只读；99脏树保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 104：选中素材标签业务工具 | 下方B104；103只读已结案retain；99脏树保留 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -61,7 +61,15 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 Owned源码：assistant_pi.py、agent_tools/diary_tools.ts、main.py两个直接assistant入口/结果投影、schemas.py直接assistant响应/事件类型；Web HomeCommandComposer.tsx、CreationTaskWorkspace.tsx、lib/api.ts、lib/types.ts，若真实代理缓冲阻断则middleware.ts仅流式透传；必要聊天局部样式与直接既有assistant/Web测试。不得写领域/持久schema/平台/Grant/cap/桌面/依赖/共享权威/GitHub/Linear；旧global CSS不要改布局或其他消费者。owned /tmp/main-acceptance-20261009/chat102/仅最小证据。直接流式事件/真实业务结果错误分支、两种对话输入与中文组成最小检查；不开模型/Key/Pi/服务/GUI/构建/下载。交clean准确候选、净diff、实际展示与缺口；仅源码检查不能称软件闭环通过。
 
-### B103：Pi工具与创作原子能力覆盖只读核验（MAIN-ATOMS103-20261009）
+### B104：选中素材标签工具差额（MAIN-MATERIAL104-20261009）
+
+B103已交准确4f工具白名单/编译命令链与首次开始scope断点；主控已读并交UI102定向修正。B103未收进最后的素材/飞书补充，不能将核验表当全系统覆盖。本任务复用B同一终端，保护pipefish的platform99四文件脏树。只从UI仓库准确4f4f1563本地git clone --shared --no-checkout到owned /tmp/main-acceptance-20261009/material104/candidate，建立具名codex/material104-tools-20261009，不复制ignored/依赖/私密配置，不改原树。主控仍负责最终对象对话纵向集成。
+
+B唯一产品源码写权：新增apps/api/agent_tools/material_tools.ts及一个直接tests/test_assistant_material_tools.py，不编辑diary_tools.ts/assistant_pi/main.py/schemas/Web/依赖/领域/持久化/平台/资源。新模块是本次实际素材助手工具，不建通用Agent框架；与已有扩展注册一次连接由后续UI负责，在此单未连接不得称标签聊天通过。向registerMaterialTools传现有业务request回调及服务器核实的选中asset/segment上下文；模型不接受任意ID/owner/workspace/路径。工具先读选中真实素材，仅显式改“我的标签”，系统标签不改；根据明确替换/添加/移除调用已存在asset tags或segment update命令，保留其他字段，返回同一对象的持久结果和真实变化。不将改标签作为剪辑提案/创建任务；对象不存在/无选择/权限/写失败说明原因，不假成功。区分素材级与片段级并给清晰工具描述；多片段不能猜作用范围。
+
+按main产品§1.1/DESIGN§2/架构§9与auth成员边界，以及准确现有请求/响应/schema实施。最小直接测试在owned隔离环境核绑定路由/标签写回读/不改其他字段及失败不成功；测试替身不是持久GUI验收。只允已有Node/Python直接工具测试，owned依赖缓存可链接公开既有依赖；不开Pi/Key/服务/GUI/模型/媒体/账号/云/下载/构建，不读Pi会话。交clean准确候选+范围净diff、接入函数签名、已准备/未接线与后续实际验证要求，报告material104/report.md。后续UI102写权结束后主控指定同一UI线程接入全链，不发生同时写同一文件。
+
+### B103：Pi工具与创作原子能力覆盖只读核验（已succeeded结案，只读权结束）
 
 复用B原终端，保护platform99四文件脏树，不切换/提交。只读UI仓库准确4f4f1563、当前main架构§2/§9及现有编辑操作消费者链；UI102工作中必须git show固定候选，不能读取混合未提交差额。区分Pi已装内置能力、命令行实际禁用/开放工具、客户端已有但Pi未暴露工具。补核MaterialLibraryWorkspace/AppShell的素材选择→对话上下文、现有asset/segment标签API→回读；飞书仅核已有入口/模块，不读私密配置或云操作。定向核已安装Pi1.1.0公开源码事件格式（文字delta、tool execution start/end）；不运行Pi、不读会话/模型私密配置。
 
