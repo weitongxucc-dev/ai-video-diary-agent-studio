@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；当前仅下方UI96具名账号只读范围有效；B94/95源码写权及B92/UI93旧运行权已结束，历史START和租约不恢复。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；当前仅下方B97新包准备有效，服务/媒体仍待具名RERENDER_START；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
 
 用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
@@ -26,7 +26,7 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新运行操作仅下方UI96账号只读具名范围，B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新运行操作仅下方B97具名范围且等待RERENDER_START，UI96账号运行和B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 96：视频号登录页定向补验 | task_056874dd9c84 / ctx_557c021d50f6；仅下方96具名新窗口，93旧租约结束，无产品写权 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 96：只读补验已结案并retain | task_056874dd9c84 / ctx_557c021d50f6；全浏览器已释放，无运行/产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | 下方97新包准备，服务/媒体等UI96释放后的RERENDER_START；95/92旧权限结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | task_26ebee1b002d / ctx_3429f9e38039；新包准备，clone锁绑定前提待裁定；服务/媒体仍等RERENDER_START；95/92旧权限结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -49,7 +49,9 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
-### UI96：视频号登录页定向补验
+### UI96：视频号登录页定向补验（已succeeded结案，运行权结束）
+
+主控已读/tmp/main-acceptance-20261009/platform96/report.md并独立核23868/23883均退出；Dispatch已retain。原隔离profile直接恢复已认证态，无新扫码，读取稳定账号标签与空上传表单、短标题/描述；既有候选data-e2e均不匹配，同host iframe仍需适配。回执和自动发布未验；未选文件/输入/保存/提交，profile保留0700。原93已确认抖音账号标签、小红书空文件控件；本次不重跑它们。
 
 UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号标签与小红书空file input正证接受，抖音表单/回执、小红书稳定ID/媒体后字段/回执、视频号登录均未验。element_not_found是旧AX快照索引失效，不是权限或策略拒绝，不把它当平台不支持或用户尚未批准。用户本人扫码/账号控件只读批准继续有效。复用UI终端，唯一新root /tmp/main-acceptance-20261009/platform96/ 写准备脚本/非秘密报告与临时证据；仅视频号可以在原93私有微信profile中继续浏览器本机会话写入（保持原workspace/member/platform归属、0700，不复制/导出/迁移会话）。原93另两平台profiles只读保留，不重启。
 
@@ -79,7 +81,7 @@ UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号�
 
 ### B95：CI旧测试替身的请求ID（已succeeded结案，写权结束）
 
-主控审clean556b4624e646c20f1e6e5e509649ae1351104301的一行测试ID差额及18项原失败专项，机械组合4c748dfc45229b879e9e1daf473b309432899f4c，推草稿PR101并回读head相同；产品blob相对26911a1未变，新CI37867055308待回读。报告/tmp/main-acceptance-20261009/resource95/report.md，测试组释放，Dispatch已retain，无新产品或运行权限。
+主控审clean556b4624e646c20f1e6e5e509649ae1351104301的一行测试ID差额及18项原失败专项，机械组合4c748dfc45229b879e9e1daf473b309432899f4c，推草稿PR101并回读head相同；产品blob相对26911a1未变，新CI37867055308三项全部通过（Backend5m39s、Frontend2m47s、Desktop11s）。报告/tmp/main-acceptance-20261009/resource95/report.md，测试组释放，Dispatch已retain，无新产品或运行权限。
 
 准确26911a1的CI37866253751前端/桌面通过，后端18失败/1671通过/20跳过：全部18失败来自tests/test_creation_resource_contract.py::_verdict的_Request无id，而真实WorkRequest必有id。主控已读该共用替身及实际AttributeError，不为旧测试添加getattr兜底或改准入契约。复用retain的B终端，从clean26911a1339bfb140c6f01fc3a01bea277ed5d90b建立codex/resource95-test-fixture-20261009，仅apps/api/tests/test_creation_resource_contract.py写权，为该既有替身补明确fixture request ID，不更改断言/删除用例或修改任何产品代码。仅/tmp/main-acceptance-20261009/resource95/隔离HOME/XDG/DB/tmp跑该文件失败的18项，无服务/媒体/模型/Pi/Key/GUI/账号/下载/打包或外部写入；不全量本机检查。交clean候选、净diff、必要结果及未验，主控审/集成/CI回读。UI93账号观察继续，不受纯测试差额影响。
 
