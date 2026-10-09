@@ -37,17 +37,25 @@ function versionDetail(taskId = "task-1", versionId = "timeline-v4") {
   return { task_id: taskId, version: { id: versionId, sequence, parent_version_id: null, created_at: "2026-10-09T00:00:00Z", is_current: true, shot_count: 1, subtitle_track_count: 1, narration_segment_count: 1 }, shots: [], narration_segments: [], subtitle_tracks: [], cover_asset: null, artifacts: [{ kind: "video", status: "available", url: "/fixture/video.mp4", reason: null }] };
 }
 
-function setup({ accounts = { items: [] }, jobs = { items: [] }, tasks = [task] }: {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+function setup({ accounts = { items: [] }, jobs = { items: [] }, tasks = [task], versionRead }: {
   accounts?: { items: PlatformBrowserAccount[] };
   jobs?: { items: PlatformPublishJob[] };
   tasks?: CreationTask[];
+  versionRead?: (taskId: string, versionId: string) => Promise<ReturnType<typeof versionDetail>>;
 } = {}) {
   api.listCreationTasks.mockResolvedValue({ items: tasks, total_count: tasks.length });
   api.listPublishingPlatforms.mockResolvedValue(platforms);
   api.listPublishingAccounts.mockResolvedValue(accounts);
   api.listPlatformPublishJobs.mockResolvedValue(jobs);
   api.verifyPublishingAccount.mockResolvedValue({ platform: "douyin", connected: true, account_ref: "creator-001" });
-  api.getCreationTaskTimelineVersion.mockImplementation((taskId: string, versionId: string) => Promise.resolve(versionDetail(taskId, versionId)));
+  api.getCreationTaskTimelineVersion.mockImplementation(versionRead ?? ((taskId: string, versionId: string) => Promise.resolve(versionDetail(taskId, versionId))));
   render(<PublishingWorkspace />);
 }
 
@@ -90,7 +98,7 @@ describe("PublishingWorkspace", () => {
       platform: "douyin", account_ref: "creator-001", timeline_version_id: "timeline-v4",
       title: "确认过的标题", description: "完整确认文案", topics: ["家庭", "记录"], confirmed: true,
     }));
-    expect(await screen.findByText(/发布作业 publish-1 已写入本机队列/)).toBeInTheDocument();
+    expect(await screen.findByText(/发布作业 publish-1 已写入任务“新品讲解视频”的本机队列/)).toBeInTheDocument();
     expect(screen.queryByText("已发布", { exact: true })).not.toBeInTheDocument();
   });
 
@@ -120,8 +128,103 @@ describe("PublishingWorkspace", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     api.verifyPublishingAccount.mockResolvedValueOnce({ platform: "douyin", connected: true, account_ref: "creator-other" });
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("任务版本或账号已变化");
+    expect(await screen.findByRole("status")).toHaveTextContent("账号与确认账号不同");
     expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
+  });
+
+  it("discards an in-flight preflight after the user changes its target", async () => {
+    setup({ tasks: [task, task2] });
+    fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "任务一文案" } });
+    const lateAccount = deferred<{ platform: "douyin"; connected: boolean; account_ref: string }>();
+    api.verifyPublishingAccount.mockReturnValueOnce(lateAccount.promise);
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    fireEvent.change(screen.getByLabelText("发布目标（任务与成片版本）"), { target: { value: "task-2" } });
+    lateAccount.resolve({ platform: "douyin", connected: true, account_ref: "creator-001" });
+    await waitFor(() => expect(screen.getByLabelText("发布目标（任务与成片版本）")).toHaveValue("task-2"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
+  });
+
+  it("ignores an older version retry that resolves after selecting another task", async () => {
+    const oldVersion = deferred<ReturnType<typeof versionDetail>>();
+    let versionReads = 0;
+    setup({ tasks: [task, task2], versionRead: (taskId, versionId) => {
+      versionReads += 1;
+      if (versionReads === 1) return Promise.reject(new Error("临时读取失败"));
+      if (versionReads === 2) return oldVersion.promise;
+      return Promise.resolve(versionDetail(taskId, versionId));
+    } });
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "重新核对" }));
+    fireEvent.change(screen.getByLabelText("发布目标（任务与成片版本）"), { target: { value: "task-2" } });
+    await waitFor(() => expect(screen.getByText(/另一条新品视频 · V2 · 当前视频产物可用/)).toBeInTheDocument());
+    oldVersion.resolve(versionDetail("task-1", "timeline-v4"));
+    await waitFor(() => expect(screen.getByText(/另一条新品视频 · V2 · 当前视频产物可用/)).toBeInTheDocument());
+    expect(screen.queryByText(/新品讲解视频 · V4 · 当前视频产物可用/)).not.toBeInTheDocument();
+  });
+
+  it("does not silently replace the selected account when preflight reads a different one", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "选定账号文案" } });
+    api.verifyPublishingAccount.mockResolvedValueOnce({ platform: "douyin", connected: true, account_ref: "creator-other" });
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("当前账号与本轮选择不同");
+    expect(screen.queryByLabelText("发布标题")).not.toBeInTheDocument();
+    expect(screen.queryByText("本轮独立核验账号：creator-other")).not.toBeInTheDocument();
+    expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
+  });
+
+  it("aborts the final recheck after Escape cancels the card", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "待最终确认" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    await screen.findByRole("dialog");
+    const lateTasks = deferred<{ items: CreationTask[]; total_count: number }>();
+    api.listCreationTasks.mockReturnValueOnce(lateTasks.promise);
+    fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    lateTasks.resolve({ items: [task], total_count: 1 });
+    await waitFor(() => expect(api.createPlatformPublishJob).not.toHaveBeenCalled());
+  });
+
+  it("invalidates final recheck when the draft changes while its reads are pending", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "原文案" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    await screen.findByRole("dialog");
+    const lateTasks = deferred<{ items: CreationTask[]; total_count: number }>();
+    api.listCreationTasks.mockReturnValueOnce(lateTasks.promise);
+    fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
+    fireEvent.change(screen.getByLabelText("发布标题"), { target: { value: "修改后的文案" } });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    lateTasks.resolve({ items: [task], total_count: 1 });
+    await waitFor(() => expect(screen.getByLabelText("发布标题")).toHaveValue("修改后的文案"));
+    expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
+  });
+
+  it("keeps an already-sent request with its original task when the card closes", async () => {
+    setup({ tasks: [task, task2] });
+    fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));
+    fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "任务一确认文案" } });
+    fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
+    await screen.findByRole("dialog");
+    const sentJob = deferred<PlatformPublishJob>();
+    const job: PlatformPublishJob = { id: "publish-late", task_id: "task-1", status: "queued", progress: 0, queue_state: "waiting", queue_wait_reason: null, failure_reason: null, impact: null, repair_action: null, events: [] };
+    api.createPlatformPublishJob.mockReturnValueOnce(sentJob.promise);
+    fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
+    await waitFor(() => expect(api.createPlatformPublishJob).toHaveBeenCalledWith("task-1", expect.any(Object)));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(await screen.findByRole("status")).toHaveTextContent("关闭确认卡不会撤回");
+    fireEvent.change(screen.getByLabelText("发布目标（任务与成片版本）"), { target: { value: "task-2" } });
+    sentJob.resolve(job);
+    await waitFor(() => expect(screen.queryByText("等待本机发布队列")).not.toBeInTheDocument());
+    expect(api.createPlatformPublishJob).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/已撤回/)).not.toBeInTheDocument();
   });
 
   it("returns to the scoped draft without creating a job when the user cancels confirmation", async () => {

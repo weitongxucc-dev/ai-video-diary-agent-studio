@@ -22,7 +22,7 @@ const statusLabels: Record<PlatformPublishJob["status"], string> = {
 };
 const stageLabels: Record<CreationTask["stage"], string> = { topic: "选题", script: "文案", narration: "配音", montage: "视频剪辑", review: "成片检查" };
 type PublishDraft = { title: string; description: string; topics: string };
-type PublishConfirmation = PublishDraft & { taskId: string; versionId: string; accountRef: string };
+type PublishConfirmation = PublishDraft & { taskId: string; taskName: string; versionId: string; accountRef: string };
 const emptyDraft: PublishDraft = { title: "", description: "", topics: "" };
 
 function taskState(task: CreationTask): { label: string; tone: string; icon: typeof CircleDashed } {
@@ -44,7 +44,7 @@ export function PublishingWorkspace() {
   const [filter, setFilter] = useState<Filter>("all");
   const [accounts, setAccounts] = useState<PlatformBrowserAccount[]>([]);
   const [platforms, setPlatforms] = useState<PublishPlatformCapability[]>([]);
-  const [jobs, setJobs] = useState<PlatformPublishJob[]>([]);
+  const [jobsByTask, setJobsByTask] = useState<Record<string, PlatformPublishJob[]>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,8 +57,11 @@ export function PublishingWorkspace() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<PublishConfirmation | null>(null);
   const latestRequest = useRef(0);
-  const latestJobsRequest = useRef(0);
+  const latestJobsRequest = useRef(new Map<string, number>());
   const latestVersionRequest = useRef(0);
+  const operationRevision = useRef(0);
+  const busyOperation = useRef<number | null>(null);
+  const sendInFlight = useRef<number | null>(null);
 
   const refreshTasks = useCallback(async () => {
     const requestId = ++latestRequest.current;
@@ -83,13 +86,16 @@ export function PublishingWorkspace() {
   }, []);
 
   const refreshJobs = useCallback(async (taskId: string | null) => {
-    const requestId = ++latestJobsRequest.current;
-    if (!taskId) { setJobs([]); return; }
+    if (!taskId) return;
+    const requestId = (latestJobsRequest.current.get(taskId) ?? 0) + 1;
+    latestJobsRequest.current.set(taskId, requestId);
     try {
       const response = await listPlatformPublishJobs(taskId);
-      if (requestId === latestJobsRequest.current) setJobs(response.items);
+      if (requestId === latestJobsRequest.current.get(taskId)) {
+        setJobsByTask((current) => ({ ...current, [taskId]: response.items }));
+      }
     } catch (cause) {
-      if (requestId === latestJobsRequest.current) setError(cause instanceof Error ? cause.message : "无法读取发布记录。");
+      if (requestId === latestJobsRequest.current.get(taskId)) setError(cause instanceof Error ? cause.message : "无法读取发布记录。");
     }
   }, []);
 
@@ -102,6 +108,7 @@ export function PublishingWorkspace() {
     return true;
   }), [filter, tasks]);
   const selected = tasks.find((task) => task.id === selectedId) ?? null;
+  const jobs = selected ? jobsByTask[selected.id] ?? [] : [];
   const connectedDouyin = accounts.find((account) => account.platform === "douyin");
   const versionId = selected?.current_timeline_version_id ?? null;
   const draftKey = selected && versionId ? `${selected.id}:${versionId}` : null;
@@ -110,6 +117,11 @@ export function PublishingWorkspace() {
   const currentOutputReady = Boolean(selected?.output_ready && versionId && versionDetail?.task_id === selected.id
     && versionDetail.version.id === versionId && versionDetail.version.is_current && videoArtifact?.status === "available" && videoArtifact.url);
   const accountReady = Boolean(verifiedAccountRef);
+
+  function invalidatePendingOperation() {
+    operationRevision.current += 1;
+    if (sendInFlight.current === null) { busyOperation.current = null; setBusy(null); }
+  }
 
   useEffect(() => {
     const requestId = ++latestVersionRequest.current;
@@ -132,112 +144,166 @@ export function PublishingWorkspace() {
 
   useEffect(() => {
     if (filtered.length && !filtered.some((task) => task.id === selectedId)) {
+      invalidatePendingOperation(); latestVersionRequest.current += 1;
       setSelectedId(filtered[0]?.id ?? null);
     } else if (!filtered.length && selectedId) {
+      invalidatePendingOperation(); latestVersionRequest.current += 1;
       setSelectedId(null);
     }
   }, [filter, filtered, selectedId]);
 
   useEffect(() => {
     void refreshJobs(selected?.id ?? null);
-    return () => { latestJobsRequest.current += 1; };
+    return () => {
+      if (selected?.id) latestJobsRequest.current.set(selected.id, (latestJobsRequest.current.get(selected.id) ?? 0) + 1);
+    };
   }, [refreshJobs, selected?.id]);
 
   async function refreshAll() {
+    invalidatePendingOperation();
+    latestVersionRequest.current += 1;
     setError(null); setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null);
     await Promise.all([refreshTasks(), refreshPublishing(), refreshJobs(selected?.id ?? null)]);
   }
 
   async function connectDouyin() {
+    const operationId = ++operationRevision.current;
+    busyOperation.current = operationId;
     setBusy("connect"); setError(null); setNotice(null); setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null);
     try {
       const result = await connectPublishingAccount("douyin");
-      setNotice(result.detail);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "无法打开独立浏览器。"); }
-    finally { setBusy(null); }
+      if (operationId === operationRevision.current) setNotice(result.detail);
+    } catch (cause) { if (operationId === operationRevision.current) setError(cause instanceof Error ? cause.message : "无法打开独立浏览器。"); }
+    finally { if (busyOperation.current === operationId) { busyOperation.current = null; setBusy(null); } }
   }
 
   async function verifyDouyin() {
+    const operationId = ++operationRevision.current;
+    busyOperation.current = operationId;
     setBusy("verify"); setError(null); setNotice(null); setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null);
     try {
       const result = await verifyPublishingAccount("douyin");
+      if (operationId !== operationRevision.current) return;
       if (result.connected && result.account_ref) {
         setVerifiedAccountRef(result.account_ref);
         setNotice(`已从独立浏览器读取账号 ${result.account_ref}；请提交前再次核对。`);
         await refreshPublishing();
       } else { setVerifiedAccountRef(null); setNotice(result.detail || "未读到当前登录账号，请先在独立浏览器完成登录。"); }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "账号核验失败。"); }
-    finally { setBusy(null); }
+    } catch (cause) { if (operationId === operationRevision.current) setError(cause instanceof Error ? cause.message : "账号核验失败。"); }
+    finally { if (busyOperation.current === operationId) { busyOperation.current = null; setBusy(null); } }
   }
 
   function updateDraft(field: keyof PublishDraft, value: string) {
     if (!draftKey) return;
+    invalidatePendingOperation();
+    if (confirmOpen) { setConfirmOpen(false); setConfirmation(null); }
     setDrafts((current) => ({ ...current, [draftKey]: { ...(current[draftKey] ?? emptyDraft), [field]: value } }));
   }
 
   function selectTask(taskId: string | null) {
+    invalidatePendingOperation();
+    latestVersionRequest.current += 1;
     setSelectedId(taskId);
     if (taskId && !filtered.some((task) => task.id === taskId)) setFilter("all");
+    setConfirmOpen(false); setConfirmation(null); setNotice(null); setError(null);
+  }
+
+  function closeConfirmation() {
+    invalidatePendingOperation();
     setConfirmOpen(false); setConfirmation(null);
+    setNotice(sendInFlight.current !== null
+      ? "发布作业请求已发出；关闭确认卡不会撤回，请在对应任务的发布记录中查看结果。"
+      : null);
+  }
+
+  function retryVersionDetail() {
+    if (!selected || !versionId) return;
+    invalidatePendingOperation();
+    const taskId = selected.id;
+    const selectedVersionId = versionId;
+    const requestId = ++latestVersionRequest.current;
+    setVersionDetail(null); setVersionError(null); setVersionLoading(true);
+    getCreationTaskTimelineVersion(taskId, selectedVersionId)
+      .then((detail) => { if (requestId === latestVersionRequest.current) setVersionDetail(detail); })
+      .catch((cause) => { if (requestId === latestVersionRequest.current) setVersionError(cause instanceof Error ? cause.message : "暂时无法核对当前成片版本。"); })
+      .finally(() => { if (requestId === latestVersionRequest.current) setVersionLoading(false); });
   }
 
   async function openPublishConfirmation() {
     if (!selected || !versionId || !currentOutputReady || !verifiedAccountRef || busy !== null) return;
+    const operationId = ++operationRevision.current;
+    const target = { taskId: selected.id, versionId, accountRef: verifiedAccountRef };
+    const copy = { ...currentDraft };
+    busyOperation.current = operationId;
     setBusy("preflight"); setError(null); setNotice(null); setConfirmOpen(false); setConfirmation(null);
     try {
       const [taskResponse, accountCheck, detail] = await Promise.all([
         listCreationTasks(), verifyPublishingAccount("douyin"), getCreationTaskTimelineVersion(selected.id, versionId),
       ]);
+      if (operationId !== operationRevision.current) return;
       const freshTask = taskResponse.items.find((task) => task.id === selected.id);
       setTasks(taskResponse.items);
       if (!freshTask?.output_ready || freshTask.current_timeline_version_id !== versionId
         || detail.task_id !== selected.id || detail.version.id !== versionId || detail.version.sequence !== freshTask.timeline_sequence || !detail.version.is_current
         || !detail.artifacts.some((artifact) => artifact.kind === "video" && artifact.status === "available" && artifact.url)
-        || !accountCheck.connected || !accountCheck.account_ref) {
-        setVerifiedAccountRef(accountCheck.connected ? accountCheck.account_ref ?? null : null);
-        setNotice("发布目标或账号状态已变化；请重新选择并核验后再编辑。");
+        || !accountCheck.connected || accountCheck.account_ref !== target.accountRef) {
+        setVerifiedAccountRef(null);
+        setNotice(accountCheck.connected && accountCheck.account_ref !== target.accountRef
+          ? "当前账号与本轮选择不同；原确认已取消，请先手动核验并选择当前账号。"
+          : "发布目标或账号状态已变化；请重新选择并核验后再编辑。");
         return;
       }
-      setVerifiedAccountRef(accountCheck.account_ref);
       setVersionDetail(detail);
-      const current = draftKey ? drafts[draftKey] ?? emptyDraft : emptyDraft;
-      setConfirmation({ taskId: freshTask.id, versionId, accountRef: accountCheck.account_ref, ...current });
+      setConfirmation({ taskId: target.taskId, taskName: freshTask.name, versionId: target.versionId, accountRef: target.accountRef, ...copy });
       setConfirmOpen(true);
-    } catch (cause) { setVerifiedAccountRef(null); setError(cause instanceof Error ? cause.message : "发布预检未完成，请重新读取任务和账号。"); }
-    finally { setBusy(null); }
+    } catch (cause) {
+      if (operationId === operationRevision.current) { setVerifiedAccountRef(null); setError(cause instanceof Error ? cause.message : "发布预检未完成，请重新读取任务和账号。"); }
+    } finally { if (busyOperation.current === operationId) { busyOperation.current = null; setBusy(null); } }
   }
 
   async function submitPublish() {
     if (!confirmation || !selected || busy !== null) return;
+    const operationId = ++operationRevision.current;
+    const snapshot = { ...confirmation };
+    busyOperation.current = operationId;
     setBusy("publish"); setError(null); setNotice(null);
     try {
       const [taskResponse, accountCheck, detail] = await Promise.all([
-        listCreationTasks(), verifyPublishingAccount("douyin"), getCreationTaskTimelineVersion(confirmation.taskId, confirmation.versionId),
+        listCreationTasks(), verifyPublishingAccount("douyin"), getCreationTaskTimelineVersion(snapshot.taskId, snapshot.versionId),
       ]);
-      const freshTask = taskResponse.items.find((task) => task.id === confirmation.taskId);
+      if (operationId !== operationRevision.current) return;
+      const freshTask = taskResponse.items.find((task) => task.id === snapshot.taskId);
       setTasks(taskResponse.items);
-      if (selected.id !== confirmation.taskId || selected.current_timeline_version_id !== confirmation.versionId
-        || !freshTask?.output_ready || freshTask.current_timeline_version_id !== confirmation.versionId
-        || detail.task_id !== confirmation.taskId || detail.version.id !== confirmation.versionId || detail.version.sequence !== freshTask.timeline_sequence || !detail.version.is_current
+      if (selected.id !== snapshot.taskId || selected.current_timeline_version_id !== snapshot.versionId
+        || !freshTask?.output_ready || freshTask.current_timeline_version_id !== snapshot.versionId
+        || detail.task_id !== snapshot.taskId || detail.version.id !== snapshot.versionId || detail.version.sequence !== freshTask.timeline_sequence || !detail.version.is_current
         || !detail.artifacts.some((artifact) => artifact.kind === "video" && artifact.status === "available" && artifact.url)
-        || !accountCheck.connected || accountCheck.account_ref !== confirmation.accountRef) {
-        setVerifiedAccountRef(accountCheck.connected ? accountCheck.account_ref ?? null : null);
+        || !accountCheck.connected || accountCheck.account_ref !== snapshot.accountRef) {
+        setVerifiedAccountRef(null);
         setConfirmOpen(false); setConfirmation(null);
-        setNotice("确认期间任务版本或账号已变化，未提交发布作业；请重新核对。");
+        setNotice(accountCheck.connected && accountCheck.account_ref !== snapshot.accountRef
+          ? "当前账号与确认账号不同；未提交发布作业，请手动核验后重新确认。"
+          : "确认期间任务版本或账号已变化，未提交发布作业；请重新核对。");
         return;
       }
-      const normalizedTopics = confirmation.topics.split(/[，,\n]/).map((topic) => topic.trim().replace(/^#/, "")).filter(Boolean);
-      const job = await createPlatformPublishJob(confirmation.taskId, {
-        platform: "douyin", account_ref: confirmation.accountRef,
-        timeline_version_id: confirmation.versionId,
-        title: confirmation.title, description: confirmation.description, topics: normalizedTopics,
+      if (operationId !== operationRevision.current) return;
+      const normalizedTopics = snapshot.topics.split(/[，,\n]/).map((topic) => topic.trim().replace(/^#/, "")).filter(Boolean);
+      sendInFlight.current = operationId;
+      const job = await createPlatformPublishJob(snapshot.taskId, {
+        platform: "douyin", account_ref: snapshot.accountRef,
+        timeline_version_id: snapshot.versionId,
+        title: snapshot.title, description: snapshot.description, topics: normalizedTopics,
         idempotency_key: crypto.randomUUID(), confirmed: true,
       });
-      setConfirmOpen(false); setConfirmation(null); setNotice(`发布作业 ${job.id} 已写入本机队列；实际平台结果以队列回读为准。`);
-      const response = await listPlatformPublishJobs(confirmation.taskId);
-      setJobs(response.items);
-    } catch (cause) { setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null); setError(cause instanceof Error ? cause.message : "发布作业未能提交。"); }
-    finally { setBusy(null); }
+      sendInFlight.current = null;
+      latestJobsRequest.current.set(snapshot.taskId, (latestJobsRequest.current.get(snapshot.taskId) ?? 0) + 1);
+      setJobsByTask((current) => ({ ...current, [snapshot.taskId]: [job, ...(current[snapshot.taskId] ?? []).filter((item) => item.id !== job.id)] }));
+      setConfirmOpen(false); setConfirmation(null);
+      if (operationId === operationRevision.current) setNotice(`发布作业 ${job.id} 已写入任务“${snapshot.taskName}”的本机队列；实际平台结果以记录回读为准。`);
+    } catch (cause) {
+      sendInFlight.current = null;
+      if (operationId === operationRevision.current) { setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null); setError(cause instanceof Error ? cause.message : "发布作业未能提交。"); }
+    } finally { if (busyOperation.current === operationId) { busyOperation.current = null; setBusy(null); } }
   }
 
   const inspector = selected ? <div className={styles.inspector}>
@@ -278,7 +344,7 @@ export function PublishingWorkspace() {
         </select></label>
         {selected ? <p className={publishStyles.targetSummary}>发布目标：{selected.name} · {versionId ? `V${selected.timeline_sequence}` : "无当前版本"} · {currentOutputReady ? "当前视频产物可用" : selected.output_ready ? "正在核对产物" : "尚未就绪"}</p> : <p>暂无创作任务。任务读取后会显示可检查的发布目标。</p>}
         {versionLoading ? <p role="status">正在核对所选版本的成片文件…</p> : null}
-        {versionError ? <p role="alert">成片版本核对失败：{versionError} <button className={styles.secondaryButton} onClick={() => { if (selected && versionId) { setVersionError(null); setVersionLoading(true); getCreationTaskTimelineVersion(selected.id, versionId).then(setVersionDetail).catch((cause) => setVersionError(cause instanceof Error ? cause.message : "暂时无法核对当前成片版本。")).finally(() => setVersionLoading(false)); } }} type="button">重新核对</button></p> : null}
+        {versionError ? <p role="alert">成片版本核对失败：{versionError} <button className={styles.secondaryButton} onClick={retryVersionDetail} type="button">重新核对</button></p> : null}
         {!selected?.output_ready || !versionId ? <p className={publishStyles.gate}>这个任务还没有当前可发布成片。可先查看记录或打开任务继续制作，不能在此输入会被误认为可发布的文案。</p> : null}
         {selected?.output_ready && versionId && !versionLoading && !versionError && !currentOutputReady ? <p className={publishStyles.gate}>当前版本未提供可核验的视频文件，暂不能作为发布目标；请打开任务检查成片。</p> : null}
 
@@ -313,13 +379,13 @@ export function PublishingWorkspace() {
 
       {error && !tasks.length ? <p role="alert">创作任务读取失败：{error}</p> : null}
       <div className={styles.summaryRow}><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{tasks.filter((task) => task.output_ready).length}</strong> 成片就绪</span><button className={styles.secondaryButton} disabled={loading} onClick={() => void refreshAll()} type="button"><RefreshCw size={14} />刷新</button></div>
-      <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => setFilter(item.id)} type="button">{item.label}</button>)}</nav>
+      <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => { invalidatePendingOperation(); latestVersionRequest.current += 1; setConfirmOpen(false); setConfirmation(null); setFilter(item.id); }} type="button">{item.label}</button>)}</nav>
       <section className={styles.recordList}><div className={styles.sectionHeading}><h2>创作任务</h2><p>{loading ? "正在读取…" : `${filtered.length} 项`}</p></div>
         {filtered.length ? <ol className={styles.records}>{filtered.map((task) => { const state = taskState(task); const StateIcon = state.icon; return <li key={task.id}><button aria-pressed={selected?.id === task.id} className={selected?.id === task.id ? styles.selectedRecord : undefined} data-open-details onClick={() => selectTask(task.id)} type="button"><span className={`${styles.recordState} ${state.tone}`}><StateIcon size={16} /></span><span className={styles.recordBody}><span className={styles.recordTitle}><strong>{task.name}</strong><em>{state.label}</em></span><span>{stageLabels[task.stage]} · {task.output_ready ? `当前成片版本 V${task.timeline_sequence}` : "打开任务继续处理"}</span><span className={styles.progressTrack} aria-label={`进度 ${task.progress}%`}><i style={{ width: `${task.progress}%` }} /></span></span><span className={styles.recordTime}>{formatTime(task.updated_at)}<ArrowRight size={15} /></span></button></li>; })}</ol> : <div className={styles.emptyStage}><span className={styles.emptyIcon}><Film size={22} /></span><div><h2>{loading ? "正在读取任务" : "当前没有可显示的记录"}</h2><p>{error || "发布只会使用已确认且仍为当前版本的有效成片。"}</p></div></div>}
       </section>
 
-      {confirmOpen && selected && confirmation ? <HomeCardDialog kind="confirmation" title="确认抖音发布内容" onClose={() => { setConfirmOpen(false); setConfirmation(null); }} footer={<><button className={styles.secondaryButton} data-card-cancel onClick={() => { setConfirmOpen(false); setConfirmation(null); }} type="button">返回修改</button><button className={styles.primaryButton} disabled={busy !== null} onClick={() => void submitPublish()} type="button">{busy === "publish" ? "正在重新核验…" : "我已核对，创建发布作业"}</button></>}>
-        <p>平台：抖音</p><p>账号：{confirmation.accountRef}</p><p>成片：{selected.name} · 当前版本 V{selected.timeline_sequence}（{confirmation.versionId}）</p><p>标题：{confirmation.title}</p><p>描述：{confirmation.description || "（空）"}</p><p>话题：{confirmation.topics || "（无）"}</p><p>确认后还会复核任务版本和独立浏览器中的账号；发生变化将取消本次确认。创建的是本机发布作业，不代表平台已发布。</p>
+      {confirmOpen && selected && confirmation ? <HomeCardDialog kind="confirmation" title="确认抖音发布内容" onClose={closeConfirmation} footer={<><button className={styles.secondaryButton} data-card-cancel onClick={closeConfirmation} type="button">返回修改</button><button className={styles.primaryButton} disabled={busy !== null} onClick={() => void submitPublish()} type="button">{busy === "publish" ? "正在重新核验…" : "我已核对，创建发布作业"}</button></>}>
+        <p>平台：抖音</p><p>账号：{confirmation.accountRef}</p><p>成片：{confirmation.taskName} · 当前版本 V{selected.timeline_sequence}（{confirmation.versionId}）</p><p>标题：{confirmation.title}</p><p>描述：{confirmation.description || "（空）"}</p><p>话题：{confirmation.topics || "（无）"}</p><p>确认后还会复核任务版本和独立浏览器中的账号；发生变化将取消本次确认。创建的是本机发布作业，不代表平台已发布。</p>
       </HomeCardDialog> : null}
     </div>
   </AppShell>;
