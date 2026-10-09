@@ -287,6 +287,18 @@ F入口42017ab已源码交付retain并机械组合01f9ae2，UI会话Repo be9e51a
 
 B新报告旧同步局部重配音`_regenerate_creation_task_narration_segment`未传真实grant/repository/reader，对范围化声音会被核心门禁拒绝；保留为实际制作编辑接续叶，不借人物编辑许可或新增并行调度器，不因独立试听排队通过关闭整条修改→重出链。
 
+### QA-V2-C-SOURCE-API-IMPLEMENT：共享来源接口正式释放
+
+B msg_a78982b37b5f已明确345d88f clean交付后停止新增产品修改并释放main/schema/API/types；主控机械组合为1993ad062c3f7604614c60beb2159b3717d259ad。B的独立预览终态metadata并发残差需新单补，旧同步局部配音/旧测试来源夹具/UI三人物消费者/N36仍开放，队列分类档案独立试听为normal_make，不凭preview名称升级作品局部预览优先。
+
+C阶段1 task_e3a8068df898/ctx_15d1fec37b07已06d1104 succeeded/retain，仅四条真实旧缺口证据不是修复，旧API字段/限制丢失与excluded假保存均确认。本阶段C新Task从准确1993ad0 clone到`/tmp/main-acceptance-20261009/review-v2-source-api-implementation/candidate`新公开分支，只写main.py来源录入/knowledge response/预检资料/选题与assistant script资料/ScriptLibrary来源资格相关段、schemas.py上述直接字段、source_repository.py必要资格/可信保存版本增量、source-api.ts/sources/page.tsx及直接专项；B已释放libAPI/types但本单不得无关改，必要资料类型只source-api。UI仅Repo/hook待main release，F仅assistant_pi/material_tools/diary_tools素材段；C不得改这些文件或生产仓储/人物/调度/全局CSS/桌面。
+
+三录入use_state校验落盘默认available并响应真实状态；普通保存省略旧ownership/authorization，可信owner_user_id来自member，来源/hash/真实系统版本来自SourceRepository。法定权利人/证明空就是空，不能将上传成员名或伪造授权句写成版权证明；已有证明/引用版本保持。保存excluded使用真实保存回执(id/source/version/use_state)确认，browse仍排除不能假失败或让excluded进入检索。旧手动source重复保存也应识别同一源/真实版本，失败重试不造多个KnowledgeItem；内容hash去重不能返回/覆盖另一成员私人条目或改变grants。只为真实登记与本次来源差额增加必要查询/事务，不造第二事实库或一套通用兜底。
+
+沿既有for_use/content_allows_use按真实purpose贯穿Plan/固定资料版本/topic/script上下文、实际agent_tools/diary_tools.ts的find_knowledge读取GET knowledge或script-context（当前F owned TS，不写但必须核真实调用），ScriptLibrary读取复用：不使用不能读取，reference_only事实参考可用，不用于自动任务不能自动候选，不用于发布不能发布；同一素材资格与B已实现后端保持。移除所有普通内容默认必须旧权利证明的活跃guard（_creation_task_topic_inputs和_script_library_sources等），而非删UI文字。license字符串不是ExternalConsent，blank/unknown不能继续伪装实际外发授权；纯本地保存不按cloud_egress=True强制校验云端。真实外部调用仍遵守产品2.6已有有效连接/必要文字证据/服务与数据类型告知，不新增收费、外发媒体或模型运行许可；对真实scope/version/grants/revocation与用户限制完整重核，provider失败不回退。
+
+实际phase1四项要转为修复后期望测试，可定向copy旧06d1104测试文件再改断言，不整包cherry-pick BUG_PASS。最小三入口/缺文件/不同状态/可信member、excluded receipt/迟到另一源不串状态/同源重试、Plan-topic-script-library默认可用与限制/固定历史版及撤销检查。只TestClient临时DB/文字网页替身、既有pytest/Web cache/tsc；无服务/模型/Pi/GUI/用户数据/Key/安装/账号/外发/远端。交clean准确delta/report和共享main/schema释放回执，UI持久CAS接续仅此结束后，不把fixture当真实界面。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
