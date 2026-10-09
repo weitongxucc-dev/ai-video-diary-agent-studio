@@ -51,7 +51,7 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 ### UI98：三平台账号接入与真实身份修正
 
-复用UI原可见终端，从准确clean4c748dfc45229b879e9e1daf473b309432899f4c建立具名新分支，先保护原UI90分支/证据。用户已批准三平台首版与真实账号只读，现有候选账号data-e2e不匹配，service/UI硬编码只允许抖音。目标是三平台可从软件打开成员专用浏览器，读取实际稳定账号标识并持久保存原workspace/member/platform归属；不能把显示名当稳定ID或称已发布。唯一源码范围：apps/api/app/platform_auth/service.py、capabilities.py；apps/api/app/platform_browser/{base,douyin,xiaohongshu,channels,playwright_driver}.py；apps/web/src/components/PublishingWorkspace.tsx及其直接既有测试；apps/api/tests/test_platform_auth.py、test_platform_browser.py。新owned /tmp/main-acceptance-20261009/account98/写必要准备/测试/报告。main.py/发布队列/发送执行/数据库schema/资源cap/打包/依赖/共享权威只读，不给B97已冻结4c引入变更。按产品§11/认证工作区边界，不改变业务授权。
+复用UI原可见终端，从准确clean4c748dfc45229b879e9e1daf473b309432899f4c建立具名新分支，先保护原UI90分支/证据。用户已批准三平台首版与真实账号只读，现有候选账号data-e2e不匹配，service/UI硬编码只允许抖音。目标是三平台可从软件打开成员专用浏览器，读取实际稳定账号标识并持久保存原workspace/member/platform归属；不能把显示名当稳定ID或称已发布。唯一源码范围：apps/api/app/platform_auth/service.py、capabilities.py；apps/api/app/platform_browser/{base,douyin,xiaohongshu,channels,playwright_driver}.py；apps/web/src/components/PublishingWorkspace.tsx及其直接既有测试；apps/api/tests/test_platform_auth.py、test_platform_browser.py，以及test_platform_publish.py中直接受login稳定ID契约影响的既有driver替身与身份变化拒绝回归（不改断言以掩盖失败、不扩发布行为）。新owned /tmp/main-acceptance-20261009/account98/写必要准备/测试/报告。main.py/发布队列/发送执行/数据库schema/资源cap/打包/依赖/共享权威只读，不给B97已冻结4c引入变更。按产品§11/认证工作区边界，不改变业务授权。
 
 先读UI93/96报告、现有真实consumer链和对应权威，语义REBASE_ACK后可以定向源码准备与最小必要测试；涉及真实页面locator的实施必须据实际字段/role/容器，不能从AX文字猜DOM、不宽扫body个人内容。三平台connect/verify由能力与实际adapter控制，不新增并行Auth体系；账号打开/核验与发布能力分开，未适配发送的另两平台browser_publish保持false，verified不因login自动true。没有可验证ID明确未核验；状态错误给真实原因，不降级为昵称或伪成功。
 
