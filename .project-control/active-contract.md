@@ -129,7 +129,7 @@ C来源第一批d16b9c0已交/retain。C新知识核心迁移：从准确f595eaf
 
 ### QA-V2-B-RANGE：独立人物方案引用与精确媒体范围
 
-B核心写权结束。本单复用原B终端，从主控组合树准确267802c新clone到/tmp/main-acceptance-20261009/review-v2-profile-range/candidate，分支codex/review-v2-profile-range-20261009，保护B99脏树。领域§4/§5.1已经明确独立person_profile_ref和voice_profile_ref；B为F01/F02纵向负责人继续完成此机制。唯一owned creation_plan.py、creation_execution.py、production.py人物声音参考解析、avatar_lipsync.py、narration.py及现有类型化FFmpeg/注册许可子进程的必要直接接线和专项；可新增一个具体参考派生模块，不建第二执行器/权限系统。main.py/schemas.py/Web/api.ts/types.ts仍UI独占，本单不得改它们；不改C的sources/source_repository、共享权威或平台。
+B核心写权结束。本单复用原B终端，从主控组合树准确267802c新clone到/tmp/main-acceptance-20261009/review-v2-profile-range/candidate，分支codex/review-v2-profile-range-20261009，保护B99脏树。领域§4/§5.1已经明确独立person_profile_ref和voice_profile_ref；B为F01/F02纵向负责人继续完成此机制。唯一owned production.py内既有CreationPlan与编译/持久消费者、creation_execution.py、production.py人物声音参考解析、avatar_lipsync.py、narration.py及现有类型化FFmpeg/注册许可子进程的必要直接接线和专项；可新增一个具体参考派生模块，不建第二执行器/权限系统。main.py/schemas.py/Web/api.ts/types.ts仍UI独占，本单不得改它们；不改C的sources/source_repository、共享权威或平台。
 
 新增selected_person固定id/version独立选择，不从声音关系猜人物，0%人物任务不读人物/口型环境。旧方案读取保留确有绑定的人物身份作为历史投影，不把空关系或其他声音自动补成当前选择。选择、缓存身份、人物生成和编辑读取同一明确版本。兼容差额与后续Schema/API参数交主控单写者接线。
 
