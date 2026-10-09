@@ -61,7 +61,7 @@ UI是纵向实施及退役负责人，从原clean6d7b0ada建立`codex/review-v2-
 
 沿现有SQLite/Repository、可信assistant路由、Pi运行和业务工具建立必要会话持久入口，不建第二Agent/生产状态库。新的聊天轮次只有一个写者，既有TaskEvent业务结果保持；旧任务聊天仅作为明确只读历史投影，不清空或静默迁移用户历史，不读取任意Pi session文件。草稿按合理提交检查点保存，不每个字符产生业务版本或伪装已执行；选择切换后结果归原会话对象，不能覆盖新选择。停止须从服务端关联当前轮次实际子进程并释放，终态回读可核实；可用受控无秘密假进程验证生命周期，不能用停止SSE读取代替进程停止。
 
-唯一owned产品：HomeCommandComposer.tsx、CreationTaskWorkspace.tsx、AppShell.tsx、MaterialLibraryWorkspace.tsx仅会话上下文；lib/api.ts、lib/types.ts；main.py仅会话创建/回读/草稿/命令/停止与三个assistant直接消费者、assistant_pi.py；确有需要的单一会话Repository模块/对应增量schema与生命周期模块、diary_tools.ts仅真实事件投影；必要共享消息组件和对话局部样式及上述直接测试。不改ProfilesRepository/人物声音/平台/任务媒体或调度/共享权威/云身份/桌面。package/lock仅在核无既有安全Markdown渲染能力后允许引入react-markdown和remark-gfm及必要锁文件；不执行安装脚本、不加入其他UI底座。B无以上文件写权，若B后续需要共享入口须等本单交付后具名转交。
+唯一owned产品：HomeCommandComposer.tsx、CreationTaskWorkspace.tsx、MaterialLibraryWorkspace.tsx仅会话上下文（AppShell已按下方RELEASE_ACK转F）；lib/api.ts、lib/types.ts；main.py仅会话创建/回读/草稿/命令/停止与三个assistant直接消费者、assistant_pi.py；确有需要的单一会话Repository模块/对应增量schema与生命周期模块、diary_tools.ts仅真实事件投影；必要共享消息组件和对话局部样式及上述直接测试。不改ProfilesRepository/人物声音/平台/任务媒体或调度/共享权威/云身份/桌面。package/lock仅在核无既有安全Markdown渲染能力后允许引入react-markdown和remark-gfm及必要锁文件；不执行安装脚本、不加入其他UI底座。B无以上文件写权，若B后续需要共享入口须等本单交付后具名转交。
 
 owned证据`/tmp/main-acceptance-20261009/review-v2-conversation/`。最小验证：两处Composer即时/流式/下一草稿/安全渲染/复制/工具顺序/未知命令；服务端会话成员空间隔离与范围绑定、历史/草稿刷新恢复、轮次错误/取消与实际受控子进程释放、只读历史兼容。允许已有依赖专项、tsc及隔离测试DB，不运行真实用户DB迁移、Pi/Key、个人素材/模型、账号/GUI/常驻服务或打包。新增必要表/字段只能在可丢弃测试DB验证，原数据保留与旧写者退役有负向证据。交clean候选、净diff、命令能力表、逐ID证据和未验项；源码通过后主控一次集成及具名客户端补验，未完成真实目标不得关闭Issue或称MIGRATION_ACCEPTED。
 
@@ -138,6 +138,12 @@ B核心写权结束。本单复用原B终端，从主控组合树准确267802c�
 只在owned隔离目录用自制合成媒体验证真实FFmpeg切片/提取、范围精度及原件不变，并通过既有测试Grant证明许可前不执行、取消/失败不留成功结果与注册子进程释放；不申请或运行真实用户DeviceGrant、模型/Pi/Key/用户素材/数据库，不启动常驻服务/GUI/打包。不使用测试输出冒称模型预览或成片；不因模型缺失阻断参考保存。最小受控方案/任务/仓储及取消专项，交clean候选、后续API/Web精确接口和逐项残余；API/Web仍待UI释放后B新单取得，#105仍开放。
 
 F第二单定时入口承诺整改：依用户自主决策授权、产品§2.5及main DESIGN主导航最新条款，定时定义未接执行时普通入口退役、保留只读明确预览；不删除定义、后台接口或0.11真实定时交付目标。F从准确a2e537c的主控组合树到/tmp/main-acceptance-20261009/review-v2-scheduled-preview/candidate新分支codex/review-v2-scheduled-preview-20261009，唯一owned ScheduledTasksWorkspace.tsx/.module.css及直接测试、production/page.tsx仅automations分支。退役普通创建/启动/删除/JSON时间窗/手填内部引用的活跃页面消费者；只读已保存定义显示真实“尚未执行接通”状态，内部字段在按需诊断，保留原数据和业务事实。N25整改证明默认入口与能力一致；N26/27为旧不可依赖编辑消费者退役，不宣称真实排程/时间配置已做通。AppShell主导航及route标签由当前UI唯一写者按同条款改，F不争写，不启动任务/服务/模型/媒体/GUI/打包。不新增开关、模拟任务、倒计时或无效按钮。直接专项核无写API动作、无普通JSON/内部引用输入、数据空/失败/已保存分清；截图统一候选后补。语义REBASE_ACK后实施并交clean/报告，不关闭真实定时交付缺口。
+
+### QA-V2-F-NAV：已释放共享壳的事实与导航消费者
+
+UI在当前task_1ad9935077fa/ctx_f2002033bb68以msg_4ea1db3ed4c1明确RELEASE_ACK，主控独立核git status该文件无差额；AppShell.tsx整文件写权现转F，UI继续其他会话消费者。F复用既有终端，从准确267802c新clone到/tmp/main-acceptance-20261009/review-v2-nav/candidate，分支codex/review-v2-nav-20261009。唯一owned AppShell.tsx、其直接AppShell专项；不改API/types/main、HomeWorkspace(D)、对话(UI)、发布(E)、C/B或全局CSS。
+
+依DESIGN最新主导航条款，移除普通定时主入口，旧URL保留明确只读预览标签，诊断/搜索若保留入口必须明确“定时定义预览”，不可称可运行定时任务。H-B010同文件现有listCreationTasks异步读取吞错且初始[]，修真正loading/empty/error/ready区别及就近原读取重试；已有server传入任务可继续可见，刷新失败不抹去已知任务、不称无任务。晚到请求不能覆盖更新后的任务集合或相反状态，不统一导航回顶。三栏/密度/既有焦点和搜索语义保留，不新建壳、状态库或开关。仅既有受控组件检查/tsc，模拟慢读取/失败/空/已有任务与恢复；真实GUI统一候选后验。本单是壳事实与入口退役，不完成真实调度。交clean候选、逐ID证据和未验；无服务/GUI/模型/媒体/Key/账号/用户数据/打包/远端写权。
 
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
