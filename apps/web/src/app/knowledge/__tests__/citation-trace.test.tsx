@@ -115,7 +115,8 @@ describe("文案引用回查", () => {
   it("shows the fixed cited version facts and the unbound locator state on the row", async () => {
     // 摘要行直接显示服务端按引用版本回填的事实；没有绑定定位时明说未绑定。
     await openEntry([source({ cited_source_url: "https://example.test/v2", cited_fetched_at: "2026-10-02T08:00:00Z" })]);
-    const row = screen.getByText(/knowledge:ki-one:2 · 设备说明书/).parentElement!;
+    const row = screen.getByText(/设备说明书 · 2/).closest("li")!;
+    expect(within(row).getByText("引用记录：knowledge:ki-one:2")).not.toBeVisible();
     expect(within(row).getByText(/引用版本 2 · 指纹 hash-v2/)).toBeInTheDocument();
     expect(within(row).getByText(/抓取于/)).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "该版原始来源" })).toHaveAttribute("href", "https://example.test/v2");

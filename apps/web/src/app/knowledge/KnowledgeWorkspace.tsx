@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiRequestError, getKnowledgeReferenceVersion, getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry, getKnowledgeGrants, grantKnowledgeToWorkspace, revokeKnowledgeGrant } from "@/lib/api";
 import type { ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CardSelect, HomeCardDialog } from "@/components/HomeCardDialog";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
@@ -75,15 +75,16 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   // 详情可能晚于列表刷新到达；只展示与当前选中条目一致的详情。
   const shownDetail = detail && detail.id === selectedId ? detail : null;
   const [query, setQuery] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState<string>("全部");
   const [collection, setCollection] = useState<"sources" | "scripts">("sources");
   const [sourcesView, setSourcesView] = useState<DisplayMode>("grid");
-  const selected = items.find((item) => item.id === selectedId) ?? null;
   const visibleItems = useMemo(() => items.filter((item) => {
     const matchesCategory = category === "全部" || (exampleMode && item.exampleCategory === category);
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
   }), [items, category, query, exampleMode]);
+  const selected = visibleItems.find((item) => item.id === selectedId) ?? null;
   // 可见范围变更用 PUT 返回的服务端值回写，不另发一轮 GET：
 // 只更新同 id 的当前详情，保留已加载的版本历史；列表由页面刷新时取真实值。
   function applyVisibilityUpdate(updated: KnowledgeItem) {
@@ -102,29 +103,29 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
           {exampleMode ? categories.map((name, index) => <button aria-pressed={category === name} className={styles.category} key={name} onClick={() => setCategory(category === name ? "全部" : name)} type="button">
             <span className={styles.categoryIcon}>{[<BookOpen key="a" size={20} />, <FileText key="b" size={20} />, <FileText key="c" size={20} />, <BookOpen key="d" size={20} />][index]}</span>
             <strong>{name}</strong>
-            <small>{exampleMode ? items.filter((item) => item.exampleCategory === name).length + " 条示例来源" : "未分类"}</small>
-          </button>) : <p className={styles.categoryUnavailable}>用途分类尚未接入 · 当前显示全部资料，不按文件格式推断分类。</p>}
+            <small>{items.filter((item) => item.exampleCategory === name).length + " 条示例来源"}</small>
+          </button>) : null}
         </nav>
         <div className={styles.actions}><Link href="/sources">添加内容 <Link2 size={14} /></Link></div>
       </div>
       <div className={styles.searchBar}>
-        <label><Search size={16} /><input aria-label="查找来源" onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文或文件引用" value={query} /></label>
+        <label><Search size={16} /><input ref={searchInput} aria-label="查找来源" onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文或文件引用" value={query} /></label>
+        {query ? <button aria-label="清除搜索" onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button">清除</button> : null}
         <button aria-pressed={category === "全部"} onClick={() => setCategory("全部")} type="button">全部来源</button>
         <button aria-label="刷新知识库" disabled={loading} onClick={onRefresh} type="button"><RefreshCw className={loading ? styles.spinning : undefined} size={16} /></button>
       </div>
-      {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>本地服务恢复或工作区授权确认后再刷新。</p></div></section> : null}
+      {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>{items.length ? "以下为上次成功读取的资料；刷新成功后更新。" : "恢复服务或确认工作区授权后重试。"}</p><button onClick={onRefresh} type="button">重试</button></div></section> : null}
       <section className={styles.card}>
           <div className={styles.cardHeading}><div><h2>资料集合</h2><small>{loading ? "正在读取" : error ? "读取失败" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选择资料查看正文</small></div><DisplayModeToggle label="资料列表" value={sourcesView} onChange={setSourcesView} /></div>
-          {loading ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
-            : error ? <div className={styles.empty}>无法读取知识库<button onClick={onRefresh} type="button">重新读取</button></div>
+          {loading && !items.length ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
             : visibleItems.length ? <div className={`${styles.grid} ${styles.sourceList}${sourcesView === "list" ? ` ${styles.list}` : ""}`}>{visibleItems.map((item) => <button className={styles.cover} data-open-details key={item.id} onClick={() => setSelectedId(item.id)} type="button">
                 <span className={styles.coverArt}>{itemIcon(item.content_type)}<small>{itemType(item.content_type)}</small></span>
                 <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : itemType(item.content_type)} · 版本 {item.version}</small>
                 <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : visibilityLabel(item.visibility)}</span>
               </button>)}</div>
-            : <div className={styles.empty}>{error ? "无法读取知识库" : items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length && !error ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
+            : error ? null : <div className={styles.empty}>{items.length ? "没有匹配的来源" : "知识库还没有内容"}{!items.length ? <Link href="/sources">去信息源添加内容</Link> : null}</div>}
       </section>
-      <p className={styles.notWired}>主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入；当前可查看已保存的来源正文。</p>
+      {loading && items.length ? <p role="status" className={styles.notWired}>正在更新资料列表…</p> : null}
       </div>
       {!exampleMode ? <div hidden={collection !== "scripts"}><ScriptLibraryPanel /></div> : null}
     </div>
@@ -296,11 +297,12 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
 
   const statusLabel = source.status === "readable"
     ? `${source.title ?? "知识资料"} · ${source.version_or_identity ?? "无版本"}`
-    : source.status === "version_changed" ? "当前版本或授权已变化" : "不可读";
+    : source.status === "version_changed" ? `${source.title ?? "知识资料"} · 引用版本 ${source.version_or_identity ?? "未知"} · 当前版本或授权已变化` : `${source.title ?? "知识资料"} · 不可读`;
   const SourceStatusIcon = source.status === "version_changed" ? RotateCcw : source.status === "missing" ? CircleMinus : CircleCheck;
 
   return <li className={styles.citation}>
-    <p className={styles.citationStatus}><SourceStatusIcon aria-hidden className={source.status === "version_changed" ? styles.statusUpdate : source.status === "missing" ? styles.statusUnavailable : styles.statusReady} size={14} />{source.reference_id} · {statusLabel}{source.source_url ? <> · <a href={source.source_url} rel="noreferrer" target="_blank">原始来源</a></> : null}</p>
+    <p className={styles.citationStatus}><SourceStatusIcon aria-hidden className={source.status === "version_changed" ? styles.statusUpdate : source.status === "missing" ? styles.statusUnavailable : styles.statusReady} size={14} />{statusLabel}{source.source_url ? <> · <a href={source.source_url} rel="noreferrer" target="_blank">原始来源</a></> : null}</p>
+    <details><summary>技术诊断信息</summary><small>引用记录：{source.reference_id}</small></details>
     {citedFacts(source)}
     {reference && source.status === "version_changed"
       ? <small className={styles.notWired}>当前条目已与引用绑定的版本不同；下面的回查只读取引用当时那一版，不用当前版替代。</small>
@@ -345,26 +347,36 @@ export function ScriptLibraryPanel() {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [listRetry, setListRetry] = useState(0);
+  const [sourceRetry, setSourceRetry] = useState(0);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadedFilter, setLoadedFilter] = useState<{ query: string; category: string } | null>(null);
   useEffect(() => {
     let active = true;
-    setLoading(true); setError(null); setSelected(null); setSources([]);
+    setLoading(true); setListError(null);
     listScriptLibraryEntries(query, category).then(result => {
-      if (active) setEntries(result.items);
+      if (active) {
+        setEntries(result.items);
+        setLoadedFilter({ query, category });
+        setSelected(current => current ? result.items.find(entry => entry.id === current.id) ?? null : null);
+      }
     }).catch(cause => {
-      if (active) { setEntries([]); setError(cause instanceof Error ? cause.message : "文案库读取失败"); }
+      if (active) setListError(cause instanceof Error ? cause.message : "文案库读取失败");
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [query, category]);
+  }, [query, category, listRetry]);
   useEffect(() => {
     if (!selected) return;
     let active = true;
+    setSources([]); setSourcesChecked(false); setSourceError(null);
     getScriptLibrarySources(selected.id).then(result => { if (active) { setSources(result); setSourcesChecked(true); } })
-      .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "来源核对失败"); });
+      .catch(cause => { if (active) setSourceError(cause instanceof Error ? cause.message : "来源核对失败"); });
     return () => { active = false; };
-  }, [selected]);
+  }, [selected?.id, sourceRetry]);
   function select(entry: ScriptLibraryEntry) {
-    setSelected(entry); setSources([]); setSourcesChecked(false); setConfirmed(false); setName(`${entry.name} · 新任务`); setError(null);
+    setSelected(entry); setSources([]); setSourcesChecked(false); setSourceError(null); setConfirmed(false); setName(`${entry.name} · 新任务`); setError(null);
   }
   async function reuse() {
     if (!selected) return;
@@ -384,17 +396,22 @@ export function ScriptLibraryPanel() {
       <label><Search size={16} /><input aria-label="搜索文案" placeholder="搜索名称或正文" value={query} onChange={event => setQuery(event.target.value)} /></label>
       <label>分类<input aria-label="筛选文案分类" placeholder="输入分类，留空查看全部" value={category} onChange={event => setCategory(event.target.value)} /></label>
     </div>
-    {error ? <p role="alert">{error}</p> : null}
-    {loading ? <p role="status">正在读取文案…</p> : entries.length ? <div className={`${styles.grid} ${styles.scriptList}${scriptsView === "list" ? ` ${styles.list}` : ""}`}>{entries.map(entry =>
+    {listError ? <div className={styles.error} role="alert"><div><strong>{listError}</strong>{entries.length ? <p>保留上次成功的结果：{loadedFilter ? `搜索“${loadedFilter.query || "全部"}”，分类“${loadedFilter.category || "全部"}”` : "尚无成功读取的筛选"}。</p> : null}<button onClick={() => setListRetry(value => value + 1)} type="button">重试读取文案</button></div></div> : null}
+    {loading ? <p role="status">{loadedFilter && entries.length ? "正在读取；保留上次成功的结果…" : "正在读取文案…"}</p> : null}
+    {loading && (loadedFilter?.query !== query || loadedFilter?.category !== category) ? null : listError && entries.length ? <div className={`${styles.grid} ${styles.scriptList}${scriptsView === "list" ? ` ${styles.list}` : ""}`}>{entries.map(entry =>
       <button className={styles.cover} key={entry.id} onClick={() => void select(entry)} type="button"><strong>{entry.name}</strong><small>{entry.category || "未分类"} · 版本 {entry.version}</small><span>{entry.title}</span></button>
-    )}</div> : <p>没有匹配的可用文案。可从任务的已确认文案页保存；来源不可读或版本已变化的条目不会用于复用。</p>}
+    )}</div> : entries.length ? <div className={`${styles.grid} ${styles.scriptList}${scriptsView === "list" ? ` ${styles.list}` : ""}`}>{entries.map(entry =>
+      <button className={styles.cover} key={entry.id} onClick={() => void select(entry)} type="button"><strong>{entry.name}</strong><small>{entry.category || "未分类"} · 版本 {entry.version}</small><span>{entry.title}</span></button>
+    )}</div> : loading ? null : listError ? null : <p>没有匹配的可用文案。可从任务的已确认文案页保存；来源不可读或版本已变化的条目不会用于复用。</p>}
     {selected ? <section className={styles.detailSection} aria-label="文案复用详情">
       <h3>{selected.name} · 版本 {selected.version}</h3>
       <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原任务</Link>
-      <p>原稿 {selected.source_script_id} · {selected.source_run_id ? `原记录 ${selected.source_run_id}` : "复用或人工文案，无模型生成记录"}</p>
-      {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p><small>{section.reference_ids.join("、")}</small></article>)}
+      <p>{selected.source_run_id ? "来源于已确认的文案记录。" : "复用或人工文案，没有模型生成记录。"}</p>
+      {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p>{section.reference_ids.length ? <details><summary>技术诊断信息</summary><small>引用记录：{section.reference_ids.join("、")}</small></details> : null}</article>)}
+      <details><summary>技术诊断信息</summary><p>原稿记录：{selected.source_script_id || "无"} · 运行记录：{selected.source_run_id || "无"}</p></details>
       <h4>事实出处（实时核对）</h4>
-      {!sourcesChecked ? <p>正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
+      {sourceError ? <div role="alert"><p>{sourceError}</p><button onClick={() => setSourceRetry(value => value + 1)} type="button">重试核对来源</button></div> : !sourcesChecked ? <p role="status">正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
+      {error ? <p role="alert">{error}</p> : null}
       <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmed(false); }} /></label>
       <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmed(false); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
       <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmed(false); }} /></label>

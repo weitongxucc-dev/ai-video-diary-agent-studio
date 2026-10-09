@@ -52,3 +52,42 @@ it("keeps owned historical text visible when a source changes, but refuses reuse
   fireEvent.change(screen.getByRole("textbox", { name: "筛选文案分类" }), { target: { value: "产品" } });
   await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith("维护", "产品"));
 });
+
+it("retries a failed filter read and drops a selection outside the successful result", async () => {
+  mocks.list.mockReset()
+    .mockResolvedValueOnce({ items: [entry], total_count: 1 })
+    .mockRejectedValueOnce(new Error("暂时不可用"))
+    .mockResolvedValueOnce({ items: [], total_count: 0 });
+  render(<ScriptLibraryPanel />);
+  fireEvent.click(await screen.findByRole("button", { name: /维护介绍/ }));
+  await screen.findByText("本人文案没有外部事实引用。");
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索文案" }), { target: { value: "其他" } });
+  expect(await screen.findByRole("alert")).toHaveTextContent("搜索“全部”，分类“全部”");
+  expect(screen.getByRole("button", { name: "重试读取文案" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重试读取文案" }));
+  await screen.findByText(/没有匹配的可用文案/);
+  expect(screen.queryByRole("region", { name: "文案复用详情" })).not.toBeInTheDocument();
+});
+
+it("offers retry when source verification fails", async () => {
+  mocks.sources.mockRejectedValueOnce(new Error("来源暂不可读")).mockResolvedValueOnce([]);
+  render(<ScriptLibraryPanel />);
+  fireEvent.click(await screen.findByRole("button", { name: /维护介绍/ }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("来源暂不可读");
+  fireEvent.click(screen.getByRole("button", { name: "重试核对来源" }));
+  await screen.findByText("本人文案没有外部事实引用。");
+  expect(mocks.sources).toHaveBeenCalledTimes(2);
+});
+
+it("keeps source and run identifiers inside on-demand diagnostics", async () => {
+  const withDiagnostics = { ...entry, source_run_id: "run-123", sections: [{ ...entry.sections[0], reference_ids: ["knowledge:item:version"] }] };
+  mocks.list.mockResolvedValue({ items: [withDiagnostics], total_count: 1 });
+  render(<ScriptLibraryPanel />);
+  fireEvent.click(await screen.findByRole("button", { name: /维护介绍/ }));
+  await screen.findByText("本人文案没有外部事实引用。");
+  const diagnostics = screen.getAllByText("技术诊断信息");
+  expect(screen.getByText(/原稿记录：original-script · 运行记录：run-123/)).not.toBeVisible();
+  fireEvent.click(diagnostics.at(-1)!);
+  expect(screen.getByText(/原稿记录：original-script · 运行记录：run-123/)).toBeVisible();
+  expect(screen.getByText("引用记录：knowledge:item:version")).not.toBeVisible();
+});

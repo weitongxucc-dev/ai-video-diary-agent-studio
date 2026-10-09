@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
@@ -67,8 +68,8 @@ describe("KnowledgePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
     expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
-    expect(screen.getByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).toBeInTheDocument();
-    expect(screen.getByText(/用途分类尚未接入/)).toBeInTheDocument();
+    expect(screen.queryByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/用途分类尚未接入/)).not.toBeInTheDocument();
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
@@ -119,6 +120,9 @@ describe("KnowledgePage", () => {
     await screen.findByRole("button", { name: /设备说明书/ });
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "找不到" } });
     expect(screen.getByText("没有匹配的来源")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+    expect(screen.getByRole("textbox", { name: "查找来源" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "电源" } });
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
@@ -131,6 +135,32 @@ describe("KnowledgePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("请求失败：502");
     expect(screen.getByText(/读取失败 · 选择资料查看正文/)).toBeInTheDocument();
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the last successful list visible when a refresh fails", async () => {
+    api.listKnowledgeItems.mockResolvedValueOnce({ items: [item], total_count: 1 }).mockRejectedValueOnce(new Error("offline"));
+    render(<KnowledgePage />);
+    expect(await screen.findByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("上次成功读取的资料");
+    expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+  });
+
+  it("ignores a late list response from the superseded mount read", async () => {
+    let resolveFirst!: (value: { items: KnowledgeItem[]; total_count: number }) => void;
+    let resolveSecond!: (value: { items: KnowledgeItem[]; total_count: number }) => void;
+    api.listKnowledgeItems
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve; }));
+    render(<StrictMode><KnowledgePage /></StrictMode>);
+    await waitFor(() => expect(api.listKnowledgeItems).toHaveBeenCalledTimes(2));
+    const newer = { ...item, id: "newer", title: "较新列表" };
+    const older = { ...item, id: "older", title: "迟到旧列表" };
+    await act(async () => { resolveSecond({ items: [newer], total_count: 1 }); });
+    expect(await screen.findByRole("button", { name: /较新列表/ })).toBeInTheDocument();
+    await act(async () => { resolveFirst({ items: [older], total_count: 1 }); });
+    expect(screen.getByRole("button", { name: /较新列表/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /迟到旧列表/ })).not.toBeInTheDocument();
   });
 
   it("renders correction and task-reference actions honestly while interfaces are absent", async () => {
