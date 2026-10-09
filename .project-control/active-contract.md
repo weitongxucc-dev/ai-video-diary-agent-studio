@@ -369,6 +369,8 @@ N32运行事实用当前工作区Vault/配置/最近真实探测，未验证配�
 
 先读权威/当前失败日志后REBASE_ACK；只这些已失败files必要pytest一次和Ruff，语义不变lint不需新测试。root完整API日志及精确ruff日志前节路径可定向读，逐rootcause解释既有实现/fixture/待源fix，不机械改所有assert。clean准确SHA/report `/tmp/main-acceptance-20261009/review-v2-read-state-test-migration/report.md`；未修产品fail维持原断言，交主控单写者修。主控最终CI与真机验收独立，受控mock不能证明新真实模型/媒体链通。
 
+C测试迁移505f35e已44PASS/Ruff0.15.7PASS/clean交付并retain，main/source写权仍UI阶段2独占。主控实际Web ESLint3errors：UI hook两个prefer-const归UI现单；C source/page helper useStateLabel被规则按Hook误判。C新QA-V2-C-SOURCE-LINT仅从原clean505f35e隔离candidate新公开分支，改apps/web/src/app/sources/page.tsx这个普通格式化函数名称/直接调用为非Hook名字，不改语义/其他file，不用eslint-disable。纯重命名仅精确该file ESLint+diffcheck，不新增镜像test/重跑前44/37/全Web。既有main-ui-linear Web公开cache已含Markdown可临时symlink，不使用缺包mantaCache，不下载/安装/运行服务GUI模型。源码clean净delta/report后释放，原原Arrowworm不改；这是必要实际CI错误，不扩大来源/业务设计。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
