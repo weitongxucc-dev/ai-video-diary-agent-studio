@@ -49,6 +49,16 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
+### UI93：三平台真实账号只读接入与适配证据
+
+用户2026-10-09已明确答复“允许账号接入，准备好后提示我扫码”，仅批准新的本机测试Chrome配置打开抖音、小红书、视频号官方创作后台，由用户本人扫码登录，只读核对账号标识、上传控件及已有发布回执页面。不上传/选文件、不填写或保存平台草稿、不点击发布/发送、不修改账号/设置/内容；授权不等于外发批准。此前全局无真实账号条款仅为本条具名范围解除，其他线程无账号操作权。
+
+复用原UI可见终端，准确只读组合2c896f24bad4ff7e2d107edb7ba59a61b33e2749的platform_auth/platform_browser直接消费者，无产品源码/依赖/共享文档/真实用户库写权。唯一写入/tmp/main-acceptance-20261009/platform93/：独立HOME/XDG/tmp/日志和按workspace/member/platform隔离的Chrome profiles（0700），会话只留本机profile，禁止导出cookies/storageState/token/HAR或将凭据写日志/报告/仓库。不复用个人Chrome或旧包账号。允许已有Playwright/channel=chrome现有产品会话路径及必要只读观测脚本，不下载浏览器/依赖，不另造产品连接体系。
+
+先准备owned目录、现有公开工具/官方入口及一次只读操作计划，回报ready；浏览器实际启动等待主控与B92确认媒体空闲后的ACCOUNT_READ_START。这个等待是本机资源互斥，不是再次用户授权。每次仅一个平台/一个Chrome配置，用户本人扫码后只读当前账号稳定标识、发布表单控件以及可达的已有成功/失败回执入口，尽量局部截图/结构化非秘密DOM，不浏览无关内容或整库数据。仅允许现有抖音creator.douyin.com、小红书creator.xiaohongshu.com、视频号channels.weixin.qq.com官方域及各自必要官方登录域；陌生跳转/新权限提示回报，不猜选择器/绕验证码/登录限制。进入空上传表单是读取控件，不选文件或提交；任何实际发送需另具名授权。
+
+准备/扫码窗口真实显示后发root状态，由root提示用户，worker不反复催问、不自动代替扫码。识别昵称与稳定ID区别，无可读稳定ID/回执则明确缺口；DOM/HTTP/截图/用户扫码回执分别记录，不把本次登入与控件存在标成自动发布通过。逐平台关闭owned浏览器释放PID/PGID，保留profile但不删除会话；实际账号浏览器本轮固定30分钟上限，可完成平台先交结果，未扫码/工具拒绝列未验，不把等待当答案。最终交最小选择器/能力缺口、下步所需适配路径、实际证据和未验到report.md并Task结算，root安排具名产品施工/外发验收。当前B92源冻结不因本只读任务失效。
+
 ### B92：组合修复的API增量入包与实际成片
 
 B91 task_1a9de32d4beb / ctx_4cdf9a1f3e03已succeeded，主控审clean a2e2f2cf834578eabe98250b8ca86e7439d9bb86四owned路径及22项真实POSIX/模拟冻结专项；未当实际包通过。UI90/B91机械组合clean2c896f24bad4ff7e2d107edb7ba59a61b33e2749，位置/tmp/main-controller-20261008/ui-v3-integration。相对1767e11运行差额仅database_migrations.py、granted_subprocess.py、server.py；Web/桌面/worker/agent运行blob逐路径未变，允许下面只读复用89已物化Web，不重跑Next。新B92读取本条语义ACK后直接按具名完整候选运行；不需再次用户批准或START。
