@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.voice_clone import MediaRuntimeFailure
 from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
+from app.profile_reference_media import ProfileReferenceInput
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -228,6 +229,7 @@ class AvatarAndLipSyncRequest:
     authorization: Authorization | None
     model_id: str
     visual_path: str = ""
+    visual_reference_input: ProfileReferenceInput | None = None
 
 
 @dataclass(frozen=True)
@@ -513,6 +515,8 @@ class AvatarAndLipSyncService:
         *,
         output_cache_key: str | None = None,
         grant_context=None,
+        repository: ProductionRepository | None = None,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> AvatarAndLipSyncResult:
         if grant_context is not None:
             grant_context.check()
@@ -527,6 +531,22 @@ class AvatarAndLipSyncService:
                 action="补充有效的权利人授权、用途范围和证据后重试。",
                 retryable=False,
             )
+        if self.provider.ready and request.visual_reference_input is not None:
+            if repository is not None and grant_context is not None:
+                current = repository.profile_reference_input(request.person, viewer_user_id=viewer_user_id,
+                                                            local_diagnostic=local_diagnostic)
+                if current != request.visual_reference_input:
+                    raise ValueError("人物参考修订已变化，请重新排队")
+                artifact = repository.materialize_profile_reference(request.person, grant_context=grant_context,
+                    viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+                if artifact.source != request.visual_reference_input:
+                    raise ValueError("人物参考修订已变化，请重新排队")
+                request = replace(request, visual_path=str(artifact.path))
+            elif request.visual_reference_input.needs_derivation:
+                raise PermissionError("所选人物范围必须通过设备许可精确派生，不能使用整片")
+        elif (self.provider.ready and request.person.reference is not None
+              and request.person.reference.start_seconds is not None):
+            raise PermissionError("人物范围缺少仓储核实的精确参考输入")
         audio = Path(request.audio_path).expanduser()
         if not audio.is_file() or audio.stat().st_size == 0:
             return _failure(
@@ -620,6 +640,7 @@ class AvatarAndLipSyncService:
         authorization_version: str,
         model_id: str,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -637,7 +658,8 @@ class AvatarAndLipSyncService:
             model_id=model_id,
             viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
         )
-        return self.render(request)
+        return self.render(request, repository=repository, grant_context=grant_context,
+                           viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
 
 class AvatarPreviewService:
@@ -668,6 +690,7 @@ class AvatarPreviewService:
         model_id: str,
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -780,7 +803,21 @@ class AvatarPreviewService:
                 impact="人物口型预览没有可用音频，未生成视频。",
                 repair_action="重新生成并选择当前版本的非空配音文件。",
             )
-        result = AvatarAndLipSyncService(self.output_root, self.provider).render(request)
+        if request.visual_reference_input.needs_derivation and grant_context is None:
+            return self._finish(repository, running, status="blocked", reason="reference_grant_required",
+                impact="所选人物范围尚未派生，未调用人物模型。", repair_action="从设备队列取得本次预览许可。")
+        from app.granted_subprocess import GrantedCommandError
+        try:
+            result = AvatarAndLipSyncService(self.output_root, self.provider).render(request,
+                repository=repository, grant_context=grant_context, viewer_user_id=viewer_user_id,
+                local_diagnostic=local_diagnostic)
+        except (GrantedCommandError, PermissionError) as exc:
+            self._finish(repository, running, status="failed", reason=type(exc).__name__,
+                impact="设备许可执行未完成，未保存成功人物预览。", repair_action=str(exc))
+            raise
+        except ValueError as exc:
+            return self._finish(repository, running, status="failed", reason="reference_derivation_failed",
+                impact="人物参考派生或源资格校验失败，未保存成功预览。", repair_action=str(exc))
         if result.status == "succeeded":
             if not _valid_avatar_preview_output(result.artifact_path, self.output_root):
                 return self._finish(
@@ -839,6 +876,8 @@ def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest, *, input_facts=No
         "expression": request.expression,
         "authorization": _authorization_cache_identity(request.authorization),
         "model_id": request.model_id,
+        "visual_reference_input": (asdict(request.visual_reference_input)
+                                   if request.visual_reference_input is not None else None),
     }
     if input_facts is not None:
         payload["input_facts"] = input_facts

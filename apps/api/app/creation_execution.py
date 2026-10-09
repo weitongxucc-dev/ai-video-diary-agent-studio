@@ -137,10 +137,10 @@ def presenter_inputs(repository, task, script, plan, models):
     selected = select_presenter_sections(
         [(section.id, segments[section.id].duration_seconds) for section in script.sections],
         plan.presenter_share_target)
-    if not plan.selected_voice.person_profile_id or not plan.selected_voice.person_version:
-        raise ValueError("当前独立声音没有绑定人物；请单独选择人物版本后再制作人物段")
-    person = repository.get_person_profile(task.workspace_id, plan.selected_voice.person_profile_id,
-                                           plan.selected_voice.person_version)
+    if plan.selected_person is None:
+        raise ValueError("请单独选择人物档案与固定版本后再制作人物段")
+    person = repository.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
+                                           plan.selected_person.version)
     inputs = []
     for section_id in selected:
         segment = segments[section_id]
@@ -425,8 +425,8 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
         inputs = repository.resolve_creation_task_narration_inputs(
             workspace_id=task.workspace_id, task_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
-        reference = repository.resolve_workspace_media_reference(
-            task.workspace_id, inputs.voice.reference_audio_path, require_registered=True)
+        reference_input = repository.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
+        reference = Path(reference_input.source_path)
         stat = reference.stat()
         resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                      "text_chars": (sum(len(section.content) for section in script.sections)
@@ -437,6 +437,7 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
                      "threads": narration_budget.max_threads,
                      "timeout_seconds": narration_budget.max_timeout_seconds}
         manifest = {"reference": [str(reference), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
+                    "reference_input": asdict(reference_input),
                     "voice": asdict(inputs.voice), "resources": resources}
     else:
         if montage_budget is None:

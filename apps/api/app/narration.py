@@ -57,6 +57,8 @@ class NarrationGenerator:
         pronunciation_entries: tuple[PronunciationEntry, ...] = (),
         language: str | None = None,
         resolved_reference_audio_path: str | Path | None = None,
+        grant_context=None,
+        reference_input_identity: str | None = None,
     ) -> NarrationArtifact:
         if episode.workspace_id != workspace_id or profile.workspace_id != workspace_id:
             raise ValueError("Episode 或生产档案不属于当前工作区")
@@ -110,6 +112,9 @@ class NarrationGenerator:
             raise ValueError("尚未设置声音参考文件")
         if voice_identity is not None and resolved_reference_audio_path is None:
             raise ValueError("版本化声音必须提供已解析的参考音频路径")
+        if (voice_identity is not None and voice_identity.reference is not None
+                and voice_identity.reference.start_seconds is not None and reference_input_identity is None):
+            raise PermissionError("声音范围缺少仓储核实的精确参考输入")
         if not reference_text.strip():
             raise ValueError("尚未填写声音参考文字")
         estimated_seconds = _estimated_narration_seconds(episode)
@@ -142,6 +147,8 @@ class NarrationGenerator:
             pronunciation_entries=pronunciation_entries,
             language=resolved_language,
         )
+        if reference_input_identity is not None:
+            cache_key = hashlib.sha256(json.dumps([cache_key, reference_input_identity]).encode()).hexdigest()
         safe_workspace = _safe_component(workspace_id)
         output_name = f"{_safe_component(episode.id)}.wav"
         selected_voice_id = (
@@ -172,6 +179,7 @@ class NarrationGenerator:
             output_path=output_path,
             language=resolved_language,
             pronunciation_dictionary=pronunciation_dictionary,
+            **({"grant_context": grant_context} if grant_context is not None else {}),
         )
         if Path(result.audio_path).resolve() != output_path.resolve() or not output_path.is_file() or output_path.stat().st_size == 0:
             raise ValueError("声音克隆没有生成当前配音文件")
@@ -207,6 +215,7 @@ class NarrationGenerator:
         voice_profile_id: str,
         voice_version: str | None = None,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None,
     ) -> NarrationArtifact:
         inputs = repository.resolve_narration_inputs(
             workspace_id=workspace_id,
@@ -220,9 +229,16 @@ class NarrationGenerator:
         )
         if authorization_failure is not None:
             raise ValueError(f"声音授权不可用：{authorization_failure}")
-        resolved_reference_audio_path = repository.resolve_voice_reference(
-            inputs.voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-        )
+        reference_input = repository.profile_reference_input(inputs.voice, viewer_user_id=viewer_user_id,
+                                                             local_diagnostic=local_diagnostic)
+        if grant_context is not None:
+            artifact = repository.materialize_profile_reference(inputs.voice, grant_context=grant_context,
+                viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            resolved_reference_audio_path = artifact.path
+            reference_input = artifact.source
+        else:
+            resolved_reference_audio_path = repository.resolve_voice_reference(
+                inputs.voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
         if (
             not resolved_reference_audio_path.is_file()
             or resolved_reference_audio_path.stat().st_size == 0
@@ -235,6 +251,8 @@ class NarrationGenerator:
             voice_identity=inputs.voice,
             pronunciation_entries=inputs.pronunciation_entries,
             resolved_reference_audio_path=resolved_reference_audio_path,
+            grant_context=grant_context,
+            reference_input_identity=reference_input.identity,
         )
 
     def generate_for_creation_task(
@@ -253,6 +271,8 @@ class NarrationGenerator:
         generation_identity: str | None = None,
         language: str | None = None,
         grant_context=None,
+        repository: ProductionRepository | None = None,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> NarrationArtifact:
         """Generate a real CreationTask WAV without constructing an Episode."""
 
@@ -281,6 +301,16 @@ class NarrationGenerator:
         if not reference_text:
             raise ValueError("声音版本缺少参考文字")
         reference_path = Path(resolved_reference_audio_path).expanduser().resolve()
+        if repository is not None:
+            if grant_context is None:
+                raise PermissionError("任务参考解析需要本次设备许可")
+            artifact = repository.materialize_profile_reference(voice_identity, grant_context=grant_context,
+                viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            reference_path = artifact.path
+            generation_identity = hashlib.sha256(json.dumps([generation_identity, artifact.identity]).encode()).hexdigest()
+        elif (voice_identity.reference and voice_identity.reference.start_seconds is not None
+              or reference_path.suffix.lower() != ".wav"):
+            raise PermissionError("范围或视频声音参考需要仓储资格与许可内精确派生，不接受整片路径")
         if not reference_path.is_file() or reference_path.suffix.lower() != ".wav":
             raise ValueError("声音参考文件必须是当前工作区已授权的 WAV")
         if reference_path.stat().st_size == 0:
@@ -555,6 +585,7 @@ class VoicePreviewService:
         language: str | None = None,
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -575,15 +606,18 @@ class VoicePreviewService:
         )
         reference_error = None
         try:
-            reference = repository.resolve_voice_reference(
-                voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-            )
+            reference_input = repository.profile_reference_input(voice, viewer_user_id=viewer_user_id,
+                                                                 local_diagnostic=local_diagnostic)
+            reference = Path(reference_input.source_path)
+            if reference_input.needs_derivation and grant_context is None:
+                raise ValueError("所选声音范围需要设备许可内的精确派生")
         except (ValueError, KeyError) as exc:
             reference_error = str(exc)
         # Recheck eligibility and source revision before reusing any successful preview.
         reference_facts = ({"error": reference_error} if reference_error is not None else {
             "size": reference.stat().st_size, "mtime_ns": reference.stat().st_mtime_ns,
             "ctime_ns": reference.stat().st_ctime_ns,
+            "input_identity": reference_input.identity,
         })
         identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "voice", identity)
@@ -693,7 +727,14 @@ class VoicePreviewService:
             / _safe_component(workspace_id)
             / f"{identity}.wav"
         )
+        from app.granted_subprocess import GrantedCommandError
         try:
+            if grant_context is not None:
+                artifact = repository.materialize_profile_reference(voice, viewer_user_id=viewer_user_id,
+                    local_diagnostic=local_diagnostic, grant_context=grant_context)
+                if artifact.source != reference_input:
+                    raise ValueError("声音参考修订已变化，请重新排队")
+                reference = artifact.path
             result = self.provider.generate(
                 text=preview_text.strip(),
                 reference_audio_path=reference,
@@ -701,7 +742,14 @@ class VoicePreviewService:
                 language=resolved_language,
                 pronunciation_dictionary=pronunciation_dictionary,
                 output_path=output_path,
+                **({"grant_context": grant_context} if grant_context is not None else {}),
             )
+            if grant_context is not None:
+                grant_context.check()
+        except (GrantedCommandError, PermissionError) as exc:
+            self._finish(repository, running, status="failed", reason=type(exc).__name__,
+                impact="设备许可执行未完成，未保存成功声音预览。", repair_action=str(exc))
+            raise
         except (VoiceCloneError, OSError) as exc:
             failure = _voice_generation_failure(exc)
             return self._finish(
@@ -712,6 +760,9 @@ class VoicePreviewService:
                 impact=failure.impact,
                 repair_action=failure.repair_action,
             )
+        except ValueError as exc:
+            return self._finish(repository, running, status="failed", reason="reference_derivation_failed",
+                impact="声音参考派生或源资格校验失败，未保存成功预览。", repair_action=str(exc))
         if (
             Path(result.audio_path).resolve() != output_path.resolve()
             or not _valid_preview_output(result.audio_path, self.output_root)

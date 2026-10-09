@@ -55,6 +55,7 @@ from app.material_scene import (
 
 if TYPE_CHECKING:
     from app.device_scheduler import Grant
+    from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -684,6 +685,16 @@ class CreationPlanVoiceReference:
 
 
 @dataclass(frozen=True)
+class CreationPlanPersonReference:
+    profile_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        if not self.profile_id.strip() or not self.version.strip():
+            raise ValueError("人物选择必须固定档案ID与版本")
+
+
+@dataclass(frozen=True)
 class CreationPlanPronunciationReference:
     id: str
     version: str
@@ -722,6 +733,7 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    selected_person: CreationPlanPersonReference | None = None
     presenter_share_target: int = 0
     lipsync_quality: Literal["high", "fast"] = "fast"
     template_id: str | None = None
@@ -1859,6 +1871,21 @@ class ProductionRepository:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         for_generation: bool = True,
     ) -> tuple[Path, float | None, float | None]:
+        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic, for_generation=for_generation)
+        if for_generation and start is not None:
+            if not profile.reference.asset_id:
+                raise ValueError("精确派生参考需要稳定来源素材")
+            asset = self.get_asset(profile.workspace_id, profile.reference.asset_id)
+            if start != 0 or end != asset.duration_seconds:
+                raise ValueError("参考范围需要精确派生输入，不能用整片替代所选范围")
+        return path, start, end
+
+    def _profile_reference_source(
+        self, profile: PersonProfile | VersionedVoiceProfile, *,
+        viewer_user_id: str | None, local_diagnostic: bool, for_generation: bool,
+        probe_media: bool = True,
+    ) -> tuple[Path, float | None, float | None]:
         """Re-read the source, membership and range; registration never runs a model."""
         if profile.reference_issue is not None:
             raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
@@ -1878,6 +1905,8 @@ class ProductionRepository:
                                 visibility=profile.visibility, owner_user_id=profile.owner_user_id):
             raise PermissionError("档案不属于当前成员或已取消共享")
         reference = profile.reference
+        if reference is not None:
+            _validate_profile_reference_fields(profile)
         logical = (profile.avatar_reference if isinstance(profile, PersonProfile)
                    else profile.reference_audio_path)
         path = self.resolve_workspace_media_reference(profile.workspace_id, logical,
@@ -1902,11 +1931,14 @@ class ProductionRepository:
                 intact = path.stat().st_size == asset.size_bytes
                 _profile_wav_duration(path)
             else:
-                intact = self._material_file_intact(asset)
+                intact = (self._material_file_intact(asset) if probe_media else
+                          not path.is_symlink() and path.stat().st_size == asset.size_bytes)
             if not intact:
                 raise ValueError("原参考已变化，请重新定位并登记新版本")
             if isinstance(profile, PersonProfile) and asset.media_type not in {"video", "image"}:
                 raise ValueError("人物参考需要已登记的视频或图片")
+            if isinstance(profile, VersionedVoiceProfile) and asset.media_type not in {"audio", "video"}:
+                raise ValueError("声音参考需要已登记音频或视频")
             if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
                                     visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                 raise PermissionError("来源素材不属于当前成员或已取消共享")
@@ -1943,9 +1975,49 @@ class ProductionRepository:
                                               usage_scope=("avatar_lipsync" if isinstance(profile, PersonProfile) else "narration"))
                 if failure is not None:
                     raise ValueError(f"参考使用受限：{failure}")
-            if start is not None and (start != 0 or end != duration):
-                raise ValueError("参考范围需要精确派生输入，当前模型接口不能用整片替代所选范围")
         return path, start, end
+
+    def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
+                                viewer_user_id: str | None = None, local_diagnostic: bool = False) -> ProfileReferenceInput:
+        """Qualified source facts only; never decode/derive during device admission."""
+        from app.profile_reference_media import ProfileReferenceInput
+        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic, for_generation=True, probe_media=False)
+        reference = profile.reference
+        asset = self.get_asset(profile.workspace_id, reference.asset_id) if reference and reference.asset_id else None
+        kind = "voice_audio" if isinstance(profile, VersionedVoiceProfile) else "person_visual"
+        if kind == "voice_audio" and asset and asset.media_type not in {"audio", "video"}:
+            raise ValueError("声音参考需要有效音频或视频的声音范围")
+        duration = asset.duration_seconds if asset else _profile_wav_duration(path)
+        return ProfileReferenceInput.from_source(
+            workspace_id=profile.workspace_id, profile_id=profile.id, profile_version=profile.version,
+            asset_id=asset.id if asset else None, segment_id=reference.segment_id if reference else None,
+            source_path=path, source_type=asset.media_type if asset else "audio", kind=kind,
+            start_seconds=start, end_seconds=end, source_duration_seconds=duration)
+
+    def materialize_profile_reference(self, profile: PersonProfile | VersionedVoiceProfile, *,
+                                      grant_context, viewer_user_id: str | None = None,
+                                      local_diagnostic: bool = False) -> ProfileReferenceArtifact:
+        from app.profile_reference_media import materialize_reference
+        if grant_context is None:
+            raise PermissionError("精确参考派生需要现有设备执行许可")
+        grant_context.check()
+        if grant_context.grant.workspace_id != profile.workspace_id:
+            raise PermissionError("参考派生许可工作区不匹配")
+        expected_stages = (("person_render:", "person_edit:") if isinstance(profile, PersonProfile)
+                           else ("narration:",))
+        if (grant_context.grant.owner_type != "creation_job"
+                or not grant_context.grant.unit_key.startswith(expected_stages)):
+            raise PermissionError("参考派生需要对应声音或人物阶段的专属许可")
+        source = self.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                                              local_diagnostic=local_diagnostic)
+        def recheck():
+            grant_context.check()
+            if self.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                                             local_diagnostic=local_diagnostic) != source:
+                raise ValueError("参考源修订已变化，请重新排队")
+        return materialize_reference(source, output_root=self.video_library_path / ".profile_references",
+                                     grant_context=grant_context, recheck=recheck)
 
     def _require_profile_write_owner(self, conn, table: str, profile, verified_owner_user_id, local_diagnostic):
         row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
@@ -1957,7 +2029,10 @@ class ProductionRepository:
 
     def resolve_voice_reference(self, voice: VersionedVoiceProfile, *,
                                 viewer_user_id: str | None = None,
-                                local_diagnostic: bool = False) -> Path:
+                                local_diagnostic: bool = False, grant_context=None) -> Path:
+        if grant_context is not None:
+            return self.materialize_profile_reference(voice, grant_context=grant_context,
+                viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic).path
         path, _, _ = self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
                                                    local_diagnostic=local_diagnostic)
         _profile_wav_duration(path)
@@ -1984,6 +2059,13 @@ class ProductionRepository:
             raise ValueError("默认声音引用不完整，请重新选择准确版本")
         return self.get_versioned_voice_profile(workspace_id, profile.default_voice_profile_id,
                                                 profile.default_voice_version)
+
+    def creation_plan_person_reference(self, workspace_id: str, profile_id: str, version: str, *,
+                                       viewer_user_id: str | None = None, local_diagnostic: bool = False) -> CreationPlanPersonReference:
+        selected = CreationPlanPersonReference(profile_id, version)
+        person = self.get_person_profile(workspace_id, selected.profile_id, selected.version)
+        self.profile_reference_input(person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        return selected
 
     def save_person_profile(
         self, person: PersonProfile, *, verified_owner_user_id: str | None = None,
@@ -2307,7 +2389,9 @@ class ProductionRepository:
                 workspace_id,
                 requested_authorization,
             )
-        self.resolve_voice_reference(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        visual_input = self.profile_reference_input(person, viewer_user_id=viewer_user_id,
+                                                    local_diagnostic=local_diagnostic)
         return AvatarAndLipSyncRequest(
             workspace_id=workspace_id,
             person=person,
@@ -2319,9 +2403,8 @@ class ProductionRepository:
             expression=expression,
             authorization=authorization,
             model_id=model_id,
-            visual_path=str(self.resolve_profile_reference(
-                person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-            )[0]),
+            visual_path=visual_input.source_path,
+            visual_reference_input=visual_input,
         )
 
     def migrate_legacy_voice_profile(
@@ -8794,7 +8877,7 @@ class ProductionRepository:
             voice_version=voice_version,
         )
         task = self.get_creation_task(workspace_id, task_id)
-        self.resolve_voice_reference(inputs.voice, viewer_user_id=task.owner_user_id)
+        self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
         return inputs
 
     def select_creation_task_narration_voice(
@@ -9950,6 +10033,12 @@ class ProductionRepository:
         knowledge_payloads = data.pop("knowledge_references", [])
         source_payloads = data.pop("source_references", [])
         voice_payload = data.pop("selected_voice", None)
+        # Missing key identifies historical payloads only. Explicit None stays
+        # unselected even if an old voice relationship exists.
+        person_payload = data.pop("selected_person", None) if "selected_person" in data else (
+            {"profile_id": voice_payload["person_profile_id"], "version": voice_payload["person_version"]}
+            if isinstance(voice_payload, dict) and voice_payload.get("person_profile_id")
+            and voice_payload.get("person_version") else None)
         pronunciation_payloads = data.pop("pronunciation_references", [])
         blocker_payloads = data.pop("blockers", [])
         material_match_payloads = data.pop("material_matches", [])
@@ -9971,6 +10060,8 @@ class ProductionRepository:
                 if isinstance(voice_payload, dict)
                 else None
             ),
+            selected_person=(CreationPlanPersonReference(**person_payload)
+                             if isinstance(person_payload, dict) else None),
             pronunciation_references=[
                 CreationPlanPronunciationReference(**item)
                 for item in pronunciation_payloads
