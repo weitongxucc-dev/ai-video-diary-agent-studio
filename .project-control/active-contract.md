@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 93：三平台账号只读准备 | task_9434a33b2ebb / ctx_b3f6bc2405eb；仅下方93owned观测，无产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 92：组合修复入包与成片补验 | task_98d881c2e10b / ctx_995baaa7191f；新owned creation92具名运行，无产品写权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 92：failed结案，已retain | task_98d881c2e10b / ctx_995baaa7191f；源码/包/证据保留，运行权结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -59,7 +59,9 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 准备/扫码窗口真实显示后发root状态，由root提示用户，worker不反复催问、不自动代替扫码。识别昵称与稳定ID区别，无可读稳定ID/回执则明确缺口；DOM/HTTP/截图/用户扫码回执分别记录，不把本次登入与控件存在标成自动发布通过。逐平台关闭owned浏览器释放PID/PGID，保留profile但不删除会话；实际账号浏览器本轮固定30分钟上限，可完成平台先交结果，未扫码/工具拒绝列未验，不把等待当答案。最终交最小选择器/能力缺口、下步所需适配路径、实际证据和未验到report.md并Task结算，root安排具名产品施工/外发验收。当前B92源冻结不因本只读任务失效。
 
-### B92：组合修复的API增量入包与实际成片
+### B92：组合修复的API增量入包与实际成片（已failed结案，运行权结束）
+
+主控回读creation92/report.md、release.json及实际文件证据后结算：准确2c896f24新ARM64包的裸库初始化、录音save/adopt、Grant首次真实5秒H264/AAC成片、画幅编辑及undo/redo通过HTTP/持久库/文件验证；当前V5为1:1且无当前输出，唯一重出请求attempt0/resource_busy/permit free，不能用首次或撤销后的旧输出冒充重出完成。同次准入数值被现有源码丢弃，08:30:27独立采样swap超原cap只证明后续诊断，不冒称排队同次首因。原生GUI只首页可见，任务/录音/编辑/保存GUI及输入匹配/听感未验。08:31:24自有12PID、6PGID、3000/61867端口全释放，固定租约未续；Dispatch已retain，旧START不复活。报告与首次视频仅在/tmp/main-acceptance-20261009/creation92/，不是全产品通过。UI93已获ACCOUNT_READ_START，仍仅账号只读。PR101准确2c896f24的CI37864291532三项均通过；源码合入与全流程完成分开。
 
 B91 task_1a9de32d4beb / ctx_4cdf9a1f3e03已succeeded，主控审clean a2e2f2cf834578eabe98250b8ca86e7439d9bb86四owned路径及22项真实POSIX/模拟冻结专项；未当实际包通过。UI90/B91机械组合clean2c896f24bad4ff7e2d107edb7ba59a61b33e2749，位置/tmp/main-controller-20261008/ui-v3-integration。相对1767e11运行差额仅database_migrations.py、granted_subprocess.py、server.py；Web/桌面/worker/agent运行blob逐路径未变，允许下面只读复用89已物化Web，不重跑Next。新B92读取本条语义ACK后直接按具名完整候选运行；不需再次用户批准或START。
 
