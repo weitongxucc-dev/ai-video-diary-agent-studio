@@ -360,7 +360,11 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   };
   const pageEntry = pageEntries[pathname];
   const suggestions = materialContext
-    ? materialContext.selection ? ["把我的标签改成产品演示", "再加上室内"] : []
+    ? materialContext.selection
+      ? materialContext.selection.scope === "asset"
+        ? ["这条素材包含什么内容？", "这条素材适合什么用途？", "把我的标签改成产品演示", "再加上室内"]
+        : ["这个片段画面里有什么？", "这个片段适合什么用途？", "把我的标签改成产品演示", "再加上室内"]
+      : ["素材库里有多少素材？", "素材库分析情况怎样？", "查找包含产品演示的素材"]
     : task ? stageSuggestions[task.stage]
     : pathname === "/" ? ["用我的素材，做一条产品介绍", "把客户常问的问题做成讲解视频"] : [];
   const showEntry = !assistant.loading && assistant.conversation !== null && !assistant.conversation.turns.length && !assistant.draftText.trim();
@@ -371,17 +375,22 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
         {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "尚未选择素材：请从右侧选择整条素材或一个片段。"}
       </p> : null}
+      {materialContext ? <p className="home-composer__context">
+        {materialContext.selection
+          ? "当前对话围绕所选范围；只有明确要求后才会修改我的标签。"
+          : "可询问全库数量、分析状态或按词查找，无需先选素材；要读具体内容/用途或改标签，请先选整条素材或片段。"}
+      </p> : null}
       <AssistantConversationPanel
         autoFocus={autoFocus}
         busy={pending !== null}
         configured={modelConfigured}
         input={assistant.draftText}
-        inputLabel={materialContext ? "素材标签要求" : task ? "任务对话要求" : "制作要求"}
+        inputLabel={materialContext ? "素材对话" : task ? "任务对话要求" : "制作要求"}
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
         onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setPending(null); setShareUpdating(false); setError(null); }}
         onSend={sendToAssistant}
         onCreatePlanFromReply={scopeKind === "home" && !task && !materialContext ? startPlanFromReply : undefined}
-        scopeLabel={materialContext ? (materialContext.label ?? "当前素材") : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
+        scopeLabel={materialContext ? (materialContext.label ?? (materialContext.selection ? "当前素材" : "素材库")) : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
         state={assistant}
         suggestions={showEntry ? suggestions : []}
       />

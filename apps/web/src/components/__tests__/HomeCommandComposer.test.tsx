@@ -176,6 +176,54 @@ describe("HomeCommandComposer", () => {
     expect(mocks.saved.get(oldConversationId)?.draft_text).not.toContain("切换");
   });
 
+  it("allows library status questions without a selected object and does not write back", async () => {
+    configuredModel();
+    const onResult = vi.fn();
+    mocks.materialAsk.mockResolvedValue({ reply: "当前可见素材共 12 条。", provider: "minimax", model: "MiniMax-M3" });
+    render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
+    expect(screen.getByRole("region", { name: "助手对话：素材库" })).toBeInTheDocument();
+    expect(screen.getByText(/可询问全库数量、分析状态或按词查找，无需先选素材/)).toBeInTheDocument();
+    const input = await readyInput("素材对话");
+    fireEvent.change(input, { target: { value: "素材库里有多少素材？" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(mocks.materialAsk).toHaveBeenCalledWith(
+      "素材库里有多少素材？", expect.any(String), null, expect.any(Function),
+    ));
+    expect(await screen.findByText("当前可见素材共 12 条。")).toBeInTheDocument();
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
+  it("fills a first-entry material suggestion into the draft without sending it", async () => {
+    configuredModel();
+    const onResult = vi.fn();
+    render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
+    const input = await readyInput("素材对话");
+    fireEvent.click(screen.getByRole("button", { name: "素材库分析情况怎样？" }));
+    expect(input).toHaveValue("素材库分析情况怎样？");
+    expect(mocks.materialAsk).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
+  it("binds selected-content questions to the exact selection and skips tag readback", async () => {
+    configuredModel();
+    const selection = { scope: "segment" as const, asset_id: "asset-1", segment_id: "segment-2" };
+    const onResult = vi.fn();
+    mocks.materialAsk.mockResolvedValue({ reply: "这个片段展示了门店入口。", provider: "minimax", model: "MiniMax-M3" });
+    render(<HomeCommandComposer materialContext={{ selection, label: "片段 0:02–0:04", onResult }} />);
+    const input = await readyInput("素材对话");
+    fireEvent.change(input, { target: { value: "这个片段画面里有什么？" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(mocks.materialAsk).toHaveBeenCalledWith(
+      "这个片段画面里有什么？", expect.any(String), selection, expect.any(Function),
+    ));
+    expect(await screen.findByText("这个片段展示了门店入口。")).toBeInTheDocument();
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
   it("asks the assistant before creating anything, then confirms the real preflight", async () => {
     configuredModel();
     const assignLocation = vi.fn();
@@ -222,8 +270,8 @@ describe("HomeCommandComposer", () => {
     const onResult = vi.fn();
     mocks.materialAsk.mockResolvedValue({ reply: "已读取旧标签；你想替换还是添加？", provider: "minimax", model: "MiniMax-M3", material_result: materialResult });
     render(<HomeCommandComposer materialContext={{ selection, label: "片段 0:02–0:04", onResult }} />);
-    fireEvent.change(await readyInput("素材标签要求"), { target: { value: "这个片段的标签帮我改一下" } });
-    fireEvent.submit(screen.getByRole("textbox", { name: "素材标签要求" }).closest("form")!);
+    fireEvent.change(await readyInput("素材对话"), { target: { value: "这个片段的标签帮我改一下" } });
+    fireEvent.submit(screen.getByRole("textbox", { name: "素材对话" }).closest("form")!);
     await waitFor(() => expect(mocks.materialAsk).toHaveBeenCalledWith(
       "这个片段的标签帮我改一下", expect.any(String), selection, expect.any(Function),
     ));

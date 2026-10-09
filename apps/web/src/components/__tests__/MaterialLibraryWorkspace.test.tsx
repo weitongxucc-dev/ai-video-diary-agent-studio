@@ -170,7 +170,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
   await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument());
 
   fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
-  fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给片段加上产品演示" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "素材对话" }), { target: { value: "给片段加上产品演示" } });
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
     "给片段加上产品演示", expect.any(String), { scope: "segment", asset_id: "asset", segment_id: "segment" },
@@ -199,8 +199,8 @@ it("shows asset labels and applies assistant readback only to the exact selected
     },
   });
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
-  fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给整条素材添加整条AI标签" } });
-  fireEvent.submit(screen.getByRole("textbox", { name: "素材标签要求" }).closest("form")!);
+  fireEvent.change(screen.getByRole("textbox", { name: "素材对话" }), { target: { value: "给整条素材添加整条AI标签" } });
+  fireEvent.submit(screen.getByRole("textbox", { name: "素材对话" }).closest("form")!);
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
     "给整条素材添加整条AI标签", expect.any(String), { scope: "asset", asset_id: "asset" },
     expect.any(String), expect.any(Number), expect.any(Function),
