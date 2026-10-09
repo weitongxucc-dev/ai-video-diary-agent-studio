@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
-vi.mock("@/lib/api", () => ({ listCreationTasks: vi.fn().mockResolvedValue([]), getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: false } } }) }));
+vi.mock("@/lib/api", () => ({ listCreationTasks: vi.fn().mockResolvedValue({ items: [], total_count: 0 }), getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: false } } }) }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({
   useLocalMemberIdentity: () => ({ token: "tok", role: identity.role, ready: identity.ready, error: null }),
 }));

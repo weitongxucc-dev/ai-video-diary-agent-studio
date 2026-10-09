@@ -17,7 +17,7 @@ const ROUTE_SHORTCUTS: RouteShortcut[] = [
   { keys: ["Meta", "3"], href: "/knowledge", label: "内容资料" },
   { keys: ["Meta", "4"], href: "/profiles", label: "人物与声音" },
   { keys: ["Meta", "5"], href: "/templates", label: "视频模板" },
-  { keys: ["Meta", "6"], href: "/production?view=automations", label: "自动任务" },
+  { keys: ["Meta", "6"], href: "/production?view=automations", label: "定时定义预览" },
   { keys: ["Meta", "7"], href: "/history", label: "发布与数据" },
 ];
 

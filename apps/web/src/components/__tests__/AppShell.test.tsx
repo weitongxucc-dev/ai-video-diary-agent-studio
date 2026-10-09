@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -192,7 +192,7 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "定时任务", "发布与数据"]) {
+    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "发布与数据", "成员与空间"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
@@ -201,6 +201,7 @@ describe("AppShell", () => {
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
     expect(screen.getAllByText("等待开始")).not.toHaveLength(0);
     expect(screen.getByRole("link", { name: /产品演示视频/ })).toHaveAttribute("href", "/tasks/task-1");
+    expect(screen.queryByRole("link", { name: "定时任务" })).not.toBeInTheDocument();
   });
 
   it("projects each persisted task stage with its user-facing status", () => {
@@ -240,6 +241,9 @@ describe("AppShell", () => {
 
     await waitFor(() => expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("link", { name: /当前详情任务/ })).toHaveAttribute("href", "/tasks/task-3");
+    expect(await screen.findByRole("alert")).toHaveTextContent("已有任务仍可打开");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新读取创作任务" })).toBeInTheDocument();
   });
 
   it("replaces an older task snapshot with the latest list response for the same id", async () => {
@@ -253,12 +257,106 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: /当前详情任务等待开始/ })).not.toBeInTheDocument();
   });
 
-  it("marks only the automatic-tasks entry active for its query route", () => {
+  it("labels the old automations URL as a preview without a normal primary navigation entry", () => {
     pathname = "/production";
     search = "view=automations";
     render(<AppShell><p>页面内容</p></AppShell>);
-    expect(screen.getByRole("link", { name: "定时任务" })).toHaveClass("is-active");
+    expect(screen.getByText("定时定义预览")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "定时任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "定时定义预览" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
+  });
+
+  it("keeps a scheduled definition preview discoverable in search with its read-only boundary", () => {
+    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    const palette = screen.getByRole("dialog", { name: "搜索页面和创作任务" });
+    const preview = within(palette).getByRole("option", { name: /定时定义预览/ });
+    expect(preview).toHaveTextContent("只读查看已保存定义，尚未接通执行");
+    expect(within(palette).queryByRole("option", { name: /^定时任务/ })).not.toBeInTheDocument();
+    fireEvent.click(preview);
+    expect(routerPush).toHaveBeenCalledWith("/production?view=automations");
+  });
+
+  it("shows loading rather than an empty list until the actual read returns empty", async () => {
+    let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise(finish => { resolve = finish; }));
+    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取创作任务…");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    await act(async () => resolve({ items: [], total_count: 0 }));
+    expect(screen.getByText("还没有创作任务")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps known server tasks visible during a slow refresh", async () => {
+    let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise(finish => { resolve = finish; }));
+    render(<AppShell creationTasks={[creationTask()]} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    expect(screen.getByRole("link", { name: /已保存创作任务/ })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在更新创作任务…");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    await act(async () => resolve({ items: [creationTask({ stage_status: "completed" })], total_count: 1 }));
+    expect(screen.getByRole("link", { name: /已保存创作任务已完成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes failure from empty and retries the original task read", async () => {
+    apiMocks.listCreationTasks.mockRejectedValueOnce(new Error("合成读取故障"));
+    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法读取创作任务");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [creationTask()], total_count: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取创作任务" }));
+    expect(await screen.findByRole("link", { name: /已保存创作任务/ })).toBeInTheDocument();
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("preserves known tasks throughout failed and slow retries", async () => {
+    apiMocks.listCreationTasks.mockRejectedValueOnce(new Error("合成读取故障"));
+    render(<AppShell creationTasks={[creationTask()]} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    await screen.findByRole("alert");
+    let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise(finish => { resolve = finish; }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取创作任务" }));
+    expect(screen.getByRole("link", { name: /已保存创作任务/ })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在更新创作任务");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    await act(async () => resolve({ items: [creationTask({ stage_status: "completed" })], total_count: 1 }));
+    expect(screen.getByRole("link", { name: /已保存创作任务已完成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each(["success", "failure"])("ignores a late %s after a newer server snapshot arrives", async outcome => {
+    let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
+    let reject!: (cause: Error) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((finish, fail) => { resolve = finish; reject = fail; }));
+    const initial = [creationTask({ name: "旧快照任务" })];
+    const view = render(<AppShell creationTasks={initial} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    const updated = [creationTask({ name: "新快照任务", stage_status: "completed", status: "completed" })];
+    view.rerender(<AppShell creationTasks={updated} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    await act(async () => {
+      if (outcome === "success") resolve({ items: initial, total_count: 1 });
+      else reject(new Error("过期读取故障"));
+    });
+    expect(screen.getByRole("link", { name: /新快照任务已完成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /旧快照任务/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+  });
+
+  it("does not let a late failed read replace a newer known-empty snapshot", async () => {
+    let reject!: (cause: Error) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((_finish, fail) => { reject = fail; }));
+    const view = render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    view.rerender(<AppShell creationTasks={[]} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    await act(async () => reject(new Error("过期读取故障")));
+    expect(screen.getByText("还没有创作任务")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("turns both search affordances into one real page and task command palette", () => {

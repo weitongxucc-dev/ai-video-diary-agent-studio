@@ -20,6 +20,7 @@ import {
   PanelLeft,
   PanelRight,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Sparkles,
@@ -30,6 +31,7 @@ import {
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   Suspense,
   type ComponentType,
@@ -74,13 +76,13 @@ const primaryNav: NavItem[] = [
   { href: "/knowledge", label: "知识库", icon: BookOpen },
   { href: "/profiles", label: "人物与声音", icon: UserRound },
   { href: "/templates", label: "视频模板", icon: FileStack },
-  { href: "/production?view=automations", label: "定时任务", icon: Sparkles, activePath: "/automations" },
   { href: "/history", label: "发布与数据", icon: Activity },
   { href: "/members", label: "成员与空间", icon: Users },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
+  { href: "/production?view=automations", label: "定时定义预览" },
   { href: "/production", label: "创作任务" },
   { href: "/tasks", label: "创作任务" },
   { href: "/sources", label: "资料来源" },
@@ -240,6 +242,10 @@ export function AppShell({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchParentId, setSearchParentId] = useState<string | undefined>();
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
+  const [taskReadState, setTaskReadState] = useState<"loading" | "ready" | "error">("loading");
+  const [taskReadError, setTaskReadError] = useState<string | null>(null);
+  const taskReadSequence = useRef(0);
+  const previousTaskProps = useRef(creationTasks);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
   useEffect(() => {
     if (inspectorConfirmationKey) setDetailsOpen(true);
@@ -258,22 +264,33 @@ export function AppShell({
     return () => query.removeEventListener("change", sync);
   }, []);
 
+  async function refreshRecentTasks() {
+    const request = ++taskReadSequence.current;
+    setTaskReadState("loading"); setTaskReadError(null);
+    try {
+      const payload = await listCreationTasks();
+      if (request !== taskReadSequence.current) return;
+      setRecentTasks(current => mergeCreationTasks(payload.items, current));
+      setTaskReadState("ready");
+    } catch (cause) {
+      if (request !== taskReadSequence.current) return;
+      setTaskReadError(cause instanceof Error ? cause.message : "任务列表读取失败");
+      setTaskReadState("error");
+    }
+  }
+
   useEffect(() => {
-    let active = true;
-    listCreationTasks()
-      .then((payload) => {
-        if (!active) return;
-        setRecentTasks((current) => mergeCreationTasks(payload.items, current));
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
+    void refreshRecentTasks();
+    return () => { ++taskReadSequence.current; };
   }, []);
 
   useEffect(() => {
-    if (!creationTasks?.length) return;
+    if (previousTaskProps.current === creationTasks) return;
+    previousTaskProps.current = creationTasks;
+    if (creationTasks === undefined) return;
+    ++taskReadSequence.current;
     setRecentTasks((current) => mergeCreationTasks(creationTasks, current));
+    setTaskReadState("ready"); setTaskReadError(null);
   }, [creationTasks]);
 
   useEffect(() => { setSidebarOpen(false); setDetailsOpen(false); }, [pathname]);
@@ -302,6 +319,7 @@ export function AppShell({
       href: creationTaskHref(task),
       icon: Clapperboard,
     })),
+    { id: "scheduled-preview", label: "定时定义预览", description: "只读查看已保存定义，尚未接通执行", href: "/production?view=automations", icon: Sparkles },
     { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
   ], [recentTasks, showMembersNav]);
@@ -344,6 +362,12 @@ export function AppShell({
 
           <div className="desktop-nav-section desktop-nav-section--creation-tasks">
             <div className="desktop-nav-heading">创作任务</div>
+            {taskReadState === "loading" ? <p className="desktop-creation-tasks-empty" role="status">{recentTasks.length ? "正在更新创作任务…" : "正在读取创作任务…"}</p> : null}
+            {taskReadState === "error" ? <div className="desktop-creation-tasks-empty" role="alert">
+              <p>暂时无法读取创作任务。{recentTasks.length ? "已有任务仍可打开。" : ""}</p>
+              <button className="shell-icon-button" aria-label="重新读取创作任务" title="重新读取创作任务" onClick={() => void refreshRecentTasks()} type="button"><RefreshCw size={16}/></button>
+              <details><summary>失败详情</summary><p>{taskReadError}</p></details>
+            </div> : null}
             {recentTasks.length ? recentTasks.map((task) => {
               const taskState = creationTaskState(task);
               return (
@@ -355,9 +379,9 @@ export function AppShell({
                   </span>
                 </Link>
               );
-            }) : (
+            }) : taskReadState === "ready" ? (
               <p className="desktop-creation-tasks-empty">还没有创作任务</p>
-            )}
+            ) : null}
           </div>
         </nav>
 
