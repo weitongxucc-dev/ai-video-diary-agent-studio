@@ -81,7 +81,6 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
   const inspector = canAct && selected && settings ? <div className={styles.inspector}>
     <h3>{selected.name} · 第{selected.version}版</h3>
     <TemplateStructurePreview template={selected} contentTemplate={catalog.find(item => `builtin_${item.template_id}` === selected.id)} />
-    <Link className={styles.primaryButton} href={creationHref}>{useLabel} <ArrowRight size={15} /></Link>
     <dl>
       <div><dt>来源</dt><dd>{selected.source_task_id ? <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原片</Link> : "内置制作结构"}</dd></div>
       <div><dt>文案风格</dt><dd>{settings.style_instruction || "未指定额外风格"}</dd></div>

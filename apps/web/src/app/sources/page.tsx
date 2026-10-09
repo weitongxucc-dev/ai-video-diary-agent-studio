@@ -133,7 +133,7 @@ export default function SourcesPage() {
     setBusy("manual-item"); setError(null); setNotice(null); setSavedToKnowledge(false);
     try {
       const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, license: String(form.get("license") ?? "使用范围待确认") });
-      setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，确认授权后可保存到知识库。"); formElement.reset(); setManualType("text");
+      setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，可查看正文并保存到知识库。"); formElement.reset(); setManualType("text");
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -148,7 +148,7 @@ export default function SourcesPage() {
       const item = await captureWebSnapshot(String(form.get("url") ?? ""));
       // 选中快照自己的连接器，否则列表刷新会跳回第一个旧信息源，快照立刻被刷掉。
       setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id);
-      setNotice("网页正文已存为快照，确认授权后可保存到知识库。");
+      setNotice("网页正文已存为快照，可查看正文并保存到知识库。");
       formElement.reset();
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
@@ -176,7 +176,7 @@ export default function SourcesPage() {
       // 列表按当前平台筛选，导入后要落在文件所属的来源上。
       setSelectedConnectorId(item.connector_id);
       setSelectedItemId(item.id);
-      setNotice(`已解析《${item.title}》：全文 ${(item.body ?? "").length} 字，出处 ${item.sections.length} 处，参数 ${item.parameters.length} 项。确认授权后保存到知识库。`);
+      setNotice(`已解析《${item.title}》：全文 ${(item.body ?? "").length} 字，出处 ${item.sections.length} 处，参数 ${item.parameters.length} 项。可查看解析结果并保存到知识库。`);
       formElement.reset(); setFileName(null);
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }

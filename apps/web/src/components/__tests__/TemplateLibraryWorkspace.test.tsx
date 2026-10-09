@@ -140,12 +140,12 @@ describe("TemplateLibraryWorkspace", () => {
 
 
 describe("template detail action and structure", () => {
-  it("puts immutable version actions in the real dialog body and footer", () => {
+  it("puts the immutable version action in the fixed dialog footer without a duplicate body action", () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[template, { ...template, version: 2 }]} />);
     const details = screen.getByRole("dialog", { name: "模板详情" });
     const links = within(details).getAllByRole("link", { name: "使用此模板" });
-    expect(links).toHaveLength(2);
-    expect(links[1].closest("footer")).not.toBeNull();
+    expect(links).toHaveLength(1);
+    expect(links[0].closest("footer")).not.toBeNull();
     links.forEach(link => expect(link).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2"));
     fireEvent.click(within(details).getByRole("button", { name: "关闭卡片" }));
     fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));

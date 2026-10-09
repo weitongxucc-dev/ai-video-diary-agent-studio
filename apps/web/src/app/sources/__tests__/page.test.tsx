@@ -190,7 +190,7 @@ describe("content entry intent and preparation", () => {
     fireEvent.change(screen.getByLabelText("正文"), { target: { value: "全文正文" } });
     fireEvent.submit(screen.getByLabelText("正文").closest("form")!);
     await waitFor(() => expect(api.createManualSourceItem).toHaveBeenCalledWith(expect.objectContaining({ title: "说明书", body: "全文正文", content_type: "text" })));
-    expect(await screen.findByText("信息条目已添加，确认授权后可保存到知识库。")).toBeInTheDocument();
+    expect(await screen.findByText("信息条目已添加，可查看正文并保存到知识库。")).toBeInTheDocument();
     expect(screen.getByLabelText("正文")).toHaveValue("");
     expect(api.listSourceItems).toHaveBeenCalledWith("manual-connector");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -207,7 +207,7 @@ it("keeps a pasted draft when the real source submission fails", async () => {
   fireEvent.submit(screen.getByLabelText("正文").closest("form")!);
   expect(await screen.findByRole("alert")).toHaveTextContent("保存失败");
   expect(screen.getByLabelText("正文")).toHaveValue("保留正文");
-  expect(screen.queryByText("信息条目已添加，确认授权后可保存到知识库。")).not.toBeInTheDocument();
+  expect(screen.queryByText("信息条目已添加，可查看正文并保存到知识库。")).not.toBeInTheDocument();
 });
 
 it("saves the supported subscription selected by its platform control without a post-await reset error", async () => {
