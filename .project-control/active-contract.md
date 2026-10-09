@@ -459,6 +459,8 @@ E新QA-V2-E-SEARCH-RESIDUAL仅只读实际dc4bed2源码和D准确0cb7b000候选/
 
 UI新QA-V2-UI-MATERIAL-TURN-FAILURE只读root准确dc4bed2 main.py中_material_assistant_turn真实工具返回后的对象范围/schema校验分支：当前try仅覆盖run_material_turn，后续HTTPException/验证拒绝不一定finish_turn。先在自有/tmp控制复现，无写main/C测试权；若成立只写一个新增tests/test_material_turn_failure.py隔离HTTP负例，准确被拒轮次持久状态/后续一次发送与草稿版本，不弱化结果范围校验。main当前C唯一owner，源修复提案先交主控串行转交，不能新增第二handler/宽泛catch。可信临时成员/库/合成对象和Pi工具替身允许，不真Pi/模型/App服务/GUI/用户数据/Key/媒体/远端；准确失败证据与最小修正建议，不把推测标已证实。
 
+C当前N14 main.py唯一写者追加两个已证实边界叶，不扩整file行为：E search-residual/report.md证实_preview_creation_task_edit候选阶段传reader而第二search_material_segments漏同一可信viewer/local_diagnostic，私有户外段被错滤；只透传同一真实_content_reader，保留实际用途/范围/自动资格/身份过滤，不改全库可见性。D原四个replacement用例保持原断言，另必要跨成员不可见负例。UI msg_f4500fdfb7dd证实素材回读scope拒绝503/schema验证400两种轮次持久running且新请求409；严格结果对象/schema拒绝仍保留，明确处理这些真实结果边界拒绝为failed/安全原因、释放控制，不吞异常/宽泛fallback，也不能恢复已被用户更新的新草稿。UI只新增test_material_turn_failure.py受控负例，C不改这个file，准确新增SHA到后由root或C机械组合检查。两个源码叶可先单独公开clean提交供组合，不提前worker_done结束N14纵向Task。若N14后端API/仓储源已完成，可交准确后端叶与接口及RELEASE_ACK main/schema给主控，再由B串行接配音API、C继续Web；不得自行两线程同时写同一file。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
