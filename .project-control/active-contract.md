@@ -267,6 +267,8 @@ QA-V2-F-ASSISTANT-ENTRY：主控aa2e431回读确认U04 Panel仍图标加发送�
 
 QA-V2-UI-DRAFT-CAS：UI-CONVERSATION-REVIEW task_6f66b0be7d3e/ctx_fd98306bec7d已ee70f9e交付retain，切走真实turn_started身份16项通过并组合d53f0cc；受控卸载/重进/旧失败实际复现无条件PATCH覆盖，N03继续开放。主控已按domain§7.5收口唯一持久草稿与发送身份。本单原UI终端从准确d53f0cc新clone至`/tmp/main-acceptance-20261009/review-v2-draft-cas/candidate`，公开身份；当前第一阶段仅conversation_repository.py及其直接pytest写权，沿同一SQLite行加独立draft_version与请求幂等身份，保存/消费/未持久轮次恢复都是真实原子事务，可信workspace/member隔离不变。旧有会话/文字零版本升级保留，重复同请求返回原轮次、不重复业务动作，不按时间或文字猜身份；重用相同请求ID不同内容/范围拒绝，失败后真实terminal不能再回running。构造旧schema/已存草稿升级、跨两个Repository实例并发保存、卸载后晚恢复与新编辑冲突、首次轮次提交/重试仅一次的必要测试。只临时自有SQLite/受控pytest，不改用户数据库；新字段为本次候选源码兼容存量，不授权真实迁移运行。main/schema/api/types仍B唯一写者，Home/Panel/CSS当前F写者；本单第二阶段要等主控准确release相关文件并给组合候选再接API/hook/Home/Task消费者，不能自行改抢锁或以Repo通过交最终完成。第一阶段完成发status含clean差额/实际接口给主控，可继续只读对照旧活跃消费提出退役位置；必要阻塞按新preamble ask，不复活已完成Dispatch。公开缓存、无安装/服务/Pi/模型/GUI/用户数据/远端，完成后绑定同候选真实可见验收再关闭N03。
 
+C恢复精确错误复核：第二attempt ctx_094d4f64acbd已经3bd6622 clean交源与11项/tsc报告，但provider最终轮仍未worker_done。主控回读准确原始check argv发现用了不存在的`term_d53c0c65-39c8-4ced-af2c-deeb0a842718`（4ced误拼），真实启动回执handle为`term_d53c0c65-39c8-4edd-af2c-deeb0a842718`（4edd）；随后--run读取的是协调者收件箱，consumer_fenced指该协调者绑定，不能据此重绑接管主控。原attempt按最终停工正证abandon/retain；同Task精确第三接续仅用新注入的真实4edd handle消费自身mail并提交现有clean差额/报告，不重复源码/测试、不访问Run协调者信箱。若新注入handle和真实start回执不一致，原样报给主控，不自行翻译或改身份；第三失败不得新Task绕路。该准确更正解决的是handle抄写，不授予绕过真实Dispatch fence。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
