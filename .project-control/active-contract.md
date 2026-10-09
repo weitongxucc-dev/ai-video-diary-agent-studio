@@ -469,6 +469,10 @@ D新QA-V2-D-VOICE-TEXT-REGISTRATION基于准确5bd870d新隔离公开候选，�
 
 F新QA-V2-F-QUEUE-IO-WINDOW基于同一5bd870d新隔离公开候选，仅tests/test_creation_execution.py中test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account的3个当前残差None/render_revoked/render_commit_unknown与其共用局部fixture。核实际HostResourceProbe：当前cpu_percent替身立即返回0使interval被忽略，样本只有0.0002s且首次pick期待即时grant；该测试必须沿真实排队/观察窗口等待，不改生产io_window_seconds、limit、判定、实际SQL/进程/Grant或许可负例，不给resources.admit=True。可让既有CPU负载替身尊重实际interval，并使用有界的当前请求pick/等待形成真实3秒证据；unknown/revoked/cancelled不能被等待循环掩盖、不能重复执行provider。先最小残差/准确Ruff，其他未变PASS复用；若真实运行时漏接观察/唤醒须原失败与精确source交主控，不靠伪造时间硬绿。两个新单无App服务/Pi/模型/GUI/用户数据/Key/原媒体/安装/远端权限，仅临时真实ffmpeg/合成worker/临时库。
 
+C N14真实Agent更新版本消费追加仅apps/api/agent_tools/diary_tools.ts中get_current_task取得当前draft.updated_at及create_script_draft实际提交/读回此token，与assistant_pi/API仓储沿同一CAS；不是扩任意工具/文件系统权限。必要既有直接extension验证，未读当前任务/过期token仍真实拒绝，首次没有草稿的初始化与现存草稿更新分开，不保留旧现存draft无条件写路径。新领域4.2参考文字后补只明确现有登记/生成边界，不改变C N14接口。
+
+E前次qualification审阅静态证据可用，但uv run误触自动依赖准备，已停且仅新忽略venv移入owned报告保留，HTTP零结果不可声明PASS。E新QA-V2-E-MATERIAL-QUALIFICATION-REPRO仅自有/tmp新快照，使用已安装绝对Python /tmp/manta-wil108-20261007/venv/bin/python，禁止uv run/install/自动建环境、写公共candidate ignored目录或处理原保留venv；复用准确5bd870d的受控D合成fixture与临时HOME/XDG/DB，仅前段实际raw有效门槛/另成员private已知ID的少数HTTP预览及确认诊断。源/tests仓库只读，输出只精确诊断report/临时脚本，余矩阵保留未验；若现阶段确认需真实模型/媒体则停该项，不借评审扩许可。现有来源/权限真实现象足够后停止扩大扫描。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
