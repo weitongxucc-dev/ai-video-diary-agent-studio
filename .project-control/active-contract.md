@@ -63,6 +63,12 @@ UI102已交clean候选5b2d940d、B104已交clean候选4f1a6503，主控审核并
 
 owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所选范围、工具真实响应事实投影、组件对应标签刷新和无选择/切换不串对象；允许隔离TestClient/测试库验证现有真实仓储写后GET持久化，不启动网络服务/Pi/Key/GUI/媒体/模型/打包/下载，不读取用户试用数据。提交clean候选、净diff、实际检查、未验证项与后续实际Pi/客户端入口；源级用例不能冒称真实GUI。读取main产品§1.1、DESIGN§2、架构§9与auth成员边界后REBASE_ACK即可施工；最终结案后再具名一次合并实包验收，不重复未受影响的视觉/媒体测试。
 
+### B106：核心对话组合候选一次本机ARM64测试包（MAIN-CHATPACKAGE106-20261009）
+
+复用保留B终端，原pipefish/platform99脏树原样保护，无产品代码写权。owned仅新/tmp/main-acceptance-20261009/chat106/；依B101已交准备复用B97公开构建依赖/缓存和现有打包流程，不复读或复制私密env/Key、用户DB/设备锁、平台profile或模型。UI105施工期间只准备新的隔离构建目录和非秘密依赖映射；尚无最终候选，不构建。主控审核组合UI105并具名PACKAGE_START准确SHA后，在本新根archive该候选并核源码身份，构建一次该候选Next standalone、PyInstaller API与ARM64 ElectronBuilder目录.app和生成身份；不复用旧Web/API二进制冒称新候选，不运行build.sh的安装步骤，不下载/安装依赖或生成DMG/ZIP/签名/Release。既有依赖不足报真实缺口。
+
+一次最终同候选仅必需集成/打包检查，不重复未变组件/媒体/宽度矩阵。交实际.app路径、准确源码SHA/candidateInputDigest、打包资源与工具TS入口实际包含、必要结果、所有自有构建进程退出与未验范围。无运行Electron/API/Web/Pi/模型/媒体/GUI/账号/Keychain权限，用户当前旧测试包不得退出或改写；真实聊天实包另具名接续。主控最终负责新包分享副本与用户配置隔离，包不含用户Key、模型、素材或测试DB。任务等待只通过本终端收件箱（check不带--run），不恢复97/101旧START。
+
 ### UI102：对话真实流式、工具过程与输入修复（已succeeded结案，写权结束）
 
 用户继续实施，并指出无流式、工具执行不可见、空格误发送及核心Pi剪辑闭环未通。UI100准确clean4f4f1563e3beb46eb17d6048e547de8760c11c80已交付28/103专项与tsc、未跑真实Pi/GUI，源码保留而非验收通过；100旧权限结束。复用原UI终端，从该准确候选建立codex/chat102-stream-20261009；先重读当前main DESIGN§2新增对话条款、架构§2/§9、auth目标成员与任务边界，语义REBASE_ACK后直接实施。
