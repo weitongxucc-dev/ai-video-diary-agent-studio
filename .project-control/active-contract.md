@@ -445,6 +445,8 @@ UI新QA-V2-UI-DRAFT-READ-RACES从准确2a1de3c新clone/tmp/main-acceptance-20261
 
 两单只源码/合成成员文字/临时DB/mock/缓存直接最小专项、正确Ruff/ESLint/类型，失败后必要修复复验可做，不重复无关52/182/32；无App/Pi/API服务/真实模型/Key/用户库/媒体/账号/GUI/安装/远端。UI报告/tmp/main-acceptance-20261009/review-v2-draft-read-races/report.md；C沿现report。root当前准确Ruff检查/全ESLint结果归相应唯一writer；此release不代表整体RETIRED或问题关闭。
 
+当前root2a1de3c实际Ruff仅tests/test_assistant_pi.py:739未用conversation_id（不是main未用变量，dispatch消息误称已更正），C阶段2追加该直接test file及test_assistant_script.py为N14/Agent真实draft CAS唯一测试owner，原身份/工具/路由断言保持；这两file不由新UI hook任务修改。组合全ESLint实际0errors/53warnings，日志/tmp/main-controller-20261009/review-v2/cas-eslint.log，不冒称无warnings。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
