@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 93：三平台账号只读准备 | task_9434a33b2ebb / ctx_b3f6bc2405eb；仅下方93owned观测，无产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 92：failed结案，已retain | task_98d881c2e10b / ctx_995baaa7191f；源码/包/证据保留，运行权结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 94：真实排队拒绝的同次诊断 | 仅下方94具名源码；92运行权结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -58,6 +58,12 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 先准备owned目录、现有公开工具/官方入口及一次只读操作计划，回报ready；浏览器实际启动等待主控与B92确认媒体空闲后的ACCOUNT_READ_START。这个等待是本机资源互斥，不是再次用户授权。每次仅一个平台/一个Chrome配置，用户本人扫码后只读当前账号稳定标识、发布表单控件以及可达的已有成功/失败回执入口，尽量局部截图/结构化非秘密DOM，不浏览无关内容或整库数据。仅允许现有抖音creator.douyin.com、小红书creator.xiaohongshu.com、视频号channels.weixin.qq.com官方域及各自必要官方登录域；陌生跳转/新权限提示回报，不猜选择器/绕验证码/登录限制。进入空上传表单是读取控件，不选文件或提交；任何实际发送需另具名授权。
 
 准备/扫码窗口真实显示后发root状态，由root提示用户，worker不反复催问、不自动代替扫码。识别昵称与稳定ID区别，无可读稳定ID/回执则明确缺口；DOM/HTTP/截图/用户扫码回执分别记录，不把本次登入与控件存在标成自动发布通过。逐平台关闭owned浏览器释放PID/PGID，保留profile但不删除会话；实际账号浏览器本轮固定30分钟上限，可完成平台先交结果，未扫码/工具拒绝列未验，不把等待当答案。最终交最小选择器/能力缺口、下步所需适配路径、实际证据和未验到report.md并Task结算，root安排具名产品施工/外发验收。当前B92源冻结不因本只读任务失效。
+
+### B94：排队拒绝的同次资源诊断
+
+B92实际重出保持resource_busy/Grant0，HostResourceProbe.admit丢弃既有HostResourceDecision，只留下bool；后续重新采样无法解释原拒绝，是本轮真实诊断缺口。复用已retain的B可见终端，从clean2c896f24建立codex/admission94-diagnostics-20261009。唯一源码写权apps/api/app/host_resource_probes.py及既有apps/api/tests/test_host_resource_probes.py；不写scheduler/runtime/业务/数据库迁移/界面/打包/依赖/共享文档。复用现有结构化decision和项目日志方式，在admit这一实际采样返回拒绝或未知时保留该次request ID、判据/实测值/阈值及未知原因，供现有API日志诊断。不二次采样，不新增持久表、通用观察系统或并行事实源，不改bool/None返回契约，不抬cap、不更改Grant或等待条件，不用日志宣称UI解释已完成，不记录密钥/用户正文/凭据。
+
+仅/tmp/main-acceptance-20261009/admission94/自有隔离测试，最小验证拒绝日志的值与决定来自同一次采样、未知原因不伪造成忙、通过不误报拒绝；复用既有相关资源用例，禁止全量本机检查。无服务/GUI/媒体/模型/Pi/Key/账号/网络下载权限，不与UI93浏览器竞争媒体资源。交clean候选、净diff、必要检查及未验，主控审查后机械集成，再判断必要新包运行；不得复活92旧租约或用日志补丁声称重出完成。UI93只读绑定2c896f24不受这一源诊断补丁影响。
 
 ### B92：组合修复的API增量入包与实际成片（已failed结案，运行权结束）
 
