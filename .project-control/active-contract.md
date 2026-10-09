@@ -12,7 +12,7 @@
 
 ## 当前执行边界
 
-用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；当前仅下方UI98账号接入修正源码/已发ACCOUNT_ADAPT_START的只读范围有效；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
+用户最新批准 `soft-cards-v3-all-right`，以[DESIGN v5.3](../DESIGN.md) §3–4/§5.10/§7为准，取代v5.2浮层尺寸与居中规则；普通直接草稿、撤销/重做与领域版本语义不变。保留已认可的左/中栏、13px/56px和命名，不推倒重做。64/67/68/69/70/72/73源码保留，B71集中GUI因画幅保存409以failed结算且已全释放；UI74修复已审并组合clean候选3db903441af97f359ccf2180f8f2fb4944bd0542，B75定向补验已结案并retain，保存场景通过，剩余GUI受工具阻断未验；本轮全部服务/GUI权已收回，不从下节旧条件START重新运行。旧B66候选与验收几何失效，Dispatch已fence；准备资料保留，不取得旧START权。主控独占共享权威、审核、机械集成、PR/Linear；不编写产品代码。本轮资源/模型暂停已由用户“继续吧”解除；UI96已完成并释放；UI98已failed部分结案并retain，原账号运行/源码权结束；当前仅下方B99账号身份收口具名范围有效；B97已succeeded结案、服务/媒体全释放，旧RERENDER_START不恢复；B94/95源码写权及B92/UI93/UI96旧运行权已结束，历史START和租约不恢复。
 
 用户最新纠正收费范围，变更 `MAIN-BYOK-20261008-01`：本地模型与客户自备Pi Key以[产品§2.6](../docs/product-requirements.md#26-本地优先与用户控制)为准；删除确认仍按DESIGN§4执行。付费UI、报价/扣费/充值实现与验收全部停止，不作为试用交付缺口；保留UI73已交代码，不因撤销收费要求回滚删除模态或普通提案单次应用。UI和B保留已交源码与证据；75已结案，旧条件START不复活。用户最新批准开始下方76/77交付任务，只取得各自具名新权限。
 
@@ -26,7 +26,7 @@
 - 本批变更标识：`MAIN-RESUME-20261007-01`。产品代码基线 `584ccc362c0e03a7647d655f22014f30e75022b1`；主入口本地说明基线 `b4dd823a5ca05c21c0dc8429eab8c9ee37e11425`。新合同由两条线程读取本文件并语义 `REBASE_ACK`；ACK 满足且无未解决范围冲突后可直接开始已授权动作，无需第二次 START。
 - 事实源：当前 main/候选 Git、Linear team WIL 的项目「曜核 0.11｜桌面端完整闭环」、实际测试与具名真实页面；浏览器表面按实际工具和人工操作分别记录。历史[暂停交接](pause-handoff-20261007.md)仅提供保留成果的位置。
 - 不整体 merge/rebase 旧混合开发分支，不覆盖脏树。执行线程不得 push、建/合 PR、写 Linear 或共享权威；本地仅提交自己已验证的具名差额。主控可准备独立 PR，main 产品代码只走 PR，不自动合并。
-- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新运行操作仅下方UI98已发START的账号只读具名范围，B97运行权已收回，UI96账号运行和B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
+- 除下方主控具名MiniMax Key及用户本人素材定向只读例外，不访问真实用户库、其他真实密钥/登录钥匙串，不激活云身份/凭据，不下载或运行未具名本地模型、不发布/签名/Release、不迁移真实数据、不删除保留工作树/stash。已结案Dispatch不复活；旧任务操作权已结束，新运行操作仅下方B99账号只读具名范围，UI98/B97运行权已收回，UI96账号运行和B94/95源码权限已结束。主控继续PR96/97及人物许可独立PR的CI/审核与相关Linear维护；用户资源条件恢复后以新具名合同/Dispatch接续完整制作，不从旧记录启动。定时 automation 与 scheduled 生产始终 OFF；无真实 Supabase 迁移/设备注册/测试账号操作权。
 - 不派内部子智能体，不新增执行窗口；一文件一写者。彼此可通信，但不得转授写权或替主控改变范围。
 
 ## 本批线程、所有权与验收
@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 98：三平台账号接入与实际身份修正 | task_fd087fd4db7b / ctx_0046889ba6ee；下方98源码范围，浏览器等B97释放后的ACCOUNT_ADAPT_START；96已结案retain |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 98：部分交付已结案retain | 09680ab7候选与证据保留；无新增源码/运行权；96已结案retain |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | task_26ebee1b002d / ctx_3429f9e38039；新包准备，保留原停机92隔离fixture/锁的最小白名单，启动前身份与快照核验；服务/媒体仍等RERENDER_START；95/92旧权限结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 99：收口真实账号身份 | 下方B99限定源码与账号只读；97已succeeded结案retain、服务/媒体权结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -49,7 +49,19 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
 
-### UI98：三平台账号接入与真实身份修正
+### B99：真实账号身份收口（MAIN-ACCOUNT99-20261009）
+
+UI98已部分结案、主控已读报告/diff，最终clean09680ab7de78070dda8e67f9c0035669eb593b84基于4c748dfc；connect/verify三平台入口已准备，视频号实际span#finder-uid-copy已观察，但最终生产login/verify/persist未执行，抖音label正则无实证、小红书ID未找到。只接受部分源码与DOM发现，不接受真实账号核验完成。98原15分钟租约已结束，自有浏览器已关闭；新99不是延长旧START。
+
+复用已保留B原可见终端，在pipefish保护97clean分支，以只读本机UI仓库准确09680ab7创建codex/platform99-identity-20261009；不整体merge/rebase旧分支。B独占98所列12个产品文件及其直接测试，UI保持retain无写权。优先移除没有实际DOM依据且实测为零的read_labeled_value及label/selector双模式，复用单一实际观察字段读取，不新增通用猜测或昵称回退。保留能力控制的三平台账号入口和同一login事实源；wechat/xhs的browser_publish/verified仍false，不新增发送权限或改发布队列/schema/cap/打包/依赖/共享规范。
+
+一次明确用户结果：原已登录成员专用profile→生产PlatformAuthService.verify_current→保存并回读同一workspace/member/platform/账号标识。先用已经实测的视频号selector完成真实生产读取与持久化；仅写owned /tmp/main-acceptance-20261009/account99/私有隔离账号数据库、脚本和非秘密报告，profile继续原platform93/profiles原地使用，workspace ui93-readonly-workspace/member ui93-readonly-member，不复制导出会话，不写真实用户库。沿已有staging-venv的Playwright/channel=chrome。语义ACK后直接执行，无第二轮START；模型/媒体/桌面服务已全部停止，本任务只读账号浏览器串行，首浏览器起固定20分钟不延长。账号ID仅在私有0700证据，Git/公开报告不写实际值。
+
+完成视频号后，抖音/小红书各一次定向账号定位：只读取账号身份专门字段及最小tag/id/class/role，同官方域必要iframe。若需官方账号资料入口，使用真实现有可达名称导航，不能猜selector或扫描整页/主页内容。页面渲染等待用已有界限，不将瞬时count=0当能力结论。无可用稳定ID就准确保留缺口；两次同类失败停止旧方法，分析具体原因，不盲目重试。不得读取body/header/全AX树/无关交互内容；不用get-app-state全应用找窗口，不读其他窗口。允许本机已有页面DOM工具在自有profile处理已批准只读页面；遇真正策略/权限拒绝不换工具绕过。若新账号需扫码，由主控通知用户，不代确认账号。
+
+禁止选视频/填表/上传/存平台草稿/发布/改账号设置/读无关历史/读取Key/Pi/模型/下载。普通scope内脚本修正、等待SPA、准确账号入口与必要SQLite伴生文件不逐项请示；真实范围冲突及时问主控。最小必要测试为直接平台auth/browser/publish及未影响Web结果复用；真实读写回执独立于stub/GUI结论。交最终clean候选、完整净diff、实际三平台已核验与未验、所有自有PID/PGID释放证据；不重做媒体/完整构建，不批量关闭父issue。
+
+### UI98：三平台账号接入与真实身份修正（已failed部分结案，源码/运行权结束）
 
 复用UI原可见终端，从准确clean4c748dfc45229b879e9e1daf473b309432899f4c建立具名新分支，先保护原UI90分支/证据。用户已批准三平台首版与真实账号只读，现有候选账号data-e2e不匹配，service/UI硬编码只允许抖音。目标是三平台可从软件打开成员专用浏览器，读取实际稳定账号标识并持久保存原workspace/member/platform归属；不能把显示名当稳定ID或称已发布。唯一源码范围：apps/api/app/platform_auth/service.py、capabilities.py；apps/api/app/platform_browser/{base,douyin,xiaohongshu,channels,playwright_driver}.py；apps/web/src/components/PublishingWorkspace.tsx及其直接既有测试；apps/api/tests/test_platform_auth.py、test_platform_browser.py，以及test_platform_publish.py中直接受login稳定ID契约影响的既有driver替身与身份变化拒绝回归（不改断言以掩盖失败、不扩发布行为）。新owned /tmp/main-acceptance-20261009/account98/写必要准备/测试/报告。main.py/发布队列/发送执行/数据库schema/资源cap/打包/依赖/共享权威只读，不给B97已冻结4c引入变更。按产品§11/认证工作区边界，不改变业务授权。
 
