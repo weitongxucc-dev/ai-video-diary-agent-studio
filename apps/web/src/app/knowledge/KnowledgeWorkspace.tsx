@@ -339,20 +339,28 @@ export function ScriptLibraryPanel() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [selected, setSelected] = useState<ScriptLibraryEntry | null>(null);
-  const [sources, setSources] = useState<ScriptLibrarySource[]>([]);
-  const [sourcesChecked, setSourcesChecked] = useState(false);
+  const selectedKey = selected ? JSON.stringify([selected.id, selected.version]) : null;
+  const [sourceResult, setSourceResult] = useState<{ key: string; sources: ScriptLibrarySource[] } | null>(null);
+  const [sourceFailure, setSourceFailure] = useState<{ key: string; message: string } | null>(null);
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
   const [duration, setDuration] = useState(60);
-  const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [listRetry, setListRetry] = useState(0);
   const [sourceRetry, setSourceRetry] = useState(0);
-  const [sourceError, setSourceError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
   const [loadedFilter, setLoadedFilter] = useState<{ query: string; category: string } | null>(null);
+  const selectedId = selected?.id ?? null;
+  const previousSelectedKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (previousSelectedKey.current !== selectedKey) {
+      previousSelectedKey.current = selectedKey;
+      setConfirmedKey(null);
+    }
+  }, [selectedKey]);
   useEffect(() => {
     let active = true;
     setLoading(true); setListError(null);
@@ -368,15 +376,19 @@ export function ScriptLibraryPanel() {
     return () => { active = false; };
   }, [query, category, listRetry]);
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedId || !selectedKey) return;
     let active = true;
-    setSources([]); setSourcesChecked(false); setSourceError(null);
-    getScriptLibrarySources(selected.id).then(result => { if (active) { setSources(result); setSourcesChecked(true); } })
-      .catch(cause => { if (active) setSourceError(cause instanceof Error ? cause.message : "来源核对失败"); });
+    const key = selectedKey;
+    getScriptLibrarySources(selectedId).then(sources => { if (active) { setSourceResult({ key, sources }); setSourceFailure(null); } })
+      .catch(cause => { if (active) setSourceFailure({ key, message: cause instanceof Error ? cause.message : "来源核对失败" }); });
     return () => { active = false; };
-  }, [selected?.id, sourceRetry]);
+  }, [selectedId, selectedKey, sourceRetry]);
   function select(entry: ScriptLibraryEntry) {
-    setSelected(entry); setSources([]); setSourcesChecked(false); setSourceError(null); setConfirmed(false); setName(`${entry.name} · 新任务`); setError(null);
+    const sameSelection = selected?.id === entry.id && selected.version === entry.version;
+    setSelected(entry);
+    if (!sameSelection) {
+      setConfirmedKey(null); setName(`${entry.name} · 新任务`); setError(null);
+    }
   }
   async function reuse() {
     if (!selected) return;
@@ -389,6 +401,10 @@ export function ScriptLibraryPanel() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "文案复用失败"); }
     finally { setBusy(false); }
   }
+  const sourcesChecked = Boolean(selectedKey && sourceResult?.key === selectedKey);
+  const sources = sourcesChecked ? sourceResult!.sources : [];
+  const sourceError = selectedKey && sourceFailure?.key === selectedKey ? sourceFailure.message : null;
+  const confirmed = Boolean(selectedKey && confirmedKey === selectedKey);
   const readable = sourcesChecked && sources.every(source => source.status === "readable");
   return <section className={styles.card} aria-label="文案库">
     <div className={styles.cardHeading}><div><h2>文案库</h2><small>已确认文案的命名快照与历史版本；复用需要新确认。</small></div><DisplayModeToggle label="文案列表" value={scriptsView} onChange={setScriptsView} /></div>
@@ -410,12 +426,12 @@ export function ScriptLibraryPanel() {
       {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p>{section.reference_ids.length ? <details><summary>技术诊断信息</summary><small>引用记录：{section.reference_ids.join("、")}</small></details> : null}</article>)}
       <details><summary>技术诊断信息</summary><p>原稿记录：{selected.source_script_id || "无"} · 运行记录：{selected.source_run_id || "无"}</p></details>
       <h4>事实出处（实时核对）</h4>
-      {sourceError ? <div role="alert"><p>{sourceError}</p><button onClick={() => setSourceRetry(value => value + 1)} type="button">重试核对来源</button></div> : !sourcesChecked ? <p role="status">正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
+      {sourceError ? <div role="alert"><p>{sourceError}</p><button onClick={() => { setSourceFailure(null); setSourceRetry(value => value + 1); }} type="button">重试核对来源</button></div> : !sourcesChecked ? <p role="status">正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${selected.version}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
       {error ? <p role="alert">{error}</p> : null}
-      <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmed(false); }} /></label>
-      <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmed(false); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
-      <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmed(false); }} /></label>
-      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />确认以上新任务要求，正文仍需重新确认</label>
+      <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmedKey(null); }} /></label>
+      <label className={styles.correctionField}><span>新任务画幅</span><select value={ratio} onChange={event => { setRatio(event.target.value as typeof ratio); setConfirmedKey(null); }}><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option></select></label>
+      <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmedKey(null); }} /></label>
+      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmedKey(event.target.checked ? selectedKey : null)} />确认以上新任务要求，正文仍需重新确认</label>
       <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
       <button disabled={busy || !confirmed || !readable || !name.trim() || duration < 15 || duration > 600} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
     </section> : null}
