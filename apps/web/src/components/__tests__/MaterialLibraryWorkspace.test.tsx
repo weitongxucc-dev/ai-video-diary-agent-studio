@@ -335,6 +335,33 @@ it("reports visual, speech, and OCR analysis separately instead of treating visu
   expect(screen.getByText(/画面已分析 · 声音转写受阻 · 文字识别受阻/)).toBeInTheDocument();
 });
 
+it("keeps edits made from the initial preview anchored across filtering without creating an assistant reference", async () => {
+  vi.mocked(getProductionMaterials)
+    .mockResolvedValueOnce({ ...taggedLibrary, assets: [], total_count: 0 })
+    .mockResolvedValueOnce({ ...twoAssetLibrary, assets: [otherAsset, taggedAsset] });
+  vi.mocked(updateProductionMaterialSegment).mockResolvedValue({ ...taggedAsset, segments: [{ ...segment, description: "预览草稿" }] });
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "预览草稿" } });
+  expect(screen.getByText("尚未选择素材：请从右侧选择整条素材或一个片段。")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "筛掉当前素材" } });
+  await screen.findByText(/草稿已保留；找回该素材后可继续保存/);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "" } });
+  await waitFor(() => expect(screen.getByLabelText("片段描述")).toHaveValue("预览草稿"));
+  fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
+  await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ description: "预览草稿" })));
+});
+
+it("counts a missing OCR result for any segment as partial rather than all complete", () => {
+  const readyUnderstanding = { status: "ready" as const, fingerprint: "", model_id: "", sample_times: [], summary: "", facts: [], unknowns: [], ocr_status: "ready" as const, ocr_model_id: "", ocr_frames: [], message: "" };
+  const twoSegments = { ...taggedAsset, segments: [
+    { ...segment, understanding: readyUnderstanding },
+    { ...otherSegment, understanding: undefined },
+  ] };
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [twoSegments] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByText(/文字识别部分完成/)).toBeInTheDocument();
+  expect(screen.queryByText(/文字识别已完成/)).not.toBeInTheDocument();
+});
+
 it("keeps the last usable list visible and reports a failed search instead of showing an empty library", async () => {
   vi.mocked(getProductionMaterials).mockRejectedValueOnce(new Error("network unavailable"));
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);

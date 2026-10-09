@@ -76,6 +76,7 @@ import type {
 
 type Filter = "all" | "raw" | "approved" | "rejected";
 type MediaTypeFilter = "all" | MaterialAsset["media_type"];
+type SegmentEditAnchor = { assetId: string; segmentId: string; startSeconds: number; endSeconds: number };
 type IntakeStatus = Awaited<ReturnType<typeof getMaterialIntakeStatus>>;
 type Busy =
   | "scan"
@@ -179,19 +180,21 @@ function modalityLabel(
 
 function analysisSummary(asset: MaterialAsset) {
   const visualStatuses = asset.segments.map((segment) => segment.visual_status);
-  const visual = visualStatuses.length && visualStatuses.every((status) => status === "ready")
-    ? "画面已分析"
-    : visualStatuses.length && visualStatuses.some((status) => status === "ready")
-      ? "画面部分完成"
-      : modalityLabel(visualStatuses[0], "画面分析");
-  const ocrStatuses = asset.segments.flatMap((segment) =>
-    segment.understanding ? [segment.understanding.ocr_status] : [],
-  );
-  const ocr = ocrStatuses.length && ocrStatuses.every((status) => status === "ready")
-    ? "文字识别已完成"
-    : ocrStatuses.length && ocrStatuses.some((status) => status === "ready")
-      ? "文字识别部分完成"
-      : modalityLabel(ocrStatuses[0], "文字识别");
+  const ocrStatuses = asset.segments.map((segment) => segment.understanding?.ocr_status);
+  const summarize = (
+    statuses: ("pending" | "ready" | "blocked" | "failed" | undefined)[],
+    subject: string,
+    completed: string,
+  ) => {
+    if (!statuses.length || statuses.every((status) => status === undefined)) return `${subject}状态未知`;
+    if (statuses.every((status) => status === "ready")) return completed;
+    if (statuses.some((status) => status === "ready")) return `${subject}部分完成`;
+    if (statuses.some((status) => status === undefined)) return `${subject}状态不完整`;
+    if (statuses.every((status) => status === statuses[0])) return modalityLabel(statuses[0], subject);
+    return `${subject}部分受阻`;
+  };
+  const visual = summarize(visualStatuses, "画面分析", "画面已分析");
+  const ocr = summarize(ocrStatuses, "文字识别", "文字识别已完成");
   return [
     visual,
     modalityLabel(asset.speech_analysis?.status, "声音转写"),
@@ -328,6 +331,9 @@ export function MaterialLibraryWorkspace({
   const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
   const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
   const [usageRoleDraft, setUsageRoleDraft] = useState<MaterialSegment["usage_role"]>(initialLibrary.assets[0]?.segments[0]?.usage_role ?? "unassigned");
+  const [editAnchor, setEditAnchor] = useState<SegmentEditAnchor | null>(null);
+  const editAnchorRef = useRef<SegmentEditAnchor | null>(null);
+  const editDraftRevision = useRef(0);
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const sourceAudio = useRef<HTMLAudioElement>(null);
   const isComposingTag = useRef(false);
@@ -340,30 +346,32 @@ export function MaterialLibraryWorkspace({
   const objectLoadRevision = useRef(0);
   const objectReadRetry = useRef(0);
 
-  // A background refresh can drop whatever is selected: the material was
-  // removed or re-indexed, or the current search no longer returns it. Falling
-  // back to assets[0] put one material's name above another material's
-  // description draft, and 保存片段修改 then wrote that draft onto the wrong
-  // item. Treat the loss as its own state instead. The typed draft stays in
-  // component state so a later pick can restore context, the inspector closes
-  // so nothing can be saved under the wrong name, and picking again re-seeds
-  // from the newly selected item.
+  // Keep explicit assistant targets and edited segment drafts tied to their
+  // original asset. If a filter drops that object, close the inspector and
+  // retain the draft instead of pairing it with the first row in the result.
   const explicitlySelectedAssetId = assistantSelection?.asset_id;
-  const selectionLost =
+  const assistantSelectionLost =
     Boolean(explicitlySelectedAssetId) &&
     !assets.some((asset) => asset.id === explicitlySelectedAssetId);
+  const editAnchorLost = Boolean(editAnchor) && !assets.some((asset) => asset.id === editAnchor?.assetId);
+  const selectionLost = assistantSelectionLost || editAnchorLost;
   const selected = selectionLost
     ? null
     : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
   // 请求发出时记住目标素材，回来时用它判断这条结果还属不属于用户眼前的素材。
   const currentAssetIdRef = useRef<string | null>(null);
   currentAssetIdRef.current = selected?.id ?? null;
-  // The same applies one level down: re-analysis can replace a segment's list,
-  // and the drafts in the textarea still belong to the segment that left.
+  // A segment edit is also tied to its original id and time range; re-analysis
+  // must not silently move its draft onto a different segment.
+  const editAnchorRangeLost = Boolean(
+    editAnchor && selected?.id === editAnchor.assetId &&
+    selected.segments.some((segment) => segment.id === editAnchor.segmentId &&
+      (segment.start_seconds !== editAnchor.startSeconds || segment.end_seconds !== editAnchor.endSeconds)),
+  );
   const segmentLost =
     Boolean(selectedSegmentId) &&
     selected !== null &&
-    !selected.segments.some((segment) => segment.id === selectedSegmentId);
+    (!selected.segments.some((segment) => segment.id === selectedSegmentId) || editAnchorRangeLost);
   const selectedSegment = segmentLost
     ? null
     : selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
@@ -493,6 +501,7 @@ export function MaterialLibraryWorkspace({
           setHasMore(result.has_more);
           if (
             !assistantSelection &&
+            !editAnchorRef.current &&
             selectionAtRequest === selectionRevision.current &&
             result.assets[0] &&
             !result.assets.some((asset) => asset.id === selectedId)
@@ -629,6 +638,24 @@ export function MaterialLibraryWorkspace({
     await saveAssetTags(asset, [...asset.user_tags, tag]);
   }
 
+  function markSegmentDraftChanged() {
+    if (!selected || !selectedSegment) return;
+    const anchor = {
+      assetId: selected.id,
+      segmentId: selectedSegment.id,
+      startSeconds: selectedSegment.start_seconds,
+      endSeconds: selectedSegment.end_seconds,
+    };
+    editAnchorRef.current = anchor;
+    setEditAnchor(anchor);
+    editDraftRevision.current += 1;
+  }
+
+  function clearSegmentEditAnchor() {
+    editAnchorRef.current = null;
+    setEditAnchor(null);
+  }
+
   function selectAsset(asset: MaterialAsset, explicit = true) {
     cancelVoiceNote();
     setVoiceNoteNotice("");
@@ -637,6 +664,7 @@ export function MaterialLibraryWorkspace({
     setDescriptionDraft(first?.description ?? "");
     setTranscriptDraft(first?.transcript ?? "");
     setUsageRoleDraft(first?.usage_role ?? "unassigned");
+    clearSegmentEditAnchor();
     setSelectedId(asset.id);
     const target = explicit ? { scope: "asset" as const, asset_id: asset.id } : null;
     setAssistantSelection(target);
@@ -654,6 +682,7 @@ export function MaterialLibraryWorkspace({
   function selectSegment(segment: MaterialSegment, explicit = true) {
     selectionRevision.current += 1;
     setSelectedSegmentId(segment.id);
+    clearSegmentEditAnchor();
     if (explicit && selected) {
       const target = { scope: "segment" as const, asset_id: selected.id, segment_id: segment.id };
       setAssistantSelection(target);
@@ -936,6 +965,8 @@ export function MaterialLibraryWorkspace({
   async function saveSegmentOrganization() {
     if (!selected || !selectedSegment) return;
     const revision = selectionRevision.current;
+    const draftRevision = editDraftRevision.current;
+    const target = { assetId: selected.id, segmentId: selectedSegment.id };
     setBusy("segment");
     setDetailError("");
     try {
@@ -953,7 +984,12 @@ export function MaterialLibraryWorkspace({
       );
       replaceAsset(updated);
       if (revision === selectionRevision.current) {
-        setUsageRoleDraft(updated.segments.find((segment) => segment.id === selectedSegment.id)!.usage_role);
+        if (draftRevision === editDraftRevision.current) {
+          setUsageRoleDraft(updated.segments.find((segment) => segment.id === selectedSegment.id)!.usage_role);
+          if (editAnchorRef.current?.assetId === target.assetId && editAnchorRef.current.segmentId === target.segmentId) {
+            clearSegmentEditAnchor();
+          }
+        }
       }
       await refreshInsights();
     } catch (cause) {
@@ -1377,14 +1413,14 @@ export function MaterialLibraryWorkspace({
               }) : <p>采样帧中未识别到文字。</p>
               : <p>{selectedSegment.understanding.ocr_status === "failed" ? "本地文字识别失败，可重新分析。" : "本地文字识别尚未配置。"}</p>}
           </section> : null}
-          <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => setDescriptionDraft(event.target.value)} /></label>
-          <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => setTranscriptDraft(event.target.value)} /></label>
+          <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => { markSegmentDraftChanged(); setDescriptionDraft(event.target.value); }} /></label>
+          <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => { markSegmentDraftChanged(); setTranscriptDraft(event.target.value); }} /></label>
           <label>
             <span>片段用途</span>
             <select
               disabled={busy !== null}
               value={usageRoleDraft}
-              onChange={(event) => setUsageRoleDraft(event.target.value as MaterialSegment["usage_role"])}
+              onChange={(event) => { markSegmentDraftChanged(); setUsageRoleDraft(event.target.value as MaterialSegment["usage_role"]); }}
             >
               {usageRoleDraft === "unassigned" ? <option value="unassigned" disabled>未指定（当前用途）</option> : null}
               {usageRoleDraft === "exclude" ? <option value="exclude" disabled>不使用（已排除）</option> : null}
@@ -1457,7 +1493,7 @@ export function MaterialLibraryWorkspace({
               {[{ id: "", name: "未归类" }, ...collections]
                 .filter((collection) => collection.name.includes(collectionQuery.trim()))
                 .map((collection) => (
-                  <button aria-pressed={collectionDraft === collection.id} className={collectionDraft === collection.id ? styles.isSelected : ""} key={collection.id || "none"} onClick={() => setCollectionDraft(collection.id)} type="button">{collection.name}</button>
+                  <button aria-pressed={collectionDraft === collection.id} className={collectionDraft === collection.id ? styles.isSelected : ""} key={collection.id || "none"} onClick={() => { markSegmentDraftChanged(); setCollectionDraft(collection.id); }} type="button">{collection.name}</button>
                 ))}
               {!collections.some((collection) => collection.name.includes(collectionQuery.trim())) && !"未归类".includes(collectionQuery.trim()) ? <small>没有匹配的标签夹</small> : null}
             </div>
@@ -1788,9 +1824,13 @@ export function MaterialLibraryWorkspace({
         {selectionLost || segmentLost ? (
           <div className="library-error" role="alert">
             <AlertCircle size={15} />
-            {selectionLost
+            {assistantSelectionLost
               ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
-              : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
+              : editAnchorRangeLost
+                ? "正在编辑的片段时间范围已变化。草稿已保留；不会保存到新的时间范围。"
+                : editAnchorLost
+                ? "正在编辑的素材已不在当前结果中。草稿已保留；找回该素材后可继续保存，不会写入其他素材。"
+                : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
           </div>
         ) : null}
 
