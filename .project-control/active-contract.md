@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 100：核心聊天到实际创作动作接线 | task_7ef29cc0cac2 / ctx_dfc72a565b11；准确4c748dfc新分支，以下UI100具名源码；98/96已结案retain |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 101：核心对话实包准备 | 下方B101仅准备，不开服务/Pi/媒体；99未提交4文件diff保留，97已结案 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 101：核心对话实包准备 | task_07710bc63910 / ctx_96c3cc6ab72c；下方B101仅准备，不开服务/Pi/媒体；99未提交4文件diff保留，97已结案 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
