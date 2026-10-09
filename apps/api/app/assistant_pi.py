@@ -93,6 +93,8 @@ _PI_TOOL_LABELS = {
     "start_creation_execution": "提交连续制作",
     "resume_creation_execution": "继续连续制作",
     "cancel_creation_execution": "取消连续制作",
+    "read_selected_material": "读取所选素材",
+    "update_selected_material_tags": "修改我的标签",
 }
 
 
@@ -101,6 +103,13 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return "这一步没有完成；请以页面显示的任务状态和错误提示为准。"
     payload = result if isinstance(result, dict) else {}
     details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    if tool_name in {"read_selected_material", "update_selected_material_tags"}:
+        scope = "整条素材" if details.get("scope") == "asset" else "当前片段"
+        if tool_name == "read_selected_material":
+            tags = details.get("user_tags") if isinstance(details.get("user_tags"), list) else []
+            return f"已读取{scope}的我的标签，共 {len(tags)} 项。"
+        return (f"{scope}的我的标签已提交并回读。" if details.get("changed")
+                else f"已回读{scope}的我的标签，内容没有变化。")
     if tool_name in {"start_creation_execution", "resume_creation_execution", "cancel_creation_execution"}:
         action = details.get("action")
         status = details.get("status") if isinstance(details.get("status"), dict) else {}
@@ -365,6 +374,10 @@ PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当�
 人物口型默认选 high 高精度；只有用户明确要求速度优先或低精度时才选 fast。不要在高精度不可用时自行改为 fast。
 回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案等内部词；说清能否开始、缺什么和下一步。"""
 
+MATERIAL_PROMPT = """你是 AI 视频日记素材库里的对话助手，只处理当前页面明确选中的一条素材或一个片段。
+每轮先调用 read_selected_material 核对当前对象真实的“我的标签”。只有用户明确要求修改标签并能确定替换、添加或移除及对应文字时，才调用 update_selected_material_tags 一次；“把标签改成……”表示替换，“再加上/添加……”表示添加，“移除/去掉……”表示移除。对象范围由服务端绑定，不能询问、推测或指定其他素材/片段，也不能改系统标签、片段描述、转写、用途或标签夹。
+如果用户没有说清操作方式或标签内容，先用日常中文问清，不执行修改。普通标签直接保存，不创建剪辑提案或创作任务，也不要求二次确认。只有工具写后回读成功才可说已保存；失败要如实说明，不得根据请求或模型回复冒称成功。回答仅围绕所选对象当前我的标签，不泄露路径、成员、工作区或其他素材内容。"""
+
 SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每轮先调用 read_current_task，读取已确认选题、本次时长和允许使用的资料；需要补充事实时调用 find_knowledge。
 你只能使用工具列出的当前任务来源 ID 作为文案证据，不能编造引用、事实、素材或已完成的制作结果。资料不足就问一个具体问题。
 用户要起草或修改文案时，调用 preview_script_draft 保存待确认文案。修改已有草稿时沿用其段落 ID；先说明想怎么改，再根据用户本轮要求提交新的完整草稿。每轮最多保存一次。
@@ -440,7 +453,7 @@ def pi_runtime_checks() -> list[dict]:
     tools_ready = extension.is_file() and os.access(extension, os.R_OK)
     # The shipped extension imports this sibling; file presence is not HTTP/tool execution.
     if extension.name == "diary_tools.ts":
-        tools_ready = tools_ready and (extension.parent / "retrieval.ts").is_file()
+        tools_ready = tools_ready and (extension.parent / "retrieval.ts").is_file() and (extension.parent / "material_tools.ts").is_file()
     pi_reason = "未找到可执行 Pi；这不是密钥保存或鉴权失败。"
     pi_repair_action = str(_FAILURES[FAILURE_RUNTIME_MISSING]["next_step"])
     pi_fix_command = "npm install -g @earendil-works/pi-coding-agent"
@@ -488,6 +501,9 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
     action_failed = False
     topic_result = None
     topic_failed = False
+    material_result = None
+    material_failed = False
+    material_result_invalid = False
     settled = False
     action_tools = {
         "start_creation_execution": "start",
@@ -505,7 +521,40 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
             "preview_edit", "preview_creation_plan", "preview_script_draft",
             "generate_creation_task_topics", *action_tools,
+            "read_selected_material", "update_selected_material_tags",
         }:
+            if event.get("toolName") in {"read_selected_material", "update_selected_material_tags"}:
+                material_failed = bool(event.get("isError")) or material_failed
+                if not event.get("isError"):
+                    details = (event.get("result") or {}).get("details") or {}
+                    scope = details.get("scope")
+                    asset_ref = details.get("asset_ref")
+                    segment_ref = details.get("segment_ref")
+                    user_tags = details.get("user_tags")
+                    system_tags = details.get("system_tags")
+                    valid_tags = isinstance(user_tags, list) and all(isinstance(tag, str) for tag in user_tags)
+                    valid_scope_ref = (
+                        scope == "asset" and isinstance(asset_ref, str) and segment_ref is None
+                    ) or (
+                        scope == "segment" and isinstance(asset_ref, str)
+                        and isinstance(segment_ref, str) and isinstance(system_tags, list)
+                        and all(isinstance(tag, str) for tag in system_tags)
+                    )
+                    if valid_scope_ref and valid_tags:
+                        material_result = {
+                            "scope": scope,
+                            "asset_ref": asset_ref,
+                            **({"segment_ref": segment_ref} if scope == "segment" and isinstance(segment_ref, str) else {}),
+                            "user_tags": [tag for tag in user_tags if isinstance(tag, str)],
+                            **({"system_tags": [tag for tag in system_tags if isinstance(tag, str)]}
+                               if scope == "segment" and isinstance(system_tags, list) else {}),
+                            **({"action": details["action"]} if details.get("action") in {"replace", "add", "remove"} else {}),
+                            **({"changed": details["changed"]} if isinstance(details.get("changed"), bool) else {}),
+                            **({"previous_user_tags": [tag for tag in details["previous_user_tags"] if isinstance(tag, str)]}
+                               if isinstance(details.get("previous_user_tags"), list) else {}),
+                        }
+                    else:
+                        material_result_invalid = True
             if event.get("toolName") in action_tools:
                 action_failed = bool(event.get("isError"))
                 if not action_failed:
@@ -536,6 +585,24 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             settled = True
     if (action_failed and action_result is None) or topic_failed:
         raise _fail(FAILURE_TOOL_FAILED)
+    if not settled or not answer:
+        cause = _classify_output(output)
+        if cause == FAILURE_UNKNOWN:
+            raise _fail(
+                cause,
+                explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
+            )
+        raise _fail(cause)
+    if kind == "material_result":
+        if material_failed or material_result_invalid:
+            raise _fail(FAILURE_TOOL_FAILED)
+        if material_result is None:
+            return answer, None
+        tags = "、".join(material_result["user_tags"]) or "暂无"
+        object_label = "整条素材" if material_result["scope"] == "asset" else "当前片段"
+        if material_result.get("action") and material_result.get("changed"):
+            answer = f"{object_label}的我的标签已保存并回读：{tags}。"
+        return answer, {"kind": "material_result", "material_result": material_result}
     if action_result is not None:
         status = action_result.get("status") or {}
         job = status.get("job") if isinstance(status, dict) else None
@@ -558,15 +625,6 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         return f"已为当前任务生成 {count} 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。", {
             "kind": "topic_generation", "topics": topic_result,
         }
-    if not settled or not answer:
-        cause = _classify_output(output)
-        if cause == FAILURE_UNKNOWN:
-            # 保留「完整回复」这个说法：用户能认出是没答完，而不是笼统报错。
-            raise _fail(
-                cause,
-                explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
-            )
-        raise _fail(cause)
     if kind == "edit_preview" and preview is not None:
         # The proposal is the business result; the model's final text stays in
         # the Pi session as evidence and does not define confirmation effects.
@@ -650,6 +708,38 @@ def run_plan_turn(
     )
 
 
+def run_material_turn(
+    settings: Settings,
+    *,
+    workspace_id: str,
+    conversation_id: str,
+    message: str,
+    selection: dict[str, str],
+    authorization: str | None = None,
+    cookie: str | None = None,
+    local_member_token: str | None = None,
+    caller_user_id: str | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
+) -> tuple[str, dict | None]:
+    tool_selection = {
+        "scope": selection["scope"],
+        "assetId": selection["asset_id"],
+        **({"segmentId": selection["segment_id"]} if selection["scope"] == "segment" else {}),
+    }
+    return _run_turn(
+        settings, workspace_id=workspace_id, task_id="", message=message,
+        stage="material", selected_refs=[], playhead_ms=None,
+        authorization=authorization, cookie=cookie,
+        local_member_token=local_member_token, caller_user_id=caller_user_id,
+        on_event=on_event, prompt=MATERIAL_PROMPT,
+        tool_names="read_selected_material,update_selected_material_tags",
+        preview_kind="material_result",
+        session_key=(f"material:{conversation_id}:{selection['scope']}:{selection['asset_id']}"
+                     f":{selection.get('segment_id', '')}"),
+        material_selection=tool_selection,
+    )
+
+
 def _run_turn(
     settings: Settings,
     *,
@@ -668,6 +758,7 @@ def _run_turn(
     preview_kind: str,
     session_key: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    material_selection: dict[str, str] | None = None,
 ) -> tuple[str, dict | None]:
     checks = pi_runtime_checks()
     for check in checks:
@@ -716,6 +807,7 @@ def _run_turn(
         "AI_VIDEO_DIARY_AGENT_COOKIE": cookie or "",
         # 已验证的本地成员令牌：工具回调必须带上，否则会退化成匿名 local 诊断读取。
         "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN": local_member_token or "",
+        "AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION": json.dumps(material_selection) if material_selection else "",
     }
     cmd = [
         str(pi_executable), "--print", "--mode", "json", "--model", f"ai-video-diary/{model}",

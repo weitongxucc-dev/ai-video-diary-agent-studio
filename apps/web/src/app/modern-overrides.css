@@ -244,6 +244,9 @@ h4 {
 
 .home-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-1)); }
 
+.home-composer__context { margin: 0 0 10px; color: var(--text-2); font-size: 12px; line-height: 1.45; }
+.home-composer__context[aria-label="当前素材对话范围"] { padding: 7px 9px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-2); }
+
 .home-composer__input-row {
   display: flex;
   align-items: flex-start;

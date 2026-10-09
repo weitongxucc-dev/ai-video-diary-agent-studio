@@ -9,6 +9,8 @@ import type {
   CreationPlanInput,
   CreationPlanPreview,
   WorkspaceAssistantPlanTurnResponse,
+  MaterialAssistantSelection,
+  MaterialAssistantTurnResponse,
   CreationTasksResponse,
   CreationTaskWorkspace,
   CreationExecutionPreview,
@@ -675,6 +677,19 @@ export function sendWorkspaceAssistantPlanTurn(
   return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
     "/api/assistant/plan/turn",
     { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
+  );
+}
+
+export function sendMaterialAssistantTurn(
+  message: string,
+  conversationId: string,
+  selection: MaterialAssistantSelection,
+  onEvent: (event: AssistantStreamEvent) => void,
+): Promise<MaterialAssistantTurnResponse> {
+  return assistantStreamRequest<MaterialAssistantTurnResponse>(
+    "/api/assistant/material/turn",
+    { message, conversation_id: conversationId, selection },
+    onEvent,
   );
 }
 

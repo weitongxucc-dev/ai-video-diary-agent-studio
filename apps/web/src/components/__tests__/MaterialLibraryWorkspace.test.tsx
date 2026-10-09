@@ -7,15 +7,15 @@ vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (pro
   recorder.props = props;
   return <span>录音组件测试替身</span>;
 } }));
-vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
+vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector, conversation }: { children: React.ReactNode; inspector: React.ReactNode; conversation: React.ReactNode }) => <>{children}{inspector}{conversation}</> }));
+vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), getRuntimeSettings: vi.fn(), sendMaterialAssistantTurn: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateMaterialAssetTags: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, getRuntimeSettings, sendMaterialAssistantTurn, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateMaterialAssetTags, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -43,6 +43,8 @@ beforeEach(() => {
   vi.mocked(getProductionMaterials).mockResolvedValue(library);
   vi.mocked(getMaterialLibraryInsights).mockResolvedValue(insights);
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
+  vi.mocked(getRuntimeSettings).mockResolvedValue({ status: { llm: { configured: true, provider: "test", model: "test" } } } as Awaited<ReturnType<typeof getRuntimeSettings>>);
+  vi.mocked(sendMaterialAssistantTurn).mockResolvedValue({ reply: "已读取。", provider: "test", model: "test", material_result: null });
   vi.mocked(getMaterialBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ items: [], total_count: 0 });
@@ -55,6 +57,67 @@ it("switches the material collection between cover grid and object rows", async 
   fireEvent.click(within(collection).getByRole("button", { name:"对象列表" }));
   expect(results).toHaveClass("is-list");
   expect(within(collection).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
+});
+
+it("does not bind the automatic first material, then binds only explicit asset and segment picks", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByText("尚未选择素材：请从右侧选择整条素材或一个片段。"))
+    .toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  expect(screen.getByText(/当前范围：整条素材 · local\.mp4/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
+  expect(screen.getByText(/当前范围：片段 0:01–0:03 · 画面说明/)).toBeInTheDocument();
+});
+
+it("shows asset labels and applies assistant readback only to the exact selected segment", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
+  let resolveTurn!: (value: Awaited<ReturnType<typeof sendMaterialAssistantTurn>>) => void;
+  vi.mocked(sendMaterialAssistantTurn).mockImplementationOnce(() => new Promise((resolve) => { resolveTurn = resolve; }));
+  vi.mocked(updateMaterialAssetTags).mockResolvedValue({ ...taggedAsset, user_tags: ["整条标签"] });
+  render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  expect(screen.getByText("整条素材还没有我的标签。")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("添加到整条素材"), { target: { value: "整条标签" } });
+  fireEvent.keyDown(screen.getByLabelText("添加到整条素材"), { key: "Enter" });
+  await waitFor(() => expect(updateMaterialAssetTags).toHaveBeenCalledWith("asset", ["整条标签"]));
+  await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给片段加上产品演示" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
+    "给片段加上产品演示", expect.any(String), { scope: "segment", asset_id: "asset", segment_id: "segment" }, expect.any(Function),
+  ));
+  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+  resolveTurn({
+    reply: "已按你的要求更新这个片段。", provider: "test", model: "test",
+    material_result: {
+      scope: "segment", asset_ref: "asset:asset", segment_ref: "segment:segment",
+      user_tags: ["旧标签", "产品演示"], system_tags: [], action: "add", changed: true,
+    },
+  });
+  await waitFor(() => expect(screen.getByRole("button", { name: /自造素材B\.mp4/ })).toBeInTheDocument());
+  expect(screen.queryByLabelText("移除标签 产品演示")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
+  await waitFor(() => expect(screen.getByLabelText("移除标签 产品演示")).toBeInTheDocument());
+  expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument();
+
+  vi.mocked(sendMaterialAssistantTurn).mockResolvedValueOnce({
+    reply: "整条素材标签已更新。", provider: "test", model: "test",
+    material_result: {
+      scope: "asset", asset_ref: "asset:asset", segment_ref: null,
+      user_tags: ["整条标签", "整条AI标签"], action: "add", changed: true,
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给整条素材添加整条AI标签" } });
+  fireEvent.submit(screen.getByRole("textbox", { name: "素材标签要求" }).closest("form")!);
+  await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
+    "给整条素材添加整条AI标签", expect.any(String), { scope: "asset", asset_id: "asset" }, expect.any(Function),
+  ));
+  await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条AI标签")).toBeInTheDocument());
 });
 
 it("persists the selected restriction and removes obsolete proof displays", async () => {

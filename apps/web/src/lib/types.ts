@@ -1733,6 +1733,28 @@ export type WorkspaceAssistantPlanTurnResponse = {
   plan_preview: CreationPlanPreview | null;
 };
 
+export type MaterialAssistantSelection =
+  | { scope: "asset"; asset_id: string }
+  | { scope: "segment"; asset_id: string; segment_id: string };
+
+export type MaterialAssistantResult = {
+  scope: "asset" | "segment";
+  asset_ref: string;
+  segment_ref: string | null;
+  user_tags: string[];
+  system_tags?: string[];
+  action?: "replace" | "add" | "remove";
+  changed?: boolean;
+  previous_user_tags?: string[];
+};
+
+export type MaterialAssistantTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  material_result: MaterialAssistantResult | null;
+};
+
 export type CreationPlan = CreationPlanPreview & {
   id: string;
   workspace_id: string;

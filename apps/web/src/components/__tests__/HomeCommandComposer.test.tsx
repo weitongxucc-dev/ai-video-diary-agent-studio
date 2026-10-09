@@ -3,11 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ ask: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn() }));
 vi.mock("@/lib/api", () => ({
   apiUrl: (path: string) => path,
   getRuntimeSettings: mocks.settings,
   sendWorkspaceAssistantPlanTurn: mocks.ask,
+  sendMaterialAssistantTurn: mocks.materialAsk,
   previewCreationPlan: mocks.preflight,
   confirmCreationPlan: mocks.confirm,
   sendCreationTaskAssistantTurn: mocks.editAsk,
@@ -59,6 +60,22 @@ describe("HomeCommandComposer", () => {
       aspect_ratio: "9:16", duration_target_seconds: 60, presenter_share_target: 20, lipsync_quality: "high", preflight_fingerprint: "a".repeat(64),
     }));
     expect(assignLocation).toHaveBeenCalledWith("/tasks/task-new");
+  });
+
+  it("sends only the bound material selection and preserves its real assistant answer", async () => {
+    configuredModel();
+    const selection = { scope: "segment" as const, asset_id: "asset-1", segment_id: "segment-2" };
+    const materialResult = { scope: "segment" as const, asset_ref: "asset:asset-1", segment_ref: "segment:segment-2", user_tags: ["旧标签"] };
+    const onResult = vi.fn();
+    mocks.materialAsk.mockResolvedValue({ reply: "已读取旧标签；你想替换还是添加？", provider: "minimax", model: "MiniMax-M3", material_result: materialResult });
+    render(<HomeCommandComposer materialContext={{ selection, label: "片段 0:02–0:04", onResult }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "这个片段的标签帮我改一下" } });
+    fireEvent.submit(screen.getByRole("textbox", { name: "素材标签要求" }).closest("form")!);
+    await waitFor(() => expect(mocks.materialAsk).toHaveBeenCalledWith(
+      "这个片段的标签帮我改一下", expect.any(String), selection, expect.any(Function),
+    ));
+    expect(await screen.findByText("已读取旧标签；你想替换还是添加？")).toBeVisible();
+    expect(onResult).toHaveBeenCalledWith(selection, materialResult);
   });
 
   it("rechecks a selected face-share stop before allowing creation", async () => {

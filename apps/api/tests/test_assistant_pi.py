@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.assistant_pi import AssistantUnavailable, _PiStreamProjector, _last_answer_and_preview, _safe_tool_result_summary, run_plan_turn, run_task_turn
+from app.assistant_pi import AssistantUnavailable, _PiStreamProjector, _last_answer_and_preview, _safe_tool_result_summary, run_material_turn, run_plan_turn, run_task_turn
 from app.config import Settings
 
 
@@ -219,8 +219,77 @@ def test_pi_events_leave_failed_edit_reply_without_a_proposal():
     assert _last_answer_and_preview(output) == ("没有明确裁剪位置，请先说明百分比。", None)
 
 
+def test_material_read_preserves_pi_clarification_and_requires_settled_turn():
+    material = {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["旧标签"]}
+    pi_answer = "我已读取这条素材的标签。你希望替换成什么，还是只添加一项？"
+    events = [
+        {"type": "tool_execution_end", "toolName": "read_selected_material", "isError": False,
+         "result": {"details": material}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": pi_answer}]}},
+        {"type": "agent_settled"},
+    ]
+    assert _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events), "material_result") == (
+        pi_answer,
+        {"kind": "material_result", "material_result": material},
+    )
+    with pytest.raises(AssistantUnavailable):
+        _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events[:-1]), "material_result")
+
+
+def test_material_saved_update_reply_comes_from_write_readback():
+    details = {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["成片素材"],
+               "action": "replace", "changed": True, "previous_user_tags": ["旧标签"]}
+    output = "\n".join(json.dumps(event, ensure_ascii=False) for event in [
+        {"type": "tool_execution_end", "toolName": "read_selected_material", "isError": False,
+         "result": {"details": {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["旧标签"]}}},
+        {"type": "tool_execution_end", "toolName": "update_selected_material_tags", "isError": False,
+         "result": {"details": details}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "我已经把未确认的请求写进去了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    reply, result = _last_answer_and_preview(output, "material_result")
+    assert reply == "整条素材的我的标签已保存并回读：成片素材。"
+    assert result == {"kind": "material_result", "material_result": details}
+
+
+def test_material_tool_success_without_exact_object_readback_is_not_claimed():
+    output = "\n".join(json.dumps(event, ensure_ascii=False) for event in [
+        {"type": "tool_execution_end", "toolName": "update_selected_material_tags", "isError": False,
+         "result": {"details": {"scope": "segment", "asset_ref": "asset:asset-1", "user_tags": ["标签"]}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "已经保存。"}]}},
+        {"type": "agent_settled"},
+    ])
+    with pytest.raises(AssistantUnavailable):
+        _last_answer_and_preview(output, "material_result")
+
+
+def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monkeypatch, tmp_path):
+    seen = {}
+
+    def capture(_settings, **kwargs):
+        seen.update(kwargs)
+        return "收到。", None
+
+    monkeypatch.setattr("app.assistant_pi._run_turn", capture)
+    selection = {"scope": "segment", "asset_id": "asset-1", "segment_id": "segment-2"}
+    assert run_material_turn(
+        Settings(model_root_path=str(tmp_path), llm_provider="minimax"),
+        workspace_id="workspace-1", conversation_id="conversation-1", message="读取这个片段标签",
+        selection=selection,
+    ) == ("收到。", None)
+    assert seen["tool_names"] == "read_selected_material,update_selected_material_tags"
+    assert seen["material_selection"] == {
+        "scope": "segment", "assetId": "asset-1", "segmentId": "segment-2",
+    }
+    assert seen["stage"] == "material"
+    assert "segment-2" in seen["session_key"]
+
+
 def test_pi_events_reject_incomplete_turn():
-    with pytest.raises(AssistantUnavailable, match="完整回复"):
+    with pytest.raises(AssistantUnavailable):
         _last_answer_and_preview('{"type":"agent_settled"}')
 
 

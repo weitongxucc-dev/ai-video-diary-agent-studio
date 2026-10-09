@@ -1700,6 +1700,48 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     plan_preview: CreationPlanPreviewResponse | None = None
 
 
+class MaterialAssistantSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["asset", "segment"]
+    asset_id: str = Field(min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.scope == "segment" and self.segment_id is None:
+            raise ValueError("片段范围需要明确片段")
+        if self.scope == "asset" and self.segment_id is not None:
+            raise ValueError("整条素材范围不能带片段")
+        return self
+
+
+class MaterialAssistantTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    conversation_id: UUID
+    selection: MaterialAssistantSelectionRequest
+
+
+class MaterialAssistantResultResponse(BaseModel):
+    scope: Literal["asset", "segment"]
+    asset_ref: str
+    segment_ref: str | None = None
+    user_tags: list[str]
+    system_tags: list[str] | None = None
+    action: Literal["replace", "add", "remove"] | None = None
+    changed: bool | None = None
+    previous_user_tags: list[str] | None = None
+
+
+class MaterialAssistantTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    material_result: MaterialAssistantResultResponse | None = None
+
+
 class AssistantStreamEvent(BaseModel):
     """UI-safe projection of Pi text/tool events and the existing final response."""
 

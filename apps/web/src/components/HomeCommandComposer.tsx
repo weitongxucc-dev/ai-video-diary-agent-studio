@@ -3,14 +3,24 @@
 import { AlertCircle, ArrowUp, Sparkles } from "lucide-react";
 import Image from "next/image";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline } from "@/lib/api";
-import type { AssistantStreamEvent, AssistantToolActivity, AssistantTurnActivity, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse } from "@/lib/types";
+import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline } from "@/lib/api";
+import type { AssistantStreamEvent, AssistantToolActivity, AssistantTurnActivity, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 
-type HomeCommandComposerProps = { assignLocation?: (url: string) => void; autoFocus?: boolean; task?: CreationTask | null; onTaskUpdated?: () => void };
+type HomeCommandComposerProps = {
+  assignLocation?: (url: string) => void;
+  autoFocus?: boolean;
+  task?: CreationTask | null;
+  onTaskUpdated?: () => void;
+  materialContext?: {
+    selection: MaterialAssistantSelection | null;
+    label: string | null;
+    onResult: (selection: MaterialAssistantSelection, result: MaterialAssistantResult) => void;
+  };
+};
 
 const issueNames: Record<string, string> = {
   content_sources_missing: "缺少资料",
@@ -76,7 +86,12 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
   </>;
 }
 
-export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated }: HomeCommandComposerProps) {
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext }: HomeCommandComposerProps) {
+  const materialScopeKey = materialContext
+    ? materialContext.selection
+      ? `${materialContext.selection.scope}:${materialContext.selection.asset_id}:${materialContext.selection.scope === "segment" ? materialContext.selection.segment_id : ""}`
+      : "none"
+    : null;
   const [message, setMessage] = useState("");
   const [turns, setTurns] = useState<{ command: string; reply: string; activity?: AssistantTurnActivity }[]>([]);
   const [streamActivity, setStreamActivity] = useState<AssistantTurnActivity | null>(null);
@@ -116,7 +131,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     streamActivityRef.current = { text: "", tools: [] };
     restoreInputFocus.current = false;
     conversationId.current = null;
-  }, [task?.id]);
+  }, [task?.id, materialScopeKey]);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
       if (runtime.status.llm.configured) {
@@ -130,6 +145,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     event?.preventDefault();
     const command = message.trim();
     if (!command || pending) return;
+    if (materialContext && !materialContext.selection) {
+      setError("请先从右侧选择整条素材或一个片段，再说明要怎么处理我的标签；这次没有发送。");
+      return;
+    }
     const revision = scopeRevision.current;
     setPending("chat");
     restoreInputFocus.current = true;
@@ -141,7 +160,19 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setTaskPreview(null);
     setTaskPreviewOpen(false);
     try {
-      if (task) {
+      if (materialContext?.selection) {
+        const selection = materialContext.selection;
+        conversationId.current ??= crypto.randomUUID();
+        const result = await sendMaterialAssistantTurn(command, conversationId.current, selection, (item) => {
+          if (revision !== scopeRevision.current) return;
+          streamActivityRef.current = assistantActivityAfterEvent(streamActivityRef.current, item);
+          setStreamActivity(streamActivityRef.current);
+        });
+        if (result.material_result) materialContext.onResult(selection, result.material_result);
+        if (revision !== scopeRevision.current) return;
+        setTurns((current) => [...current, { command, reply: result.reply, activity: streamActivityRef.current }].slice(-8));
+        setModel(`${result.provider} / ${result.model}`);
+      } else if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
           message: command, context_stage: task.stage,
           selected_object_refs: [], playhead_ms: null,
@@ -283,7 +314,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
   return (
     <div className="home-composer">
-      {!turns.length ? <div className="home-chat-start"><h2>{task ? "这条怎么改？" : "今天想做什么？"}</h2><p>{task ? "说说不满意的地方，先看修改，再决定。" : "说说要介绍什么，剩下的我们一起完成。"}</p>{(task ? ["让节奏快一点", "把字幕放大一点", "露脸占比调到四成"] : ["用我的素材，做一条产品介绍", "把客户常问的问题，做成讲解视频", "把今天拍的片段，剪成工作日常"]).map(text => <button type="button" key={text} onClick={() => { setMessage(text); commandInput.current?.focus(); }}>{text}</button>)}</div> : null}
+      {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
+        {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "尚未选择素材：请从右侧选择整条素材或一个片段。"}
+      </p> : null}
+      {!turns.length ? <div className="home-chat-start"><h2>{materialContext ? "这份素材怎么标记？" : task ? "这条怎么改？" : "今天想做什么？"}</h2><p>{materialContext ? "明确说替换、添加或移除哪些我的标签；未明确选择时不会发送。" : task ? "说说不满意的地方，先看修改，再决定。" : "说说要介绍什么，剩下的我们一起完成。"}</p>{(materialContext ? ["把我的标签改成产品演示", "再加上室内", "移除旧标签"] : task ? ["让节奏快一点", "把字幕放大一点", "露脸占比调到四成"] : ["用我的素材，做一条产品介绍", "把客户常问的问题，做成讲解视频", "把今天拍的片段，剪成工作日常"]).map(text => <button type="button" key={text} onClick={() => { setMessage(text); commandInput.current?.focus(); }}>{text}</button>)}</div> : null}
       {turns.length ? <div className="home-composer__conversation" aria-label="对话记录">
       {turns.map((turn, index) => <div className="home-composer__turn" key={index}>
           <p className="home-composer__command">{turn.command}</p>
@@ -323,7 +357,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       <form onSubmit={(event) => void sendToAssistant(event)} ref={commandForm}>
         <div className="home-composer__input-row">
           <Sparkles aria-hidden="true" size={18} />
-          <textarea aria-label="制作指令" disabled={pending !== null} ref={commandInput}
+          <textarea aria-label={materialContext ? "素材标签要求" : "制作指令"} disabled={pending !== null} ref={commandInput}
             onCompositionStart={() => { composing.current = true; }}
             onCompositionEnd={() => { composing.current = false; }}
             onKeyDown={(event) => {
@@ -333,13 +367,13 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
               commandForm.current?.requestSubmit();
             }}
             onChange={(event) => { setMessage(event.target.value); setPreview(null); setPreviewOpen(false); }}
-            placeholder={task ? "说说怎么改" : "想做什么视频？"}
+            placeholder={materialContext ? "说说我的标签怎么改" : task ? "说说怎么改" : "想做什么视频？"}
             rows={2} value={message} />
         </div>
         <div className="home-composer__toolbar">
           <div className="home-composer__meta">
             <span>{modelConfigured ? "仅传文字" : "尚未连接"}</span>
-            {modelConfigured ? <CardDisclosure title="服务详情"><p>当前服务：{model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。</p></CardDisclosure> : <a href="/settings">去设置</a>}
+            {modelConfigured ? <CardDisclosure title="服务详情"><p>{materialContext ? `当前服务：${model}。只发送这段话和所选对象的我的标签，不发送原视频或声音。` : `当前服务：${model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。`}</p></CardDisclosure> : <a href="/settings">去设置</a>}
           </div>
           <button aria-label="发送" className="composer-submit" disabled={!modelConfigured || !message.trim() || pending !== null} type="submit">
             <ArrowUp size={17} /><span>{pending === "chat" ? "发送中" : "发送"}</span>
@@ -347,7 +381,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         </div>
       </form>
       {error ? <p className="home-composer__error" role="alert">{error}</p> : null}
-      <div className="home-composer__footer">{task ? <><a href={`/tasks/${encodeURIComponent(task.id)}`}>打开任务</a>{undoReady ? <button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button> : null}</> : <a href="/production?new=1">手动创建</a>}</div>
+      {!materialContext ? <div className="home-composer__footer">{task ? <><a href={`/tasks/${encodeURIComponent(task.id)}`}>打开任务</a>{undoReady ? <button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button> : null}</> : <a href="/production?new=1">手动创建</a>}</div> : null}
     </div>
   );
 }

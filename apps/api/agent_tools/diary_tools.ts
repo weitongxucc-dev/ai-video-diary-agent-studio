@@ -1,4 +1,5 @@
 import { rankByQuery, tokenizeQuery } from "./retrieval.ts";
+import { registerMaterialTools } from "./material_tools.ts";
 
 const apiBase = process.env.AI_VIDEO_DIARY_AGENT_API_BASE;
 const taskId = process.env.AI_VIDEO_DIARY_AGENT_TASK_ID;
@@ -36,6 +37,10 @@ async function request(path: string, init?: RequestInit) {
 
 export default function (pi: { registerTool: (tool: unknown) => void }) {
   let creationActionApplied = false;
+  const materialSelection = process.env.AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION
+    ? JSON.parse(process.env.AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION)
+    : null;
+  if (materialSelection) registerMaterialTools(pi, { selection: materialSelection, request });
   pi.registerTool({
     name: "read_workspace_context",
     label: "读取当前工作区",

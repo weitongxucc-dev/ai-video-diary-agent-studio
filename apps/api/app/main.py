@@ -27,7 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 import httpx
 
-from app.assistant_pi import AssistantUnavailable, run_plan_turn, run_task_turn
+from app.assistant_pi import AssistantUnavailable, run_material_turn, run_plan_turn, run_task_turn
 
 from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
@@ -275,6 +275,9 @@ from app.schemas import (
     CreationTaskAssistantTurnResponse,
     CreationTaskAssistantHistoryResponse,
     AssistantStreamEvent,
+    MaterialAssistantTurnRequest,
+    MaterialAssistantTurnResponse,
+    MaterialAssistantResultResponse,
     WorkspaceAssistantPlanTurnRequest,
     WorkspaceAssistantPlanTurnResponse,
     CompoundEditSelectionRequest,
@@ -4451,6 +4454,75 @@ def _workspace_assistant_plan_turn(
         provider=workspace_settings_for_turn.effective_llm_provider,
         model=workspace_settings_for_turn.effective_llm_model,
         plan_preview=plan_preview,
+    )
+
+
+@app.post("/api/assistant/material/turn", response_model=MaterialAssistantTurnResponse)
+def material_assistant_turn(
+    request: Request,
+    payload: MaterialAssistantTurnRequest,
+) -> MaterialAssistantTurnResponse:
+    if "text/event-stream" in request.headers.get("accept", "").lower():
+        workspace_id = current_workspace_id(request)
+        return _assistant_stream_response(
+            lambda on_event: _material_assistant_turn(request, payload, on_event),
+            workspace_id=workspace_id,
+        )
+    return _material_assistant_turn(request, payload, None)
+
+
+def _material_assistant_turn(
+    request: Request,
+    payload: MaterialAssistantTurnRequest,
+    on_event,
+) -> MaterialAssistantTurnResponse:
+    workspace_id = current_workspace_id(request)
+    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
+    selection = payload.selection.model_dump(exclude_none=True)
+    # Resolve the user-selected target through the existing visibility-checked API
+    # before adding its exact identity to this Pi turn's trusted extension context.
+    asset = get_production_material(selection["asset_id"], request)
+    if selection["scope"] == "segment" and not any(
+        segment.id == selection["segment_id"] and segment.asset_id == asset.id
+        for segment in asset.segments
+    ):
+        raise HTTPException(status_code=404, detail="所选片段不属于当前可见素材")
+    message = payload.message.strip()
+    if _assistant_text_without_credentials(message, workspace_id) != message:
+        raise HTTPException(status_code=422, detail="请勿在素材要求中粘贴密钥或口令。")
+    workspace_settings_for_turn = _workspace_settings_for(workspace_id)
+    try:
+        reply, result = run_material_turn(
+            workspace_settings_for_turn,
+            workspace_id=workspace_id,
+            conversation_id=str(payload.conversation_id),
+            message=message,
+            selection={key: value for key, value in selection.items() if isinstance(value, str)},
+            local_member_token=_local_member_token(request) or None,
+            caller_user_id=caller_user_id if not local_diagnostic else None,
+            authorization=request.headers.get("authorization"),
+            cookie=request.headers.get("cookie"),
+            on_event=on_event,
+        )
+    except AssistantUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    reply = _assistant_text_without_credentials(reply, workspace_id)
+    material_result = None
+    if isinstance(result, dict) and result.get("kind") == "material_result":
+        raw = result.get("material_result")
+        if isinstance(raw, dict):
+            expected_asset_ref = f"asset:{asset.id}"
+            expected_segment_ref = f"segment:{selection['segment_id']}" if selection["scope"] == "segment" else None
+            if (raw.get("scope") != selection["scope"]
+                or raw.get("asset_ref") != expected_asset_ref
+                or raw.get("segment_ref") != expected_segment_ref):
+                raise HTTPException(status_code=503, detail="所选素材回读与本轮选择不一致，未能确认结果")
+            material_result = MaterialAssistantResultResponse.model_validate(raw)
+    return MaterialAssistantTurnResponse(
+        reply=reply,
+        provider=workspace_settings_for_turn.effective_llm_provider,
+        model=workspace_settings_for_turn.effective_llm_model,
+        material_result=material_result,
     )
 
 
