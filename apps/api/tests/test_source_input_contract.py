@@ -11,7 +11,11 @@ import app.main as main_module
 from app.external_sources import FetchedWebPage
 from app.knowledge_web import snapshot_web_page
 from app.local_members import LocalMemberService
-from app.production import CreationPlanKnowledgeReference, CreationPlanSourceReference
+from app.production import (
+    CreationPlanKnowledgeReference,
+    CreationPlanSourceReference,
+    ProductionRepository,
+)
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 
@@ -249,3 +253,59 @@ def test_topic_inputs_allow_reference_only_unknown_license_and_block_automation_
     with pytest.raises(main_module._CreationTaskTopicPreflightError) as denied_source:
         main_module._creation_task_topic_inputs(workspace, task, plan, cloud_egress=False)
     assert denied_source.value.reason == "source_use_restricted"
+
+
+def test_plan_preflight_uses_only_reference_eligible_knowledge_and_sources(
+    client, tmp_path, monkeypatch,
+):
+    workspace = "workspace-source-contract"
+    owner_id = client.test_owner_id
+    production_root = tmp_path / "production"
+    library = production_root / "library"
+    library.mkdir(parents=True)
+    production = ProductionRepository(
+        database_path=production_root / "studio.sqlite3",
+        video_library_path=library,
+        duration_reader=lambda _path: 25.0,
+        scene_reader=lambda _path, _duration: [5.0, 17.0],
+    )
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "model_catalog", SimpleNamespace(list_statuses=lambda: []))
+    repo = main_module.source_repository
+    connector = SourceConnector(
+        id="plan-source-connector", workspace_id=workspace, platform="manual",
+        protocol="local", account_or_rule="test", frequency="on_demand", permissions=(),
+    )
+    repo.upsert_connector(connector)
+
+    for state in ("available", "reference_only", "not_for_automation", "excluded"):
+        item_id = f"plan-knowledge-{state}"
+        repo.create_knowledge_item_owned(
+            KnowledgeItem(
+                id=item_id, workspace_id=workspace, content_type="text",
+                title=state, body="计划预检受控正文", file_reference=None,
+                authorization="", ownership="", source_item_id=None, version="1",
+                use_state=state,
+            ),
+            verified_user_id=owner_id,
+        )
+        repo.save_source_items(workspace, [SourceItem(
+            id=f"plan-source-{state}", workspace_id=workspace,
+            connector_id=connector.id, source_label="manual", source_url=None,
+            content_type="text", author=None, published_at=None,
+            body="计划预检来源正文", subtitles=None, media_references=(),
+            license="unknown", title=state, use_state=state,
+        )])
+
+    preview = client.post(
+        "/api/creation-plans/preview",
+        json={"goal": "验证资料用途", "presenter_share_target": 0},
+    )
+    assert preview.status_code == 200, preview.text
+    payload = preview.json()
+    assert {item["id"] for item in payload["knowledge_references"]} == {
+        "plan-knowledge-available", "plan-knowledge-reference_only",
+    }
+    assert {item["id"] for item in payload["source_references"]} == {
+        "plan-source-available", "plan-source-reference_only",
+    }

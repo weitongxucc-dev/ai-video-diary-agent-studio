@@ -32,7 +32,11 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
             production,
             workspace,
             file_name,
-            segments=[{"_start": 0.0, "description": "permissionneedle"}],
+            segments=[{
+                "_start": 0.0,
+                "description": "permissionneedle",
+                "transcript": "",
+            }],
         )
         owned = replace(asset, owner_user_id=owner_id, visibility=visibility)
         with production._connect() as conn:
@@ -59,8 +63,8 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
         headers=second_headers,
     )
     assert first_all.status_code == second_all.status_code == 200
-    first_ids = {row["asset_id"] for row in first_all.json()}
-    second_ids = {row["asset_id"] for row in second_all.json()}
+    first_ids = {row["asset_ref"].removeprefix("asset:") for row in first_all.json()}
+    second_ids = {row["asset_ref"].removeprefix("asset:") for row in second_all.json()}
     assert first_ids == {shared.id, first_private.id}
     assert second_ids == {shared.id, second_private.id}
 
@@ -73,5 +77,6 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
     )
     assert first_limited.status_code == 200
     assert first_limited.json()
-    assert first_limited.json()[0]["asset_id"] != second_private.id
-    assert first_limited.json()[0]["asset_id"] in {shared.id, first_private.id}
+    limited_asset_id = first_limited.json()[0]["asset_ref"].removeprefix("asset:")
+    assert limited_asset_id != second_private.id
+    assert limited_asset_id in {shared.id, first_private.id}
