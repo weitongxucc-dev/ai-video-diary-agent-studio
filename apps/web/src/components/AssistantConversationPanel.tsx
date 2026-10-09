@@ -10,23 +10,16 @@ import type { useAssistantConversation } from "@/components/useAssistantConversa
 
 type Conversation = ReturnType<typeof useAssistantConversation>;
 
-type TurnBlock =
-  | { kind: "text"; text: string }
-  | { kind: "tool"; tool_id: number; label: string; state: "running" | "succeeded" | "failed"; summary: string };
+type TurnBlock = { kind: "tool"; tool_id: number; label: string; state: "running" | "succeeded" | "failed"; summary: string };
 
-function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
+function turnTools(turn: AssistantConversationTurn): TurnBlock[] {
   const ordered: TurnBlock[] = [];
   for (const event of turn.events) {
-    if (event.type === "text_delta") {
-      const last = ordered.at(-1);
-      if (last?.kind === "text") last.text += event.delta;
-      else ordered.push({ kind: "text", text: event.delta });
-      continue;
-    }
     if (event.type === "tool_start") {
       ordered.push({ kind: "tool", tool_id: event.tool_id, label: event.label, state: "running", summary: "" });
       continue;
     }
+    if (event.type !== "tool_end") continue;
     let index = -1;
     for (let candidate = ordered.length - 1; candidate >= 0; candidate -= 1) {
       const item = ordered[candidate];
@@ -39,7 +32,6 @@ function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
       if (previous.kind === "tool") ordered[index] = { ...previous, label: event.label, state: event.ok ? "succeeded" : "failed", summary: event.summary };
     }
   }
-  if (!ordered.some((item) => item.kind === "text") && turn.assistant_text) ordered.push({ kind: "text", text: turn.assistant_text });
   return ordered;
 }
 
@@ -58,14 +50,18 @@ function AssistantText({ text }: { text: string }) {
 }
 
 function TurnContent({ turn }: { turn: AssistantConversationTurn }) {
-  const blocks = turnBlocks(turn);
+  const tools = turnTools(turn);
+  const runningTools = tools.some((tool) => tool.state === "running");
+  const failedTools = tools.some((tool) => tool.state === "failed");
   return <div className="assistant-markdown-wrap">
-    {blocks.map((block, index) => block.kind === "text"
-      ? <div className="assistant-markdown" key={`text-${index}`}><ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown></div>
-      : <details className="assistant-turn-tools" key={`tool-${block.tool_id}-${index}`}>
-        <summary>{block.label} · {block.state === "running" ? "进行中" : block.state === "succeeded" ? "已完成" : "未完成"}</summary>
-        <p>{block.summary || (block.state === "running" ? "等待此操作返回。" : "操作没有返回摘要。")}</p>
-      </details>)}
+    {tools.length ? <details className="assistant-turn-tools">
+      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含未完成操作" : "已完成"}</summary>
+      <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
+        <strong>{tool.label} · {tool.state === "running" ? "进行中" : tool.state === "succeeded" ? "已完成" : "未完成"}</strong>
+        <p>{tool.summary || (tool.state === "running" ? "等待此操作返回。" : "操作没有返回摘要。")}</p>
+      </li>)}</ol>
+    </details> : null}
+    {turn.assistant_text ? <div className="assistant-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></div> : null}
     {turn.assistant_text ? <AssistantText text={turn.assistant_text} /> : null}
   </div>;
 }

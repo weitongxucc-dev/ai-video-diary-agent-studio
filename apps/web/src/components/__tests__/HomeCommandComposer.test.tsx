@@ -259,13 +259,10 @@ describe("HomeCommandComposer", () => {
       emitDelta({ type: "text_delta", delta: "制作条件。" });
       resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
     });
-    expect(await screen.findByText("制作条件。")).toBeInTheDocument();
-    const streamedIntro = screen.getByText("已读到当前");
-    const streamedTool = screen.getByText("读取当前工作区 · 已完成");
-    const streamedConclusion = screen.getByText("制作条件。");
-    expect(streamedIntro.compareDocumentPosition(streamedTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(streamedTool.compareDocumentPosition(streamedConclusion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(streamedTool);
+    const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
+    const toolSummary = screen.getByText("工具记录 · 1 项 · 已完成");
+    expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(toolSummary);
     expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
   });

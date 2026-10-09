@@ -4590,7 +4590,7 @@ def assistant_capabilities(request: Request):
         "pi_tui_commands": {
             "available": False,
             "version": "1.1.0",
-            "commands": ["/settings", "/model", "/tree", "/thinking", "/scoped-models", "/export", "/import", "/share", "/bug", "/copy", "/name", "/session", "/changelog", "/hotkeys", "/fork", "/clone", "/trust", "/login", "/logout", "/new", "/compact", "/resume", "/reload", "/quit"],
+            "commands": ["/settings", "/scoped-models", "/model", "/thinking", "/export", "/import", "/share", "/bug", "/copy", "/name", "/session", "/changelog", "/hotkeys", "/fork", "/clone", "/tree", "/trust", "/login", "/logout", "/new", "/compact", "/reload", "/debug", "/arminsayshi", "/dementedelves", "/resume", "/quit"],
             "reason": "当前产品以无交互调用运行Pi；以上交互式Pi命令均未接通，不能从对话输入中调用。",
         },
         "extension_commands": {"available": False, "commands": [], "reason": "扩展仅注册受限业务工具，没有注册命令或任意文件/终端入口。"},

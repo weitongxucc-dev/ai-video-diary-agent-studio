@@ -61,28 +61,39 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AssistantConversationPanel", () => {
-  it("renders one Markdown reply with tool results in their actual event order", async () => {
-    render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
+  it("renders one final Markdown body and one collapsed, ordered tool summary", async () => {
+    const { container } = render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
       busy={false} configured scopeLabel="首页创作" />);
 
     expect(screen.getByText("真实方案").tagName).toBe("STRONG");
     expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
-    const firstTool = screen.getByText("读取当前方案 · 已完成");
+    const tools = container.querySelector(".assistant-turn-tools summary")!;
+    expect(tools.textContent).toContain("工具记录 · 2 项 · 含未完成操作");
     const assistantText = screen.getByText("真实方案");
-    const secondTool = screen.getByText("检查新建方案 · 未完成");
-    expect(firstTool.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(assistantText.compareDocumentPosition(secondTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const toolDetails = [firstTool.closest("details")!, secondTool.closest("details")!];
-    expect(toolDetails.every((item) => !item.open)).toBe(true);
-    fireEvent.click(firstTool);
-    expect(within(toolDetails[0]).getByText("已读取 1 项方案。")).toBeInTheDocument();
-    fireEvent.click(secondTool);
-    expect(within(toolDetails[1]).getByText("这一步没有完成。")).toBeInTheDocument();
+    expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const toolDetails = tools.closest("details")!;
+    expect(toolDetails).not.toHaveAttribute("open");
+    expect(within(toolDetails).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(toolDetails).getByText("读取当前方案 · 已完成")).toBeInTheDocument();
+    expect(within(toolDetails).getByText("检查新建方案 · 未完成")).toBeInTheDocument();
+    fireEvent.click(tools);
+    expect(within(toolDetails).getByText("已读取 1 项方案。")).toBeInTheDocument();
+    expect(within(toolDetails).getByText("这一步没有完成。")).toBeInTheDocument();
     expect(screen.getByText("本轮结果").closest("details")).not.toHaveAttribute("open");
 
     await screen.findByText("技术能力状态（诊断）");
     expect(screen.getByText("对话操作").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("技术能力状态（诊断）").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("uses the complete persisted assistant text when it extends past streamed deltas", () => {
+    const saved = conversation();
+    saved.turns = [{ ...saved.turns[0], assistant_text: "完整的 Markdown 正文\n\n**终态尾段**。",
+      events: [{ type: "text_delta", delta: "完整的 Markdown 正文" }] }];
+    render(<AssistantConversationPanel state={state({ conversation: saved })} input="" onInput={vi.fn()} onSend={vi.fn()}
+      busy={false} configured scopeLabel="首页创作" />);
+    expect(screen.getByText("终态尾段").tagName).toBe("STRONG");
+    expect(screen.queryByText("完整的 Markdown 正文完整的 Markdown 正文")).not.toBeInTheDocument();
   });
 
   it("sends on plain Enter only, preserves Shift+Enter and IME composition, and restores input focus", async () => {
