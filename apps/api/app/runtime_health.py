@@ -199,7 +199,8 @@ def _deepseek_item(settings: Settings, checked_at, workspace_id: str = "") -> di
     status = {"missing": "missing", "unverified": "degraded", "available": "ready", "failed": "degraded"}.get(state["state"], "degraded")
     return _health_item(item_id="deepseek", label="对话与文字服务", status=status,
         reason=state["detail"], impact="仅反映当前工作区这套文字服务配置与最近实际调用，不代表全部工具或模型就绪。",
-        repair_action="核对当前工作区设置；失败时查看该次调用的实际原因。", checked_at=checked_at)
+        repair_action=state["repair_action"] or "核对当前工作区设置；失败时查看该次调用的实际原因。",
+        checked_at=checked_at)
 
 
 def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:

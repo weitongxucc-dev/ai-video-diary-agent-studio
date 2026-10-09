@@ -77,9 +77,13 @@ def test_recent_current_workspace_failure_is_reported_without_cross_workspace_re
 
     assert failed['status'] == 'degraded'
     assert failed['reason'] == '最近一次受控调用被拒绝。'
-    # The underlying current-workspace status retains the exact repair fact.
-    assert settings.llm_service_status('health-workspace-failed')['repair_action'] == '检查此工作区的模型设置。'
+    assert failed['repair_action'] == '检查此工作区的模型设置。'
     assert '还没有真的连过一次服务' in other['reason']
+    assert other['repair_action'] == '核对当前工作区设置；失败时查看该次调用的实际原因。'
+
+    missing = _deepseek_item(Settings(), utc_now(), 'health-workspace-missing')
+    assert missing['status'] == 'missing'
+    assert missing['repair_action'] == '核对当前工作区设置；失败时查看该次调用的实际原因。'
 
 
 def test_recent_success_is_available_only_for_the_workspace_that_was_verified():
@@ -93,6 +97,7 @@ def test_recent_success_is_available_only_for_the_workspace_that_was_verified():
 
     assert verified['status'] == 'ready'
     assert '上一次真实调用成功' in verified['reason']
+    assert '失败时查看' in verified['repair_action']
     assert other['status'] == 'degraded'
     assert '还没有真的连过一次服务' in other['reason']
 
