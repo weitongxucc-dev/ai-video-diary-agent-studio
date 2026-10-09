@@ -554,6 +554,14 @@ UI-CI-IDEMPOTENCE已9ed99455 test-only交付并retain，主控组合22130b2，Py
 
 原UI终端新单从准确6646b19创建owned review-v2-visible-diagnostics/candidate，唯一生产写权AssistantConversationPanel.tsx、modern-overrides.css相关共享会话规则和必要EditorShell.module.css对应消费者，以及直接专项测试。先证明显示根因，再统一对话操作/诊断展开、窄栏min-width/换行/滚动及输入/发送布局；默认只有紧凑必要操作，诊断按需可发现且完整可读，不删除真实技术信息/失败或改服务事实。保留批准三栏/13px/56px/右侧壳，禁止大布局重做、猜测fallback或每页一套补丁。可仅用自有静态合成渲染fixture与已装公共Electron/浏览器做CSS复现/像素对比；不运行产品API/Web服务、模型、真实资料或当前27794业务DOM，不将fixture/程序截图冒称真实GUI操作通过。若现有浏览器环境不足，准确说明、不下载；主控负责同候选Web重建/机械打包和新PID原生只读截图。真实交互工具拒绝边界保留，不另走CDP/HTTP业务写来宣称导航或保存成功。
 
+### QA-V2-F-HOME-FACTS：首页真实空状态与准备事项
+
+用户再次明确当前大量问题可见，候选提交/CI不构成产品交付。主控在6646b19新包看到全零七项计数仍绘制大幅全零趋势；缺声音旧code被HomeWorkspace映射成“声音未授权”，并将各种准备事项一律带去health。源码readiness实际message为“尚未登记可用于配音的版本化声音”，没有证据默认权限门槛仍在，不能假设后台两套数据或只删真实限制。本单由原F终端独占HomeWorkspace.tsx、HomeWorkspace.module.css及两个直接Home测试；不写UI正在占有的AssistantConversationPanel/modern-overrides/EditorShell，也不改production.py/API/领域对象。
+
+主控决定：首页在真实空工作区先提供既有可执行开始/导入入口；全零趋势收为紧凑有范围选择的空说明，真实非零数据仍按真实接收日期展示。准备项按实际事实和影响呈现，缺声音是添加/补齐参考，缺模型是设置真实生成环境；每类直达现有准确资源/字段，不能以health通吃，不暗示缺配音阻止先讨论/写稿。沿已存在修复intent/默认声音和列表状态，不制造新事实源，不把仅参考/不使用、媒体失联或引擎条件抹掉。未知/加载失败/真正全零三者保持区别；技术口径可展开不占默认业务阅读。保持批准的三栏/13px/56px/主首页方向，限右侧内容信息层，无整页重设计。
+
+从准确6646b19建立owned review-v2-home-facts/candidate，公开身份。必要组件回归覆盖实际zero-filled日序列、非零、时段零但全库有资料、未知/失败、按实际blocker正确修复入口。允许自有静态合成浏览器fixture核CSS/像素，不启动产品API/Web或控制现存主控GUI；不以fixture宣称真实导航/保存已通，无模型/Key/用户库/收费/账号/云/下载/远端。主控负责与UI候选组合、同一Web重新构建及原生截图；47及历史问题保持开放，观察缺陷继续修。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
