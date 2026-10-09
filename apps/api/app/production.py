@@ -9111,10 +9111,9 @@ class ProductionRepository:
             if row is None:
                 raise KeyError(script_id)
             script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
-            if (
-                expected_updated_at is not None
-                and _revision_value(script.updated_at) != _revision_value(expected_updated_at)
-            ):
+            if expected_updated_at is None:
+                raise ValueError("更新文案草稿必须提供当前 updated_at")
+            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
                 raise ValueError("文案草稿修订已变化，请重新读取后再保存")
             if (
                 task.stage != "script"
@@ -9330,6 +9329,10 @@ class ProductionRepository:
                 raise KeyError(script_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
             script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
+            if expected_updated_at is None:
+                raise ValueError("确认文案必须提供当前 updated_at")
+            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
+                raise ValueError("文案草稿修订已变化，请重新读取后再确认")
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
@@ -9352,11 +9355,6 @@ class ProductionRepository:
                 task.stage != "script" or task.stage_status != "waiting_for_user"
             ):
                 raise ValueError("当前创作任务不在等待确认文案状态")
-            if (
-                expected_updated_at is not None
-                and _revision_value(script.updated_at) != _revision_value(expected_updated_at)
-            ):
-                raise ValueError("文案草稿修订已变化，请重新读取后再确认")
             allowed_references = {
                 reference_id
                 for original in script.sections
