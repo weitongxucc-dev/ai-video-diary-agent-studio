@@ -1061,7 +1061,10 @@ describe("CreationTaskWorkspace", () => {
     }
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
-  it.each(["succeeded", "failed", "cancelled"])("keeps a queued person edit unapplied until persisted job %s is read", async (status) => {
+  it.each([
+    ...["succeeded", "failed", "cancelled"].map(status => ["person", status]),
+    ...["succeeded", "failed", "cancelled", "interrupted", "wrong-task", "wrong-job"].map(status => ["narration", status]),
+  ])("keeps a queued %s edit unapplied until persisted job %s is read", async (kind, status) => {
     const initial = subtitleCoverWorkspace();
     initial.montage!.clips = [{
       id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
@@ -1069,10 +1072,22 @@ describe("CreationTaskWorkspace", () => {
       timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
       match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
     }];
+    const narration = kind === "narration";
+    if (narration) initial.narration = {
+      task: initial.task, script_id: "script-1", audio_reference: "narration://artifact/old-audio",
+      duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
+      language: "zh", pronunciation_version: "p1",
+      segments: [{ id: "narration-segment-1", source_section_id: "section-1", text: "原配音正文",
+        audio_reference: "narration://artifact/old-segment", audio_url: "/api/old-segment/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+        voice_version: "v1", language: "zh", pronunciation_version: "p1", status: "ready",
+        source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null }],
+    };
     const preview = exactPreview(initial.task, "ReplaceClip");
-    Object.assign(preview.proposal.operation, { operation_type: "ChangePersonSegment", payload: { clip_id: "clip-1" } });
-    preview.proposal.target_refs = ["clip:clip-1"];
-    mocks.askAssistant.mockResolvedValue({ reply: "人物修改待确认。", provider: "minimax", model: "MiniMax-M3", edit_preview: preview });
+    Object.assign(preview.proposal.operation, { operation_type: narration ? "RegenerateNarrationSegment" : "ChangePersonSegment", payload: narration ? { narration_segment_id: "narration-segment-1" } : { clip_id: "clip-1" } });
+    preview.proposal.target_refs = [narration ? "narration:narration-segment-1" : "clip:clip-1"];
+    mocks.askAssistant.mockResolvedValue({ reply: narration ? "配音修改待确认。" : "人物修改待确认。", provider: "minimax", model: "MiniMax-M3", edit_preview: preview });
     mocks.getWorkspace.mockResolvedValue(initial);
     let submitted = false;
     let readTerminal: (value: unknown) => void = () => {};
@@ -1080,37 +1095,65 @@ describe("CreationTaskWorkspace", () => {
     mocks.getJobProgress.mockImplementation(() => submitted ? terminal : Promise.resolve({ task_id: "task-1", current: null, items: [], total_count: 0 }));
     mocks.confirmEdit.mockImplementation(async () => {
       submitted = true;
-      return { status: "queued", job_id: "person-edit-job", request_id: "device-request" };
+      return { status: "queued", job_id: `${kind}-edit-job`, request_id: "device-request" };
     });
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
-    fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
-    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
-    fireEvent.change(await readyInput("局部修改要求"), { target: { value: "这一段换成当前人物出镜" } });
+    if (narration) {
+      fireEvent.click(screen.getByRole("button", { name: /^配音：/ }));
+      fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: /^检查与输出：/ }));
+      fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+      fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    }
+    fireEvent.change(await readyInput("局部修改要求"), { target: { value: narration ? "把这一段配音读得慢一点" : "这一段换成当前人物出镜" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await screen.findByRole("dialog", { name: "修改提案" });
     fireEvent.click(screen.getByRole("button", { name: "应用到草稿" }));
-    expect(await screen.findByText("人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。")).toBeInTheDocument();
-    expect(screen.queryByText(/人物修改已完成/)).not.toBeInTheDocument();
+    expect(await screen.findByText(narration ? "配音修改已排队，取得设备许可并完成后才更新目标配音段；当前版本和音频保持不变。" : "人物修改已排队，取得设备许可并完成后才更新目标镜头；当前版本保持不变。")).toBeInTheDocument();
+    expect(screen.queryByText(/(?:人物|配音)修改已完成/)).not.toBeInTheDocument();
     expect(screen.getByText(/版本 6$/)).toBeInTheDocument();
     const refreshCount = mocks.getWorkspace.mock.calls.length;
     const finalState = status === "succeeded" ? { ...initial, task: { ...initial.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 } } : initial;
     mocks.getWorkspace.mockResolvedValue(finalState);
-    const job = { id: "person-edit-job", kind: "creation_task_person_edit", status,
+    if (narration && status === "succeeded") {
+      finalState.narration = { ...initial.narration!, audio_reference: "narration://artifact/new-audio",
+        segments: [{ ...initial.narration!.segments[0], audio_reference: "narration://artifact/new-segment", audio_url: "/api/new-segment/audio" }] };
+      finalState.montage = { ...initial.montage!, output_url: null };
+    }
+    const job = { id: status === "wrong-job" ? "other-edit-job" : `${kind}-edit-job`, kind: narration ? "creation_task_narration_edit" : "creation_task_person_edit", status: status.startsWith("wrong-") ? "succeeded" : status,
       progress: status === "succeeded" ? 100 : 0, attempt: 1, started_at: initial.task.created_at,
       finished_at: initial.task.updated_at, updated_at: initial.task.updated_at, elapsed_seconds: 1,
-      failure_reason: status === "succeeded" ? null : "人物授权已失效", impact: "旧版本保持不变",
+      failure_reason: status === "succeeded" ? null : narration ? "配音来源已失效" : "人物授权已失效", impact: "旧版本保持不变",
       repair_action: "修复授权后重新预览", wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null };
-    await act(async () => { readTerminal({ task_id: "task-1", current: job, items: [job], total_count: 1 }); });
+    await act(async () => { readTerminal({ task_id: status === "wrong-task" ? "other-task" : "task-1", current: job, items: [job], total_count: 1 }); });
+    if (status === "interrupted" || status.startsWith("wrong-")) {
+      expect(mocks.getWorkspace.mock.calls.length).toBe(refreshCount);
+      expect(screen.getByText(/版本 6$/)).toBeInTheDocument();
+      if (status === "interrupted") expect(screen.getByLabelText("作业进度")).toHaveTextContent("已中断");
+      expect(screen.queryByText(/配音修改已完成/)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "选择配音 1" })).toHaveAttribute("aria-pressed", "true");
+      expect(document.querySelector('audio[src="/api/old-segment/audio"]')).not.toBeNull();
+      expect(mocks.generateNarration).not.toHaveBeenCalled();
+      expect(mocks.generatePersonRender).not.toHaveBeenCalled();
+      expect(mocks.renderMontage).not.toHaveBeenCalled();
+      return;
+    }
     await waitFor(() => expect(mocks.getWorkspace.mock.calls.length).toBeGreaterThan(refreshCount));
     expect(screen.getByText(status === "succeeded" ? /版本 7$/ : /版本 6$/)).toBeInTheDocument();
-    if (status === "succeeded") expect(await screen.findByText("人物修改已完成，目标镜头和当前版本已更新；成片尚未重新生成。")).toBeInTheDocument();
+    if (status === "succeeded") expect(await screen.findByText(narration ? "配音修改已完成，目标配音段和当前版本已更新；成片尚未重新生成。" : "人物修改已完成，目标镜头和当前版本已更新；成片尚未重新生成。")).toBeInTheDocument();
     else {
-      expect(await screen.findByText("人物修改未完成，当前版本保持不变；请查看作业原因。")).toBeInTheDocument();
-      expect(screen.getByLabelText("作业进度")).toHaveTextContent("人物授权已失效");
-      expect(screen.queryByText(/人物修改已完成/)).not.toBeInTheDocument();
+      expect(await screen.findByText(narration ? status === "cancelled" ? "配音修改已取消，当前版本和音频保持不变；请查看作业原因。" : "配音修改未完成，当前版本和音频保持不变；请查看作业原因。" : "人物修改未完成，当前版本保持不变；请查看作业原因。")).toBeInTheDocument();
+      expect(screen.getByLabelText("作业进度")).toHaveTextContent(narration ? "配音来源已失效" : "人物授权已失效");
+      expect(screen.queryByText(/(?:人物|配音)修改已完成/)).not.toBeInTheDocument();
     }
+    if (narration) {
+      expect(screen.getByLabelText("作业进度")).toHaveTextContent("局部配音修改");
+      expect(screen.getByRole("button", { name: "选择配音 1" })).toHaveAttribute("aria-pressed", "true");
+      expect(document.querySelector(`audio[src="/api/${status === "succeeded" ? "new" : "old"}-segment/audio"]`)).not.toBeNull();
+    }
+    expect(mocks.generateNarration).not.toHaveBeenCalled();
     expect(mocks.generatePersonRender).not.toHaveBeenCalled();
     expect(mocks.renderMontage).not.toHaveBeenCalled();
   });
