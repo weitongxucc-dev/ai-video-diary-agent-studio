@@ -41,6 +41,14 @@
 
 ## 当前波次：B89新包录音／资源定位，UI90定向CI修复（2026-10-09）
 
+### B91：冻结许可子进程入口修复（B89结案后接续）
+
+B89实际1767e11包录音save/adopt和许可故事板V1成立，首次渲染失败、无当前MP4。现有granted_subprocess.py使用sys.executable -c trampoline；冻结sys.executable是api-server，server.py却无该入口分派而直接加载API启动恢复。实际render和外层Job同时process_interrupted、driver checkpoint失败及resume503与此源码机制相符；子进程完整argv未捕获，首因结论保留推断，修后必须实际冻结验证。初次I/O压力是另一同次真实事件，不扩大资源阈值或重写恢复扫描。
+
+B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11建立codex/frozen-grant91-20261009。唯一产品写权apps/api/app/granted_subprocess.py、apps/api/server.py，必要既有apps/api/tests/test_host_resource_probes.py及一个server入口直接测试；不写production.py/migrations（UI90独占）、device_runtime/creation_execution/恢复规则、资源cap、main.py、Web/桌面/依赖/共享文档。沿现有注册子进程→核Grant→许可字节→exec的门禁，给冻结包一个明确的许可子进程入口，在dotenv/API/uvicorn/恢复扫描加载之前分派；不要给服务新增任意Python -c执行入口，不移除子进程身份、取消/超时/组退出校验，也不新增并行调度系统。开发路径保持可用；无需本机或全局Python解释器假设。
+
+仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
+
 ### UI90：CI37862398673的迁移与旧测试替身缺口
 
 PR101准确1767e11的远端CI已回读：Desktop syntax成功，Backend五失败／1659通过／20跳过，Frontend七失败／570通过。具名失败日志/tmp/main-controller-20261009/pr101-ci-failed.log。前端六项保存反馈缺listCreationTaskRecordings mock，另一项仍断言已替换的旧提示；后端四项裸auth/shared DB及旧v5迁移遇v15假定narration_segments必在，另一项Webm测试被WAV-only probe替身误读。这是本次真实失败，不能用吞错或修改通过数量掩盖。
