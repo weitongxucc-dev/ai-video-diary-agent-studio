@@ -37,10 +37,10 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI-IMPLEMENT：会话共同机制修正 | task_1ad9935077fa / ctx_f2002033bb68；以下新实施范围 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B-CORE：人物声音同一持久契约 | 定位task_d4a8b44a7fda / ctx_06b5564d9958已succeeded并retain；99脏树保留 |
-| C / arrowworm | `/Users/Zhuanz/orca/workspaces/main/arrowworm`；`term_d53c0c65-39c8-4edd-af2c-deeb0a842718` | QA-V2-C：模板与知识录入闭环 | 以下独占消费者；原协议树保留 |
-| D / foxface | `/Users/Zhuanz/orca/workspaces/main/foxface`；`term_348145c1-121a-40ef-825a-c0d41739ff88` | QA-V2-D：设置与文件选择契约 | 以下独占消费者；原命名树保留 |
-| E / integration | `/private/tmp/main-controller-20261007/creation-wave/integration`；`term_f37fee2b-1725-4d4e-bdda-e2ac2271d8e4` | QA-V2-E：任务历史故障与一致性复核 | 以下只读/隔离复现；旧集成树不作为候选 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B-CORE：人物声音同一持久契约 | task_20846b8a711d / ctx_dda1c040904b；99脏树保留 |
+| C / arrowworm | `/Users/Zhuanz/orca/workspaces/main/arrowworm`；`term_d53c0c65-39c8-4edd-af2c-deeb0a842718` | QA-V2-C：模板与知识录入闭环 | task_2325828e95cf / ctx_769828ca4aa2；以下独占消费者；原协议树保留 |
+| D / foxface | `/Users/Zhuanz/orca/workspaces/main/foxface`；`term_348145c1-121a-40ef-825a-c0d41739ff88` | QA-V2-D：设置与文件选择契约 | task_7f09829a538d / ctx_549f96617dde；以下独占消费者；原命名树保留 |
+| E / integration | `/private/tmp/main-controller-20261007/creation-wave/integration`；`term_f37fee2b-1725-4d4e-bdda-e2ac2271d8e4` | QA-V2-E：任务历史故障与一致性复核 | task_8c8a1fb296c6 / ctx_8e2eb345787b；以下只读/隔离复现；旧集成树不作为候选 |
 
 ## 当前波次：实机v2累计整改（MAIN-REVIEWV2-20261009）
 
