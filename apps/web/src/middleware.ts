@@ -14,6 +14,7 @@ import {
   redirectWithRefreshedCookies,
   refreshSession,
 } from "@/lib/supabase/middleware";
+import { localMemberTokenCookieName, localNativeMediaHeaders } from "@/lib/native-media-auth";
 
 const API_PORT = process.env.API_PORT ?? "8000";
 
@@ -30,6 +31,15 @@ async function proxyApiRequest(
       method: request.method,
       headers: trustedApiHeaders(request.headers, accessToken),
     };
+    if (isLocalAuthMode()) {
+      const cookieName = localMemberTokenCookieName(request.nextUrl.protocol, request.nextUrl.port);
+      fetchOptions.headers = localNativeMediaHeaders(
+        fetchOptions.headers as Headers,
+        request.cookies.get(cookieName)?.value,
+        request.method,
+        pathname,
+      );
+    }
 
     if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
       fetchOptions.body = await request.clone().arrayBuffer();
