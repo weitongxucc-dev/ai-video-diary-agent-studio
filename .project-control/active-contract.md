@@ -37,11 +37,11 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 90：已succeeded结案并retain | 无新增写权；5da2fbb已审核并机械集成c446d60，远端组合CI待回读 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 91：冻结许可子进程入口修复 | task_1a9de32d4beb / ctx_4cdf9a1f3e03；仅下方91源码及直接最小测试，无运行包权限 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 92：组合修复入包与成片补验 | task_98d881c2e10b / ctx_995baaa7191f；新owned creation92具名运行，无产品写权 |
 
-## 当前波次：B91冻结入口修复，UI90定向CI修复（2026-10-09）
+## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
-### B91：冻结许可子进程入口修复
+### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
 
 B89实际1767e11包录音save/adopt和许可故事板V1成立，首次渲染失败、无当前MP4。现有granted_subprocess.py使用sys.executable -c trampoline；冻结sys.executable是api-server，server.py却无该入口分派而直接加载API启动恢复。实际render和外层Job同时process_interrupted、driver checkpoint失败及resume503与此源码机制相符；子进程完整argv未捕获，首因结论保留推断，修后必须实际冻结验证。初次I/O压力是另一同次真实事件，不扩大资源阈值或重写恢复扫描。
 
