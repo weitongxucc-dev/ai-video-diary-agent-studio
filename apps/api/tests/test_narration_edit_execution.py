@@ -72,6 +72,8 @@ class Resources:
 
 
 class Processes:
+    recovery = "released"
+
     def current(self):
         return ProcessIdentity(100, "controlled-test-start", "controlled-test-boot")
 
@@ -85,7 +87,7 @@ class Processes:
         return True
 
     def recovery_state(self, holder, children):
-        return "released"
+        return self.recovery
 
 
 @pytest.fixture
@@ -627,8 +629,32 @@ def test_unknown_release_retains_original_permit_and_unpublished_version(fixture
         assert permit["state"] != "free" and permit["request_id"] == request.id
     f.resources.release = True
     f.resources.allowed = False
-    assert not f.runtime.run_once()
-    unchanged(f)
+    assert f.runtime.stop(1)
+    processes = Processes()
+    processes.recovery = "unknown"
+    recovered = build_device_runtime(
+        database_path=f.repo.database_path,
+        device_lock_path=f.runtime.scheduler.lock_path,
+        device_access=MemberDeviceAccess(f.members),
+        registrations=f.runtime.registrations,
+        resources=f.resources,
+        processes=processes,
+    )
+    try:
+        with pytest.raises(RecoveryBlocked):
+            recovered.run_once()
+        unchanged(f)
+        assert len(f.calls) == 1
+        processes.recovery = "released"
+        assert not recovered.run_once()
+        unchanged(f)
+        assert len(f.calls) == 1
+        with f.repo._connect() as conn:
+            assert conn.execute(
+                "SELECT state,request_id FROM device_permit WHERE id=1"
+            ).fetchone()[:] == ("free", None)
+    finally:
+        assert recovered.stop(1)
 
 
 def test_unknown_admission_and_wrong_scope_are_not_permits(fixture):
