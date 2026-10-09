@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 96：只读补验已结案并retain | task_056874dd9c84 / ctx_557c021d50f6；全浏览器已释放，无运行/产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | task_26ebee1b002d / ctx_3429f9e38039；新包准备，clone锁绑定前提待裁定；服务/媒体仍等RERENDER_START；95/92旧权限结束 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | task_26ebee1b002d / ctx_3429f9e38039；新包准备，保留原停机92隔离fixture/锁的最小白名单，启动前身份与快照核验；服务/媒体仍等RERENDER_START；95/92旧权限结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -60,6 +60,8 @@ UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号�
 二维码实际可见后及时给root临时截图/真实host/窗口，root提示用户本人扫码；扫码后只读账号标识、空上传控件和现有回执入口，不上传/选文件/填草稿/保存/发布。各批消息处理后ACK以取得用户回报。到期或真实拒绝关闭所有自有浏览器/driver并核PID/PGID释放，保留profile，交最小实际结果/未验，不把工具定位失败写成平台能力结论。本次仅补原缺口，不重跑抖音/小红书，不恢复93旧租约。
 
 ### B97：诊断差额入包后仅补真实修改重出
+
+2026-10-09 09:04定向修订 MAIN-RERENDER97-FIXTURE：静态核验表明free permit仍绑定原DB父目录锁，新路径clone会被现有真实边界拒绝。为避免重复已通过的上游，不改锁规则、不编辑DB，采用原停机92隔离fixture继续真实queued恢复。此前“所有写入仅97且旧92库不变”仅对此测试库/锁白名单由本段替代；它不是用户真实库或迁移。B必须先将旧92 SQLite完整只读backup保存97并记录hash，原first-video.mp4、undo-output.mp4及既有输入保持hash不变。唯一允许旧root写入：creation92/db/fixture.sqlite3及必要-wal/-shm、同目录device-permit.lock和.lock.state；其余config/userData/日志/tmp/新VIDEO_OUTPUT_PATH/新产物写97。沿原数据库/锁身份保持owner及queued原请求，不造新请求或seed成功；已有逻辑artifact只读复制97。若job仍要求在该白名单外写旧92，停止并交具体路径。启动前交新包身份、backup/媒体hash、配置路径核验与无旧进程证据，ACK本修订；服务仍等待本Dispatch的RERENDER_START，固定首服务10分钟lease与原cap不变。UI96已全释放，主控已独立核PID消失；不重开平台浏览器。
 
 从clean4c748dfc45229b879e9e1daf473b309432899f4c复用B终端，唯一owned /tmp/main-acceptance-20261009/rerender97/，无产品源码写权。B94仅改host_resource_probes运行日志，B95纯测试；先证明相对B92准确2c896f24其余Web/desktop/worker/agent运行blob不变。只读复用92已物化Web/公开依赖，按既有PyInstaller/Electron Builder增量API重新产生实际ARM64 .app及新身份，不Next全构建/热换旧包、不DMG/ZIP/签名/下载。准备阶段可与UI96并行，但不开服务/GUI/媒体，实际运行等root确认UI96全释放后发RERENDER_START。
 
