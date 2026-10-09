@@ -132,6 +132,7 @@ def test_low_confidence_ocr_is_retained_but_not_searchable(tmp_path):
             {"text": "verifiedword", "confidence": 1.0, "box": [0, 0, .5, .5]},
         ]}])
     repo._save_asset(asset)
+    repo.set_asset_visibility("workspace", asset.id, "shared")
     assert not repo.search_material_segments("workspace", query="uncertain")
     assert repo.list_assets_page("workspace", limit=20, offset=0, query="uncertain")[1] == 0
     assert repo.search_material_segments("workspace", query="verifiedword")

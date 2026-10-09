@@ -101,11 +101,25 @@ def tag_counts(client: TestClient, headers: dict[str, str] | None = None) -> dic
     return {item["tag"]: item for item in response.json()["tags"]}
 
 
+def create_material_conversation(client: TestClient, headers: dict[str, str], asset_id: str) -> str:
+    # Plain TestClient use does not enter the app lifespan; initialize only the
+    # already isolated test conversation database before seeding this session.
+    main_module.conversation_repo.initialize()
+    response = client.post(
+        "/api/assistant/conversations",
+        headers=headers,
+        json={"scope_kind": "material", "scope_id": f"asset:{asset_id}", "title": "测试素材对话"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["id"]
+
+
 def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_tags(tag_client, monkeypatch) -> None:
     asset_id = register(
         tag_client.repository, tag_client.library, "对话素材.mp4",
         uploader_user_id=tag_client.uploader_user_id, user_tags=["旧标签"],
     )
+    conversation_id = create_material_conversation(tag_client.client, tag_client.headers, asset_id)
 
     def fake_turn(_settings, *, workspace_id, selection, **_kwargs):
         assert workspace_id == WORKSPACE
@@ -122,7 +136,7 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
     monkeypatch.setattr(main_module, "run_material_turn", fake_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
-        json={"message": "把整条素材标签改成新标签", "conversation_id": "9a8657bb-1e86-49ac-a2a8-2fc90d7bf0d5",
+        json={"message": "把整条素材标签改成新标签", "conversation_id": conversation_id,
               "selection": {"scope": "asset", "asset_id": asset_id}},
     )
     assert response.status_code == 200

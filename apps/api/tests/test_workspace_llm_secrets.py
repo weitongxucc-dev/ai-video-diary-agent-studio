@@ -309,6 +309,8 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
         return "已记下", None
 
     monkeypatch.setattr(main_module, "run_plan_turn", fake_run_plan_turn)
+    main_module.conversation_repo.initialize()
+    conversation = main_module.conversation_repo.create("ws-a", "u", "home", "home")
     request = SimpleNamespace(
         state=SimpleNamespace(
             principal=AuthPrincipal(user_id="u", workspace_id="ws-a")
@@ -319,7 +321,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
 
     response = main_module.workspace_assistant_plan_turn(
         request, WorkspaceAssistantPlanTurnRequest(
-            conversation_id="11111111-1111-5111-8111-111111111111", message="帮我列个提纲"
+            conversation_id=conversation["id"], message="帮我列个提纲"
         )
     )
 

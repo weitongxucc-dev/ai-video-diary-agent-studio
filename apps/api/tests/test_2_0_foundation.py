@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.config import Settings
+from app import workspace_settings
 
 client = TestClient(main_module.app)
 
@@ -30,12 +31,12 @@ def test_content_templates_endpoint_returns_three_product_templates():
 
 
 
-def test_runtime_health_endpoint_explains_status_and_repair_actions(tmp_path):
+def test_runtime_health_endpoint_explains_current_workspace_status_and_repair_actions(tmp_path, monkeypatch):
     video_inbox = tmp_path / "inbox"
     video_output = tmp_path / "output"
     video_inbox.mkdir()
     video_output.mkdir()
-    main_module.settings = Settings(
+    monkeypatch.setattr(main_module, "settings", Settings(
         deepseek_api_key=None,
         obsidian_vault_path=str(tmp_path / "missing-vault"),
         video_inbox_path=str(video_inbox),
@@ -44,7 +45,14 @@ def test_runtime_health_endpoint_explains_status_and_repair_actions(tmp_path):
         jianying_draft_root_path=str(tmp_path / "jianying"),
         database_path=str(tmp_path / "agent.sqlite3"),
         topic_source_urls=("https://watcha.cn/",),
-    )
+    ))
+    workspace_id = "health-workspace-current"
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
+    workspace_settings.save_workspace_config(workspace_id, {
+        "llm_provider": "custom",
+        "llm_base_url": "https://provider.example/v1",
+        "llm_model": "synthetic-health-model",
+    })
 
     response = client.get("/api/runtime/health")
 
@@ -53,10 +61,10 @@ def test_runtime_health_endpoint_explains_status_and_repair_actions(tmp_path):
     items = {item["id"]: item for item in body["items"]}
     assert body["summary"]["total"] == len(body["items"])
     assert items["deepseek"]["status"] == "degraded"
-    assert "本地" in items["deepseek"]["reason"]
+    assert "还没有真的连过一次服务" in items["deepseek"]["reason"]
     assert items["deepseek"]["impact"]
     assert items["deepseek"]["repair_action"]
     assert items["obsidian"]["status"] == "missing"
     assert items["video_inbox"]["status"] == "ready"
     assert items["video_output"]["status"] == "ready"
-    assert "last_checked_at" in items["deepseek"]
+    assert items["deepseek"]["last_checked_at"]

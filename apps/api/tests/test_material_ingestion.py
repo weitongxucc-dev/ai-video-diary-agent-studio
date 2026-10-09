@@ -383,6 +383,7 @@ def test_unbound_copy_confirmation_restart_and_changed_content(tmp_path: Path) -
     analyzed = service.scan_once()
     assert len(analyzed) == 1 and analyzed[0].analysis_status == "ready"
     assert analyzed[0].review_status == "raw"
+    repo.set_asset_visibility("one", analyzed[0].id, "shared")
     assert repo.search_material_segments("one")
     assert duration.call_count == 1
     assert service.scan_once() == []
@@ -667,6 +668,8 @@ def test_asset_tags_are_atomic_workspace_scoped_and_searchable(tmp_path: Path) -
     service.scan_once()
     service.scan_once()
     ids = [asset.id for asset in repo.list_assets("one")]
+    for asset_id in ids:
+        repo.set_asset_visibility("one", asset_id, "shared")
     repo.update_asset_tags("one", ids[0], ["客户现场"])
     assert repo.search_material_segments("one", tags=["客户现场"])
     assert repo.list_assets_page("one", limit=10, offset=0, query="客户现场")[1] == 1
@@ -695,6 +698,8 @@ def test_segment_usage_change_updates_persisted_tags_and_search(tmp_path: Path) 
             description="人工描述", transcript="人工转录", review_status="approved",
             usage_role="b_roll", user_tags=["手工标签"],
         )
+    for asset in assets:
+        repo.set_asset_visibility("one", asset.id, "shared")
     first = repo.get_asset("one", assets[0].id)
     other = repo.get_asset("one", assets[1].id)
     original = first.segments[0]

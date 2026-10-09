@@ -174,13 +174,17 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
 
     # 只装好、不启动：驱动线程由生命周期统一启停，装配阶段不得自己起。
     assert runtime.running is False
-    assert set(runtime.registrations) == {"creation_job", "platform_publish", "material_asset"}
+    assert set(runtime.registrations) == {"creation_job", "media_preview", "platform_publish", "material_asset"}
     # 素材服务拿的是同一个 runtime 的同一张队列，不是第二条。
     assert service is not None
     assert service.repository is repository
     assert service.execution_mode == "scheduled"
     assert service.scheduler is runtime.scheduler
     assert runtime.registrations["material_asset"].executor._service is service
+    preview = runtime.registrations["media_preview"]
+    assert type(preview.owner).__name__ == "ProfilePreviewOwner"
+    assert preview.owner.repository is repository
+    assert type(preview.executor).__name__ == "ProfilePreviewExecutor"
     assert runtime.scheduler.database_path == repository.database_path.resolve()
     assert runtime.scheduler.lock_path.parent == repository.database_path.resolve().parent
 
@@ -197,7 +201,11 @@ def test_interactive_permit_survives_when_scheduled_material_is_off(
     runtime, service = main_module._build_device_components(repository=repository)
 
     # 定时触发关着，交互式许可照样在，且仍然只有这一个运行时。
-    assert set(runtime.registrations) == {"creation_job", "platform_publish"}
+    assert set(runtime.registrations) == {"creation_job", "media_preview", "platform_publish"}
+    preview = runtime.registrations["media_preview"]
+    assert type(preview.owner).__name__ == "ProfilePreviewOwner"
+    assert preview.owner.repository is repository
+    assert type(preview.executor).__name__ == "ProfilePreviewExecutor"
     assert service is None
 
 

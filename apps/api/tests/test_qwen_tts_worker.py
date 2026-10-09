@@ -58,7 +58,6 @@ def test_worker_passes_once_replaced_text_to_model_and_keeps_reference_text():
 
 
 def test_worker_prefers_person_scope_over_workspace_and_leaves_unmatched_rules_alone():
-    payload=request("en")
     dictionary=[
         rule("Codex", "workspace version", scope="workspace", entry_id="workspace"),
         rule("Codex", "person version", scope="person", entry_id="person"),
