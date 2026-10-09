@@ -277,6 +277,16 @@ QA-V2-C-SOURCE-API：task_dd0225de596e最终ctx_3faea4f2c137已成功3bd6622/11�
 
 QA-V2-E-SCRIPT-TRANSFER-REVIEW：复用E原终端/原creation-wave placement，仅主控97ef234候选只读和产品§5/8、领域Plan/Script/确认、DESIGN对话/文案库直接章节。N14仍无首页回复→TaskScript草稿→用户确认→ScriptLibrary可见出口，不用“复制”或普通KnowledgeItem保存冒充闭环。准确核查已有assistant/script-context、assistant/script-draft、confirm-script、script-library与CreationTask stages/选题/必要真实来源契约，给一个可实施的最小完整纵向方案：无已有任务时如何保留回复原文和来源身份进入实际建任务流程；已有适用任务时如何保存未确认草稿、再沿原确认与文案库保存出口；不适用阶段如何说明/返回，不自动覆写已确认稿/旧成片，不引入第二文案事实库。判明本地保存是否被cloud_egress误绑定、固定对象/版本/晚响应保护和真实原端点能复用的部分；不要假定去所有阶段门槛即可成功。只报告具体需改文件/接口/最小真实数据回归与尚需模型权限步骤，源码不写、不建新服务/跑API/模型/Pi/GUI/用户数据/安装或读历史ZIP。不扫描全部历史；输出`/tmp/main-acceptance-20261009/review-v2-script-transfer-review/report.md`，准确只读结果 worker_done/retain，主控随后作决定和具名实施而非交用户新计划。
 
+### QA-V2-F-MATERIAL-READ-TOOLS：N06真实只读能力先接线
+
+F入口42017ab已源码交付retain并机械组合01f9ae2，UI会话Repo be9e51a已组合b203122；主控将最新共享词典/CAS/桌面端口说明机械同步为准确197870bc0da163cc6f2afe9f19ad698ff25c43db。B仍唯一main/schema/API/types/People/创建表单写者，UI第二阶段仍HOLD。本单仅复用原F可见线程，从准确197870b clone到`/tmp/main-acceptance-20261009/review-v2-material-read-tools/candidate`公开身份。
+
+来源N06/R02/H-B022，owned assistant_pi.py素材prompt、业务工具能力注册和run_material_turn；agent_tools/material_tools.ts、diary_tools.ts素材注册/检索说明相关段及对应直接专项。无选中时可查询真实可见库的分析状态和检索候选；有选择时可读完整文字分析/现有转写事实/所属文件与时间范围，不只我的标签。调用同一可信业务HTTP读接口，白名单输出必要文字事实、来源、分项状态，不外发绝对路径/原始媒体/整库正文，不臆造声音识别/用途结论。受控请求仍透传原成员/空间认证；零结果、空库、失败分开，完整数量需按真实分页/总计而不是首100条假称全库。局部写入始终要求发送时明确选中对象，注册无选中读能力不能开放模型自行指定ID/路径/成员，不改变B104真实写入回读及系统标签保留。
+
+本阶段可使run_material_turn接受选中范围可空并绑定素材库会话，但API/schema/Home的必选前置当前仍待唯一文件释放，不能声称用户链路已修；不写main/schema/libAPI/types/Home/hook/MaterialLibrary/全局CSS，不动C未来知识检索段、资源许可/权限/领域。补未选库状态、已选内容摘要事实、部分转写/OCR、不同文件同时间范围、无选择修改明确拒绝、HTTP错误与可信请求头的必要直接Node/Python替身测试；不运行Pi/模型/API服务/GUI/媒体/用户库/安装/远端。交clean提交、准确接口 delta 和API前置残差；阶段1完成即按阶段任务worker_done，主控串行具名接API+Home并做同候选GUI，不冒充整N06完成。
+
+B新报告旧同步局部重配音`_regenerate_creation_task_narration_segment`未传真实grant/repository/reader，对范围化声音会被核心门禁拒绝；保留为实际制作编辑接续叶，不借人物编辑许可或新增并行调度器，不因独立试听排队通过关闭整条修改→重出链。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
