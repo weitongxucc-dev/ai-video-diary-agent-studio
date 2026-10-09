@@ -3,12 +3,13 @@
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
-import { useEffect, useRef, useState, type RefObject, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type RefObject, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX } from "lucide-react";
 import { apiUrl, listenCreationTaskAudio } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskWorkspace, MontageClipCandidate } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 import quickUi from "./VideoClipQuickEditor.module.css";
+import mediaUi from "./VideoEditorMedia.module.css";
 import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
 import { NarrationWaveformTrack } from "./NarrationWaveformTrack";
 
@@ -20,9 +21,38 @@ export function createVideoClipDraft(clip: CreationTaskMontageClip): VideoClipDr
 const sourceUrl = (clip: CreationTaskMontageClip, taskId: string) => apiUrl(clip.person_render_id
   ? `/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/${encodeURIComponent(clip.person_render_id)}/media`
   : `/api/production/materials/${encodeURIComponent(clip.asset_id)}/media`);
+const clipMediaKey = (clip: CreationTaskMontageClip, taskId: string) => JSON.stringify([taskId, clip.id, sourceUrl(clip, taskId), clip.source_reference, clip.source_start_seconds, clip.source_end_seconds]);
 
-export function ClipThumbnail({ clip, taskId, className }: { clip: CreationTaskMontageClip; taskId: string; className?: string }) {
-  return <video className={className} aria-hidden muted playsInline preload="metadata" src={sourceUrl(clip, taskId)} onLoadedMetadata={event => { event.currentTarget.currentTime = clip.source_start_seconds; }} />;
+export function ClipThumbnail({ clip, taskId, className, statusId }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string }) {
+  return <ClipMedia key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} className={className} statusId={statusId} />;
+}
+
+function ClipMedia({ clip, taskId, className, statusId, preview = false }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string; preview?: boolean }) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [retry, setRetry] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const positioned = useRef(false);
+  const missing = !clip.person_render_id && !clip.asset_id;
+  const identity = clip.person_render_id ? "人物口型预览" : "源素材预览";
+  function frameReady(video: HTMLVideoElement) {
+    if (video !== videoRef.current || video.readyState < 2 || video.seeking) return;
+    if (!positioned.current && Math.abs(video.currentTime - clip.source_start_seconds) > .05) return;
+    positioned.current = true;
+    setState("ready");
+  }
+  const video = missing ? null : <video key={retry} ref={videoRef} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined}
+    controls={preview} muted={!preview} playsInline preload="metadata" src={sourceUrl(clip, taskId)}
+    onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = clip.source_start_seconds; }}
+    onLoadedData={event => frameReady(event.currentTarget)} onSeeked={event => frameReady(event.currentTarget)} onCanPlay={event => frameReady(event.currentTarget)}
+    onError={event => { if (event.currentTarget === videoRef.current) setState("error"); }} />;
+  const message = missing ? "未关联媒体" : state === "loading" ? (preview ? "正在读取原片…" : "读取缩略图…") : state === "error" ? (preview ? "原片暂时无法读取" : "缩略图读取失败") : "缩略图已定位";
+  if (preview) return <>{video}<span className={ui.playerBadge}>{clip.person_render_id ? "人物口型 · 非成片" : "源素材 · 原始画面，非成片"}</span>
+    {missing || state !== "ready" ? <div className={mediaUi.playerState} role={state === "error" ? "alert" : "status"}>
+      <span>{message}</span>{state === "error" && !missing ? <button className={ui.button} type="button" onClick={() => { positioned.current = false; setState("loading"); setRetry(value => value + 1); }}>重新读取原片</button> : null}
+    </div> : null}</>;
+  return <span className={`${mediaUi.thumbnail} ${className ?? mediaUi.thumbnailFill}`} data-media-state={missing ? "missing" : state}>
+    {video}<span id={statusId} className={state === "ready" && !missing ? mediaUi.srOnly : mediaUi.thumbnailState} aria-live="off">{message}</span>
+  </span>;
 }
 
 function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>Promise<boolean>;onDraftChange:()=>void}) {
@@ -48,7 +78,12 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   const [time, setTime] = useState(initialTime);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [playbackError, setPlaybackError] = useState(false);
+  const outputIdentity = JSON.stringify([workspace.task.id, workspace.task.current_timeline_version_id, montage.output_url]);
+  const [outputState, setOutputState] = useState<{ identity: string; state: "loading" | "ready" | "error" }>({ identity: outputIdentity, state: "loading" });
+  const playbackState = outputState.identity === outputIdentity ? outputState.state : "loading";
+  const [outputRetry, setOutputRetry] = useState(0);
+  const storyboardId = useId();
+  useEffect(() => { setPlaying(false); }, [outputIdentity]);
   const previewRatio = montage.aspect_ratio === "16:9" ? 16 / 9 : montage.aspect_ratio === "1:1" ? 1 : 9 / 16;
   const canvasFitMode = montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fit")
     ? "fit"
@@ -74,31 +109,38 @@ export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition,
   }, [previewRatio]);
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
+  function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
+    if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
+  }
   return <div className={ui.stage}>
     <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={montage.aspect_ratio ?? "9:16"} fitMode={canvasFitMode} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={montage.aspect_ratio ?? "9:16"} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
-      {montage.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
-        onLoadedMetadata={event => { event.currentTarget.currentTime = initialTime; setPlaybackError(false); }}
-        onTimeUpdate={event => position(event.currentTarget)} onSeeked={event => position(event.currentTarget)}
-        onPlay={() => setPlaying(true)} onPause={event => { setPlaying(false); position(event.currentTarget); }}
-        onEnded={() => setPlaying(false)} onError={() => setPlaybackError(true)} />
-        : selected ? <video aria-label="源素材预览" controls key={selected.id} playsInline preload="metadata" src={sourceUrl(selected, workspace.task.id)} onLoadedMetadata={event => { event.currentTarget.currentTime = selected.source_start_seconds; }} />
+      {montage.output_url ? <video key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
+        onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = initialTime; }}
+        onLoadedData={event => { if (event.currentTarget.readyState >= 2) outputEvent(event.currentTarget, "ready"); }} onCanPlay={event => outputEvent(event.currentTarget, "ready")}
+        onTimeUpdate={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }} onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }}
+        onPlay={event => { if (event.currentTarget === videoRef.current) setPlaying(true); }} onPause={event => { if (event.currentTarget === videoRef.current) { setPlaying(false); position(event.currentTarget); } }}
+        onEnded={event => { if (event.currentTarget === videoRef.current) setPlaying(false); }} onError={event => outputEvent(event.currentTarget, "error")} />
+        : selected ? <ClipMedia key={clipMediaKey(selected, workspace.task.id)} clip={selected} taskId={workspace.task.id} preview />
           : <p>先选镜头</p>}
-      {!montage.output_url && selected ? <span className={ui.playerBadge}>原始画面</span> : null}
-      {playbackError ? <p className={ui.playerError} role="alert">画面打不开，请重新出片。</p> : null}
+      {montage.output_url ? <span className={ui.playerBadge}>成片画面</span> : null}
+      {montage.output_url && playbackState !== "ready" ? <div className={mediaUi.playerState} role={playbackState === "error" ? "alert" : "status"}>
+        <span>{playbackState === "error" ? "成片暂时无法播放" : "正在读取成片…"}</span>
+        {playbackState === "error" ? <button className={ui.button} type="button" onClick={() => { setOutputState({ identity: outputIdentity, state: "loading" }); setPlaying(false); setOutputRetry(value => value + 1); }}>重新读取成片</button> : null}
+      </div> : null}
     </div>
     </div>
     {montage.output_url ? <div className={ui.transport} data-editor-transport>
-      <button className={ui.iconButton} aria-label={playing ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => setPlaybackError(true)); else video.pause(); }} type="button">{playing ? <Pause size={17} /> : <Play size={17} />}</button>
+      <button className={ui.iconButton} aria-label={playing && playbackState === "ready" ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => outputEvent(video, "error")); else video.pause(); }} type="button">{playing && playbackState === "ready" ? <Pause size={17} /> : <Play size={17} />}</button>
       <button className={ui.iconButton} aria-label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)} type="button">{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>
       <input aria-label="成片播放位置" type="range" min={0} max={montage.duration_seconds} step={0.01} value={Math.min(time, montage.duration_seconds)} onChange={event => seek(Number(event.target.value))} />
       <time>{editorTime(time)} / {editorTime(montage.duration_seconds)}</time>
       <button className={ui.iconButton} aria-label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></button>
     </div> : null}
     {onSelectOverlay && montage.graphic_overlays?.length ? <div className={ui.overlayList} aria-label="图文叠加层">{montage.graphic_overlays.map((item,index)=><button className={ui.button} type="button" key={item.id} disabled={busy} aria-pressed={selectedOverlayId===item.id} onClick={()=>onSelectOverlay(item.id)}>{item.kind==="image"?"图片":item.kind==="arrow"?"箭头":"标题"}{index+1} · {item.kind==="image"||item.kind==="arrow"?item.name:item.text}</button>)}</div> : null}
-    <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
-      <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={workspace.task.id} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
+    <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-describedby={`${storyboardId}-thumbnail-${index}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
+      <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={workspace.task.id} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div>
     <div className={ui.tracks} aria-label="配音与字幕时间范围">
