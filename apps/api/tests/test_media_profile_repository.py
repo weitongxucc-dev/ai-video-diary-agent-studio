@@ -1,6 +1,8 @@
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
+import wave
+from PIL import Image
 
 import pytest
 
@@ -8,25 +10,43 @@ from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncService,
     PersonProfile,
+    ProfileReference,
     PronunciationEntry,
     UnavailableAvatarAndLipSyncProvider,
     VoiceProfile as VersionedVoiceProfile,
 )
 from app.models import Episode, EpisodeStatus, ScriptPackage, ScriptSection
 from app.narration import NarrationGenerator
-from app.production import ProductionProfile, ProductionRepository, VoiceProfile
+from app.production import MaterialAsset, ProductionProfile, ProductionRepository, VoiceProfile
 from app.voice_clone import VoiceCloneResult
 
 
 def _repository(tmp_path: Path) -> ProductionRepository:
     library = tmp_path / "library"
     library.mkdir()
-    return ProductionRepository(
-        database_path=tmp_path / "studio.sqlite3",
-        video_library_path=library,
-        duration_reader=lambda _path: 10.0,
-        scene_reader=lambda _path, _duration: [],
+    repository = ProductionRepository(
+        database_path=tmp_path / "studio.sqlite3", video_library_path=library,
+        duration_reader=lambda _path: 10.0, scene_reader=lambda _path, _duration: [],
     )
+    approved = library / "approved"
+    approved.mkdir()
+    for name in ("voice-a.wav", "legacy.wav"):
+        with wave.open(str(approved / name), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(8000)
+            audio.writeframes(b"\0\0" * 8000)
+        path = approved / name
+        repository._save_asset(MaterialAsset(id="voice-a-source" if name == "voice-a.wav" else "legacy-source",
+            workspace_id="workspace_a", file_name=name, path=str(path), size_bytes=path.stat().st_size,
+            modified_at=datetime.fromtimestamp(path.stat().st_mtime), media_type="audio", duration_seconds=1))
+        with repository._connect() as conn:
+            repository._claim_workspace_media_reference(conn, workspace_id="workspace_a", reference=f"workspace://approved/{name}")
+    avatar = approved / "avatar.png"
+    Image.new("RGB", (2, 2), (100, 100, 100)).save(avatar)
+    repository._save_asset(MaterialAsset(id="avatar", workspace_id="workspace_a", file_name=avatar.name,
+        path=str(avatar), size_bytes=avatar.stat().st_size, modified_at=datetime.fromtimestamp(avatar.stat().st_mtime), media_type="image"))
+    return repository
 
 
 def _authorization(
@@ -54,10 +74,11 @@ def _media_profiles(workspace_id: str) -> tuple[PersonProfile, VersionedVoicePro
         workspace_id=workspace_id,
         display_name="主播 A",
         version="person-v1",
-        avatar_reference="asset://avatar/person-a",
+        avatar_reference="workspace://approved/avatar.png",
         background_capabilities=("studio",),
         shot_capabilities=("medium",),
         authorization=_authorization(workspace_id, "person_likeness", "avatar_lipsync"),
+        reference=ProfileReference(asset_id="avatar"),
     )
     voice = VersionedVoiceProfile(
         id="voice_a",
@@ -70,6 +91,7 @@ def _media_profiles(workspace_id: str) -> tuple[PersonProfile, VersionedVoicePro
         reference_text="主播 A 的声音参考文字。",
         model_id="qwen3-tts-v1",
         authorization=_authorization(workspace_id, "voice", ("narration", "avatar_lipsync")),
+        reference=ProfileReference(asset_id="voice-a-source"), display_name="主播声音",
     )
     return person, voice
 
@@ -96,8 +118,8 @@ def _episode(workspace_id: str) -> Episode:
 def test_versioned_media_profiles_survive_restart_and_resolve_task_inputs(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     repository.save_pronunciation_entry(
         PronunciationEntry(
             id="workspace-term",
@@ -161,8 +183,8 @@ def test_versioned_media_profiles_survive_restart_and_resolve_task_inputs(tmp_pa
 def test_versioned_media_profiles_are_workspace_scoped(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
 
     with pytest.raises(KeyError):
         repository.get_person_profile("workspace_b", person.id, person.version)
@@ -178,7 +200,8 @@ def test_versioned_media_profiles_are_workspace_scoped(tmp_path):
                 voice,
                 workspace_id="workspace_b",
                 authorization=replace(voice.authorization, workspace_id="workspace_b"),
-            )
+            ),
+            local_diagnostic=True,
         )
 
 
@@ -195,7 +218,7 @@ def test_legacy_voice_profiles_remain_readable_and_migrate_only_explicitly(tmp_p
         )
     )
     person, _voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
+    repository.save_person_profile(person, local_diagnostic=True)
 
     assert repository.get_voice_profile("workspace_a", legacy.id) == legacy
     with pytest.raises(KeyError):
@@ -209,7 +232,7 @@ def test_legacy_voice_profiles_remain_readable_and_migrate_only_explicitly(tmp_p
         version="legacy-v1",
         language="zh",
         authorization=_authorization("workspace_a", "voice", "narration"),
-    )
+     local_diagnostic=True)
 
     assert repository.get_voice_profile("workspace_a", legacy.id) == legacy
     assert repository.get_versioned_voice_profile("workspace_a", legacy.id, "legacy-v1") == migrated
@@ -233,28 +256,35 @@ def test_legacy_voice_profiles_remain_readable_and_migrate_only_explicitly(tmp_p
             version="raw-legacy-v1",
             language="zh",
             authorization=_authorization("workspace_a", "voice", "narration"),
-        )
+         local_diagnostic=True)
 
 
 def test_version_changes_preserve_history_and_invalidate_narration_identity(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     with pytest.raises(ValueError, match="新版本"):
         repository.save_versioned_voice_profile(
-            replace(voice, model_id="qwen3-tts-v2")
+            replace(voice, model_id="qwen3-tts-v2"),
+            local_diagnostic=True,
         )
 
-    person_v2 = replace(person, version="person-v2", avatar_reference="asset://avatar/person-a-v2")
-    repository.save_person_profile(person_v2)
+    avatar_v2 = repository.video_library_path / "approved" / "avatar-v2.png"
+    Image.new("RGB", (2, 2), (150, 150, 150)).save(avatar_v2)
+    repository._save_asset(MaterialAsset(id="avatar-v2", workspace_id="workspace_a", file_name=avatar_v2.name,
+        path=str(avatar_v2), size_bytes=avatar_v2.stat().st_size,
+        modified_at=datetime.fromtimestamp(avatar_v2.stat().st_mtime), media_type="image"))
+    person_v2 = replace(person, version="person-v2", avatar_reference="workspace://approved/avatar-v2.png",
+                        reference=ProfileReference(asset_id="avatar-v2"))
+    repository.save_person_profile(person_v2, local_diagnostic=True)
     voice_v2 = replace(
         voice,
         version="voice-v2",
         person_version=person_v2.version,
         model_id="qwen3-tts-v2",
     )
-    repository.save_versioned_voice_profile(voice_v2)
+    repository.save_versioned_voice_profile(voice_v2, local_diagnostic=True)
     pronunciation_v1 = PronunciationEntry(
         id="term",
         workspace_id="workspace_a",
@@ -329,8 +359,8 @@ def test_version_changes_preserve_history_and_invalidate_narration_identity(tmp_
 def test_revoked_authorization_changes_cache_identity_and_blocks_persisted_narration(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     episode = _episode("workspace_a")
     profile = ProductionProfile(workspace_id="workspace_a")
 
@@ -385,14 +415,15 @@ def test_revoked_authorization_changes_cache_identity_and_blocks_persisted_narra
             profile=profile,
             voice_profile_id=voice.id,
             voice_version=voice.version,
+            local_diagnostic=True,
         )
 
 
 def test_revoked_authorization_blocks_explicit_historical_avatar_request(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     avatar_authorization = _authorization("workspace_a", "avatar_video", "avatar_lipsync")
     repository.save_authorization(avatar_authorization)
     audio = tmp_path / "narration.wav"
@@ -412,6 +443,7 @@ def test_revoked_authorization_blocks_explicit_historical_avatar_request(tmp_pat
         authorization_id=avatar_authorization.id,
         authorization_version=avatar_authorization.version,
         model_id="avatar-model-v1",
+        local_diagnostic=True,
     )
     repository.save_authorization(
         replace(person.authorization, version="v2", status="revoked")
@@ -423,21 +455,27 @@ def test_revoked_authorization_blocks_explicit_historical_avatar_request(tmp_pat
         replace(avatar_authorization, version="v2", status="revoked")
     )
 
-    request_after_revocation = repository.resolve_avatar_lipsync_request(
-        workspace_id="workspace_a",
-        person_id=person.id,
-        person_version=person.version,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        audio_path=str(audio),
-        audio_cache_key="narration-cache-v1",
-        language="zh-en",
-        motion="natural",
-        expression="neutral",
-        authorization_id=avatar_authorization.id,
-        authorization_version=avatar_authorization.version,
-        model_id="avatar-model-v1",
-    )
+    with pytest.raises(ValueError, match="authorization_revoked"):
+        repository.resolve_avatar_lipsync_request(
+            workspace_id="workspace_a",
+            person_id=person.id,
+            person_version=person.version,
+            voice_profile_id=voice.id,
+            voice_version=voice.version,
+            audio_path=str(audio),
+            audio_cache_key="narration-cache-v1",
+            language="zh-en",
+            motion="natural",
+            expression="neutral",
+            authorization_id=avatar_authorization.id,
+            authorization_version=avatar_authorization.version,
+            model_id="avatar-model-v1",
+            local_diagnostic=True,
+        )
+    request_after_revocation = replace(request_before_revocation,
+        person=replace(person, authorization=repository.get_authorization("workspace_a", person.authorization.id)),
+        voice=replace(voice, authorization=repository.get_authorization("workspace_a", voice.authorization.id)),
+        authorization=repository.get_authorization("workspace_a", avatar_authorization.id))
     result = AvatarAndLipSyncService(
         tmp_path / "outputs", UnavailableAvatarAndLipSyncProvider()
     ).render(request_after_revocation)
@@ -457,10 +495,8 @@ def test_narration_generator_resolves_persisted_voice_language_and_dictionary(tm
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
     reference = repository.video_library_path / "approved" / "voice-a.wav"
-    reference.parent.mkdir()
-    reference.write_bytes(b"fixture reference")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     repository.save_pronunciation_entry(
         PronunciationEntry(
             id="term",
@@ -506,6 +542,7 @@ def test_narration_generator_resolves_persisted_voice_language_and_dictionary(tm
         profile=ProductionProfile(workspace_id="workspace_a"),
         voice_profile_id=voice.id,
         voice_version=voice.version,
+        local_diagnostic=True,
     )
 
     assert artifact.language == "zh-en"
@@ -548,7 +585,7 @@ def test_narration_generator_resolves_persisted_voice_language_and_dictionary(tm
 def test_persisted_narration_reference_fails_before_provider(tmp_path, reference_kind):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
+    repository.save_person_profile(person, local_diagnostic=True)
     invalid_voice = replace(
         voice,
         version="voice-invalid-reference",
@@ -572,11 +609,13 @@ def test_persisted_narration_reference_fails_before_provider(tmp_path, reference
 
     if reference_kind != "missing":
         with pytest.raises(ValueError, match="媒体引用|workspace://"):
-            repository.save_versioned_voice_profile(invalid_voice)
+            repository.save_versioned_voice_profile(invalid_voice, local_diagnostic=True)
         assert calls == 0
         return
 
-    repository.save_versioned_voice_profile(invalid_voice)
+    invalid_voice = voice
+    repository.save_versioned_voice_profile(invalid_voice, local_diagnostic=True)
+    repository.resolve_workspace_media_reference("workspace_a", invalid_voice.reference_audio_path).unlink()
     with pytest.raises(ValueError, match="媒体引用|参考文件|workspace://"):
         NarrationGenerator(tmp_path / "outputs", Provider()).generate_from_repository(
             repository=repository,
@@ -585,6 +624,7 @@ def test_persisted_narration_reference_fails_before_provider(tmp_path, reference
             profile=ProductionProfile(workspace_id="workspace_a"),
             voice_profile_id=invalid_voice.id,
             voice_version=invalid_voice.version,
+            local_diagnostic=True,
         )
 
     assert calls == 0
@@ -593,8 +633,8 @@ def test_persisted_narration_reference_fails_before_provider(tmp_path, reference
 def test_avatar_request_is_resolved_from_workspace_scoped_versions(tmp_path):
     repository = _repository(tmp_path)
     person, voice = _media_profiles("workspace_a")
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
+    repository.save_person_profile(person, local_diagnostic=True)
+    repository.save_versioned_voice_profile(voice, local_diagnostic=True)
     avatar_authorization = _authorization("workspace_a", "avatar_video", "avatar_lipsync")
     repository.save_authorization(avatar_authorization)
     audio = tmp_path / "narration.wav"
@@ -617,6 +657,7 @@ def test_avatar_request_is_resolved_from_workspace_scoped_versions(tmp_path):
         authorization_id=avatar_authorization.id,
         authorization_version=avatar_authorization.version,
         model_id="avatar-model-v1",
+        local_diagnostic=True,
     )
 
     assert result.status == "unavailable"
@@ -635,4 +676,5 @@ def test_avatar_request_is_resolved_from_workspace_scoped_versions(tmp_path):
             authorization_id=avatar_authorization.id,
             authorization_version=avatar_authorization.version,
             model_id="avatar-model-v1",
+        local_diagnostic=True,
         )

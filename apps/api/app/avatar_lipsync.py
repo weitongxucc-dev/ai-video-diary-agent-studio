@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -97,6 +97,16 @@ class Authorization:
 
 
 @dataclass(frozen=True)
+class ProfileReference:
+    """A registered source and its explicit range, independent of model output."""
+
+    asset_id: str | None = None
+    segment_id: str | None = None
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+
+
+@dataclass(frozen=True)
 class PersonProfile:
     id: str
     workspace_id: str
@@ -105,21 +115,66 @@ class PersonProfile:
     avatar_reference: str
     background_capabilities: tuple[str, ...]
     shot_capabilities: tuple[str, ...]
-    authorization: Authorization
+    authorization: Authorization | None = None
+    reference: ProfileReference | None = None
+    use_state: str = "available"
+    owner_user_id: str | None = None
+    visibility: str = "private"
+    reference_issue: str | None = None
 
 
 @dataclass(frozen=True)
 class VoiceProfile:
     id: str
     workspace_id: str
-    person_profile_id: str
-    person_version: str
     version: str
     language: Literal["zh", "en", "zh-en"]
     reference_audio_path: str
     reference_text: str
-    model_id: str
-    authorization: Authorization
+    person_profile_id: str = ""
+    person_version: str = ""
+    model_id: str = ""
+    authorization: Authorization | None = None
+    display_name: str = ""
+    reference: ProfileReference | None = None
+    use_state: str = "available"
+    owner_user_id: str | None = None
+    visibility: str = "private"
+    reference_issue: str | None = None
+
+
+def profile_use_failure(profile, *, content_type: str, usage_scope: str) -> str | None:
+    """Local references need no proof form; explicit restrictions remain binding."""
+    if profile.reference_issue is not None:
+        return profile.reference_issue
+    if profile.use_state not in {"available", "not_for_publish"}:
+        return f"profile_{profile.use_state}"
+    authorization = profile.authorization
+    if authorization is None:
+        return None
+    if authorization.workspace_id != profile.workspace_id:
+        return "authorization_workspace_mismatch"
+    now = datetime.now(timezone.utc)
+    if authorization.status not in {"active", "pending"}:
+        return f"authorization_{authorization.status}"
+    if authorization.expires_at is not None and _as_utc(authorization.expires_at) <= now:
+        return "authorization_expired"
+    if _as_utc(authorization.effective_from) > now:
+        return "authorization_not_effective"
+    if authorization.content_types and content_type not in authorization.content_types:
+        return "authorization_content_type_denied"
+    if authorization.usage_scopes and usage_scope not in authorization.usage_scopes:
+        return "authorization_scope_denied"
+    return None
+
+
+def profile_cache_identity(profile) -> dict[str, object]:
+    return {
+        "id": profile.id, "version": profile.version,
+        "reference": asdict(profile.reference) if profile.reference else None,
+        "use_state": profile.use_state,
+        "authorization": _authorization_cache_identity(profile.authorization),
+    }
 
 
 @dataclass(frozen=True)
@@ -170,7 +225,7 @@ class AvatarAndLipSyncRequest:
     language: Literal["zh", "en", "zh-en"]
     motion: str
     expression: str
-    authorization: Authorization
+    authorization: Authorization | None
     model_id: str
     visual_path: str = ""
 
@@ -324,8 +379,8 @@ class SubprocessAvatarAndLipSyncProvider:
                         "language": request.language,
                         "motion": request.motion,
                         "expression": request.expression,
-                        "authorization_id": request.authorization.id,
-                        "authorization_version": request.authorization.version,
+                        "authorization_id": request.authorization.id if request.authorization else "",
+                        "authorization_version": request.authorization.version if request.authorization else "",
                         "output_path": str(output),
                     },
                     ensure_ascii=False,
@@ -564,6 +619,7 @@ class AvatarAndLipSyncService:
         authorization_id: str,
         authorization_version: str,
         model_id: str,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> AvatarAndLipSyncResult:
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -579,6 +635,7 @@ class AvatarAndLipSyncService:
             authorization_id=authorization_id,
             authorization_version=authorization_version,
             model_id=model_id,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
         )
         return self.render(request)
 
@@ -610,6 +667,7 @@ class AvatarPreviewService:
         authorization_version: str,
         model_id: str,
         retry: bool = False,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -627,6 +685,7 @@ class AvatarPreviewService:
             authorization_id=authorization_id,
             authorization_version=authorization_version,
             model_id=model_id,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
         )
         identity = _avatar_preview_identity(
             request,
@@ -653,8 +712,8 @@ class AvatarPreviewService:
             person_version=request.person.version,
             voice_profile_id=request.voice.id,
             voice_version=request.voice.version,
-            authorization_id=request.authorization.id,
-            authorization_version=request.authorization.version,
+            authorization_id=request.authorization.id if request.authorization else "",
+            authorization_version=request.authorization.version if request.authorization else "",
         )
         running, claimed = repository.claim_media_preview_run(
             candidate,
@@ -767,12 +826,12 @@ def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest, *, input_facts=No
             "id": request.person.id,
             "version": request.person.version,
             "avatar_reference": request.person.avatar_reference,
-            "authorization": _authorization_cache_identity(request.person.authorization),
+            "identity": profile_cache_identity(request.person),
         },
         "voice": {
             "id": request.voice.id,
             "version": request.voice.version,
-            "authorization": _authorization_cache_identity(request.voice.authorization),
+            "identity": profile_cache_identity(request.voice),
         },
         "audio_cache_key": request.audio_cache_key,
         "language": request.language,
@@ -807,34 +866,24 @@ def _avatar_preview_identity(
 def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
     if request.workspace_id != request.person.workspace_id or request.workspace_id != request.voice.workspace_id:
         return "workspace_mismatch"
-    if any(
-        authorization.workspace_id != request.workspace_id
-        for authorization in (
-            request.person.authorization,
-            request.voice.authorization,
-            request.authorization,
-        )
-    ):
+    if request.authorization is not None and request.authorization.workspace_id != request.workspace_id:
         return "authorization_workspace_mismatch"
-    if request.voice.person_profile_id != request.person.id:
+    if request.voice.person_profile_id:
+        if request.voice.person_profile_id != request.person.id:
+            return "voice_person_mismatch"
+        if request.voice.person_version != request.person.version:
+            return "voice_person_version_mismatch"
+    elif request.voice.person_version:
         return "voice_person_mismatch"
-    if request.voice.person_version != request.person.version:
-        return "voice_person_version_mismatch"
     if request.voice.language != request.language:
         return "language_mismatch"
-    person_failure = request.person.authorization.failure_for(
-        content_type="person_likeness", usage_scope="avatar_lipsync"
-    )
-    if person_failure:
-        return person_failure
-    voice_failure = request.voice.authorization.failure_for(
-        content_type="voice", usage_scope="avatar_lipsync"
-    )
-    if voice_failure:
-        return voice_failure
-    return request.authorization.failure_for(
-        content_type="avatar_video", usage_scope="avatar_lipsync"
-    )
+    for profile, kind in ((request.person, "person_likeness"), (request.voice, "voice")):
+        failure = profile_use_failure(profile, content_type=kind, usage_scope="avatar_lipsync")
+        if failure:
+            return failure
+    if request.authorization is None:
+        return None
+    return request.authorization.failure_for(content_type="avatar_video", usage_scope="avatar_lipsync")
 
 
 def _parse_avatar_result(
@@ -994,7 +1043,9 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def _authorization_cache_identity(authorization: Authorization) -> dict[str, str | None]:
+def _authorization_cache_identity(authorization: Authorization | None) -> dict[str, str | None] | None:
+    if authorization is None:
+        return None
     return {
         "id": authorization.id,
         "version": authorization.version,

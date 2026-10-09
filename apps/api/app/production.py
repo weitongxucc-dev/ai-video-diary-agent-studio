@@ -24,6 +24,9 @@ from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncRequest,
     PersonProfile,
+    ProfileReference,
+    profile_use_failure,
+    _as_utc,
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
 )
@@ -413,6 +416,8 @@ class ProductionProfile:
     intro_text: str = ""
     outro_text: str = ""
     background_music_path: str | None = None
+    default_voice_profile_id: str | None = None
+    default_voice_version: str | None = None
     voice_name: str = ""
     voice_reference_path: str | None = None
     voice_reference_text: str = ""
@@ -1316,6 +1321,7 @@ class ProductionRepository:
         self,
         workspace_id: str,
         content: bytes,
+        *, verified_owner_user_id: str | None = None,
     ) -> tuple[str, int, float]:
         """Persist a validated WAV under the workspace media root.
 
@@ -1358,6 +1364,16 @@ class ProductionRepository:
                     workspace_id=workspace_id,
                     reference=reference,
                 )
+            # Use the existing material ownership/source record, not an unowned
+            # logical-path claim as permission to another member's reference.
+            stat = target.stat()
+            self._save_asset(MaterialAsset(
+                id=f"voice_source_{uuid4().hex}", workspace_id=workspace_id,
+                file_name=target.name, path=str(target), size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime), media_type="audio",
+                duration_seconds=duration_seconds,
+                owner_user_id=content_owner(verified_owner_user_id),
+            ))
         except Exception:
             temporary.unlink(missing_ok=True)
             target.unlink(missing_ok=True)
@@ -1838,9 +1854,153 @@ class ProductionRepository:
             )
         return [self._authorization_from_payload(payload) for payload in payloads]
 
-    def save_person_profile(self, person: PersonProfile) -> PersonProfile:
-        _validate_person_profile(person)
+    def resolve_profile_reference(
+        self, profile: PersonProfile | VersionedVoiceProfile, *,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        for_generation: bool = True,
+    ) -> tuple[Path, float | None, float | None]:
+        """Re-read the source, membership and range; registration never runs a model."""
+        if profile.reference_issue is not None:
+            raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
+        table = "person_profiles" if isinstance(profile, PersonProfile) else "versioned_voice_profiles"
         with self._connect() as conn:
+            row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                               (profile.workspace_id, profile.id)).fetchone()
+            current = ((self._person_profile_from_payload if isinstance(profile, PersonProfile)
+                        else self._versioned_voice_profile_from_payload)(conn, profile.workspace_id, json.loads(row["payload"]))
+                       if row is not None else profile)
+            if row is not None:
+                current = replace(current, authorization=self._current_authorization(conn, profile.workspace_id, current.authorization))
+        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                visibility=current.visibility, owner_user_id=current.owner_user_id):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                visibility=profile.visibility, owner_user_id=profile.owner_user_id):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        reference = profile.reference
+        logical = (profile.avatar_reference if isinstance(profile, PersonProfile)
+                   else profile.reference_audio_path)
+        path = self.resolve_workspace_media_reference(profile.workspace_id, logical,
+                                                       require_registered=reference is None or not reference.asset_id)
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise ValueError("参考文件失联或为空，请重新定位原参考")
+        asset = None
+        if reference is not None and reference.asset_id:
+            asset = self.get_asset(profile.workspace_id, reference.asset_id)
+            if self.workspace_media_reference_for_asset(profile.workspace_id, asset.id) != logical:
+                raise ValueError("参考文件与来源素材不一致")
+        else:
+            with self._connect() as conn:
+                row = conn.execute("SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND file_path=?",
+                                   (profile.workspace_id, str(path))).fetchone()
+            if row is not None:
+                asset = self._asset_from_row(row)
+        if asset is not None:
+            if abs(path.stat().st_mtime - asset.modified_at.timestamp()) > .00001:
+                raise ValueError("原参考已变化，请重新定位并登记新版本")
+            if asset.media_type == "audio" and path.suffix.lower() == ".wav":
+                intact = path.stat().st_size == asset.size_bytes
+                _profile_wav_duration(path)
+            else:
+                intact = self._material_file_intact(asset)
+            if not intact:
+                raise ValueError("原参考已变化，请重新定位并登记新版本")
+            if isinstance(profile, PersonProfile) and asset.media_type not in {"video", "image"}:
+                raise ValueError("人物参考需要已登记的视频或图片")
+            if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                    visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+                raise PermissionError("来源素材不属于当前成员或已取消共享")
+            if asset.use_state == "excluded" or (for_generation and asset.use_state not in {"available", "not_for_publish"}):
+                raise ValueError(f"来源素材使用状态限制：{asset.use_state}")
+            duration = asset.duration_seconds
+            if asset.media_type != "image" and (duration is None or not math.isfinite(duration) or duration <= 0):
+                raise ValueError("来源时长未知，请重新定位有效参考范围")
+            if reference is not None and reference.segment_id:
+                segment = next((item for item in asset.segments if item.id == reference.segment_id), None)
+                if segment is None or segment.asset_id != asset.id:
+                    raise ValueError("参考片段已失联，请重新选择")
+                if reference.start_seconds is None or reference.end_seconds is None:
+                    raise ValueError("片段参考需要明确起止时间")
+                if reference.start_seconds < segment.start_seconds or reference.end_seconds > segment.end_seconds:
+                    raise ValueError("参考范围超出来源片段")
+                if segment.usage_role == "exclude":
+                    raise ValueError("来源片段已排除使用")
+        else:
+            if isinstance(profile, PersonProfile):
+                raise ValueError("人物参考缺少稳定素材登记，请重新定位")
+            duration = _profile_wav_duration(path)
+            if not local_diagnostic:
+                raise PermissionError("历史声音来源缺少成员归属，请重新导入参考")
+        if isinstance(profile, VersionedVoiceProfile) and path.suffix.lower() == ".wav":
+            duration = _profile_wav_duration(path)
+        start = reference.start_seconds if reference else None
+        end = reference.end_seconds if reference else None
+        if start is not None and (duration is None or end is None or end > duration):
+            raise ValueError("参考范围超出有效来源时长")
+        if for_generation:
+            for version in (profile, current):
+                failure = profile_use_failure(version, content_type=("person_likeness" if isinstance(profile, PersonProfile) else "voice"),
+                                              usage_scope=("avatar_lipsync" if isinstance(profile, PersonProfile) else "narration"))
+                if failure is not None:
+                    raise ValueError(f"参考使用受限：{failure}")
+            if start is not None and (start != 0 or end != duration):
+                raise ValueError("参考范围需要精确派生输入，当前模型接口不能用整片替代所选范围")
+        return path, start, end
+
+    def _require_profile_write_owner(self, conn, table: str, profile, verified_owner_user_id, local_diagnostic):
+        row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                           (profile.workspace_id, profile.id)).fetchone()
+        if row is not None and not local_diagnostic:
+            owner = json.loads(row["payload"]).get("owner_user_id")
+            if not owner or owner != verified_owner_user_id:
+                raise PermissionError("只有档案原登记成员可以保存新版本；历史归属缺失需要重新定位")
+
+    def resolve_voice_reference(self, voice: VersionedVoiceProfile, *,
+                                viewer_user_id: str | None = None,
+                                local_diagnostic: bool = False) -> Path:
+        path, _, _ = self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
+                                                   local_diagnostic=local_diagnostic)
+        _profile_wav_duration(path)
+        return path
+
+    def set_default_versioned_voice(self, workspace_id: str, voice_profile_id: str, version: str, *,
+                                    viewer_user_id: str | None = None, local_diagnostic: bool = False) -> VersionedVoiceProfile:
+        if not voice_profile_id.strip() or not version.strip():
+            raise ValueError("默认声音必须指定准确档案与版本")
+        voice = self.get_versioned_voice_profile(workspace_id, voice_profile_id, version)
+        # A default can be stored without a model, but must point at a readable real reference.
+        self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
+                                       local_diagnostic=local_diagnostic, for_generation=False)
+        profile = self.get_profile(workspace_id)
+        profile.default_voice_profile_id, profile.default_voice_version = voice.id, voice.version
+        self.save_profile(profile)
+        return voice
+
+    def get_default_versioned_voice(self, workspace_id: str) -> VersionedVoiceProfile | None:
+        profile = self.get_profile(workspace_id)
+        if profile.default_voice_profile_id is None and profile.default_voice_version is None:
+            return None
+        if not profile.default_voice_profile_id or not profile.default_voice_version:
+            raise ValueError("默认声音引用不完整，请重新选择准确版本")
+        return self.get_versioned_voice_profile(workspace_id, profile.default_voice_profile_id,
+                                                profile.default_voice_version)
+
+    def save_person_profile(
+        self, person: PersonProfile, *, verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> PersonProfile:
+        _validate_person_profile(person)
+        if person.reference is not None:
+            person = replace(person, owner_user_id=content_owner(verified_owner_user_id))
+            self.resolve_profile_reference(person, viewer_user_id=verified_owner_user_id,
+                                           local_diagnostic=local_diagnostic, for_generation=False)
+            if person.reference.asset_id is None:
+                path = self.resolve_workspace_media_reference(person.workspace_id, person.avatar_reference)
+                asset = self._asset_by_path(person.workspace_id, str(path))
+                person = replace(person, reference=replace(person.reference, asset_id=asset.id))
+        with self._connect() as conn:
+            if person.reference is not None:
+                self._require_profile_write_owner(conn, "person_profiles", person, verified_owner_user_id, local_diagnostic)
             if person.avatar_reference.startswith("workspace://"):
                 self.resolve_workspace_media_reference(
                     person.workspace_id,
@@ -1851,7 +2011,8 @@ class ProductionRepository:
                     workspace_id=person.workspace_id,
                     reference=person.avatar_reference,
                 )
-            self._save_authorization(conn, person.workspace_id, person.authorization)
+            if person.authorization is not None:
+                self._save_authorization(conn, person.workspace_id, person.authorization)
             self._save_versioned_payload(
                 conn,
                 table="person_profiles",
@@ -1903,21 +2064,32 @@ class ProductionRepository:
 
     def save_versioned_voice_profile(
         self,
-        voice: VersionedVoiceProfile,
+        voice: VersionedVoiceProfile, *, verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
         _validate_versioned_voice_profile(voice)
+        if voice.reference is not None:
+            voice = replace(voice, owner_user_id=content_owner(verified_owner_user_id))
+            self.resolve_profile_reference(voice, viewer_user_id=verified_owner_user_id,
+                                          local_diagnostic=local_diagnostic, for_generation=False)
+            if voice.reference.asset_id is None:
+                path = self.resolve_workspace_media_reference(voice.workspace_id, voice.reference_audio_path)
+                with self._connect() as conn:
+                    row = conn.execute("SELECT id FROM material_assets WHERE workspace_id=? AND file_path=?",
+                                       (voice.workspace_id, str(path))).fetchone()
+                if row is not None:
+                    voice = replace(voice, reference=replace(voice.reference, asset_id=str(row["id"])))
         with self._connect() as conn:
+            if voice.reference is not None:
+                self._require_profile_write_owner(conn, "versioned_voice_profiles", voice, verified_owner_user_id, local_diagnostic)
             self.resolve_workspace_media_reference(
                 voice.workspace_id,
                 voice.reference_audio_path,
             )
-            self._get_person_profile(
-                conn,
-                voice.workspace_id,
-                voice.person_profile_id,
-                voice.person_version,
-            )
-            self._save_authorization(conn, voice.workspace_id, voice.authorization)
+            if voice.person_profile_id:
+                self._get_person_profile(conn, voice.workspace_id, voice.person_profile_id, voice.person_version)
+            if voice.authorization is not None:
+                self._save_authorization(conn, voice.workspace_id, voice.authorization)
             self._claim_workspace_media_reference(
                 conn,
                 workspace_id=voice.workspace_id,
@@ -2053,8 +2225,12 @@ class ProductionRepository:
                 voice_profile_id,
                 voice_version,
             )
+            current_voice = self._get_versioned_voice_profile(conn, workspace_id, voice_profile_id)
             voice = replace(
                 historical_voice,
+                use_state=(historical_voice.use_state if historical_voice.use_state != "available"
+                           else current_voice.use_state),
+                visibility=current_voice.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
@@ -2088,6 +2264,7 @@ class ProductionRepository:
         authorization_id: str,
         authorization_version: str,
         model_id: str,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> AvatarAndLipSyncRequest:
         if language not in {"zh", "en", "zh-en"}:
             raise ValueError("人物口型语言必须是 zh、en 或 zh-en")
@@ -2120,17 +2297,17 @@ class ProductionRepository:
                     historical_voice.authorization,
                 ),
             )
-            requested_authorization = self._get_authorization(
-                conn,
-                workspace_id,
-                authorization_id,
-                authorization_version,
-            )
+            if bool(authorization_id) != bool(authorization_version):
+                raise ValueError("授权引用必须同时指定ID和版本")
+            requested_authorization = (self._get_authorization(
+                conn, workspace_id, authorization_id, authorization_version,
+            ) if authorization_id else None)
             authorization = self._current_authorization(
                 conn,
                 workspace_id,
                 requested_authorization,
             )
+        self.resolve_voice_reference(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
         return AvatarAndLipSyncRequest(
             workspace_id=workspace_id,
             person=person,
@@ -2142,17 +2319,9 @@ class ProductionRepository:
             expression=expression,
             authorization=authorization,
             model_id=model_id,
-            visual_path=(
-                str(
-                    self.resolve_workspace_media_reference(
-                        workspace_id,
-                        person.avatar_reference,
-                        require_registered=True,
-                    )
-                )
-                if person.avatar_reference.startswith("workspace://")
-                else ""
-            ),
+            visual_path=str(self.resolve_profile_reference(
+                person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+            )[0]),
         )
 
     def migrate_legacy_voice_profile(
@@ -2165,6 +2334,8 @@ class ProductionRepository:
         version: str,
         language: str,
         authorization: Authorization,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
         """Explicitly map a legacy voice row; no automatic migration is performed."""
         if language not in {"zh", "en", "zh-en"}:
@@ -2181,8 +2352,11 @@ class ProductionRepository:
             reference_text=legacy.reference_text,
             model_id=legacy.model_id,
             authorization=authorization,
+            reference=ProfileReference(),
+            display_name=legacy.name,
         )
-        return self.save_versioned_voice_profile(versioned)
+        return self.save_versioned_voice_profile(versioned, verified_owner_user_id=verified_owner_user_id,
+                                                 local_diagnostic=local_diagnostic)
 
     def list_applicable_pronunciation_entries(
         self,
@@ -2375,8 +2549,15 @@ class ProductionRepository:
         self,
         conn: sqlite3.Connection,
         workspace_id: str,
-        authorization: Authorization,
-    ) -> Authorization:
+        authorization: Authorization | None,
+    ) -> Authorization | None:
+        if authorization is None:
+            return None
+        # An explicitly revoked/expired historical version cannot be upgraded by a later record.
+        if authorization.status in {"revoked", "expired"} or (
+            authorization.expires_at is not None and _as_utc(authorization.expires_at) <= utc_now()
+        ):
+            return authorization
         return self._get_authorization(conn, workspace_id, authorization.id, None)
 
     def _get_person_profile(
@@ -2545,7 +2726,7 @@ class ProductionRepository:
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
-        authorization_failure = inputs.voice.authorization.failure_for(
+        authorization_failure = profile_use_failure(inputs.voice,
             content_type="voice",
             usage_scope="narration",
         )
@@ -5055,7 +5236,8 @@ class ProductionRepository:
                 raise ValueError("标签夹不存在或不属于当前工作区")
             segment.collection_ids = list(dict.fromkeys(collection_ids))
         segment.review_status = review_status
-        segment.system_tags = _infer_system_tags(asset, segment)
+        # Editing member text does not replace recognition facts. Analysis owns
+        # system_tags and still refreshes them through its existing save path.
         segment.updated_at = utc_now()
         return self._save_asset(asset)
 
@@ -8605,12 +8787,15 @@ class ProductionRepository:
         voice_profile_id: str,
         voice_version: str | None = None,
     ) -> VersionedNarrationInputs:
-        return self.resolve_narration_inputs(
+        inputs = self.resolve_narration_inputs(
             workspace_id=workspace_id,
             episode_id=task_id,
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
+        task = self.get_creation_task(workspace_id, task_id)
+        self.resolve_voice_reference(inputs.voice, viewer_user_id=task.owner_user_id)
+        return inputs
 
     def select_creation_task_narration_voice(
         self,
@@ -8939,6 +9124,8 @@ class ProductionRepository:
         workspace_id: str,
         *,
         profile: ProductionProfile | None = None,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> dict[str, object]:
         profile = profile or self.get_profile(workspace_id)
         assets = self.list_assets(workspace_id)
@@ -8958,30 +9145,24 @@ class ProductionRepository:
         ]
         blockers: list[dict[str, str]] = []
         versioned_voices = self.list_versioned_voice_profiles(workspace_id)
-        usable_voice = next(
-            (
-                voice
-                for voice in versioned_voices
-                if voice.authorization.failure_for(
-                    content_type="voice",
-                    usage_scope="narration",
-                )
-                is None
-            ),
-            None,
-        )
-        if not profile.brand_name or not profile.brand_template_name:
-            blockers.append(
-                {
-                    "code": "brand_profile_missing",
-                    "message": "尚未配置品牌名称和固定视觉模板。",
-                }
-            )
+        usable_voice = None
+        reference_issue = None
+        for voice in versioned_voices:
+            if profile_use_failure(voice, content_type="voice", usage_scope="narration") is not None:
+                continue
+            try:
+                self.resolve_voice_reference(voice, viewer_user_id=viewer_user_id,
+                                             local_diagnostic=local_diagnostic)
+            except (ValueError, PermissionError, KeyError) as exc:
+                reference_issue = str(exc)
+            else:
+                usable_voice = voice
+                break
         if usable_voice is None:
             blockers.append(
                 {
-                    "code": "versioned_voice_authorization_missing",
-                    "message": "尚未登记可用于配音的版本化授权声音。",
+                    "code": "voice_reference_unavailable" if reference_issue else "versioned_voice_authorization_missing",
+                    "message": reference_issue or "尚未登记可用于配音的版本化声音。",
                 }
             )
         elif not usable_voice.reference_audio_path or not usable_voice.reference_text.strip():
@@ -9604,15 +9785,26 @@ class ProductionRepository:
         return Authorization(
             id=_required_text(data, "id"),
             version=_required_text(data, "version"),
-            rights_holder=_required_text(data, "rights_holder"),
-            content_types=_string_tuple(data, "content_types"),
-            usage_scopes=_string_tuple(data, "usage_scopes"),
+            rights_holder=str(data.get("rights_holder") or ""),
+            content_types=_optional_string_tuple(data, "content_types"),
+            usage_scopes=_optional_string_tuple(data, "usage_scopes"),
             effective_from=_required_datetime(data, "effective_from"),
             expires_at=_optional_datetime(data, "expires_at"),
-            evidence_reference=_required_text(data, "evidence_reference"),
+            evidence_reference=str(data.get("evidence_reference") or ""),
             status=_required_text(data, "status"),  # type: ignore[arg-type]
             workspace_id=_required_text(data, "workspace_id"),
         )
+
+    def _profile_authorization_from_payload(self, conn, workspace_id, data):
+        if not data.get("authorization_id") and not data.get("authorization_version"):
+            return None, None
+        if not data.get("authorization_id") or not data.get("authorization_version"):
+            return None, "historical_authorization_reference_incomplete"
+        try:
+            return self._get_authorization(conn, workspace_id, str(data["authorization_id"]),
+                                           str(data["authorization_version"])), None
+        except KeyError:
+            return None, "historical_authorization_reference_missing"
 
     def _person_profile_from_payload(
         self,
@@ -9620,23 +9812,20 @@ class ProductionRepository:
         workspace_id: str,
         data: dict[str, object],
     ) -> PersonProfile:
-        authorization = self._get_authorization(
-            conn,
-            workspace_id,
-            _required_text(data, "authorization_id"),
-            _required_text(data, "authorization_version"),
-        )
+        authorization, reference_issue = self._profile_authorization_from_payload(conn, workspace_id, data)
         return PersonProfile(
             id=_required_text(data, "id"),
             workspace_id=_required_text(data, "workspace_id"),
             display_name=_required_text(data, "display_name"),
             version=_required_text(data, "version"),
-            avatar_reference=_required_text(data, "avatar_reference"),
+            avatar_reference=str(data.get("avatar_reference") or ""),
             background_capabilities=_optional_string_tuple(
                 data, "background_capabilities"
             ),
             shot_capabilities=_optional_string_tuple(data, "shot_capabilities"),
             authorization=authorization,
+            reference_issue=reference_issue,
+            **_profile_reference_fields(data, authorization),
         )
 
     def _versioned_voice_profile_from_payload(
@@ -9645,23 +9834,21 @@ class ProductionRepository:
         workspace_id: str,
         data: dict[str, object],
     ) -> VersionedVoiceProfile:
-        authorization = self._get_authorization(
-            conn,
-            workspace_id,
-            _required_text(data, "authorization_id"),
-            _required_text(data, "authorization_version"),
-        )
+        authorization, reference_issue = self._profile_authorization_from_payload(conn, workspace_id, data)
         return VersionedVoiceProfile(
             id=_required_text(data, "id"),
             workspace_id=_required_text(data, "workspace_id"),
-            person_profile_id=_required_text(data, "person_profile_id"),
-            person_version=_required_text(data, "person_version"),
+            person_profile_id=str(data.get("person_profile_id") or ""),
+            person_version=str(data.get("person_version") or ""),
             version=_required_text(data, "version"),
             language=_required_text(data, "language"),  # type: ignore[arg-type]
-            reference_audio_path=_required_text(data, "reference_audio_path"),
-            reference_text=_required_text(data, "reference_text"),
-            model_id=_required_text(data, "model_id"),
+            reference_audio_path=str(data.get("reference_audio_path") or ""),
+            reference_text=str(data.get("reference_text") or ""),
+            model_id=str(data.get("model_id") or ""),
             authorization=authorization,
+            reference_issue=reference_issue,
+            display_name=str(data.get("display_name") or ""),
+            **_profile_reference_fields(data, authorization),
         )
 
     @staticmethod
@@ -10370,6 +10557,47 @@ def _authorization_payload(authorization: Authorization) -> dict[str, object]:
     }
 
 
+def _profile_reference_payload(profile) -> dict[str, object]:
+    return {
+        "reference": asdict(profile.reference) if profile.reference else None,
+        "use_state": profile.use_state,
+        "owner_user_id": profile.owner_user_id,
+        "visibility": profile.visibility,
+    }
+
+
+def _profile_reference_fields(data: dict[str, object], authorization: Authorization | None) -> dict[str, object]:
+    # Old payloads stay unchanged in SQLite. Missing provenance is not ownership.
+    reference = data.get("reference")
+    return {
+        "reference": ProfileReference(**reference) if reference is not None else None,
+        "use_state": data.get("use_state", "excluded" if authorization is not None and (
+            authorization.status in {"revoked", "expired"} or
+            (authorization.expires_at is not None and _as_utc(authorization.expires_at) <= utc_now())
+        ) else "available"),
+        "owner_user_id": data.get("owner_user_id"),
+        "visibility": data.get("visibility", "private"),
+    }
+
+
+def _profile_wav_duration(path: Path) -> float:
+    if path.suffix.lower() != ".wav":
+        raise ValueError("声音参考需要有效 WAV；视频来源需先明确派生音频")
+    try:
+        with wave.open(str(path), "rb") as audio:
+            rate, frames = audio.getframerate(), audio.getnframes()
+            if rate <= 0 or frames <= 0 or audio.getnchannels() not in {1, 2} or audio.getsampwidth() not in {1, 2, 3, 4}:
+                raise ValueError("声音参考 WAV 无有效音频")
+            duration = frames / rate
+            if not 1 <= duration <= 120:
+                raise ValueError("声音参考 WAV 时长必须在 1–120 秒之间")
+            if len(audio.readframes(frames)) != frames * audio.getnchannels() * audio.getsampwidth():
+                raise ValueError("声音参考 WAV 已截断")
+            return duration
+    except (EOFError, wave.Error) as exc:
+        raise ValueError("声音参考不是有效 PCM WAV") from exc
+
+
 def _person_profile_payload(person: PersonProfile) -> dict[str, object]:
     return {
         "id": person.id,
@@ -10379,8 +10607,9 @@ def _person_profile_payload(person: PersonProfile) -> dict[str, object]:
         "avatar_reference": person.avatar_reference,
         "background_capabilities": list(person.background_capabilities),
         "shot_capabilities": list(person.shot_capabilities),
-        "authorization_id": person.authorization.id,
-        "authorization_version": person.authorization.version,
+        "authorization_id": person.authorization.id if person.authorization else None,
+        "authorization_version": person.authorization.version if person.authorization else None,
+        **_profile_reference_payload(person),
     }
 
 
@@ -10395,8 +10624,10 @@ def _versioned_voice_profile_payload(voice: VersionedVoiceProfile) -> dict[str, 
         "reference_audio_path": voice.reference_audio_path,
         "reference_text": voice.reference_text,
         "model_id": voice.model_id,
-        "authorization_id": voice.authorization.id,
-        "authorization_version": voice.authorization.version,
+        "authorization_id": voice.authorization.id if voice.authorization else None,
+        "authorization_version": voice.authorization.version if voice.authorization else None,
+        "display_name": voice.display_name,
+        **_profile_reference_payload(voice),
     }
 
 
@@ -10945,13 +11176,36 @@ def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
         raise ValueError("终态失败或不可用预览必须包含结束时间、原因、影响和修复动作")
 
 
+def _validate_profile_reference_fields(profile) -> None:
+    if profile.use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
+        raise ValueError("档案使用状态无效")
+    if profile.visibility not in {"private", "shared"}:
+        raise ValueError("档案可见范围无效")
+    reference = profile.reference
+    if reference is None:
+        raise ValueError("新档案需要明确来源引用，不能猜测历史来源")
+    if profile.reference_issue is not None:
+        raise ValueError("历史参考未可靠映射，请先重新定位来源")
+    if reference.segment_id and not reference.asset_id:
+        raise ValueError("参考片段必须绑定素材")
+    if (reference.start_seconds is None) != (reference.end_seconds is None):
+        raise ValueError("参考范围必须同时包含起止时间")
+    if reference.start_seconds is not None:
+        if any(type(value) not in {int, float} or not math.isfinite(value)
+               for value in (reference.start_seconds, reference.end_seconds)):
+            raise ValueError("参考时间必须是有限数值")
+        if reference.start_seconds < 0 or reference.end_seconds <= reference.start_seconds:
+            raise ValueError("参考范围无效")
+
+
 def _validate_person_profile(person: PersonProfile) -> None:
     if not all(
         value.strip()
         for value in (person.id, person.workspace_id, person.display_name, person.version, person.avatar_reference)
     ):
         raise ValueError("人物档案缺少必要标识或形象引用")
-    if person.authorization.workspace_id != person.workspace_id:
+    _validate_profile_reference_fields(person)
+    if person.authorization is not None and person.authorization.workspace_id != person.workspace_id:
         raise ValueError("人物授权不属于当前工作区")
 
 
@@ -10961,18 +11215,19 @@ def _validate_versioned_voice_profile(voice: VersionedVoiceProfile) -> None:
         for value in (
             voice.id,
             voice.workspace_id,
-            voice.person_profile_id,
-            voice.person_version,
             voice.version,
             voice.reference_audio_path,
-            voice.reference_text,
-            voice.model_id,
         )
     ):
         raise ValueError("声音档案缺少必要标识或参考资料")
     if voice.language not in {"zh", "en", "zh-en"}:
         raise ValueError("声音语言必须是 zh、en 或 zh-en")
-    if voice.authorization.workspace_id != voice.workspace_id:
+    if bool(voice.person_profile_id) != bool(voice.person_version):
+        raise ValueError("人物关系必须同时指定人物和版本")
+    _validate_profile_reference_fields(voice)
+    if voice.reference is not None and not voice.display_name.strip():
+        raise ValueError("独立声音需要名称")
+    if voice.authorization is not None and voice.authorization.workspace_id != voice.workspace_id:
         raise ValueError("声音授权不属于当前工作区")
 
 

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from app.models import Episode, EpisodeStatus, utc_now
 from app.speech_timing import estimate_speech_seconds
-from app.avatar_lipsync import PronunciationEntry, VoiceProfile as VersionedVoiceProfile
+from app.avatar_lipsync import profile_use_failure, profile_cache_identity, PronunciationEntry, VoiceProfile as VersionedVoiceProfile
 from app.production import ProductionProfile, VoiceProfile
 from app.voice_clone import (
     MediaRuntimeFailure,
@@ -75,9 +75,7 @@ class NarrationGenerator:
         if voice_identity is not None:
             if voice_identity.workspace_id != workspace_id:
                 raise ValueError("声音版本不属于当前工作区")
-            if voice_identity.authorization.workspace_id != workspace_id:
-                raise ValueError("声音授权不属于当前工作区")
-            authorization_failure = voice_identity.authorization.failure_for(
+            authorization_failure = profile_use_failure(voice_identity,
                 content_type="voice", usage_scope="narration"
             )
             if authorization_failure is not None:
@@ -208,6 +206,7 @@ class NarrationGenerator:
         profile: ProductionProfile,
         voice_profile_id: str,
         voice_version: str | None = None,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> NarrationArtifact:
         inputs = repository.resolve_narration_inputs(
             workspace_id=workspace_id,
@@ -215,15 +214,14 @@ class NarrationGenerator:
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
-        authorization_failure = inputs.voice.authorization.failure_for(
+        authorization_failure = profile_use_failure(inputs.voice,
             content_type="voice",
             usage_scope="narration",
         )
         if authorization_failure is not None:
             raise ValueError(f"声音授权不可用：{authorization_failure}")
-        resolved_reference_audio_path = repository.resolve_workspace_media_reference(
-            workspace_id,
-            inputs.voice.reference_audio_path,
+        resolved_reference_audio_path = repository.resolve_voice_reference(
+            inputs.voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
         )
         if (
             not resolved_reference_audio_path.is_file()
@@ -274,7 +272,7 @@ class NarrationGenerator:
             raise ValueError("配音语言无效")
         if voice_identity.language not in {resolved_language, "zh-en"}:
             raise ValueError("所选声音版本未声明支持本次配音语言，请选择对应语言的声音版本")
-        authorization_failure = voice_identity.authorization.failure_for(
+        authorization_failure = profile_use_failure(voice_identity,
             content_type="voice", usage_scope="narration"
         )
         if authorization_failure is not None:
@@ -485,16 +483,7 @@ class NarrationGenerator:
             "script_id": script_id,
             "text": narration_text,
             "language": language or voice_identity.language,
-            "voice": {
-                "id": voice_identity.id,
-                "version": voice_identity.version,
-                "person_profile_id": voice_identity.person_profile_id,
-                "person_version": voice_identity.person_version,
-                "model_id": voice_identity.model_id,
-                "authorization_id": voice_identity.authorization.id,
-                "authorization_version": voice_identity.authorization.version,
-                "authorization_status": voice_identity.authorization.status,
-            },
+            "voice": profile_cache_identity(voice_identity),
             "pronunciation_dictionary": pronunciation_dictionary,
             "provider_model_id": self.provider.model_id,
             "segment_id": segment_id,
@@ -534,25 +523,8 @@ class NarrationGenerator:
             person_profile_id=voice_identity.person_profile_id if voice_identity else None,
             task_id=episode.id,
         )
-        versioned_identity = (
-            {
-                "id": voice_identity.id,
-                "version": voice_identity.version,
-                "person_profile_id": voice_identity.person_profile_id,
-                "person_version": voice_identity.person_version,
-                "model_id": voice_identity.model_id,
-                "authorization": {
-                    "id": voice_identity.authorization.id,
-                    "version": voice_identity.authorization.version,
-                    "status": voice_identity.authorization.status,
-                    "expires_at": voice_identity.authorization.expires_at.isoformat()
-                    if voice_identity.authorization.expires_at
-                    else None,
-                },
-            }
-            if voice_identity is not None
-            else legacy_voice_identity
-        )
+        versioned_identity = profile_cache_identity(voice_identity) if voice_identity is not None else legacy_voice_identity
+
         payload = (
             f"{episode.script.id}|{_episode_narration_text(episode)}|"
             f"{json.dumps(versioned_identity, ensure_ascii=False, sort_keys=True)}|"
@@ -582,6 +554,7 @@ class VoicePreviewService:
         voice_version: str | None = None,
         language: str | None = None,
         retry: bool = False,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -600,6 +573,19 @@ class VoicePreviewService:
             pronunciation_entries=inputs.pronunciation_entries,
             provider_model_id=self.provider.model_id,
         )
+        reference_error = None
+        try:
+            reference = repository.resolve_voice_reference(
+                voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+            )
+        except (ValueError, KeyError) as exc:
+            reference_error = str(exc)
+        # Recheck eligibility and source revision before reusing any successful preview.
+        reference_facts = ({"error": reference_error} if reference_error is not None else {
+            "size": reference.stat().st_size, "mtime_ns": reference.stat().st_mtime_ns,
+            "ctime_ns": reference.stat().st_ctime_ns,
+        })
+        identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "voice", identity)
         succeeded_reusable = not (
             existing is not None
@@ -620,8 +606,8 @@ class VoicePreviewService:
             person_version=voice.person_version,
             voice_profile_id=voice.id,
             voice_version=voice.version,
-            authorization_id=voice.authorization.id,
-            authorization_version=voice.authorization.version,
+            authorization_id=voice.authorization.id if voice.authorization else "",
+            authorization_version=voice.authorization.version if voice.authorization else "",
         )
         running, claimed = repository.claim_media_preview_run(
             candidate,
@@ -630,6 +616,10 @@ class VoicePreviewService:
         )
         if not claimed:
             return running
+        if reference_error is not None:
+            return self._finish(repository, running, status="blocked", reason="reference_audio_invalid",
+                                impact="原参考不可用于本次预览，未生成或复用音频。",
+                                repair_action=reference_error)
         if existing is not None and existing.status == "succeeded":
             return self._finish(
                 repository,
@@ -639,7 +629,7 @@ class VoicePreviewService:
                 impact="已记录的声音预览输出不可用，不能作为成功结果复用。",
                 repair_action="确认输出目录后显式重试声音预览。",
             )
-        authorization_failure = voice.authorization.failure_for(
+        authorization_failure = profile_use_failure(voice,
             content_type="voice",
             usage_scope="narration",
         )
@@ -661,6 +651,12 @@ class VoicePreviewService:
                 impact="请求语言与当前声音版本不一致，未生成音频。",
                 repair_action="选择与声音版本一致的语言后重试。",
             )
+        if not voice.reference_text.strip():
+            return self._finish(
+                repository, running, status="blocked", reason="reference_text_missing",
+                impact="原参考已保存，但缺少对应文字，未调用声音模型。",
+                repair_action="为该参考填写实际对应文字并保存新版本后再生成预览。",
+            )
         pronunciation_dictionary = _pronunciation_dictionary(
             entries=inputs.pronunciation_entries,
             workspace_id=workspace_id,
@@ -680,29 +676,6 @@ class VoicePreviewService:
                 reason=preflight_failure.reason,
                 impact=preflight_failure.impact,
                 repair_action=preflight_failure.repair_action,
-            )
-        try:
-            reference = repository.resolve_workspace_media_reference(
-                workspace_id,
-                voice.reference_audio_path,
-            )
-        except ValueError as exc:
-            return self._finish(
-                repository,
-                running,
-                status="failed",
-                reason="reference_audio_invalid",
-                impact="声音预览参考音频不在当前工作区已授权媒体根目录，未生成音频。",
-                repair_action=f"选择 workspace:// 媒体引用或已授权根内绝对路径后重试：{exc}",
-            )
-        if not reference.is_file() or reference.stat().st_size == 0:
-            return self._finish(
-                repository,
-                running,
-                status="failed",
-                reason="reference_audio_missing",
-                impact="声音预览缺少可用参考音频，未生成音频。",
-                repair_action="选择当前工作区已授权的非空参考音频。",
             )
         if not preview_text.strip():
             return self._finish(
@@ -921,14 +894,7 @@ def _voice_preview_identity(
         "voice_version": voice.version,
         "person_id": voice.person_profile_id,
         "person_version": voice.person_version,
-        "authorization": {
-            "id": voice.authorization.id,
-            "version": voice.authorization.version,
-            "status": voice.authorization.status,
-            "expires_at": voice.authorization.expires_at.isoformat()
-            if voice.authorization.expires_at
-            else None,
-        },
+        "identity": profile_cache_identity(voice),
         "voice_model_id": voice.model_id,
         "provider_model_id": provider_model_id,
         "language": language,
