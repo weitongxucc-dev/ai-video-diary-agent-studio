@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import styles from "./LlmProviderFields.module.css";
 import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
 
 type ProviderPreset = {
@@ -113,33 +114,35 @@ export function LlmProviderFields({
             {keyConfigured ? "已配置" : preset.apiKeyOptional ? "可选" : "未配置"}
           </span>
         </span>
-        <input
-          aria-label="模型 API Key"
-          autoComplete="off"
-          maxLength={512}
-          name="llm_api_key"
-          placeholder={keyConfigured ? "已配置 · 留空不修改" : "粘贴服务商提供的密钥"}
-          type="password"
-        />
+        <div className={styles.keyRow}>
+          <input
+            aria-label="模型 API Key"
+            autoComplete="off"
+            maxLength={512}
+            name="llm_api_key"
+            placeholder={keyConfigured ? "已配置 · 留空不修改" : "粘贴服务商提供的密钥"}
+            type="password"
+          />
+          {keyConfigured ? (
+            <span className="settings-field-actions">
+              {keyDeleteArmed ? (
+                <>
+                  <button hidden ref={keyDeleteSubmit} name="llm_key_action" type="submit" value="delete" />
+                  <HomeCardDialog title="删除连接密钥" onClose={() => setKeyDeleteArmed(false)} footer={<><button data-card-cancel onClick={() => setKeyDeleteArmed(false)} type="button">取消</button><button onClick={() => keyDeleteSubmit.current?.click()} type="button">确认删除密钥</button></>}>
+                    <p>删除此服务商在本机保存的密钥。之后需要重新填写，才能继续需要密钥的文字模型调用。</p>
+                  </HomeCardDialog>
+                </>
+              ) : (
+                <button className={styles.removeButton} onClick={() => setKeyDeleteArmed(true)} type="button">
+                  移除密钥
+                </button>
+              )}
+            </span>
+          ) : null}
+        </div>
         <small className="settings-field-helper">
           仅保存在这台电脑，不会显示完整内容。
         </small>
-        {keyConfigured ? (
-          <span className="settings-field-actions">
-            {keyDeleteArmed ? (
-              <>
-                <button hidden ref={keyDeleteSubmit} name="llm_key_action" type="submit" value="delete" />
-                <HomeCardDialog title="删除连接密钥" onClose={() => setKeyDeleteArmed(false)} footer={<><button data-card-cancel onClick={() => setKeyDeleteArmed(false)} type="button">取消</button><button onClick={() => keyDeleteSubmit.current?.click()} type="button">确认删除密钥</button></>}>
-                  <p>删除此服务商在本机保存的密钥。之后需要重新填写，才能继续需要密钥的文字模型调用。</p>
-                </HomeCardDialog>
-              </>
-            ) : (
-              <button onClick={() => setKeyDeleteArmed(true)} type="button">
-                删除已保存的密钥
-              </button>
-            )}
-          </span>
-        ) : null}
       </label>
 
       <label className="settings-field wide">

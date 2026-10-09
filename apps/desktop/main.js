@@ -1167,6 +1167,15 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  ipcMain.handle('open-file', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: '选择文件',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('open-wav-file', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],

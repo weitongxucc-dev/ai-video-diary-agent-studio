@@ -1,0 +1,13 @@
+.group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.group > legend {
+  padding: 0 0 12px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+}

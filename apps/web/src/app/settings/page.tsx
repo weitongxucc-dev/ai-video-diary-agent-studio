@@ -9,6 +9,7 @@ import { AppShell } from "@/components/AppShell";
 import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { LlmProviderFields } from "@/components/LlmProviderFields";
+import { AsrFields, FieldRow, type FieldDef } from "@/components/SettingsFields";
 import { ModelInstallPanel } from "@/components/ModelInstallPanel";
 import {
   getLocalModels,
@@ -59,28 +60,17 @@ type SectionDef = {
   tone: "blue" | "green" | "orange" | "purple";
 };
 
-type FieldDef = {
-  name: string;
-  label: string;
-  helper?: string;
-  kind: "text" | "secret" | "directory" | "textarea" | "select";
-  options?: { value: string; label: string }[];
-  defaultValue?: string;
-  placeholder?: string;
-  configured?: boolean;
-};
-
 const SECTIONS: SectionDef[] = [
   {
     id: "paths",
-    title: "本地目录",
+    title: "保存位置",
     description:
       "Obsidian、视频、剪映、数据库与本地模型都使用绝对路径；大模型建议放在空间充足的移动硬盘。",
     tone: "green",
   },
   {
     id: "asr",
-    title: "语音识别 (ASR)",
+    title: "听写设置",
     description:
       "默认本地 Whisper；只有主动选择腾讯云才会外发音频，失败不自动切换。",
     tone: "orange",
@@ -93,18 +83,6 @@ const SECTIONS: SectionDef[] = [
     tone: "purple",
   },
 ];
-
-function statusTone(configured: boolean): "green" | "red" {
-  return configured ? "green" : "red";
-}
-
-/**
- * 密钥类字段的徽章只说明「这一格填了没有」——这些服务（腾讯云、Product Hunt）
- * 没有服务状态线，任何「已配置」都只等于字段非空。这里不说「可用」。
- */
-function statusLabel(configured: boolean): string {
-  return configured ? "已填写" : "未填写";
-}
 
 function getSetting(
   settings: RuntimeSettingItem[],
@@ -151,7 +129,7 @@ const LLM_SERVICE_VIEWS: Record<
   available: {
     label: "最近调用成功",
     detail:
-      "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。",
+      "上一次真实调用成功返回了回复；这里只记录那次结果，不代表下一次调用一定成功。",
     nextStep:
       "下一步：改动地址、模型或密钥之后会退回「已配置·待验证」，需要重新验证一次；上次成功不保证本次可用。",
     tone: "available",
@@ -236,8 +214,8 @@ function buildFields(
 
   return {
     paths: [
-      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "text", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
-      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "text", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
+      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "file", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
+      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "file", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
       {
         name: "obsidian_vault_path",
         label: "Obsidian Vault 路径",
@@ -281,8 +259,8 @@ function buildFields(
       {
         name: "database_path",
         label: "SQLite 数据库",
-        helper: "存放创作内容、选题和反馈等结构化数据。",
-        kind: "directory",
+        helper: "选择已有的 SQLite 数据库文件，保存只更改使用位置，不会搬迁现有数据。",
+        kind: "file",
         defaultValue: valueOf("DATABASE_PATH"),
         placeholder: "/Users/you/.ai-video-diary/studio.db",
       },
@@ -312,7 +290,7 @@ function buildFields(
         options: [{ value: "whisper_cpp", label: "whisper.cpp（原生运行）" }, { value: "openai_whisper", label: "OpenAI Whisper（Python）" }],
       },
       {
-        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "text",
+        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_CLI_PATH"), helper: "选择 whisper.cpp 时使用；模型须为 GGML 格式。",
       },
       {
@@ -362,23 +340,23 @@ function buildFields(
       },
       {
         name: "local_whisper_python_path",
-        label: "Local Whisper Python",
+        label: "Python 程序文件",
         helper: "本地 Whisper 解释器绝对路径，例如 /opt/homebrew/bin/python3。",
-        kind: "text",
+        kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_PYTHON_PATH"),
         placeholder: "/opt/homebrew/bin/python3",
       },
       {
         name: "local_whisper_model_path",
-        label: "Local Whisper Model",
+        label: "听写模型文件",
         helper: "模型文件路径：whisper.cpp 使用 ggml .bin，Python 使用 .pt。",
-        kind: "text",
+        kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_MODEL_PATH"),
         placeholder: "/Users/you/.cache/whisper/medium",
       },
       {
         name: "local_whisper_language",
-        label: "Local Whisper Language",
+        label: "听写语言",
         helper: "auto 自动检测；也可指定 zh 中文或 en 英文。",
         kind: "text",
         defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "auto",
@@ -414,113 +392,6 @@ function buildFields(
   };
 }
 
-function FieldRow({ field }: { field: FieldDef }) {
-  if (field.kind === "select") {
-    return <label className="settings-field"><span>{field.label}</span>
-      <select aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
-        {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      {field.helper ? <small className="settings-field-helper">{field.helper}</small> : null}
-    </label>;
-  }
-  if (field.kind === "secret") {
-    return (
-      <label className="settings-field">
-        <span>
-          {field.label}
-          <span
-            className={`settings-secret-badge ${statusTone(Boolean(field.configured))}`}
-          >
-            {statusLabel(Boolean(field.configured))}
-          </span>
-        </span>
-        <input
-          aria-label={field.label}
-          autoComplete="off"
-          maxLength={field.name === "deepseek_api_key" ? 256 : 512}
-          minLength={field.name === "deepseek_api_key" ? 20 : 4}
-          name={field.name}
-          pattern={
-            field.name === "deepseek_api_key"
-              ? "^sk-[A-Za-z0-9_-]{8,}$"
-              : undefined
-          }
-          placeholder={field.placeholder}
-          title={
-            field.name === "deepseek_api_key"
-              ? "DeepSeek API Key 必须以 sk- 开头，长度 ≥ 20"
-              : `${field.label} 至少 4 字符`
-          }
-          type="password"
-        />
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.kind === "directory") {
-    return (
-      <label className="settings-field">
-        <span>{field.label}</span>
-        <div className="settings-field-row">
-          <input
-            aria-label={field.label}
-            maxLength={512}
-            name={field.name}
-            placeholder={field.placeholder}
-            title="支持 POSIX 与 Windows 绝对路径，留空保持现有值"
-            type="text"
-            defaultValue={field.defaultValue ?? ""}
-          />
-          <DirectoryPickerButton targetName={field.name} />
-        </div>
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.kind === "textarea") {
-    return (
-      <label className="settings-field wide">
-        <span>{field.label}</span>
-        <textarea
-          aria-label={field.label}
-          maxLength={2000}
-          name={field.name}
-          rows={4}
-          title="每行一个以 http(s):// 开头的 URL"
-          defaultValue={field.defaultValue ?? ""}
-        />
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  return (
-    <label className="settings-field">
-      <span>{field.label}</span>
-      <input
-        aria-label={field.label}
-        maxLength={512}
-        minLength={1}
-        name={field.name}
-        placeholder={field.placeholder}
-        title={`${field.label} 最多 512 字符`}
-        type="text"
-        defaultValue={field.defaultValue ?? ""}
-      />
-      {field.helper ? (
-        <small className="settings-field-helper">{field.helper}</small>
-      ) : null}
-    </label>
-  );
-}
 
 type SettingsCategory =
   "model" | "production" | "voices" | "paths" | "asr" | "sources";
@@ -576,11 +447,9 @@ export default async function SettingsPage({
             <div>
               <dt>语音识别</dt>
               <dd>
-                {status?.asr.configured
-                  ? status.asr.engine_model_type
-                  : status?.asr.local_whisper_configured
-                    ? "本地 Whisper"
-                    : "未配置"}
+                {!status ? "暂时无法读取配置" : valueOfSetting(settingItems, "ASR_PROVIDER") === "tencentcloud"
+                  ? `腾讯云 · ${status.asr.configured ? "已配置·待验证" : "未配置"}`
+                  : `本地 Whisper · ${status.asr.local_whisper_configured ? "已配置·待验证" : "未配置"}`}
               </dd>
             </div>
             <div>
@@ -705,7 +574,7 @@ export default async function SettingsPage({
                     />
                   </label>
                   <label className="settings-field">
-                    <span>品牌名称</span>
+                    <span>品牌名称（可选）</span>
                     <input
                       name="brand_name"
                       defaultValue={profile.brand_name}
@@ -740,18 +609,24 @@ export default async function SettingsPage({
                     </small>
                   </label>
                   <label className="settings-field">
-                    <span>品牌模板</span>
+                    <span>品牌样式备注（可选）</span>
                     <input
                       name="brand_template_name"
                       defaultValue={profile.brand_template_name}
+                      maxLength={80}
+                      placeholder="例如：公司产品介绍风格"
                     />
+                    <small className="settings-field-helper">记录常用样式的名称；保存备注不会自动改变画面。</small>
                   </label>
                   <label className="settings-field">
-                    <span>字幕风格</span>
+                    <span>字幕偏好备注（可选）</span>
                     <input
                       name="subtitle_style"
                       defaultValue={profile.subtitle_style}
+                      maxLength={240}
+                      placeholder="例如：白字黑边，重点词用黄色"
                     />
+                    <small className="settings-field-helper">记录希望的字幕样式；目前不会自动应用到成片字幕，请在任务中调整字幕。</small>
                   </label>
                 </div>
                 <input
@@ -992,7 +867,7 @@ export default async function SettingsPage({
                       {section.description}
                     </p>
                     <div className="settings-grid">
-                      {sectionFields.map((field) => (
+                      {section.id === "asr" ? <AsrFields fields={sectionFields} /> : sectionFields.map((field) => (
                         <FieldRow field={field} key={field.name} />
                       ))}
                     </div>

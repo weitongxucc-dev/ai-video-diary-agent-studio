@@ -126,6 +126,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
   const completedTasks = tasks.filter((task) => task.stage_status === "completed")
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
   const readyOutputTasks = tasks.filter((task) => task.output_ready && task.stage_status !== "completed");
+  const dependencyBlockers = foundation?.readiness.blockers.filter(blocker => blocker.code !== "brand_profile_missing") ?? [];
   const example = dashboard ? summarizeExample(dashboard) : null;
   const home = live?.data ?? null;
   // 整机计数按服务端给的 key 口径显示；没有真实载体的项由 unknown 说明原因，
@@ -165,7 +166,7 @@ export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: 
   return <div className={styles.home}>
     <header className={styles.heading}><div><h1>工作空间总览</h1><p>{dashboard?.scopeLabel ?? "当前工作区 · 数据按已接入来源展示"}</p></div>{dashboard ? <span className={styles.exampleBadge}>示例数据 · 不连接真实服务</span> : null}</header>
     {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div>
-      : !foundation.readiness.ready ? <div className={styles.readiness}><strong>{readinessLabel(foundation.readiness.blockers[0]?.code)}</strong><Link href="/health">查看原因</Link></div> : null}
+      : !foundation.readiness.ready && dependencyBlockers.length ? <div className={styles.readiness}><strong>{readinessLabel(dependencyBlockers[0]?.code)}</strong><Link href="/health">查看原因</Link></div> : null}
     {!dashboard ? <section className={styles.taskGroups} aria-label="创作任务状态分组">
       <div className={styles.taskGroupsHeading}><h2>创作任务</h2><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>
       {home ? <details className={styles.metaDetails}><summary>整机任务与处理阶段</summary><p>整机状态：处理中 {home.device_queue.running ?? "未知"} · 排队 {home.device_queue.queued ?? "未知"}{Object.keys(home.device_queue.counts).length

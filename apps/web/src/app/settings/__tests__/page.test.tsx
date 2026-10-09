@@ -29,7 +29,7 @@ vi.mock("@/components/AppShell", () => ({
 vi.mock("@/components/FormErrorBanner", () => ({
   FormErrorBanner: ({ children }: { children: ReactNode }) => <form>{children}</form>,
 }));
-vi.mock("@/components/DirectoryPickerButton", () => ({ DirectoryPickerButton: () => null }));
+vi.mock("@/components/DirectoryPickerButton", () => ({ DirectoryPickerButton: ({ kind = "directory", targetName }: { kind?: string; targetName: string }) => <button data-picker-kind={kind} data-target={targetName}>选择{kind === "file" ? "文件" : "目录"}</button> }));
 vi.mock("@/components/ModelInstallPanel", () => ({ ModelInstallPanel: () => null }));
 
 import SettingsPage from "@/app/settings/page";
@@ -208,4 +208,19 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
       view.unmount();
     }
   });
+});
+
+
+it("routes SQLite, executable and model paths to file pickers while retaining directory pickers", async () => {
+  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("已填写，未验证"));
+  const view = render(await SettingsPage({ searchParams: Promise.resolve({ section: "paths" }) }));
+  for (const name of ["database_path", "understanding_runtime_python_path", "native_ocr_worker_path"]) {
+    expect(view.container.querySelector(`[data-target="${name}"]`)).toHaveAttribute("data-picker-kind", "file");
+  }
+  expect(view.container.querySelector('[data-target="video_inbox_path"]')).toHaveAttribute("data-picker-kind", "directory");
+  view.unmount();
+  const asr = render(await SettingsPage({ searchParams: Promise.resolve({ section: "asr" }) }));
+  for (const name of ["local_whisper_python_path", "local_whisper_cli_path", "local_whisper_model_path"]) {
+    expect(asr.container.querySelector(`[data-target="${name}"]`)).toHaveAttribute("data-picker-kind", "file");
+  }
 });

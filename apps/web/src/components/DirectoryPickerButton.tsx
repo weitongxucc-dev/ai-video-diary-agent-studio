@@ -3,8 +3,10 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import {
   hasDirectoryPicker,
+  hasFilePicker,
   hasWavFilePicker,
   pickDirectory,
+  pickFile,
   pickWavFile,
 } from "@/lib/directoryPicker";
 
@@ -19,7 +21,7 @@ type WritebackProps =
   | { onPick?: never; targetName: string };
 
 type DirectoryPickerButtonProps = WritebackProps & {
-  kind?: "directory" | "wav";
+  kind?: "directory" | "file" | "wav";
 };
 
 const BROWSER_HINT = "桌面端可选择目录；浏览器中请手动输入绝对路径。";
@@ -35,11 +37,12 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
   // Determined after mount so SSR output matches the first client render;
   // the desktop shell never sees the browser hint, and plain browsers get
   // the hint as soon as hydration runs.
+  const [error, setError] = useState<string | null>(null);
   const [showBrowserHint, setShowBrowserHint] = useState(false);
 
   useEffect(() => {
     setShowBrowserHint(
-      props.kind === "wav" ? !hasWavFilePicker() : !hasDirectoryPicker(),
+      props.kind === "wav" ? !hasWavFilePicker() : props.kind === "file" ? !hasFilePicker() : !hasDirectoryPicker(),
     );
   }, [props.kind]);
 
@@ -47,7 +50,9 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
     // React clears `currentTarget` once dispatch ends, so capture it before
     // awaiting the native dialog.
     const button = event.currentTarget;
-    const result = props.kind === "wav" ? await pickWavFile() : await pickDirectory();
+    setError(null);
+    const result = props.kind === "wav" ? await pickWavFile() : props.kind === "file" ? await pickFile() : await pickDirectory();
+    if (result.kind === "failed") setError("暂时无法打开文件选择窗口，请重试或手动输入路径。");
     if (result.kind !== "picked") {
       return;
     }
@@ -70,10 +75,11 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
         onClick={handleClick}
         type="button"
       >
-        {props.kind === "wav" ? "选择 WAV" : "选择目录"}
+        {props.kind === "wav" ? "选择 WAV" : props.kind === "file" ? "选择文件" : "选择目录"}
       </button>
+      {error ? <small role="alert">{error}</small> : null}
       {showBrowserHint ? (
-        <small className="settings-field-helper">{BROWSER_HINT}</small>
+        <small className="settings-field-helper">{props.kind === "file" ? "桌面端可选择文件；浏览器中请手动输入绝对路径。" : BROWSER_HINT}</small>
       ) : null}
     </span>
   );

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CreationTask, HomeAggregation } from "@/lib/types";
+import type { CreationTask, HomeAggregation, ProductionFoundation } from "@/lib/types";
 import { HomeWorkspace, TrendChart, type HomeDashboardExample } from "@/components/HomeWorkspace";
 
 const routerPush = vi.fn();
@@ -270,4 +270,14 @@ describe("HomeWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     expect(onRetry).toHaveBeenCalled();
   });
+});
+
+
+it("does not warn about optional brand information but retains other dependency warnings", () => {
+  const foundation = { readiness: { ready: false, blockers: [{ code: "brand_profile_missing", message: "品牌" }] } } as ProductionFoundation;
+  const view = render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+  expect(screen.queryByText("品牌未设置")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "查看原因" })).not.toBeInTheDocument();
+  view.rerender(<HomeWorkspace foundation={{ ...foundation, readiness: { ...foundation.readiness, blockers: [...foundation.readiness.blockers, { code: "voice_model_not_ready", message: "声音模型" }] } }} tasks={[]} />);
+  expect(screen.getByRole("link", { name: "查看原因" })).toHaveAttribute("href", "/health");
 });
