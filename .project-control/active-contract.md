@@ -35,9 +35,12 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI-IMPLEMENT：会话共同机制修正 | 定位task_087deec80e9a / ctx_5664c1ed76fa已succeeded并retain；以下新实施范围 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI-IMPLEMENT：会话共同机制修正 | task_1ad9935077fa / ctx_f2002033bb68；以下新实施范围 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B：声音/人物纵向根因核实 | task_d4a8b44a7fda / ctx_06b5564d9958；以下具名只读定位；108运行权结束；99脏树保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B-CORE：人物声音同一持久契约 | 定位task_d4a8b44a7fda / ctx_06b5564d9958已succeeded并retain；99脏树保留 |
+| C / arrowworm | `/Users/Zhuanz/orca/workspaces/main/arrowworm`；`term_d53c0c65-39c8-4edd-af2c-deeb0a842718` | QA-V2-C：模板与知识录入闭环 | 以下独占消费者；原协议树保留 |
+| D / foxface | `/Users/Zhuanz/orca/workspaces/main/foxface`；`term_348145c1-121a-40ef-825a-c0d41739ff88` | QA-V2-D：设置与文件选择契约 | 以下独占消费者；原命名树保留 |
+| E / integration | `/private/tmp/main-controller-20261007/creation-wave/integration`；`term_f37fee2b-1725-4d4e-bdda-e2ac2271d8e4` | QA-V2-E：任务历史故障与一致性复核 | 以下只读/隔离复现；旧集成树不作为候选 |
 
 ## 当前波次：实机v2累计整改（MAIN-REVIEWV2-20261009）
 
@@ -61,11 +64,37 @@ UI是纵向实施及退役负责人，从原clean6d7b0ada建立`codex/review-v2-
 
 owned证据`/tmp/main-acceptance-20261009/review-v2-conversation/`。最小验证：两处Composer即时/流式/下一草稿/安全渲染/复制/工具顺序/未知命令；服务端会话成员空间隔离与范围绑定、历史/草稿刷新恢复、轮次错误/取消与实际受控子进程释放、只读历史兼容。允许已有依赖专项、tsc及隔离测试DB，不运行真实用户DB迁移、Pi/Key、个人素材/模型、账号/GUI/常驻服务或打包。新增必要表/字段只能在可丢弃测试DB验证，原数据保留与旧写者退役有负向证据。交clean候选、净diff、命令能力表、逐ID证据和未验项；源码通过后主控一次集成及具名客户端补验，未完成真实目标不得关闭Issue或称MIGRATION_ACCEPTED。
 
-### QA-V2-B：F01/F02人物声音完整路径根因（定位任务）
+### QA-V2-B-CORE：人物声音同一持久契约（MAIN-REVIEWV2-PROFILES）
 
-纵向负责人B，同时跟完两条相关资源流程；先定向只读准确6d7b0ada的PeopleAndVoiceWorkspace、settings声音入口/actions、lib/api/types、ProfilesRepository及person/voice引用解析、媒体预览/能力、任务声音/人物选择直接消费者和desktop文件选择桥。main产品§2.1/§2.2/§2.5/§2.6、领域§2.4/§3/§4、DESIGN§5.4与auth成员对象边界为准。保护pipefish四文件脏树，不切换/提交/复活99或108。来源F01/F02、N18–N21/N11/N36、H-B019–B022；只按报告增量及相关证据定位，不广读历史。
+定位报告`/tmp/main-acceptance-20261009/review-v2-profiles/report.md`已确认UI/API/ProductionRepository/预览/任务贯穿旧必填人物与逐版本授权、设置旧表写端点410。B是F01/F02整个纵向和退役负责人，定位权结束；产品§2.1/§2.2/§2.5/§2.6、领域§2.4/§3/§4新增参考/独立声音条款、DESIGN§5.4新录入条款、auth成员/共享对象边界冻结。用户进一步授权主控自行作范围内判断，并授权复用C/D/E三个可见线程；无人数据、不共享新权限。
 
-owned仅`/tmp/main-acceptance-20261009/review-v2-profiles/`报告。追踪参考输入→保存版本→列表重开→真实预览→任务选择，确认旧审核/逐条授权/声音人物依赖分别来自UI还是后端，并核独立声音与设置声音是否相同对象。给最小可实施纵向改动、退役目标和精确owned候选；保留use_state、来源范围、媒体有效性与真实权限，登记与生成能力分开。不把未配置模型变成参考登记阻断；不以删除所有校验修复。仅只读公开已装解码/模型接口，不跑媒体、模型、Pi/Key/服务/GUI/构建或读取真实档案；用户个人样本/真实克隆/口型仍未授权。若持久字段必须迁移，先交必要方案，不运行真实迁移。尽快报告可实施的闭环边界；结案后retain，主控新Dispatch安排源码实现。
+分两次互斥源码接续：本单先实现持久与模型直接消费者；待UI交付会话共享入口、D交付设置页后，B基于主控组合候选取得main.py/schemas/Web的第二单，继续跟完录入→保存→重开→预览→任务引用。第一单不单独集成或宣告完整流程，禁止两套可写声音事实长期共存。旧声音410保持；历史数据只读保留，新默认引用只能绑定版本化档案。
+
+B在owned新`/tmp/main-acceptance-20261009/review-v2-profile-core/candidate`从准确6d7b0ada本地clone --shared --no-checkout并建`codex/review-v2-profile-core-20261009`，不修改或切换原pipefish。唯一产品owned：production.py仅人物/版本化声音持久、参考范围解析/默认引用及其直接资格；avatar_lipsync.py的两Profile/真实输入/预览消费者、narration.py、creation_execution.py仅声音与人物独立选择直接消费者；database_migrations.py仅确需的增量/历史payload映射；直接test_media_profile_repository/test_avatar_lipsync/test_narration_commands/test_creation_execution及必要一个本单专项。main.py/schemas.py、全部Web、桌面、assistant及其他产品路径当前禁止写。UI不写production.py/database_migrations.py/上述媒体模块，D独占settings/page.tsx和desktop选择桥。
+
+新参考默认available，独立声音可在无人无模型条件下保存有效WAV参考，人物可保存合法素材/范围；use_state与来源限制分别核实，不能把源的限制丢失到一个宽松枚举。人物关系若填写必须成对且指向同空间有效版本，0%人物旁白不反查人物或口型。既有原片与生成结果、声音版本、真实模型/媒体/设备许可继续区分，登记不偷跑生成。沿现有versioned JSON/Repository保存，不另建档案库；新增字段仅在可丢弃DB验证。不运行真实库迁移或自动复制原件。
+
+历史处理冻结：已有明确use_state、来源限制和共享撤销优先；旧授权记录明示revoked/expired的限制不自动升级available，不删除历史证明；缺默认权利人/证据或pending本身不构成新导入的强制证明门槛。不能凭缺owner推定当前成员拥有旧私有素材，所有真实读取仍须现有成员/共享及安全根边界。失联、无有效源范围或不能可靠映射的历史记录保留并说明重新定位，不猜另一声音或改用户默认；若映射需要额外产品判断，交准确事实，主控自行决策。
+
+最小直接正证：合成WAV合法导入/声音无人无模型登记→GET→重开同版本、合法人物范围引用、默认版本引用与独立旁白消费者；负证：无效媒体/越界/跨空间、实际主动限制/过期共享、旧版本不可变、失联引用不称可生成、生成失败不伪成功。允许隔离测试DB、测试内无秘密受控替身和标准库合成WAV；仅必要时本任务自有合成媒体根的短FFmpeg/FFprobe，不碰个人原件或启动模型/Pi/Key/账号。不开常驻服务/GUI/构建/外发，不新增依赖、资源调度框架或弱化真实授权检查。交clean候选、净diff、明确API/Web后续差额与退役矩阵，现阶段证据仅源码/隔离持久，不关闭#105。
+
+### QA-V2-C：模板与知识录入闭环（MAIN-REVIEWV2-ENTRY）
+
+复用用户新授权arrowworm终端；原协议讨论与clean树保留。本单从6d7b0ada复制干净源码到owned`/tmp/main-acceptance-20261009/review-v2-entry/candidate`的新分支，不在旧协议树施工。先核#109/#110与N15–N17/N22–N24及H-B012/H-D006/D008/L11，main产品§3/§6/§10、领域§2/§9.1、DESIGN§4.2/§5.3/§5.6/§5.9为准。可独占改TemplateLibraryWorkspace.tsx/.module.css、app/templates/page.tsx、app/sources/page.tsx及该页局部组件/样式和上述直接测试；不改AppShell/共享浮卡底座、actions.ts、lib/api/types、main.py/schema、settings或其他页面。真实现有提交方法复用，不另造写接口。
+
+确认后直接修：知识按粘贴/文件/网页的真实意图收起非当前表单，持续订阅独立高级入口；不支持平台改非交互说明或真实说明入口，文件未选明确就地状态/校验。模板详情内绑定所选版本的使用出口，正文和底栏有效；真实视觉样式才给效果预览，仅文案结构给标示示例的内容/结构预览，不拿示意当成片。N24按当前多类目标用户保留技术创作者并指出/补既有可用结构，不能只造空数量；若模板catalog必须修改后端，先报准确唯一owned请求，不自写共享接口。最小专项与tsc，必要截图先报可执行入口；不跑真实服务/Pi/媒体/Key/账号/GUI/打包或用户库。交完整消费者差额、来源逐项状态、clean候选及未验；不以源码PASS关闭Issue。
+
+### QA-V2-D：设置与文件选择契约（MAIN-REVIEWV2-SETTINGS）
+
+复用用户新授权foxface终端，原命名树保持；从6d7b0ada到owned`/tmp/main-acceptance-20261009/review-v2-settings/candidate`新分支。纵向核#108来源U07/N29–N32的有效服务配置/状态来源和文件型消费者，main产品§2.5/§2.6、DESIGN§4.4/§5.9、架构§2及desktop README直接边界为准。唯一owned：settings/page.tsx非声音部分及现有设置字段/PathPicker组件、desktop main.js/preload.js仅原生文件/目录选择契约、health/page.tsx、首页品牌消费者仅若不在UI AppShell/HomeComposer文件、直接专项；局部样式只在owned文件/新模块，不改global CSS或UI持有文件。settings声音旧表消费者留待B接续，D交付后整页写权明确转B；不能两人同时写页面。
+
+SQLite字段kind:directory为源码已确认错误，修同类文件型选择对象与取消语义，不替换真实DB或运行迁移；听写按本地/云、Python/cpp选择显示真实对应字段，保留切换配置。制作偏好按实际消费说明字段含义，不造未接通预览。品牌若可选不作依赖告警；需要补齐时直达真实设置。N32沿当前真正有效配置定位，禁止凭最近成功捏造当前健康；若原因在main.py/API schema只报告精确差额交UI当前唯一写者，不前端猜测或只删告警。最小既有专项/tsc/桌面syntax，原生取消/文件选回读留同候选GUI实证；不得改用户配置/Key/数据库、服务/Pi/模型/媒体/账号/GUI/打包/共享权威/远端。交clean候选、源码根因、所有受影响消费者、后续API所需接线及未验。
+
+### QA-V2-E：任务历史故障与对象一致性核验（MAIN-REVIEWV2-TASK-AUDIT）
+
+复用用户新授权integration终端，不把其旧集成树当产品候选、不切换/改树。只读准确6d7b0ada及#107/#112对应H-B001–B017/B025、H-L01–L04/L06/L09/L10/DEEP-07和历史风险，main产品§2.2–2.4/§9/§11、领域§5–§8、DESIGN§4.4/§5.5/§5.8为准。先核分页读取/字幕503原动作、30秒结构计划、清空说明系统标签副作用、发布选择对象与预检/提交绑定；再核31条以上历史首屏和0%人物无关环境。不是整仓库健康审计，不遍历用户输出/所有日志。
+
+仅owned`/tmp/main-acceptance-20261009/review-v2-task-audit/`报告及最小可复现证据；产品写权为零。允许准确候选离线已有专项/隔离TestClient、可丢弃SQLite、纯合成成员/文本/测试fixture；不seed“实际成功”的证明，受控替身不能冒称真实字幕或成片。用户ZIP内history中指定旧实机报告/疑似Bug台账仅定向溯源，历史状态保留，不用旧权限施工。无常驻服务/Pi/Key/真实媒体/模型/发布/用户数据操作；不构建/改共享接口。回报各源ID确认/未复现/已改善、准确共同原因、当前写者涉及文件和最小后续修正，交主控串行转交，不能按UI/B未受影响成果要求重测。若终端实际额度中断，保留报告与当前状态，不创建替代窗格或重复Dispatch。
 
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
