@@ -3,3 +3,9 @@
 .diagnostics { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 .diagnostics > summary { cursor: pointer; }
 .diagnostics p { margin-block: 6px; }
+.repairActions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 8px; }
+.draftNotice { color: var(--text-2); font-size: 12px; }
+.returnEntry { display: inline-flex; align-items: center; font-size: 12px; }
+.returnEntry button { padding: 5px 8px; border: 1px solid var(--border-1); border-radius: 8px; color: var(--text-1); background: var(--surface-1); cursor: pointer; }
+.returnEntry button:disabled { opacity: .6; cursor: wait; }
+.returnEntry button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

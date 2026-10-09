@@ -39,6 +39,7 @@ import {
   type CSSProperties,
 } from "react";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
@@ -419,6 +420,7 @@ export function AppShell({
             {toolbar ?? <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
               <ToolbarLocation pathname={pathname} />
             </Suspense>}
+            <Suspense fallback={null}><PreflightDraftReturn /></Suspense>
           </div>
           <div className="desktop-toolbar__actions">
             <button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></button>

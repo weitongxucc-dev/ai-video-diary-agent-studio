@@ -12,6 +12,7 @@ import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/li
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import ui from "./CreateProductionTaskForm.module.css";
+import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, validDraftId, type DraftScope, type PreflightDraftFields } from "@/lib/preflight-draft";
 
 // These fields are returned by MaterialSegmentMatchResponse; the shared Web type omits them.
 type PreflightMatch = CreationPlanPreview["material_matches"][number] & { match_tier?: string; asset_file_name?: string };
@@ -30,6 +31,7 @@ type CreateProductionTaskFormProps = {
   autoFocus?: boolean;
   initialGoal?: string;
   assignLocation?: (url: string) => void;
+  draftId?: string;
 };
 
 type FormError = {
@@ -74,24 +76,24 @@ function stateLabel(ready: boolean) {
   return ready ? "已就绪" : "不可用";
 }
 
-export function PreflightFacts({ preview }: { preview: CreationPlanPreview }) {
+export function PreflightFacts({ preview, voices = [], people = [], onRepair, disabled = false }: { preview: CreationPlanPreview; voices?: VoiceProfile[]; people?: PersonProfile[]; onRepair?: (href: string) => void; disabled?: boolean }) {
   const matches = preview.material_matches as PreflightMatch[];
   return (
     <div className="creation-plan-facts" aria-label="可用内容检查结果">
       <section>
         <header><SearchCheck size={16} /><div><span>资料与信息源</span><strong>{preview.knowledge_references.length + preview.source_references.length} 条已纳入检查</strong></div></header>
-        {preview.knowledge_references.length ? <ul>{preview.knowledge_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>{item.title}</strong><span>{item.authorization} · {item.ownership}</span></li>)}</ul> : null}
-        {preview.source_references.length ? <ul>{preview.source_references.map((item) => <li key={item.id}><strong>{item.title}</strong><span>{item.source_label} · {item.license}</span></li>)}</ul> : null}
+        {preview.knowledge_references.length ? <ul>{preview.knowledge_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>{item.title}</strong><span>已纳入本次资料检查</span><details className={ui.diagnostics}><summary>资料引用诊断</summary><p>{item.id} · {item.version}</p><p>{item.authorization || "未返回证明字段"} · {item.ownership || "未返回归属字段"}</p></details></li>)}</ul> : null}
+        {preview.source_references.length ? <ul>{preview.source_references.map((item) => <li key={item.id}><strong>{item.title}</strong><span>{item.source_label}</span><details className={ui.diagnostics}><summary>来源引用诊断</summary><p>{item.id} · {item.license || "未返回证明字段"}</p></details></li>)}</ul> : null}
         {!preview.knowledge_references.length && !preview.source_references.length ? <p>本次检查没有返回资料或信息源。</p> : null}
       </section>
       <section>
         <header><ShieldCheck size={16} /><div><span>素材候选</span><strong>{matches.length} 个检索候选</strong></div></header>
         <p>候选按主题、词语或结构条件检索，需在选片时核对内容与使用范围。</p>
-        {matches.length ? <ul>{matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`}><strong>{matchTierLabel(item.match_tier)}</strong><span>{item.reasons.join("；")}</span><details className={ui.diagnostics}><summary>候选诊断</summary><p>引用：{item.asset_ref} · {item.segment_ref}</p><p>层级：{item.match_tier ?? "未返回"} · 启发分值：{item.score}（用于排序，不是适配概率）</p>{item.asset_file_name ? <p>文件：{item.asset_file_name}</p> : null}</details></li>)}</ul> : <p>当前目标没有返回检索候选。<a href="/library">前往素材库补充内容</a></p>}
+        {matches.length ? <ul>{matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`}><strong>{matchTierLabel(item.match_tier)}</strong><span>{item.reasons.join("；")}</span><details className={ui.diagnostics}><summary>候选诊断</summary><p>引用：{item.asset_ref} · {item.segment_ref}</p><p>层级：{item.match_tier ?? "未返回"} · 启发分值：{item.score}（用于排序，不是适配概率）</p>{item.asset_file_name ? <p>文件：{item.asset_file_name}</p> : null}</details></li>)}</ul> : <p>当前目标没有返回检索候选。{onRepair ? <button type="button" disabled={disabled} onClick={() => onRepair("/library")}>前往素材库补充内容</button> : <a href="/library">前往素材库补充内容</a>}</p>}
         {matches.length > 4 ? <p>当前展示前 4 个，检查共返回 {matches.length} 个候选。</p> : null}
         <details className={ui.diagnostics}><summary>素材计数与筛选口径</summary><p>本次可自动选用：{preview.approved_asset_count} 个素材 · {preview.approved_clip_count} 个补充片段；检索候选与可用计数分别核验。</p><p>{materialSummary(preview.material_rule_summary)}</p></details>
-        {preview.selected_voice ? <><p>本次检查已选择声音，适用语言：{preview.selected_voice.language}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>模型：{preview.selected_voice.model_id}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
-        {preview.selected_person ? <p>本次人物：{preview.selected_person.profile_id} · {preview.selected_person.version}（与声音独立选择）</p> : null}
+        {preview.selected_voice ? <><p>本次声音：{voices.find(item => item.id === preview.selected_voice?.profile_id && item.version === preview.selected_voice?.version)?.display_name ?? "已固定声音版本"}，适用语言：{preview.selected_voice.language}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>模型：{preview.selected_voice.model_id}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
+        {preview.selected_person ? <><p>本次人物：{people.find(item => item.id === preview.selected_person?.profile_id && item.version === preview.selected_person?.version)?.display_name ?? "已固定人物版本"}（与声音独立选择）</p><details className={ui.diagnostics}><summary>人物引用诊断</summary><p>{preview.selected_person.profile_id} · {preview.selected_person.version}</p></details></> : null}
         {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {item.language}</span></li>)}</ul> : null}
       </section>
       <section>
@@ -103,9 +105,17 @@ export function PreflightFacts({ preview }: { preview: CreationPlanPreview }) {
   );
 }
 
-export function Blockers({ preview }: { preview: CreationPlanPreview }) {
+function repairEntries(reason: string, stage: string): { href: string; label: string }[] {
+  if (reason === "template_voice_unavailable") return [{ href: "/profiles", label: "检查声音版本" }, { href: "/templates", label: "重新选择模板版本" }];
+  if (reason === "content_sources_missing") return [{ href: "/knowledge", label: "补充知识资料" }, { href: "/sources", label: "管理信息源" }];
+  if (["approved_material_clips_missing", "template_material_matches_missing"].includes(reason)) return [{ href: "/library", label: "补充素材" }];
+  if (["voice_model_unavailable", "person_render_unavailable"].includes(reason)) return [{ href: "/health", label: "检查本地能力" }, { href: "/settings", label: "检查连接设置" }];
+  if (stage === "narration" || stage === "avatar_lipsync" || stage === "person_lipsync") return [{ href: "/profiles", label: stage === "narration" ? "检查声音版本" : "检查人物参考" }];
+  return [];
+}
+export function Blockers({ preview, onRepair, disabled = false }: { preview: CreationPlanPreview; onRepair?: (href: string) => void; disabled?: boolean }) {
   if (!preview.blockers.length) return null;
-  return <section className="creation-plan-blockers" aria-label="待处理事项"><header><AlertCircle size={17} /><div><span>需要处理</span><h3>{preview.blockers.length} 项待处理</h3></div></header><div>{preview.blockers.map((item, index) => <article key={`${item.reason}-${index}`}><strong>{item.impact}</strong><p>受影响阶段：{stageLabel(item.stage)}</p><p>怎么处理：{item.repair_action}</p><span className={item.blocks_confirmation ? "is-blocking" : ""}>{item.blocks_confirmation ? "阻止创建任务" : `不阻止创建；进入${stageLabel(item.stage)}前需处理`}</span><details className={ui.diagnostics}><summary>阻断诊断</summary><p>{item.reason} · {item.stage}</p></details></article>)}</div></section>;
+  return <section className="creation-plan-blockers" aria-label="待处理事项"><header><AlertCircle size={17} /><div><span>需要处理</span><h3>{preview.blockers.length} 项待处理</h3></div></header><div>{preview.blockers.map((item, index) => <article key={`${item.reason}-${index}`}><strong>{item.reason === "template_voice_unavailable" ? "模板指定的固定声音版本不可用，未替换为其他声音。" : item.impact}</strong><p>受影响阶段：{stageLabel(item.stage)}</p><p>怎么处理：{item.repair_action}</p><span className={item.blocks_confirmation ? "is-blocking" : ""}>{item.blocks_confirmation ? "阻止创建任务" : `不阻止创建；进入${stageLabel(item.stage)}前需处理`}</span>{onRepair ? <div className={ui.repairActions}>{repairEntries(item.reason, item.stage).map(entry => <button key={entry.href} type="button" disabled={disabled} onClick={() => onRepair(entry.href)}>{entry.label}</button>)}</div> : null}<details className={ui.diagnostics}><summary>阻断诊断</summary><p>{item.reason} · {item.stage}</p>{item.reason === "template_voice_unavailable" ? <p>{item.impact}</p> : null}</details></article>)}</div></section>;
 }
 
 export function CreateProductionTaskForm({
@@ -113,30 +123,45 @@ export function CreateProductionTaskForm({
   autoFocus = false,
   initialGoal = "",
   assignLocation = assignDocumentLocation,
+  draftId,
 }: CreateProductionTaskFormProps) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [people, setPeople] = useState<PersonProfile[]>([]);
   const [voicePin, setVoicePin] = useState<CreationPlanInput["selected_voice"]>(undefined);
   const [personPin, setPersonPin] = useState<CreationPlanInput["selected_person"]>(undefined);
   const voiceSelectionEdited = useRef(false);
+  const draftScope = useRef<DraftScope | null>(null);
+  const draftUuid = useRef<string | null>(null);
+  const previousDraftId = useRef(draftId);
+  const userEdited = useRef(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftReady, setDraftReady] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const alive = useRef(true);
+  const operation = useRef(0);
   const [profilesError, setProfilesError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void Promise.all([listVoiceProfiles(), listPersonProfiles(), getDefaultVoice()]).then(([v,p,d]) => {
-      if (!active) return; setVoices(v.items); setPeople(p.items);
-      if (d && !voiceSelectionEdited.current) setVoicePin({profile_id:d.id,version:d.version});
-    }).catch(cause => { if(active)setProfilesError(cause instanceof Error ? cause.message : "档案读取失败"); });
+    void verifiedScope().then(async scope => {
+      const [v, p, d] = await Promise.all([listVoiceProfiles(), listPersonProfiles(), getDefaultVoice()]);
+      const current = await verifiedScope();
+      if (!sameDraftScope(scope, current)) throw new Error("成员或工作区在档案读取期间变化，没有使用旧档案。");
+      if (!active) return;
+      setVoices(v.items); setPeople(p.items);
+      if (d && !voiceSelectionEdited.current && !submittingRef.current) { setVoicePin({ profile_id: d.id, version: d.version }); ++inputRevision.current; setPreview(null); }
+    }).catch(cause => { if (active) setProfilesError(cause instanceof Error ? cause.message : "档案读取失败"); });
     return () => { active = false; };
   }, []);
   const [goal, setGoal] = useState(initialGoal);
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
-  const language: CreationPlanInput["language"] = template?.settings.language ?? "zh-CN";
-  const aspectRatio: CreationPlanInput["aspect_ratio"] = template?.settings.aspect_ratio ?? "9:16";
+  const [language, setLanguage] = useState<CreationPlanInput["language"]>(template?.settings.language ?? "zh-CN");
+  const [aspectRatio, setAspectRatio] = useState<CreationPlanInput["aspect_ratio"]>(template?.settings.aspect_ratio ?? "9:16");
   const [duration, setDuration] = useState(String(template?.settings.duration_target_seconds ?? 60));
   const [presenterShare, setPresenterShare] = useState<PresenterShare>(template?.settings.presenter_share_target ?? 20);
   const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
+  const [created, setCreated] = useState(false);
   const [pending, setPending] = useState<"preview" | "confirm" | null>(null);
   const [error, setError] = useState<FormError | null>(null);
   const submittingRef = useRef(false);
@@ -148,44 +173,110 @@ export function CreateProductionTaskForm({
     setPreview(null);
     setError(null);
     setDuration(String(template?.settings.duration_target_seconds ?? 60));
+    setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
   }, [template?.id, template?.version]);
 
-  function input(): CreationPlanInput {
+  useEffect(() => {
+    let active = true; alive.current = true;
+    ++inputRevision.current; ++operation.current; submittingRef.current = false; setPending(null); setCreated(false); setPreview(null);
+    userEdited.current = false; setDraftReady(false); setRestored(false); setDraftError(null); draftScope.current = null;
+    draftUuid.current = draftId ?? crypto.randomUUID();
+    if (draftId || previousDraftId.current !== draftId) {
+      setGoal(draftId ? "" : initialGoal); setName(""); setTargetCount("1");
+      setDuration(String(template?.settings.duration_target_seconds ?? 60));
+      setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
+      setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
+      voiceSelectionEdited.current = false; setVoicePin(undefined); setPersonPin(undefined);
+    }
+    previousDraftId.current = draftId;
+    void readPreflightDraftScope().then(scope => {
+      if (!active) return;
+      draftScope.current = scope;
+      if (draftId) {
+        const saved = loadPreflightDraft(window.sessionStorage, scope, draftId);
+        if (!saved) throw new Error("当前成员与工作区没有这份临时草稿。");
+        if (JSON.stringify(saved.template) !== JSON.stringify(template ? { id: template.id, version: template.version } : null)) throw new Error("草稿模板固定版本与入口不符，没有恢复旧输入。");
+        if (userEdited.current) throw new Error("你已更改输入，晚到的草稿没有覆盖当前内容。");
+        setGoal(saved.goal); setName(saved.name); setTargetCount(saved.targetCount); setDuration(saved.duration);
+        setLanguage(saved.language); setAspectRatio(saved.aspectRatio); setPresenterShare(saved.presenterShare); setLipsyncQuality(saved.lipsyncQuality);
+        voiceSelectionEdited.current = saved.voiceEdited || saved.voicePin !== null;
+        setVoicePin(saved.voicePin ?? undefined); setPersonPin(saved.personPin ?? undefined); setRestored(true);
+        ++inputRevision.current;
+        void runPreview(saved);
+      }
+      setDraftReady(true);
+    }).catch(cause => { if (active) setDraftError(`临时草稿未恢复：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
+    return () => { active = false; alive.current = false; ++inputRevision.current; ++operation.current; };
+  }, [draftId, template?.id, template?.version]);
+
+  function draftFields(): PreflightDraftFields {
+    return { goal, name, targetCount, duration, language, aspectRatio, presenterShare, lipsyncQuality,
+      voicePin: voicePin ?? null, personPin: personPin ?? null, voiceEdited: voiceSelectionEdited.current,
+      template: template ? { id: template.id, version: template.version } : null };
+  }
+  async function verifiedScope(): Promise<DraftScope> {
+    const scope = await readPreflightDraftScope();
+    if (draftScope.current && !sameDraftScope(scope, draftScope.current)) throw new Error("成员或工作区已切换，请重新打开新建表单；没有发送原草稿。");
+    return scope;
+  }
+  async function repair(href: string) {
+    if (!PREFLIGHT_RESOURCE_PATHS.has(href) || !draftReady || pending) return;
+    const revision = inputRevision.current;
+    try {
+      const scope = await verifiedScope();
+      if (!alive.current || revision !== inputRevision.current) return;
+      const id = draftUuid.current!;
+      if (!validDraftId(id)) throw new Error("草稿编号无效，没有离开表单。");
+      const saved = draftFields();
+      savePreflightDraft(window.sessionStorage, scope, id, saved);
+      assignLocation(`${href}?${new URLSearchParams({ return_to: preflightReturnUrl(id, saved.template) })}`);
+    } catch (cause) { if (alive.current && revision === inputRevision.current) setDraftError(`临时草稿保存失败，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`); }
+  }
+
+  async function abandonDraft() {
+    const revision = inputRevision.current;
+    try {
+      const scope = await verifiedScope();
+      if (!alive.current || revision !== inputRevision.current) return;
+      clearPreflightDraft(window.sessionStorage, scope, draftUuid.current!);
+      assignLocation("/production");
+    } catch (cause) { if (alive.current && revision === inputRevision.current) setDraftError(`没有放弃草稿，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`); }
+  }
+
+  function input(value = draftFields()): CreationPlanInput {
     return {
-      ...(template ? { template_id: template.id, template_version: template.version } : {}),
-      goal: goal.trim(),
-      ...(name.trim() ? { name: name.trim() } : {}),
-      target_count: Number(targetCount),
-      language,
-      aspect_ratio: aspectRatio,
-      duration_target_seconds: Number(duration),
-      presenter_share_target: presenterShare,
-      lipsync_quality: lipsyncQuality,
-      ...(voicePin ? {selected_voice: voicePin} : {}),
-      ...(personPin ? {selected_person: personPin} : {}),
+      ...(value.template ? { template_id: value.template.id, template_version: value.template.version } : {}),
+      goal: value.goal.trim(), ...(value.name.trim() ? { name: value.name.trim() } : {}), target_count: Number(value.targetCount),
+      language: value.language, aspect_ratio: value.aspectRatio, duration_target_seconds: Number(value.duration),
+      presenter_share_target: value.presenterShare, lipsync_quality: value.lipsyncQuality,
+      ...(value.voicePin ? {selected_voice: value.voicePin} : {}), ...(value.personPin ? {selected_person: value.personPin} : {}),
     };
   }
 
   function invalidatePreview() {
+    userEdited.current = true;
     ++inputRevision.current;
     setPreview(null);
     setError(null);
   }
 
-  async function runPreview() {
-    if (submittingRef.current) return;
+  async function runPreview(saved?: PreflightDraftFields) {
+    if (submittingRef.current || (draftId && !saved && !draftReady)) return;
     submittingRef.current = true;
     setPending("preview");
     setError(null);
     const revision = inputRevision.current;
+    const request = ++operation.current;
     try {
-      const result = await previewCreationPlan(input());
-      if (revision === inputRevision.current) setPreview(result);
+      await verifiedScope();
+      if (!alive.current || revision !== inputRevision.current) return;
+      const result = await previewCreationPlan(input(saved));
+      await verifiedScope();
+      if (alive.current && revision === inputRevision.current) setPreview(result);
     } catch (cause) {
-      if (revision === inputRevision.current) setError(messageForError(cause));
+      if (alive.current && revision === inputRevision.current) setError(messageForError(cause));
     } finally {
-      submittingRef.current = false;
-      setPending(null);
+      if (alive.current && request === operation.current) { submittingRef.current = false; setPending(null); }
     }
   }
 
@@ -199,10 +290,24 @@ export function CreateProductionTaskForm({
     submittingRef.current = true;
     setPending("confirm");
     setError(null);
+    const revision = inputRevision.current;
+    const confirmDraftId = draftUuid.current;
+    const request = ++operation.current;
     try {
+      const scope = await verifiedScope();
+      if (!alive.current || revision !== inputRevision.current) { if (alive.current && request === operation.current) { submittingRef.current = false; setPending(null); } return; }
       const plan = await confirmCreationPlan({ ...input(), preflight_fingerprint: preview.preflight_fingerprint });
-      assignLocation(`/tasks/${encodeURIComponent(plan.creation_task.id)}?${new URLSearchParams({ toast: "success", toast_message: "创作任务已创建，选题尚未开始。" }).toString()}`);
+      let cleanupWarning = "";
+      try { clearPreflightDraft(window.sessionStorage, scope, confirmDraftId!); }
+      catch (cause) { cleanupWarning = `临时草稿清理失败：${cause instanceof Error ? cause.message : "存储不可用"}`; }
+      if (!alive.current || request !== operation.current) return;
+      setCreated(true); setPending(null);
+      try { await verifiedScope(); }
+      catch (cause) { if (alive.current && request === operation.current) setDraftError(`任务已创建，但当前成员或工作区未重新确认，没有自动打开任务：${cause instanceof Error ? cause.message : "身份读取失败"}${cleanupWarning ? `；${cleanupWarning}` : ""}`); return; }
+      if (!alive.current || request !== operation.current) return;
+      assignLocation(`/tasks/${encodeURIComponent(plan.creation_task.id)}?${new URLSearchParams({ toast: "success", toast_message: `创作任务已创建，选题尚未开始。${cleanupWarning}` }).toString()}`);
     } catch (cause) {
+      if (!alive.current || request !== operation.current) return;
       if (cause instanceof CreationPlanApiError && cause.code === "creation_plan_preflight_stale") {
         setPreview(null);
       }
@@ -212,11 +317,14 @@ export function CreateProductionTaskForm({
     }
   }
 
-  const isPending = pending !== null;
+  const isPending = pending !== null || created;
   return (
     <div className={`creation-plan-form ${ui.form}`}>
-      {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><a href="/templates">重新选择模板</a></section> : null}
-      <form onSubmit={handlePreview} aria-busy={isPending}>
+      {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/templates")}>重新选择模板</button></section> : null}
+      <p className={ui.draftNotice}>{restored ? (pending === "preview" ? "已恢复本次输入，正在重新检查当前资格。" : preview ? "已恢复本次输入并取得新预检结果。" : "已恢复本次输入，请重新检查当前资格。") : "前往补充资源前会保存当前输入为本成员、本工作区的临时草稿。"}关闭或返回列表不会创建任务；已保存的临时草稿仅保留在本次浏览会话，创建成功后清理。</p>
+      <button type="button" disabled={!draftReady || isPending} onClick={() => void abandonDraft()}>放弃本次草稿并返回列表</button>
+      {draftError ? <p className={ui.draftNotice} role="alert">{draftError}</p> : null}
+      <form onSubmit={handlePreview} aria-busy={pending !== null}>
         <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周可用素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
         <div className="creation-plan-form__settings">
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
@@ -226,17 +334,17 @@ export function CreateProductionTaskForm({
         </div>
         <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
         {profilesError ? <p role="alert">{profilesError}</p> : null}
-        <label>声音固定版本<select aria-label="任务声音" disabled={isPending} value={voicePin ? `${voicePin.profile_id}:${voicePin.version}` : ""} onChange={event=>{voiceSelectionEdited.current=true;const selected=voices.find(item=>`${item.id}:${item.version}`===event.target.value);setVoicePin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">使用已保存默认版本</option>{voicePin && !voices.some(v=>v.id===voicePin.profile_id && v.version===voicePin.version) ? <option value={`${voicePin.profile_id}:${voicePin.version}`}>默认声音 · {voicePin.version}</option> : null}{voices.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
-        <label>人物固定版本<select aria-label="任务人物" disabled={isPending || presenterShare===0} value={personPin ? `${personPin.profile_id}:${personPin.version}` : ""} onChange={event=>{const selected=people.find(item=>`${item.id}:${item.version}`===event.target.value);setPersonPin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">选择独立人物</option>{people.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
+        <label>声音固定版本<select aria-label="任务声音" disabled={isPending} value={voicePin ? `${voicePin.profile_id}:${voicePin.version}` : ""} onChange={event=>{voiceSelectionEdited.current=true;const selected=voices.find(item=>`${item.id}:${item.version}`===event.target.value);setVoicePin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">使用已保存默认版本</option>{voicePin && !voices.some(v=>v.id===voicePin.profile_id && v.version===voicePin.version) ? <option value={`${voicePin.profile_id}:${voicePin.version}`}>已固定声音版本 · {voicePin.version}（当前列表未返回）</option> : null}{voices.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
+        <label>人物固定版本<select aria-label="任务人物" disabled={isPending || presenterShare===0} value={personPin ? `${personPin.profile_id}:${personPin.version}` : ""} onChange={event=>{const selected=people.find(item=>`${item.id}:${item.version}`===event.target.value);setPersonPin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">选择独立人物</option>{personPin && !people.some(p=>p.id===personPin.profile_id && p.version===personPin.version) ? <option value={`${personPin.profile_id}:${personPin.version}`}>已固定人物版本 · {personPin.version}（当前列表未返回）</option> : null}{people.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
         <PresenterShareSlider disabled={isPending} onChange={(value) => { setPresenterShare(value); invalidatePreview(); }} value={presenterShare} />
         <LipSyncQualitySelect disabled={isPending || presenterShare === 0} onChange={(value) => { setLipsyncQuality(value); invalidatePreview(); }} value={lipsyncQuality} />
         {presenterShare === 0 ? <p>露脸占比为 0%，本次无需人物口型，口型档位暂不可调整。</p> : null}
-        <div className="creation-plan-form__actions"><button className="modern-primary-button" aria-describedby={`${formId}-preview-scope`} disabled={isPending || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button><span id={`${formId}-preview-scope`}>{!goal.trim() ? "先填写制作目标，再检查。" : preview ? (preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有创建阻断需要处理。") : "检查不会创建任务，也不会生成选题、文案或成片。"}</span></div>
+        <div className="creation-plan-form__actions"><button className="modern-primary-button" aria-describedby={`${formId}-preview-scope`} disabled={isPending || !draftReady || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button><span id={`${formId}-preview-scope`}>{!goal.trim() ? "先填写制作目标，再检查。" : !draftReady ? "当前成员与工作区尚未确认，暂不能检查。" : preview ? (preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有创建阻断需要处理。") : "检查不会创建任务，也不会生成选题、文案或成片。"}</span></div>
       </form>
 
       {error ? <section className="creation-plan-error" role="alert"><AlertCircle size={17} /><div><strong>操作未完成：{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div>{error.repairAction ? <button disabled={isPending || !goal.trim()} onClick={() => void runPreview()} type="button">重新检查可用内容</button> : null}</section> : null}
 
-      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "本次检查允许创建创作任务" : "先处理创建阻断"}</h3><p>预检画幅：{preview.aspect_ratio}</p><p>预检目标时长：{preview.duration_target_seconds} 秒</p><p>以下事实来自本次只读检查；创建许可不代表全部制作阶段已就绪。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "可创建任务" : "创建受阻"}</span></header><PreflightFacts preview={preview} /><Blockers preview={preview} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p><p id={`${formId}-confirm-scope`}>{preview.confirmable ? "当前允许创建任务；后续阶段的限制见待处理事项。" : "当前不能创建任务，请先处理标记为阻止创建的事项并重新检查。"}</p></div><button className="modern-primary-button" aria-describedby={`${formId}-confirm-scope`} disabled={!preview.confirmable || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
+      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "本次检查允许创建创作任务" : "先处理创建阻断"}</h3><p>预检画幅：{preview.aspect_ratio}</p><p>预检目标时长：{preview.duration_target_seconds} 秒</p><p>以下事实来自本次只读检查；创建许可不代表全部制作阶段已就绪。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "可创建任务" : "创建受阻"}</span></header><PreflightFacts preview={preview} voices={voices} people={people} onRepair={href => void repair(href)} disabled={!draftReady || isPending} /><Blockers preview={preview} onRepair={href => void repair(href)} disabled={!draftReady || isPending} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p><p id={`${formId}-confirm-scope`}>{preview.confirmable ? "当前允许创建任务；后续阶段的限制见待处理事项。" : "当前不能创建任务，请先处理标记为阻止创建的事项并重新检查。"}</p></div><button className="modern-primary-button" aria-describedby={`${formId}-confirm-scope`} disabled={!preview.confirmable || !draftReady || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{created ? "任务已创建" : pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
     </div>
   );
 }

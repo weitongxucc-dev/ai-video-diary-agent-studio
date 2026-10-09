@@ -85,7 +85,7 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const [foundation, persistedTasks] = await Promise.all([
@@ -118,6 +118,7 @@ export default async function ProductionPage({
             <CreateProductionTaskForm
               autoFocus={!initialGoal}
               initialGoal={initialGoal}
+              draftId={params.draft_id}
               template={template}
             />
           </section>

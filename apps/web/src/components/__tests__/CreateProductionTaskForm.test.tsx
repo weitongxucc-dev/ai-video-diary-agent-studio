@@ -28,6 +28,8 @@ vi.mock("@/lib/api", () => ({
   CreationPlanApiError: mocks.CreationPlanApiError,
 }));
 
+vi.mock("@/lib/preflight-draft", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: vi.fn().mockResolvedValue({ memberId: "local:member-a", workspaceId: "workspace-a" }) }));
+
 const profileMocks=vi.hoisted(()=>({listVoiceProfiles:vi.fn(),listPersonProfiles:vi.fn(),getDefaultVoice:vi.fn()}));
 vi.mock("@/lib/media-profiles-api",()=>profileMocks);
 beforeEach(()=>{profileMocks.listVoiceProfiles.mockResolvedValue({items:[]});profileMocks.listPersonProfiles.mockResolvedValue({items:[]});profileMocks.getDefaultVoice.mockResolvedValue(null);});
@@ -261,6 +263,7 @@ describe("preflight candidate and stage facts", () => {
     const template = { id: "template-old", version: 1, visibility: "private" as const, name: "旧模板", origin: "user" as const, source_task_id: "old", source_timeline_version_id: "old-version", created_at: "2026-10-09", settings: { language: "zh-CN" as const, aspect_ratio: "9:16" as const, duration_target_seconds: 60, voice: null, style_instruction: "", fit_mode: "fit" as const, subtitle_style: {} } };
     const view = render(<CreateProductionTaskForm template={template} initialGoal="产品观察" />);
     fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenCalledTimes(1));
     view.rerender(<CreateProductionTaskForm template={{ ...template, id: "template-new", settings: { ...template.settings, duration_target_seconds: 90 } }} initialGoal="产品观察" />);
     await act(async () => { if (outcome === "success") resolve(preview()); else reject(new Error("旧模板检查错误")); });
     expect(screen.queryByRole("button", { name: "确认并创建任务" })).not.toBeInTheDocument();
@@ -336,6 +339,26 @@ it("inherits landscape ratio through the form and preflight, then replaces it wh
 
 describe("fixed independent task profile pins",()=>{
  it("uses the historical default voice and an independently chosen person in the same real preflight request",async()=>{
-  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice",version:"v2",display_name:"最新声音"}]});profileMocks.getDefaultVoice.mockResolvedValue({id:"voice",version:"v1"});profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-other",version:"p3",display_name:"另一个人物"}]});mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();await screen.findByRole("option",{name:"默认声音 · v1"});expect(screen.getByLabelText("任务声音")).toHaveValue("voice:v1");fireEvent.change(screen.getByLabelText("任务人物"),{target:{value:"person-other:p3"}});fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice",version:"v1"},selected_person:{profile_id:"person-other",version:"p3"}})));
+  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice",version:"v2",display_name:"最新声音"}]});profileMocks.getDefaultVoice.mockResolvedValue({id:"voice",version:"v1"});profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-other",version:"p3",display_name:"另一个人物"}]});mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();await screen.findByRole("option",{name:"已固定声音版本 · v1（当前列表未返回）"});expect(screen.getByLabelText("任务声音")).toHaveValue("voice:v1");fireEvent.change(screen.getByLabelText("任务人物"),{target:{value:"person-other:p3"}});fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice",version:"v1"},selected_person:{profile_id:"person-other",version:"p3"}})));
  });
+});
+
+
+describe("preflight business names and necessary diagnostics", () => {
+  it("shows names for the exact independent pins and leaves IDs/empty proof fields in diagnostics", () => {
+    render(<PreflightFacts
+      preview={preview({ knowledge_references: [{ id: "knowledge-raw", version: "v1", title: "资料名称", authorization: "", ownership: "" }], selected_person: { profile_id: "independent-person", version: "p3" } })}
+      voices={[{ id: "voice-1", version: "v2", display_name: "我的声音" }] as import("@/lib/media-profiles-api").VoiceProfile[]}
+      people={[{ id: "independent-person", version: "p3", display_name: "所选人物" }] as import("@/lib/media-profiles-api").PersonProfile[]}
+    />);
+    expect(screen.getByText(/本次声音：我的声音/)).toBeVisible(); expect(screen.getByText(/本次人物：所选人物/)).toBeVisible();
+    expect(screen.getByText("independent-person · p3")).not.toBeVisible(); expect(screen.getByText("knowledge-raw · v1")).not.toBeVisible();
+    expect(screen.getByText("未返回证明字段 · 未返回归属字段")).not.toBeVisible();
+    fireEvent.click(screen.getByText("资料引用诊断")); expect(screen.getByText("未返回证明字段 · 未返回归属字段")).toBeVisible();
+  });
+  it("keeps raw template voice impact available in diagnostics without using its ID as business copy", () => {
+    render(<Blockers preview={preview({ blockers: [{ reason: "template_voice_unavailable", stage: "narration", impact: "模板指定声音 raw-profile · v3 不可用，未替换为其他声音。", repair_action: "恢复指定版本或选择其他模板", blocks_confirmation: true }] })} />);
+    expect(screen.getByText("模板指定的固定声音版本不可用，未替换为其他声音。")).toBeVisible();
+    expect(screen.getByText(/raw-profile/)).not.toBeVisible(); fireEvent.click(screen.getByText("阻断诊断")); expect(screen.getByText(/raw-profile/)).toBeVisible();
+  });
 });
