@@ -5,6 +5,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -705,7 +706,10 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
-    payload = {"conversation_id": conversation["id"], "message": "请检查镜头", "context_stage": "montage",
+    message = "请检查镜头"
+    saved = repo.save_draft(conversation["id"], "workspace-a", "member-caller", message, 0)
+    payload = {"conversation_id": conversation["id"], "message": message, "context_stage": "montage",
+               "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
                "selected_object_refs": ["clip:clip-1"], "playhead_ms": 1200}
     denied = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload,
                          headers={"x-test-workspace": "workspace-b"})
@@ -736,13 +740,50 @@ def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp
     rejected = client.post("/api/assistant/plan/turn", json={"message": "做视频", "conversation_id": "bad"})
     assert rejected.status_code == 422
     assert seen == []
-    response = client.post("/api/assistant/plan/turn",
-                           json={"message": "做视频", "conversation_id": conversation["id"]},
+    message = "做视频"
+    saved = client.patch(f"/api/assistant/conversations/{conversation['id']}",
+                         json={"draft_text": message, "expected_draft_version": conversation["draft_version"]},
+                         headers={"x-test-workspace": "workspace-b"})
+    assert saved.status_code == 200
+    request_body = {"message": message, "conversation_id": conversation["id"],
+                    "client_request_id": str(uuid4()),
+                    "expected_draft_version": saved.json()["draft_version"]}
+    response = client.post("/api/assistant/plan/turn", json=request_body,
                            headers={"x-test-workspace": "workspace-b"})
     assert response.status_code == 200
     assert response.json()["plan_preview"] is None
+    assert response.json()["draft_version"] == saved.json()["draft_version"] + 1
     assert seen[0]["workspace_id"] == "workspace-b"
     assert seen[0]["conversation_id"] == conversation["id"]
+    replay = client.post("/api/assistant/plan/turn", json=request_body,
+                         headers={"x-test-workspace": "workspace-b"})
+    assert replay.status_code == 200 and replay.json() == response.json()
+    assert len(seen) == 1
+    reused = client.post("/api/assistant/plan/turn", json={**request_body, "message": "复用身份提交其他内容"},
+                         headers={"x-test-workspace": "workspace-b"})
+    assert reused.status_code == 409
+    assert len(seen) == 1
+
+    streamed_message = "补充新的制作要求"
+    latest = repo.get(conversation["id"], "workspace-b", "member-caller")
+    streamed_draft = client.patch(f"/api/assistant/conversations/{conversation['id']}",
+                                  json={"draft_text": streamed_message,
+                                        "expected_draft_version": latest["draft_version"]},
+                                  headers={"x-test-workspace": "workspace-b"})
+    assert streamed_draft.status_code == 200
+    streamed_body = {"message": streamed_message, "conversation_id": conversation["id"],
+                     "client_request_id": str(uuid4()),
+                     "expected_draft_version": streamed_draft.json()["draft_version"]}
+    stream_response = client.post("/api/assistant/plan/turn", json=streamed_body,
+                                  headers={"x-test-workspace": "workspace-b", "accept": "text/event-stream"})
+    assert stream_response.status_code == 200
+    stream_events = [json.loads(line[6:]) for line in stream_response.text.splitlines() if line.startswith("data: ")]
+    consumed_version = streamed_draft.json()["draft_version"] + 1
+    assert any(event.get("type") == "turn_started" and event.get("draft_version") == consumed_version
+               for event in stream_events)
+    terminal_result = next(event["result"] for event in stream_events if event.get("type") == "result")
+    assert terminal_result["draft_version"] == consumed_version
+    assert len(seen) == 2
 
 
 def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):

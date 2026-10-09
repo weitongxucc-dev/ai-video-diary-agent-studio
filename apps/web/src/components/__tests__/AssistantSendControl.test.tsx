@@ -7,7 +7,7 @@ vi.mock("@/lib/api", () => ({ getAssistantCapabilities: vi.fn().mockRejectedValu
 afterEach(cleanup);
 function state(running = false, loading = false) {
   const conversation: AssistantConversation = { id: "fixture", workspace_id: "fixture", scope_kind: "home", scope_id: "home", title: "新对话", draft_text: "",
-    created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: running ? [{ id: "real-persisted-turn", sequence: 1, user_message: "要求",
+    draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: running ? [{ id: "real-persisted-turn", sequence: 1, user_message: "要求",
       assistant_text: "正在回复", status: "running", events: [], result: null, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z" }] : [] };
   return { conversation, conversations: [], loading, error: null, stop: vi.fn().mockResolvedValue(undefined) } as never;
 }

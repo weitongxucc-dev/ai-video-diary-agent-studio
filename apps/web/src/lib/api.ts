@@ -306,7 +306,12 @@ async function assistantStreamRequest<T>(
       );
     }
     if (value.type === "turn_started" && typeof value.turn_id === "string") {
-      onEvent({ type: "turn_started", turn_id: value.turn_id, turn_state: "running" });
+      const turnState = value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped"
+        ? value.turn_state : "running";
+      const draftVersion = typeof value.draft_version === "number" && Number.isInteger(value.draft_version)
+        && value.draft_version >= 0 ? value.draft_version : undefined;
+      onEvent({ type: "turn_started", turn_id: value.turn_id, turn_state: turnState,
+        ...(draftVersion === undefined ? {} : { draft_version: draftVersion }) });
     } else if (value.type === "turn_status" && typeof value.turn_id === "string"
       && (value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped")) {
       onEvent({ type: "turn_status", turn_id: value.turn_id, turn_state: value.turn_state });
@@ -720,10 +725,19 @@ export function resumeAssistantConversation(conversationId: string): Promise<Ass
 
 export function updateAssistantConversation(
   conversationId: string,
-  update: { title?: string; draft_text?: string },
+  update: { title?: string; draft_text?: string; expected_draft_version?: number },
 ): Promise<AssistantConversation> {
   return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
     method: "PATCH", body: JSON.stringify(update),
+  });
+}
+
+export function restoreUnpersistedAssistantTurnDraft(
+  conversationId: string,
+  input: { client_request_id: string; user_message: string; expected_draft_version: number },
+): Promise<{ status: "restored" | "already_recovered" | "already_persisted"; conversation: AssistantConversation }> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/restore-unpersisted-turn`, {
+    method: "POST", body: JSON.stringify(input),
   });
 }
 
@@ -741,26 +755,33 @@ export async function getAssistantCapabilities(): Promise<AssistantCapabilities>
 export function sendWorkspaceAssistantPlanTurn(
   message: string,
   conversationId: string,
+  clientRequestId: string,
+  expectedDraftVersion: number,
   onEvent?: (event: AssistantStreamEvent) => void,
 ): Promise<WorkspaceAssistantPlanTurnResponse> {
+  const input = { message, conversation_id: conversationId, client_request_id: clientRequestId,
+    expected_draft_version: expectedDraftVersion };
   if (onEvent) return assistantStreamRequest<WorkspaceAssistantPlanTurnResponse>(
-    "/api/assistant/plan/turn", { message, conversation_id: conversationId }, onEvent,
+    "/api/assistant/plan/turn", input, onEvent,
   );
   return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
     "/api/assistant/plan/turn",
-    { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
 export function sendMaterialAssistantTurn(
   message: string,
   conversationId: string,
-  selection: MaterialAssistantSelection,
+  selection: MaterialAssistantSelection | null,
+  clientRequestId: string,
+  expectedDraftVersion: number,
   onEvent: (event: AssistantStreamEvent) => void,
 ): Promise<MaterialAssistantTurnResponse> {
   return assistantStreamRequest<MaterialAssistantTurnResponse>(
     "/api/assistant/material/turn",
-    { message, conversation_id: conversationId, selection },
+    { message, conversation_id: conversationId, selection, client_request_id: clientRequestId,
+      expected_draft_version: expectedDraftVersion },
     onEvent,
   );
 }
@@ -1046,6 +1067,8 @@ export function sendCreationTaskAssistantTurn(
   input: {
     conversation_id: string;
     message: string;
+    client_request_id: string;
+    expected_draft_version: number;
     context_stage: string;
     selected_object_refs: string[];
     playhead_ms: number | null;

@@ -11,6 +11,19 @@ from app.conversation_repository import (
 )
 
 
+def _send(repository: ConversationRepository, conversation: dict, message: str, request_id: str) -> dict:
+    owner = (conversation["workspace_id"], conversation["member_id"])
+    current = repository.get(conversation["id"], *owner)
+    assert current is not None
+    saved = repository.save_draft(conversation["id"], *owner, message, current["draft_version"])
+    assert saved is not None
+    turn, created = repository.create_turn_idempotent(
+        conversation["id"], *owner, message, request_id, saved["draft_version"],
+    )
+    assert created and turn is not None
+    return turn
+
+
 def test_conversation_scope_member_draft_turn_events_and_restart(tmp_path):
     database = tmp_path / "isolated-conversations.sqlite3"
     first = ConversationRepository(database)
@@ -19,13 +32,15 @@ def test_conversation_scope_member_draft_turn_events_and_restart(tmp_path):
     assert first.get(home["id"], "workspace-one", "member-two") is None
     assert first.get(home["id"], "workspace-two", "member-one") is None
 
-    drafted = first.update(home["id"], "workspace-one", "member-one", draft_text="保留的下一条草稿")
+    drafted = first.save_draft(home["id"], "workspace-one", "member-one", "保留的下一条草稿", 0)
     assert drafted is not None and drafted["draft_version"] == 1
-    turn = first.create_turn(home["id"], "请读取当前方案")
+    turn = _send(first, home, "请读取当前方案", "turn-home-1")
     consumed = first.get(home["id"], "workspace-one", "member-one")
-    assert consumed is not None and consumed["draft_version"] == 2
+    assert consumed is not None and consumed["draft_version"] == 3
+    running_draft = first.save_draft(home["id"], "workspace-one", "member-one", "不应覆盖正在运行的轮次", consumed["draft_version"])
+    assert running_draft is not None
     with pytest.raises(ConversationTurnAlreadyRunning):
-        first.create_turn(home["id"], "不应覆盖正在运行的轮次")
+        first.create_turn_idempotent(home["id"], "workspace-one", "member-one", "不应覆盖正在运行的轮次", "turn-home-2", running_draft["draft_version"])
     first.append_event(turn["id"], {"type": "tool_start", "tool_id": 1, "label": "读取方案"})
     first.append_event(turn["id"], {"type": "text_delta", "delta": "读取完成"})
     first.finish_turn(turn["id"], "completed", "读取完成", {"kind": "plan_preview"})
@@ -33,7 +48,8 @@ def test_conversation_scope_member_draft_turn_events_and_restart(tmp_path):
     restarted = ConversationRepository(database)
     saved = restarted.get(home["id"], "workspace-one", "member-one")
     assert saved is not None
-    assert saved["draft_text"] == ""
+    assert saved["draft_text"] == "不应覆盖正在运行的轮次"
+    assert saved["draft_version"] == running_draft["draft_version"]
     assert restarted.list_turns(home["id"])[0]["events"] == [
         {"type": "tool_start", "tool_id": 1, "label": "读取方案"},
         {"type": "text_delta", "delta": "读取完成"},
@@ -42,16 +58,21 @@ def test_conversation_scope_member_draft_turn_events_and_restart(tmp_path):
 
     material = restarted.create("workspace-one", "member-one", "material", "asset:visible")
     assert restarted.get(material["id"], "workspace-one", "member-one")["scope_id"] == "asset:visible"
+    library = restarted.create("workspace-one", "member-one", "material", "library")
+    indexed_material = restarted.list_for_scope("workspace-one", "member-one", "material", "library")
+    assert {row["id"] for row in indexed_material} == {material["id"], library["id"]}
 
 
 def test_current_selection_survives_old_turn_updates_and_explicit_resume(tmp_path):
     repository = ConversationRepository(tmp_path / "current-selection.sqlite3")
     older = repository.current_or_create("workspace-one", "member-one", "home", "home")
-    old_turn = repository.create_turn(older["id"], "旧轮次")
+    old_turn = _send(repository, older, "旧轮次", "old-turn-request")
     repository.append_event(old_turn["id"], {"type": "text_delta", "delta": "partial"})
 
     current = repository.create("workspace-one", "member-one", "home", "home", "新对话")
-    repository.update(older["id"], "workspace-one", "member-one", draft_text="迟到的旧草稿")
+    after_turn = repository.get(older["id"], "workspace-one", "member-one")
+    assert after_turn is not None
+    repository.save_draft(older["id"], "workspace-one", "member-one", "迟到的旧草稿", after_turn["draft_version"])
     assert repository.fail_interrupted_turns() == 1
     repository.append_event(old_turn["id"], {"type": "text_delta", "delta": "不可追加"})
     repository.finish_turn(old_turn["id"], "completed", "被竞态覆盖", {"kind": "unexpected"})
@@ -77,9 +98,9 @@ def test_current_selection_survives_old_turn_updates_and_explicit_resume(tmp_pat
 def test_only_completed_plan_turn_can_store_a_server_checked_preview(tmp_path):
     repository = ConversationRepository(tmp_path / "plan-preview.sqlite3")
     conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
-    ordinary = repository.create_turn(conversation["id"], "普通问题")
+    ordinary = _send(repository, conversation, "普通问题", "ordinary-turn")
     repository.finish_turn(ordinary["id"], "completed", "回答", {"kind": "conversation"})
-    plan = repository.create_turn(conversation["id"], "创建一个短片方案")
+    plan = _send(repository, conversation, "创建一个短片方案", "plan-turn")
     repository.finish_turn(plan["id"], "completed", "方案已检查", {
         "kind": "plan_preview", "plan_preview": {"duration_target_seconds": 30, "preflight_fingerprint": "a" * 64},
     })
@@ -95,7 +116,7 @@ def test_only_completed_plan_turn_can_store_a_server_checked_preview(tmp_path):
 def test_failed_turn_persists_failure_result_without_erasing_partial_reply(tmp_path):
     repository = ConversationRepository(tmp_path / "failed-turn.sqlite3")
     conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
-    turn = repository.create_turn(conversation["id"], "先检查当前条件")
+    turn = _send(repository, conversation, "先检查当前条件", "failed-turn")
     repository.append_event(turn["id"], {"type": "text_delta", "delta": "检查到连接问题。"})
 
     failure = {"kind": "failure", "message": "文字模型当前不可用；请先在设置中检查连接。"}
@@ -169,7 +190,7 @@ def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_conte
     repository = ConversationRepository(database)
     second_repository = ConversationRepository(database)
     home = repository.current_or_create("workspace-one", "member-one", "home", "home")
-    draft = repository.save_draft(home["id"], "workspace-one", "member-one", "先前输入", 0)
+    draft = repository.save_draft(home["id"], "workspace-one", "member-one", "读取现在的方案", 0)
     assert draft is not None
 
     def send(repo: ConversationRepository):
@@ -217,39 +238,71 @@ def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_conte
 def test_failure_recovery_restores_only_an_unpersisted_unchanged_draft_version(tmp_path):
     repository = ConversationRepository(tmp_path / "recovery-cas.sqlite3")
     conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
+    prepared = repository.save_draft(conversation["id"], "workspace-one", "member-one", "原始已发送句子", 0)
+    assert prepared is not None
     restored, outcome = repository.restore_unpersisted_turn_draft(
-        conversation["id"], "workspace-one", "member-one", "request-unpersisted", "原始已发送句子", 0,
+        conversation["id"], "workspace-one", "member-one", "request-unpersisted", "原始已发送句子", prepared["draft_version"],
     )
     assert restored is not None and outcome == "restored"
     assert restored["draft_text"] == "原始已发送句子"
-    assert restored["draft_version"] == 1
+    assert restored["draft_version"] == 2
     with pytest.raises(ConversationTurnRequestConflict):
         repository.restore_unpersisted_turn_draft(
-            conversation["id"], "workspace-one", "member-one", "request-unpersisted", "被改写的同ID请求", 0,
+            conversation["id"], "workspace-one", "member-one", "request-unpersisted", "被改写的同ID请求", prepared["draft_version"],
         )
     restored, outcome = repository.restore_unpersisted_turn_draft(
-        conversation["id"], "workspace-one", "member-one", "request-unpersisted", "原始已发送句子", 0,
+        conversation["id"], "workspace-one", "member-one", "request-unpersisted", "原始已发送句子", prepared["draft_version"],
     )
     assert restored is not None and outcome == "already_recovered"
-    assert restored["draft_version"] == 1
+    assert restored["draft_version"] == 2
 
-    newer = repository.save_draft(conversation["id"], "workspace-one", "member-one", "后来编辑的新草稿", 1)
-    assert newer is not None and newer["draft_version"] == 2
+    newer = repository.save_draft(conversation["id"], "workspace-one", "member-one", "后来编辑的新草稿", 2)
+    assert newer is not None and newer["draft_version"] == 3
     with pytest.raises(ConversationDraftVersionConflict):
         repository.restore_unpersisted_turn_draft(
-            conversation["id"], "workspace-one", "member-one", "request-stale", "旧失败恢复句", 0,
+        conversation["id"], "workspace-one", "member-one", "request-stale", "旧失败恢复句", prepared["draft_version"],
         )
     current = repository.get(conversation["id"], "workspace-one", "member-one")
     assert current is not None
     assert current["draft_text"] == "后来编辑的新草稿"
-    assert current["draft_version"] == 2
+    assert current["draft_version"] == 3
 
+    prepared = repository.save_draft(conversation["id"], "workspace-one", "member-one", "新的真实轮次", 3)
+    assert prepared is not None and prepared["draft_version"] == 4
     durable, created = repository.create_turn_idempotent(
-        conversation["id"], "workspace-one", "member-one", "新的真实轮次", "request-persisted", 2,
+        conversation["id"], "workspace-one", "member-one", "新的真实轮次", "request-persisted", 4,
     )
     assert durable is not None and created is True
     current, outcome = repository.restore_unpersisted_turn_draft(
-        conversation["id"], "workspace-one", "member-one", "request-persisted", "新的真实轮次", 2,
+        conversation["id"], "workspace-one", "member-one", "request-persisted", "新的真实轮次", 4,
     )
     assert current is not None and outcome == "already_persisted"
     assert current["draft_text"] == ""
+
+
+def test_failure_recovery_restores_when_the_checkpoint_never_committed(tmp_path):
+    repository = ConversationRepository(tmp_path / "missing-checkpoint.sqlite3")
+    conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
+
+    restored, outcome = repository.restore_unpersisted_turn_draft(
+        conversation["id"], "workspace-one", "member-one", "request-without-checkpoint", "提交前等待的原句", 0,
+    )
+
+    assert restored is not None and outcome == "restored"
+    assert restored["draft_text"] == "提交前等待的原句"
+    assert restored["draft_version"] == 1
+    duplicate, outcome = repository.restore_unpersisted_turn_draft(
+        conversation["id"], "workspace-one", "member-one", "request-without-checkpoint", "提交前等待的原句", 0,
+    )
+    assert duplicate is not None and outcome == "already_recovered"
+    assert duplicate["draft_version"] == 1
+
+    newer = repository.save_draft(conversation["id"], "workspace-one", "member-one", "较新的输入", 1)
+    assert newer is not None and newer["draft_version"] == 2
+    with pytest.raises(ConversationDraftVersionConflict):
+        repository.restore_unpersisted_turn_draft(
+            conversation["id"], "workspace-one", "member-one", "stale-uncommitted-request", "旧的等待输入", 0,
+        )
+    current = repository.get(conversation["id"], "workspace-one", "member-one")
+    assert current is not None
+    assert current["draft_text"] == "较新的输入"

@@ -3,18 +3,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ saved: new Map<string, import("@/lib/types").AssistantConversation>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn() }));
+const mocks = vi.hoisted(() => ({ saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
 vi.mock("@/lib/api", () => {
   const saved = mocks.saved;
   function makeConversation(scope: { scope_kind: "home" | "task" | "material"; scope_id: string }, id = `conversation-${scope.scope_kind}-${scope.scope_id}`) {
     const value: import("@/lib/types").AssistantConversation = {
-      id, workspace_id: "local", ...scope, title: "新对话", draft_text: "",
+      id, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0,
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [],
     };
     saved.set(id, value);
     return value;
   }
-  async function runTurn(conversationId: string, userMessage: string, onEvent: (event: never) => void, work: (emit: (event: never) => void) => Promise<Record<string, unknown>>) {
+  async function runTurn(conversationId: string, userMessage: string, clientRequestId: string, expectedDraftVersion: number,
+    onEvent: (event: never) => void, work: (emit: (event: never) => void) => Promise<Record<string, unknown>>) {
+    const priorReceipt = mocks.receipts.get(clientRequestId) as { request: string; response: Record<string, unknown> } | undefined;
+    if (priorReceipt) {
+      if (priorReceipt.request !== `${conversationId}:${userMessage}:${expectedDraftVersion}`) throw new Error("request id reused with different turn");
+      return priorReceipt.response;
+    }
+    const before = saved.get(conversationId)!;
+    if (before.draft_text !== userMessage || before.draft_version !== expectedDraftVersion) throw new Error("draft CAS conflict");
     const turnId = `turn-${++mocks.sequence}`;
     const events: never[] = [];
     const emit = (event: never) => {
@@ -22,7 +30,8 @@ vi.mock("@/lib/api", () => {
       if (type !== "turn_started" && type !== "turn_status") events.push(event);
       onEvent(event);
     };
-    emit({ type: "turn_started", turn_id: turnId } as never);
+    saved.set(conversationId, { ...before, draft_text: "", draft_version: expectedDraftVersion + 1 });
+    emit({ type: "turn_started", turn_id: turnId, draft_version: expectedDraftVersion + 1 } as never);
     const result = await work(emit);
     if (!events.some((event) => (event as { type?: string }).type === "text_delta") && typeof result.reply === "string") {
       emit({ type: "text_delta", delta: result.reply } as never);
@@ -42,9 +51,13 @@ vi.mock("@/lib/api", () => {
     const turn = { id: turnId, sequence: mocks.sequence, user_message: userMessage, assistant_text: assistantText,
       status: "completed" as const, events: events as import("@/lib/types").AssistantConversationTurn["events"],
       result: projected, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z" };
-    saved.set(conversationId, { ...existing, turns: [...existing.turns.filter((item) => item.id !== turnId), turn], updated_at: turn.updated_at });
+    const nextVersion = expectedDraftVersion + 1;
+    saved.set(conversationId, { ...existing, draft_text: "", draft_version: nextVersion,
+      turns: [...existing.turns.filter((item) => item.id !== turnId), turn], updated_at: turn.updated_at });
     emit({ type: "turn_status", turn_state: "completed" } as never);
-    return { ...result, turn_id: turnId };
+    const response = { ...result, turn_id: turnId, draft_version: nextVersion };
+    mocks.receipts.set(clientRequestId, { request: `${conversationId}:${userMessage}:${expectedDraftVersion}`, response });
+    return response;
   }
   return {
   getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, `conversation-${scope.scope_kind}-${scope.scope_id}-${++mocks.sequence}`)),
@@ -52,22 +65,33 @@ vi.mock("@/lib/api", () => {
   listAssistantConversations: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => ({ items: [...saved.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
   getAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
   resumeAssistantConversation: vi.fn(async (id: string) => saved.get(id)!),
-  updateAssistantConversation: mocks.updateConversation.mockImplementation(async (id: string, update: { draft_text?: string; title?: string }) => {
+  updateAssistantConversation: mocks.updateConversation.mockImplementation(async (id: string, update: { draft_text?: string; title?: string; expected_draft_version?: number }) => {
     const item = saved.get(id)!;
-    const updated = { ...item, ...update, updated_at: "2026-10-09T00:00:01Z" };
+    if (update.draft_text !== undefined && update.expected_draft_version !== item.draft_version) throw new Error("draft CAS conflict");
+    const { expected_draft_version: _expected, ...changes } = update;
+    const updated = { ...item, ...changes,
+      draft_version: item.draft_version + (update.draft_text !== undefined ? 1 : 0), updated_at: "2026-10-09T00:00:01Z" };
     saved.set(id, updated);
     return updated;
+  }),
+  restoreUnpersistedAssistantTurnDraft: mocks.restoreDraft.mockImplementation(async (id: string, input: { client_request_id: string; user_message: string; expected_draft_version: number }) => {
+    if (mocks.receipts.has(input.client_request_id)) return { status: "already_persisted", conversation: saved.get(id)! };
+    const item = saved.get(id)!;
+    if (item.draft_version !== input.expected_draft_version) throw new Error("draft CAS conflict");
+    const conversation = { ...item, draft_text: input.user_message, draft_version: item.draft_version + 1 };
+    saved.set(id, conversation);
+    return { status: "restored", conversation };
   }),
   stopAssistantConversationTurn: vi.fn(),
   getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
   apiUrl: (path: string) => path,
   getRuntimeSettings: mocks.settings,
-  sendWorkspaceAssistantPlanTurn: vi.fn((message: string, conversationId: string, onEvent: (event: never) => void) => runTurn(conversationId, message, onEvent, (emit) => mocks.ask(message, conversationId, emit))),
+  sendWorkspaceAssistantPlanTurn: vi.fn((message: string, conversationId: string, clientRequestId: string, expectedDraftVersion: number, onEvent: (event: never) => void) => runTurn(conversationId, message, clientRequestId, expectedDraftVersion, onEvent, (emit) => mocks.ask(message, conversationId, emit))),
   updateAssistantPlanPreview: vi.fn((_conversationId: string, _turnId: string, input: unknown) => mocks.preflight(input)),
-  sendMaterialAssistantTurn: vi.fn((message: string, conversationId: string, selection: unknown, onEvent: (event: never) => void) => runTurn(conversationId, message, onEvent, (emit) => mocks.materialAsk(message, conversationId, selection, emit))),
+  sendMaterialAssistantTurn: vi.fn((message: string, conversationId: string, selection: unknown, clientRequestId: string, expectedDraftVersion: number, onEvent: (event: never) => void) => runTurn(conversationId, message, clientRequestId, expectedDraftVersion, onEvent, (emit) => mocks.materialAsk(message, conversationId, selection, emit))),
   previewCreationPlan: mocks.preflight,
   confirmCreationPlan: mocks.confirm,
-  sendCreationTaskAssistantTurn: vi.fn((taskId: string, payload: { conversation_id: string; message: string }, onEvent: (event: never) => void) => runTurn(payload.conversation_id, payload.message, onEvent, (emit) => mocks.editAsk(taskId, payload, emit))),
+  sendCreationTaskAssistantTurn: mocks.sendTaskTurn.mockImplementation((taskId: string, payload: { conversation_id: string; message: string; client_request_id: string; expected_draft_version: number }, onEvent: (event: never) => void) => runTurn(payload.conversation_id, payload.message, payload.client_request_id, payload.expected_draft_version, onEvent, (emit) => mocks.editAsk(taskId, payload, emit))),
   confirmCreationTaskEdit: mocks.confirmEdit,
   undoCreationTaskTimeline: mocks.undoEdit,
   };
@@ -90,11 +114,12 @@ describe("HomeCommandComposer", () => {
     configuredModel();
     let releaseInitialSave!: () => void;
     let oldConversationId = "";
-    mocks.updateConversation.mockImplementationOnce((id: string, update: { draft_text?: string }) => new Promise((resolve) => {
+    mocks.updateConversation.mockImplementationOnce((id: string, update: { draft_text?: string; expected_draft_version?: number }) => new Promise((resolve) => {
       oldConversationId = id;
       releaseInitialSave = () => {
         const existing = mocks.saved.get(id)!;
-        const updated = { ...existing, ...update, updated_at: "2026-10-09T00:00:01Z" };
+        const { expected_draft_version: _expected, ...changes } = update;
+        const updated = { ...existing, ...changes, draft_version: existing.draft_version + 1, updated_at: "2026-10-09T00:00:01Z" };
         mocks.saved.set(id, updated);
         resolve(updated);
       };
@@ -325,6 +350,7 @@ describe("HomeCommandComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledWith("task-1", {
       conversation_id: expect.any(String), message: "把画面调亮", context_stage: "montage", selected_object_refs: [], playhead_ms: null,
+      client_request_id: expect.any(String), expected_draft_version: expect.any(Number),
     }, expect.any(Function)));
     expect(await screen.findByRole("dialog", { name: "修改预览" })).toHaveTextContent("调亮画面");
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
@@ -400,5 +426,38 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeDisabled());
     expect(screen.queryByText("第一条已处理")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "修改预览" })).not.toBeInTheDocument();
+  });
+
+  it("records turn_started after navigation and does not restore a request the server already consumed", async () => {
+    configuredModel();
+    let deliver!: (event: { type: "turn_started"; turn_id: string; turn_state: "running"; draft_version: number }) => void;
+    let rejectTurn!: (cause: Error) => void;
+    mocks.sendTaskTurn.mockImplementationOnce((_taskId: string, payload: { conversation_id: string; message: string; client_request_id: string; expected_draft_version: number }, onEvent: typeof deliver) => {
+      const saved = mocks.saved.get(payload.conversation_id)!;
+      mocks.saved.set(saved.id, { ...saved, draft_text: "", draft_version: payload.expected_draft_version + 1 });
+      mocks.receipts.set(payload.client_request_id, { request: `${payload.conversation_id}:${payload.message}:${payload.expected_draft_version}` });
+      deliver = onEvent;
+      return new Promise((_resolve, reject) => { rejectTurn = reject; });
+    });
+    const first = { id: "task-1", stage: "montage", name: "第一条" } as CreationTask;
+    const second = { id: "task-2", stage: "montage", name: "第二条" } as CreationTask;
+    const view = render(<HomeCommandComposer task={first} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "调亮" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.sendTaskTurn).toHaveBeenCalledOnce());
+    const oldConversationId = mocks.sendTaskTurn.mock.calls[0][1].conversation_id;
+
+    view.rerender(<HomeCommandComposer task={second} />);
+    await act(async () => {
+      deliver({ type: "turn_started", turn_id: "persisted-after-navigation", turn_state: "running", draft_version: 2 });
+      rejectTurn(new Error("响应连接中断"));
+    });
+
+    await waitFor(() => expect(mocks.restoreDraft).toHaveBeenCalledWith(oldConversationId,
+      expect.objectContaining({ user_message: "调亮", expected_draft_version: 1 })));
+    expect(mocks.saved.get(oldConversationId)?.draft_text).toBe("");
+    expect(mocks.saved.get(oldConversationId)?.draft_version).toBe(2);
+    expect(screen.queryByText("调亮")).not.toBeInTheDocument();
   });
 });

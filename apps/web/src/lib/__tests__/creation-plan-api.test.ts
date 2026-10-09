@@ -50,10 +50,11 @@ describe("creation-plan API", () => {
 describe("assistant streaming API", () => {
   it("forwards only projected text/tool events and returns the authoritative final result", async () => {
     const frames = [
+      { type: "turn_started", turn_id: "turn-1", turn_state: "running", draft_version: 4 },
       { type: "text_delta", delta: "我先检查。" },
       { type: "tool_start", tool_id: 1, label: "读取当前工作区", args: { path: "/private/key" } },
       { type: "tool_end", tool_id: 1, label: "读取当前工作区", ok: true, summary: "已读取 1 项任务摘要。", result: { token: "secret" } },
-      { type: "result", result: { reply: "方案已返回。", provider: "minimax", model: "test", plan_preview: null } },
+      { type: "result", result: { reply: "方案已返回。", provider: "minimax", model: "test", plan_preview: null, draft_version: 4 } },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
     const fetch = vi.fn().mockResolvedValue(new Response(frames, {
       status: 200, headers: { "Content-Type": "text/event-stream" },
@@ -61,14 +62,17 @@ describe("assistant streaming API", () => {
     vi.stubGlobal("fetch", fetch);
     const events: unknown[] = [];
 
-    const result = await sendWorkspaceAssistantPlanTurn("介绍产品", "conversation-one", event => events.push(event));
+    const result = await sendWorkspaceAssistantPlanTurn("介绍产品", "conversation-one", "request-1", 3, event => events.push(event));
 
     expect(fetch).toHaveBeenCalledWith("/api/assistant/plan/turn", expect.objectContaining({
       headers: expect.objectContaining({ Accept: "text/event-stream" }),
-      body: JSON.stringify({ message: "介绍产品", conversation_id: "conversation-one" }),
+      body: JSON.stringify({ message: "介绍产品", conversation_id: "conversation-one",
+        client_request_id: "request-1", expected_draft_version: 3 }),
     }));
     expect(result.reply).toBe("方案已返回。");
+    expect(result.draft_version).toBe(4);
     expect(events).toEqual([
+      { type: "turn_started", turn_id: "turn-1", turn_state: "running", draft_version: 4 },
       { type: "text_delta", delta: "我先检查。" },
       { type: "tool_start", tool_id: 1, label: "读取当前工作区" },
       { type: "tool_end", tool_id: 1, label: "读取当前工作区", ok: true, summary: "已读取 1 项任务摘要。" },
@@ -83,7 +87,7 @@ describe("assistant streaming API", () => {
       .mockResolvedValueOnce(new Response(`data: ${JSON.stringify({ type: "text_delta", delta: "部分回复" })}\n\n`, {
         status: 200, headers: { "Content-Type": "text/event-stream" },
       })));
-    const send = () => sendWorkspaceAssistantPlanTurn("你好", "conversation-one", () => undefined);
+    const send = () => sendWorkspaceAssistantPlanTurn("你好", "conversation-one", "request-2", 0, () => undefined);
     await expect(send()).rejects.toMatchObject({ status: 503, message: "Pi不可用" });
     await expect(send()).rejects.toMatchObject({ status: 0, message: "连接已结束，但没有收到完整的对话结果。" });
   });

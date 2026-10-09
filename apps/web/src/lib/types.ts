@@ -1654,12 +1654,13 @@ export type CreationTaskAssistantTurnResponse = {
   execution_status: CreationExecutionStatus | null;
   topic_candidates: CreationTaskTopicsResponse | null;
   turn_id?: string | null;
-  turn_status?: "completed" | "stopped";
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
 };
 
 export type AssistantStreamEvent =
-  | { type: "turn_started"; turn_id: string; turn_state: "running" }
-  | { type: "turn_status"; turn_id: string; turn_state: "completed" | "failed" | "stopped" }
+  | { type: "turn_started"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped"; draft_version?: number }
+  | { type: "turn_status"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped" }
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; tool_id: number; label: string }
   | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string };
@@ -1696,6 +1697,7 @@ export type AssistantConversation = {
   scope_id: string;
   title: string;
   draft_text: string;
+  draft_version: number;
   created_at: string;
   updated_at: string;
   turns: AssistantConversationTurn[];
@@ -1787,7 +1789,8 @@ export type WorkspaceAssistantPlanTurnResponse = {
   model: string;
   plan_preview: CreationPlanPreview | null;
   turn_id?: string | null;
-  turn_status?: "completed" | "stopped";
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
 };
 
 export type MaterialAssistantSelection =
@@ -1811,7 +1814,8 @@ export type MaterialAssistantTurnResponse = {
   model: string;
   material_result: MaterialAssistantResult | null;
   turn_id?: string | null;
-  turn_status?: "completed" | "stopped";
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
 };
 
 export type CreationPlan = CreationPlanPreview & {

@@ -93,14 +93,14 @@ vi.mock("@/lib/api", () => ({
     const id = mocks.currentAssistantConversation.get(`${scope.scope_kind}:${scope.scope_id}`);
     if (id) return mocks.assistantConversations.get(id)!;
     const conversation = { id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope,
-      title: "新对话", draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
+      title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
     mocks.assistantConversations.set(conversation.id, conversation);
     mocks.currentAssistantConversation.set(`${scope.scope_kind}:${scope.scope_id}`, conversation.id);
     return conversation;
   }),
   createAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => {
     const id = `new-conversation-${scope.scope_kind}-${scope.scope_id}-${++mocks.assistantSequence}`;
-    const conversation = { id, workspace_id: "local", ...scope, title: "新对话", draft_text: "",
+    const conversation = { id, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0,
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
     mocks.assistantConversations.set(id, conversation);
     mocks.currentAssistantConversation.set(`${scope.scope_kind}:${scope.scope_id}`, id);
@@ -113,11 +113,21 @@ vi.mock("@/lib/api", () => ({
     mocks.currentAssistantConversation.set(`${conversation.scope_kind}:${conversation.scope_id}`, id);
     return conversation;
   }),
-  updateAssistantConversation: vi.fn(async (id: string, update: { draft_text?: string; title?: string }) => {
+  updateAssistantConversation: vi.fn(async (id: string, update: { draft_text?: string; title?: string; expected_draft_version?: number }) => {
     const conversation = mocks.assistantConversations.get(id)!;
-    const updated = { ...conversation, ...update, updated_at: "2026-10-09T00:00:01Z" };
+    if (update.draft_text !== undefined && update.expected_draft_version !== conversation.draft_version) throw new Error("draft CAS conflict");
+    const { expected_draft_version: _expected, ...changes } = update;
+    const updated = { ...conversation, ...changes,
+      draft_version: conversation.draft_version + (update.draft_text !== undefined ? 1 : 0), updated_at: "2026-10-09T00:00:01Z" };
     mocks.assistantConversations.set(id, updated);
     return updated;
+  }),
+  restoreUnpersistedAssistantTurnDraft: vi.fn(async (id: string, input: { client_request_id: string; user_message: string; expected_draft_version: number }) => {
+    const conversation = mocks.assistantConversations.get(id)!;
+    if (conversation.draft_version !== input.expected_draft_version) throw new Error("draft CAS conflict");
+    const restored = { ...conversation, draft_text: input.user_message, draft_version: conversation.draft_version + 1 };
+    mocks.assistantConversations.set(id, restored);
+    return { status: "restored", conversation: restored };
   }),
   stopAssistantConversationTurn: vi.fn(),
   getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
@@ -151,16 +161,18 @@ vi.mock("@/lib/api", () => ({
   resumeCreationExecution: mocks.resumeExecution,
   cancelCreationExecution: mocks.cancelExecution,
   getRuntimeSettings: mocks.getRuntimeSettings,
-  sendCreationTaskAssistantTurn: vi.fn(async (taskId: string, input: { conversation_id: string; message: string }, onEvent: (event: import("@/lib/types").AssistantStreamEvent) => void) => {
+  sendCreationTaskAssistantTurn: vi.fn(async (taskId: string, input: { conversation_id: string; message: string; client_request_id: string; expected_draft_version: number }, onEvent: (event: import("@/lib/types").AssistantStreamEvent) => void) => {
     const conversation = mocks.assistantConversations.get(input.conversation_id);
     if (!conversation) throw new Error("对话夹具不存在");
+    if (conversation.draft_version !== input.expected_draft_version || conversation.draft_text !== input.message) throw new Error("draft CAS conflict");
     const turnId = `task-turn-${++mocks.assistantSequence}`;
     const events: import("@/lib/types").AssistantTurnActivity["events"] = [];
     const emit = (event: import("@/lib/types").AssistantStreamEvent) => {
       onEvent(event);
       if (event.type === "text_delta" || event.type === "tool_start" || event.type === "tool_end") events.push(event);
     };
-    emit({ type: "turn_started", turn_id: turnId, turn_state: "running" });
+    mocks.assistantConversations.set(conversation.id, { ...conversation, draft_text: "", draft_version: input.expected_draft_version + 1 });
+    emit({ type: "turn_started", turn_id: turnId, turn_state: "running", draft_version: input.expected_draft_version + 1 });
     const result = await mocks.askAssistant(taskId, input, emit);
     if (!events.some((event) => event.type === "text_delta") && typeof result.reply === "string") emit({ type: "text_delta", delta: result.reply });
     const saved = mocks.assistantConversations.get(input.conversation_id)!;
@@ -170,9 +182,10 @@ vi.mock("@/lib/api", () => ({
         execution_status: result.execution_status?.job?.status ?? null, script_draft: result.script_draft?.id ?? null,
         topic_candidates: Boolean(result.topic_candidates), edit_preview: Boolean(result.edit_preview) },
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z" };
-    mocks.assistantConversations.set(saved.id, { ...saved, draft_text: "", turns: [...saved.turns, turn], updated_at: turn.updated_at });
+    mocks.assistantConversations.set(saved.id, { ...saved, draft_text: "", draft_version: input.expected_draft_version + 1,
+      turns: [...saved.turns, turn], updated_at: turn.updated_at });
     emit({ type: "turn_status", turn_id: turnId, turn_state: "completed" });
-    return { ...result, turn_id: turnId, turn_status: "completed" };
+    return { ...result, turn_id: turnId, turn_status: "completed", draft_version: input.expected_draft_version + 1 };
   }),
   previewCreationTaskEdit: mocks.previewEdit,
   previewCompoundSelection: mocks.previewSelection,
@@ -1304,7 +1317,7 @@ describe("CreationTaskWorkspace", () => {
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
     expect(saveRenderedVideo).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole("status", { name: "" })).toHaveTextContent("成片.mp4");
+    expect(await screen.findByText("已保存：成片.mp4")).toHaveAttribute("role", "status");
     fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
     expect(screen.getByLabelText("镜头故事板")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成成片" })).not.toBeInTheDocument();
@@ -1355,6 +1368,7 @@ describe("CreationTaskWorkspace", () => {
       person_authorization_id: "person-auth-1", person_authorization_version: "v1",
       authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts-12hz-0.6b-base-8bit",
     };
+    initial.plan.selected_person = { profile_id: "person-1", version: "person-v1" };
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
       sample_rate: 24000, model_id: "qwen3-tts-12hz-0.6b-base-8bit", voice_profile_id: "voice-1",
@@ -1374,7 +1388,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", { name: "人物与口型：待生成口型" }));
+    fireEvent.click(screen.getByRole("button", { name: /人物与口型/ }));
 
     expect(screen.getByText("还没有生成任何口型；系统只为选中的露脸段生成口型。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
@@ -1387,6 +1401,39 @@ describe("CreationTaskWorkspace", () => {
       motion: "natural",
       expression: "neutral",
     }));
+  });
+
+  it("does not infer the selected person from the selected voice reference", () => {
+    const task = { ...baseTask, stage: "montage" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 70 };
+    const initial = workspace(task);
+    initial.plan.presenter_share_target = 40;
+    initial.plan.selected_voice = {
+      profile_id: "voice-1", version: "v1", person_profile_id: "person-1", person_version: "person-v1",
+      person_authorization_id: "person-auth-1", person_authorization_version: "v1",
+      authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts",
+    };
+    initial.plan.selected_person = null;
+    initial.narration = {
+      task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 3,
+      sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",
+      source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
+      language: "zh" as const, pronunciation_version: "v1",
+      segments: [{
+        id: "narration-segment-1", source_section_id: "section-1", text: "第一段真实配音",
+        audio_reference: "narration://artifact/segment-1", audio_url: "/api/segment-1/audio",
+        duration_seconds: 3, sample_rate: 24000, model_id: "qwen3-tts",
+        voice_profile_id: "voice-1", voice_version: "v1", language: "zh" as const,
+        pronunciation_version: "p1", status: "ready" as const,
+        source_kind: "generated", source_artifact_ref: null, source_sha256: null, source_script_digest: null,
+      }],
+    };
+
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: /人物与口型/ }));
+
+    expect(screen.getByText("声音档案中的关联人物不能替代本任务的已选人物。请先在制作方案中选择人物版本，再为配音片段生成口型。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /生成人物口型预览/ })).not.toBeInTheDocument();
+    expect(mocks.generatePersonRender).not.toHaveBeenCalled();
   });
 
   it("does not report the person stage complete while a required segment is still failed", () => {
@@ -1406,6 +1453,7 @@ describe("CreationTaskWorkspace", () => {
       person_authorization_id: "person-auth-1", person_authorization_version: "v1",
       authorization_id: "voice-auth-1", authorization_version: "v1", language: "zh", model_id: "qwen3-tts",
     };
+    initial.plan.selected_person = { profile_id: "person-1", version: "person-v1" };
     initial.narration = {
       task, script_id: "script-1", audio_reference: "narration://artifact/full-audio", duration_seconds: 6,
       sample_rate: 24000, model_id: "qwen3-tts", voice_profile_id: "voice-1",

@@ -91,6 +91,7 @@ class ConversationRepository:
                     scope_id TEXT NOT NULL,
                     user_message TEXT NOT NULL,
                     expected_draft_version INTEGER NOT NULL,
+                    request_context_json TEXT NOT NULL DEFAULT '{}',
                     outcome TEXT NOT NULL CHECK(outcome IN ('consumed','recovered')),
                     turn_id TEXT UNIQUE REFERENCES assistant_conversation_turns(id) ON DELETE CASCADE,
                     created_at TEXT NOT NULL,
@@ -100,6 +101,9 @@ class ConversationRepository:
             conversation_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversations)")}
             if "draft_version" not in conversation_columns:
                 conn.execute("ALTER TABLE assistant_conversations ADD COLUMN draft_version INTEGER NOT NULL DEFAULT 0")
+            receipt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversation_request_receipts)")}
+            if "request_context_json" not in receipt_columns:
+                conn.execute("ALTER TABLE assistant_conversation_request_receipts ADD COLUMN request_context_json TEXT NOT NULL DEFAULT '{}'")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path, timeout=10)
@@ -183,11 +187,18 @@ class ConversationRepository:
 
     def list_for_scope(self, workspace_id: str, member_id: str, scope_kind: str, scope_id: str) -> list[dict]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM assistant_conversations WHERE workspace_id=? AND member_id=? "
-                "AND scope_kind=? AND scope_id=? ORDER BY updated_at DESC, created_at DESC",
-                (workspace_id, member_id, scope_kind, scope_id),
-            ).fetchall()
+            if scope_kind == "material" and scope_id == "library":
+                rows = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE workspace_id=? AND member_id=? "
+                    "AND scope_kind='material' ORDER BY updated_at DESC, created_at DESC",
+                    (workspace_id, member_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE workspace_id=? AND member_id=? "
+                    "AND scope_kind=? AND scope_id=? ORDER BY updated_at DESC, created_at DESC",
+                    (workspace_id, member_id, scope_kind, scope_id),
+                ).fetchall()
         return [self._conversation(row) for row in rows]
 
     def get(self, conversation_id: str, workspace_id: str, member_id: str) -> dict | None:
@@ -217,26 +228,11 @@ class ConversationRepository:
             )
         return self._conversation(row)
 
-    def update(self, conversation_id: str, workspace_id: str, member_id: str,
-               *, title: str | None = None, draft_text: str | None = None) -> dict | None:
-        fields: list[str] = []
-        values: list[str] = []
-        if title is not None:
-            fields.append("title=?")
-            values.append(title)
-        if draft_text is not None:
-            fields.append("draft_text=?")
-            values.append(draft_text)
-            fields.append("draft_version=draft_version+1")
-        if not fields:
-            return self.get(conversation_id, workspace_id, member_id)
-        fields.append("updated_at=?")
-        values.append(_now())
-        values.extend((conversation_id, workspace_id, member_id))
+    def update_title(self, conversation_id: str, workspace_id: str, member_id: str, title: str) -> dict | None:
         with self._connect() as conn:
             conn.execute(
-                f"UPDATE assistant_conversations SET {','.join(fields)} "
-                "WHERE id=? AND workspace_id=? AND member_id=?", values,
+                "UPDATE assistant_conversations SET title=?,updated_at=? WHERE id=? AND workspace_id=? AND member_id=?",
+                (title, _now(), conversation_id, workspace_id, member_id),
             )
         return self.get(conversation_id, workspace_id, member_id)
 
@@ -276,37 +272,9 @@ class ConversationRepository:
         assert updated is not None
         return self._conversation(updated)
 
-    def create_turn(self, conversation_id: str, user_message: str) -> dict:
-        turn_id = str(uuid4())
-        now = _now()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            running = conn.execute(
-                "SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running' LIMIT 1",
-                (conversation_id,),
-            ).fetchone()
-            if running is not None:
-                raise ConversationTurnAlreadyRunning("此对话已有正在运行的助手轮次。")
-            row = conn.execute(
-                "SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM assistant_conversation_turns WHERE conversation_id=?",
-                (conversation_id,),
-            ).fetchone()
-            sequence = int(row["sequence"])
-            conn.execute(
-                "INSERT INTO assistant_conversation_turns "
-                "(id,conversation_id,sequence,user_message,assistant_text,status,events_json,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,'running','[]',?,?)",
-                (turn_id, conversation_id, sequence, user_message, "", now, now),
-            )
-            conn.execute("UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,updated_at=? WHERE id=?",
-                         (now, conversation_id))
-            result = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
-        assert result is not None
-        return dict(result)
-
     def create_turn_idempotent(
         self, conversation_id: str, workspace_id: str, member_id: str, user_message: str,
-        client_request_id: str, expected_draft_version: int,
+        client_request_id: str, expected_draft_version: int, request_context: dict | None = None,
     ) -> tuple[dict | None, bool]:
         """Atomically consume a draft version and create at most one turn per request ID.
 
@@ -314,6 +282,7 @@ class ConversationRepository:
         must return the existing turn without launching its business tools again.
         """
         self._validate_draft_request(client_request_id, expected_draft_version)
+        context_json = json.dumps(request_context or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conversation = conn.execute(
@@ -335,6 +304,7 @@ class ConversationRepository:
                     and existing["scope_id"] == conversation["scope_id"]
                     and existing["user_message"] == user_message
                     and existing["expected_draft_version"] == expected_draft_version
+                    and existing["request_context_json"] == context_json
                 )
                 if not same_request:
                     raise ConversationTurnRequestConflict("此请求身份已用于其他内容或对话范围。")
@@ -349,6 +319,8 @@ class ConversationRepository:
 
             current = self._conversation(conversation)
             if current["draft_version"] != expected_draft_version:
+                raise ConversationDraftVersionConflict(current)
+            if current["draft_text"] != user_message:
                 raise ConversationDraftVersionConflict(current)
             running = conn.execute(
                 "SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running' LIMIT 1",
@@ -384,9 +356,9 @@ class ConversationRepository:
             conn.execute(
                 "INSERT INTO assistant_conversation_request_receipts "
                 "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
-                "expected_draft_version,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?, 'consumed',?,?)",
+                "expected_draft_version,request_context_json,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?,?, 'consumed',?,?)",
                 (client_request_id, conversation_id, workspace_id, member_id, conversation["scope_kind"],
-                 conversation["scope_id"], user_message, expected_draft_version, turn_id, now),
+                 conversation["scope_id"], user_message, expected_draft_version, context_json, turn_id, now),
             )
             turn = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
         assert turn is not None
@@ -446,7 +418,7 @@ class ConversationRepository:
             conn.execute(
                 "INSERT INTO assistant_conversation_request_receipts "
                 "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
-                "expected_draft_version,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?, 'recovered',NULL,?)",
+                "expected_draft_version,request_context_json,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,?,?, '{}','recovered',NULL,?)",
                 (client_request_id, conversation_id, workspace_id, member_id, conversation["scope_kind"],
                  conversation["scope_id"], user_message, expected_draft_version, _now()),
             )
@@ -477,7 +449,10 @@ class ConversationRepository:
             existing = json.loads(row["result_json"]) if row["result_json"] else None
             if not isinstance(existing, dict) or existing.get("kind") != "plan_preview":
                 return False
-            result = {"kind": "plan_preview", "plan_preview": plan_preview}
+            result = {**existing, "kind": "plan_preview", "plan_preview": plan_preview}
+            response = result.get("response")
+            if isinstance(response, dict):
+                result["response"] = {**response, "plan_preview": plan_preview}
             conn.execute(
                 "UPDATE assistant_conversation_turns SET result_json=?,updated_at=? "
                 "WHERE id=? AND status='completed'",

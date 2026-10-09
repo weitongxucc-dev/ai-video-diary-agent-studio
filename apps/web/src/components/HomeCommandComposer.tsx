@@ -64,15 +64,16 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
 }
 
 export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext }: HomeCommandComposerProps) {
-  const materialScopeKey = materialContext
+  const materialSelectionKey = materialContext
     ? materialContext.selection
       ? materialContext.selection.scope === "asset"
         ? `asset:${materialContext.selection.asset_id}`
         : `segment:${materialContext.selection.asset_id}:${materialContext.selection.segment_id}`
       : "browse"
     : null;
-  const scopeKind = materialScopeKey !== null ? "material" as const : task ? "task" as const : "home" as const;
-  const scopeId = materialScopeKey ?? task?.id ?? "home";
+  const materialConversationScope = materialContext ? "library" : null;
+  const scopeKind = materialConversationScope !== null ? "material" as const : task ? "task" as const : "home" as const;
+  const scopeId = materialConversationScope ?? task?.id ?? "home";
   const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -99,7 +100,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setTaskPreview(null); setTaskPreviewOpen(false); setUndoReady(false);
     setPending(null); setError(null); setTaskActionStatus(null);
     restoredPlanKey.current = null;
-  }, [task?.id, materialScopeKey]);
+  }, [task?.id, materialSelectionKey]);
   useEffect(() => {
     const saved = assistant.conversation;
     if (!saved || saved.scope_kind !== scopeKind || saved.scope_id !== scopeId) return;
@@ -130,10 +131,6 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   async function sendToAssistant(rawMessage: string) {
     const command = rawMessage.trim();
     if (!command || pending) return;
-    if (materialContext && !materialContext.selection) {
-      setError("请先从右侧选择整条素材或一个片段，再说明要怎么处理我的标签；这次没有发送。");
-      return;
-    }
     const revision = scopeRevision.current;
     setPending("chat");
     setError(null);
@@ -150,40 +147,35 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       requestConversationId = turn.conversationId;
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistant.bindTurnEvents(turn.conversationId, turn.localTurnId);
-      await turn.draftCheckpoint;
+      const expectedDraftVersion = await turn.draftCheckpoint;
       if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) {
         await assistant.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
           "页面或会话已切换；本轮没有发送，原要求已保留为草稿。");
         return;
       }
-      if (materialContext?.selection) {
+      if (materialContext) {
         const selection = materialContext.selection;
-        const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection, (item) => {
-          if (revision !== scopeRevision.current) return;
-          onStreamEvent(item);
-        });
-        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
-        if (result.material_result) materialContext.onResult(selection, result.material_result);
-        setModel(`${result.provider} / ${result.model}`);
+        const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection,
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+        if (!assistant.isCurrentConversation(turn.conversationId)) return;
+        if (selection && result.material_result) materialContext.onResult(selection, result.material_result);
+        if (revision === scopeRevision.current) setModel(`${result.provider} / ${result.model}`);
       } else if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
           conversation_id: turn.conversationId,
           message: command, context_stage: task.stage,
+          client_request_id: turn.clientRequestId,
+          expected_draft_version: expectedDraftVersion,
           selected_object_refs: [], playhead_ms: null,
-        }, (item) => {
-          if (revision !== scopeRevision.current) return;
-          onStreamEvent(item);
-        });
+        }, onStreamEvent);
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         setModel(`${result.provider} / ${result.model}`);
         if (result.execution_action || result.topic_candidates) onTaskUpdated?.();
       } else {
-        const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId, (item) => {
-          if (revision !== scopeRevision.current) return;
-          onStreamEvent(item);
-        });
+        const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent);
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setPreview(result.plan_preview);
         setActivePlanTurnId(result.turn_id ?? null);

@@ -3,19 +3,68 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 import type { DesktopVoiceRecorderProps } from "@/components/DesktopVoiceRecorder";
 const recorder = vi.hoisted(() => ({ props: null as DesktopVoiceRecorderProps | null }));
+const assistantFixtures = vi.hoisted(() => ({
+  conversations: new Map<string, import("@/lib/types").AssistantConversation>(),
+  current: new Map<string, string>(),
+  sequence: 0,
+}));
 vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (props: DesktopVoiceRecorderProps) => {
   recorder.props = props;
   return <span>录音组件测试替身</span>;
 } }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector, conversation }: { children: React.ReactNode; inspector: React.ReactNode; conversation: React.ReactNode }) => <>{children}{inspector}{conversation}</> }));
-vi.mock("@/lib/api", () => ({ getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), getRuntimeSettings: vi.fn(), sendMaterialAssistantTurn: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateMaterialAssetTags: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), getRuntimeSettings: vi.fn(), sendMaterialAssistantTurn: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateMaterialAssetTags: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn(),
+  getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => {
+    const key = `${scope.scope_kind}:${scope.scope_id}`;
+    const currentId = assistantFixtures.current.get(key);
+    if (currentId) return assistantFixtures.conversations.get(currentId)!;
+    const conversation = { id: `conversation-${key}`, workspace_id: "workspace", ...scope, title: "新对话", draft_text: "", draft_version: 0,
+      created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
+    assistantFixtures.conversations.set(conversation.id, conversation);
+    assistantFixtures.current.set(key, conversation.id);
+    return conversation;
+  }),
+  createAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => {
+    const key = `${scope.scope_kind}:${scope.scope_id}`;
+    const id = `conversation-${key}-${++assistantFixtures.sequence}`;
+    const conversation = { id, workspace_id: "workspace", ...scope, title: "新对话", draft_text: "", draft_version: 0,
+      created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
+    assistantFixtures.conversations.set(id, conversation);
+    assistantFixtures.current.set(key, id);
+    return conversation;
+  }),
+  listAssistantConversations: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ items: [...assistantFixtures.conversations.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
+  getAssistantConversation: vi.fn(async (id: string) => assistantFixtures.conversations.get(id)!),
+  resumeAssistantConversation: vi.fn(async (id: string) => {
+    const conversation = assistantFixtures.conversations.get(id)!;
+    assistantFixtures.current.set(`${conversation.scope_kind}:${conversation.scope_id}`, id);
+    return conversation;
+  }),
+  updateAssistantConversation: vi.fn(async (id: string, update: { title?: string; draft_text?: string; expected_draft_version?: number }) => {
+    const conversation = assistantFixtures.conversations.get(id)!;
+    if (update.draft_text !== undefined && update.expected_draft_version !== conversation.draft_version) throw new Error("draft CAS conflict");
+    const { expected_draft_version: _expected, ...changes } = update;
+    const updated = { ...conversation, ...changes, draft_version: conversation.draft_version + (update.draft_text !== undefined ? 1 : 0) };
+    assistantFixtures.conversations.set(id, updated);
+    return updated;
+  }),
+  restoreUnpersistedAssistantTurnDraft: vi.fn(async (id: string, input: { user_message: string; expected_draft_version: number }) => {
+    const conversation = assistantFixtures.conversations.get(id)!;
+    if (input.expected_draft_version !== conversation.draft_version) throw new Error("draft CAS conflict");
+    const restored = { ...conversation, draft_text: input.user_message, draft_version: conversation.draft_version + 1 };
+    assistantFixtures.conversations.set(id, restored);
+    return { status: "restored", conversation: restored };
+  }),
+  getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
+}));
 vi.mock("@/lib/directoryPicker", () => ({ importLocalMaterials: vi.fn(), hasMaterialImporter: () => true }));
 vi.mock("@/lib/media-link-api", () => ({
   checkMediaLink: vi.fn(),
   importMediaLink: vi.fn(),
   mediaLinkErrorMessage: (cause: unknown) => (cause instanceof Error ? cause.message : "链接导入失败，请重试。"),
 }));
-import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, getRuntimeSettings, sendMaterialAssistantTurn, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateMaterialAssetTags, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords } from "@/lib/api";
+import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeStatus, getRuntimeSettings, sendMaterialAssistantTurn, bindMaterialIntake, confirmMaterialCopyComplete, scanMaterialIntake, retryMaterialIntake, updateMaterialUseState, updateMaterialAssetTags, updateProductionMaterialSegment, updateMaterialNotes, transcribeMaterialVoiceNote, getMaterialBusinessObjects, createMaterialBusinessObject, getAssetBusinessObjects, saveAssetBusinessObjects, getAssetSegmentUsageRecords, getCurrentAssistantConversation, listAssistantConversations, getAssistantCapabilities } from "@/lib/api";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
@@ -38,6 +87,9 @@ const intakeReady: MaterialIntakeStatus = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  assistantFixtures.conversations.clear();
+  assistantFixtures.current.clear();
+  assistantFixtures.sequence = 0;
   vi.mocked(transcribeMaterialVoiceNote).mockReset();
   recorder.props = null;
   vi.mocked(getProductionMaterials).mockResolvedValue(library);
@@ -45,6 +97,9 @@ beforeEach(() => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(intakeReady);
   vi.mocked(getRuntimeSettings).mockResolvedValue({ status: { llm: { configured: true, provider: "test", model: "test" } } } as Awaited<ReturnType<typeof getRuntimeSettings>>);
   vi.mocked(sendMaterialAssistantTurn).mockResolvedValue({ reply: "已读取。", provider: "test", model: "test", material_result: null });
+  vi.mocked(getCurrentAssistantConversation).mockClear();
+  vi.mocked(listAssistantConversations).mockClear();
+  vi.mocked(getAssistantCapabilities).mockClear();
   vi.mocked(getMaterialBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ items: [], total_count: 0 });
@@ -73,7 +128,38 @@ it("does not bind the automatic first material, then binds only explicit asset a
 it("shows asset labels and applies assistant readback only to the exact selected segment", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
   let resolveTurn!: (value: Awaited<ReturnType<typeof sendMaterialAssistantTurn>>) => void;
-  vi.mocked(sendMaterialAssistantTurn).mockImplementationOnce(() => new Promise((resolve) => { resolveTurn = resolve; }));
+  vi.mocked(sendMaterialAssistantTurn).mockImplementationOnce((message, conversationId, _selection, _requestId, expectedVersion, onEvent) => {
+    const conversation = assistantFixtures.conversations.get(conversationId)!;
+    if (conversation.draft_version !== expectedVersion || conversation.draft_text !== message) throw new Error("draft CAS conflict");
+    const turnId = `material-turn-${++assistantFixtures.sequence}`;
+    const startedAt = "2026-10-09T00:00:01Z";
+    const turn: import("@/lib/types").AssistantConversationTurn = {
+      id: turnId, sequence: assistantFixtures.sequence, user_message: message, assistant_text: "", status: "running",
+      events: [], result: null, created_at: startedAt, updated_at: startedAt,
+    };
+    assistantFixtures.conversations.set(conversationId, {
+      ...conversation, draft_text: "", draft_version: expectedVersion + 1, turns: [...conversation.turns, turn], updated_at: startedAt,
+    });
+    onEvent({ type: "turn_started", turn_id: turnId, turn_state: "running", draft_version: expectedVersion + 1 });
+    return new Promise((resolve) => {
+      resolveTurn = (value) => {
+        const latest = assistantFixtures.conversations.get(conversationId)!;
+        const currentTurn = latest.turns.find((item) => item.id === turnId)!;
+        const textEvent = { type: "text_delta" as const, delta: value.reply };
+        const completedAt = "2026-10-09T00:00:02Z";
+        assistantFixtures.conversations.set(conversationId, {
+          ...latest,
+          turns: latest.turns.map((item) => item.id === turnId
+            ? { ...currentTurn, assistant_text: value.reply, status: "completed", events: [textEvent], result: { kind: "material_turn", material_result: value.material_result }, updated_at: completedAt }
+            : item),
+          updated_at: completedAt,
+        });
+        onEvent(textEvent);
+        onEvent({ type: "turn_status", turn_id: turnId, turn_state: "completed" });
+        resolve(value);
+      };
+    });
+  });
   vi.mocked(updateMaterialAssetTags).mockResolvedValue({ ...taggedAsset, user_tags: ["整条标签"] });
   render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
@@ -87,7 +173,8 @@ it("shows asset labels and applies assistant readback only to the exact selected
   fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给片段加上产品演示" } });
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
-    "给片段加上产品演示", expect.any(String), { scope: "segment", asset_id: "asset", segment_id: "segment" }, expect.any(Function),
+    "给片段加上产品演示", expect.any(String), { scope: "segment", asset_id: "asset", segment_id: "segment" },
+    expect.any(String), expect.any(Number), expect.any(Function),
   ));
   fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
   resolveTurn({
@@ -115,7 +202,8 @@ it("shows asset labels and applies assistant readback only to the exact selected
   fireEvent.change(screen.getByRole("textbox", { name: "素材标签要求" }), { target: { value: "给整条素材添加整条AI标签" } });
   fireEvent.submit(screen.getByRole("textbox", { name: "素材标签要求" }).closest("form")!);
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
-    "给整条素材添加整条AI标签", expect.any(String), { scope: "asset", asset_id: "asset" }, expect.any(Function),
+    "给整条素材添加整条AI标签", expect.any(String), { scope: "asset", asset_id: "asset" },
+    expect.any(String), expect.any(Number), expect.any(Function),
   ));
   await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条AI标签")).toBeInTheDocument());
 });
@@ -669,7 +757,8 @@ it("explains which files were skipped as unsupported", async () => {
   vi.mocked(importLocalMaterials).mockResolvedValue({ canceled:false, copied:[], skipped:["notes.txt"], failures:[] });
   renderBound();
   fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
-  const status = await screen.findByRole("status");
+  const status = await screen.findByText(/没有可导入的文件：notes\.txt/);
+  expect(status).toHaveAttribute("role", "status");
   expect(status).toHaveTextContent("notes.txt");
   expect(status).toHaveTextContent("仅支持 mp4、mov、m4v");
 });
@@ -682,7 +771,8 @@ it("surfaces a cleanup warning without turning a completed copy into a failure",
   });
   renderBound();
   fireEvent.click(await screen.findByRole("button", { name:"导入本地素材" }));
-  const status = await screen.findByRole("status");
+  const status = await screen.findByText(/已复制 1 个文件到素材目录/);
+  expect(status).toHaveAttribute("role", "status");
   expect(status).toHaveTextContent("已复制 1 个文件到素材目录");
   expect(status).toHaveTextContent("未能自动清理");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();

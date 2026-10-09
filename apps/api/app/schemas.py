@@ -1592,6 +1592,21 @@ class AssistantConversationUpdateRequest(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=80)
     draft_text: str | None = Field(default=None, max_length=4000)
+    expected_draft_version: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def require_draft_version(self):
+        if self.draft_text is not None and self.expected_draft_version is None:
+            raise ValueError("保存草稿必须提供expected_draft_version")
+        return self
+
+
+class AssistantConversationDraftRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_request_id: UUID
+    user_message: str = Field(min_length=2, max_length=4000)
+    expected_draft_version: int = Field(ge=0)
 
 
 class AssistantConversationTurnResponse(BaseModel):
@@ -1613,9 +1628,15 @@ class AssistantConversationResponse(BaseModel):
     scope_id: str
     title: str
     draft_text: str
+    draft_version: int = Field(ge=0)
     created_at: datetime
     updated_at: datetime
     turns: list[AssistantConversationTurnResponse] = Field(default_factory=list)
+
+
+class AssistantConversationDraftRestoreResponse(BaseModel):
+    status: Literal["restored", "already_recovered", "already_persisted"]
+    conversation: AssistantConversationResponse
 
 
 class AssistantConversationListResponse(BaseModel):
@@ -1631,6 +1652,8 @@ class CreationTaskAssistantTurnRequest(BaseModel):
 
     conversation_id: UUID
     message: str = Field(min_length=2, max_length=1000)
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
     context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
@@ -1646,7 +1669,8 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     execution_status: dict[str, object] | None = None
     topic_candidates: CreationTaskTopicsResponse | None = None
     turn_id: UUID | None = None
-    turn_status: Literal["completed", "stopped"] = "completed"
+    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
 
 
 class CreationTaskAssistantHistoryEntry(BaseModel):
@@ -1755,6 +1779,8 @@ class WorkspaceAssistantPlanTurnRequest(BaseModel):
 
     message: str = Field(min_length=2, max_length=1000)
     conversation_id: UUID
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
 
 
 class WorkspaceAssistantPlanTurnResponse(BaseModel):
@@ -1763,7 +1789,8 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     model: str
     plan_preview: CreationPlanPreviewResponse | None = None
     turn_id: UUID | None = None
-    turn_status: Literal["completed", "stopped"] = "completed"
+    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
 
 
 class MaterialAssistantSelectionRequest(BaseModel):
@@ -1787,7 +1814,9 @@ class MaterialAssistantTurnRequest(BaseModel):
 
     message: str = Field(min_length=2, max_length=1000)
     conversation_id: UUID
-    selection: MaterialAssistantSelectionRequest
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
+    selection: MaterialAssistantSelectionRequest | None = None
 
 
 class MaterialAssistantResultResponse(BaseModel):
@@ -1807,7 +1836,8 @@ class MaterialAssistantTurnResponse(BaseModel):
     model: str
     material_result: MaterialAssistantResultResponse | None = None
     turn_id: UUID | None = None
-    turn_status: Literal["completed", "stopped"] = "completed"
+    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
 
 
 class AssistantStreamEvent(BaseModel):
@@ -1816,6 +1846,7 @@ class AssistantStreamEvent(BaseModel):
     type: Literal["turn_started", "turn_status", "text_delta", "tool_start", "tool_end", "result", "error"]
     turn_id: UUID | None = None
     turn_state: Literal["running", "completed", "failed", "stopped"] | None = None
+    draft_version: int | None = Field(default=None, ge=0)
     delta: str | None = None
     tool_id: int | None = None
     label: str | None = None

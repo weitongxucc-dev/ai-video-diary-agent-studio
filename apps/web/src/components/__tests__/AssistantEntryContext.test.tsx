@@ -20,7 +20,7 @@ vi.mock("@/lib/api", () => ({
 
 function savedConversation(): AssistantConversation {
   return { id: "saved-conversation", workspace_id: "fixture-workspace", scope_kind: "home", scope_id: "home", title: "新对话",
-    draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
+    draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] };
 }
 let conversation: AssistantConversation;
 let draftText: string;

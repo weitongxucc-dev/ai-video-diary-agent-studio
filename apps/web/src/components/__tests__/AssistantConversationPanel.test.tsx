@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationPanel } from "../AssistantConversationPanel";
 import { useAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantStreamEvent } from "@/lib/types";
@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   createAssistantConversation: vi.fn(),
   resumeAssistantConversation: vi.fn(),
   getAssistantConversation: vi.fn(),
+  restoreUnpersistedAssistantTurnDraft: vi.fn(),
   stopAssistantConversationTurn: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({
@@ -33,10 +34,26 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function conversation(): AssistantConversation {
+beforeEach(() => {
+  api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string; expected_draft_version?: number; title?: string }) => ({
+    ...conversation(), id, title: update.title ?? "新对话", draft_text: update.draft_text ?? "",
+    draft_version: (update.expected_draft_version ?? 0) + 1,
+  }));
+  api.restoreUnpersistedAssistantTurnDraft.mockImplementation(async (id: string, request: {
+    user_message: string; expected_draft_version: number;
+  }) => ({
+    status: "restored",
+    conversation: {
+      ...conversation(), id, draft_text: request.user_message,
+      draft_version: request.expected_draft_version + 1,
+    },
+  }));
+});
+
+function conversation(scopeKind: "home" | "task" = "home", scopeId = scopeKind === "home" ? "home" : "task-one"): AssistantConversation {
   return {
-    id: "conversation-one", workspace_id: "workspace-one", scope_kind: "home", scope_id: "home",
-    title: "新对话", draft_text: "", created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z",
+    id: "conversation-one", workspace_id: "workspace-one", scope_kind: scopeKind, scope_id: scopeId,
+    title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z",
     turns: [{
       id: "turn-one", sequence: 1, user_message: "请先读当前方案",
       assistant_text: "已读取 **真实方案**。\n\n下一步可查看「本轮结果」。",
@@ -182,31 +199,39 @@ describe("AssistantConversationPanel", () => {
 
   it("records turn_started before the active scope gate so a late failure cannot restore a submitted message", async () => {
     const first = { ...conversation(), turns: [], draft_text: "" };
-    const second = { ...conversation(), id: "task-conversation", scope_kind: "task" as const,
-      scope_id: "task-one", turns: [], draft_text: "" };
+    const second = { ...conversation("task", "task-one"), id: "task-conversation", turns: [], draft_text: "" };
     api.getCurrentAssistantConversation.mockImplementation(async (scope: { scope_kind: string; scope_id: string }) =>
       scope.scope_kind === "home" ? first : second);
     api.listAssistantConversations.mockImplementation(async (scope: { scope_kind: string; scope_id: string }) => ({
       items: scope.scope_kind === "home" ? [first] : [second],
     }));
-    api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string }) => ({
+    api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string; expected_draft_version?: number }) => ({
       ...(id === first.id ? first : second), draft_text: update.draft_text ?? "",
+      draft_version: (update.expected_draft_version ?? 0) + 1,
     }));
 
     const { result, rerender } = renderHook(({ scope }) => useAssistantConversation(scope), {
-      initialProps: { scope: { scope_kind: "home" as const, scope_id: "home" } },
+      initialProps: { scope: { scope_kind: "home" as "home" | "task", scope_id: "home" } },
     });
     await waitFor(() => expect(result.current.conversation?.id).toBe(first.id));
     let pending!: ReturnType<typeof result.current.beginTurn>;
     let stream!: (event: AssistantStreamEvent) => void;
-    act(() => {
+    await act(async () => {
       pending = result.current.beginTurn("上一范围已提交的请求");
       stream = result.current.bindTurnEvents(pending.conversationId, pending.localTurnId);
+      await pending.draftCheckpoint;
     });
 
     rerender({ scope: { scope_kind: "task", scope_id: "task-one" } });
     await waitFor(() => expect(result.current.conversation?.id).toBe(second.id));
-    act(() => stream({ type: "turn_started", turn_id: "persisted-old-turn", turn_state: "running" }));
+    act(() => stream({ type: "turn_started", turn_id: "persisted-old-turn", turn_state: "running", draft_version: 2 }));
+    api.restoreUnpersistedAssistantTurnDraft.mockResolvedValue({
+      status: "already_persisted",
+      conversation: {
+        ...first, draft_version: 2,
+        turns: [{ ...conversation().turns[0], id: "persisted-old-turn", status: "running" }],
+      },
+    });
     const updateCount = api.updateAssistantConversation.mock.calls.length;
 
     await act(async () => {
@@ -235,6 +260,23 @@ describe("AssistantConversationPanel", () => {
     expect(api.updateAssistantConversation).toHaveBeenCalledTimes(updatesBeforeBegin);
   });
 
+  it("marks a conversation inactive when its hook unmounts during a pending draft checkpoint", async () => {
+    const initial = { ...conversation(), turns: [], draft_text: "" };
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.listAssistantConversations.mockResolvedValue({ items: [initial] });
+    const { result, unmount } = renderHook(() => useAssistantConversation({ scope_kind: "home", scope_id: "home" }));
+    await waitFor(() => expect(result.current.conversation?.id).toBe(initial.id));
+    let turn!: ReturnType<typeof result.current.beginTurn>;
+    await act(async () => {
+      turn = result.current.beginTurn("卸载前等待保存的请求");
+      await turn.draftCheckpoint;
+    });
+
+    unmount();
+
+    expect(result.current.isCurrentConversation(initial.id)).toBe(false);
+  });
+
   it("turns an unpersisted failed optimistic turn into a retryable draft", async () => {
     const saved = conversation();
     api.getCurrentAssistantConversation.mockResolvedValue(saved);
@@ -246,14 +288,40 @@ describe("AssistantConversationPanel", () => {
     await act(async () => {
       const turn = result.current.beginTurn("请再试一次读取当前方案");
       localTurnId = turn.localTurnId;
+      await turn.draftCheckpoint;
       await result.current.refresh();
+      api.restoreUnpersistedAssistantTurnDraft.mockResolvedValue({
+        status: "restored", conversation: { ...saved, draft_text: "请再试一次读取当前方案", draft_version: 2 },
+      });
       expect(await result.current.failUnpersistedTurn(turn.conversationId, turn.localTurnId, "网络请求未能建立轮次。")).toBe(true);
     });
-    expect(result.current.conversation?.turns.at(-1)?.id).toBe(localTurnId);
-    expect(result.current.conversation?.turns.at(-1)?.status).toBe("failed");
-    expect(result.current.conversation?.turns.at(-1)?.result).toEqual({ kind: "failure", message: "网络请求未能建立轮次。" });
+    expect(result.current.conversation?.turns.some((turn) => turn.id === localTurnId)).toBe(false);
     expect(result.current.draftText).toBe("请再试一次读取当前方案");
-    expect(api.updateAssistantConversation).not.toHaveBeenCalledWith(saved.id, { draft_text: "网络请求未能建立轮次。" });
+    expect(api.restoreUnpersistedAssistantTurnDraft).toHaveBeenCalledWith(saved.id, {
+      client_request_id: expect.any(String), user_message: "请再试一次读取当前方案", expected_draft_version: 1,
+    });
+  });
+
+  it("restores the original request when the draft checkpoint failed before persisting", async () => {
+    const initial = { ...conversation(), turns: [], draft_text: "" };
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.listAssistantConversations.mockResolvedValue({ items: [initial] });
+    api.updateAssistantConversation.mockRejectedValueOnce(new Error("checkpoint unavailable"));
+    const { result } = renderHook(() => useAssistantConversation({ scope_kind: "home", scope_id: "home" }));
+    await waitFor(() => expect(result.current.conversation?.id).toBe(initial.id));
+    let turn!: ReturnType<typeof result.current.beginTurn>;
+    act(() => { turn = result.current.beginTurn("检查点失败仍需保留的原句"); });
+    await expect(turn.draftCheckpoint).rejects.toThrow("checkpoint unavailable");
+
+    await act(async () => {
+      expect(await result.current.failUnpersistedTurn(turn.conversationId, turn.localTurnId, "连接中断")).toBe(true);
+    });
+
+    expect(api.restoreUnpersistedAssistantTurnDraft).toHaveBeenCalledWith(initial.id, {
+      client_request_id: turn.clientRequestId, user_message: "检查点失败仍需保留的原句", expected_draft_version: 0,
+    });
+    expect(result.current.draftText).toBe("检查点失败仍需保留的原句");
+    expect(result.current.conversation?.draft_version).toBe(1);
   });
 
   it("keeps a late unpersisted-turn failure in its original conversation without replacing a newer conversation draft", async () => {
@@ -263,14 +331,18 @@ describe("AssistantConversationPanel", () => {
     api.listAssistantConversations.mockResolvedValue({ items: [first, second] });
     api.createAssistantConversation.mockResolvedValue(second);
     api.getAssistantConversation.mockResolvedValue(first);
-    api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string }) => ({
+    api.updateAssistantConversation.mockImplementation(async (id: string, update: { draft_text?: string; expected_draft_version?: number }) => ({
       ...(id === first.id ? first : second), draft_text: update.draft_text ?? "",
+      draft_version: (update.expected_draft_version ?? 0) + 1,
       updated_at: "2026-10-09T00:01:00Z",
     }));
     const { result } = renderHook(() => useAssistantConversation({ scope_kind: "home", scope_id: "home" }));
     await waitFor(() => expect(result.current.conversation?.id).toBe(first.id));
     let pending!: ReturnType<typeof result.current.beginTurn>;
-    act(() => { pending = result.current.beginTurn("旧会话原始要求"); });
+    await act(async () => { pending = result.current.beginTurn("旧会话原始要求"); await pending.draftCheckpoint; });
+    api.restoreUnpersistedAssistantTurnDraft.mockResolvedValue({
+      status: "restored", conversation: { ...first, draft_text: "旧会话原始要求", draft_version: 2 },
+    });
     await act(async () => { await result.current.createNew(); });
     act(() => result.current.setDraftText("新会话较新的草稿"));
 
@@ -278,8 +350,10 @@ describe("AssistantConversationPanel", () => {
       expect(await result.current.failUnpersistedTurn(pending.conversationId, pending.localTurnId, "旧请求连接失败说明")).toBe(true);
     });
 
-    expect(api.updateAssistantConversation).toHaveBeenCalledWith(first.id, { draft_text: "旧会话原始要求" });
-    expect(api.updateAssistantConversation).not.toHaveBeenCalledWith(second.id, { draft_text: "旧请求连接失败说明" });
+    expect(api.updateAssistantConversation).not.toHaveBeenCalledWith(first.id, expect.objectContaining({ draft_text: "" }));
+    expect(api.restoreUnpersistedAssistantTurnDraft).toHaveBeenCalledWith(first.id, {
+      client_request_id: expect.any(String), user_message: "旧会话原始要求", expected_draft_version: 1,
+    });
     expect(result.current.conversation?.id).toBe(second.id);
     expect(result.current.draftText).toBe("新会话较新的草稿");
   });
@@ -291,15 +365,18 @@ describe("AssistantConversationPanel", () => {
     const { result } = renderHook(() => useAssistantConversation({ scope_kind: "home", scope_id: "home" }));
     await waitFor(() => expect(result.current.conversation?.id).toBe(initial.id));
     let pending!: ReturnType<typeof result.current.beginTurn>;
-    act(() => { pending = result.current.beginTurn("已提交但失败的要求"); });
+    await act(async () => { pending = result.current.beginTurn("已提交但失败的要求"); await pending.draftCheckpoint; });
     act(() => result.current.setDraftText("发送后新写的草稿"));
+    api.restoreUnpersistedAssistantTurnDraft.mockResolvedValue({
+      status: "restored", conversation: { ...initial, draft_text: "已提交但失败的要求", draft_version: 2 },
+    });
 
     await act(async () => {
       expect(await result.current.failUnpersistedTurn(pending.conversationId, pending.localTurnId, "网络失败说明")).toBe(true);
     });
 
     expect(result.current.draftText).toBe("发送后新写的草稿");
-    expect(result.current.conversation?.turns.at(-1)?.result).toEqual({ kind: "failure", message: "网络失败说明" });
+    expect(result.current.conversation?.turns.some((turn) => turn.id === pending.localTurnId)).toBe(false);
   });
 
   it("reconciles a recovered server turn instead of leaving an optimistic duplicate running", async () => {
@@ -358,7 +435,10 @@ describe("AssistantConversationPanel", () => {
     let resolveCurrent!: (value: AssistantConversation) => void;
     api.getCurrentAssistantConversation.mockReturnValue(new Promise((resolve) => { resolveCurrent = resolve; }));
     api.listAssistantConversations.mockResolvedValue({ items: [initial] });
-    api.updateAssistantConversation.mockImplementation(async (_id: string, update: { draft_text?: string }) => ({ ...initial, draft_text: update.draft_text ?? "" }));
+    api.updateAssistantConversation.mockImplementation(async (_id: string, update: { draft_text?: string; expected_draft_version?: number }) => ({
+      ...initial, draft_text: update.draft_text ?? "",
+      draft_version: initial.draft_version + (update.draft_text === undefined ? 0 : 1),
+    }));
     const { result } = renderHook(() => useAssistantConversation({ scope_kind: "home", scope_id: "home" }));
 
     act(() => result.current.setDraftText("提取当前镜头原声"));
@@ -366,6 +446,8 @@ describe("AssistantConversationPanel", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.draftText).toBe("提取当前镜头原声");
-    expect(api.updateAssistantConversation).toHaveBeenCalledWith(initial.id, { draft_text: "提取当前镜头原声" });
+    expect(api.updateAssistantConversation).toHaveBeenCalledWith(initial.id, {
+      draft_text: "提取当前镜头原声", expected_draft_version: initial.draft_version,
+    });
   });
 });

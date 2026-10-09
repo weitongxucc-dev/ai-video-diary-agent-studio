@@ -161,13 +161,14 @@ function personStageFacts(workspace: WorkspaceState): { state: ProductStageState
 
   // 只有属于当前配音、人物与声音版本仍是当前方案的口型才算本阶段的当前产物；
   // 旧人物版本留下的记录不代表这一阶段做完了。
+  const person = workspace.plan.selected_person;
   const voice = workspace.plan.selected_voice;
   const segmentIds = new Set(workspace.narration?.segments.map((segment) => segment.id) ?? []);
   const renders = workspace.person_renders.filter((render) => segmentIds.has(render.narration_segment_id)
-    && (!voice || (render.person_profile_id === voice.person_profile_id
-      && render.person_version === voice.person_version
-      && render.voice_profile_id === voice.profile_id
-      && render.voice_version === voice.version)));
+    && Boolean(person)
+    && render.person_profile_id === person?.profile_id
+    && render.person_version === person?.version
+    && (!voice || (render.voice_profile_id === voice.profile_id && render.voice_version === voice.version)));
   // 本任务真正需要的口型由成片镜头引用决定；有失败或缺覆盖证据时不能算整个阶段完成。
   const required = (workspace.montage?.clips ?? [])
     .map((clip) => clip.person_render_id)
@@ -182,6 +183,7 @@ function personStageFacts(workspace: WorkspaceState): { state: ProductStageState
   if (renders.length) return { state: "current", detail: `已生成 ${ready}/${renders.length} 段 · 仍待处理` };
   if (!workspace.narration) return { state: "upcoming", detail: "待配音" };
   if (target === null) return { state: "upcoming", detail: "未记录露脸目标" };
+  if (!person) return { state: "current", detail: "尚未选择人物版本" };
   if (!workspace.person_render_capability.available) return { state: "current", detail: "口型能力不可用" };
   return { state: "current", detail: "待生成口型" };
 }
@@ -294,7 +296,7 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
         <dl>
           <div><dt>用途</dt><dd>{selectedClip.person_render_id ? "人物口型" : selectedClip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div>
           <div><dt>成片位置</dt><dd>{selectedClip.timeline_start_seconds.toFixed(1)}–{selectedClip.timeline_end_seconds.toFixed(1)} 秒</dd></div>
-          <div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : selectedClip.person_render_id ? "未读取到人物片段记录" : plan.selected_voice ? `${plan.selected_voice.person_profile_id} · ${plan.selected_voice.person_version}` : "当前任务人物"}</dd></div>
+          <div><dt>人物版本</dt><dd>{selectedPersonRender ? `${selectedPersonRender.person_profile_id} · ${selectedPersonRender.person_version}` : selectedClip.person_render_id ? "未读取到人物片段记录" : plan.selected_person ? `${plan.selected_person.profile_id} · ${plan.selected_person.version}` : "尚未选择人物版本"}</dd></div>
           {selectedPersonRender ? <>
             <div><dt>声音版本</dt><dd>{selectedPersonRender.voice_profile_id} · {selectedPersonRender.voice_version}</dd></div>
             <div><dt>语言</dt><dd>{selectedPersonNarration?.language === "zh" ? "中文" : "未记录"}</dd></div>
@@ -446,8 +448,9 @@ function PersonRenderPanel({ busy, onGenerate, selectedRender, selectedSegmentId
         <UserRound size={18} />
         <div><strong>人物口型预览</strong><p>选择一段配音，用当前人物版本检查口型效果；确认编辑后才会进入成片时间线。</p></div>
       </div>
+      {!workspace.plan.selected_person ? <span role="status">当前方案没有选择人物版本；请先在制作方案中选择人物。</span> : null}
       {!selectedSegmentId ? <span>先选择上方一段配音</span> : null}
-      {selectedSegmentId && !selectedRender ? <button className="modern-primary-button" disabled={busy || !workspace.plan.selected_voice} onClick={() => onGenerate(selectedSegmentId)} type="button">生成人物口型预览</button> : null}
+      {selectedSegmentId && !selectedRender && workspace.plan.selected_person ? <button className="modern-primary-button" disabled={busy} onClick={() => onGenerate(selectedSegmentId)} type="button">生成人物口型预览</button> : null}
       {selectedRender?.status === "running" || selectedRender?.status === "pending" ? <span><LoaderCircle className="is-spinning" size={15} />正在生成人物口型预览</span> : null}
       {selectedRender?.status === "failed" ? <div className={styles.personRenderFailure}><strong>生成没有完成</strong><p>{selectedRender.impact ?? selectedRender.failure_reason}</p>{selectedRender.repair_action ? <small>{selectedRender.repair_action}</small> : null}<button className="modern-primary-button" disabled={busy} onClick={() => onGenerate(selectedSegmentId!)} type="button">重新生成</button></div> : null}
       {selectedRender?.status === "ready" && selectedRender.media_url ? <div className={styles.personRenderPreview}><video controls preload="metadata" src={apiUrl(selectedRender.media_url)} /><p>{selectedRender.model_id} · {selectedRender.duration_seconds?.toFixed(1)} 秒 · 人物 {selectedRender.person_version}</p></div> : null}
@@ -528,7 +531,10 @@ function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, selected
       {!narration ? <div className={styles.emptyAction}><UserRound size={30} /><h2>还没有配音事实</h2><p>口型由最终配音驱动。先生成配音，才能为选中的露脸段制作口型。</p><button className="modern-primary-button" disabled={busy} onClick={onOpenNarration} type="button">前往配音</button></div> : null}
       {narration && presenterShareTarget === null ? <div className={styles.emptyAction}><UserRound size={30} /><h2>未记录露脸占比</h2><p>当前方案的露脸占比没有记录，不能按 0% 当作跳过处理。请先在制作方案中确认露脸占比，再回到本阶段生成口型。</p></div> : null}
       {narration && presenterShareTarget === 0 ? <div className={styles.emptyAction}><UserRound size={30} /><h2>本阶段明确跳过</h2><p>露脸占比为 0%，成片全部使用素材画面，不需要生成人物口型。这不是已完成，也不会被写成完成。</p></div> : null}
-      {narration && presenterShareTarget !== null && presenterShareTarget > 0 ? <>
+      {narration && presenterShareTarget !== null && presenterShareTarget > 0 && !plan.selected_person
+        ? <div className={styles.emptyAction}><UserRound size={30} /><h2>尚未选择当前人物</h2><p>声音档案中的关联人物不能替代本任务的已选人物。请先在制作方案中选择人物版本，再为配音片段生成口型。</p></div>
+        : null}
+      {narration && presenterShareTarget !== null && presenterShareTarget > 0 && plan.selected_person ? <>
         <div className={styles.narrationSegments}>
           {narration.segments.map((segment, index) => (
             <article className={selectedSegmentId === segment.id ? styles.selectedSegment : ""} key={segment.id}>
@@ -1898,14 +1904,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function generatePersonRender(segmentId: string) {
-    const selectedVoice = workspace.plan.selected_voice;
-    if (!selectedVoice) return;
+    const selectedPerson = workspace.plan.selected_person;
+    if (!selectedPerson) return;
     void run(
       "person-render",
       () => generateCreationTaskPersonRender(task.id, {
         narration_segment_id: segmentId,
-        person_profile_id: selectedVoice.person_profile_id,
-        person_version: selectedVoice.person_version,
+        person_profile_id: selectedPerson.profile_id,
+        person_version: selectedPerson.version,
         motion: "natural",
         expression: "neutral",
       }),
@@ -1965,7 +1971,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       requestConversationId = turn.conversationId;
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
-      await turn.draftCheckpoint;
+      const expectedDraftVersion = await turn.draftCheckpoint;
       if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
         await assistantConversation.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
           "编辑范围已切换；本轮没有发送，原要求已保留为草稿。");
@@ -1974,6 +1980,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
       const result = await sendCreationTaskAssistantTurn(task.id, {
         conversation_id: turn.conversationId,
+        client_request_id: turn.clientRequestId,
+        expected_draft_version: expectedDraftVersion,
         message,
         context_stage: activeView,
         selected_object_refs: selectedEditContext
@@ -1981,10 +1989,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           : [],
         playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
-      }, (event) => {
-        if (revision !== editContextRevision.current) return;
-        onStreamEvent(event);
-      });
+      }, onStreamEvent);
       if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
       await assistantConversation.refresh();
       if (result.execution_status) setExecution(result.execution_status);
