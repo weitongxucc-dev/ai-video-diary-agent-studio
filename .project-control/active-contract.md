@@ -317,6 +317,8 @@ F msg_bca6ac695a54及主控1993ad0回读确认search_production_material_segment
 
 E先核当前实际媒体端点及现有store/clear调用，不罗列猜测式通配路径；测试用合成成员字符串、Next Request/Headers替身，验证native GET/HEAD/Range身份透传、store/clear/切成员/端口隔离、显式无效头不回退、Supabase与非媒体POST不注入、没有把令牌写入URL/响应业务正文。必要当前local auth/middleware专项+tsc即可；未运行真实浏览器/API/GUI，源机制和受控代理证据不冒称可播放。无安装/Pi/模型/用户数据/Key/真实Cookie/账号/媒体/服务/远端；clean delta/report交主控同候选真实窗口验收。
 
+D msg_985efbb1c7fa补可信登记后的实际预览负例：既有授权撤销被profile_reference_input先抛ValueError，VoicePreview随后误报reference_audio_invalid；Avatar准备直接抛错而未形成authorization_revoked阻断事实。B当前仍唯一production.py写者具名追加narration.py VoicePreviewService.request、avatar_lipsync.py AvatarPreviewService.request和必要resolve_avatar_lipsync_request小范围接线/其直接test_profile_api_contract专项；D仍仅两旧测试文件写者。把可信成员/空间/私有和真实来源读取校验与生成用途资格分开准确归因，沿现有profile_use_failure/_authorization_failure不另建一套规则；显式撤销/过期/用途限制必须blocked、零provider且不复用旧成功，来源失联才来源错误，权限读不到仍404/403不得泄露private授权事实。实际owner准入/执行和生成服务继续严格资格、来源hash/版本/permit重核，不通过prepare/read模式跳过执行门禁。若必要加入明确for_generation读取参数只给预览准备事实读取，默认生成路径保持严格并测试无许可/撤销零执行，不能静默fallback。只必要新撤销/失联/权限负例，旧29/36不重复；D保留原负例，待B准确clean可串行fetch该净增量后重验受影响项，失败不是改断言理由。无新增运行/用户数据/模型/媒体/服务许可。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
