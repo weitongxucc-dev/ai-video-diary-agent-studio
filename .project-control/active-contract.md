@@ -67,6 +67,10 @@ owned /tmp/main-acceptance-20261009/material105/，最小检查证明可信所�
 
 本Dispatch PACKAGE_START准确冻结7aa1eedd7480b45e09561860485eb6a23384005f，源Git为/tmp/main-controller-20261008/ui-v3-integration；UI105已审核并机械ff，根合同不因此取得产品代码写权。
 
+### UI107：现有语音证据测试素材字段补齐（MAIN-FIXTURE107-20261009）
+
+PR102前端CI唯一失败为MaterialSpeechEvidence.test.tsx的asset替身缺必带user_tags，右侧真实整条标签读取.length报错；真实MaterialAsset/API契约已经必带该数组。复用保留UI终端，基于clean7aa1eedd新建codex/material107-test-fixture-20261009。唯一写权apps/web/src/components/__tests__/MaterialSpeechEvidence.test.tsx，只补这个已有asset替身的user_tags:[]，不改断言/产品组件/API/类型/依赖，不为残缺测试数据增加生产回退。仅运行该文件1项检查和diff-check，owned /tmp/main-acceptance-20261009/fixture107/交clean候选、最小差额与结果。无服务/模型/Pi/GUI/构建/外部写权；B106已冻结包不改变、不重建，后续根核运行blob相等再更新PR。
+
 复用保留B终端，原pipefish/platform99脏树原样保护，无产品代码写权。owned仅新/tmp/main-acceptance-20261009/chat106/；依B101已交准备复用B97公开构建依赖/缓存和现有打包流程，不复读或复制私密env/Key、用户DB/设备锁、平台profile或模型。UI105施工期间只准备新的隔离构建目录和非秘密依赖映射；尚无最终候选，不构建。主控审核组合UI105并具名PACKAGE_START准确SHA后，在本新根archive该候选并核源码身份，构建一次该候选Next standalone、PyInstaller API与ARM64 ElectronBuilder目录.app和生成身份；不复用旧Web/API二进制冒称新候选，不运行build.sh的安装步骤，不下载/安装依赖或生成DMG/ZIP/签名/Release。既有依赖不足报真实缺口。
 
 一次最终同候选仅必需集成/打包检查，不重复未变组件/媒体/宽度矩阵。交实际.app路径、准确源码SHA/candidateInputDigest、打包资源与工具TS入口实际包含、必要结果、所有自有构建进程退出与未验范围。无运行Electron/API/Web/Pi/模型/媒体/GUI/账号/Keychain权限，用户当前旧测试包不得退出或改写；真实聊天实包另具名接续。主控最终负责新包分享副本与用户配置隔离，包不含用户Key、模型、素材或测试DB。任务等待只通过本终端收件箱（check不带--run），不恢复97/101旧START。
