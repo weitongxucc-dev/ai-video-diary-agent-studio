@@ -3,7 +3,7 @@
  * 切成员后旧身份的响应不能落到页面上，重试必须用当前选择的天数。
  * 全部使用受控的假接口，不连真实服务、不读真实数据。
  */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HomeAggregation } from "@/lib/types";
 
@@ -126,7 +126,13 @@ describe("首页真实数据容器", () => {
     // 切到 30 天后读取失败：重试必须用 30 天，不能退回首次的 7 天。
     api.getHomeDashboard.mockRejectedValueOnce(new Error("读取失败：503"));
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("读取失败：503");
+    await screen.findByText("部分首页数据读取失败");
+    const alert = screen.getByText("部分首页数据读取失败").closest('[role="alert"]') as HTMLElement;
+    expect(alert).toHaveTextContent("部分首页数据读取失败");
+    const detail = within(alert).getByText("查看详情").closest("details") as HTMLElement;
+    expect(detail).not.toHaveAttribute("open");
+    fireEvent.click(within(detail).getByText("查看详情"));
+    expect(alert).toHaveTextContent("读取失败：503");
     api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => payload(days, `${days} 天任务`));
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     await waitFor(() => expect(api.getHomeDashboard).toHaveBeenLastCalledWith(30));
