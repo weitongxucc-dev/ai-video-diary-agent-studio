@@ -540,6 +540,10 @@ root957整Web为849PASS/4FAIL、tsc/ESLint零错误，52既有warnings。两个�
 
 仅主控可运行此新包，固定自有32123 origin与绝对新userData；HOME/XDG/DB/inbox/output/models/temp/agent完全位于同owned runtime，空DB/空inbox/空模型、local auth、scheduled OFF，不复制真实用户配置/Key/媒体/身份或模型。允许原生computer-use查看并操作自己的新PID窗口，合成文字草稿/页面导航/开关创建卡/原生选择器取消等不依赖模型的可见验收；只在确需路径时明确导入client-prep具名合成WAV/video，不能称真实声音/人物质量。业务操作来自GUI，API/SQL只读核对，不绕工具拒绝改DOM/CDP/API写冒称GUI；window_not_focused仅按指南restore一次，仍拒绝则标具体未验，不重复要求用户代按键。无Pi/模型/云/收费/发布/真实资料权限，原3000实例保留。结束正常退出自己的包，并核自有Electron/API/Web子进程与端口释放，持久unknown不手清；原用户包和资料不动。
 
+### QA-V2-D-STANDALONE：实际桌面物化断点
+
+主控在准确bc37469的owned ARM候选上完成Next/API生产构建；现有bundle-standalone.js随后真实ENOENT：Next的standalone只追踪next/react等运行依赖，脚本却遍历Web package.json全部开发输入，首个缺失@supabase/ssr导致中断。原D终端新单从bc37469 clone至owned review-v2-standalone/candidate，唯一源码写权apps/desktop/scripts/bundle-standalone.js及直接专项脚本测试。以实际standalone已追踪依赖为打包事实源，保留所有真实运行依赖、static/public及传递依赖物化；真实断链/缺必需Next/react必须明确失败，不补开发依赖或静默猜测回退。测试实际追踪子集、缺失必需项、断链和生成树无symlink；不得修改Web/API业务、锁文件、身份算法或共享权威。可在准确同候选复用主控已产出的owned .next/standalone，只运行物化/模块解析，不下载/运行模型/启动服务/GUI/用户数据/远端。交clean差额及必要证据后主控机械组合、刷新输入身份、继续dir.app构建；已有Next/API源码未改变则复用对应构建，不重复模型或业务测试。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
