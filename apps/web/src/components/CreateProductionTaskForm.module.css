@@ -1,0 +1,5 @@
+.form button:disabled { cursor: not-allowed; opacity: .6; filter: saturate(.25); box-shadow: none; }
+.form input:disabled, .form select:disabled, .form textarea:disabled { color: var(--text-2); background: var(--surface-2); cursor: not-allowed; }
+.diagnostics { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.diagnostics > summary { cursor: pointer; }
+.diagnostics p { margin-block: 6px; }
