@@ -331,6 +331,20 @@ F新单基于准确11e724d新clone到`/tmp/main-acceptance-20261009/review-v2-pr
 
 最小受控Web测试跨资源→返回字段/固定版/30秒保持、相邻两个草稿不串、成员/空间隔离、错误return_to拒绝、storage失败、晚预检/默认声音不覆盖、真实确认成功清自身及失败保留，必要现有表单/AppShell专项+tsc。已有未影响预检/三栏/模板证据复用。使用公开既有cache/mock API/验证身份，不安装、不启动App/API/Pi/模型/GUI，不读取用户DB/Key/媒体/账号/cookie或向远端操作；源码/组件测试不冒称真机。交clean准确SHA/report、读回与残余边界，不用未接通按钮充数。
 
+### QA-V2-UI-DRAFT-CAS 第二阶段正式释放（2026-10-09）
+
+C源码b75cf69→6ea6346、直接f6face1→3035a25已审核机械组合3035a25e077e18422624edd2483bf26d1e5e2175，C原Dispatch task_73c344661ad2/ctx_48b39b372a5d succeeded/retain并释放main/schema。45API/37Web受控PASS；C临时manta缓存缺Markdown不得用于最终组合，主控既有main-ui-linear依赖可用。旧相邻候选测试缺transcript/可信档案来源和TS207真实错误仍待必要修，不标全仓CI通过。D原两个撤销负例已在组合60d7fa6由主控最小重验2PASS，复用原其余23；来源asset excluded归因仍B具名当前单核。F新修复返回仅表单/AppShell，不与本阶段源码重叠。
+
+UI原task_0ecc5c23b3e0/ctx_df85c79f03c8保持同一生命周期，phase1已be9e51a→b203122且8Repo PASS不重跑。现在由UI唯一接 main.py/schemas.py 会话CRUD/开始轮次/失败恢复及素材query绑定段、lib/api.ts/lib/types.ts相关会话/素材字段、conversation_repository.py必要接线、hook/HomeCommandComposer/AssistantConversationPanel/CreationTaskWorkspace及局部CSS和直接专项。基于精确3035a25在原CAS隔离candidate fetch并机械组合源，不丢现有Repo成果，不写F CreateProductionTaskForm/AppShell/返回helper、C source_repository/source-api/来源/知识页、B production/narration/avatar/preview、E native-media认证、共享CSS/桌面。
+
+所有真实draft写入显式expected draft_version CAS，稳定client_request_id贯穿真实本地一次发送/失败重试、流式与HTTP结果；同请求只复用同轮不再次运行工具，新轮消费对应草稿原子写，任何晚失败不能覆盖生成期间新输入。原旧无条件PATCH/主流程create_turn写入要退役，明确给不存在证明，不保留并行宽松路线。草稿冲突保留新值/原句准确提示，确认失败/取消/断流和中途编辑各守真实终态。原流式/即时用户入列/真实停止/可编辑下一句/命令真实分派与Markdown复制保留，修TS207正确task测试类型，不以忽略测试打绿；当前安装版本Pi清单仅源码注册可核，不擅自真实运行模型。
+
+N06当前F eca已组合3b195：run_material_turn.selected_material可空，library_status/search_material_library真实只读工具已实现。但现main/schema/API/Home仍强制选择，必须本阶段接齐。素材页使用同一可信成员/workspace的素材库应用会话，选择改变只调整下一轮上下文，不隐式创建/删除会话或草稿；显式新对话才换会话，旧按资产scope会话仍可被用户从真实会话索引恢复，不造假历史。新增素材库scope使用明确稳定library语义，发送时将明确已选asset/segment与精确范围固定在轮次；服务端当前成员/space真实核source，模型不能选别的对象或路径。无选择只开放全库状态/检索，修改工具要求发送时明确绑定；读/写不误投为创建任务。切选择后晚结果保留原轮次事实但不覆盖当前右侧对象，成功业务结果回读同一对象并刷新当前可见投影，不重复执行。只fixture/工具替身，无真实Pi/Key/用户素材HTTP运行许可。
+
+本阶段追加Task三个旧耦合消费者：PersonAndVoiceFacts、人物Inspector、generatePersonRender使用现Plan.selected_person独立固定版本，绝不从selected_voice.person_profile_id/person_version猜人物；0%目标不触发人物provider，缺人物给准确入口，已选声音仍可旁白。B HTTP/核心已修的可用性和真模型条件不重造前端规则。任务预检中资源修复返回留下一具名纵向单，不抢F手动表单。N14对话转任务文案需Plan/Topic/TaskScript真实来源与确认，不在本阶段用rawReply直接写文案库。
+
+最小全接口CAS/重复请求零重复工具/失败新草稿/跨页恢复/切stage选择及旧资产会话恢复、N06无选择状态/选对象标签真实固定范围与晚回包、独立声音人物/0%专项，必要既有直接Web与tsc；API使用临时DB/TestClient/受控工具/mockgrant不真实模型。scope/source依赖变化只重测受影响，无安装/服务/GUI/用户数据/Key/媒体/账号/发布/远端。必须clean精确SHA/report+旧写入口退役证明及source/fixture与GUI未验，源权重读ACK后立即持续实施，不再等旧主控START。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
