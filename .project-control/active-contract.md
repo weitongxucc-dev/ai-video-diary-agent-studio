@@ -371,6 +371,20 @@ N32运行事实用当前工作区Vault/配置/最近真实探测，未验证配�
 
 C测试迁移505f35e已44PASS/Ruff0.15.7PASS/clean交付并retain，main/source写权仍UI阶段2独占。主控实际Web ESLint3errors：UI hook两个prefer-const归UI现单；C source/page helper useStateLabel被规则按Hook误判。C新QA-V2-C-SOURCE-LINT仅从原clean505f35e隔离candidate新公开分支，改apps/web/src/app/sources/page.tsx这个普通格式化函数名称/直接调用为非Hook名字，不改语义/其他file，不用eslint-disable。纯重命名仅精确该file ESLint+diffcheck，不新增镜像test/重跑前44/37/全Web。既有main-ui-linear Web公开cache已含Markdown可临时symlink，不使用缺包mantaCache，不下载/安装/运行服务GUI模型。源码clean净delta/report后释放，原原Arrowworm不改；这是必要实际CI错误，不扩大来源/业务设计。
 
+### QA-V2-C-REPLY-SCRIPT-TRANSFER：N14纵向负责人，分阶段单写
+
+主控采纳当前领域§7.5及DESIGN§2新增对话回复→TaskScript来源移交规则，现B preview全源写权已释放/retain，C lint原单已完成retain。准确组合ead4f2b590513503c69377a88f689cf7bc3c5750；C新Task从此clone到`/tmp/main-acceptance-20261009/review-v2-reply-script-transfer/candidate`公开分支codex/review-v2-reply-script-transfer-20261009。同一纵向负责人直到真实API/UI/任务确认/库返回链源码完成，不以阶段1Repo宣布N14关闭。先REBASE_ACK读取当前产品2.1/2.6、领域5/7.5、DESIGN2及E只读report（其中旧license外发guard建议已被当前C source权威取代，不继续旧证明门槛），报告`/tmp/main-acceptance-20261009/review-v2-reply-script-transfer/report.md`。
+
+阶段1唯一owned production.py仅CreationPlan/TaskScript/ScriptGenerationRun必要来源引用与原子确认/修订方法、tests/test_reply_script_transfer.py新直接专项；不会写B已结束人物/声音/媒体preview/资源/其它生产段。只复用现有Plan/Task/TaskEvent/Script/Run payload和同一SQLite，不建第二文案库/Task表/同步状态框架。来源是服务端核实的conversation_id+已完成turn_id+正文摘要，成员与space由真实身份解析，不接受调用方任意owner/路径/原始工具payload；正文仍从原会话读，暂存引用不复制整份回复。确认Plan时可携该明确origin和稳定client conversion/request id，来源/输入/成员准确相同重试回读同一Plan/Task，冲突409不重建，绑定与创建事务一致，不用浏览器closure冒称服务器无副作用。
+
+已有待确认脚本转入必须实际Plan/selectedTopic/current来源版本一致、Task脚本阶段且未确认、期望现有draft修订与当前相同；已有正文明确用户替换选择才写。稿段来源只真实input_references，不把对话正文当事实证据或自动给所有资料勾上，不允许stage绕过/已确认稿改写/另任务覆盖；正文可由用户在明确草稿入口编辑，原turn引用保持。有效稿保存和用户确认分别沿既有方法，保存成功回读同一稿、确认后库用原save_script_library_entry，不直接 rawReply→库。修订比较用既有持久TaskScript.updated_at精确token并在原事务核Task/稿/Topic/Plan，不以页面实例内存判断；所有相关UI/Agent写入及确认消费在阶段2一起迁移，不能只新增旁路校验而保留当前旧update/confirm任意覆盖。改前/后真实scope/version/取消/失败/重复请求负例保留。
+
+阶段1源码可先独立实现并提交，但主控组合必须等阶段2旧消费者退役后，不能将产生旧签名断点的片段先合成通过。main/schema/libAPI/types/Home/Panel/Task当前唯一UI-CAS写者，明确HOLD这些文件；可只读检查待接线，禁止修改或偷偷复制UI dirty。C阶段1完成仍在同一Task等待主控准确组合/正式release，再独占阶段2 main/schema只originPlan/transfer/ScriptDraft/Confirm/Library响应与libAPI/types/Home/Panel/Task/ScriptEditor必要消费者、knowledge/KnowledgeWorkspace现文案库条目深链及局部CSS/直接专项；此处是待release规划不是现在写权。F表单/AppShell始终不写，E媒体认证不写，D/C/E旧测试迁移files不重写。
+
+阶段2新回复“带入文案草稿”明确原轮次→用户选择现Task或先真实确认Plan→真正Topic确认→Task原文案草稿→手动核对资料和正文→确认→保存文案库准确entry/version/来源Task。先复用真实TaskScript editor/confirm/source模型，必要抽取同一file内现组件为复用组件而非新文案表单事实库。晚回包不切换新Task/会话或清较新草稿，明确版本冲突保留原稿可回查；未知阶段给真实下一步不是无效按钮。已确认稿只能沿既有明确修订流程，不伪造新Task成功。存在准确不可执行条件时保留原回复并标叶，不停止其他独立路径。
+
+允许源实现/临时DB/TestClient/可信合成成员、Task/文字资料、mock模型/工具与旧公开依赖最小验证，不运行真实模型/Pi/用户Key/用户DB/媒体/账号/常驻App/API服务/GUI/远端/安装。阶段1必要Repo真实来源/错scope/非完成turn/固定版本/原子重试、阶段2实际HTTP与Web直接链验证；全模型/GUI真实性仍主控新候选后验，不能自动获得外发许可。阶段2发布前给旧draft/update/confirm消费者不存在证明，confirm可复用版与源链按当前实际产物判断。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
