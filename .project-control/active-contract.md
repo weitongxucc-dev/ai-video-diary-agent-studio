@@ -481,6 +481,12 @@ C同时保留production.py仅update_assistant_script_draft/confirm_creation_task
 
 E资格HTTP诊断已实证：ready/available且旧raw审核字段导致picker为空、Insert/Replace预览409；另成员private已知ID的preview+confirm均200并实际改Timeline，原任务副本出现越权引用。源报告/tmp/main-acceptance-20261009/review-v2-material-qualification-audit/reproduction-report.md为临时合成证据，不涉及用户资料。B当前main拥有权追加纵向资格迁移，优先此已证实对象边界，再局部重做API；production.py共享手工/自动资格helper待C释放后才写。scope为活跃_creation_task_montage_candidates、_creation_task_insert_clip、_apply_creation_task_montage_clip_update及其所有preview/confirm调用；复用既有真实reader/private-owner/grant判据，每次读取与确认重新校验当前访问，不把候选过滤当写权限。手工和自动必须沿同一实际媒体/状态/范围/文件身份基础资格，手工可用not_for_automation，自动仍拒绝，明确rejected/reference_only/excluded/失联/越界/改变文件保持拒绝。退役所有活跃CreationTask旧approved硬门槛/无reader对象读取与误导审核修复文案；legacy已410写路与无活跃Web读路不顺手改造。一个新增tests/test_material_edit_qualification.py正/负例与D四replacement准确复验，保留真实媒体有效性，不全库include_private或诊断兜底、不深解码绕Grant。交新结果、RETIRED/调用不存在证明、精确来源与未验；不能据此发布或声称真实客户端通过。
 
+### QA-V2-C-SCRIPT-CAS-FINAL：仓储版本门槛收尾与释放
+
+C消费者Task ctx_14f4fd2f3670已交4e4f0a6并retain；D声音文字登记23dc2e4与F真实IO夹具f585cf3也已审，机械候选d83fa80f7561ed3d3e5bcf235c332245837bd314。声音7项通过，IO三个仍失败，不据此关闭Issue或称GUI通过。C旧派工不恢复，原可见C接此具名新单，只独占production.py的update_assistant_script_draft/confirm_creation_task_script及一个新直接tests/test_script_write_cas_contract.py；按上一节实际事务强制版本，首次创建不混作更新，旧无token消费者不得保留兼容后门。从准确d83fa80新隔离候选、公开Git身份，重读领域7.5与本合同，语义ACK后实施。精准仓储缺失/过期/正确token与确认门槛测试、Ruff/diff，提交clean叶并RELEASE_ACK production.py后结束；不写main/schema/Web、既有旧fixture、B执行器或共享文档。服务/Pi/模型/用户数据/GUI/账号/远端写权仍无。
+
+C Web/APItypes/Task写权随旧Task结束正式释放，主控尚未转授其他写者；版本残差按当前准确候选复现后具名处理。B仍独占main/schema/narration/creation_execution，本单production仍C，须等待正式释放。F实证montage waiting_for_user已保存却被执行器记失败：B追加同一现有执行器阶段交接的诊断与最小修正，合法等待保持用户确认，不能把waiting归ready或自动render/降低阈值；复用已有Job/Task/调度终态与继续入口，不造第二状态系统。先报具体可用等待/继续协议和受影响文件，仍不写C production。F已交tests/test_creation_execution.py写权结束，后续成功输入夹具与等待回归须新单，不能硬改期望使低置信镜头自动使用。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
