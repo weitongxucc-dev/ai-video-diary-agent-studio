@@ -319,6 +319,18 @@ E先核当前实际媒体端点及现有store/clear调用，不罗列猜测式�
 
 D msg_985efbb1c7fa补可信登记后的实际预览负例：既有授权撤销被profile_reference_input先抛ValueError，VoicePreview随后误报reference_audio_invalid；Avatar准备直接抛错而未形成authorization_revoked阻断事实。B当前仍唯一production.py写者具名追加narration.py VoicePreviewService.request、avatar_lipsync.py AvatarPreviewService.request和必要resolve_avatar_lipsync_request小范围接线/其直接test_profile_api_contract专项；D仍仅两旧测试文件写者。把可信成员/空间/私有和真实来源读取校验与生成用途资格分开准确归因，沿现有profile_use_failure/_authorization_failure不另建一套规则；显式撤销/过期/用途限制必须blocked、零provider且不复用旧成功，来源失联才来源错误，权限读不到仍404/403不得泄露private授权事实。实际owner准入/执行和生成服务继续严格资格、来源hash/版本/permit重核，不通过prepare/read模式跳过执行门禁。若必要加入明确for_generation读取参数只给预览准备事实读取，默认生成路径保持严格并测试无许可/撤销零执行，不能静默fallback。只必要新撤销/失联/权限负例，旧29/36不重复；D保留原负例，待B准确clean可串行fetch该净增量后重验受影响项，失败不是改断言理由。无新增运行/用户数据/模型/媒体/服务许可。
 
+### QA-V2-F-PREFLIGHT-RETURN：未创建任务的修复返回闭环
+
+主控已组合B终态绑定0b851cd→5250964、召回前可信读者82414ab→017ecbc、E原生媒体身份349e7bc→11e724d。C源录入b75cf69独立完成，主控在C候选机械追加仅production.py召回差额535df2b，待真实HTTP/Plan专项后释放main/schema给UI；E/D旧单retain源权结束。D55992ae夹具23/25，两个撤销负例保持原断言待B修复，不以报告succeeded宣布通过。
+
+F新单基于准确11e724d新clone到`/tmp/main-acceptance-20261009/review-v2-preflight-return/candidate`，公开分支codex/review-v2-preflight-return-20261009，原终端/旧树保留。唯一owned CreateProductionTaskForm.tsx/.module.css、AppShell.tsx仅必要返回创作入口、production/page.tsx仅草稿/模板参数绑定、一个具体未创建任务表单草稿/返回helper及一个对应返回组件与其直接专项。不得写Home/hook/Task/main/schema/api.ts/types.ts/资料来源页/E认证或共享CSS；主控DESIGN§5.1此新增规则先读REBASE_ACK。不要新持久化API、Task数据库或第二会话状态框架。
+
+修N36/N35及N13此表单消费者：预检按真实reason/stage映射资料、声音、人物、素材、连接的准确现有入口，不猜不存在字段。修复前将目标/名称/数量/时长/现有语言比例/模板固定版本/人物声音固定引用保存到当前浏览器会话的本次稳定草稿UUID，按实际ProductionFoundation.profile.workspace_id和现有已验证local whoami member_id（Supabase使用现有客户端已验证user）隔离；不使用token作为草稿键，不存凭据，不让别的成员/空间恢复。只用户草稿，可撤销，不是已保存任务或已确认方案。只存必要字段/UUID，不复制资料/音频/检查响应；URL仅本次UUID及模板固定引用，正文不上URL。sessionStorage实际边界错误准确就近说明并保留当前输入，不静默fallback或假称可恢复。
+
+资源页经AppShell提供可发现返回创作入口；return_to只接受同原点准确/production?new=1&draft_id=<UUID>及必要模板固定引用，不开放任意外链/credential URL/自由路径。返回读取本成员本空间草稿，回读当前声音人物及实际预检，不复用旧preflight_fingerprint或把点击修复看作完成；用户更改后晚回复不覆盖新输入。初始/模板重设不能覆盖恢复的30秒目标/已改选择；默认声音晚到不能覆盖恢复的显式选择。成功确认真实Plan后只清本次草稿，失败保留；取消/关闭返回语义明确，不能自动调用创建/模型生成。普通业务层显示名称与下一步，必要ID/证明空值在诊断层，不能改资格规则或新索取证明。任务内目标已有业务存储，其消费者留UI后续单写，本单不冒称任务内修复闭环完成。
+
+最小受控Web测试跨资源→返回字段/固定版/30秒保持、相邻两个草稿不串、成员/空间隔离、错误return_to拒绝、storage失败、晚预检/默认声音不覆盖、真实确认成功清自身及失败保留，必要现有表单/AppShell专项+tsc。已有未影响预检/三栏/模板证据复用。使用公开既有cache/mock API/验证身份，不安装、不启动App/API/Pi/模型/GUI，不读取用户DB/Key/媒体/账号/cookie或向远端操作；源码/组件测试不冒称真机。交clean准确SHA/report、读回与残余边界，不用未接通按钮充数。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
