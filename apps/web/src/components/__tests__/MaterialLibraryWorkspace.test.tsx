@@ -117,7 +117,7 @@ it("switches the material collection between cover grid and object rows", async 
 it("does not bind the automatic first material, then binds only explicit asset and segment picks", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  expect(screen.getByText("尚未选择素材：请从右侧选择整条素材或一个片段。"))
+  expect(screen.getByText("当前未选中素材或片段。"))
     .toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
   expect(screen.getByText(/当前范围：整条素材 · local\.mp4/)).toBeInTheDocument();
@@ -430,7 +430,7 @@ it("keeps edits made from the initial preview anchored across filtering without 
   vi.mocked(updateProductionMaterialSegment).mockResolvedValue({ ...taggedAsset, segments: [{ ...segment, description: "预览草稿" }] });
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "预览草稿" } });
-  expect(screen.getByText("尚未选择素材：请从右侧选择整条素材或一个片段。")).toBeInTheDocument();
+  expect(screen.getByText("当前未选中素材或片段。")).toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "筛掉当前素材" } });
   await screen.findByText(/草稿已保留；找回该素材后可继续保存/);
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "" } });
