@@ -113,6 +113,16 @@ F独占HomeCardDialog.tsx与SideCards.module.css仅有无footer的共同正文�
 
 重读main DESIGN§3–4/§5.4、领域§4、产品§2.1和auth可信成员边界后语义REBASE_ACK即实施。现有依赖直接组件检查/tsc及隔离fixture可用，无常驻服务/Pi/Key/真实用户数据/成员操作/媒体/模型/GUI/打包/远端写权。owned证据/tmp/main-acceptance-20261009/review-v2-shared/。交clean候选、净diff、逐来源结果与未验；主控统一组合后真实UI补验，不以源码/fixture宣布全部通过。该分工不转授其他线程改共享壳；C只能消费已有footer属性、UI只能消费现有CardDisclosure，若需要共享签名变更向主控报告。
 
+F C1：R01可丢弃SQLite实证两所有者并发移除/降级均通过并留下0 owner；主控回读local_members.py确认检查前无写锁。此为既有“至少一位所有者”不变量的原子性修复，未增加权限或角色，不改成员认证/跨空间规则。F独占增量local_members.py及直接test_local_members相关用例：复用既有BEGIN IMMEDIATE保留事务，从读取目标及owner数量前持有写锁直到写入/回滚完成；并发移除/降级均保留至少一owner，正常可操作路径/错误响应保持。不得仅禁用前端按钮解决后台并发，也不改真实成员/数据库。只做可丢弃并发与既有顺序最小检查；不加载服务/GUI/云身份。记录源R01从“未执行风险”提升为“隔离并发确认缺陷”，真机身份行为仍未验。
+
+### 第二批独立消费者（MAIN-REVIEWV2-FOLLOWUP）
+
+D原设置单207547c已源码审核/retain，settings整页写权结束，保留给B第二阶段。D另接首页消费者：从主控已机械组合的/tmp/main-controller-20261009/review-v2-integration准确f595eaf新clone到/tmp/main-acceptance-20261009/review-v2-home/candidate，分支codex/review-v2-home-20261009。唯一产品owned HomeWorkspace.tsx/HomeWorkspace.module.css及其直接组件专项；不改AppShell/中栏/会话/设置/人物/模板/API/types/全局样式。依main DESIGN§5.1/§7与产品§1.2，处理U08、H-D001/D002、N13首页消费者：保留唯一清楚页面标题，首屏围绕实际待办/进行中/近期可用结果，重复结果不重复呈现，空模块不保留大框；必要统计与图表次要且保留时间/单位/真实可见范围。词云只按真实已有标签结果做简短可读呈现、长观察收详情，不擅自重写系统标签或编造聚合计数，精确点击查询保持。暂无事实显示真实未知/空，不生成示例冒充实库；诊断内容按需展开，不删除必要阻断。不推翻三栏/已接受尺度。仅现有依赖专项/tsc，无服务/GUI/用户数据/模型/账号/打包，交clean候选与逐项未验；截图由统一候选后补。
+
+E只读复核已交并retain，新单修发布消费者H-L04/N28/H-V012机制：同样从f595eaf到/tmp/main-acceptance-20261009/review-v2-publishing/candidate新clone，分支codex/review-v2-publishing-20261009。唯一owned PublishingWorkspace.tsx、必要新增局部模块CSS及其直接既有测试；不改共享ProductWorkspace.module.css、AppShell/api.ts/main/平台worker/账号/持久schema。统一实际可发布task+产物版本选择，列表/下拉/正文/预检/最终提交同一身份；提前文案草稿需清楚归属并保留task+版本的本轮临时草稿，切换不沿用其他任务文本，未提供持久保存不能称刷新可恢复。前提按有效成片→实际账号状态→编辑信息→现有最终确认组织；重查/对象版本或账号变更使旧确认失效，真实后端409门禁保持，不新增自动重发/隐式幂等。普通未就绪对象可只读记录或准备入口，不隐藏混成不可见提交目标。仅受控组件/API替身核多任务/版本/账号/取消/失败，不真实连接、账号浏览器、上传/草稿/发布或权限操作；报告请求快照证明只是fixture。原历史报告复用，不重测未影响字幕/素材。
+
+C来源第一批d16b9c0已交/retain；知识普通导入旧字段门槛与领域§2.4不符的跨层差额尚未派写，需在UI/B释放共享入口后具名接续；不以第一批源码完成关闭N15/H-D006。会话UI待M5/M6/M7任务错误/历史消费者接续，B待F01/F02 API/Web和范围派生接续，定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
