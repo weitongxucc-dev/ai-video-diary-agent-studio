@@ -920,6 +920,8 @@ class ScriptGenerationRun:
     retryable: bool | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
+    run_kind: Literal["generation", "assistant_reply_transfer"] = "generation"
+    source_reply_reference: dict[str, str] | None = None
 
 
 @dataclass
@@ -947,6 +949,7 @@ class CreationTaskScript:
     confirmed_at: datetime | None = None
     # 复用稿没有自己的生成记录，这里记下它来自文案库的哪一条，供界面如实标注。
     reused_from_entry_id: str | None = None
+    source_reply_reference: dict[str, str] | None = None
 
 
 @dataclass
@@ -5767,6 +5770,107 @@ class ProductionRepository:
         *,
         verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
+        reply_reference: dict[str, str] | None = None,
+        request_id: str | None = None,
+    ) -> tuple[CreationPlan, CreationTask]:
+        if reply_reference is not None or request_id is not None:
+            if reply_reference is None or request_id is None:
+                raise ValueError("对话回复来源绑定需要稳定请求身份")
+            return self.confirm_creation_plan_from_reply(
+                plan,
+                task,
+                reply_reference=reply_reference,
+                request_id=request_id,
+                verified_owner_user_id=verified_owner_user_id,
+                local_diagnostic=local_diagnostic,
+            )
+        plan, task = self._prepare_confirmed_creation_plan(
+            plan, task, verified_owner_user_id=verified_owner_user_id,
+            local_diagnostic=local_diagnostic,
+        )
+        with self._connect() as conn:
+            self._insert_confirmed_creation_plan(conn, plan, task)
+        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
+
+    def confirm_creation_plan_from_reply(
+        self,
+        plan: CreationPlan,
+        task: CreationTask,
+        *,
+        reply_reference: dict[str, str],
+        request_id: str,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> tuple[CreationPlan, CreationTask]:
+        reference = _validated_assistant_reply_reference(reply_reference)
+        if not request_id.strip():
+            raise ValueError("确认方案请求身份不能为空")
+        plan, task = self._prepare_confirmed_creation_plan(
+            plan, task, verified_owner_user_id=verified_owner_user_id,
+            local_diagnostic=local_diagnostic,
+        )
+        fingerprint_payload = {
+            "workspace_id": plan.workspace_id,
+            "owner_user_id": task.owner_user_id,
+            "reply_reference": reference,
+            "plan": _creation_plan_conversion_intent(plan),
+            "task": _creation_task_conversion_intent(task),
+        }
+        request_fingerprint = hashlib.sha256(
+            _json_object(fingerprint_payload).encode("utf-8")
+        ).hexdigest()
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_plan_confirmed", plan.workspace_id, request_id,
+        )
+        replay_ids: tuple[str, str] | None = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM task_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            if existing is not None:
+                event = self._task_event_from_row(existing)
+                if (
+                    event.event_type != "assistant_reply_plan_confirmed"
+                    or event.workspace_id != plan.workspace_id
+                    or event.payload.get("request_fingerprint") != request_fingerprint
+                ):
+                    raise ValueError("方案请求身份已用于不同的对话或方案输入")
+                replay_ids = (str(event.payload["plan_id"]), str(event.payload["task_id"]))
+            else:
+                self._insert_confirmed_creation_plan(conn, plan, task)
+                self.append_task_event(
+                    TaskEvent(
+                        id=event_id,
+                        workspace_id=plan.workspace_id,
+                        task_id=task.id,
+                        job_id=None,
+                        event_type="assistant_reply_plan_confirmed",
+                        payload={
+                            "request_id": request_id,
+                            "request_fingerprint": request_fingerprint,
+                            "reply_reference": reference,
+                            "reply_owner_user_id": task.owner_user_id,
+                            "plan_id": plan.id,
+                            "task_id": task.id,
+                        },
+                    ),
+                    connection=conn,
+                )
+        if replay_ids is not None:
+            return (
+                self.get_creation_plan(plan.workspace_id, replay_ids[0]),
+                self.get_creation_task(plan.workspace_id, replay_ids[1]),
+            )
+        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
+
+    @staticmethod
+    def _prepare_confirmed_creation_plan(
+        plan: CreationPlan,
+        task: CreationTask,
+        *,
+        verified_owner_user_id: str | None,
+        local_diagnostic: bool,
     ) -> tuple[CreationPlan, CreationTask]:
         if not plan.workspace_id.strip() or not task.workspace_id.strip():
             raise ValueError("创作方案和任务必须属于工作区")
@@ -5792,69 +5896,41 @@ class ProductionRepository:
         elif owner:
             plan = replace(plan, owner_user_id=owner)
             task = replace(task, owner_user_id=owner)
+        return plan, task
 
+    def _insert_confirmed_creation_plan(
+        self, conn: sqlite3.Connection, plan: CreationPlan, task: CreationTask,
+    ) -> None:
         now = utc_now()
         plan.creation_task_id = task.id
         plan.updated_at = now
         task.updated_at = now
-        with self._connect() as conn:
-            for match in plan.material_matches:
-                asset_id = match.asset_ref.removeprefix("asset:")
-                segment_id = match.segment_ref.removeprefix("segment:")
-                asset_row = conn.execute(
-                    """
-                    SELECT payload FROM material_assets
-                    WHERE workspace_id = ? AND id = ?
-                    """,
-                    (plan.workspace_id, asset_id),
-                ).fetchone()
-                if asset_row is None:
-                    raise ValueError("创作方案引用的素材不属于当前工作区")
-                asset = self._asset_from_payload(
-                    json.loads(str(asset_row["payload"]))
-                )
-                segment = next(
-                    (item for item in asset.segments if item.id == segment_id),
-                    None,
-                )
-                if (
-                    segment is None
-                    or asset.analysis_status != "ready"
-                    or asset.review_status == "rejected"
-                    or not material_allows_footage(asset)
-                    or segment.review_status == "rejected"
-                ):
-                    raise ValueError("创作方案引用的素材片段不可用")
-            conn.execute(
-                """
-                INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    plan.id,
-                    plan.workspace_id,
-                    _json_payload(plan),
-                    plan.visibility,
-                    plan.updated_at.isoformat(),
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task.id,
-                    task.workspace_id,
-                    task.plan_id,
-                    _json_payload(task),
-                    task.visibility,
-                    task.updated_at.isoformat(),
-                ),
-            )
-        return (
-            self.get_creation_plan(plan.workspace_id, plan.id),
-            self.get_creation_task(task.workspace_id, task.id),
+        for match in plan.material_matches:
+            asset_id = match.asset_ref.removeprefix("asset:")
+            segment_id = match.segment_ref.removeprefix("segment:")
+            asset_row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id = ? AND id = ?",
+                (plan.workspace_id, asset_id),
+            ).fetchone()
+            if asset_row is None:
+                raise ValueError("创作方案引用的素材不属于当前工作区")
+            asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
+            segment = next((item for item in asset.segments if item.id == segment_id), None)
+            if (
+                segment is None
+                or asset.analysis_status != "ready"
+                or asset.review_status == "rejected"
+                or not material_allows_footage(asset)
+                or segment.review_status == "rejected"
+            ):
+                raise ValueError("创作方案引用的素材片段不可用")
+        conn.execute(
+            "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (plan.id, plan.workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (task.id, task.workspace_id, task.plan_id, _json_payload(task), task.visibility, task.updated_at.isoformat()),
         )
 
     def get_creation_plan(self, workspace_id: str, plan_id: str) -> CreationPlan:
@@ -8403,6 +8479,8 @@ class ProductionRepository:
         self,
         run: ScriptGenerationRun,
     ) -> tuple[CreationTask, ScriptGenerationRun]:
+        if run.run_kind != "generation" or run.source_reply_reference is not None:
+            raise ValueError("对话回复移交不能伪装成模型生成运行")
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
         with self._connect() as conn:
@@ -8457,6 +8535,308 @@ class ProductionRepository:
             self.get_script_generation_run(run.workspace_id, run.id),
         )
 
+    def transfer_completed_assistant_reply_to_script(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        request_id: str,
+        reply_reference: dict[str, str],
+        plan_conversion_request_id: str | None = None,
+        reply_text: str,
+        expected_plan_id: str,
+        expected_plan_updated_at: datetime | str,
+        expected_topic_id: str,
+        expected_task_updated_at: datetime | str,
+        input_references: list[dict[str, object]],
+        script_id: str,
+        run_id: str,
+        title: str,
+        language: Literal["zh-CN", "en-US", "zh-CN/en-US"],
+        sections: list[CreationTaskScriptSection],
+        replace_existing_script_id: str | None = None,
+        expected_script_updated_at: datetime | str | None = None,
+        verified_owner_user_id: str | None = None,
+    ) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
+        """Persist an explicit reply-to-draft transfer against current task facts."""
+        reference = _validated_assistant_reply_reference(reply_reference)
+        if not request_id.strip() or not reply_text.strip() or not title.strip() or not sections:
+            raise ValueError("移交文案需要请求身份、回复正文、标题和段落")
+        if hashlib.sha256(reply_text.encode("utf-8")).hexdigest() != reference["response_digest"]:
+            raise ValueError("对话回复正文已变化，请重新读取当前回复")
+        if any(
+            not section.id.strip() or not section.title.strip() or not section.content.strip()
+            for section in sections
+        ):
+            raise ValueError("移交文案段落必须包含标题和正文")
+        if "".join(section.content for section in sections) != reply_text:
+            raise ValueError("移交草稿必须保留当前对话回复正文")
+        references_by_id = _assistant_reply_input_references(input_references)
+        evidence_ids = {
+            reference_id
+            for section in sections
+            for reference_id in section.evidence_reference_ids
+        }
+        if not evidence_ids.issubset(references_by_id):
+            raise ValueError("移交文案引用了当前任务输入之外的资料")
+
+        request_payload: dict[str, object] = {
+            "workspace_id": workspace_id,
+            "task_id": task_id,
+            "reply_reference": reference,
+            "plan_conversion_request_id": plan_conversion_request_id,
+            "expected_plan_id": expected_plan_id,
+            "expected_plan_updated_at": _revision_value(expected_plan_updated_at),
+            "expected_topic_id": expected_topic_id,
+            "expected_task_updated_at": _revision_value(expected_task_updated_at),
+            "input_references": input_references,
+            "script_id": script_id,
+            "run_id": run_id,
+            "title": title,
+            "language": language,
+            "sections": [asdict(section) for section in sections],
+            "replace_existing_script_id": replace_existing_script_id,
+            "expected_script_updated_at": (
+                _revision_value(expected_script_updated_at)
+                if expected_script_updated_at is not None else None
+            ),
+            "owner_user_id": content_owner(verified_owner_user_id),
+        }
+        request_payload.pop("script_id")
+        request_payload.pop("run_id")
+        request_fingerprint = hashlib.sha256(
+            _json_object(request_payload).encode("utf-8")
+        ).hexdigest()
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_script_transferred", workspace_id, request_id,
+        )
+        replay_ids: tuple[str, str] | None = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                "SELECT * FROM task_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            if prior is not None:
+                event = self._task_event_from_row(prior)
+                if (
+                    event.event_type != "assistant_reply_script_transferred"
+                    or event.workspace_id != workspace_id
+                    or event.task_id != task_id
+                    or event.payload.get("request_fingerprint") != request_fingerprint
+                ):
+                    raise ValueError("回复移交请求身份已用于不同的任务或输入")
+                replay_ids = (str(event.payload["run_id"]), str(event.payload["script_id"]))
+            else:
+                task = self._require_creation_task(conn, workspace_id, task_id)
+                if task.plan_id != expected_plan_id:
+                    raise ValueError("回复移交的创作方案已变化")
+                plan_row = conn.execute(
+                    "SELECT payload FROM creation_plans WHERE workspace_id = ? AND id = ?",
+                    (workspace_id, task.plan_id),
+                ).fetchone()
+                if plan_row is None:
+                    raise KeyError(task.plan_id)
+                plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
+                if _revision_value(plan.updated_at) != _revision_value(expected_plan_updated_at):
+                    raise ValueError("创作方案版本已变化，请重新读取后移交")
+                if task.selected_topic_id != expected_topic_id:
+                    raise ValueError("回复移交的已确认选题已变化")
+                if task.confirmed_script_id is not None:
+                    raise ValueError("已确认文案不能被对话回复移交覆盖")
+                topic_row = conn.execute(
+                    "SELECT payload FROM topic_candidates WHERE workspace_id = ? AND task_id = ? AND id = ?",
+                    (workspace_id, task_id, expected_topic_id),
+                ).fetchone()
+                if topic_row is None:
+                    raise ValueError("回复移交选题不属于当前任务")
+                topic = self._topic_candidate_from_payload(json.loads(str(topic_row["payload"])))
+                if topic.selection_status != "confirmed":
+                    raise ValueError("回复移交前必须确认当前选题")
+                if task.stage != "script" or task.stage_status not in {"not_started", "waiting_for_user"}:
+                    raise ValueError("当前创作任务不在可移交的文案阶段")
+                if _revision_value(task.updated_at) != _revision_value(expected_task_updated_at):
+                    raise ValueError("创作任务版本已变化，请重新读取后移交")
+                if plan_conversion_request_id is not None:
+                    self._require_assistant_reply_plan_event(
+                        conn,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        plan_id=plan.id,
+                        request_id=plan_conversion_request_id,
+                        reply_reference=reference,
+                        reply_owner_user_id=content_owner(verified_owner_user_id),
+                    )
+                self._validate_assistant_reply_inputs(plan, references_by_id)
+
+                current_scripts = conn.execute(
+                    "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? ORDER BY updated_at DESC, id DESC",
+                    (workspace_id, task_id),
+                ).fetchall()
+                latest = (
+                    self._creation_task_script_from_payload(json.loads(str(current_scripts[0]["payload"])))
+                    if current_scripts else None
+                )
+                if latest is not None:
+                    if (
+                        replace_existing_script_id != latest.id
+                        or expected_script_updated_at is None
+                    ):
+                        raise ValueError("当前已有文案草稿，请明确选择替换")
+                    if latest.selection_status != "draft":
+                        raise ValueError("已有文案不是可替换的待确认草稿")
+                    if _revision_value(latest.updated_at) != _revision_value(expected_script_updated_at):
+                        raise ValueError("文案草稿已变化，请重新读取后确认替换")
+                    script = latest
+                    script_id = latest.id
+                    script.run_id = run_id
+                    script.topic_id = expected_topic_id
+                    script.title = title.strip()
+                    script.language = language
+                    script.sections = sections
+                    script.selection_status = "draft"
+                    script.confirmed_at = None
+                    script.source_reply_reference = reference
+                else:
+                    if replace_existing_script_id is not None or expected_script_updated_at is not None:
+                        raise ValueError("没有当前草稿可按指定修订替换")
+                    script = CreationTaskScript(
+                        id=script_id,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        run_id=run_id,
+                        topic_id=expected_topic_id,
+                        title=title.strip(),
+                        language=language,
+                        sections=sections,
+                        source_reply_reference=reference,
+                    )
+
+                if task.stage_status == "not_started":
+                    task.stage_status = "waiting_for_user"
+                    task.status = "waiting_for_user"
+                    task.progress = max(task.progress, 35)
+                now = utc_now()
+                run = ScriptGenerationRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    task_id=task_id,
+                    plan_id=plan.id,
+                    topic_id=topic.id,
+                    status="succeeded",
+                    route_snapshot={"operation": "explicit_assistant_reply_transfer", "provider": "none"},
+                    prompt_schema_version="assistant-reply-transfer/v1",
+                    input_references=list(input_references),
+                    started_at=now,
+                    finished_at=now,
+                    run_kind="assistant_reply_transfer",
+                    source_reply_reference=reference,
+                )
+                script.updated_at = now
+                task.updated_at = now
+                conn.execute(
+                    "INSERT INTO script_generation_runs (id, workspace_id, task_id, plan_id, topic_id, payload, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run.id, workspace_id, task_id, plan.id, topic.id, _json_payload(run), now.isoformat(), now.isoformat()),
+                )
+                if latest is None:
+                    conn.execute(
+                        "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (script.id, workspace_id, task_id, run.id, _json_payload(script), now.isoformat()),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE creation_task_scripts SET run_id = ?, payload = ?, updated_at = ? WHERE workspace_id = ? AND task_id = ? AND id = ?",
+                        (run.id, _json_payload(script), now.isoformat(), workspace_id, task_id, script.id),
+                    )
+                conn.execute(
+                    "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                    (_json_payload(task), now.isoformat(), workspace_id, task_id),
+                )
+                self.append_task_event(
+                    TaskEvent(
+                        id=event_id,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        job_id=None,
+                        event_type="assistant_reply_script_transferred",
+                        payload={
+                            "request_id": request_id,
+                            "request_fingerprint": request_fingerprint,
+                            "reply_reference": reference,
+                            "plan_conversion_request_id": plan_conversion_request_id,
+                            "plan_id": plan.id,
+                            "topic_id": topic.id,
+                            "task_id": task_id,
+                            "run_id": run.id,
+                            "script_id": script.id,
+                            "expected_task_updated_at": _revision_value(expected_task_updated_at),
+                            "expected_script_updated_at": (
+                                _revision_value(expected_script_updated_at)
+                                if expected_script_updated_at is not None else None
+                            ),
+                        },
+                    ),
+                    connection=conn,
+                )
+        if replay_ids is not None:
+            return (
+                self.get_creation_task(workspace_id, task_id),
+                self.get_script_generation_run(workspace_id, replay_ids[0]),
+                self.get_creation_task_script(workspace_id, replay_ids[1]),
+            )
+        return (
+            self.get_creation_task(workspace_id, task_id),
+            self.get_script_generation_run(workspace_id, run_id),
+            self.get_creation_task_script(workspace_id, script_id),
+        )
+
+    def _require_assistant_reply_plan_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        task_id: str,
+        plan_id: str,
+        request_id: str,
+        reply_reference: dict[str, str],
+        reply_owner_user_id: str | None,
+    ) -> None:
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_plan_confirmed", workspace_id, request_id,
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM task_events WHERE workspace_id = ? AND task_id = ? AND id = ? AND event_type = 'assistant_reply_plan_confirmed'",
+            (workspace_id, task_id, event_id),
+        ).fetchone()
+        payload = _json_object_from_text(str(row["payload_json"])) if row is not None else {}
+        if not (
+            payload.get("plan_id") == plan_id
+            and payload.get("reply_reference") == reply_reference
+            and payload.get("reply_owner_user_id") == reply_owner_user_id
+        ):
+            raise ValueError("当前方案没有绑定这条已完成对话回复")
+
+    @staticmethod
+    def _validate_assistant_reply_inputs(
+        plan: CreationPlan,
+        input_references: dict[str, dict[str, object]],
+    ) -> None:
+        expected: dict[str, dict[str, str]] = {}
+        for item in plan.knowledge_references:
+            reference_id = f"knowledge:{item.id}:{item.version}"
+            expected[reference_id] = {
+                "kind": "knowledge", "object_id": item.id,
+                "version_or_identity": item.version, "title": item.title,
+            }
+        for item in plan.source_references:
+            reference_id = f"source:{item.id}"
+            expected[reference_id] = {
+                "kind": "source", "object_id": item.id,
+                "version_or_identity": item.identity, "title": item.title,
+            }
+        for reference_id, item in input_references.items():
+            if not reference_id or item != expected.get(reference_id):
+                raise ValueError("文案输入来源与当前方案的固定版本不一致")
+
     def complete_script_generation(
         self,
         run_id: str,
@@ -8482,6 +8862,8 @@ class ProductionRepository:
             run = self._script_generation_run_from_payload(json.loads(str(row["payload"])))
             if run.status != "running":
                 raise ValueError("文案运行不是可完成状态")
+            if run.run_kind != "generation":
+                raise ValueError("回复移交记录不能作为模型生成运行完成")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (run.workspace_id, run.task_id),
@@ -8702,17 +9084,16 @@ class ProductionRepository:
         *,
         title: str,
         sections: list[CreationTaskScriptSection],
+        expected_updated_at: datetime | str | None = None,
     ) -> CreationTaskScript:
         """Revise only the current unconfirmed assistant draft in its existing run."""
         if not title.strip() or not sections or any(
             not section.id.strip()
             or not section.title.strip()
             or not section.content.strip()
-            or not section.visual_prompt.strip()
-            or not section.evidence_reference_ids
             for section in sections
         ):
-            raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+            raise ValueError("文案草稿必须包含标题和正文")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task = self._require_creation_task(conn, workspace_id, task_id)
@@ -8724,6 +9105,11 @@ class ProductionRepository:
                 raise KeyError(script_id)
             script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
             if (
+                expected_updated_at is not None
+                and _revision_value(script.updated_at) != _revision_value(expected_updated_at)
+            ):
+                raise ValueError("文案草稿修订已变化，请重新读取后再保存")
+            if (
                 task.stage != "script"
                 or task.stage_status != "waiting_for_user"
                 or task.confirmed_script_id is not None
@@ -8731,6 +9117,11 @@ class ProductionRepository:
                 or script.topic_id != task.selected_topic_id
             ):
                 raise ValueError("当前创作任务不允许修改这份待确认文案")
+            if script.source_reply_reference is None and any(
+                not section.visual_prompt.strip() or not section.evidence_reference_ids
+                for section in sections
+            ):
+                raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
             run_row = conn.execute(
                 "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
                 "AND json_extract(payload, '$.status')='succeeded' "
@@ -8909,13 +9300,12 @@ class ProductionRepository:
         *,
         title: str,
         sections: list[CreationTaskScriptSection],
+        expected_updated_at: datetime | str | None = None,
     ) -> tuple[CreationTask, CreationTaskScript]:
-        if not title.strip() or not sections or any(
-            not section.content.strip() or not section.evidence_reference_ids
-            for section in sections
-        ):
+        if not title.strip() or not sections or any(not section.content.strip() for section in sections):
             raise ValueError("确认文案必须包含正文和来源证据")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (workspace_id, task_id),
@@ -8928,6 +9318,11 @@ class ProductionRepository:
                 raise KeyError(script_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
             script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
+            if (
+                script.source_reply_reference is None
+                and any(not section.evidence_reference_ids for section in sections)
+            ):
+                raise ValueError("确认文案必须包含正文和来源证据")
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
@@ -8950,6 +9345,11 @@ class ProductionRepository:
                 task.stage != "script" or task.stage_status != "waiting_for_user"
             ):
                 raise ValueError("当前创作任务不在等待确认文案状态")
+            if (
+                expected_updated_at is not None
+                and _revision_value(script.updated_at) != _revision_value(expected_updated_at)
+            ):
+                raise ValueError("文案草稿修订已变化，请重新读取后再确认")
             allowed_references = {
                 reference_id
                 for original in script.sections
@@ -10659,6 +11059,60 @@ def _business_object_from_row(row: sqlite3.Row) -> MaterialBusinessObject:
 
 def _json_object(value: dict[str, object]) -> str:
     return json.dumps(value, ensure_ascii=False, default=_json_default)
+
+
+def _validated_assistant_reply_reference(value: dict[str, str]) -> dict[str, str]:
+    conversation_id = value.get("conversation_id", "").strip()
+    turn_id = value.get("turn_id", "").strip()
+    response_digest = value.get("response_digest", "").strip().lower()
+    if not conversation_id or not turn_id or re.fullmatch(r"[0-9a-f]{64}", response_digest) is None:
+        raise ValueError("对话回复来源必须包含会话、已完成轮次和 SHA-256 摘要")
+    return {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "response_digest": response_digest,
+    }
+
+
+def _assistant_reply_input_references(
+    values: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    required = ("reference_id", "kind", "object_id", "version_or_identity", "title")
+    for value in values:
+        if not isinstance(value, dict) or any(not str(value.get(key, "")).strip() for key in required):
+            raise ValueError("文案输入来源缺少固定版本身份")
+        reference_id = str(value["reference_id"])
+        if reference_id in result:
+            raise ValueError("文案输入来源标识重复")
+        result[reference_id] = {key: value[key] for key in required if key != "reference_id"}
+    return result
+
+
+def _revision_value(value: datetime | str) -> str:
+    result = value.isoformat() if isinstance(value, datetime) else value.strip()
+    if not result:
+        raise ValueError("对象修订令牌不能为空")
+    return result
+
+
+def _assistant_reply_request_event_id(event_type: str, workspace_id: str, request_id: str) -> str:
+    identity = hashlib.sha256(f"{workspace_id}\0{request_id}".encode("utf-8")).hexdigest()[:32]
+    return f"{event_type}_{identity}"
+
+
+def _creation_plan_conversion_intent(plan: CreationPlan) -> dict[str, object]:
+    value = asdict(plan)
+    for key in ("id", "creation_task_id", "owner_user_id", "created_at", "confirmed_at", "updated_at"):
+        value.pop(key, None)
+    return value
+
+
+def _creation_task_conversion_intent(task: CreationTask) -> dict[str, object]:
+    value = asdict(task)
+    for key in ("id", "plan_id", "owner_user_id", "created_at", "updated_at"):
+        value.pop(key, None)
+    return value
 
 
 def _json_object_from_text(value: str) -> dict[str, object]:
