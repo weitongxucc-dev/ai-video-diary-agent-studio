@@ -40,7 +40,7 @@ function sourceLabel(value: string) {
   return value === "manual" ? "手工添加" : platformLabel(value);
 }
 
-function useStateLabel(value: ContentUseState) {
+function contentUseStateLabel(value: ContentUseState) {
   return ({ available: "可用于创作", reference_only: "仅供参考", excluded: "不使用", not_for_automation: "不用于自动任务", not_for_publish: "不用于发布" })[value];
 }
 
@@ -216,7 +216,7 @@ export default function SourcesPage() {
       setSavedReceipt({ sourceItemId: source.id, knowledgeItemId: saved.id, useState: saved.use_state });
       setNotice(saved.use_state === "excluded"
         ? `已登记“${source.title}”并回读确认；当前标记为不使用，因此不会进入知识检索。`
-        : `已回读确认“${source.title}”保存到知识库，使用范围：${useStateLabel(saved.use_state)}。`);
+        : `已回读确认“${source.title}”保存到知识库，使用范围：${contentUseStateLabel(saved.use_state)}。`);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : sourceErrorMessage(cause)); }
     finally { setBusy(null); }
