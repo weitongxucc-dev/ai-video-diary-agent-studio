@@ -221,6 +221,22 @@ D ada64c3已78专项/tsc通过并retain，主控审阅当前源码仍发现两�
 
 E能力盘点task_e5daffa2962a已failed结算retain：公开安装/源码矩阵成立，误触ZIP中测试会话内容后停止、未完成包元数据核对；没有恢复旧读权限或重跑会话证据。main能力表差额已交UI唯一写者。C知识2d/e5源码审核后机械组合f603abb，真实GUI及N14/N15接线未完成。
 
+### 当前单写者接续：QA-V2-B-PROFILE-API / UI-TASK / C-SOURCE-FORM
+
+UI会话da6f7c7、B范围3c149cb、D素材ada64c3+749820a、F预检84bcd24均已报告、源码审核并retain，原Dispatch写权结束；机械组合候选`/tmp/main-controller-20261009/review-v2-integration`准确`804dcf3`，main产品代码未改。本节优先于上表旧任务摘要。当前仅以下具名新单拥有写权，仍无用户库/Key/真实模型/账号/发布/GUI运行许可；源码与隔离检查不是完整流程完成。
+
+B纵向继续F01/F02，基于804dcf3新clone到`/tmp/main-acceptance-20261009/review-v2-profile-api/candidate`，分支`codex/review-v2-profile-api-20261009`。唯一共享写者：main.py/schemas.py/lib/api.ts/lib/types.ts；产品owned仅人物声音/默认选择/预检及其任务生成回调相关段，另有PeopleAndVoiceWorkspace.tsx/.module.css、profiles/page.tsx、settings/page.tsx声音部分、CreateProductionTaskForm声音人物选择消费者、production.py/avatar_lipsync.py/narration.py/creation_execution.py/profile_reference_media.py的必要接线及直接专项。禁止改会话消费者/assistant_pi、C资料仓储/source-api/来源页、平台、共享壳/全局样式/桌面或不相关main段。一文件一写者；F的创建表单权已经结束。
+
+登记按可信成员/空间读取，授权证明及声音的人物关联可选；两个声音入口使用同一版本化对象、默认固定版本。导入WAV沿真实现有文件桥/注册媒体入口；从现有素材选择真实文件/片段时间范围，显示来源和可试听/预览，禁止手填任意路径或要求旧已审核字段。人物入口稳定，名称与参考必填，版本自动生成，其他信息按真实能力可选。保存有效参考不调用模型；失联保留档案可重新定位，源use_state/限制不丢失。选中人物和声音独立传Plan/任务，0%人物不查口型，所有response处理可空历史证明且不伪造授权。任务配音/人物生成回调传可信reader和真实grant，使用3c149cb的精确派生，不能用整文件代替所选范围。
+
+独立试听/人物短预览目前API直接调用服务且无设备许可，是真实接线缺口。本单按已有架构§3.12补一个具体media_preview业务owner/执行器注册到唯一DeviceRuntime，复用现有MediaPreviewRun和持久队列/注册子进程/预算/取消/恢复；允许必要新增具体profile_preview_execution.py及ProductionRepository自有增量字段和直接测试。绑定实际成员/空间、声音/人物版本、文本/模型/源范围摘要，准入/执行前重核，queued不冒充running或完成；不伪造CreationTask、借creation_job许可、添加第二调度器/内存队列或绕过未标定主机预算。Preview服务和参考派生只接受准确该owner/unit的许可；失败保留参考与文本，真实新文件才成功，原片不得冒充结果。列表/媒体读取仍受真实reader约束。若现有设备许可接口差额需要跨模块变更，交准确事实主控收口，不静默放行。
+
+同一预检接线修N33/36资格消费者：依据领域§3.3和现有material_allows_automation/真实媒体/use_state/范围，沿同一方法供预检与实际自动选片，review_state不作全导入默认门槛，明确拒绝和主动限制仍遵守；候选匹配与可用计数分别返回，不把低语义结构候选静默变为自动选片。N09覆盖规范类别按真实已有分类/同义关系归并，不编造观察。只做必要正负专项，复用未影响既有42/30与合成范围证据。WAV/视频为任务自制合成，临时DB/TestClient/模型替身/测试grant及公开manta依赖可用；不安装、不启动常驻服务/模型/Pi/GUI，不用个人样本/Key/真实DeviceGrant，不改用户默认声音/库。交clean候选、逐ID、退役消费者不存在证明、精确GUI/模型未验；不先以API完成宣布F01/F02完成。
+
+UI另接任务可见事实消费者，基于804dcf3新clone到`/tmp/main-acceptance-20261009/review-v2-task-view/candidate`分支`codex/review-v2-task-view-20261009`。仅CreationTaskWorkspace.tsx、JobProgressPanel.tsx、PersonView和SubtitleView实际所在组件及必要局部CSS、直接专项；不写main/schema/api/types/创建表单/资料/人物列表/B媒体核心/HomeCommandComposer。来源H-B005–009/B011/B013–017/B025、H-DEEP-07、M5/M6/M7：当前阶段原操作失败就近影响/恢复，历史折叠右卡且32条不能淹没主工作；真实完成不显示未知等待估时或整片红，旧完成产物不冒充当前版本就绪；0%人物不报无关口型环境。字幕草稿选段与真实画面定位就近，草稿/输出保存范围准确，显示和保留中文轨独立，失败不清用户草稿，恢复清当前已恢复错误。播放器保留F事实/范围实现，不重复重做；目标窗口三轨/实际比例保持。先复核已有接线，再按真实发现改；503归因未知不能统一指密钥。只受控组件/必要API替身检查和tsc，无真实服务/模型/GUI/媒体/用户数据；N14正文→文案草稿与N06全库对话待共享入口再次释放后具名接线，不造假保存按钮。
+
+C独占来源表单消费者，基于804dcf3新clone到`/tmp/main-acceptance-20261009/review-v2-source-form/candidate`分支`codex/review-v2-source-form-20261009`。owned sources/page.tsx及必要局部组件/CSS、lib/source-api.ts的来源知识输入类型、直接专项；不写main/schema/lib/api.ts/lib/types.ts/生产仓储/知识集合/全局样式。按既有SourceRepository.use_state默认available，普通导入不要求权利人/授权字符串；保留来源、历史许可和真实主动限制，外发/订阅行为边界不放宽。复用同一粘贴/文件/网页录入流程，非当前表单收起，保存失败保留输入/原对象，真实结果回读再成功；prepared文件/格式就地校验，unsupported平台非交互，源技术参数按需诊断。后端当前schema旧必填仍未释放，报告精确API接线差额，不能提交假授权占位字符串绕过，前端专项是替身证据。B结束共享写权后C另接唯一main/schema接线单，届时验证默认available、excluded/restrictions按实际检索/计划用途消费与固定版本/grants不回退。本单仅现有公开缓存/受控检查/tsc，无安装、服务/Pi/GUI/媒体/Key/用户库/远端操作。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
