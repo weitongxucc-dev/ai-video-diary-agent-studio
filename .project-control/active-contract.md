@@ -532,6 +532,8 @@ F确认消费者3dc5809已审、机械组合9a268d9；原三个参数真实IO/FF
 
 root准确19a330f整API实际2000PASS/3FAIL/零ERROR（api-full-final.log）。随后B Web2f74385和UI素材入口5fd9ad8/f568a5e只Web机械组合至957a1c4bb212cae4c4c93d771bfda1ec5de2e906，API树未变，两Dispatch已retain/source权结束。D新单仅三个失败test及局部fixture：test_member_permits.py实际AST main consumer namespace缺新增montage_waiting_for_confirmation，使用真实函数不假的False；test_trim_preview_media.py有效真实素材应有准确role/文件修订，先核409实际原因，不放宽媒体资格或422/颜色/范围/零写断言；test_montage_pipeline.py原narration_retime函数仍patch已退役helper/期待旧503及新有效SRT，本次改为当前直接诊断retime快照保留用户文字/时钟、字幕unavailable且artifact/transform为空、原因/影响/修复及undo/redo恢复，不能冒充许可API成功，原503断言退役而真正零Grant/queued/原子提交证据复用新13API/17队列。不得复活helper或给私有函数套虚假Grant。唯一这三测试文件，不改任何产品/预算/reader/对照负例；仅三个残差及必要共用fixture/Ruff，2000未影响复用，最终CI归主控。owned /tmp/main-acceptance-20261009/review-v2-final-three/；允许既有合成FFmpeg/临时库/真实许可进程，不运行模型/App服务/GUI/用户数据/下载/远端。语义ACK后实施；真实source缺陷交主控不改绿。
 
+root957整Web为849PASS/4FAIL、tsc/ESLint零错误，52既有warnings。两个失败断言仍期待f568已退役的“先选择素材”句；另两个搜索失败/背景刷新反馈原98组PASS、最终组失败，须在同scope核交错，不预先认定生产回归或纯时序。UI新QA-V2-UI-FINAL-MATERIAL-FIXTURES仅MaterialLibraryWorkspace.test.tsx这四case/局部fixture，先两处断言换真实中性范围并保留未选择不自动引用，再四case必要复验；另两真实反馈/草稿/列表/范围负例不能删、any-status或加任意延时。若尚失败报告真实根因，不新增生产fallback；2000API/849Web未影响证明复用。准确957新隔离公开候选与owned/tmp/main-acceptance-20261009/review-v2-final-material-fixtures/，最小组/Ruff不适用、精确ESLint/diffcheck，无服务模型GUI用户资料远端权。
+
 ### 主控同候选机械构建与隔离可见核验
 
 源码整改授权内，主控在两消费者交付和必要检查收口后，将准确组合SHA绑定至owned `/tmp/main-acceptance-20261009/review-v2-final-client/candidate`；不创建Run/自派worker。只复用lock摘要一致的公开依赖的自有APFS副本、已装PyInstaller与arm64 Electron33.4.11，构建Next standalone/API和arm64 dir.app，publish never、无Apple签名/公证/DMG/ZIP/安装或替换用户包。准备不是通过，实际输入digest和源码绑定另回读。
