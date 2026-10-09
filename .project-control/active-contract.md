@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 93：三平台账号只读准备 | task_9434a33b2ebb / ctx_b3f6bc2405eb；仅下方93owned观测，无产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 94：succeeded结案，已retain | task_fa893f93a714 / ctx_ca0b9e3794c7；源码/证据保留，无新增写权/运行权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 95：旧资源测试替身补请求ID | 仅下方95单个测试文件；94/92旧权限结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -60,6 +60,10 @@ B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11�
 准备/扫码窗口真实显示后发root状态，由root提示用户，worker不反复催问、不自动代替扫码。识别昵称与稳定ID区别，无可读稳定ID/回执则明确缺口；DOM/HTTP/截图/用户扫码回执分别记录，不把本次登入与控件存在标成自动发布通过。逐平台关闭owned浏览器释放PID/PGID，保留profile但不删除会话；实际账号浏览器本轮固定30分钟上限，可完成平台先交结果，未扫码/工具拒绝列未验，不把等待当答案。最终交最小选择器/能力缺口、下步所需适配路径、实际证据和未验到report.md并Task结算，root安排具名产品施工/外发验收。当前B92源冻结不因本只读任务失效。
 
 ### B94：排队拒绝的同次资源诊断（已succeeded结案，写权结束）
+
+### B95：CI旧测试替身的请求ID
+
+准确26911a1的CI37866253751前端/桌面通过，后端18失败/1671通过/20跳过：全部18失败来自tests/test_creation_resource_contract.py::_verdict的_Request无id，而真实WorkRequest必有id。主控已读该共用替身及实际AttributeError，不为旧测试添加getattr兜底或改准入契约。复用retain的B终端，从clean26911a1339bfb140c6f01fc3a01bea277ed5d90b建立codex/resource95-test-fixture-20261009，仅apps/api/tests/test_creation_resource_contract.py写权，为该既有替身补明确fixture request ID，不更改断言/删除用例或修改任何产品代码。仅/tmp/main-acceptance-20261009/resource95/隔离HOME/XDG/DB/tmp跑该文件失败的18项，无服务/媒体/模型/Pi/Key/GUI/账号/下载/打包或外部写入；不全量本机检查。交clean候选、净diff、必要结果及未验，主控审/集成/CI回读。UI93账号观察继续，不受纯测试差额影响。
 
 主控审核clean e52e25e8b4d4e64b794368409e8907181bb9f8d1，两个owned文件净差额及8项专项；拒绝/未知日志来自原一次采样，bool/None、cap、Grant与等待条件未变。机械集成26911a1339bfb140c6f01fc3a01bea277ed5d90b并推草稿PR101，最新CI待回读；旧2c896f24 CI和B92实际包证据保留各自范围，不冒称新包日志/重出通过。报告/tmp/main-acceptance-20261009/admission94/report.md，测试组已退出，Dispatch已retain。源写权已结束，未有新服务/媒体运行权。UI93继续只读2c896f24的未变platform_auth/platform_browser；集成中只有host探针/测试差额，账号观察和已加载浏览器不受影响。
 
