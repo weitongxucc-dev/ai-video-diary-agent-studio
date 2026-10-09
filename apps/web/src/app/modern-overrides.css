@@ -354,10 +354,13 @@ h4 {
 .assistant-conversation-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .assistant-conversation-actions details { margin-right: auto; }
 .assistant-conversation-actions details p { max-width: 520px; color: var(--text-3); font-size: 12px; }
-.assistant-conversation-actions button[type="submit"] { background: var(--accent); color: white; }
+.assistant-conversation-actions button.assistant-send { display: inline-flex; width: 28px; height: 28px; flex: 0 0 28px; align-items: center; justify-content: center; padding: 0; background: var(--accent); color: white; }
+.assistant-conversation-actions button.assistant-send:disabled { opacity: .5; cursor: not-allowed; }
+.assistant-conversation-actions button.assistant-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.assistant-send-state, .assistant-entry-hint { color: var(--text-3); font-size: 12px; }
 .assistant-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
 .assistant-suggestions p { flex-basis: 100%; margin: 0; }
-.assistant-suggestions button { border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface-1); color: var(--text-2); padding: 5px 9px; font: inherit; cursor: pointer; }
+.assistant-suggestions button, .assistant-suggestions a { border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface-1); color: var(--text-2); padding: 5px 9px; font: inherit; cursor: pointer; text-decoration: none; }
 .assistant-markdown-wrap { position: relative; color: var(--text-1); }
 .assistant-markdown { line-height: var(--line-body); overflow-wrap: anywhere; }
 .assistant-markdown > :first-child { margin-top: 0; }

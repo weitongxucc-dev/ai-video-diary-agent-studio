@@ -2,6 +2,7 @@
 
 import { AlertCircle } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
 import type { CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
@@ -17,6 +18,7 @@ type HomeCommandComposerProps = {
   autoFocus?: boolean;
   task?: CreationTask | null;
   onTaskUpdated?: () => void;
+  pageContext?: { pathname: string };
   materialContext?: {
     selection: MaterialAssistantSelection | null;
     label: string | null;
@@ -61,7 +63,7 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
   </>;
 }
 
-export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext }: HomeCommandComposerProps) {
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext }: HomeCommandComposerProps) {
   const materialScopeKey = materialContext
     ? materialContext.selection
       ? materialContext.selection.scope === "asset"
@@ -312,8 +314,36 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     }
   }
 
+  const pathname = pageContext?.pathname ?? "/";
+  const stageSuggestions: Record<CreationTask["stage"], string[]> = {
+    topic: ["先解释当前选题进度", "帮我梳理选题方向"],
+    script: ["先检查当前文案", "把文案写得更简洁"],
+    narration: ["先解释当前配音进度"],
+    montage: ["让节奏快一点", "字幕放大一点"],
+    review: ["先解释当前成片检查结果"],
+  };
+  const pageEntries: Record<string, { label: string; links: { href: string; label: string }[] }> = {
+    "/settings": { label: "设置", links: [{ href: "/health", label: "查看运行情况" }, { href: "/profiles", label: "查看人物与声音" }] },
+    "/profiles": { label: "人物与声音", links: [{ href: "/library", label: "查看参考素材" }, { href: "/settings", label: "查看制作设置" }] },
+    "/members": { label: "成员与空间", links: [{ href: "/", label: "查看工作区首页" }] },
+    "/knowledge": { label: "知识库", links: [{ href: "/sources", label: "管理资料来源" }, { href: "/?new=1", label: "进入新建视频" }] },
+    "/sources": { label: "资料来源", links: [{ href: "/knowledge", label: "查看知识库" }] },
+    "/library": { label: "素材库", links: [{ href: "/?new=1", label: "进入新建视频" }, { href: "/knowledge", label: "查看知识库" }] },
+    "/templates": { label: "视频模板", links: [{ href: "/?new=1", label: "进入新建视频" }] },
+    "/history": { label: "发布与数据", links: [{ href: "/", label: "查看工作区任务" }] },
+    "/health": { label: "运行情况", links: [{ href: "/settings", label: "查看服务设置" }] },
+    "/production": { label: "创作任务", links: [{ href: "/?new=1", label: "进入新建视频" }] },
+  };
+  const pageEntry = pageEntries[pathname];
+  const suggestions = materialContext
+    ? materialContext.selection ? ["把我的标签改成产品演示", "再加上室内"] : []
+    : task ? stageSuggestions[task.stage]
+    : pathname === "/" ? ["用我的素材，做一条产品介绍", "把客户常问的问题做成讲解视频"] : [];
+  const showEntry = !assistant.loading && assistant.conversation !== null && !assistant.conversation.turns.length && !assistant.draftText.trim();
   return (
     <div className="home-composer">
+      {showEntry && !task && !materialContext && pageEntry ? <nav className="assistant-suggestions" aria-label="当前页面建议入口"><p>{pageEntry.label}：以下入口只跳转页面，不会发送对话。</p>{pageEntry.links.map(item => <Link key={item.href} href={item.href}>{item.label}</Link>)}</nav> : null}
+      {showEntry && suggestions.length ? <p className="assistant-entry-hint">点击建议只填入草稿，发送后才处理。</p> : null}
       {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
         {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "尚未选择素材：请从右侧选择整条素材或一个片段。"}
       </p> : null}
@@ -326,9 +356,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
         onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setPending(null); setShareUpdating(false); setError(null); }}
         onSend={sendToAssistant}
-        scopeLabel={materialContext ? (materialContext.label ?? "当前素材") : task ? task.name : "首页创作"}
+        scopeLabel={materialContext ? (materialContext.label ?? "当前素材") : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
         state={assistant}
-        suggestions={materialContext ? ["把我的标签改成产品演示", "再加上室内", "移除旧标签"] : task ? ["先解释目前这一步", "让节奏快一点", "字幕放大一点"] : ["用我的素材，做一条产品介绍", "把客户常问的问题做成讲解视频", "把今天拍的片段剪成工作日常"]}
+        suggestions={showEntry ? suggestions : []}
       />
       {taskActionStatus ? <p role="status" aria-live="polite">{taskActionStatus}</p> : null}
       {preview ? <button className="home-composer__open-card" onClick={() => setPreviewOpen(true)} type="button">查看方案</button> : null}

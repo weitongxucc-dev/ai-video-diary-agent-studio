@@ -120,6 +120,9 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
+  const sendLabel = currentRunning && !input.trim().startsWith("/") ? "本轮运行中" : busy && !input.trim().startsWith("/") ? "正在处理" : "发送";
+  const sendDisabled = !configured || (busy && !input.trim().startsWith("/")) || state.loading || !input.trim() || (currentRunning && !input.trim().startsWith("/"));
+  const sendReason = state.loading ? "正在恢复对话" : !configured ? "请先配置对话服务" : sendLabel !== "发送" ? sendLabel : !input.trim() ? "先填写对话要求" : "Enter 发送，Shift+Enter 换行";
   const commandHelp = useMemo(() => capabilities?.application_commands ?? ["/new", "/name <名称>", "/resume <会话ID>", "/help"], [capabilities]);
 
   useEffect(() => { void getAssistantCapabilities().then(setCapabilities).catch(() => undefined); }, []);
@@ -203,7 +206,8 @@ export function AssistantConversationPanel({
           </details>
         </> : null}
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <button type="button" onClick={() => void state.stop().catch((cause) => setError(cause.message))}>停止本轮</button> : null}
-        <button type="submit" disabled={!configured || (busy && !input.trim().startsWith("/")) || state.loading || !input.trim() || (currentRunning && !input.trim().startsWith("/"))}><Send aria-hidden="true" size={14} />{currentRunning && !input.trim().startsWith("/") ? "本轮运行中" : busy && !input.trim().startsWith("/") ? "正在处理" : "发送"}</button>
+        <span className="assistant-send-state" role="status">{sendDisabled ? sendReason : null}</span>
+        <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><Send aria-hidden="true" size={14} /></button>
       </div>
     </form>
     {error || state.error ? <p className="assistant-conversation-error" role="alert">{error ?? state.error}</p> : null}

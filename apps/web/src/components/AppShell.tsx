@@ -443,7 +443,7 @@ export function AppShell({
           <section aria-label="创作助手" className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small><button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></button></div></header>
             <div className={editorShell.conversationBody}>
-              {conversation || <HomeCommandComposer autoFocus={autoFocus} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
+              {conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
