@@ -35,11 +35,33 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 109：succeeded结案并retain | clean6d7b0ada仅两项测试契约更新；运行产品blob与7aa相等；旧写权结束 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | QA-V2-UI：会话纵向根因核实 | task_087deec80e9a / ctx_5664c1ed76fa；以下具名只读定位；109旧写权结束 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 108：succeeded结案并retain | task_6b2bd981a37c / ctx_12d7b1c70be7；以下B108；B106已结案retain；99脏树保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | QA-V2-B：声音/人物纵向根因核实 | task_d4a8b44a7fda / ctx_06b5564d9958；以下具名只读定位；108运行权结束；99脏树保留 |
 
-## 当前波次：B92组合修复实际成片补验（2026-10-09）
+## 当前波次：实机v2累计整改（MAIN-REVIEWV2-20261009）
+
+用户于2026-10-09提供Downloads累计版ZIP并明确要求在GitHub建Issue、确认问题后安排修正，按同类共同机制解决，不按症状逐处补丁。47个U/N来源ID保持；F01/F02、历史候选/风险/设计/L/DEEP行有重叠，不求和成Bug数。评审是现象证据而非产品权威；报告original链接仅溯源，活动规则仍从main/docs/README.md路由。已改善的流式/工具事件/引用/柔光卡/WAV选择器保留。
+
+累计追踪为[GitHub #103](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/103)，#104–112按会话、人物声音、素材资格、任务版本、设置事实、知识录入、模板、共享组件和定时发布机制归组。所有47个新版ID、70行历史来源及R01/R02已有路由；施工与关闭仍逐项记录，建单不表示缺陷全部确认或已经修复。
+
+准确产品基线为`/tmp/main-controller-20261008/ui-v3-integration`的`6d7b0ada06e8389cd5495c2d32501fdb92102e60`，PR102仍draft且未获合入批准。评审包SHA256为`c62f75e9282673c79b71703cc0a28bd43a390886ed7a7887dbfbdb1340c206f0`，manifest289文件无差异；定向证据及累计入口在`/tmp/main-controller-20261009/review-v2/`。既有用户包和试用数据保留，不访问其DB/配置/Key或改设置；原模型/媒体/账号租约不复活。本批授权产品整改，不取得实际模型、个人样本、外发、收费、账号、发布、用户数据迁移或删除许可。
+
+首波仅复用UI/B终端进行互不重叠的定向根因定位；主控随后按确认差额具名施工与验收，不让临时诊断停在泛化计划。每个Issue关闭须逐来源ID回填候选、复现、系统原因、受影响消费者、真实UI及必要持久结果；静态/测试/HTTP/模型/客户端分别记证据。
+
+### QA-V2-UI：会话生命周期与Agent控制根因（定位任务）
+
+纵向负责人UI。仅只读准确6d7b0ada的HomeCommandComposer、AppShell、CreationTaskWorkspace、assistant_pi、直接assistant路由与Repository、lib/api/types、现有消息渲染和直接专项；读main DESIGN§2/§4、架构§2/§9与auth当前可信成员边界。原树clean保留，不切换或改产品；不恢复109/105权限。来源N01–N04、U01/U04–U06/N05、H-L05/DEEP-01–04/06；只核本批会话路径，不扫描全部历史。
+
+owned仅`/tmp/main-acceptance-20261009/review-v2-ui/`报告/最小证据。确认当前消息延迟、草稿与历史生命周期、真实Pi会话身份、页面/任务/对象切换、请求取消与子进程释放链、命令能力注册表（实际Pi1.1.0公共代码只读，不读用户会话或设置）。给出每个确认问题的准确代码定位与共同原因、最小完整改动路径及共享文件需求；列真实支持/缺接线/需要产品决定，不能把全部Pi能力名当已支持命令。不能用Abort浏览器读取冒称已停止Pi或取消制作。可用现有离线专项定向复现，测试不是GUI；不开网络服务、GUI、Pi/Key、模型/媒体或构建，不改依赖/共享权威/远端。尽快报告可直接实施的边界；结案后retain，主控新Dispatch接续实现。
+
+### QA-V2-B：F01/F02人物声音完整路径根因（定位任务）
+
+纵向负责人B，同时跟完两条相关资源流程；先定向只读准确6d7b0ada的PeopleAndVoiceWorkspace、settings声音入口/actions、lib/api/types、ProfilesRepository及person/voice引用解析、媒体预览/能力、任务声音/人物选择直接消费者和desktop文件选择桥。main产品§2.1/§2.2/§2.5/§2.6、领域§2.4/§3/§4、DESIGN§5.4与auth成员对象边界为准。保护pipefish四文件脏树，不切换/提交/复活99或108。来源F01/F02、N18–N21/N11/N36、H-B019–B022；只按报告增量及相关证据定位，不广读历史。
+
+owned仅`/tmp/main-acceptance-20261009/review-v2-profiles/`报告。追踪参考输入→保存版本→列表重开→真实预览→任务选择，确认旧审核/逐条授权/声音人物依赖分别来自UI还是后端，并核独立声音与设置声音是否相同对象。给最小可实施纵向改动、退役目标和精确owned候选；保留use_state、来源范围、媒体有效性与真实权限，登记与生成能力分开。不把未配置模型变成参考登记阻断；不以删除所有校验修复。仅只读公开已装解码/模型接口，不跑媒体、模型、Pi/Key/服务/GUI/构建或读取真实档案；用户个人样本/真实克隆/口型仍未授权。若持久字段必须迁移，先交必要方案，不运行真实迁移。尽快报告可实施的闭环边界；结案后retain，主控新Dispatch安排源码实现。
+
+## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
 
