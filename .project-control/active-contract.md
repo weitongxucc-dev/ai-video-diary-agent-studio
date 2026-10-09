@@ -123,7 +123,19 @@ E只读复核已交并retain，新单修发布消费者H-L04/N28/H-V012机制：
 
 C来源第一批d16b9c0已交/retain。C新知识核心迁移：从准确f595eaf建立/tmp/main-acceptance-20261009/review-v2-knowledge-core/candidate，分支codex/review-v2-knowledge-core-20261009。唯一owned sources.py/source_repository.py及直接知识仓储/授权专项；只处理自己已有SourceItem/KnowledgeItem表的必要增量use_state持久字段/旧行兼容，不写B所有的database_migrations.py或生产字段，不写main/schema/creation_plan/Web/认证。依已有领域§2.4和产品§2.1补available默认与明确主动限制，归属仍由verified_user_id而非客户端ownership文本决定；authorization/ownership保留历史追溯且普通新导入不要求逐条证明或伪造已授权字符串。真实跨空间KnowledgeGrant及撤销/到期/固定版本/私有读边界保持。excluded不可读/检索/引用；reference_only仍可事实理解，not_for_automation/not_for_publish按具体消费者用途提供真实资格方法，不把阅读默认当发布/自动授权。版本/来源/旧字段保留，不把不可读原件变成本成员的档案。核心新增字段的DDL/回读只沿既有SourceRepository自有表初始化/字段升级位置，使用可丢弃旧格式与新库验证，不另造知识库或权限解析器，不迁移真实用户DB。交精确API/Schema/Plan后续接线接口及必要增量字段；共享入口等UI交付后由主控具名单写者串行接线，不以仓储通过宣布N15完整默认可用已修。
 
-会话UI待M5/M6/M7任务错误/历史消费者接续，B待F01/F02 API/Web和范围派生接续，知识H-D006集合布局仍待C后续消费者；定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
+会话UI待M5/M6/M7任务错误/历史消费者接续，知识H-D006集合布局仍待C后续消费者；定时定义N25–27保持当前OFF与待整改，不从任何历史START启动。
+
+当前回执：C知识核心 task_b7f49a0e1a8b / ctx_cd13d71fb16a；D首页 task_67f431a1fd8a / ctx_13f661653b71；E发布消费者 task_fc0ff8ed8748 / ctx_8bc450650430。D/E旧attempt最后只回应Git身份且没有worker_done，精确provider transcript证明该轮已结束；主控按恢复指南abandon保留原终端，原Task原终端显式retry，以上新attempt均已语义ACK。旧ctx_bc1a22f04de8/ctx_eab015c1918e不再有写权。B核心9cd2c53和F定时只读04ec021已源码审核、结算并retain；它们已机械组合进独立候选，main产品代码未改，完整迁移验收仍未成立。
+
+### QA-V2-B-RANGE：独立人物方案引用与精确媒体范围
+
+B核心写权结束。本单复用原B终端，从主控组合树准确267802c新clone到/tmp/main-acceptance-20261009/review-v2-profile-range/candidate，分支codex/review-v2-profile-range-20261009，保护B99脏树。领域§4/§5.1已经明确独立person_profile_ref和voice_profile_ref；B为F01/F02纵向负责人继续完成此机制。唯一owned creation_plan.py、creation_execution.py、production.py人物声音参考解析、avatar_lipsync.py、narration.py及现有类型化FFmpeg/注册许可子进程的必要直接接线和专项；可新增一个具体参考派生模块，不建第二执行器/权限系统。main.py/schemas.py/Web/api.ts/types.ts仍UI独占，本单不得改它们；不改C的sources/source_repository、共享权威或平台。
+
+新增selected_person固定id/version独立选择，不从声音关系猜人物，0%人物任务不读人物/口型环境。旧方案读取保留确有绑定的人物身份作为历史投影，不把空关系或其他声音自动补成当前选择。选择、缓存身份、人物生成和编辑读取同一明确版本。兼容差额与后续Schema/API参数交主控单写者接线。
+
+所选音频/视频范围通过既有类型化FFmpeg、granted_subprocess注册和DeviceRuntime许可执行路径派生真实输入，保留原文件只读、asset/segment/起止/源版本及派生产物身份；精确范围才可交给模型，不通过放松核心部分范围阻断或整文件回退完成。派生前重新核可信成员、源可读性/use_state/范围和有效媒体；不能从任意路径或未登记源构造输入。视频取声与人物片段分别形成实际类型，WAV可沿原有效输入；参考文本缺失只阻断需要它的生成。派生缓存复用必须绑定真实源修订/范围/类型并核文件，失败/取消保留档案，不伪造完成。媒体派生与实际模型生成分开，云/收费/发布权限不扩大。
+
+只在owned隔离目录用自制合成媒体验证真实FFmpeg切片/提取、范围精度及原件不变，并通过既有测试Grant证明许可前不执行、取消/失败不留成功结果与注册子进程释放；不申请或运行真实用户DeviceGrant、模型/Pi/Key/用户素材/数据库，不启动常驻服务/GUI/打包。不使用测试输出冒称模型预览或成片；不因模型缺失阻断参考保存。最小受控方案/任务/仓储及取消专项，交clean候选、后续API/Web精确接口和逐项残余；API/Web仍待UI释放后B新单取得，#105仍开放。
 
 F第二单定时入口承诺整改：依用户自主决策授权、产品§2.5及main DESIGN主导航最新条款，定时定义未接执行时普通入口退役、保留只读明确预览；不删除定义、后台接口或0.11真实定时交付目标。F从准确a2e537c的主控组合树到/tmp/main-acceptance-20261009/review-v2-scheduled-preview/candidate新分支codex/review-v2-scheduled-preview-20261009，唯一owned ScheduledTasksWorkspace.tsx/.module.css及直接测试、production/page.tsx仅automations分支。退役普通创建/启动/删除/JSON时间窗/手填内部引用的活跃页面消费者；只读已保存定义显示真实“尚未执行接通”状态，内部字段在按需诊断，保留原数据和业务事实。N25整改证明默认入口与能力一致；N26/27为旧不可依赖编辑消费者退役，不宣称真实排程/时间配置已做通。AppShell主导航及route标签由当前UI唯一写者按同条款改，F不争写，不启动任务/服务/模型/媒体/GUI/打包。不新增开关、模拟任务、倒计时或无效按钮。直接专项核无写API动作、无普通JSON/内部引用输入、数据空/失败/已保存分清；截图统一候选后补。语义REBASE_ACK后实施并交clean/报告，不关闭真实定时交付缺口。
 
