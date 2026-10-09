@@ -1988,7 +1988,7 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     )
 
     assert [item.usage_role for item in reviewed.segments] == ["a_roll", "b_roll"]
-    assert production.readiness("workspace_a")["approved_segment_count"] == 1
+    assert production.readiness("workspace_a", local_diagnostic=True)["approved_segment_count"] == 1
 
 
 def test_production_api_exposes_foundation_and_retires_batch_creation(tmp_path, monkeypatch):
@@ -3877,3 +3877,225 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
         production._save_asset(analyzed)
     assert production.get_visual_feature('workspace_a',segment.id,provider.model_id) is None
     assert production.get_visual_feature('workspace_b',segment.id,provider.model_id) is None
+
+
+@pytest.fixture
+def foundation_state(tmp_path, monkeypatch):
+    from app.avatar_lipsync import ProfileReference
+    from app.production import MaterialAsset, MaterialSegment
+    from app.sources import ObsidianVault
+
+    production = _repository(tmp_path)
+    members = LocalMemberService(tmp_path / "foundation-members.sqlite3")
+    owner, owner_token = members.whoami(None)
+    other, other_token = members.join(members.create_invite_code(), "合成另成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "model_catalog", SimpleNamespace(
+        status=lambda _spec: SimpleNamespace(ready=True, state="ready", message="受控模型已就绪")
+    ))
+    configured = Settings(topic_source_urls=("https://fixture.invalid/feed",),
+                          product_hunt_token=None, hermes_radar_path=None,
+                          obsidian_vault_path=None)
+    monkeypatch.setattr(main_module, "settings", configured)
+    monkeypatch.setattr(main_module, "vault", ObsidianVault(None))
+    ws = LEGACY_WORKSPACE_ID
+    production.save_profile(ProductionProfile(ws, source_urls=[], use_obsidian=False, use_hermes=False))
+    reference, _, _ = production.import_voice_reference_wav(
+        ws, synthetic_wav_bytes(), verified_owner_user_id=owner.member_id,
+    )
+    source = production._asset_by_path(ws, str(production.resolve_workspace_media_reference(ws, reference)))
+    voice = production.save_versioned_voice_profile(VersionedVoiceProfile(
+        id="foundation-voice", workspace_id=ws, version="v1", language="zh",
+        display_name="合成独立声音", reference_audio_path=reference,
+        reference_text="合成参考文字", model_id="fixture-voice",
+        reference=ProfileReference(asset_id=source.id),
+    ), verified_owner_user_id=owner.member_id)
+    path = production.video_library_path / "foundation.mp4"
+    path.write_bytes(b"synthetic metadata-only video")
+    stat = path.stat()
+    video = production._save_asset(MaterialAsset(
+        id="foundation-video", workspace_id=ws, owner_user_id=owner.member_id,
+        file_name=path.name, path=str(path), size_bytes=stat.st_size,
+        modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+        duration_seconds=4, analysis_status="ready", review_status="raw", usage_role="b_roll",
+        segments=[MaterialSegment("foundation-segment", "foundation-video", 0, 4, usage_role="b_roll")],
+    ))
+    return SimpleNamespace(repo=production, owner=owner, other=other, voice=voice, video=video,
+        path=path, settings=configured, client=TestClient(main_module.app),
+        headers={"X-Local-Member-Token": owner_token},
+        other_headers={"X-Local-Member-Token": other_token})
+
+
+def test_foundation_uses_current_member_for_private_material_and_voice(foundation_state):
+    state = foundation_state
+    own = state.client.get("/api/production/foundation", headers=state.headers)
+    other = state.client.get("/api/production/foundation", headers=state.other_headers)
+    assert own.status_code == other.status_code == 200
+    assert own.json()["readiness"] == {
+        "ready": True, "blockers": [], "asset_count": 2,
+        "approved_asset_count": 1, "approved_segment_count": 1, "total_duration_seconds": 6.0,
+    }
+    assert other.json()["readiness"]["asset_count"] == 0
+    assert other.json()["readiness"]["approved_segment_count"] == 0
+    blockers = other.json()["readiness"]["blockers"]
+    assert {item["code"] for item in blockers} == {
+        "versioned_voice_authorization_missing", "approved_materials_empty",
+    }
+    assert not any("不属于" in item["message"] for item in blockers)
+
+
+def test_foundation_invalid_identity_never_falls_back_to_diagnostic(foundation_state, monkeypatch):
+    state = foundation_state
+    calls = []
+    monkeypatch.setattr(state.repo, "readiness", lambda *args, **kwargs: calls.append(kwargs))
+    response = state.client.get("/api/production/foundation", headers={"X-Local-Member-Token": "invalid"})
+    assert response.status_code == 401
+    assert calls == []
+
+
+def test_foundation_local_diagnostic_is_explicit_and_preserves_single_user_read(foundation_state):
+    response = foundation_state.client.get("/api/production/foundation")
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True
+
+
+@pytest.mark.parametrize("source", ["urls", "vault", "product_hunt", "hermes", "none", "legacy_only"])
+def test_foundation_source_readiness_matches_current_generator(foundation_state, tmp_path, monkeypatch, source):
+    from app.sources import ObsidianVault
+    from app.topics import MissingTopicGenerator, topic_generator_from_settings
+
+    state = foundation_state
+    vault_path = tmp_path / "configured-vault"
+    if source == "vault":
+        vault_path.mkdir()
+    settings = replace(state.settings,
+        topic_source_urls=("https://fixture.invalid/feed",) if source == "urls" else (),
+        product_hunt_token="synthetic-config-only" if source == "product_hunt" else None,
+        hermes_radar_path=str(tmp_path / "not-fetched-radar") if source == "hermes" else None,
+        obsidian_vault_path=str(vault_path) if source == "vault" else None,
+    )
+    vault = ObsidianVault(settings.obsidian_vault_path)
+    state.repo.save_profile(ProductionProfile(LEGACY_WORKSPACE_ID,
+        source_urls=["https://old.invalid/feed"] if source == "legacy_only" else [],
+        use_obsidian=source == "legacy_only", use_hermes=source == "legacy_only"))
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "vault", vault)
+    generator = topic_generator_from_settings(settings, vault)
+    has_current_sources = not isinstance(generator, MissingTopicGenerator)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    blockers = response.json()["readiness"]["blockers"]
+    assert ("source_pool_empty" not in {item["code"] for item in blockers}) == has_current_sources
+    assert has_current_sources == (source not in {"none", "legacy_only"})
+
+
+@pytest.mark.parametrize("mutation", ["lost", "changed", "excluded", "reference_only", "bad_range", "excluded_segment", "unanalysed", "manual_only"])
+def test_foundation_counts_only_current_qualified_material(foundation_state, mutation):
+    state = foundation_state
+    asset = state.video
+    if mutation == "lost":
+        state.path.unlink()
+    elif mutation == "changed":
+        state.path.write_bytes(b"changed source with different bytes")
+    elif mutation in {"excluded", "reference_only"}:
+        asset.use_state = mutation
+    elif mutation == "manual_only":
+        asset.use_state = "not_for_automation"
+    elif mutation == "bad_range":
+        asset.segments[0].end_seconds = 5
+    elif mutation == "excluded_segment":
+        asset.segments[0].usage_role = "exclude"
+    else:
+        asset.analysis_status = "pending"
+    state.repo._save_asset(asset)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    readiness = response.json()["readiness"]
+    assert readiness["asset_count"] == 2
+    assert readiness["approved_asset_count"] == (1 if mutation == "manual_only" else 0)
+    assert readiness["approved_segment_count"] == (1 if mutation == "manual_only" else 0)
+
+
+@pytest.mark.parametrize("issue", ["no_voice", "lost_reference", "empty_text", "restricted", "model_missing", "both_missing", "range"])
+def test_foundation_separates_voice_reference_from_live_engine(foundation_state, monkeypatch, issue):
+    from app.avatar_lipsync import ProfileReference
+
+    state = foundation_state
+    if issue in {"no_voice", "both_missing"}:
+        monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [])
+    elif issue == "lost_reference":
+        state.repo.resolve_workspace_media_reference(LEGACY_WORKSPACE_ID, state.voice.reference_audio_path).unlink()
+    elif issue in {"empty_text", "restricted", "range"}:
+        voice = replace(state.voice, version="v2",
+            reference_text="" if issue == "empty_text" else state.voice.reference_text,
+            use_state="excluded" if issue == "restricted" else "available",
+            reference=ProfileReference(asset_id=state.voice.reference.asset_id, start_seconds=.25, end_seconds=1.25)
+                if issue == "range" else state.voice.reference)
+        state.repo.save_versioned_voice_profile(voice, verified_owner_user_id=state.owner.member_id)
+    if issue in {"model_missing", "both_missing"}:
+        # The real foundation wrapper still reads the current catalog, not old profile state.
+        monkeypatch.setattr(main_module, "model_catalog", SimpleNamespace(
+            status=lambda _spec: SimpleNamespace(ready=False, state="missing", message="受控模型未安装")
+        ))
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    blockers = response.json()["readiness"]["blockers"]
+    codes = {item["code"] for item in blockers}
+    assert ("voice_model_not_ready" in codes) == (issue in {"model_missing", "both_missing"})
+    if issue == "empty_text":
+        assert "voice_reference_missing" in codes
+    elif issue in {"no_voice", "both_missing"}:
+        assert "versioned_voice_authorization_missing" in codes
+        message = next(item["message"] for item in blockers if item["code"] == "versioned_voice_authorization_missing")
+        assert "授权" not in message and "文案" in message
+    elif issue == "range":
+        assert codes == set()
+    elif issue != "model_missing":
+        assert "voice_reference_unavailable" in codes
+    else:
+        assert codes == {"voice_model_not_ready"}
+    assert response.json()["profile"]["voice_model_status"] == ("blocked" if issue in {"model_missing", "both_missing"} else "ready")
+
+
+@pytest.mark.parametrize("ranged", [False, True])
+def test_foundation_video_voice_preparation_never_decodes_or_derives(foundation_state, monkeypatch, ranged):
+    from app.avatar_lipsync import ProfileReference
+
+    state = foundation_state
+    # Registration uses a controlled format qualification for synthetic video bytes.
+    # Preparation must subsequently use source facts, never this decoder or a model.
+    monkeypatch.setattr(state.repo, "_material_file_intact", lambda _asset: True)
+    voice = state.repo.save_versioned_voice_profile(VersionedVoiceProfile(
+        id="video-voice", workspace_id=LEGACY_WORKSPACE_ID, version="v1", language="zh",
+        display_name="合成视频声音参考", model_id="fixture-voice", reference_text="视频中的合成文字",
+        reference_audio_path=state.repo.workspace_media_reference_for_asset(LEGACY_WORKSPACE_ID, state.video.id),
+        reference=ProfileReference(asset_id=state.video.id,
+            segment_id=state.video.segments[0].id if ranged else None,
+            start_seconds=.5 if ranged else None, end_seconds=2 if ranged else None),
+    ), verified_owner_user_id=state.owner.member_id)
+    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [voice])
+
+    def no_decoder(_asset):
+        raise AssertionError("foundation preparation must not decode video")
+
+    monkeypatch.setattr(state.repo, "_material_file_intact", no_decoder)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True
+    with pytest.raises(PermissionError, match="设备执行许可"):
+        state.repo.materialize_profile_reference(voice, grant_context=None,
+            viewer_user_id=state.owner.member_id)
+    assert not (state.repo.video_library_path / ".profile_references").exists()
+
+
+def test_foundation_checks_all_readable_voices_before_reporting_missing_text(foundation_state, monkeypatch):
+    state = foundation_state
+    incomplete = state.repo.save_versioned_voice_profile(
+        replace(state.voice, id="incomplete-voice", reference_text=""),
+        verified_owner_user_id=state.owner.member_id,
+    )
+    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [incomplete, state.voice])
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True

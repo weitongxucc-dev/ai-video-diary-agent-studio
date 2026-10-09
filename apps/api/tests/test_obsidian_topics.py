@@ -2,6 +2,7 @@ import json
 import os
 
 import httpx
+import pytest
 
 from app.config import Settings
 from app.external_sources import HtmlPageSourceClient
@@ -299,3 +300,26 @@ def test_settings_status_reports_obsidian_without_note_content(tmp_path):
     assert status["obsidian"]["path"] == str(vault)
     assert status["obsidian"]["markdown_count"] is None
     assert "私密笔记" not in json.dumps(status, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("llm_configured", [False, True])
+def test_topic_generator_consumes_shared_source_fact_without_fetch(monkeypatch, configured, llm_configured):
+    from types import SimpleNamespace
+    import app.topics as topics
+
+    settings = SimpleNamespace(llm_configured=llm_configured)
+    vault = ObsidianVault(None)
+    calls = []
+
+    def source_fact(current_settings, current_vault):
+        calls.append((current_settings, current_vault))
+        return configured
+
+    monkeypatch.setattr(topics, "topic_sources_configured", source_fact)
+    generator = topics.topic_generator_from_settings(settings, vault)
+    assert calls == [(settings, vault)]
+    expected = topics.MissingTopicGenerator if not configured else (
+        topics.DeepSeekTopicGenerator if llm_configured else topics.LocalSourceTopicGenerator
+    )
+    assert isinstance(generator, expected)

@@ -9767,50 +9767,51 @@ class ProductionRepository:
         profile: ProductionProfile | None = None,
         viewer_user_id: str | None = None,
         local_diagnostic: bool = False,
+        topic_sources_configured: bool = False,
     ) -> dict[str, object]:
         profile = profile or self.get_profile(workspace_id)
-        assets = self.list_assets(workspace_id)
-        usable_assets = [
-            asset
+        assets = self.list_assets(
+            workspace_id, include_private=viewer_user_id is not None or local_diagnostic,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+        )
+        qualified = [
+            (asset, [segment for segment in asset.segments
+                     if material_segment_eligible(asset, segment, workspace_id)])
             for asset in assets
-            if asset.analysis_status == "ready"
-            and asset.review_status != "rejected"
-            and material_allows_footage(asset)
         ]
+        usable_assets = [asset for asset, segments in qualified if segments]
         usable_segments = [
             segment
-            for asset in usable_assets
-            for segment in asset.segments
-            if segment.review_status != "rejected"
-            and selectable_segment_usage_role(asset, segment) == "b_roll"
+            for asset, segments in qualified
+            for segment in segments
+            if selectable_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
         versioned_voices = self.list_versioned_voice_profiles(workspace_id)
         usable_voice = None
         reference_issue = None
+        reference_issue_code = "voice_reference_unavailable"
         for voice in versioned_voices:
-            if profile_use_failure(voice, content_type="voice", usage_scope="narration") is not None:
+            if not self.profile_readable(voice, viewer_user_id, local_diagnostic):
                 continue
             try:
-                self.resolve_voice_reference(voice, viewer_user_id=viewer_user_id,
+                self.profile_reference_input(voice, viewer_user_id=viewer_user_id,
                                              local_diagnostic=local_diagnostic)
             except (ValueError, PermissionError, KeyError) as exc:
                 reference_issue = str(exc)
+                reference_issue_code = "voice_reference_unavailable"
             else:
+                if not voice.reference_audio_path or not voice.reference_text.strip():
+                    reference_issue = "声音档案缺少工作区参考音频或对应文字；仍可先讨论需求或编写文案。"
+                    reference_issue_code = "voice_reference_missing"
+                    continue
                 usable_voice = voice
                 break
         if usable_voice is None:
             blockers.append(
                 {
-                    "code": "voice_reference_unavailable" if reference_issue else "versioned_voice_authorization_missing",
-                    "message": reference_issue or "尚未登记可用于配音的版本化声音。",
-                }
-            )
-        elif not usable_voice.reference_audio_path or not usable_voice.reference_text.strip():
-            blockers.append(
-                {
-                "code": "voice_reference_missing",
-                    "message": "授权声音缺少工作区参考音频或对应文字。",
+                    "code": reference_issue_code if reference_issue else "versioned_voice_authorization_missing",
+                    "message": reference_issue or "尚未登记可用于配音的版本化声音；仍可先讨论需求或编写文案。",
                 }
             )
         if profile.voice_model_status != "ready":
@@ -9820,11 +9821,11 @@ class ProductionRepository:
                     "message": profile.voice_model_message,
                 }
             )
-        if not (profile.source_urls or profile.use_obsidian or profile.use_hermes):
+        if not topic_sources_configured:
             blockers.append(
                 {
                     "code": "source_pool_empty",
-                    "message": "自动选题来源池为空。",
+                    "message": "尚未配置可尝试的选题来源；仍可先讨论需求或编写文案。",
                 }
             )
         if not usable_segments:

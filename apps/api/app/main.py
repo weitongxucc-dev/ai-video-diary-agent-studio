@@ -472,6 +472,7 @@ from app.topics import (
     OpenAICompatibleCreationTaskTopicGenerator,
     OpenAICompatibleCreationTaskScriptGenerator,
     topic_generator_from_settings,
+    topic_sources_configured,
 )
 from app.video import FfmpegVideoProcessor, SourceTracker, VideoInbox
 from app.video_jobs import VideoJobRunner
@@ -1391,13 +1392,18 @@ def save_creation_task_template(task_id: str, request: Request, payload: SaveVid
 )
 def get_production_foundation(request: Request) -> ProductionFoundationResponse:
     workspace_id = current_workspace_id(request)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     profile = production_profile_with_model_status(workspace_id)
     return ProductionFoundationResponse(
         profile=ProductionProfileResponse.model_validate(
             profile,
             from_attributes=True,
         ),
-        readiness=production_repo.readiness(workspace_id, profile=profile),
+        readiness=production_repo.readiness(
+            workspace_id, profile=profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+            topic_sources_configured=topic_sources_configured(settings, vault),
+        ),
         recent_batches=[
             _production_batch_response(batch)
             for batch in production_repo.list_batches(workspace_id)[:8]
