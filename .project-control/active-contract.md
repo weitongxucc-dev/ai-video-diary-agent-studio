@@ -435,6 +435,16 @@ main/schema/assistant_pi.py/ScriptEditor/APItypes/Home/Panel/Task/knowledge及�
 
 只source/临时DB/合成文字与Grant替身直接测试/准确Ruff；没有服务/Pi/App/GUI/模型/Key/用户库/媒体/安装/远端。report/tmp/main-acceptance-20261009/review-v2-reply-script-consumers/report.md；避免对前14/44或独立声音26/8无影响测试重做。主控已完成及remote product c121b329、control a2b89c07回读，后续控制变更仍须新push。
 
+### UI-CAS组合后文件释放与迟到读回修复
+
+UI-CAS原Task已eb863f1 succeeded/retain，52API、182受影响Web+32会话Web、tsc及diffcheck成立，root机械组合准确2a1de3c8fa705b7c2bd07c345acf98ddb322d76e；完整CI/GUI仍未通过。C当前ctx_14f4fd2f3670 N14阶段2正式释放，从此准确组合fetch/rebase其clean仓储整改（只映射自身f760与40f10fa，不重复许可叶4e8已组合），唯一production.py N14、main.py只replyPlan/transfer/ScriptDraft/Confirm/Library相关、schemas相应payload/response、assistant_pi.py仅原script-draft写入持久版本消费、lib/api.ts/types对应、Home/AssistantConversationPanel/CreationTaskWorkspace/ScriptEditor必要实际移交/确认/资料选择/库返回、knowledge/page内实际KnowledgeWorkspace组件相关深链及局部CSS/directtests。F的AppShell/表单/模板/helper不写；B main/narration仍HOLD，D旧foundation/media fixtures不写；不改变已有材料/会话CAS/流式/许可/来源默认可用性规则。
+
+所有活跃TaskScript draft-update/confirm UI与Agent写者强制持久updated_at原事务CAS，来源是当前可信conversation/完成turn/body重读，当前目标Task/Plan/Topic及原有效input references/use_state/reader先核。首次与重复回读访问校验保持，但不能以自己首次成功导致的updated_at变化拒绝合法幂等回读。回复缺来源可保存草稿，确认仍补原条件；原editor显示实际可选当前来源及画面建议输入，允许明确选择而非自动全选，跨任务/已确认版本/迟到目标变更不误写。完整真实Plan确认→Topic确认→已有ScriptDraft→确认→现有Library保存并定位准确entry/sourceTask源码链交付后才worker_done。API/UI直接mock/test与真实GUI区分。
+
+UI新QA-V2-UI-DRAFT-READ-RACES从准确2a1de3c新clone/tmp/main-acceptance-20261009/review-v2-draft-read-races/candidate，唯一useAssistantConversation.ts和newtests/useAssistantConversationReadRaces.test.tsx（与C Panel/Home/Task直接测试不重写）。主控静态定位refresh只核streamRevision无draftRevision，迟到GET可把正在编辑的下一句换成旧serverdraft；failUnpersistedTurn恢复失败catch取catch时新revision再GET，仍可能把提交后较新本地输入换成旧稿；already_persisted分支二次GET后未再核当前scope/会话/草稿，success else还用await前current移除pending回写。先受控复现准确这些迟到交错，再沿原hook revision/scope/conversation fence修复同一类读回覆盖；不可新增状态框架/重试/fallback，服务器草稿CAS不放宽，当前input要保留且GET当前version/turn可正确合并。服务器409也应显示真实冲突不清新字。原stream/rename/resume/即时消息语义保持，不写main/schema/libAPI/types/其它消费者或globalCSS。
+
+两单只源码/合成成员文字/临时DB/mock/缓存直接最小专项、正确Ruff/ESLint/类型，失败后必要修复复验可做，不重复无关52/182/32；无App/Pi/API服务/真实模型/Key/用户库/媒体/账号/GUI/安装/远端。UI报告/tmp/main-acceptance-20261009/review-v2-draft-read-races/report.md；C沿现report。root当前准确Ruff检查/全ESLint结果归相应唯一writer；此release不代表整体RETIRED或问题关闭。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
