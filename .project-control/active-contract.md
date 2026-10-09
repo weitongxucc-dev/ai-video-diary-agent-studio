@@ -520,6 +520,8 @@ C CAS五test叶f3cfa5f、D可信读者50126a5、UI晚编辑e249694、F请求/受
 
 B后端328e201已审，机械组合至准确c64ddecc06d8da5a033203357da8e536c4d2075b；31受控专项证明共享手动/自动素材资格、局部配音同事务检查点、故事板真实待确认交接，不能替代模型/GUI。旧审核必填、旧局部配音503及未确认即渲染路径已由现有协议取代；完整CI仍待消费者收尾。B当前ctx_5948cb0be957结束后台新增写入，仅按上一节Web所有权从此准确组合新建隔离消费者候选，保持N14和晚编辑修复，直接SOURCE_START。F当前ctx_facbc5aa6b25同样从此准确组合仅迁移原三参数真实队列测试消费者，现SOURCE_START；不改B新测试或生产。后端新增缺陷须先交主控重新具名，不通过消费者篡改状态、资格或预算。两线程必须回读准确SHA并语义ACK，旧树和已通过证明保留。
 
+B后端只读自审msg_a6611c9c25b6提出同工作区其他段artifact元数据也被combine读取；root源确认当前seal只封段与文件修订、仅目标artifact核Task/Script。B当前Task追加唯一creation_execution.py该manifest与直接tests/test_narration_edit_execution.py：逐个真实读取artifact的Task/Script归属及实际消费元数据同次封存，拒绝异Task/旧Script且等待变更不执行，保留来源身份/预算/原音频，不新增全文件hash/第二探测。另仅test_material_edit_qualification.py两个无定义fixture值改真实excluded及usage_role=exclude，并新增use_state=reference_only负例；不得以未知枚举拒绝冒充业务限制已验。此补点可与同一B Web源码在隔离候选串行完成、单独后台叶先交，不阻断F已授权等待消费者；F不改这些文件。其余后台写权仍结束，无新增真实操作许可。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
