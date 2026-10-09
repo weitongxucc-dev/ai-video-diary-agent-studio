@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 100：核心聊天到实际创作动作接线 | task_7ef29cc0cac2 / ctx_dfc72a565b11；准确4c748dfc新分支，以下UI100具名源码；98/96已结案retain |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 99：用户转向后部分结案retain | 未提交4文件diff/私有证据保留；无新增源码/运行权；97已结案 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 101：核心对话实包准备 | 下方B101仅准备，不开服务/Pi/媒体；99未提交4文件diff保留，97已结案 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -48,6 +48,14 @@ B89实际1767e11包录音save/adopt和许可故事板V1成立，首次渲染失�
 B89完成failed结算及物理释放后复用原B可见终端，从clean1767e11建立codex/frozen-grant91-20261009。唯一产品写权apps/api/app/granted_subprocess.py、apps/api/server.py，必要既有apps/api/tests/test_host_resource_probes.py及一个server入口直接测试；不写production.py/migrations（UI90独占）、device_runtime/creation_execution/恢复规则、资源cap、main.py、Web/桌面/依赖/共享文档。沿现有注册子进程→核Grant→许可字节→exec的门禁，给冻结包一个明确的许可子进程入口，在dotenv/API/uvicorn/恢复扫描加载之前分派；不要给服务新增任意Python -c执行入口，不移除子进程身份、取消/超时/组退出校验，也不新增并行调度系统。开发路径保持可用；无需本机或全局Python解释器假设。
 
 仅owned /tmp/main-acceptance-20261009/frozen91/隔离DB/tmp做最小入口与真实POSIX门禁测试：许可登记前不执行目标、合法许可后执行、拒绝/取消不执行、子组释放，冻结入口不导入API或调用恢复；模拟冻结测试不得冒称真实打包验证。无打包/服务/GUI/媒体/模型/Pi/Key/平台/下载权限。交clean候选、净diff、专项及未验；主控机械集成UI90/B91后另具名一次必要API增量入包与实际成片补验，不重做未变Web/视觉矩阵。
+
+### B101：一次核心对话实包验证的准备（MAIN-CHAT101-PREP-20261009）
+
+复用B保留终端，仅做准备、不测试；保护99脏树，不切分支、不提交未测平台差额。owned /tmp/main-acceptance-20261009/chat101/0700只写最小启动/验证准备材料，无产品代码权。准确源仍4c，UI100新差额未交不构建。只读核B97实际.app、B92已停止隔离fixture/合法LocalMember/DeviceRuntime原锁、现有5秒本人音视频与B97已验证输出，确定可复用输入与先前已通过步骤；不得复制锁迁移身份、seed任务/旁白/故事板/输出成功状态。原92测试DB仅只读快照/查询，所有实际写入等后续运行具名授权；不读/输出认证值或账号profile，不打开真实用户库。保留旧媒体。
+
+准备单条真实场景：软件聊天提出创作需求，必要方案/文案选择一次→真实开始制作与结果→自然语言一个修改并应用→仅重出/保存当前视频。仅使用既有本人录音纯素材0%，本轮不测Qwen/人物，不改变产品默认；复用现有原件与裁片，避免重复媒体工作。新MiniMax请求仅发送必要文字与业务摘要、不发原媒体，Key由root安全保存，B不接触Key。具名Pi路径/已装公共依赖可只读核实际版本，不能运行Pi/媒体/浏览器/API/Web/Electron/下载/构建或登录钥匙串。
+
+尽快交一份简短可执行准备结果：确切包/输入/配置与数据归属、所需最小构建差额、真实对话将如何进入/看到返回、首个缺失条件。不要新造长期规范/模板/完整测试计划，不重复已通过检查。UI100候选交付前，本单不等待未来条件；交结果worker_done并retain，后续以准确候选复用同终端接续运行，不从旧START恢复。
 
 ### UI100：核心对话创作接线（MAIN-CHAT100-20261009）
 
