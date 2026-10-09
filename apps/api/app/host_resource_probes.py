@@ -7,6 +7,7 @@ is deliberately unsupported until an owner can measure and release it.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -23,6 +24,9 @@ import psutil
 
 from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
 from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -755,7 +759,26 @@ class HostResourceProbe:
         return decision(passed, interval=duration)
 
     def admit(self, request: WorkRequest) -> bool | None:
-        return self._sample(request.resources).verdict
+        decision = self._sample(request.resources)
+        if decision.verdict is not True:
+            logger.warning("Device resource admission: %s", json.dumps({
+                "request_id": request.id,
+                "verdict": decision.verdict,
+                # Only resource dimensions, never the full request or its content.
+                "declared": {name: decision.declared[name] for name in (
+                    "size_bytes", "duration_seconds", "timeout_seconds",
+                    "width_px", "height_px", "input_bytes", "clip_count",
+                    "overlay_count", "max_output_bytes", "threads", "text_chars",
+                    "section_count", "reference_bytes", "source_frame_rate_fps",
+                    "scan_seconds", "output_sample_fps", "source_width_px",
+                    "source_height_px", "output_max_width_px", "output_max_frames",
+                    "ffmpeg_threads",
+                ) if type(decision.declared.get(name)) in {int, float}},
+                "checks": decision.checks,
+                "reason": decision.reason,
+                "observed_interval_seconds": decision.observed_interval_seconds,
+            }, ensure_ascii=False))
+        return decision.verdict
 
     def _grant_resources(self, grant: Grant) -> dict[str, object] | None:
         if grant.database_path != self.database_path:
