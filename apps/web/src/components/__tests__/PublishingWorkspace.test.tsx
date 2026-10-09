@@ -164,6 +164,38 @@ describe("PublishingWorkspace", () => {
     expect(screen.queryByText(/新品讲解视频 · V4 · 当前视频产物可用/)).not.toBeInTheDocument();
   });
 
+  it("rereads the same selected version on refresh and ignores the older pending response", async () => {
+    const olderRead = deferred<ReturnType<typeof versionDetail>>();
+    const refreshedRead = deferred<ReturnType<typeof versionDetail>>();
+    let versionReads = 0;
+    setup({ versionRead: () => {
+      versionReads += 1;
+      return versionReads === 1 ? olderRead.promise : refreshedRead.promise;
+    } });
+    await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(2));
+    expect(api.getCreationTaskTimelineVersion).toHaveBeenLastCalledWith("task-1", "timeline-v4");
+    refreshedRead.resolve(versionDetail());
+    await waitFor(() => expect(screen.getByText(/新品讲解视频 · V4 · 当前视频产物可用/)).toBeInTheDocument());
+    olderRead.resolve({ ...versionDetail(), artifacts: [{ kind: "video", status: "missing", url: "/fixture/stale.mp4", reason: null }] });
+    await waitFor(() => expect(screen.getByText(/新品讲解视频 · V4 · 当前视频产物可用/)).toBeInTheDocument());
+  });
+
+  it("keeps a pending version read when the same task and same filter are selected", async () => {
+    const pendingRead = deferred<ReturnType<typeof versionDetail>>();
+    setup({ versionRead: () => pendingRead.promise });
+    await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /新品讲解视频/ }));
+    fireEvent.click(screen.getByRole("button", { name: "全部记录" }));
+    expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1);
+    pendingRead.resolve(versionDetail());
+    await waitFor(() => expect(screen.getByText(/新品讲解视频 · V4 · 当前视频产物可用/)).toBeInTheDocument());
+    expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1);
+  });
+
   it("does not silently replace the selected account when preflight reads a different one", async () => {
     setup();
     fireEvent.click(await screen.findByRole("button", { name: "重新核验当前抖音账号" }));

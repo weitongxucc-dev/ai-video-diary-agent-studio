@@ -123,18 +123,27 @@ export function PublishingWorkspace() {
     if (sendInFlight.current === null) { busyOperation.current = null; setBusy(null); }
   }
 
-  useEffect(() => {
+  const readVersionDetail = useCallback((taskId: string | null, selectedVersionId: string | null) => {
     const requestId = ++latestVersionRequest.current;
+    if (!taskId || !selectedVersionId) {
+      setVersionDetail(null);
+      setVersionError(null);
+      setVersionLoading(false);
+      return;
+    }
     setVersionDetail(null);
     setVersionError(null);
-    if (!selected?.output_ready || !versionId) { setVersionLoading(false); return; }
     setVersionLoading(true);
-    getCreationTaskTimelineVersion(selected.id, versionId)
+    getCreationTaskTimelineVersion(taskId, selectedVersionId)
       .then((detail) => { if (requestId === latestVersionRequest.current) setVersionDetail(detail); })
       .catch((cause) => { if (requestId === latestVersionRequest.current) setVersionError(cause instanceof Error ? cause.message : "暂时无法核对当前成片版本。"); })
       .finally(() => { if (requestId === latestVersionRequest.current) setVersionLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    readVersionDetail(selected?.output_ready ? selected.id : null, selected?.output_ready ? versionId : null);
     return () => { latestVersionRequest.current += 1; };
-  }, [selected?.id, selected?.output_ready, versionId]);
+  }, [readVersionDetail, selected?.id, selected?.output_ready, versionId]);
 
   useEffect(() => {
     if (confirmation && (confirmation.taskId !== selected?.id || confirmation.versionId !== versionId)) {
@@ -144,10 +153,10 @@ export function PublishingWorkspace() {
 
   useEffect(() => {
     if (filtered.length && !filtered.some((task) => task.id === selectedId)) {
-      invalidatePendingOperation(); latestVersionRequest.current += 1;
+      invalidatePendingOperation();
       setSelectedId(filtered[0]?.id ?? null);
     } else if (!filtered.length && selectedId) {
-      invalidatePendingOperation(); latestVersionRequest.current += 1;
+      invalidatePendingOperation();
       setSelectedId(null);
     }
   }, [filter, filtered, selectedId]);
@@ -161,8 +170,8 @@ export function PublishingWorkspace() {
 
   async function refreshAll() {
     invalidatePendingOperation();
-    latestVersionRequest.current += 1;
     setError(null); setVerifiedAccountRef(null); setConfirmOpen(false); setConfirmation(null);
+    readVersionDetail(selected?.output_ready ? selected.id : null, selected?.output_ready ? versionId : null);
     await Promise.all([refreshTasks(), refreshPublishing(), refreshJobs(selected?.id ?? null)]);
   }
 
@@ -201,8 +210,8 @@ export function PublishingWorkspace() {
   }
 
   function selectTask(taskId: string | null) {
+    if (taskId === selectedId) return;
     invalidatePendingOperation();
-    latestVersionRequest.current += 1;
     setSelectedId(taskId);
     if (taskId && !filtered.some((task) => task.id === taskId)) setFilter("all");
     setConfirmOpen(false); setConfirmation(null); setNotice(null); setError(null);
@@ -219,14 +228,7 @@ export function PublishingWorkspace() {
   function retryVersionDetail() {
     if (!selected || !versionId) return;
     invalidatePendingOperation();
-    const taskId = selected.id;
-    const selectedVersionId = versionId;
-    const requestId = ++latestVersionRequest.current;
-    setVersionDetail(null); setVersionError(null); setVersionLoading(true);
-    getCreationTaskTimelineVersion(taskId, selectedVersionId)
-      .then((detail) => { if (requestId === latestVersionRequest.current) setVersionDetail(detail); })
-      .catch((cause) => { if (requestId === latestVersionRequest.current) setVersionError(cause instanceof Error ? cause.message : "暂时无法核对当前成片版本。"); })
-      .finally(() => { if (requestId === latestVersionRequest.current) setVersionLoading(false); });
+    readVersionDetail(selected.id, versionId);
   }
 
   async function openPublishConfirmation() {
@@ -379,7 +381,7 @@ export function PublishingWorkspace() {
 
       {error && !tasks.length ? <p role="alert">创作任务读取失败：{error}</p> : null}
       <div className={styles.summaryRow}><span><strong>{tasks.length}</strong> 全部任务</span><span><strong>{tasks.filter((task) => task.output_ready).length}</strong> 成片就绪</span><button className={styles.secondaryButton} disabled={loading} onClick={() => void refreshAll()} type="button"><RefreshCw size={14} />刷新</button></div>
-      <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => { invalidatePendingOperation(); latestVersionRequest.current += 1; setConfirmOpen(false); setConfirmation(null); setFilter(item.id); }} type="button">{item.label}</button>)}</nav>
+      <nav aria-label="记录筛选" className={styles.tabs}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? styles.activeTab : undefined} key={item.id} onClick={() => { if (filter === item.id) return; invalidatePendingOperation(); setConfirmOpen(false); setConfirmation(null); setFilter(item.id); }} type="button">{item.label}</button>)}</nav>
       <section className={styles.recordList}><div className={styles.sectionHeading}><h2>创作任务</h2><p>{loading ? "正在读取…" : `${filtered.length} 项`}</p></div>
         {filtered.length ? <ol className={styles.records}>{filtered.map((task) => { const state = taskState(task); const StateIcon = state.icon; return <li key={task.id}><button aria-pressed={selected?.id === task.id} className={selected?.id === task.id ? styles.selectedRecord : undefined} data-open-details onClick={() => selectTask(task.id)} type="button"><span className={`${styles.recordState} ${state.tone}`}><StateIcon size={16} /></span><span className={styles.recordBody}><span className={styles.recordTitle}><strong>{task.name}</strong><em>{state.label}</em></span><span>{stageLabels[task.stage]} · {task.output_ready ? `当前成片版本 V${task.timeline_sequence}` : "打开任务继续处理"}</span><span className={styles.progressTrack} aria-label={`进度 ${task.progress}%`}><i style={{ width: `${task.progress}%` }} /></span></span><span className={styles.recordTime}>{formatTime(task.updated_at)}<ArrowRight size={15} /></span></button></li>; })}</ol> : <div className={styles.emptyStage}><span className={styles.emptyIcon}><Film size={22} /></span><div><h2>{loading ? "正在读取任务" : "当前没有可显示的记录"}</h2><p>{error || "发布只会使用已确认且仍为当前版本的有效成片。"}</p></div></div>}
       </section>
