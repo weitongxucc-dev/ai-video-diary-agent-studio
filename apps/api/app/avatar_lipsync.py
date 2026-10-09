@@ -690,7 +690,7 @@ class AvatarPreviewService:
         model_id: str,
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
-        grant_context=None,
+        grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -715,6 +715,7 @@ class AvatarPreviewService:
             capability_id=self.capability_id,
             provider_model_id=self.provider.model_id,
         )
+        identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "avatar_lipsync", identity)
         succeeded_reusable = not (
             existing is not None
@@ -727,7 +728,8 @@ class AvatarPreviewService:
             workspace_id=workspace_id,
             preview_type="avatar_lipsync",
             identity=identity,
-            status="running",
+            status="queued" if prepare_only else "running",
+            member_identity=member_identity or {},
             capability_id=self.capability_id,
             model_id=request.model_id,
             language=request.language,
@@ -803,9 +805,17 @@ class AvatarPreviewService:
                 impact="人物口型预览没有可用音频，未生成视频。",
                 repair_action="重新生成并选择当前版本的非空配音文件。",
             )
-        if request.visual_reference_input.needs_derivation and grant_context is None:
+        if request.visual_reference_input.needs_derivation and grant_context is None and not prepare_only:
             return self._finish(repository, running, status="blocked", reason="reference_grant_required",
                 impact="所选人物范围尚未派生，未调用人物模型。", repair_action="从设备队列取得本次预览许可。")
+        if prepare_only:
+            return running
+        if grant_context is None:
+            return self._finish(repository, running, status="blocked", reason="device_grant_required",
+                impact="未获独立预览设备许可，未调用人物模型。", repair_action="从人物预览入口提交持久设备请求。")
+        if (grant_context.grant.owner_type != "media_preview" or
+                not grant_context.grant.unit_key.startswith("avatar_lipsync:")):
+            raise PermissionError("独立预览需要准确的media_preview单位许可")
         from app.granted_subprocess import GrantedCommandError
         try:
             result = AvatarAndLipSyncService(self.output_root, self.provider).render(request,

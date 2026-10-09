@@ -28,6 +28,10 @@ vi.mock("@/lib/api", () => ({
   CreationPlanApiError: mocks.CreationPlanApiError,
 }));
 
+const profileMocks=vi.hoisted(()=>({listVoiceProfiles:vi.fn(),listPersonProfiles:vi.fn(),getDefaultVoice:vi.fn()}));
+vi.mock("@/lib/media-profiles-api",()=>profileMocks);
+beforeEach(()=>{profileMocks.listVoiceProfiles.mockResolvedValue({items:[]});profileMocks.listPersonProfiles.mockResolvedValue({items:[]});profileMocks.getDefaultVoice.mockResolvedValue(null);});
+
 import { Blockers, CreateProductionTaskForm, PreflightFacts } from "@/components/CreateProductionTaskForm";
 
 function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPreview {
@@ -191,12 +195,12 @@ describe("preflight candidate and stage facts", () => {
   it("does not invent a tier when the response omitted it and preserves the old count definition in diagnostics", () => {
     render(<PreflightFacts preview={preview({ material_matches: [{ asset_ref: "asset:1", segment_ref: "segment:1", score: .8, reasons: [] }] })} />);
     expect(screen.getByText("候选层级未提供")).toBeInTheDocument();
-    const count = screen.getByText(/本 API 旧审核口径/);
+    const count = screen.getByText(/本次可自动选用/);
     expect(count).not.toBeVisible();
     fireEvent.click(screen.getByText("素材计数与筛选口径"));
     expect(count).toBeVisible();
-    expect(count).toHaveTextContent("3 个已审核素材 · 5 个已审核片段");
-    expect(count).toHaveTextContent("不代表当前可用资格计数");
+    expect(count).toHaveTextContent("3 个素材 · 5 个补充片段");
+    expect(count).toHaveTextContent("检索候选与可用计数分别核验");
   });
 
   it("retains actual model errors and outbound facts while putting raw identifiers in diagnostics", () => {
@@ -328,4 +332,10 @@ it("inherits landscape ratio through the form and preflight, then replaces it wh
   view.rerender(<CreateProductionTaskForm initialGoal="新的主题" />);
   expect(screen.getByText("画幅：9:16（当前本地服务支持的画幅）")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "确认并创建任务" })).not.toBeInTheDocument();
+});
+
+describe("fixed independent task profile pins",()=>{
+ it("uses the historical default voice and an independently chosen person in the same real preflight request",async()=>{
+  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice",version:"v2",display_name:"最新声音"}]});profileMocks.getDefaultVoice.mockResolvedValue({id:"voice",version:"v1"});profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-other",version:"p3",display_name:"另一个人物"}]});mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();await screen.findByRole("option",{name:"默认声音 · v1"});expect(screen.getByLabelText("任务声音")).toHaveValue("voice:v1");fireEvent.change(screen.getByLabelText("任务人物"),{target:{value:"person-other:p3"}});fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice",version:"v1"},selected_person:{profile_id:"person-other",version:"p3"}})));
+ });
 });

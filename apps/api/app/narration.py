@@ -585,7 +585,7 @@ class VoicePreviewService:
         language: str | None = None,
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
-        grant_context=None,
+        grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
         from app.production import MediaPreviewRunRecord
 
@@ -609,7 +609,7 @@ class VoicePreviewService:
             reference_input = repository.profile_reference_input(voice, viewer_user_id=viewer_user_id,
                                                                  local_diagnostic=local_diagnostic)
             reference = Path(reference_input.source_path)
-            if reference_input.needs_derivation and grant_context is None:
+            if reference_input.needs_derivation and grant_context is None and not prepare_only:
                 raise ValueError("所选声音范围需要设备许可内的精确派生")
         except (ValueError, KeyError) as exc:
             reference_error = str(exc)
@@ -620,6 +620,7 @@ class VoicePreviewService:
             "input_identity": reference_input.identity,
         })
         identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
+        identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "voice", identity)
         succeeded_reusable = not (
             existing is not None
@@ -632,7 +633,8 @@ class VoicePreviewService:
             workspace_id=workspace_id,
             preview_type="voice",
             identity=identity,
-            status="running",
+            status="queued" if prepare_only else "running",
+            member_identity=member_identity or {},
             capability_id=self.capability_id,
             model_id=self.provider.model_id,
             language=resolved_language,
@@ -720,6 +722,17 @@ class VoicePreviewService:
                 impact="声音预览没有可合成的文本。",
                 repair_action="提供简短预览文本后重试。",
             )
+        if not voice.model_id or voice.model_id != self.provider.model_id:
+            return self._finish(repository, running, status="unavailable", reason="voice_model_unconfigured",
+                impact="参考已保存，但该声音版本尚未选择当前可用的生成模型。", repair_action="选择已配置模型并保存新声音版本后预览。")
+        if prepare_only:
+            return running
+        if grant_context is None:
+            return self._finish(repository, running, status="blocked", reason="device_grant_required",
+                impact="未获独立预览设备许可，未调用声音模型。", repair_action="从声音预览入口提交持久设备请求。")
+        if (grant_context.grant.owner_type != "media_preview" or
+                not grant_context.grant.unit_key.startswith("voice:")):
+            raise PermissionError("独立预览需要准确的media_preview单位许可")
         output_path = (
             self.output_root
             / "previews"

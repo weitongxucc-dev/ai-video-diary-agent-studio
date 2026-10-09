@@ -136,7 +136,7 @@ BatchItemStatus = Literal[
     "interrupted",
 ]
 MediaPreviewType = Literal["voice", "avatar_lipsync"]
-MediaPreviewStatus = Literal["running", "succeeded", "unavailable", "blocked", "failed"]
+MediaPreviewStatus = Literal["queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"]
 
 _A_ROLL_PROMPTS = (
     "一个人面对摄像头说话的自拍视频",
@@ -386,6 +386,35 @@ def material_allows_automation(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_publish"}
 
 
+_MATERIAL_COVERAGE_TERMS = {
+    "主体:人物": ("主体:人物", "人物", "人像", "女性", "女人", "男子", "男人", "女孩", "男孩", "女士", "男士", "person", "people"),
+    "场景:办公": ("场景:办公", "办公室", "办公环境", "office"),
+    "场景:户外": ("场景:户外", "室外", "户外", "街道", "outdoor"),
+    "物体:电脑": ("物体:电脑", "电脑", "笔记本", "计算机", "computer", "laptop"),
+    "动作:打字": ("动作:打字", "打字", "typing"),
+    "内容:软件界面": ("内容:软件界面", "软件界面", "应用界面", "app interface"),
+    "镜头:特写": ("镜头:特写", "特写", "close-up"),
+}
+
+def automatic_segment_eligible(asset, segment, workspace_id):
+    """Metadata/file qualification; deep decoding remains under the executing Grant."""
+    if (asset.workspace_id != workspace_id or asset.review_status == "rejected"
+            or segment.review_status == "rejected" or not material_allows_automation(asset)
+            or asset.analysis_status != "ready" or asset.media_type != "video"
+            or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
+            or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
+            or not (math.isfinite(segment.start_seconds) and math.isfinite(segment.end_seconds)
+                    and 0 <= segment.start_seconds < segment.end_seconds <= asset.duration_seconds)):
+        return False
+    path = Path(asset.path)
+    try:
+        stat = path.stat()
+        return (path.is_file() and stat.st_size > 0 and stat.st_size == asset.size_bytes
+                and abs(stat.st_mtime - asset.modified_at.timestamp()) < 0.001)
+    except OSError:
+        return False
+
+
 def _material_analysis_public_error(error: Exception) -> str:
     if isinstance(error, PermissionError):
         return "素材文件没有读取权限"
@@ -574,6 +603,11 @@ class MediaPreviewRunRecord:
     repair_action: str | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
+    member_identity: dict = field(default_factory=dict)
+    preview_input: dict = field(default_factory=dict)
+    input_digest: str = ""
+    device_request_id: str | None = None
+
 
 
 @dataclass
@@ -2006,8 +2040,10 @@ class ProductionRepository:
             raise PermissionError("参考派生许可工作区不匹配")
         expected_stages = (("person_render:", "person_edit:") if isinstance(profile, PersonProfile)
                            else ("narration:",))
-        if (grant_context.grant.owner_type != "creation_job"
-                or not grant_context.grant.unit_key.startswith(expected_stages)):
+        if (not ((grant_context.grant.owner_type == "creation_job"
+                      and grant_context.grant.unit_key.startswith(expected_stages))
+                     or (grant_context.grant.owner_type == "media_preview"
+                         and grant_context.grant.unit_key.startswith("avatar_lipsync:" if isinstance(profile, PersonProfile) else "voice:")))):
             raise PermissionError("参考派生需要对应声音或人物阶段的专属许可")
         source = self.profile_reference_input(profile, viewer_user_id=viewer_user_id,
                                               local_diagnostic=local_diagnostic)
@@ -2038,6 +2074,13 @@ class ProductionRepository:
         _profile_wav_duration(path)
         return path
 
+    @staticmethod
+    def profile_readable(profile, user_id, local_diagnostic=False):
+        return content_readable(user_id=user_id, local_diagnostic=local_diagnostic, visibility=profile.visibility, owner_user_id=profile.owner_user_id)
+
+    def current_profile_authorization(self, profile):
+        return self.get_authorization(profile.workspace_id, profile.authorization.id) if profile.authorization else None
+
     def set_default_versioned_voice(self, workspace_id: str, voice_profile_id: str, version: str, *,
                                     viewer_user_id: str | None = None, local_diagnostic: bool = False) -> VersionedVoiceProfile:
         if not voice_profile_id.strip() or not version.strip():
@@ -2060,6 +2103,26 @@ class ProductionRepository:
         return self.get_versioned_voice_profile(workspace_id, profile.default_voice_profile_id,
                                                 profile.default_voice_version)
 
+    def creation_plan_voice_reference(self, workspace_id, profile_id, version, *, viewer_user_id=None, local_diagnostic=False):
+        voice = self.get_versioned_voice_profile(workspace_id, profile_id, version)
+        self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        auth = self.current_profile_authorization(voice)
+        return CreationPlanVoiceReference(profile_id=voice.id, version=voice.version,
+            person_profile_id=voice.person_profile_id, person_version=voice.person_version,
+            person_authorization_id="", person_authorization_version="",
+            authorization_id=auth.id if auth else "", authorization_version=auth.version if auth else "",
+            language=voice.language, model_id=voice.model_id)
+
+    def automatic_material_segments(self, workspace_id, *, viewer_user_id=None, local_diagnostic=False):
+        result = []
+        for asset in self.list_assets(workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic):
+            try:
+                self.resolve_workspace_media_reference(workspace_id, self.workspace_media_reference_for_asset(workspace_id, asset.id), require_registered=True)
+            except (ValueError, KeyError, OSError):
+                continue
+            result.extend((asset, segment) for segment in asset.segments if automatic_segment_eligible(asset, segment, workspace_id))
+        return result
+
     def creation_plan_person_reference(self, workspace_id: str, profile_id: str, version: str, *,
                                        viewer_user_id: str | None = None, local_diagnostic: bool = False) -> CreationPlanPersonReference:
         selected = CreationPlanPersonReference(profile_id, version)
@@ -2067,10 +2130,22 @@ class ProductionRepository:
         self.profile_reference_input(person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
         return selected
 
+    def _retain_profile_authorization(self, table, profile):
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (profile.workspace_id, profile.id)).fetchone()
+            if row is not None and profile.authorization is None:
+                data = json.loads(row["payload"])
+                prior = data.get("authorization")
+                if prior is not None:
+                    authorization = self._authorization_from_payload(prior)
+                    profile = replace(profile, authorization=self._current_authorization(conn, profile.workspace_id, authorization))
+        return profile
+
     def save_person_profile(
         self, person: PersonProfile, *, verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> PersonProfile:
+        person = self._retain_profile_authorization("person_profiles", person)
         _validate_person_profile(person)
         if person.reference is not None:
             person = replace(person, owner_user_id=content_owner(verified_owner_user_id))
@@ -2149,6 +2224,7 @@ class ProductionRepository:
         voice: VersionedVoiceProfile, *, verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
+        voice = self._retain_profile_authorization("versioned_voice_profiles", voice)
         _validate_versioned_voice_profile(voice)
         if voice.reference is not None:
             voice = replace(voice, owner_user_id=content_owner(verified_owner_user_id))
@@ -2948,7 +3024,7 @@ class ProductionRepository:
                 )
                 if previous.id != record.id:
                     raise ValueError("预览尝试 ID 与现有记录不一致")
-                if previous.status != "running" and previous != record:
+                if previous.status not in {"queued", "running"} and previous != record:
                     raise ValueError("已结束的预览尝试不可覆盖")
             conn.execute(
                 """
@@ -2971,6 +3047,15 @@ class ProductionRepository:
                 ),
             )
         return record
+
+    def bind_preview_device_request(self, run, request_id):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
+            current = self._media_preview_run_from_payload(json.loads(row["payload"]))
+            updated = replace(current, device_request_id=request_id)
+            conn.execute("UPDATE media_preview_attempts SET payload=? WHERE id=?", (_json_payload(updated), run.id))
+        return updated
 
     def claim_media_preview_run(
         self,
@@ -2998,7 +3083,12 @@ class ProductionRepository:
                 else None
             )
             if latest is not None:
-                if latest.status == "running":
+                if latest.status == "queued" and record.status == "running":
+                    running = replace(latest, status="running")
+                    conn.execute("UPDATE media_preview_attempts SET payload=?,updated_at=? WHERE id=?",
+                                 (_json_payload(running), utc_now().isoformat(), running.id))
+                    return running, True
+                if latest.status in {"queued", "running"}:
                     return latest, False
                 if latest.status == "succeeded" and succeeded_reusable:
                     return latest, False
@@ -5494,6 +5584,16 @@ class ProductionRepository:
                 item["segment_count"] = int(item["segment_count"]) + 1
                 item["duration_seconds"] = float(item["duration_seconds"]) + duration
                 item["usage_count"] = int(item["usage_count"]) + segment.usage_count
+        coverage_categories = set()
+        for tag in stats:
+            # Existing taxonomy synonyms and role facts are used only for coverage;
+            # original observations and click-to-filter tag counts stay unchanged.
+            lowered = tag.casefold()
+            for category, terms in _MATERIAL_COVERAGE_TERMS.items():
+                if any(term in lowered for term in terms):
+                    coverage_categories.add(category)
+        if any(effective_segment_usage_role(asset, segment) == "a_roll" for asset in assets for segment in asset.segments):
+            coverage_categories.add("主体:人物")
         for tag in DEFAULT_MATERIAL_TAXONOMY:
             stats.setdefault(tag, blank(tag))
         ordered = sorted(
@@ -5510,7 +5610,7 @@ class ProductionRepository:
             "recommended_gaps": [
                 str(item["tag"])
                 for item in ordered
-                if int(item["segment_count"]) == 0
+                if str(item["tag"]) not in coverage_categories
                 and str(item["tag"]) in DEFAULT_MATERIAL_TAXONOMY
             ],
         }
@@ -11246,13 +11346,13 @@ def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
         raise ValueError("预览运行记录缺少工作区、ID 或幂等身份")
     if record.preview_type not in {"voice", "avatar_lipsync"}:
         raise ValueError("预览类型无效")
-    if record.status not in {"running", "succeeded", "unavailable", "blocked", "failed"}:
+    if record.status not in {"queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"}:
         raise ValueError("预览运行状态无效")
     if not record.capability_id.strip() or not record.model_id.strip() or not record.language.strip():
         raise ValueError("预览运行记录缺少能力、模型或语言")
     if record.attempt < 1:
         raise ValueError("预览尝试序号必须从 1 开始")
-    if record.status == "running":
+    if record.status in {"queued", "running"}:
         if record.finished_at is not None:
             raise ValueError("运行中的预览不能包含结束时间")
     elif record.status == "succeeded":

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import shutil
-import socket
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
@@ -107,7 +105,7 @@ def _feature_gates(
     return gates
 
 
-def runtime_health(settings: Settings) -> dict[str, Any]:
+def runtime_health(settings: Settings, workspace_id: str = "") -> dict[str, Any]:
     checked_at = utc_now()
     catalog = model_catalog_from_settings(settings)
     pi_checks = pi_runtime_checks()
@@ -118,7 +116,7 @@ def runtime_health(settings: Settings) -> dict[str, Any]:
             fix_command=c["fix_command"], checked_at=checked_at,
             impact="仅影响对话助手；不阻断首启、精确编辑或直接文字模型调用。",
         ) for c in pi_checks),
-        _deepseek_item(settings, checked_at),
+        _deepseek_item(settings, checked_at, workspace_id),
         _obsidian_item(settings, checked_at),
         _ffmpeg_item(checked_at),
         _local_whisper_item(settings, checked_at),
@@ -196,48 +194,12 @@ def _health_item(
     }
 
 
-def _deepseek_item(settings: Settings, checked_at) -> dict[str, Any]:
-    if settings.llm_configured:
-        endpoint = urlsplit(settings.effective_llm_base_url)
-        connection_note = "连接与实际生成尚未验证。"
-        if endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
-            try:
-                port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
-                with socket.create_connection((endpoint.hostname, port), timeout=0.5):
-                    pass
-            except (OSError, ValueError):
-                return _health_item(
-                    item_id="deepseek",
-                    label="AI 文案模型",
-                    status="degraded",
-                    reason="已配置本地模型，但无法连接本机模型服务。",
-                    impact="当前不能通过该模型生成选题或文案。",
-                    repair_action="启动本地模型服务，并核对设置中的服务地址与端口。",
-                    checked_at=checked_at,
-                )
-            connection_note = "本机服务端口可连接；模型加载与实际生成尚未验证。"
-        return _health_item(
-            item_id="deepseek",
-            label="AI 文案模型",
-            status="ready",
-            reason=(
-                f"已配置 {settings.effective_llm_provider} / "
-                f"{settings.effective_llm_model}。{connection_note}"
-            ),
-            impact="用于生成选题、脚本和语音指令草案；配置检查不代表生成成功。",
-            repair_action="如生成失败，请检查模型服务及返回的具体错误。",
-            checked_at=checked_at,
-        )
-    return _health_item(
-        item_id="deepseek",
-        label="对话与文字模型",
-        status="degraded",
-        reason="未配置外部文字模型；本地来源摘要不能代替对话 Agent。",
-        impact="0.11 对话和文字创作不可用；后台本地素材分析可独立运行。",
-        repair_action="在设置页连接 MiniMax-M3 或主动选择 DeepSeek。",
-        fix_command=None,
-        checked_at=checked_at,
-    )
+def _deepseek_item(settings: Settings, checked_at, workspace_id: str = "") -> dict[str, Any]:
+    state = settings.llm_service_status(workspace_id)
+    status = {"missing": "missing", "unverified": "degraded", "available": "ready", "failed": "degraded"}.get(state["state"], "degraded")
+    return _health_item(item_id="deepseek", label="对话与文字服务", status=status,
+        reason=state["detail"], impact="仅反映当前工作区这套文字服务配置与最近实际调用，不代表全部工具或模型就绪。",
+        repair_action="核对当前工作区设置；失败时查看该次调用的实际原因。", checked_at=checked_at)
 
 
 def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:

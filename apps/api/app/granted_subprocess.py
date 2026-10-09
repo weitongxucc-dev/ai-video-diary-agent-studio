@@ -167,8 +167,9 @@ def run_granted_command(
     resources = getattr(scheduler, "resources", None)
     scene_unit = (isinstance(grant, Grant) and grant.owner_type == "material_asset"
                   and grant.unit_key.startswith("scene-window:v1:"))
-    model_unit = (isinstance(grant, Grant) and grant.owner_type == "creation_job"
-                  and grant.unit_key.startswith(("narration:", "person_render:", "person_edit:")))
+    model_unit = (isinstance(grant, Grant) and (
+        (grant.owner_type == "creation_job" and grant.unit_key.startswith(("narration:", "person_render:", "person_edit:")))
+        or (grant.owner_type == "media_preview" and grant.unit_key.startswith(("voice:", "avatar_lipsync:")))))
     if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None
@@ -212,7 +213,7 @@ def run_granted_command(
 
         def check_running_unit():
             nonlocal next_permission_sample
-            if isinstance(grant, Grant) and grant.owner_type == "creation_job" and time.monotonic() >= next_permission_sample:
+            if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit) and time.monotonic() >= next_permission_sample:
                 scheduler.assert_grant(grant)
                 next_permission_sample = time.monotonic() + 1.0
             if max_output_file_bytes is not None:

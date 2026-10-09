@@ -43,7 +43,7 @@ def validate_logical_media_reference(
         raise ValueError(f"{field} must use {allowed} logical reference")
     if parsed.query or parsed.fragment or "@" in parsed.netloc or ":" in parsed.netloc:
         raise ValueError(f"{field} must not contain authority, query, or fragment")
-    components = [parsed.netloc, *parsed.path.lstrip("/").split("/")]
+    components = [parsed.netloc, *(parsed.path.lstrip("/").split("/") if parsed.path else [])]
     if any(not component for component in components):
         raise ValueError(f"{field} must contain a relative path")
     for component in components:
@@ -291,6 +291,8 @@ class ProductionProfileResponse(BaseModel):
     use_hermes: bool
     factuality_gate_enabled: bool
     cloud_enhancement_enabled: bool
+    default_voice_profile_id: str | None = None
+    default_voice_version: str | None = None
     updated_at: datetime
 
 
@@ -829,6 +831,11 @@ class ProductionBatchesResponse(BaseModel):
     total_count: int
 
 
+class PlanProfileReference(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
 class CreationPlanDefaultsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -840,6 +847,8 @@ class CreationPlanDefaultsRequest(BaseModel):
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 20
     lipsync_quality: Literal["high", "fast"] = "high"
+    selected_voice: PlanProfileReference | None = None
+    selected_person: PlanProfileReference | None = None
     template_id: str | None = Field(default=None, min_length=1, max_length=120)
     template_version: int | None = Field(default=None, ge=1)
 
@@ -1727,6 +1736,7 @@ class CreationPlanPreviewResponse(BaseModel):
     lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]
+    selected_person: PlanProfileReference | None = None
     selected_voice: CreationPlanVoiceReferenceResponse | None
     pronunciation_references: list[CreationPlanPronunciationReferenceResponse]
     approved_asset_count: int = Field(ge=0)
@@ -2453,6 +2463,18 @@ class AuthorizationsResponse(BaseModel):
     total_count: int
 
 
+class ProfileReferenceResponse(BaseModel):
+    asset_id: str | None = None
+    segment_id: str | None = None
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None, gt=0)
+
+
+class FixedProfileReference(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
 class PersonProfileResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2461,8 +2483,8 @@ class PersonProfileResponse(BaseModel):
     avatar_reference: str
     background_capabilities: list[str]
     shot_capabilities: list[str]
-    authorization: AuthorizationResponse
-    current_authorization: AuthorizationResponse
+    authorization: AuthorizationResponse | None
+    current_authorization: AuthorizationResponse | None
     runnable: bool
     runnable_reason: str | None
     body_reference_kind: str
@@ -2471,17 +2493,22 @@ class PersonProfileResponse(BaseModel):
     body_reference_reason: str | None
     body_reference_repair_action: str | None
 
+    reference: ProfileReferenceResponse | None = None
+    use_state: str = "available"
+    reference_issue: str | None = None
+    reference_url: str | None = None
+
 
 class PersonProfileUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=120)
     display_name: str = Field(min_length=1, max_length=300)
-    version: str = Field(min_length=1, max_length=120)
+    version: str | None = Field(default=None, min_length=1, max_length=120)
     avatar_reference: str = Field(min_length=1, max_length=4000)
     background_capabilities: list[str] = Field(default_factory=list, max_length=40)
     shot_capabilities: list[str] = Field(default_factory=list, max_length=40)
-    authorization: AuthorizationUpsertRequest
+    authorization: AuthorizationUpsertRequest | None = None
 
     @field_validator("avatar_reference")
     @classmethod
@@ -2491,6 +2518,9 @@ class PersonProfileUpsertRequest(BaseModel):
             field="avatar reference",
             allowed_schemes={"asset", "workspace"},
         )
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"] = "available"
 
 
 class PersonProfilesResponse(BaseModel):
@@ -2508,24 +2538,31 @@ class VersionedVoiceProfileResponse(BaseModel):
     reference_audio_path: str
     reference_text: str
     model_id: str
-    authorization: AuthorizationResponse
-    current_authorization: AuthorizationResponse
+    authorization: AuthorizationResponse | None
+    current_authorization: AuthorizationResponse | None
     runnable: bool
     runnable_reason: str | None
+
+    display_name: str = ""
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: str = "available"
+    reference_issue: str | None = None
+    reference_url: str | None = None
 
 
 class VersionedVoiceProfileUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=120)
-    person_profile_id: str = Field(min_length=1, max_length=120)
-    person_version: str = Field(min_length=1, max_length=120)
-    version: str = Field(min_length=1, max_length=120)
+    person_profile_id: str = Field(default="", max_length=120)
+    person_version: str = Field(default="", max_length=120)
+    version: str | None = Field(default=None, min_length=1, max_length=120)
     language: Literal["zh", "en", "zh-en"]
     reference_audio_path: str = Field(min_length=1, max_length=4000)
-    reference_text: str = Field(min_length=1, max_length=4000)
-    model_id: str = Field(min_length=1, max_length=300)
-    authorization: AuthorizationUpsertRequest
+    reference_text: str = Field(default="", max_length=4000)
+    model_id: str = Field(default="", max_length=300)
+    authorization: AuthorizationUpsertRequest | None = None
 
     @field_validator("reference_audio_path")
     @classmethod
@@ -2533,8 +2570,12 @@ class VersionedVoiceProfileUpsertRequest(BaseModel):
         return validate_logical_media_reference(
             value,
             field="reference audio path",
-            allowed_schemes={"workspace"},
+            allowed_schemes={"asset", "workspace"},
         )
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"] = "available"
+    display_name: str = Field(min_length=1, max_length=300)
 
 
 class VersionedVoiceProfilesResponse(BaseModel):
@@ -2605,8 +2646,8 @@ class AvatarLipSyncPreviewRequest(BaseModel):
     voice_preview_identity: str = Field(min_length=1, max_length=200)
     motion: str = Field(min_length=1, max_length=120)
     expression: str = Field(min_length=1, max_length=120)
-    authorization_id: str = Field(min_length=1, max_length=120)
-    authorization_version: str = Field(min_length=1, max_length=120)
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=120)
+    authorization_version: str | None = Field(default=None, min_length=1, max_length=120)
     model_id: str = Field(min_length=1, max_length=300)
     retry: bool = False
 
@@ -2617,7 +2658,7 @@ class MediaPreviewRunResponse(BaseModel):
     preview_type: Literal["voice", "avatar_lipsync"]
     identity: str
     attempt: int = Field(ge=1)
-    status: Literal["running", "succeeded", "unavailable", "blocked", "failed"]
+    status: Literal["queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"]
     capability_id: str
     model_id: str
     language: str

@@ -7,6 +7,7 @@ import {
   CreationPlanApiError,
   previewCreationPlan,
 } from "@/lib/api";
+import { getDefaultVoice, listVoiceProfiles, listPersonProfiles, type VoiceProfile, type PersonProfile } from "@/lib/media-profiles-api";
 import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/lib/types";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
@@ -88,8 +89,9 @@ export function PreflightFacts({ preview }: { preview: CreationPlanPreview }) {
         <p>候选按主题、词语或结构条件检索，需在选片时核对内容与使用范围。</p>
         {matches.length ? <ul>{matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`}><strong>{matchTierLabel(item.match_tier)}</strong><span>{item.reasons.join("；")}</span><details className={ui.diagnostics}><summary>候选诊断</summary><p>引用：{item.asset_ref} · {item.segment_ref}</p><p>层级：{item.match_tier ?? "未返回"} · 启发分值：{item.score}（用于排序，不是适配概率）</p>{item.asset_file_name ? <p>文件：{item.asset_file_name}</p> : null}</details></li>)}</ul> : <p>当前目标没有返回检索候选。<a href="/library">前往素材库补充内容</a></p>}
         {matches.length > 4 ? <p>当前展示前 4 个，检查共返回 {matches.length} 个候选。</p> : null}
-        <details className={ui.diagnostics}><summary>素材计数与筛选口径</summary><p>本 API 旧审核口径：{preview.approved_asset_count} 个已审核素材 · {preview.approved_clip_count} 个已审核片段；不代表当前可用资格计数。</p><p>{materialSummary(preview.material_rule_summary)}</p></details>
-        {preview.selected_voice ? <><p>本次检查已选择声音，适用语言：{preview.selected_voice.language}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>人物：{preview.selected_voice.person_profile_id} · {preview.selected_voice.person_version}</p><p>模型：{preview.selected_voice.model_id}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
+        <details className={ui.diagnostics}><summary>素材计数与筛选口径</summary><p>本次可自动选用：{preview.approved_asset_count} 个素材 · {preview.approved_clip_count} 个补充片段；检索候选与可用计数分别核验。</p><p>{materialSummary(preview.material_rule_summary)}</p></details>
+        {preview.selected_voice ? <><p>本次检查已选择声音，适用语言：{preview.selected_voice.language}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>模型：{preview.selected_voice.model_id}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
+        {preview.selected_person ? <p>本次人物：{preview.selected_person.profile_id} · {preview.selected_person.version}（与声音独立选择）</p> : null}
         {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {item.language}</span></li>)}</ul> : null}
       </section>
       <section>
@@ -112,6 +114,20 @@ export function CreateProductionTaskForm({
   initialGoal = "",
   assignLocation = assignDocumentLocation,
 }: CreateProductionTaskFormProps) {
+  const [voices, setVoices] = useState<VoiceProfile[]>([]);
+  const [people, setPeople] = useState<PersonProfile[]>([]);
+  const [voicePin, setVoicePin] = useState<CreationPlanInput["selected_voice"]>(undefined);
+  const [personPin, setPersonPin] = useState<CreationPlanInput["selected_person"]>(undefined);
+  const voiceSelectionEdited = useRef(false);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void Promise.all([listVoiceProfiles(), listPersonProfiles(), getDefaultVoice()]).then(([v,p,d]) => {
+      if (!active) return; setVoices(v.items); setPeople(p.items);
+      if (d && !voiceSelectionEdited.current) setVoicePin({profile_id:d.id,version:d.version});
+    }).catch(cause => { if(active)setProfilesError(cause instanceof Error ? cause.message : "档案读取失败"); });
+    return () => { active = false; };
+  }, []);
   const [goal, setGoal] = useState(initialGoal);
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
@@ -145,6 +161,8 @@ export function CreateProductionTaskForm({
       duration_target_seconds: Number(duration),
       presenter_share_target: presenterShare,
       lipsync_quality: lipsyncQuality,
+      ...(voicePin ? {selected_voice: voicePin} : {}),
+      ...(personPin ? {selected_person: personPin} : {}),
     };
   }
 
@@ -199,7 +217,7 @@ export function CreateProductionTaskForm({
     <div className={`creation-plan-form ${ui.form}`}>
       {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><a href="/templates">重新选择模板</a></section> : null}
       <form onSubmit={handlePreview} aria-busy={isPending}>
-        <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周已审核素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
+        <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周可用素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
         <div className="creation-plan-form__settings">
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max="50" min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
@@ -207,6 +225,9 @@ export function CreateProductionTaskForm({
           <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板默认 {template.settings.duration_target_seconds ?? 60} 秒，可调整本次时长。</small> : null}</label>
         </div>
         <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
+        {profilesError ? <p role="alert">{profilesError}</p> : null}
+        <label>声音固定版本<select aria-label="任务声音" disabled={isPending} value={voicePin ? `${voicePin.profile_id}:${voicePin.version}` : ""} onChange={event=>{voiceSelectionEdited.current=true;const selected=voices.find(item=>`${item.id}:${item.version}`===event.target.value);setVoicePin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">使用已保存默认版本</option>{voicePin && !voices.some(v=>v.id===voicePin.profile_id && v.version===voicePin.version) ? <option value={`${voicePin.profile_id}:${voicePin.version}`}>默认声音 · {voicePin.version}</option> : null}{voices.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
+        <label>人物固定版本<select aria-label="任务人物" disabled={isPending || presenterShare===0} value={personPin ? `${personPin.profile_id}:${personPin.version}` : ""} onChange={event=>{const selected=people.find(item=>`${item.id}:${item.version}`===event.target.value);setPersonPin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">选择独立人物</option>{people.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
         <PresenterShareSlider disabled={isPending} onChange={(value) => { setPresenterShare(value); invalidatePreview(); }} value={presenterShare} />
         <LipSyncQualitySelect disabled={isPending || presenterShare === 0} onChange={(value) => { setLipsyncQuality(value); invalidatePreview(); }} value={lipsyncQuality} />
         {presenterShare === 0 ? <p>露脸占比为 0%，本次无需人物口型，口型档位暂不可调整。</p> : null}

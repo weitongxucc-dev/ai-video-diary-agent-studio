@@ -36,6 +36,7 @@ from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_sch
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
+    automatic_segment_eligible,
     CreationTaskScript,
     MaterialAsset,
     MaterialSegment,
@@ -262,23 +263,19 @@ class MontagePlanner:
             (asset, segment)
             for asset in assets
             if asset.workspace_id == workspace_id
-            and asset.review_status == "approved"
-            and material_allows_automation(asset)
             for segment in asset.segments
-            if segment.review_status == "approved"
+            if automatic_segment_eligible(asset, segment, workspace_id)
             and effective_segment_usage_role(asset, segment) == "b_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
         if not b_roll_candidates:
-            raise ValueError("可用素材库中没有已审核的 B-roll 镜头")
+            raise ValueError("可用素材库中没有可自动选用的补充镜头")
         a_roll_candidates = [
             (asset, segment)
             for asset in assets
             if asset.workspace_id == workspace_id
-            and asset.review_status == "approved"
-            and material_allows_automation(asset)
             for segment in asset.segments
-            if segment.review_status == "approved"
+            if automatic_segment_eligible(asset, segment, workspace_id)
             and effective_segment_usage_role(asset, segment) == "a_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
@@ -436,10 +433,8 @@ class MontagePlanner:
             (asset, segment)
             for asset in assets
             if asset.workspace_id == workspace_id
-            and asset.review_status == "approved"
-            and material_allows_automation(asset)
             for segment in asset.segments
-            if segment.review_status == "approved"
+            if automatic_segment_eligible(asset, segment, workspace_id)
             and effective_segment_usage_role(asset, segment) == "b_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
@@ -453,7 +448,7 @@ class MontagePlanner:
         )
         person_render_by_section = person_render_by_section or {}
         if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in cues):
-            raise ValueError("可用素材库中没有已审核的补充画面，无法覆盖未露脸的配音段落")
+            raise ValueError("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
         visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}

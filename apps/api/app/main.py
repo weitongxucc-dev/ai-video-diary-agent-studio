@@ -54,9 +54,11 @@ from app.avatar_lipsync import (
     AvatarAndLipSyncService,
     AvatarPreviewService,
     PersonProfile,
+    ProfileReference,
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
     avatar_lipsync_cache_key,
+    profile_use_failure,
     avatar_lipsync_provider_from_settings,
 )
 from app.auth import (
@@ -375,6 +377,7 @@ from app.schemas import (
     ProductionChainResponse,
     ProductionFoundationResponse,
     ProductionProfileResponse,
+    FixedProfileReference,
     ProductionProfileUpdateRequest,
     PersonProfileResponse,
     PersonProfilesResponse,
@@ -1707,90 +1710,53 @@ def _authorization_response(authorization: Authorization) -> AuthorizationRespon
     return AuthorizationResponse.model_validate(authorization, from_attributes=True)
 
 
-def _current_authorization(workspace_id: str, authorization: Authorization) -> Authorization:
-    return production_repo.get_authorization(workspace_id, authorization.id)
-
-
-def _person_body_reference(
-    workspace_id: str,
-    reference: str,
-) -> tuple[str, str | None, str | None, bool, str | None]:
-    """Report where a person body reference points and whether that file is still there."""
-    if not reference.startswith("workspace://"):
-        return (
-            "asset",
-            None,
-            "人物参考是素材库引用，没有指向当前工作区的文件，无法核验它是否还在。",
-            False,
-            "在工作区重新导入该素材后再保存人物参考。",
-        )
+def _profile_read_facts(profile, request: Request):
+    user_id, diagnostic = _content_reader(request, profile.workspace_id)
+    current = production_repo.get_person_profile(profile.workspace_id, profile.id) if isinstance(profile, PersonProfile) else production_repo.get_versioned_voice_profile(profile.workspace_id, profile.id)
+    if any(not production_repo.profile_readable(item, user_id, diagnostic) for item in (profile, current)):
+        raise HTTPException(status_code=404, detail="profile not found")
+    reference_reason = None
     try:
-        resolved = production_repo.resolve_workspace_media_reference(workspace_id, reference)
-    except MediaAuthorityError as exc:
-        return ("workspace", None, exc.impact, False, exc.repair_action)
-    if not resolved.is_file():
-        return (
-            "workspace",
-            resolved.name,
-            "工作区里已没有这个人物参考文件。",
-            False,
-            "在工作区重新导入该素材，或保存一个新的人物版本。",
-        )
-    return ("workspace", resolved.name, None, True, None)
+        path, _, _ = production_repo._profile_reference_source(profile, viewer_user_id=user_id,
+            local_diagnostic=diagnostic, for_generation=False)
+    except (ValueError, PermissionError, OSError, KeyError) as exc:
+        path, reference_reason = None, str(exc)
+    reason = profile_use_failure(current, content_type="person_likeness" if isinstance(profile, PersonProfile) else "voice",
+        usage_scope="avatar_lipsync" if isinstance(profile, PersonProfile) else "narration") or reference_reason
+    if reason is None:
+        try:
+            production_repo.profile_reference_input(profile, viewer_user_id=user_id, local_diagnostic=diagnostic)
+        except (ValueError, PermissionError, OSError, KeyError) as exc:
+            reason = str(exc)
+    authorization = production_repo.current_profile_authorization(profile)
+    return path, reference_reason, reason, authorization
 
 
-def _person_profile_response(person: PersonProfile) -> PersonProfileResponse:
-    current_authorization = _current_authorization(person.workspace_id, person.authorization)
-    reason = current_authorization.failure_for(
-        content_type="person_likeness",
-        usage_scope="avatar_lipsync",
-    )
-    kind, name, reference_reason, available, repair_action = _person_body_reference(
-        person.workspace_id, person.avatar_reference
-    )
-    return PersonProfileResponse(
-        id=person.id,
-        workspace_id=person.workspace_id,
-        display_name=person.display_name,
-        version=person.version,
-        avatar_reference=person.avatar_reference,
-        background_capabilities=list(person.background_capabilities),
-        shot_capabilities=list(person.shot_capabilities),
-        authorization=_authorization_response(person.authorization),
-        current_authorization=_authorization_response(current_authorization),
-        runnable=reason is None,
-        runnable_reason=reason,
-        body_reference_kind=kind,
-        body_reference_name=name,
-        body_reference_available=available,
-        body_reference_reason=reference_reason,
-        body_reference_repair_action=repair_action,
-    )
+def _person_profile_response(person: PersonProfile, request: Request) -> PersonProfileResponse:
+    path, reference_reason, reason, authorization = _profile_read_facts(person, request)
+    return PersonProfileResponse(id=person.id, workspace_id=person.workspace_id, display_name=person.display_name,
+        version=person.version, avatar_reference=person.avatar_reference,
+        background_capabilities=list(person.background_capabilities), shot_capabilities=list(person.shot_capabilities),
+        authorization=_authorization_response(person.authorization) if person.authorization else None,
+        current_authorization=_authorization_response(authorization) if authorization else None,
+        runnable=reason is None, runnable_reason=reason, body_reference_kind="workspace",
+        body_reference_name=path.name if path else None, body_reference_available=path is not None,
+        body_reference_reason=reference_reason, body_reference_repair_action="重新定位来源并保存新版本。" if reference_reason else None,
+        reference=asdict(person.reference) if person.reference else None, use_state=person.use_state,
+        reference_issue=person.reference_issue, reference_url=f"/api/media/person-profiles/{quote(person.id, safe='')}/reference?version={quote(person.version, safe='')}" if path else None)
 
 
-def _versioned_voice_profile_response(
-    voice: VersionedVoiceProfile,
-) -> VersionedVoiceProfileResponse:
-    current_authorization = _current_authorization(voice.workspace_id, voice.authorization)
-    reason = current_authorization.failure_for(
-        content_type="voice",
-        usage_scope="narration",
-    )
-    return VersionedVoiceProfileResponse(
-        id=voice.id,
-        workspace_id=voice.workspace_id,
-        person_profile_id=voice.person_profile_id,
-        person_version=voice.person_version,
-        version=voice.version,
-        language=voice.language,
-        reference_audio_path=voice.reference_audio_path,
-        reference_text=voice.reference_text,
-        model_id=voice.model_id,
-        authorization=_authorization_response(voice.authorization),
-        current_authorization=_authorization_response(current_authorization),
-        runnable=reason is None,
-        runnable_reason=reason,
-    )
+def _versioned_voice_profile_response(voice: VersionedVoiceProfile, request: Request) -> VersionedVoiceProfileResponse:
+    path, reference_reason, reason, authorization = _profile_read_facts(voice, request)
+    return VersionedVoiceProfileResponse(id=voice.id, workspace_id=voice.workspace_id,
+        display_name=voice.display_name, person_profile_id=voice.person_profile_id, person_version=voice.person_version,
+        version=voice.version, language=voice.language, reference_audio_path=voice.reference_audio_path,
+        reference_text=voice.reference_text, model_id=voice.model_id,
+        authorization=_authorization_response(voice.authorization) if voice.authorization else None,
+        current_authorization=_authorization_response(authorization) if authorization else None,
+        runnable=reason is None, runnable_reason=reason, reference=asdict(voice.reference) if voice.reference else None,
+        use_state=voice.use_state, reference_issue=voice.reference_issue,
+        reference_url=f"/api/media/voice-profiles/{quote(voice.id, safe='')}/reference?version={quote(voice.version, safe='')}" if path else None)
 
 
 def _pronunciation_entry_response(entry: PronunciationEntry) -> PronunciationEntryResponse:
@@ -1855,13 +1821,65 @@ def list_media_authorization_versions(
     )
 
 
+def _readable_profiles(request: Request, items):
+    user_id, diagnostic = _content_reader(request, current_workspace_id(request))
+    return [item for item in items if production_repo.profile_readable(item, user_id, diagnostic)]
+
+
+@app.get("/api/media/default-voice", response_model=VersionedVoiceProfileResponse | None)
+def get_default_media_voice(request: Request):
+    voice = production_repo.get_default_versioned_voice(current_workspace_id(request))
+    user, diagnostic = _content_reader(request, current_workspace_id(request))
+    return _versioned_voice_profile_response(voice, request) if voice and production_repo.profile_readable(voice, user, diagnostic) else None
+
+
+@app.put("/api/media/default-voice", response_model=VersionedVoiceProfileResponse)
+def set_default_media_voice(request: Request, payload: FixedProfileReference):
+    selected = payload
+    ws = current_workspace_id(request)
+    user, diagnostic = _content_reader(request, ws)
+    try:
+        voice = production_repo.set_default_versioned_voice(ws, selected.profile_id, selected.version,
+            viewer_user_id=user, local_diagnostic=diagnostic)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _versioned_voice_profile_response(voice, request)
+
+
+@app.get("/api/media/{profile_kind}/{profile_id}/reference")
+def stream_profile_reference(profile_kind: Literal["person-profiles", "voice-profiles"], profile_id: str, request: Request, version: str):
+    ws = current_workspace_id(request)
+    try:
+        profile = (production_repo.get_person_profile(ws, profile_id, version) if profile_kind == "person-profiles"
+                   else production_repo.get_versioned_voice_profile(ws, profile_id, version))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="profile not found") from exc
+    path, reason, _, _ = _profile_read_facts(profile, request)
+    if path is None:
+        raise HTTPException(status_code=409, detail=reason)
+    return FileResponse(path)
+
+
 @app.get("/api/media/person-profiles", response_model=PersonProfilesResponse)
 def list_media_person_profiles(request: Request) -> PersonProfilesResponse:
-    people = production_repo.list_person_profiles(current_workspace_id(request))
+    people = _readable_profiles(request, production_repo.list_person_profiles(current_workspace_id(request)))
     return PersonProfilesResponse(
-        items=[_person_profile_response(item) for item in people],
+        items=[_person_profile_response(item, request) for item in people],
         total_count=len(people),
     )
+
+
+def _profile_save_use_state(workspace_id, payload, *, person):
+    if "use_state" in payload.model_fields_set:
+        return payload.use_state
+    try:
+        previous = (production_repo.get_person_profile(workspace_id, payload.id) if person
+                    else production_repo.get_versioned_voice_profile(workspace_id, payload.id))
+    except KeyError:
+        return payload.use_state
+    return previous.use_state
 
 
 @app.post("/api/media/person-profiles", response_model=PersonProfileResponse)
@@ -1876,7 +1894,7 @@ def save_media_person_profile(
                 id=_required_media_text(payload.id, "person id"),
                 workspace_id=workspace_id,
                 display_name=_required_media_text(payload.display_name, "display name"),
-                version=_required_media_text(payload.version, "person version"),
+                version=payload.version or f"v-{uuid4().hex}",
                 avatar_reference=validate_logical_media_reference(
                     payload.avatar_reference,
                     field="avatar reference",
@@ -1888,12 +1906,17 @@ def save_media_person_profile(
                 shot_capabilities=_optional_media_text_values(
                     payload.shot_capabilities, "shot capabilities"
                 ),
-                authorization=_authorization_from_request(workspace_id, payload.authorization),
-            )
+                authorization=_authorization_from_request(workspace_id, payload.authorization) if payload.authorization else None,
+                reference=ProfileReference(**payload.reference.model_dump()) if payload.reference else ProfileReference(),
+                use_state=_profile_save_use_state(workspace_id, payload, person=True),
+            ), verified_owner_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise _media_write_error(exc) from exc
-    return _person_profile_response(saved)
+    return _person_profile_response(saved, request)
 
 
 @app.get(
@@ -1911,7 +1934,7 @@ def get_media_person_profile(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="person profile not found") from exc
-    return _person_profile_response(person)
+    return _person_profile_response(person, request)
 
 
 @app.get(
@@ -1927,9 +1950,9 @@ def list_media_person_profile_versions(
         production_repo.get_person_profile(workspace_id, person_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="person profile not found") from exc
-    items = production_repo.list_person_profile_versions(workspace_id, person_id)
+    items = _readable_profiles(request, production_repo.list_person_profile_versions(workspace_id, person_id))
     return PersonProfilesResponse(
-        items=[_person_profile_response(item) for item in items],
+        items=[_person_profile_response(item, request) for item in items],
         total_count=len(items),
     )
 
@@ -1950,7 +1973,7 @@ async def import_media_voice_reference(
         reference, size_bytes, duration_seconds = (
             production_repo.import_voice_reference_wav(
                 current_workspace_id(request),
-                content,
+                content, verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
             )
         )
     except (OSError, ValueError) as exc:
@@ -1965,9 +1988,9 @@ async def import_media_voice_reference(
 
 @app.get("/api/media/voice-profiles", response_model=VersionedVoiceProfilesResponse)
 def list_media_voice_profiles(request: Request) -> VersionedVoiceProfilesResponse:
-    voices = production_repo.list_versioned_voice_profiles(current_workspace_id(request))
+    voices = _readable_profiles(request, production_repo.list_versioned_voice_profiles(current_workspace_id(request)))
     return VersionedVoiceProfilesResponse(
-        items=[_versioned_voice_profile_response(item) for item in voices],
+        items=[_versioned_voice_profile_response(item, request) for item in voices],
         total_count=len(voices),
     )
 
@@ -1978,36 +2001,43 @@ def save_media_voice_profile(
     payload: VersionedVoiceProfileUpsertRequest,
 ) -> VersionedVoiceProfileResponse:
     workspace_id = current_workspace_id(request)
+    person_pair = (payload.person_profile_id, payload.person_version)
+    if not {"person_profile_id", "person_version"} & payload.model_fields_set:
+        try:
+            previous = production_repo.get_versioned_voice_profile(workspace_id, payload.id)
+            person_pair = (previous.person_profile_id, previous.person_version)
+        except KeyError:
+            pass  # A new independent voice has no historical person restriction.
     try:
         saved = production_repo.save_versioned_voice_profile(
             VersionedVoiceProfile(
                 id=_required_media_text(payload.id, "voice profile id"),
                 workspace_id=workspace_id,
-                person_profile_id=_required_media_text(
-                    payload.person_profile_id, "person profile id"
-                ),
-                person_version=_required_media_text(
-                    payload.person_version, "person version"
-                ),
-                version=_required_media_text(payload.version, "voice version"),
+                person_profile_id=person_pair[0],
+                person_version=person_pair[1],
+                version=payload.version or f"v-{uuid4().hex}",
                 language=payload.language,
                 reference_audio_path=validate_logical_media_reference(
                     payload.reference_audio_path,
                     field="reference audio path",
-                    allowed_schemes={"workspace"},
+                    allowed_schemes={"asset", "workspace"},
                 ),
-                reference_text=_required_media_text(
-                    payload.reference_text, "reference text"
-                ),
-                model_id=_required_media_text(payload.model_id, "model id"),
-                authorization=_authorization_from_request(workspace_id, payload.authorization),
-            )
+                reference_text=payload.reference_text,
+                display_name=payload.display_name,
+                model_id=payload.model_id,
+                authorization=_authorization_from_request(workspace_id, payload.authorization) if payload.authorization else None,
+                reference=ProfileReference(**payload.reference.model_dump()) if payload.reference else ProfileReference(),
+                use_state=_profile_save_use_state(workspace_id, payload, person=False),
+            ), verified_owner_user_id=_content_reader(request, workspace_id)[0],
+            local_diagnostic=_content_reader(request, workspace_id)[1],
         )
-    except (KeyError, ValueError) as exc:
+    except (KeyError, ValueError, PermissionError) as exc:
+        if isinstance(exc, PermissionError):
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         if isinstance(exc, KeyError):
             raise HTTPException(status_code=404, detail="person profile not found") from exc
         raise _media_write_error(exc) from exc
-    return _versioned_voice_profile_response(saved)
+    return _versioned_voice_profile_response(saved, request)
 
 
 @app.get(
@@ -2025,7 +2055,7 @@ def get_media_voice_profile(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    return _versioned_voice_profile_response(voice)
+    return _versioned_voice_profile_response(voice, request)
 
 
 @app.get(
@@ -2041,11 +2071,11 @@ def list_media_voice_profile_versions(
         production_repo.get_versioned_voice_profile(workspace_id, voice_profile_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    items = production_repo.list_versioned_voice_profile_versions(
+    items = _readable_profiles(request, production_repo.list_versioned_voice_profile_versions(
         workspace_id, voice_profile_id
-    )
+    ))
     return VersionedVoiceProfilesResponse(
-        items=[_versioned_voice_profile_response(item) for item in items],
+        items=[_versioned_voice_profile_response(item, request) for item in items],
         total_count=len(items),
     )
 
@@ -2267,19 +2297,20 @@ def _preview_precondition_error(
 
 
 @app.post("/api/media/previews/voice", response_model=MediaPreviewRunResponse)
-def request_voice_preview(
-    request: Request,
-    payload: VoicePreviewRequest,
-) -> MediaPreviewRunResponse:
+def request_voice_preview(request: Request, payload: VoicePreviewRequest) -> MediaPreviewRunResponse:
+    ws = current_workspace_id(request)
+    user, diagnostic = _content_reader(request, ws)
+    actor = _require_permit_actor(request, ws)
+    runtime = _creation_runtime()
     try:
-        run = voice_preview_service.request(
-            repository=production_repo,
-            workspace_id=current_workspace_id(request),
-            voice_profile_id=payload.voice_profile_id,
-            voice_version=payload.voice_version,
-            preview_text=payload.preview_text,
-            retry=payload.retry,
-        )
+        params = payload.model_dump()
+        run = voice_preview_service.request(repository=production_repo, workspace_id=ws,
+            viewer_user_id=user, local_diagnostic=diagnostic, prepare_only=True, member_identity=actor.identity_payload(), **params)
+        if run.status == "queued" and not run.device_request_id:
+            from app.profile_preview_execution import submit_profile_preview
+            run = submit_profile_preview(runtime, run, actor, params)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="voice profile not found") from exc
     except ValueError as exc:
@@ -2291,48 +2322,61 @@ def request_voice_preview(
     "/api/media/previews/avatar-lipsync",
     response_model=MediaPreviewRunResponse,
 )
-def request_avatar_lipsync_preview(
-    request: Request,
-    payload: AvatarLipSyncPreviewRequest,
-) -> MediaPreviewRunResponse:
-    workspace_id = current_workspace_id(request)
-    voice_run = production_repo.get_media_preview_run(
-        workspace_id,
-        "voice",
-        payload.voice_preview_identity,
-    )
-    if voice_run is None:
+def request_avatar_lipsync_preview(request: Request, payload: AvatarLipSyncPreviewRequest) -> MediaPreviewRunResponse:
+    ws = current_workspace_id(request)
+    actor = _require_permit_actor(request, ws)
+    runtime = _creation_runtime()
+    voice_run = production_repo.get_media_preview_run(ws, "voice", payload.voice_preview_identity)
+    if voice_run is None or not _preview_readable(voice_run, request):
         raise HTTPException(status_code=404, detail="voice preview not found")
     audio_path = _preview_output_path(voice_run)
     if voice_run.status != "succeeded" or audio_path is None:
-        raise _preview_precondition_error(
-            error="voice_preview_not_succeeded",
-            detail="avatar preview requires a succeeded voice preview with a safe output.",
-            impact="人物口型预览未开始，不能生成或返回人物视频。",
-            repair_action="完成当前工作区的声音预览后重试。",
-        )
+        raise _preview_precondition_error(error="voice_preview_not_succeeded", detail="需要当前成员已成功的声音预览。",
+            impact="未开始人物预览。", repair_action="先完成同一固定声音版本的独立试听。")
+    user, diagnostic = _content_reader(request, ws)
+    params = dict(person_id=payload.person_profile_id, person_version=payload.person_version,
+        voice_profile_id=payload.voice_profile_id, voice_version=payload.voice_version,
+        audio_path=str(audio_path), audio_cache_key=voice_run.identity, language=voice_run.language,
+        motion=payload.motion, expression=payload.expression, authorization_id=payload.authorization_id,
+        authorization_version=payload.authorization_version, model_id=payload.model_id, retry=payload.retry)
     try:
-        run = avatar_preview_service.request(
-            repository=production_repo,
-            workspace_id=workspace_id,
-            person_id=payload.person_profile_id,
-            person_version=payload.person_version,
-            voice_profile_id=payload.voice_profile_id,
-            voice_version=payload.voice_version,
-            audio_path=str(audio_path),
-            audio_cache_key=voice_run.identity,
-            language=voice_run.language,
-            motion=payload.motion,
-            expression=payload.expression,
-            authorization_id=payload.authorization_id,
-            authorization_version=payload.authorization_version,
-            model_id=payload.model_id,
-            retry=payload.retry,
-        )
+        run = avatar_preview_service.request(repository=production_repo, workspace_id=ws,
+            viewer_user_id=user, local_diagnostic=diagnostic, prepare_only=True, member_identity=actor.identity_payload(), **params)
+        if run.status == "queued" and not run.device_request_id:
+            from app.profile_preview_execution import submit_profile_preview
+            run = submit_profile_preview(runtime, run, actor, params)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="media preview dependency not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _media_preview_response(run)
+
+
+def _preview_readable(run, request: Request):
+    user, diagnostic = _content_reader(request, run.workspace_id)
+    if not run.member_identity:
+        return diagnostic
+    original = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
+    return user == (original.user_id or original.member_id)
+
+
+@app.post("/api/media/previews/{preview_type}/{identity}/cancel", response_model=MediaPreviewRunResponse)
+def cancel_media_preview(preview_type: str, identity: str, request: Request):
+    ws = current_workspace_id(request)
+    actor = _require_permit_actor(request, ws)
+    run = production_repo.get_media_preview_run(ws, preview_type, identity)
+    if run is None or not _preview_readable(run, request):
+        raise HTTPException(status_code=404, detail="media preview not found")
+    if run.status not in {"queued", "running"} or not run.device_request_id:
+        raise HTTPException(status_code=409, detail="预览不在可取消的设备请求状态")
+    runtime = _creation_runtime()
+    result = runtime.scheduler.cancel(run.device_request_id, actor)
+    runtime.registrations["media_preview"].executor.request_cancel(run.device_request_id)
+    if result["state"] == "cancelled":
+        run = production_repo.save_media_preview_run(replace(run, status="cancelled", finished_at=utc_now(),
+            output_path=None, reason="cancelled", impact="预览已取消，参考和输入保留。", repair_action="需要时显式重新预览。"))
     return _media_preview_response(run)
 
 
@@ -2346,6 +2390,8 @@ def list_media_previews(
     workspace_id = current_workspace_id(request)
     latest_by_identity = {}
     for run in production_repo.list_media_preview_runs(workspace_id, preview_type):
+        if not _preview_readable(run, request):
+            continue
         current = latest_by_identity.get(run.identity)
         if current is None or run.attempt > current.attempt:
             latest_by_identity[run.identity] = run
@@ -2374,7 +2420,7 @@ def list_media_preview_attempts(
     workspace_id = current_workspace_id(request)
     if production_repo.get_media_preview_run(workspace_id, preview_type, identity) is None:
         raise HTTPException(status_code=404, detail="media preview not found")
-    runs = production_repo.list_media_preview_attempts(workspace_id, preview_type, identity)
+    runs = [run for run in production_repo.list_media_preview_attempts(workspace_id, preview_type, identity) if _preview_readable(run, request)]
     return MediaPreviewRunsResponse(
         items=[_media_preview_response(run) for run in runs],
         total_count=len(runs),
@@ -2392,7 +2438,7 @@ def stream_media_preview_output(
     run = production_repo.get_media_preview_run(
         current_workspace_id(request), preview_type, identity
     )
-    if run is None:
+    if run is None or not _preview_readable(run, request):
         raise HTTPException(status_code=404, detail="media preview not found")
     output_path = _preview_output_path(run)
     if output_path is None:
@@ -2655,7 +2701,7 @@ def _creation_plan_preflight(
         if payload.template_version is None:
             raise HTTPException(status_code=422, detail="请选择明确的模板版本。")
         template = _video_template_or_404(workspace_id, payload.template_id, payload.template_version)
-        inherited = {key: template.settings[key] for key in ("language", "aspect_ratio", "duration_target_seconds")}
+        inherited = {key: template.settings[key] for key in ("language", "aspect_ratio", "duration_target_seconds") if key not in payload.model_fields_set and key in template.settings}
         if "presenter_share_target" not in payload.model_fields_set and "presenter_share_target" in template.settings:
             inherited["presenter_share_target"] = template.settings["presenter_share_target"]
         if "lipsync_quality" not in payload.model_fields_set and "lipsync_quality" in template.settings:
@@ -2691,24 +2737,10 @@ def _creation_plan_preflight(
         )
         for item in source_repository.list_source_items(workspace_id)
     ]
-    approved_assets = [
-        asset
-        for asset in production_repo.list_assets(workspace_id)
-        if asset.review_status == "approved"
-        and material_allows_footage(asset)
-        and any(
-            segment.review_status == "approved"
-            and effective_segment_usage_role(asset, segment) in {"a_roll", "b_roll"}
-            for segment in asset.segments
-        )
-    ]
-    approved_clips = [
-        segment
-        for asset in approved_assets
-        for segment in asset.segments
-        if segment.review_status == "approved"
-        and effective_segment_usage_role(asset, segment) == "b_roll"
-    ]
+    usable = production_repo.automatic_material_segments(workspace_id, viewer_user_id=_plan_user_id,
+                                                          local_diagnostic=_plan_local_diagnostic)
+    approved_assets = list({asset.id: asset for asset, _ in usable}.values())
+    approved_clips = [segment for asset, segment in usable if effective_segment_usage_role(asset, segment) == "b_roll"]
     material_matches = production_repo.search_material_segments(
         workspace_id,
         query=payload.goal,
@@ -2721,6 +2753,8 @@ def _creation_plan_preflight(
             usage_roles=["a_roll", "b_roll"],
             limit=8,
         )
+    readable_ids = {asset.id for asset in production_repo.list_assets(workspace_id, viewer_user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic)}
+    material_matches = [match for match in material_matches if match.asset_id in readable_ids]
     language_to_voice_language = {
         "zh-CN": "zh",
         "en-US": "en",
@@ -2729,86 +2763,43 @@ def _creation_plan_preflight(
     requested_voice_language = language_to_voice_language[payload.language]
     active_voices = []
     required_voice = template.settings.get("voice") if template else None
-    voices = (
-        production_repo.list_versioned_voice_profile_versions(workspace_id, required_voice["profile_id"])
-        if required_voice else production_repo.list_versioned_voice_profiles(workspace_id)
-    )
-    for voice in voices:
-        authorization = production_repo.get_authorization(
-            workspace_id,
-            voice.authorization.id,
-        )
-        if authorization.failure_for(content_type="voice", usage_scope="narration") is None:
-            active_voices.append((voice, authorization))
-    selected_voice_pair = next(
-        (
-            (voice, authorization)
-            for voice, authorization in active_voices
-            if voice.language in {requested_voice_language, "zh-en"}
-            and (template is None or not template.settings.get("voice") or
-                 (voice.id, voice.version) == (template.settings["voice"]["profile_id"], template.settings["voice"]["version"]))
-        ),
-        None,
-    )
+    explicit = payload.selected_voice
+    default_voice = production_repo.get_default_versioned_voice(workspace_id) if explicit is None and required_voice is None else None
+    voice_media_failure = None
+    try:
+        voices = ([production_repo.get_versioned_voice_profile(workspace_id, explicit.profile_id, explicit.version)] if explicit else
+                  [production_repo.get_versioned_voice_profile(workspace_id, required_voice["profile_id"], required_voice["version"])] if required_voice else
+                  [default_voice] if default_voice else [])
+    except KeyError:
+        voices = []
+        voice_media_failure = "voice_reference_missing"
     selected_voice = None
-    pronunciation_references: list[CreationPlanPronunciationReference] = []
-    person_authorization_failure: str | None = None
-    voice_media_failure: str | None = None
-    if selected_voice_pair is not None:
-        voice, authorization = selected_voice_pair
+    selected_person = None
+    person_authorization_failure = None
+    pronunciation_references = []
+    for voice in voices:
         try:
-            reference_audio = production_repo.resolve_workspace_media_reference(
-                workspace_id,
-                voice.reference_audio_path,
-                require_registered=True,
-            )
-            if (
-                reference_audio.suffix.lower() != ".wav"
-                or not reference_audio.is_file()
-                or reference_audio.stat().st_size == 0
-            ):
-                voice_media_failure = "voice_reference_wav_unavailable"
-        except (MediaAuthorityError, OSError):
-            voice_media_failure = "voice_reference_wav_unavailable"
-        person = production_repo.get_person_profile(
-            workspace_id,
-            voice.person_profile_id,
-            voice.person_version,
-        )
-        person_authorization = production_repo.get_authorization(
-            workspace_id,
-            person.authorization.id,
-        )
-        person_authorization_failure = person_authorization.failure_for(
-            content_type="person_likeness",
-            usage_scope="avatar_lipsync",
-        )
-        selected_voice = CreationPlanVoiceReference(
-            profile_id=voice.id,
-            version=voice.version,
-            person_profile_id=voice.person_profile_id,
-            person_version=voice.person_version,
-            person_authorization_id=person_authorization.id,
-            person_authorization_version=person_authorization.version,
-            authorization_id=authorization.id,
-            authorization_version=authorization.version,
-            language=voice.language,
-            model_id=voice.model_id,
-        )
-        pronunciation_references = [
-            CreationPlanPronunciationReference(
-                id=entry.id,
-                version=entry.version,
-                scope=entry.scope,
-                scope_reference=entry.scope_reference,
-                language=entry.language,
-            )
-            for entry in production_repo.list_applicable_pronunciation_entries(
-                workspace_id=workspace_id,
-                person_profile_id=voice.person_profile_id,
-                episode_id="",
-            )
-        ]
+            reference = production_repo.creation_plan_voice_reference(workspace_id, voice.id, voice.version,
+                viewer_user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic)
+            if voice.language not in {requested_voice_language, "zh-en"}:
+                raise ValueError("voice_language_unavailable")
+            selected_voice = reference
+            active_voices.append(voice)
+            pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
+                scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language)
+                for entry in production_repo.list_applicable_pronunciation_entries(workspace_id=workspace_id,
+                    person_profile_id=voice.person_profile_id, episode_id="")]
+        except (PermissionError, ValueError, OSError, KeyError) as exc:
+            voice_media_failure = str(exc)
+    if payload.selected_person is not None:
+        try:
+            selected_person = production_repo.creation_plan_person_reference(workspace_id,
+                payload.selected_person.profile_id, payload.selected_person.version,
+                viewer_user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic)
+        except (PermissionError, ValueError, OSError, KeyError) as exc:
+            person_authorization_failure = str(exc)
+    elif payload.presenter_share_target > 0:
+        person_authorization_failure = "person_reference_missing"
     model_snapshot = [
         {
             "id": status.model.id,
@@ -2819,14 +2810,16 @@ def _creation_plan_preflight(
         }
         for status in model_catalog.list_statuses()
     ]
-    selected_lipsync_provider = _lipsync_provider(payload.lipsync_quality)
-    model_snapshot.append({
-        "id": selected_lipsync_provider.model_id,
-        "capability": "avatar_lipsync",
-        "state": "ready" if selected_lipsync_provider.ready else "unavailable",
-        "ready": selected_lipsync_provider.ready,
-        "message": selected_lipsync_provider.message,
-    })
+    selected_lipsync_provider = None
+    if payload.presenter_share_target > 0:
+        selected_lipsync_provider = _lipsync_provider(payload.lipsync_quality)
+        model_snapshot.append({
+            "id": selected_lipsync_provider.model_id,
+            "capability": "avatar_lipsync",
+            "state": "ready" if selected_lipsync_provider.ready else "unavailable",
+            "ready": selected_lipsync_provider.ready,
+            "message": selected_lipsync_provider.message,
+        })
     model_by_id = {str(item["id"]): item for item in model_snapshot}
     blockers: list[CreationPlanBlocker] = []
     if not knowledge_references and not source_references:
@@ -2851,13 +2844,13 @@ def _creation_plan_preflight(
         reason = (
             "voice_language_unavailable"
             if active_voices
-            else "voice_authorization_missing"
+            else voice_media_failure or "voice_reference_missing"
         )
         blockers.append(
             CreationPlanBlocker(
                 reason=reason,
-                impact="当前方案不能进入需要该语言授权声音的配音阶段。",
-                repair_action="登记当前工作区可用语言的授权声音版本，或调整方案语言。",
+                impact="当前方案缺少可用的固定声音版本，配音阶段尚不可执行。",
+                repair_action="登记并选择当前工作区可用语言的声音版本，或调整方案语言。",
                 stage="narration",
                 blocks_confirmation=False,
             )
@@ -2884,16 +2877,16 @@ def _creation_plan_preflight(
                     blocks_confirmation=False,
                 )
             )
-        if person_authorization_failure is not None and payload.presenter_share_target > 0:
-            blockers.append(
-                CreationPlanBlocker(
-                    reason=person_authorization_failure,
-                    impact="当前方案不能进入人物口型阶段，但可先创建任务并进行选题。",
-                    repair_action="更新人物形象的有效授权后，再从人物与口型阶段继续。",
-                    stage="avatar_lipsync",
-                    blocks_confirmation=False,
-                )
+    if person_authorization_failure is not None and payload.presenter_share_target > 0:
+        blockers.append(
+            CreationPlanBlocker(
+                reason=person_authorization_failure,
+                impact="当前方案不能进入人物口型阶段，但可先创建任务并进行选题。",
+                repair_action="选择可用人物参考，检查来源及明确使用限制后继续。",
+                stage="avatar_lipsync",
+                blocks_confirmation=False,
             )
+        )
     if payload.presenter_share_target > 0 and not selected_lipsync_provider.ready:
         blockers.append(CreationPlanBlocker(
             reason="person_render_unavailable",
@@ -2906,7 +2899,7 @@ def _creation_plan_preflight(
             CreationPlanBlocker(
                 reason="approved_material_clips_missing",
                 impact="当前方案不能进入自动选片和视频剪辑阶段。",
-                repair_action="审核并标记至少一个当前工作区可用的 B-roll 镜头后继续。",
+                repair_action="导入并分析可用的补充镜头；检查来源、范围和主动使用限制后继续。",
                 stage="video_editing",
                 blocks_confirmation=False,
             )
@@ -2934,12 +2927,13 @@ def _creation_plan_preflight(
         "knowledge_references": [item.__dict__ for item in knowledge_references],
         "source_references": [item.__dict__ for item in source_references],
         "selected_voice": selected_voice.__dict__ if selected_voice else None,
+        "selected_person": asdict(selected_person) if selected_person else None,
         "pronunciation_references": [
             item.__dict__ for item in pronunciation_references
         ],
         "approved_asset_count": len(approved_assets),
         "approved_clip_count": len(approved_clips),
-        "material_rule_summary": "使用当前工作区已审核的人物主镜头与补充画面；用户给入的内容默认可用于创作。",
+        "material_rule_summary": "使用当前可自动选用的有效镜头；保留主动限制、人工疑点与匹配依据。",
         "material_matches": [asdict(item) for item in material_matches],
         "model_snapshot": model_snapshot,
         "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],
@@ -2967,6 +2961,7 @@ def _creation_plan_preflight(
         knowledge_references=knowledge_references,
         source_references=source_references,
         selected_voice=selected_voice,
+        selected_person=selected_person,
         pronunciation_references=pronunciation_references,
         approved_asset_count=len(approved_assets),
         approved_clip_count=len(approved_clips),
@@ -2998,6 +2993,7 @@ def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewRe
             "lipsync_quality": plan.lipsync_quality,
             "knowledge_references": [item.__dict__ for item in plan.knowledge_references],
             "source_references": [item.__dict__ for item in plan.source_references],
+            "selected_person": asdict(plan.selected_person) if plan.selected_person else None,
             "selected_voice": (
                 plan.selected_voice.__dict__ if plan.selected_voice is not None else None
             ),
@@ -3995,125 +3991,20 @@ def _creation_task_montage_response(
     )
 
 
-def _resolve_creation_task_voice_selection(
-    *,
-    workspace_id: str,
-    task: CreationTask,
-    plan: CreationPlan,
-    voice_profile_id: str,
-    voice_version: str,
-) -> tuple[CreationPlanVoiceReference, list[CreationPlanPronunciationReference]]:
+def _resolve_creation_task_voice_selection(*, workspace_id: str, task: CreationTask, plan: CreationPlan,
+                                         voice_profile_id: str, voice_version: str):
     try:
-        inputs = production_repo.resolve_creation_task_narration_inputs(
-            workspace_id=workspace_id,
-            task_id=task.id,
-            voice_profile_id=voice_profile_id,
-            voice_version=voice_version,
-        )
-    except KeyError as exc:
-        raise MediaAuthorityError(
-            reason="voice_identity_missing",
-            impact="当前任务没有绑定声音，未调用声音模型。",
-            repair_action="选择当前工作区中存在的声音版本。",
-        ) from exc
-    voice = inputs.voice
-    expected_language = {
-        "zh-CN": "zh",
-        "en-US": "en",
-        "zh-CN/en-US": "zh-en",
-    }[plan.language]
-    if voice.language not in {expected_language, "zh-en"}:
-        raise MediaAuthorityError(
-            reason="voice_language_unavailable",
-            impact="所选声音不支持当前任务语言，未调用声音模型。",
-            repair_action="选择中文声音版本，或新建与任务语言一致的授权声音。",
-        )
-    authorization_failure = voice.authorization.failure_for(
-        content_type="voice",
-        usage_scope="narration",
-    )
-    if authorization_failure is not None:
-        raise MediaAuthorityError(
-            reason=authorization_failure,
-            impact="所选声音授权当前不可用于配音，未调用声音模型。",
-            repair_action="更新声音授权状态和配音使用范围后再选择。",
-        )
-    try:
-        reference_audio = production_repo.resolve_workspace_media_reference(
-            workspace_id,
-            voice.reference_audio_path,
-            require_registered=True,
-        )
-    except (MediaAuthorityError, OSError) as exc:
-        raise MediaAuthorityError(
-            reason="voice_reference_wav_unavailable",
-            impact="所选声音没有可读取的工作区 WAV，未调用声音模型。",
-            repair_action="重新导入 1–120 秒的已授权 WAV，再登记声音新版本。",
-        ) from exc
-    if (
-        reference_audio.suffix.lower() != ".wav"
-        or not reference_audio.is_file()
-        or reference_audio.stat().st_size == 0
-    ):
-        raise MediaAuthorityError(
-            reason="voice_reference_wav_unavailable",
-            impact="所选声音没有有效 WAV，未调用声音模型。",
-            repair_action="重新导入 1–120 秒的已授权 WAV，再登记声音新版本。",
-        )
-    model_status = next(
-        (status for status in model_catalog.list_statuses() if status.model.id == voice.model_id),
-        None,
-    )
-    if model_status is None or not model_status.ready:
-        raise MediaAuthorityError(
-            reason="voice_model_unavailable",
-            impact="所选声音要求的本地模型尚未就绪，未调用声音模型。",
-            repair_action=(
-                model_status.message
-                if model_status is not None
-                else "为声音档案选择当前已安装的本地声音模型。"
-            ),
-        )
-    try:
-        person = production_repo.get_person_profile(
-            workspace_id,
-            voice.person_profile_id,
-            voice.person_version,
-        )
-        person_authorization = production_repo.get_authorization(
-            workspace_id,
-            person.authorization.id,
-        )
-    except KeyError as exc:
-        raise MediaAuthorityError(
-            reason="voice_person_identity_missing",
-            impact="声音版本关联的人物身份不完整，未调用声音模型。",
-            repair_action="重新登记与现有人物版本关联的授权声音。",
-        ) from exc
-    return (
-        CreationPlanVoiceReference(
-            profile_id=voice.id,
-            version=voice.version,
-            person_profile_id=voice.person_profile_id,
-            person_version=voice.person_version,
-            person_authorization_id=person_authorization.id,
-            person_authorization_version=person_authorization.version,
-            authorization_id=voice.authorization.id,
-            authorization_version=voice.authorization.version,
-            language=voice.language,
-            model_id=voice.model_id,
-        ),
-        [
-            CreationPlanPronunciationReference(
-                id=entry.id,
-                version=entry.version,
-                scope=entry.scope,
-                scope_reference=entry.scope_reference,
-                language=entry.language,
-            )
-            for entry in inputs.pronunciation_entries
-        ],
-    )
+        reference = production_repo.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
+            viewer_user_id=task.owner_user_id)
+        entries = production_repo.list_applicable_pronunciation_entries(workspace_id=workspace_id,
+            person_profile_id=reference.person_profile_id, episode_id=task.id)
+    except (KeyError, ValueError, PermissionError, OSError) as exc:
+        raise MediaAuthorityError(reason="voice_reference_unavailable", impact="声音引用未更新，未调用模型。",
+                                  repair_action=str(exc)) from exc
+    if reference.language not in {{"zh-CN":"zh", "en-US":"en", "zh-CN/en-US":"zh-en"}[plan.language], "zh-en"}:
+        raise MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。", repair_action="选择匹配方案语言的声音。")
+    return reference, [CreationPlanPronunciationReference(id=e.id, version=e.version, scope=e.scope,
+        scope_reference=e.scope_reference, language=e.language) for e in entries]
 
 
 def _creation_task_voice_options(
@@ -4123,6 +4014,8 @@ def _creation_task_voice_options(
 ) -> list[dict[str, object]]:
     options: list[dict[str, object]] = []
     for voice in production_repo.list_versioned_voice_profiles(workspace_id):
+        if not production_repo.profile_readable(voice, task.owner_user_id):
+            continue
         try:
             person = production_repo.get_person_profile(
                 workspace_id,
@@ -4147,7 +4040,7 @@ def _creation_task_voice_options(
                 "profile_id": voice.id,
                 "version": voice.version,
                 "person_display_name": (
-                    person.display_name if person is not None else "人物档案缺失"
+                    person.display_name if person is not None else "独立旁白声音"
                 ),
                 "language": voice.language,
                 "model_id": voice.model_id,
@@ -4316,8 +4209,8 @@ def _creation_task_workspace_response(
         None,
     )
     can_undo = _undo_target_versions(workspace_id, task)[0] is not None
-    person_provider = _lipsync_provider(plan.lipsync_quality)
-    person_render_available = person_provider.ready
+    person_provider = _lipsync_provider(plan.lipsync_quality) if plan.presenter_share_target > 0 else None
+    person_render_available = bool(person_provider and person_provider.ready)
     subtitle_tracks = _current_subtitle_tracks(
         workspace_id, task, current_version=current_version, montage=montage
     )
@@ -4407,11 +4300,11 @@ def _creation_task_workspace_response(
             "portrait_available": _portrait_processor(workspace_id).available,
             "person_render_capability": {
                 "available": person_render_available,
-                "model_id": person_provider.model_id,
-                "message": person_provider.message,
+                "model_id": person_provider.model_id if person_provider else "",
+                "message": person_provider.message if person_provider else "0%人物，本任务不需要口型能力。",
                 "repair_action": (
                     None
-                    if person_render_available
+                    if person_render_available or person_provider is None
                     else "配置本地人物口型运行环境后重试。"
                 ),
             },
@@ -6338,6 +6231,7 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str, task_id: 
                 voice_identity=inputs.voice,
                 pronunciation_entries=inputs.pronunciation_entries,
                 resolved_reference_audio_path=reference_path,
+                repository=production_repo, viewer_user_id=task.owner_user_id,
                 segment_id=segment_id,
                 **({"grant_context": replace(grant_context,
                     max_output_bytes=grant_context.max_output_bytes - output_bytes)}
@@ -6650,17 +6544,18 @@ def _person_render_matches_narration(
             render.workspace_id, render.person_profile_id, render.person_version)
         audio = production_repo.resolve_authorized_narration_audio_reference(
             render.workspace_id, segment.audio_reference)
+        task = production_repo.get_creation_task(render.workspace_id, render.task_id)
         request = production_repo.resolve_avatar_lipsync_request(
             workspace_id=render.workspace_id, person_id=person.id, person_version=person.version,
             voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
             audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
             motion=render.motion, expression=render.expression,
-            authorization_id=person.authorization.id, authorization_version=person.authorization.version,
-            model_id=render.model_id)
+            authorization_id=person.authorization.id if person.authorization else None, authorization_version=person.authorization.version if person.authorization else None,
+            model_id=render.model_id, viewer_user_id=task.owner_user_id)
         if _authorization_failure(request) is not None:
             return False
         input_facts = presenter_input_facts(request)
-    except (KeyError, ValueError, OSError):
+    except (KeyError, ValueError, OSError, PermissionError):
         # Missing or unauthorized current inputs cannot authorize an old output.
         return False
     return any(item.parameters["presenter_input_facts"] == input_facts for item in matching)
@@ -6763,8 +6658,9 @@ def _generate_creation_task_person_render_record(
             language=segment.language,
             motion=payload.motion,
             expression=payload.expression,
-            authorization_id=person.authorization.id,
-            authorization_version=person.authorization.version,
+            authorization_id=person.authorization.id if person.authorization else None,
+            authorization_version=person.authorization.version if person.authorization else None,
+            viewer_user_id=task.owner_user_id,
             model_id=provider.model_id,
         )
         input_facts = presenter_input_facts(render_request)
@@ -6853,7 +6749,8 @@ def _generate_creation_task_person_render_record(
                     result = AvatarAndLipSyncService(
                         settings.video_output_path,
                         provider,
-                    ).render(render_request, output_cache_key=cache_key, grant_context=grant_context)
+                    ).render(render_request, output_cache_key=cache_key, grant_context=grant_context,
+                        repository=production_repo, viewer_user_id=task.owner_user_id)
                     if result.status != "succeeded" or not result.artifact_path:
                         failed = production_repo.finish_person_render(
                             context.workspace_id,
@@ -7126,7 +7023,7 @@ def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id:
             task_id=task.id,
             script=script,
             profile=production_repo.get_profile(workspace_id),
-            assets=production_repo.list_assets(workspace_id),
+            assets=list({asset.id: asset for asset, _ in production_repo.automatic_material_segments(workspace_id, viewer_user_id=task.owner_user_id)}.values()),
             media_reference_for_asset=lambda asset_id: production_repo.workspace_media_reference_for_asset(
                 workspace_id, asset_id
             ),
@@ -8753,13 +8650,13 @@ def preview_creation_task_edit(
             )
             creation_plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
             person_provider = _lipsync_provider(creation_plan.lipsync_quality)
-            selected_voice = creation_plan.selected_voice
-            if selected_voice is None:
+            selected_person = creation_plan.selected_person
+            if selected_person is None:
                 raise ValueError("当前任务没有绑定人物声音版本")
             person = production_repo.get_person_profile(
                 workspace_id,
-                selected_voice.person_profile_id,
-                selected_voice.person_version,
+                selected_person.profile_id,
+                selected_person.version,
             )
             current_render = (
                 production_repo.get_person_render(
@@ -14058,8 +13955,8 @@ def _require_feature(feature: str) -> None:
 
 
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
-def get_runtime_health() -> RuntimeHealthResponse:
-    return RuntimeHealthResponse.model_validate(runtime_health(settings))
+def get_runtime_health(request: Request) -> RuntimeHealthResponse:
+    return RuntimeHealthResponse.model_validate(runtime_health(_workspace_settings_for(current_workspace_id(request)), current_workspace_id(request)))
 
 
 @app.get("/api/setup/preflight", response_model=SetupPreflightResponse)
@@ -16502,6 +16399,11 @@ def _build_device_components(*, repository: ProductionRepository):
                            "montage_plan": _montage_stage_with_grant, "person_edit": _person_edit_stage_with_grant},
         ),
     }
+    from app.profile_preview_execution import profile_preview_registration
+    registrations["media_preview"] = profile_preview_registration(repository,
+        voice_service=voice_preview_service, avatar_service=avatar_preview_service,
+        narration_budget=narration_budget, presenter_budget=presenter_budget,
+        verify_identity=_verify_creation_identity)
     registrations["platform_publish"] = platform_publish_registration(
         repository, platform_auth_service,
         publishable_output_for=_platform_publish_output_for,

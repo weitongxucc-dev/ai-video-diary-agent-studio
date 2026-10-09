@@ -1,7 +1,6 @@
 import Link from "next/link";
+import { PeopleAndVoiceWorkspace } from "@/components/PeopleAndVoiceWorkspace";
 import {
-  createVoiceProfileAction,
-  setDefaultVoiceProfileAction,
   updateProductionProfileAction,
   updateRuntimeSettingsAction,
 } from "@/app/actions";
@@ -15,7 +14,6 @@ import {
   getLocalModels,
   getProductionFoundation,
   getRuntimeSettings,
-  getVoiceProfiles,
 } from "@/lib/api.server";
 import type {
   LocalModelStatus,
@@ -24,7 +22,6 @@ import type {
   RuntimeSettingItem,
   RuntimeSettings,
   SystemStatus,
-  VoiceProfile,
 } from "@/lib/types";
 
 import styles from "./llm-service-state.module.css";
@@ -35,20 +32,17 @@ async function loadSettings(): Promise<{
   runtime: RuntimeSettings | null;
   models: LocalModelStatus[];
   foundation: ProductionFoundation | null;
-  voices: VoiceProfile[];
   offline: boolean;
 }> {
-  const [runtime, catalog, foundation, voiceCatalog] = await Promise.all([
+  const [runtime, catalog, foundation] = await Promise.all([
     getRuntimeSettings().catch(() => null),
     getLocalModels().catch(() => ({ models: [] })),
     getProductionFoundation().catch(() => null),
-    getVoiceProfiles().catch(() => ({ voices: [], total_count: 0 })),
   ]);
   return {
     runtime,
     models: catalog.models,
     foundation,
-    voices: voiceCatalog.voices,
     offline: runtime === null,
   };
 }
@@ -421,7 +415,7 @@ export default async function SettingsPage({
   )
     ? (requestedSection as SettingsCategory)
     : "model";
-  const { runtime, models, foundation, voices, offline } = await loadSettings();
+  const { runtime, models, foundation, offline } = await loadSettings();
   const profile = foundation?.profile;
   const settingItems = runtime?.settings ?? [];
   const status = runtime?.status;
@@ -697,142 +691,7 @@ export default async function SettingsPage({
                 </div>
               </FormErrorBanner>
 
-              <section
-                className="settings-voice-section"
-                aria-labelledby="voice-library-title"
-                hidden={activeCategory !== "voices"}
-              >
-                <div className="settings-product-heading">
-                  <div>
-                    <span className="section-kicker">授权资产</span>
-                    <h2 id="voice-library-title">声音库</h2>
-                    <p>
-                      可保存多个声音。默认声音用于新内容，单条创作内容
-                      仍可临时切换。
-                    </p>
-                  </div>
-                </div>
-                <div className="settings-voice-list">
-                  {voices.map((voice) => (
-                    <div className="settings-voice-row" key={voice.id}>
-                      <div className="settings-voice-copy">
-                        <strong>{voice.name}</strong>
-                        <span>
-                          {voice.is_default ? "默认声音" : "可选声音"} ·{" "}
-                          {voice.status === "ready"
-                            ? "已就绪"
-                            : voice.message || voice.status}
-                        </span>
-                      </div>
-                      <audio
-                        controls
-                        preload="none"
-                        src={`/api/production/voices/${voice.id}/media`}
-                      />
-                      {voice.is_default ? (
-                        <span className="settings-voice-default">当前默认</span>
-                      ) : (
-                        <form action={setDefaultVoiceProfileAction}>
-                          <input
-                            type="hidden"
-                            name="voice_profile_id"
-                            value={voice.id}
-                          />
-                          <input type="hidden" name="name" value={voice.name} />
-                          <input
-                            type="hidden"
-                            name="reference_audio_path"
-                            value={voice.reference_audio_path}
-                          />
-                          <input
-                            type="hidden"
-                            name="reference_text"
-                            value={voice.reference_text}
-                          />
-                          <input
-                            type="hidden"
-                            name="consent_confirmed"
-                            value={String(voice.consent_confirmed)}
-                          />
-                          <button
-                            className="ui-button secondary"
-                            type="submit"
-                          >
-                            设为默认
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  ))}
-                  {!voices.length ? (
-                    <p className="settings-voice-empty">
-                      还没有可用声音，请添加已获授权的 WAV 参考音频。
-                    </p>
-                  ) : null}
-                </div>
-                <FormErrorBanner
-                  action={createVoiceProfileAction}
-                  className="settings-voice-create"
-                  emptyMessage="请补全声音授权信息"
-                >
-                  <div className="settings-grid">
-                    <label className="settings-field">
-                      <span>声音名称</span>
-                      <input
-                        name="name"
-                        required
-                        placeholder="例如：张三旁白"
-                      />
-                    </label>
-                    <label className="settings-field">
-                      <span>WAV 参考音频</span>
-                      <div className="settings-field-row">
-                        <input
-                          name="reference_audio_path"
-                          required
-                          placeholder="/Volumes/External/voices/name.wav"
-                        />
-                        <DirectoryPickerButton
-                          kind="wav"
-                          targetName="reference_audio_path"
-                        />
-                      </div>
-                      <small className="settings-field-helper">
-                        仅记录原文件绝对路径，不复制到内置硬盘。
-                      </small>
-                    </label>
-                    <label className="settings-field wide">
-                      <span>参考音频文字</span>
-                      <textarea
-                        name="reference_text"
-                        required
-                        rows={3}
-                        placeholder="逐字填写参考音频中的内容"
-                      />
-                    </label>
-                  </div>
-                  <div className="settings-voice-consent">
-                    <label>
-                      <input
-                        name="consent_confirmed"
-                        required
-                        type="checkbox"
-                      />
-                      我确认已获得该声音所有者授权
-                    </label>
-                    <label>
-                      <input name="is_default" type="checkbox" />
-                      添加后设为默认声音
-                    </label>
-                  </div>
-                  <div className="settings-actions">
-                    <button className="ui-button" type="submit">
-                      添加声音
-                    </button>
-                    <span>模型就绪前会保留参考档案和可解释状态。</span>
-                  </div>
-                </FormErrorBanner>
-              </section>
+              {activeCategory === "voices" ? <PeopleAndVoiceWorkspace initialView="voices" embedded /> : null}
             </div>
           ) : null}
 

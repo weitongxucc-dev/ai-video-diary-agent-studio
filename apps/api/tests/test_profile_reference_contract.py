@@ -261,11 +261,13 @@ class Provider:
 
 
 def test_independent_narration_provider_failure_and_cached_preview_rechecks_source(repository, tmp_path):
-    saved = save_voice(repository)
     provider = Provider()
+    saved = save_voice(repository, model_id=provider.model_id)
+    context = range_context(tmp_path)
+    context = replace(context, grant=replace(context.grant, owner_type='media_preview', unit_key='voice:test'))
     service = VoicePreviewService(tmp_path / 'output', provider)
     args = dict(repository=repository, workspace_id='ws', voice_profile_id=saved.id,
-                preview_text='合成文字', viewer_user_id='member')
+                preview_text='合成文字', viewer_user_id='member', grant_context=context)
     first = service.request(**args)
     assert first.status == 'succeeded' and provider.calls == 1
     assert service.request(**args).id == first.id and provider.calls == 1

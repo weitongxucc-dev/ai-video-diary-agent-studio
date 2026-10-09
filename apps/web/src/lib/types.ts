@@ -982,6 +982,9 @@ export type CreationPlanInput = {
   duration_target_seconds: number;
   presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
   lipsync_quality?: "high" | "fast";
+
+  selected_voice?: { profile_id: string; version: string } | null;
+  selected_person?: { profile_id: string; version: string } | null;
 };
 
 export type CreationPlanKnowledgeReference = {
@@ -1759,7 +1762,7 @@ export type CreationTaskEditQueuedResponse = {
 export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
 
 
-export type CreationPlanPreview = CreationPlanInput & {
+export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
   template_settings?: VideoTemplateSettings;
   name: string;
   knowledge_references: CreationPlanKnowledgeReference[];
@@ -1775,6 +1778,7 @@ export type CreationPlanPreview = CreationPlanInput & {
   blockers: CreationPlanBlocker[];
   confirmable: boolean;
   preflight_fingerprint: string;
+  selected_person?: { profile_id: string; version: string } | null;
 };
 
 export type WorkspaceAssistantPlanTurnResponse = {

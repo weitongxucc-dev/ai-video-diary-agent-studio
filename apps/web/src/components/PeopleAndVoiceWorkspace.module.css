@@ -125,3 +125,15 @@
 .originalPreview { width: 100%; display: grid; justify-items: center; gap: 8px; }
 .originalPreview video { width: 100%; max-height: 330px; object-fit: contain; background: #18202c; border-radius: 8px; }
 .originalPreview small { color: var(--text-3); font-size: 12px; }
+
+.workspaceTabs { display:flex; gap:8px; flex-wrap:wrap; }
+.workspaceTabs button, .sectionHeader button, .stage button { padding:7px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
+.workspaceTabs button[aria-pressed="true"] { background:var(--surface-2); }
+.objectRail > button { display:grid; gap:4px; padding:10px; border:0; border-bottom:1px solid var(--border-1); background:transparent; color:var(--text-1); text-align:left; cursor:pointer; }
+.objectRail > button[aria-pressed="true"] { background:var(--surface-1); }
+.stage { padding:16px; }
+.stage video, .stage img { display:block; max-width:100%; max-height:300px; }
+.stage audio { max-width:100%; }
+.stage label { display:grid; gap:5px; margin:10px 0; }
+.stage select { min-width:0; max-width:100%; color:var(--text-1); background:var(--surface-1); }
+.editorForm > p { grid-column:1/-1; }

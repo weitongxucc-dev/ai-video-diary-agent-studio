@@ -1071,3 +1071,65 @@ def test_person_model_child_rejects_non_host_probe_before_exec(tmp_path, unit_ke
         run_granted_command(scheduler, grant, [sys.executable, "-c", f"open({str(marker)!r},'w').close()"],
             timeout_seconds=1, max_stdout_bytes=100, max_stderr_bytes=100)
     assert not marker.exists() and not scheduler.children
+
+
+@pytest.mark.parametrize("unit_key", ["voice:input", "avatar_lipsync:input"])
+def test_media_preview_child_requires_real_probe_and_declared_budget(tmp_path, unit_key):
+    from app.device_scheduler import RecoveryBlocked
+    grant = Grant("preview-request", "local", "media_preview", "preview", unit_key,
+                  "digest", 1, 1, "token", tmp_path / "db")
+    scheduler = RecordingScheduler()
+    scheduler.assert_grant = lambda current: None
+    scheduler.resources = SimpleNamespace(scene_runtime_limits=lambda current: None)
+    marker = tmp_path / "must-not-exec"
+    with pytest.raises(RecoveryBlocked, match="真实资源探针"):
+        run_granted_command(scheduler, grant, [sys.executable, "-c", f"open({str(marker)!r},'w').close()"],
+                            timeout_seconds=1, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert not marker.exists() and not scheduler.children
+
+
+@pytest.mark.parametrize("scenario", ["allowed", "register_refused", "cancel_before_exec", "revoked", "resource_limit", "timeout"])
+def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeypatch, scenario):
+    """Real POSIX children, controlled resource facts; no host capacity sampling/model."""
+    from app.host_resource_probes import SceneRuntimeLimits
+    import app.granted_subprocess as commands
+    grant = Grant("preview-request", "local", "media_preview", "preview", "voice:input",
+                  "digest", 1, 1, "token", tmp_path / "db")
+    cancel = threading.Event()
+    class PreviewScheduler(RecordingScheduler):
+        samples = 0
+        def assert_grant(self, current):
+            assert current == grant
+            self.samples += 1
+            if scenario == "revoked" and self.samples >= 4:
+                raise GrantedCommandCancelled("synthetic permit revoked")
+        def register_child(self, current, child):
+            self.assert_grant(current)
+            if scenario == "register_refused":
+                raise PermissionError("synthetic child registration refused")
+            self.children.append(child)
+            if scenario == "cancel_before_exec":
+                cancel.set()
+    scheduler = PreviewScheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                                            budget=HostBudget(100,1,2**63,1,2**63,1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current: SceneRuntimeLimits(10**9,16,1,2**63,0.05))
+    def controlled_sample(*args):
+        if scenario == "resource_limit":
+            raise GrantedCommandResourceUnavailable("synthetic resource sample limit")
+    monkeypatch.setattr(commands, "_check_scene_runtime", controlled_sample)
+    marker = tmp_path / "executed"
+    argv = [sys.executable, "-c", f"import time;open({str(marker)!r},'w').write('allowed');time.sleep({0 if scenario=='allowed' else 2})"]
+    expected = {"register_refused":PermissionError,"cancel_before_exec":GrantedCommandCancelled,
+                "revoked":GrantedCommandCancelled,"resource_limit":GrantedCommandResourceUnavailable,"timeout":GrantedCommandTimeout}
+    if scenario == "allowed":
+        assert run_granted_command(scheduler,grant,argv,timeout_seconds=1,max_stdout_bytes=100,max_stderr_bytes=100,cancel_event=cancel).returncode==0
+        assert marker.read_text()=="allowed" and len(scheduler.children)==1
+    else:
+        with pytest.raises(expected[scenario]) as refusal:
+            run_granted_command(scheduler,grant,argv,timeout_seconds=0.3,max_stdout_bytes=100,max_stderr_bytes=100,cancel_event=cancel)
+        assert refusal.value.command_diagnostics["group_released"] is True
+        if scenario in {"register_refused","cancel_before_exec"}:
+            assert refusal.value.command_diagnostics["exec_ack"] is False
+            assert not marker.exists()
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
