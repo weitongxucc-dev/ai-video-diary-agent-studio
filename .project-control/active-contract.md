@@ -457,6 +457,8 @@ D旧profile迁移0cb7b000为测试源码交付，不是CI通过：整指定集37
 
 E新QA-V2-E-SEARCH-RESIDUAL仅只读实际dc4bed2源码和D准确0cb7b000候选/失败日志；在自有/tmp隔离控制复现四个montage replacement_clip_unavailable及person缓存来源身份残差，确认是fixture失配、召回权限/语义还是实际漏接独立人物。不得写产品/测试仓库文件，不重复全仓，不改D原case、不赋所有私有或诊断权限。临时合成媒体/TestClient/mock许可允许，模型/Pi/App服务/GUI/Key/用户数据/账户/安装/远端仍不允许；交准确根因和必要源writer差额，不冒称已修。
 
+UI新QA-V2-UI-MATERIAL-TURN-FAILURE只读root准确dc4bed2 main.py中_material_assistant_turn真实工具返回后的对象范围/schema校验分支：当前try仅覆盖run_material_turn，后续HTTPException/验证拒绝不一定finish_turn。先在自有/tmp控制复现，无写main/C测试权；若成立只写一个新增tests/test_material_turn_failure.py隔离HTTP负例，准确被拒轮次持久状态/后续一次发送与草稿版本，不弱化结果范围校验。main当前C唯一owner，源修复提案先交主控串行转交，不能新增第二handler/宽泛catch。可信临时成员/库/合成对象和Pi工具替身允许，不真Pi/模型/App服务/GUI/用户数据/Key/媒体/远端；准确失败证据与最小修正建议，不把推测标已证实。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
