@@ -55,7 +55,10 @@ def library(tmp_path, monkeypatch):
             "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", json.dumps(asdict(script), default=str),
                                       script.updated_at.isoformat()),
         )
-    repo.confirm_creation_task_script("local", task.id, script.id, title=script.title, sections=script.sections)
+    repo.confirm_creation_task_script(
+        "local", task.id, script.id, title=script.title, sections=script.sections,
+        expected_updated_at=script.updated_at,
+    )
     monkeypatch.setattr(main, "production_repo", repo)
     monkeypatch.setattr(main, "source_repository", sources)
     # Use the actual routes without starting background workers/models.
@@ -239,6 +242,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     repo.confirm_creation_task_script(
         "local", "task_original", "script_original", title="模块化介绍",
         sections=[CreationTaskScriptSection(**section) for section in payload["sections"]],
+        expected_updated_at=repo.get_creation_task_script("local", "script_original").updated_at,
     )
     entry = save(client)
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()

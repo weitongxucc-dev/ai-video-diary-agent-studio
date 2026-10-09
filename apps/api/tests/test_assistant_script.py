@@ -310,7 +310,8 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
 
     saved = repo.get_creation_task_script("local", script_id)
     repo.confirm_creation_task_script("local", "task-one", script_id,
-                                      title=saved.title, sections=saved.sections)
+                                      title=saved.title, sections=saved.sections,
+                                      expected_updated_at=saved.updated_at)
     assert client.post(base + "/script-draft", json=body).status_code == 409
     for stage in ("script", "topic", "montage", "review", "subtitle_cover"):
         response = client.post(base + "/turn", headers={"X-Local-Member-Token": token}, json=

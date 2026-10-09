@@ -385,13 +385,21 @@ def test_existing_draft_requires_explicit_current_revision_and_confirmed_script_
     assert read_back.source_script_id == replacement.id
     assert read_back.source_run_id == replacement.run_id
     assert read_back.sections[0].content == REPLY_TEXT
-    stale_retry_task, stale_retry = repo.confirm_creation_task_script(
+    with pytest.raises(ValueError, match="修订已变化"):
+        repo.confirm_creation_task_script(
+            WORKSPACE, task.id, replacement.id,
+            title="不能覆盖的迟到回复", sections=[replace(before.sections[0], content="迟到覆盖")],
+            expected_updated_at=before.updated_at,
+        )
+    assert repo.get_creation_task(WORKSPACE, task.id).confirmed_script_id == replacement.id
+    assert repo.get_creation_task_script(WORKSPACE, replacement.id) == confirmed
+    replay_task, replay_script = repo.confirm_creation_task_script(
         WORKSPACE, task.id, replacement.id,
-        title="不能覆盖的迟到回复", sections=[replace(before.sections[0], content="迟到覆盖")],
-        expected_updated_at=before.updated_at,
+        title="确认后的重复请求", sections=[replace(before.sections[0], content="重放不能覆盖")],
+        expected_updated_at=confirmed.updated_at,
     )
-    assert stale_retry_task.confirmed_script_id == replacement.id
-    assert stale_retry.sections == before.sections
+    assert replay_task.confirmed_script_id == replacement.id
+    assert replay_script == confirmed
     with pytest.raises(ValueError, match="已确认文案不能"):
         transfer(
             repo,

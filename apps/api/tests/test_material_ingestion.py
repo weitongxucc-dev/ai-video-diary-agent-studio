@@ -844,7 +844,10 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     )
     repo.complete_script_generation(run.id, initial)
     revised_sections = [CreationTaskScriptSection("section-one", "开头", "用户改过的内容", "产品画面", ["ref-one"])]
-    revised = repo.update_assistant_script_draft("one", "task-one", initial.id, title="新版草稿", sections=revised_sections)
+    revised = repo.update_assistant_script_draft(
+        "one", "task-one", initial.id, title="新版草稿", sections=revised_sections,
+        expected_updated_at=initial.updated_at,
+    )
     assert (revised.id, revised.run_id, revised.topic_id, revised.selection_status) == (initial.id, run.id, "topic-one", "draft")
     assert revised.sections == revised_sections
     assert repo.get_creation_task("one", "task-one").confirmed_script_id is None
@@ -857,7 +860,15 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
         restarted.update_assistant_script_draft(
             "one", "task-one", initial.id, title="伪来源",
             sections=[replace(revised_sections[0], evidence_reference_ids=["unknown"])],
+            expected_updated_at=revised.updated_at,
         )
-    restarted.confirm_creation_task_script("one", "task-one", initial.id, title="用户确认", sections=revised_sections)
+    restarted.confirm_creation_task_script(
+        "one", "task-one", initial.id, title="用户确认", sections=revised_sections,
+        expected_updated_at=revised.updated_at,
+    )
+    confirmed = restarted.get_creation_task_script("one", initial.id)
     with pytest.raises(ValueError, match="不允许修改"):
-        restarted.update_assistant_script_draft("one", "task-one", initial.id, title="越过确认", sections=revised_sections)
+        restarted.update_assistant_script_draft(
+            "one", "task-one", initial.id, title="越过确认", sections=revised_sections,
+            expected_updated_at=confirmed.updated_at,
+        )

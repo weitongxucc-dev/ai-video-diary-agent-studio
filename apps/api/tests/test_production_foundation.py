@@ -3019,7 +3019,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     ]
     confirmed = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{script['id']}/confirm",
-        json={"title": "用户确认后的文案", "sections": edited_sections},
+        json={"title": "用户确认后的文案", "sections": edited_sections,
+              "expected_updated_at": script["updated_at"]},
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["task"]["stage"] == "narration"
@@ -3074,11 +3075,12 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
         json={"title": "直接修订", "sections": [
             {**asdict(section), "content": "直接压缩正文，无需再次调用文字模型。"} for section in saved_script.sections
-        ]},
+        ], "expected_updated_at": saved_script.updated_at.isoformat()},
     )
     assert direct_repair.status_code == 200, direct_repair.text
     assert direct_repair.json()["task"]["stage_status"] == "not_started"
     assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
+    saved_script = reloaded.get_creation_task_script("workspace_a", saved_script.id)
     assert len(script_calls) == 1
     assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
     reloaded.start_creation_task_narration("workspace_a", task_id)
@@ -3118,6 +3120,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
             )
             for section in saved_script.sections
         ],
+        expected_updated_at=saved_script.updated_at,
     )
     assert repaired_task.stage == "narration"
     assert repaired_task.stage_status == "not_started"
