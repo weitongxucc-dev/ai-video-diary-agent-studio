@@ -578,6 +578,14 @@ Home核验进一步证明foundation路由没有向readiness传当前可信reader
 
 仅owned合成SQLite/WAV/video字节和TestClient，验当前本人/其他成员private/无效身份、同一现配来源与旧字段矛盾、源失联与资格计数、缺参考/缺模型独立事实；无真实用户库、Key、网络抓取/服务/GUI/Pi/模型/下载/远端。保护B99四文件脏树不移动；交clean差额与报告后主控组合并因真实API源码改变重新构建API，未改的模型/媒体质量不重复。问题开放直到相应真实用户路径有证据。
 
+### QA-V2-UI-CONVERSATION-HEADER：多个会话下共享头部真实挤压
+
+B-FOUNDATION-FACTS已cf3ee279交付retain、组合ef76fd8并推draft113，新Web/API owned ARM包启动ready、输入摘要e0edb5c4…；当前原生截图gui-second-home.json实际为模板页且诊断正文展开，不据“未由主控操作”断言默认状态（用户可能并行操作），但明确看到有历史选择器时头部范围、新对话和诊断控件竖排。原UI终端新单从准确ef76fd8，只独占modern-overrides.css会话共享头部相关规则及owned静态渲染证据。以真实长标题、诊断/新建/历史选择器的动态组合统一min-width、换行和选择器宽度；默认紧凑、文字横排、不溢出，长标题可截断并保留可识别原义，恢复选项可完整辨识。输入/草稿/停止/命令/受控展开逻辑、API/Home/EditorShell/组件业务均不改，三栏/13px/56px保持。
+
+可用已有真实Panel和真实CSS作合成静态fixture，覆盖有无历史、长名称与展开诊断、当前真实窗口尺寸，不造产品服务/DOM操作；已装公共Chrome最多一次有界捕获，不足就准确未验，不下载、不触及用户浏览器profile。原生同包与实际交互由主控继续具名验证；旧source和fixture不称最终可见通过。原用户包/资料与当前root owned实例不由worker操作，root自行释放并按实际仅Web差额重建；API源码和二进制未变即可复用，不再重复构建/模型检查。
+
+本单 task_a12d6334a6c4 / ctx_5558e369363b 已交 e78f5d9fcb33f561b1299d549781d818f42b8a2d，主控审查并retain、处理消息后ACK；UI本单源码权结束。机械组合公开候选 cfaa83ee914427f1d6765a7ca0c7fb5825de4de4，主控第三轮owned ARM包输入摘要6c819fd5…、API/Web ready；仅首页当前单历史/收起诊断的可见状态有原生截图，不推导其他操作或展开组合通过。三轮owned实例与API/Web均正向核实退出、端口无监听，运行租约结束，owned资料和证据保留；真实用户实例及数据未改。原生业务操作仍未验证，旧Task/运行权不恢复；后续独立实施或验收须具名新单，Issue开放与否以GitHub实时事实为准。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
