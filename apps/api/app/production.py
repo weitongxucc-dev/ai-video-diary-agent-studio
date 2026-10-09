@@ -8604,8 +8604,15 @@ class ProductionRepository:
         }
         request_payload.pop("script_id")
         request_payload.pop("run_id")
+        # Revision tokens fence a new write, but a retry may observe revisions
+        # advanced by that same successful write. Keep them out of the stable
+        # request identity so the persisted result can be replayed after readback.
+        fingerprint_payload = {
+            key: value for key, value in request_payload.items()
+            if key not in {"expected_plan_updated_at", "expected_task_updated_at", "expected_script_updated_at"}
+        }
         request_fingerprint = hashlib.sha256(
-            _json_object(request_payload).encode("utf-8")
+            _json_object(fingerprint_payload).encode("utf-8")
         ).hexdigest()
         event_id = _assistant_reply_request_event_id(
             "assistant_reply_script_transferred", workspace_id, request_id,

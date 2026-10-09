@@ -736,7 +736,6 @@ def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp
     monkeypatch.setattr(main_module, "conversation_repo", repo)
     conversation = repo.current_or_create("workspace-b", "member-caller", "home", "home")
     client = TestClient(main_module.app)
-    conversation_id = "11111111-1111-4111-8111-111111111111"
     rejected = client.post("/api/assistant/plan/turn", json={"message": "做视频", "conversation_id": "bad"})
     assert rejected.status_code == 422
     assert seen == []

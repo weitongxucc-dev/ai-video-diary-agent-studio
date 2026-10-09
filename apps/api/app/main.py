@@ -274,6 +274,8 @@ from app.schemas import (
     CreationTaskTopicGenerateRequest,
     CreationTaskTopicsResponse,
     CreationTaskScriptConfirmRequest,
+    CreationTaskScriptDraftRequest,
+    AssistantReplyScriptTransferRequest,
     CreationTaskScriptResponse,
     CreationTaskScriptGenerateRequest,
     CreationTaskScriptsResponse,
@@ -3394,6 +3396,8 @@ def _creation_task_scripts_response(
     task: CreationTask,
 ) -> CreationTaskScriptsResponse:
     latest_run = production_repo.latest_script_generation_run(workspace_id, task.id)
+    if latest_run is not None and latest_run.run_kind != "generation":
+        latest_run = None
     route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(workspace_id), latest_run)
     return CreationTaskScriptsResponse.model_validate(
         {
@@ -4648,7 +4652,7 @@ def _workspace_assistant_plan_turn(
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
     caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    turn_id, created, _turn = _begin_assistant_turn(
+    turn_id, created, turn = _begin_assistant_turn(
         request, str(payload.conversation_id), "home", "home", payload.message.strip(),
         payload.client_request_id, payload.expected_draft_version, {"kind": "home"}, on_event,
     )
@@ -4743,12 +4747,22 @@ def _material_assistant_turn(
     if _assistant_text_without_credentials(message, workspace_id) != message:
         raise HTTPException(status_code=422, detail="请勿在素材要求中粘贴密钥或口令。")
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
-    turn_id, created, _turn = _begin_assistant_turn(
+    turn_id, created, turn = _begin_assistant_turn(
         request, str(payload.conversation_id), "material", None, message,
         payload.client_request_id, payload.expected_draft_version,
         {"kind": "material", "selection": selection}, on_event,
     )
     if not created:
+        if turn["status"] == "failed":
+            failure = turn.get("result") or {}
+            return MaterialAssistantTurnResponse(
+                reply=str(failure.get("message") or "上一轮未能完成，请检查后明确重试。"),
+                provider=workspace_settings_for_turn.effective_llm_provider,
+                model=workspace_settings_for_turn.effective_llm_model,
+                turn_id=turn_id,
+                turn_status="failed",
+                draft_version=payload.expected_draft_version + 1,
+            )
         return _replay_assistant_turn(
             turn_id, MaterialAssistantTurnResponse,
             provider=workspace_settings_for_turn.effective_llm_provider,
@@ -4784,28 +4798,42 @@ def _material_assistant_turn(
             "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
         })
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    reply = _assistant_text_without_credentials(reply, workspace_id)
-    material_result = None
-    if isinstance(result, dict) and result.get("kind") == "material_result":
-        raw = result.get("material_result")
-        if isinstance(raw, dict):
-            if selection is None or asset is None:
-                raise HTTPException(status_code=502, detail="未选择素材时不能修改素材标签。")
-            expected_asset_ref = f"asset:{asset.id}"
-            expected_segment_ref = f"segment:{selection['segment_id']}" if selection["scope"] == "segment" else None
-            if (raw.get("scope") != selection["scope"]
-                or raw.get("asset_ref") != expected_asset_ref
-                or raw.get("segment_ref") != expected_segment_ref):
-                raise HTTPException(status_code=503, detail="所选素材回读与本轮选择不一致，未能确认结果")
-            material_result = MaterialAssistantResultResponse.model_validate(raw)
-    response = MaterialAssistantTurnResponse(
-        reply=reply,
-        provider=workspace_settings_for_turn.effective_llm_provider,
-        model=workspace_settings_for_turn.effective_llm_model,
-        material_result=material_result,
-        turn_id=turn_id,
-        draft_version=payload.expected_draft_version + 1,
-    )
+    try:
+        reply = _assistant_text_without_credentials(reply, workspace_id)
+        material_result = None
+        if isinstance(result, dict) and result.get("kind") == "material_result":
+            raw = result.get("material_result")
+            if isinstance(raw, dict):
+                if selection is None or asset is None:
+                    raise HTTPException(status_code=502, detail="未选择素材时不能修改素材标签。")
+                expected_asset_ref = f"asset:{asset.id}"
+                expected_segment_ref = f"segment:{selection['segment_id']}" if selection["scope"] == "segment" else None
+                if (raw.get("scope") != selection["scope"]
+                    or raw.get("asset_ref") != expected_asset_ref
+                    or raw.get("segment_ref") != expected_segment_ref):
+                    raise HTTPException(status_code=503, detail="所选素材回读与本轮选择不一致，未能确认结果")
+                material_result = MaterialAssistantResultResponse.model_validate(raw)
+        response = MaterialAssistantTurnResponse(
+            reply=reply,
+            provider=workspace_settings_for_turn.effective_llm_provider,
+            model=workspace_settings_for_turn.effective_llm_model,
+            material_result=material_result,
+            turn_id=turn_id,
+            draft_version=payload.expected_draft_version + 1,
+        )
+    except HTTPException as exc:
+        forget_turn_control(turn_id)
+        detail = exc.detail if isinstance(exc.detail, str) else "素材结果没有通过当前选择核对，未写入。"
+        conversation_repo.finish_turn(turn_id, "failed", result={
+            "kind": "failure", "message": _assistant_stream_safe_text(detail, workspace_id),
+        })
+        raise
+    except ValidationError as exc:
+        forget_turn_control(turn_id)
+        conversation_repo.finish_turn(turn_id, "failed", result={
+            "kind": "failure", "message": "素材结果未通过字段校验，未写入。",
+        })
+        raise HTTPException(status_code=400, detail="素材结果未通过字段校验，未写入。") from exc
     forget_turn_control(turn_id)
     conversation_repo.finish_turn(
         turn_id, "completed", reply,
@@ -4840,6 +4868,19 @@ def confirm_creation_plan(
     payload: CreationPlanConfirmRequest,
 ) -> CreationPlanResponse:
     workspace_id = current_workspace_id(request)
+    reply_reference = None
+    reply_request_id = None
+    reply_owner_id = None
+    local_diagnostic = False
+    if payload.reply_origin is not None:
+        origin = payload.reply_origin
+        reply_reference, _reply_text, reply_owner_id = _verified_assistant_reply(
+            request, str(origin.conversation_id), str(origin.turn_id), None,
+        )
+        request_owner_id, local_diagnostic = _content_reader(request, workspace_id)
+        if not request_owner_id or request_owner_id != reply_owner_id:
+            raise HTTPException(status_code=403, detail="对话成员身份已变化，请重新打开当前工作区。")
+        reply_request_id = str(origin.request_id)
     plan = _creation_plan_preflight(request, workspace_id, payload)
     if payload.preflight_fingerprint != plan.preflight_fingerprint:
         raise HTTPException(
@@ -4879,8 +4920,10 @@ def confirm_creation_plan(
         # 方案与任务的归属只认这次请求的可信身份，调用方自填的值不参与判断。
         saved_plan, saved_task = production_repo.confirm_creation_plan(
             plan, task,
-            verified_owner_user_id=_content_reader(request, workspace_id)[0],
-            local_diagnostic=_content_reader(request, workspace_id)[1],
+            verified_owner_user_id=reply_owner_id or _content_reader(request, workspace_id)[0],
+            local_diagnostic=local_diagnostic if reply_reference is not None else _content_reader(request, workspace_id)[1],
+            reply_reference=reply_reference,
+            request_id=reply_request_id,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -5495,6 +5538,18 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
     task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
     scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
     draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
+    reply_event = next((event for event in production_repo.list_task_events(workspace_id, task.id)
+                        if event.event_type == "assistant_reply_plan_confirmed"
+                        and event.payload.get("plan_id") == plan.id), None)
+    reply_reference = reply_event.payload.get("reply_reference") if reply_event else None
+    reply_origin = ({
+        "conversation_id": reply_reference["conversation_id"],
+        "turn_id": reply_reference["turn_id"],
+        "request_id": reply_event.payload["request_id"],
+    } if isinstance(reply_reference, dict)
+        and isinstance(reply_reference.get("conversation_id"), str)
+        and isinstance(reply_reference.get("turn_id"), str)
+        and isinstance(reply_event.payload.get("request_id"), str) else None)
     return {
         "task_id": task.id,
         "goal": plan.goal,
@@ -5505,9 +5560,130 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
         "sources": [{"reference_id": source.reference_id, "title": source.title,
                      "text": source.text} for source in sources],
         "draft": ({"id": draft.id, "title": draft.title,
+                   "updated_at": draft.updated_at,
                    "sections": [asdict(section) for section in draft.sections]}
                   if draft is not None else None),
+        "reply_origin": reply_origin,
     }
+
+
+def _verified_assistant_reply(request: Request, conversation_id: str, turn_id: str, task_id: str | None) -> tuple[dict[str, str], str, str]:
+    workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
+    if conversation["scope_kind"] == "material" or (
+        task_id is None and conversation["scope_kind"] != "home"
+    ) or (
+        task_id is not None and conversation["scope_kind"] == "task" and conversation["scope_id"] != task_id
+    ):
+        raise HTTPException(status_code=409, detail="只能把当前任务或首页对话中的完成回复带入文案草稿。")
+    turn = conversation_repo.get_turn(turn_id)
+    result = turn.get("result") if turn else None
+    response = result.get("response") if isinstance(result, dict) else None
+    assistant_text = str(turn.get("assistant_text") or "") if turn else ""
+    if (not turn or turn.get("conversation_id") != conversation_id
+        or turn.get("status") != "completed" or not assistant_text.strip()
+        or not isinstance(response, dict) or response.get("reply") != assistant_text):
+        raise HTTPException(status_code=409, detail="这条回复尚未完整保存或内容已变化，请重新读取对话。")
+    reference = {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "response_digest": hashlib.sha256(assistant_text.encode("utf-8")).hexdigest(),
+    }
+    return reference, assistant_text, member_id
+
+
+def _require_current_script_inputs(
+    request: Request, workspace_id: str, plan: CreationPlan,
+    input_references: list[dict[str, object]],
+) -> tuple[str | None, bool]:
+    reader_id, local_diagnostic = _content_reader(request, workspace_id)
+    knowledge_by_id = {item.id: item for item in plan.knowledge_references}
+    source_by_id = {item.id: item for item in plan.source_references}
+    try:
+        for reference in input_references:
+            kind = reference.get("kind")
+            object_id = str(reference.get("object_id") or "")
+            identity = str(reference.get("version_or_identity") or "")
+            if kind == "knowledge":
+                item = source_repository.get_knowledge_reference_readable_by(
+                    workspace_id, object_id, identity, user_id=reader_id,
+                    local_diagnostic=local_diagnostic,
+                )
+                planned = knowledge_by_id.get(object_id)
+                if (planned is None or item.version != planned.version
+                    or item.title != planned.title
+                    or item.authorization != planned.authorization
+                    or item.ownership != planned.ownership
+                    or not content_allows_use(item.use_state, "reference")
+                    or item.use_state == "not_for_automation"):
+                    raise ValueError("知识资料的当前版本、许可或使用范围已变化")
+            elif kind == "source":
+                item = source_repository.get_source_item_for_use(workspace_id, object_id, purpose="reference")
+                planned = source_by_id.get(object_id)
+                if (planned is None or _source_item_identity(item) != planned.identity
+                    or item.connector_id != planned.connector_id or item.title != planned.title
+                    or item.license != planned.license
+                    or not content_allows_use(item.use_state, "reference")
+                    or item.use_state == "not_for_automation"):
+                    raise ValueError("信息源身份、许可或使用范围已变化")
+            else:
+                raise ValueError("文案引用来源类型无效")
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "assistant_reply_source_changed",
+            "message": "当前任务资料已不可用或使用范围已变化，文案没有写入。",
+            "repair_action": "重新核对任务资料、固定版本和用途后再试。",
+        }) from exc
+    return reader_id, local_diagnostic
+
+
+@app.post(
+    "/api/creation-tasks/{task_id}/assistant/reply-transfer",
+    response_model=CreationTaskScriptsResponse,
+)
+def transfer_assistant_reply_to_script(
+    task_id: str, request: Request, payload: AssistantReplyScriptTransferRequest,
+) -> CreationTaskScriptsResponse:
+    workspace_id = current_workspace_id(request)
+    reference, reply_text, member_id = _verified_assistant_reply(
+        request, str(payload.conversation_id), str(payload.turn_id), task_id,
+    )
+    task, plan, topic, _sources, input_references = _assistant_script_inputs(workspace_id, task_id)
+    reader_id, _local_diagnostic = _require_current_script_inputs(
+        request, workspace_id, plan, input_references,
+    )
+    if reader_id != member_id:
+        raise HTTPException(status_code=403, detail="对话成员身份已变化，请重新打开当前工作区。")
+    scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
+    latest = scripts[0] if scripts else None
+    script_id = latest.id if latest and payload.replace_existing_script_id == latest.id else f"script_{uuid4().hex[:12]}"
+    run_id = f"script_run_{uuid4().hex[:12]}"
+    title = latest.title if latest and script_id == latest.id else f"对话回复草稿 · {topic.title[:80]}"
+    section = CreationTaskScriptSection(
+        id=f"reply_section_{payload.request_id.hex}", title=topic.title[:160] or "对话回复",
+        content=reply_text, visual_prompt="", evidence_reference_ids=[],
+    )
+    try:
+        task, _run, _script = production_repo.transfer_completed_assistant_reply_to_script(
+            workspace_id, task_id, request_id=str(payload.request_id),
+            reply_reference=reference, reply_text=reply_text,
+            plan_conversion_request_id=(str(payload.plan_conversion_request_id) if payload.plan_conversion_request_id else None),
+            expected_plan_id=plan.id, expected_plan_updated_at=payload.expected_plan_updated_at,
+            expected_topic_id=topic.id, expected_task_updated_at=payload.expected_task_updated_at,
+            input_references=input_references, script_id=script_id, run_id=run_id,
+            title=title, language=plan.language, sections=[section],
+            replace_existing_script_id=payload.replace_existing_script_id,
+            expected_script_updated_at=payload.expected_script_updated_at,
+            verified_owner_user_id=reader_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="当前任务或方案不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "assistant_reply_transfer_conflict",
+            "message": "当前任务或草稿已变化，回复没有写入文案。",
+            "repair_action": str(exc),
+        }) from exc
+    return _creation_task_scripts_response(workspace_id, task)
 
 
 @app.post(
@@ -5515,23 +5691,29 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
     response_model=CreationTaskScriptResponse,
 )
 def save_assistant_script_draft(
-    task_id: str, request: Request, payload: CreationTaskScriptConfirmRequest,
+    task_id: str, request: Request, payload: CreationTaskScriptDraftRequest,
 ) -> CreationTaskScriptResponse:
     workspace_id = current_workspace_id(request)
     task, plan, topic, _, input_references = _assistant_script_inputs(workspace_id, task_id)
+    _require_current_script_inputs(request, workspace_id, plan, input_references)
     sections = [CreationTaskScriptSection(**section.model_dump()) for section in payload.sections]
     allowed = {str(item["reference_id"]) for item in input_references}
     if any(not set(section.evidence_reference_ids).issubset(allowed) for section in sections):
         raise HTTPException(status_code=422, detail="文案引用了本次任务以外的资料")
     scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
     if scripts and scripts[0].selection_status == "draft" and task.stage_status == "waiting_for_user":
+        if payload.expected_updated_at is None:
+            raise HTTPException(status_code=422, detail="更新文案草稿必须提供当前 updated_at")
         try:
             draft = production_repo.update_assistant_script_draft(
                 workspace_id, task_id, scripts[0].id, title=payload.title, sections=sections,
+                expected_updated_at=payload.expected_updated_at,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
+        if payload.expected_updated_at is not None:
+            raise HTTPException(status_code=409, detail="草稿版本已变化，请重新读取后再保存")
         run = ScriptGenerationRun(
             id=f"script_run_{uuid4().hex[:12]}", workspace_id=workspace_id,
             task_id=task_id, plan_id=plan.id, topic_id=topic.id, status="running",
@@ -6230,6 +6412,12 @@ def confirm_creation_task_script(
         raise HTTPException(status_code=404, detail="creation task script not found")
     if current_script.reused_from_entry_id:
         _readable_script_library_entry(request, workspace_id, current_script.reused_from_entry_id)
+    elif current_script.run_id:
+        try:
+            generation_run = production_repo.get_script_generation_run(workspace_id, current_script.run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="文案来源记录已不可用，请重新读取任务。") from exc
+        _require_current_script_inputs(request, workspace_id, plan, generation_run.input_references)
     estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in payload.sections))
     if estimated_seconds > plan.duration_target_seconds:
         raise HTTPException(status_code=422, detail=(
@@ -6246,6 +6434,7 @@ def confirm_creation_task_script(
                 CreationTaskScriptSection(**section.model_dump())
                 for section in payload.sections
             ],
+            expected_updated_at=payload.expected_updated_at,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task script not found") from exc
@@ -9073,12 +9262,13 @@ def preview_creation_task_edit(
             retryable=True,
         )
     invalidated_refs = _logical_montage_output_refs(plan)
+    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     candidates = [
         candidate
         for candidate in _creation_task_montage_candidates(
             workspace_id, plan, clip, automation_only=True,
-            viewer_user_id=_content_reader(request, workspace_id)[0],
-            local_diagnostic=_content_reader(request, workspace_id)[1],
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
         )
         if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id)
     ]
@@ -9091,6 +9281,8 @@ def preview_creation_task_edit(
             usage_roles=["a_roll", "b_roll"],
             min_duration_seconds=slot_duration,
             limit=24,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
         )
         candidate_by_ref = {
             (f"asset:{candidate.asset_id}", f"segment:{candidate.segment_id}"): candidate

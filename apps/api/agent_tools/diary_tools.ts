@@ -10,6 +10,7 @@ const playheadMs = process.env.AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS
   : null;
 let previewCreated = false;
 let currentTaskRead = false;
+let currentScriptDraftUpdatedAt: string | null = null;
 
 async function request(path: string, init?: RequestInit) {
   if (!apiBase) throw new Error("本地业务服务不可用");
@@ -297,6 +298,8 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
       const scriptContext = stage === "script"
         ? await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/script-context`)
         : null;
+      currentScriptDraftUpdatedAt = typeof scriptContext?.draft?.updated_at === "string"
+        ? scriptContext.draft.updated_at : null;
       const allClips = task.montage?.clips || [];
       const selectedClipIds = new Set(selectedRefs.filter((ref: string) => ref.startsWith("clip:")).map((ref: string) => ref.slice(5)));
       const clips = allClips.filter((clip: Record<string, unknown>, index: number) => index < 24 || selectedClipIds.has(String(clip.id)))
@@ -427,8 +430,9 @@ export default function (pi: { registerTool: (tool: unknown) => void }) {
         method: "POST",
         body: JSON.stringify({ title: params.title, sections: params.sections.map((section, index) => ({
           ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
-        })) }),
+        })), ...(currentScriptDraftUpdatedAt ? { expected_updated_at: currentScriptDraftUpdatedAt } : {}) }),
       });
+      currentScriptDraftUpdatedAt = typeof draft.updated_at === "string" ? draft.updated_at : currentScriptDraftUpdatedAt;
       previewCreated = true;
       const preview = { script_id: draft.id };
       return {

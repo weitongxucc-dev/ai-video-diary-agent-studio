@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, CreationPlanKnowledgeReference, CreationTask, ProductionRepository
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
@@ -229,12 +229,23 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         task = main_module._creation_task_or_404(workspace_id, task_id)
         if task.stage != "script" or task.confirmed_script_id:
             raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
-        return task, repo.get_creation_plan(workspace_id, task.plan_id), topic, (source,), [
-            {"reference_id": source.reference_id, "kind": "knowledge", "object_id": "one"},
-        ]
+        plan = repo.get_creation_plan(workspace_id, task.plan_id)
+        plan.knowledge_references = [CreationPlanKnowledgeReference(
+            id="one", version="v1", title=source.title, authorization="available", ownership="workspace",
+        )]
+        return task, plan, topic, (source,), [{
+            "reference_id": source.reference_id, "kind": "knowledge", "object_id": "one",
+            "version_or_identity": "v1", "title": source.title,
+        }]
 
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "_assistant_script_inputs", inputs)
+    monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
+        get_knowledge_reference_readable_by=lambda *_args, **_kwargs: SimpleNamespace(
+            version="v1", title="已授权资料", authorization="available",
+            ownership="workspace", use_state="available",
+        ),
+    ))
     client = TestClient(main_module.app)
     base = "/api/creation-tasks/task-one/assistant"
     context = client.get(base + "/script-context")
@@ -255,9 +266,17 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert repo.get_creation_task("local", "task-one").confirmed_script_id is None
     second = client.post(base + "/script-draft", json={
         **body, "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
+        "expected_updated_at": first.json()["updated_at"],
     })
     assert second.status_code == 200 and second.json()["id"] == script_id
     assert len(repo.list_creation_task_scripts("local", "task-one")) == 1
+    stale = client.post(base + "/script-draft", json={
+        **body,
+        "sections": [{**body["sections"][0], "content": "迟到的旧版本"}],
+        "expected_updated_at": first.json()["updated_at"],
+    })
+    assert stale.status_code == 409
+    assert repo.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
 
     def run_turn(_settings, **kwargs):
         if kwargs["stage"] == "script":

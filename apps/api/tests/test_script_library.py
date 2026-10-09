@@ -104,8 +104,14 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
     assert draft["sections"][0]["id"] != "section_original"
     assert draft["sections"][0]["evidence_reference_ids"] == ["knowledge:knowledge_own:1"]
     assert client.get(f"/api/creation-tasks/{task.id}").status_code == 200
-    confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
+    stale_confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
         "title": draft["title"], "sections": draft["sections"],
+        "expected_updated_at": "2000-01-01T00:00:00+00:00",
+    })
+    assert stale_confirm.status_code == 409
+    assert repo.get_creation_task(task.workspace_id, task.id).confirmed_script_id is None
+    confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
+        "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     })
     assert confirm.status_code == 200, confirm.text
     assert repo.get_creation_task("local", task.id).confirmed_script_id == draft["id"]
@@ -130,7 +136,7 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
     assert save(client)["version"] == 2  # Owned confirmed history can still be saved.
     draft = created["script"]
     assert client.post(f"/api/creation-tasks/{created['task_id']}/scripts/{draft['id']}/confirm", json={
-        "title": draft["title"], "sections": draft["sections"],
+        "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     }).status_code == 409
     assert repo.get_creation_task("local", created["task_id"]).confirmed_script_id is None
     with sources._connect() as conn:

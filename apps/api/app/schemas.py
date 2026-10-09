@@ -875,8 +875,17 @@ class CreationPlanPreviewRequest(CreationPlanDefaultsRequest):
     pass
 
 
+class AssistantReplyPlanOriginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    turn_id: UUID
+    request_id: UUID
+
+
 class CreationPlanConfirmRequest(CreationPlanDefaultsRequest):
     preflight_fingerprint: str = Field(min_length=64, max_length=64)
+    reply_origin: AssistantReplyPlanOriginRequest | None = None
 
 
 class CreationPlanKnowledgeReferenceResponse(BaseModel):
@@ -1091,6 +1100,39 @@ class CreationTaskScriptConfirmRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sections: list[CreationTaskScriptSectionRequest] = Field(min_length=1, max_length=20)
 
+    expected_updated_at: datetime
+
+
+class CreationTaskScriptDraftSectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=4000)
+    visual_prompt: str = Field(default="", max_length=1000)
+    evidence_reference_ids: list[str] = Field(default_factory=list, max_length=12)
+
+
+class CreationTaskScriptDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(min_length=1, max_length=20)
+    expected_updated_at: datetime | None = None
+
+
+class AssistantReplyScriptTransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    turn_id: UUID
+    request_id: UUID
+    plan_conversion_request_id: UUID | None = None
+    expected_plan_updated_at: datetime
+    expected_task_updated_at: datetime
+    replace_existing_script_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_script_updated_at: datetime | None = None
+
 
 class CreationTaskScriptSectionResponse(BaseModel):
     id: str
@@ -1125,6 +1167,7 @@ class CreationTaskScriptResponse(BaseModel):
     updated_at: datetime
     confirmed_at: datetime | None
     reused_from_entry_id: str | None = None
+    source_reply_reference: dict[str, str] | None = None
 
 
 class CreationTaskScriptsResponse(BaseModel):
@@ -1836,7 +1879,7 @@ class MaterialAssistantTurnResponse(BaseModel):
     model: str
     material_result: MaterialAssistantResultResponse | None = None
     turn_id: UUID | None = None
-    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    turn_status: Literal["running", "completed", "stopped", "failed"] = "completed"
     draft_version: int | None = Field(default=None, ge=0)
 
 

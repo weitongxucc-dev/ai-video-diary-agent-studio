@@ -5,8 +5,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
+from starlette.requests import Request
 
 from app.production import (
     CreationPlan,
@@ -18,6 +21,8 @@ from app.production import (
     TopicEvidenceReference,
     TopicGenerationRun,
 )
+from app import main as main_module
+from app.schemas import AssistantReplyScriptTransferRequest
 
 WORKSPACE = "workspace-one"
 OWNER = "member-one"
@@ -72,7 +77,7 @@ def make_plan(plan_id: str = "plan-one") -> CreationPlan:
 def confirm_plan_from_reply(
     repo: ProductionRepository,
     *,
-    request_id: str = "plan-request-one",
+    request_id: str = "44444444-4444-4444-8444-444444444444",
     plan_id: str = "plan-one",
     task_id: str = "task-one",
     from_reply: bool = True,
@@ -144,7 +149,7 @@ def transfer(repo, plan, task, **overrides):
         "task_id": task.id,
         "request_id": "transfer-request-one",
         "reply_reference": REPLY_REFERENCE,
-        "plan_conversion_request_id": "plan-request-one",
+        "plan_conversion_request_id": "44444444-4444-4444-8444-444444444444",
         "reply_text": REPLY_TEXT,
         "expected_plan_id": plan.id,
         "expected_plan_updated_at": plan.updated_at,
@@ -189,7 +194,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
                 name="不同目标", scenario="knowledge_explanation",
             ),
             reply_reference={**REPLY_REFERENCE, "turn_id": "another-turn"},
-            request_id="plan-request-one",
+            request_id="44444444-4444-4444-8444-444444444444",
             verified_owner_user_id=OWNER,
         )
     assert len(repo.list_task_events(WORKSPACE, task.id)) == 1
@@ -217,7 +222,8 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
     assert REPLY_TEXT not in str(repo.list_task_events(WORKSPACE, task.id)[-1].payload)
 
     retry_task, retry_run, retry_script = transfer(
-        repo, plan, task, script_id="fresh-unused-script", run_id="fresh-unused-run",
+        repo, plan, draft_task, script_id="fresh-unused-script", run_id="fresh-unused-run",
+        expected_task_updated_at=draft_task.updated_at,
     )
     assert (retry_task.id, retry_run.id, retry_script.id) == (task.id, run.id, script.id)
     assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
@@ -398,3 +404,189 @@ def test_existing_draft_requires_explicit_current_revision_and_confirmed_script_
             run_id="reply-run-three",
         )
     assert repo.get_creation_task_script(WORKSPACE, replacement.id).sections == before.sections
+
+
+def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_replays_same_result(tmp_path, monkeypatch):
+    repo, plan, task = ready_task_for_transfer(tmp_path)
+    conversation_id = "11111111-1111-4111-8111-111111111111"
+    turn_id = "22222222-2222-4222-8222-222222222222"
+    turn = {
+        "conversation_id": conversation_id,
+        "status": "completed",
+        "assistant_text": REPLY_TEXT,
+        "result": {"response": {"reply": REPLY_TEXT}},
+    }
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: WORKSPACE)
+    monkeypatch.setattr(main_module, "_content_reader", lambda _request, _workspace: (OWNER, False))
+    monkeypatch.setattr(main_module, "_validate_assistant_scope", lambda *_args: None)
+    monkeypatch.setattr(main_module, "conversation_repo", SimpleNamespace(
+        get=lambda _conversation_id, _workspace, _member: {
+            "id": conversation_id, "scope_kind": "task", "scope_id": task.id,
+        },
+        get_turn=lambda _turn_id: turn,
+    ))
+    monkeypatch.setattr(main_module, "_assistant_script_inputs", lambda _workspace, _task_id: (
+        repo.get_creation_task(WORKSPACE, task.id), plan,
+        SimpleNamespace(id=task.selected_topic_id, title="核心功能是什么"), (), INPUT_REFERENCES,
+    ))
+    readable = SimpleNamespace(
+        version="v3", title="当前知识资料", use_state="available",
+        authorization="available", ownership="workspace",
+    )
+    monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
+        get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
+    ))
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "_creation_task_scripts_response", lambda _workspace, _task: {"saved": True})
+    request = Request({"type": "http", "headers": []})
+    payload = AssistantReplyScriptTransferRequest(
+        conversation_id=UUID(conversation_id), turn_id=UUID(turn_id),
+        request_id=UUID("33333333-3333-4333-8333-333333333333"),
+        expected_plan_updated_at=plan.updated_at,
+        expected_task_updated_at=task.updated_at,
+    )
+    first = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
+    assert first == {"saved": True}
+    saved = repo.list_creation_task_scripts(WORKSPACE, task.id)
+    assert len(saved) == 1 and saved[0].source_reply_reference == {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "response_digest": hashlib.sha256(REPLY_TEXT.encode("utf-8")).hexdigest(),
+    }
+    assert saved[0].sections[0].content == REPLY_TEXT
+
+    # The duplicate uses the original revision token; the repository returns the
+    # original persisted script even though the first write advanced the task.
+    second = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
+    assert second == {"saved": True}
+    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+
+    readable.version = "v2"
+    changed_request = Request({"type": "http", "headers": []})
+    with pytest.raises(main_module.HTTPException) as exc:
+        main_module.transfer_assistant_reply_to_script(task.id, changed_request, payload)
+    assert exc.value.status_code == 409
+
+
+def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    conversation_id = "11111111-1111-4111-8111-111111111111"
+    turn_id = "22222222-2222-4222-8222-222222222222"
+    request_id = "44444444-4444-4444-8444-444444444444"
+    turn = {
+        "conversation_id": conversation_id,
+        "status": "completed",
+        "assistant_text": REPLY_TEXT,
+        "result": {"response": {"reply": REPLY_TEXT}},
+    }
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: WORKSPACE)
+    monkeypatch.setattr(main_module, "_content_reader", lambda _request, _workspace: (OWNER, False))
+    monkeypatch.setattr(main_module, "_validate_assistant_scope", lambda *_args: None)
+    monkeypatch.setattr(main_module, "conversation_repo", SimpleNamespace(
+        get=lambda _conversation_id, _workspace, _member: {
+            "id": conversation_id, "scope_kind": "home", "scope_id": "home",
+        },
+        get_turn=lambda _turn_id: turn,
+    ))
+    monkeypatch.setattr(main_module, "_creation_plan_preflight", lambda _request, _workspace, _payload: replace(
+        make_plan(), preflight_fingerprint="f" * 64,
+    ))
+    monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "_creation_plan_response", lambda plan, task: {"plan_id": plan.id, "task_id": task.id})
+    request = Request({"type": "http", "headers": []})
+    payload = main_module.CreationPlanConfirmRequest(
+        goal="介绍资料的核心功能", name="核心功能介绍", preflight_fingerprint="f" * 64,
+        reply_origin={
+            "conversation_id": conversation_id, "turn_id": turn_id, "request_id": request_id,
+        },
+    )
+
+    first = main_module.confirm_creation_plan(request, payload)
+    second = main_module.confirm_creation_plan(request, payload)
+    assert second == first
+    events = repo.list_task_events(WORKSPACE, first["task_id"])
+    assert len(events) == 1
+    assert events[0].event_type == "assistant_reply_plan_confirmed"
+    assert events[0].payload["reply_reference"] == {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "response_digest": hashlib.sha256(REPLY_TEXT.encode("utf-8")).hexdigest(),
+    }
+    assert REPLY_TEXT not in str(events[0].payload)
+
+    plan = repo.get_creation_plan(WORKSPACE, first["plan_id"])
+    task = repo.get_creation_task(WORKSPACE, first["task_id"])
+    topic_run = TopicGenerationRun(
+        id="http-topic-run", workspace_id=WORKSPACE, task_id=task.id, plan_id=plan.id,
+        status="running", route_snapshot={"provider": "test-double"},
+        prompt_schema_version="topic-test/v1", input_references=INPUT_REFERENCES,
+    )
+    repo.start_topic_generation(topic_run)
+    topic = TopicCandidate(
+        id="http-topic", workspace_id=WORKSPACE, task_id=task.id, run_id=topic_run.id,
+        title="当前资料的核心功能", angle="讲清实际用途", audience="普通创作者",
+        outline=["需求", "结果"], score=90,
+    )
+    repo.complete_topic_generation(topic_run.id, [topic], [TopicEvidenceReference(
+        id="http-topic-evidence", workspace_id=WORKSPACE, task_id=task.id,
+        candidate_id=topic.id, kind="knowledge", reference_id="knowledge-one",
+        version_or_identity="v3", title="当前知识资料", authorization_or_license="available",
+        source_url=None,
+    )])
+    repo.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
+    plan = repo.get_creation_plan(WORKSPACE, plan.id)
+    task = repo.get_creation_task(WORKSPACE, task.id)
+    topic = repo.list_topic_candidates(WORKSPACE, task.id)[0]
+    readable = SimpleNamespace(
+        version="v3", title="当前知识资料", use_state="available",
+        authorization="available", ownership="workspace",
+    )
+    monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
+        get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
+    ))
+    monkeypatch.setattr(main_module, "_assistant_script_inputs", lambda _workspace, _task_id: (
+        repo.get_creation_task(WORKSPACE, task.id), repo.get_creation_plan(WORKSPACE, plan.id),
+        topic, (), INPUT_REFERENCES,
+    ))
+    transfer_payload = AssistantReplyScriptTransferRequest(
+        conversation_id=UUID(conversation_id), turn_id=UUID(turn_id),
+        request_id=UUID("55555555-5555-4555-8555-555555555555"),
+        plan_conversion_request_id=UUID(request_id),
+        expected_plan_updated_at=plan.updated_at, expected_task_updated_at=task.updated_at,
+    )
+    transferred = main_module.transfer_assistant_reply_to_script(task.id, request, transfer_payload)
+    assert transferred.task.id == task.id
+    assert transferred.latest_run is None
+    draft = repo.list_creation_task_scripts(WORKSPACE, task.id)[0]
+    assert draft.selection_status == "draft"
+    assert draft.sections[0].visual_prompt == "" and draft.sections[0].evidence_reference_ids == []
+
+    edited = main_module.save_assistant_script_draft(task.id, request,
+        main_module.CreationTaskScriptDraftRequest(
+            title=draft.title, expected_updated_at=draft.updated_at,
+            sections=[{
+                "id": draft.sections[0].id, "title": draft.sections[0].title,
+                "content": draft.sections[0].content, "visual_prompt": "展示本次资料中的核心功能。",
+                "evidence_reference_ids": ["knowledge:knowledge-one:v3"],
+            }],
+        ))
+    assert edited.updated_at != draft.updated_at
+    confirmed = main_module.confirm_creation_task_script(task.id, draft.id, request,
+        main_module.CreationTaskScriptConfirmRequest(
+            title=edited.title, expected_updated_at=edited.updated_at,
+            sections=[section.model_dump() for section in edited.sections],
+        ))
+    assert confirmed.task.confirmed_script_id == draft.id
+    entry = main_module.save_script_library(request,
+        main_module.ScriptLibrarySaveRequest(
+            source_script_id=draft.id, name="已确认的对话回复文案", category="产品介绍",
+        ))
+    read_back = repo.get_script_library_entry(WORKSPACE, entry.id)
+    assert read_back.source_task_id == task.id and read_back.source_script_id == draft.id
+    assert read_back.version == entry.version
+
+    turn["result"] = {"response": {"reply": "被篡改的正文"}}
+    with pytest.raises(main_module.HTTPException) as exc:
+        main_module.confirm_creation_plan(request, payload)
+    assert exc.value.status_code == 409
+    assert len(repo.list_task_events(WORKSPACE, first["task_id"])) == 2
