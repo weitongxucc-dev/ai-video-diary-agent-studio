@@ -345,6 +345,18 @@ N06当前F eca已组合3b195：run_material_turn.selected_material可空，libra
 
 最小全接口CAS/重复请求零重复工具/失败新草稿/跨页恢复/切stage选择及旧资产会话恢复、N06无选择状态/选对象标签真实固定范围与晚回包、独立声音人物/0%专项，必要既有直接Web与tsc；API使用临时DB/TestClient/受控工具/mockgrant不真实模型。scope/source依赖变化只重测受影响，无安装/服务/GUI/用户数据/Key/媒体/账号/发布/远端。必须clean精确SHA/report+旧写入口退役证明及source/fixture与GUI未验，源权重读ACK后立即持续实施，不再等旧主控START。
 
+### 必要组合CI修复：具名测试迁移，不降低领域门禁
+
+主控按实际CI在3035a25一次全API隔离运行：1651PASS、110FAIL、161ERROR，12warnings/3subtests，日志`/tmp/main-controller-20261009/review-v2/backend-3035a25.log`。Ruff0.15.7精确47项，日志`/tmp/main-controller-20261009/review-v2/ruff-3035a25.log`；离线缓存无该版本后仅主控用uvx取得固定测试工具，不改依赖/锁。大量181次旧档案夹具缺真实来源、手动保存旧必填proof字段导致extra_forbidden，以及无读者私有检索被新门禁拒绝。不能据数量全称旧夹具，不复现/审核就改assert；也不为绿CI放宽真实权限/来源/设备许可。
+
+B当前单补本单test_profile_api_contract新来源repository purpose接口替身及Ruff直接规范化，明确追加test_profile_reference_contract仅未用变量/import/行内控制规范化；montage.py只去未用material_allows_automation import，唯一此file写者，不改逻辑。UI当前main UUID未定义与未用CreationPlanVoiceReference，及assistant相关必要旧夹具由UI同file单写，不由别的worker碰。
+
+D新QA-V2-D-PROFILE-FIXTURE-MIGRATION基于3035a25新隔离clone `/tmp/main-acceptance-20261009/review-v2-profile-fixture-migration/candidate`。唯一owned测试test_montage_pipeline.py、test_creation_execution.py、test_media_profile_api.py、test_media_profile_repository.py、test_member_permits.py、test_crop_preview_description.py、test_linked_timeline_reorder.py、test_subtitle_time_sync.py、test_video_templates.py、前单tests/_media_preview_test_fixtures.py仅必要共用合成辅助，及test_media_preview_runs.py两未用变量lint。不写任何生产/API/schema/别的测试，尤其B两profile_contract、UI任何assistant。按真实新档案参考/固定独立人物声音/可信owner和member、当前reader/工作区输入迁移旧positive helper，优先一处共用helper服务多个消费者，不复制来源链；生成测试沿真实独有DeviceRuntime/许可测试替身。保留拒绝/撤销/私有/未知准入/切scope/失败恢复负例；旧被退役依赖的断言可按当前权威改，但须具体说明，不宽泛accept status/skip/noqa。
+
+C新QA-V2-C-SOURCE-TEST-MIGRATION基于3035a25新隔离clone `/tmp/main-acceptance-20261009/review-v2-source-test-migration/candidate`。唯一owned tests/test_knowledge_file_parsing.py、test_knowledge_visibility_api.py、test_content_upload_ownership_http.py、test_web_snapshot.py、test_source_api.py，仅迁移旧save-source请求为当前{}与真实系统版本、可信member/hash固定版本/grants/use_state预期；禁止任何生产/main/schema/API/Web或assistant测试。旧证明门槛预期按新权威调整，不能删跨成员/撤销/复用来源/未知格式错误负例，metadata不得伪造证明。精确同一已失败files最小复验，source_repo45与Web37无关不重跑。
+
+两单仅测试夹具/断言/规范化，不做产品修复；若失败是实际产品缺口，保留准确case/rootcause并交主控指定源owner，不绕过或私有改生产。均使用临时DB/合成媒体/既有依赖和受控provider，不运行真实模型/App/Pi/用户DB/Key/媒体/账号/常驻服务/安装/远端。必要真实ffmpeg合成解码允许自有/tmp范围，queued与完成不能混淆；源目录read仅故障定位，不扫旧历史。先ACK精确file名单再改，受影响file完整一轮必要pytest和准确Ruff；未影响的PASS复用。报告clean准确SHA/改前实际失败类别/改后行为/残余生产缺口，主控最终CI保留独立验收。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
