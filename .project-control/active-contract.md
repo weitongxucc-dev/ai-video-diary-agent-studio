@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 96：视频号登录页定向补验 | task_056874dd9c84 / ctx_557c021d50f6；仅下方96具名新窗口，93旧租约结束，无产品写权 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 95：succeeded结案，已retain | task_0f405d34b605 / ctx_fc226a0c7c32；源码/证据保留，无新写权/运行权 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 97：仅补验修改后重出 | 下方97新包准备，服务/媒体等UI96释放后的RERENDER_START；95/92旧权限结束 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -56,6 +56,16 @@ UI93只读报告已交并retain，三个专用浏览器均关闭；抖音账号�
 只读平台运行blob准确2c896f24（与最新4c748df平台目录相同），无产品Git/依赖/共享文档写权；使用已核3.12.13/Playwright1.63.0和现有PlaywrightSessionManager/channel=chrome。开一个官方channels.weixin.qq.com登录新窗口，固定10分钟lease，从fresh页面状态判断当前控件。不要复用已过期AX索引；当前有实际名字的“使用其他头像、昵称或账号”或“加载失败，点击重试”是已批准扫码流程的普通入口/错误恢复，不再问权限。沿现有页面工具在新会话观察实际role/文本/官方iframe host后至多一次登录方式切换、一次明确重试；未发生的旧AX点击不算已执行登录请求。若出现权限/策略拒绝，不切表面绕过；实际一次重试仍失败、验证码、陌生域或新权限则保留具体错误，停止该动作。不得点微信快捷登录、启动/读取桌面微信已有会话、代用户选择账号或确认授权，不运行模型/媒体/产品服务，不下载/改代理/浏览器设置。
 
 二维码实际可见后及时给root临时截图/真实host/窗口，root提示用户本人扫码；扫码后只读账号标识、空上传控件和现有回执入口，不上传/选文件/填草稿/保存/发布。各批消息处理后ACK以取得用户回报。到期或真实拒绝关闭所有自有浏览器/driver并核PID/PGID释放，保留profile，交最小实际结果/未验，不把工具定位失败写成平台能力结论。本次仅补原缺口，不重跑抖音/小红书，不恢复93旧租约。
+
+### B97：诊断差额入包后仅补真实修改重出
+
+从clean4c748dfc45229b879e9e1daf473b309432899f4c复用B终端，唯一owned /tmp/main-acceptance-20261009/rerender97/，无产品源码写权。B94仅改host_resource_probes运行日志，B95纯测试；先证明相对B92准确2c896f24其余Web/desktop/worker/agent运行blob不变。只读复用92已物化Web/公开依赖，按既有PyInstaller/Electron Builder增量API重新产生实际ARM64 .app及新身份，不Next全构建/热换旧包、不DMG/ZIP/签名/下载。准备阶段可与UI96并行，但不开服务/GUI/媒体，实际运行等root确认UI96全释放后发RERENDER_START。
+
+允许只读复制92已停止隔离DB及其真实已确认录音/故事板/编辑V5作为新隔离测试输入，必须记录来源/hash/当前版本，不seed成功或冒称本包新生成上游，不迁移用户真实数据。仅必要已具名92测试媒体只读；测试Key/模型为空、Pi offline/定时OFF。先核clone的旧permit确为free、无活动旧进程，并定向检查输出/日志等本次写入不会指向旧92；若原job或数据绑定要求写旧路径则交具体事实，不能改DB绕过或写旧产物。新DB/ledger/config/输出/日志/所有写入仅97root；原92库、输入和产物不变。
+
+当前合法成员/设备/可信owner归属及V5的真实依赖保持，沿本包DeviceRuntime/Grant仅执行已明确的1:1重出（既有queued恢复或一次真实resume，不能重复创建请求），读取当前MP4到本根，核对应版本/hash、真实ffprobe及保持原9:16文件。新服务起固定10分钟lease，不自动续，串行最多一个重出；继承B92有限CPU实验同一声明上限，fresh启动swap基线+64MiB只用于本新窗口，不抬任何原cap，CPU75/可用至少1.5GiB+render512MiB、磁盘1GiB+render16MiB、IO128MiB/s、最长15秒/1920px/像素秒31104000/2clips/输入输出8MiB/threads1/60s不变。不跑Qwen/人物/Pi/账号/Key或GUI，不恢复92旧租约。阻断时必须从该实际admit日志回读同次数值，后续采样另列；不盲重试/手清Grant/改成功状态。
+
+交实际包身份与未变复用证明、clone真实输入来源、仅重出与当前文件或首因同次诊断、旧92完整性/进程端口全释放。已通过的92录音/首次成片/undo/redo与本次重出分开标注，不重复整轮，不以HTTP冒称GUI或三平台通过。
 
 ### UI93：三平台真实账号只读接入与适配证据（已交只读报告，运行权结束）
 
