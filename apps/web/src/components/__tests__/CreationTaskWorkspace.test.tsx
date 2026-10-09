@@ -1029,7 +1029,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     expect(screen.queryByRole("button", { name: "生成配音" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "添加声音" })).toHaveAttribute("href", "/profiles");
-    expect(screen.getByText(/不需要重做选题或文案/)).toBeInTheDocument();
+    expect(screen.getByText(/你仍可采用这次本人录音/)).toBeInTheDocument();
   });
 
   it.each(["script", "narration"] as const)("lets the user revise and reconfirm after %s fails", async (stage) => {

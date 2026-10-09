@@ -794,6 +794,22 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
     for version, sql in _MIGRATIONS:
         if version in applied:
             continue
+        # Older assembled databases can have migration markers for 1..14 but
+        # lack the narration table originally created by migration 4. Restore
+        # that real prerequisite before v15 transforms it; never stamp a missing
+        # migration version to make the chain appear complete.
+        if version == 15 and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='narration_segments'"
+        ).fetchone() is None:
+            narration_schema = next(
+                migration_sql for migration_version, migration_sql in _MIGRATIONS
+                if migration_version == 4
+            )
+            try:
+                conn.executescript("BEGIN IMMEDIATE;\n" + narration_schema + "\nCOMMIT;")
+            except sqlite3.Error:
+                conn.rollback()
+                raise
         try:
             conn.executescript(
                 "BEGIN IMMEDIATE;\n"

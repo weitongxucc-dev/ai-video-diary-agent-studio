@@ -35,14 +35,27 @@ def wav_bytes(seconds: float = 1) -> bytes:
     return buffer.getvalue()
 
 
-def _synthetic_wav_duration(path):
+def _synthetic_audio_duration(path):
+    if path.suffix == ".webm":
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-threads", "1",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return float(result.stdout.strip())
     with wave.open(str(path), "rb") as audio:
         return audio.getnframes() / audio.getframerate()
 
 
 @pytest.fixture
 def recording_task(tmp_path, monkeypatch):
-    monkeypatch.setattr(task_audio_module, "probe_audio_source", _synthetic_wav_duration)
+    monkeypatch.setattr(task_audio_module, "probe_audio_source", _synthetic_audio_duration)
     repo = ProductionRepository(database_path=tmp_path / "production.sqlite3", video_library_path=tmp_path / "library")
     workspace_id, task_id, script_id = "local", "task_recording", "script_recording"
     plan = CreationPlan(
@@ -563,12 +576,16 @@ def test_volume_edit_keeps_subtitle_track_valid(recording_task):
     assert tracks[0].cues == original.cues and tracks[0].style == original.style
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="FFmpeg/ffprobe unavailable",
+)
 def test_browser_webm_recording_keeps_audio_container_and_reloads(recording_task, tmp_path):
     _repo, task_id, _version, client = recording_task
     media = tmp_path / "microphone.webm"
-    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
-                    "-c:a", "libopus", str(media)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-threads", "1", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", "-c:a", "libopus", str(media)],
+                   check=True, capture_output=True, timeout=15)
     uploaded = client.post(f"/api/creation-tasks/{task_id}/audio/recordings",
                            files={"audio": (media.name, media.read_bytes(), "audio/webm")})
     assert uploaded.status_code == 200, uploaded.text

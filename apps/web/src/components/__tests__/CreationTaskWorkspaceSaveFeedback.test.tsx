@@ -73,6 +73,7 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: vi.fn(),
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  listCreationTaskRecordings: vi.fn().mockResolvedValue({ items: [] }),
   getCreationTaskQualityCheck: mocks.getQualityCheck,
   checkCreationTaskQuality: mocks.checkQuality,
   initializeCreationTaskTimeline: vi.fn(),

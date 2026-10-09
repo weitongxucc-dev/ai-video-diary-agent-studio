@@ -331,6 +331,14 @@ def test_migration_13_applies_twice_without_error(tmp_path):
         conn.close()
 
     assert versions == list(range(1, PRODUCTION_SCHEMA_VERSION + 1))
+    # The old database fixture carries migration markers but omits migration
+    # 4's table. Reaching version 15 must restore and then really transform
+    # that table, not merely stamp the version marker.
+    with sqlite3.connect(database_path) as conn:
+        narration_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(narration_segments)")
+        }
+    assert {"source_kind", "source_artifact_ref", "source_sha256"} <= narration_columns
     # Migration 13 is a version-only marker: it bumps the schema version without
     # touching creation_tasks/material_assets, so it stays safe on the bare
     # standalone chain (test_device_runtime). The visibility columns are added
