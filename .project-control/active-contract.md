@@ -415,6 +415,16 @@ C阶段1f76021d已worker_done/retain，阶段2需UI-CAS准确完成后新Dispatc
 
 E新QA-V2-E-REPLY-SCRIPT-REVIEW只读审阅C clean f76021d候选及main当前产品2.1/领域5与7.5/DESIGN2、实际main.py/Agent的update/confirm调用；唯一输出/tmp/main-acceptance-20261009/review-v2-reply-script-review/report.md，不改C产品或测试/共享文档/GitHub。重点真实会话来源还需HTTP校验、当前读者/空间/use_state/固定版本、现有事实依据确认规则是否被新reply旁路削弱、稳定请求重复与当前撤销/修订关系、阶段2必须退役的无条件写消费者，按具体证据给阻断/建议/已证实三类，不因未接Phase2就假报已完成产品故障。不运行测试/模型/App/用户库/Key/媒体/服务/GUI/远端，不复制dirty UI，C阶段2实施仍唯一C。先REBASE_ACK后定向读、报告完成结算；主控审阅决定是否授权修订。
 
+### QA-V2-F-PREFLIGHT-RETURN-CONTINUITY与Web组合门禁
+
+主控组合c121b329实际全Web一次：73files中68PASS/5FAIL，798cases中711PASS/87FAIL，日志/tmp/main-controller-20261009/review-v2/web-full-return.log。80素材、2首页、3AppShellMembersNav为当前会话能力/历史API mock缺新真实接口；1任务保存断言因新增对话status而选中多个元素；1成员Role用旧危险操作名称。UI现单追加唯一MaterialLibraryWorkspace.test.tsx、app/__tests__/page.test.tsx、CreationTaskWorkspace.test.tsx，沿当前真实会话/CASshape修fixture，保留原范围/读写/晚返回/原生保存边界，不改生产fallback或弱化断言。F新单唯一AppShellMembersNav.test.tsx/MembersPageRole.test.tsx，只补当前实际形状及准确控件名称，保留角色/所有者权限负例。
+
+F前860a247已clean组合并retain。实际settings/page.tsx栏目Link丢return_to，sources/page.tsx保存后去knowledge亦丢；TemplateLibraryWorkspace实际creationHref开新的生产表单，修复途中换模板也会丢原目标。F新QA-V2-F-PREFLIGHT-RETURN-CONTINUITY从准确c121b329be886d0afe9bc2cadfd373c9fb3a5d47新隔离clone/tmp/main-acceptance-20261009/review-v2-preflight-return-continuity/candidate，唯一preflight-draft.ts、PreflightDraftReturn.tsx、CreateProductionTaskForm.tsx仅返回上下文/显式换模板、TemplateLibraryWorkspace.tsx仅真实使用模板动作接本草稿，以及这些files直接tests、前段两fixture。AppShell只必要返回组件参数，不写main/APItypes/Home/Task/material/knowledge/source/settings或globalCSS。
+
+沿已有成员/空间sessionStorage草稿，只增加本次明确修复选择的草稿定位标记（scope+UUID+既有有界返回目标），不另建业务对象、通用导航拦截或逐页query补丁。资源allowlist内普通子导航后仍可回原草稿；显式非法return_to须报错不能回退旧标记，跨成员/空间不可见，相邻UUID不能串稿；成功创建/主动放弃只清自己当前定位，存储失败保留当前输入并如实提示。模板使用在当前修复上下文中是明确换所选固定模板的动作，更新同一草稿准确template id/version后返回；保留用户目标/显式30秒/声音人物pin，不因新模板默认值重置、不自动创建。无修复上下文时原模板新建行为不变。未知/失联草稿不得代造有效目标。
+
+先REBASE_ACK后实施；最小实证settings栏目、source→knowledge内部导航仍返回、模板显式换版再返回30秒、旧/并行草稿/不同成员空间/非法URL/存储拒绝、原template使用入口保持。只受控组件/mock与既有公开cache专项/ESLint/类型，非owned旧TS207保持等待UI修复；真实GUI统一候选后验。无模型/Pi/App/API服务/Key/媒体/用户库/账号/安装/远端。报告/tmp/main-acceptance-20261009/review-v2-preflight-return-continuity/report.md，不能复用前85case声称新导航已验通。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
