@@ -271,6 +271,10 @@ C恢复精确错误复核：第二attempt ctx_094d4f64acbd已经3bd6622 clean交
 
 D-PRONUNCIATION task_e7422e8b4b77/ctx_4cd075e6a91b已6a97d84源码交付retain；主控复用真实现有`/tmp/manta-wil108-20261007/venv/bin/python`跑两文件pytest：24通过、1旧cache测试失败。失败要求voice.person_version改变必须重配音，与本次人物/声音独立及既有_voice_cache_identity不消费person_version冲突，不能因此把已批准缓存改回耦合。D新QA-V2-D-PRONUNCIATION-CHECK仅在原clean候选6a97d84上复核其父aa2e431相同case的未影响基线，并更新该直接test_voice_clone专项为人物版本不无故失效、真正声音/模型/语言/词典版本仍失效；不改narration/生产代码或删除词典版本断言。直接两文件运行用上述已安装pytest，不下载/服务/模型/用户库；report追加精确复核结果与原false环境阻断纠正，公开Git clean delta，音频听感仍未验。原提交保留不amend。
 
+QA-V2-C-SOURCE-API：task_dd0225de596e最终ctx_3faea4f2c137已成功3bd6622/11项/tsc交付retain，精确4edd收件箱可用，原写权结束并机械组合97ef234。C新单在原可见终端从97ef234新clone到`/tmp/main-acceptance-20261009/review-v2-source-api/candidate`公开身份。纵向目标是N15/17及N33资料资格：真实粘贴/文件/网页请求use_state落盘默认available；可选旧license不伪造权利证明，保存knowledge从可信member/source派生归属、真实内容版本与来源，旧授权字符串不阻断默认导入；响应真实use_state。固定版本/可信权限与知识grants完整保留，source不是可信身份绕路，普通输入不授权云外发/持续订阅。既有source_repository for_use与content_allows_use复用，main创建预检/选题/assistant知识查找按真实用途消费，自动选择不得带not_for_automation或reference_only媒体；事实参考可用reference_only、publish拒绝not_for_publish，excluded不进入检索/生成/成片，不以去旧审批取消真实限制。当前第一阶段仅新直接专项tests/test_source_input_contract.py及只读接线核查；不写main/schema/API生产文件（B独占），先证明必要旧契约失败和准确复用，不重新实现已通过39项仓储或下载依赖。公开已装pytest`/tmp/manta-wil108-20261007/venv/bin/python`/公开Web缓存可用。阶段1status给最小API delta；只有主控明确B release并给组合候选后，阶段2才可独占main.py/schemas.py这些来源/资格段、source_repository.py必要直接增量、sources/page/source-api输入输出及直接专项。UI draft仓储独立，draft API在本单共享main结案后接续，不能并行抢写。
+
+准确C前端残差也需本纵向收口：saveToKnowledge只在listKnowledgeItems回读ID后成功，但当前该列表按既有excluded谓词刻意不返回排除条目；主动保存excluded不应因真实限制而假报未保存或重复创建。响应/回读须能核对当前可信源ID、知识ID与版本/use_state，区分登记成功与可用于检索，保留使用限制，不通过让excluded进入检索列表修复；选中源在异步期间变化不能将旧成功标在新源上，失败保留原条目/输入、重试真实同一对象。复用已确认ScriptLibrary与knowledge selection的固定版本规则；不改用户资料/删除旧source。无安装/真实服务/模型/Pi/GUI/用户库Key/账号/外发；TestClient/临时DB与受控网页文本替身只是接口证据，最终需要同候选真实UI。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
