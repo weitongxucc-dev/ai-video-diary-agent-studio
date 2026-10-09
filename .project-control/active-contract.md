@@ -251,6 +251,10 @@ B-PROFILE-API C2直接自动选片消费者：主控回读montage.py三处approv
 
 UI-TASK C1真实会话残差：主控804dcf3回读useAssistantConversation.failUnpersistedTurn签名第三参为failure消息，Home/Task调用均传错误说明；切走原会话后该函数PATCH draft_text=错误说明，会把用户原句恢复成错误并可能覆盖该旧会话后写草稿。另beginTurn后等待draftCheckpoint，scope改变直接return可能没有POST也没有收束本地pending轮次。追加UI独占useAssistantConversation.ts、HomeCommandComposer.tsx及直接会话专项，CreationTask调用仍自己owned。待发原句、错误说明和新草稿分别管理，不能拿错误当正文；导航/未建立持久轮次的取消保留原句及状态，不留下假running。晚失败不得覆盖任意较新草稿/新会话，不凭时间猜文本等于同一轮次；已有真实持久轮次可独立继续并恢复。共享API/Repository仍B写；若需原子服务器恢复，请只给具体接口差额，主控交单写者，不暗加无版本覆盖或内存fallback。只新增迟到失败→切新会话/旧会话已有新草稿、checkpoint等待期间切scope的必要受控证据，复用未影响125检查；不重新加载Pi或模型。
 
+UI-TASK b3afb5d已部分源码交付/retain并按公开提交身份机械组合为03abe39。原单报告未包含末尾会话C1；源码JobProgressPanel仍以styles.blocker包全部成功/历史，H-B006未修，不能按报告关闭。新QA-V2-UI-TASK-REVIEW复用原UI终端，从主控03abe39新clone到`/tmp/main-acceptance-20261009/review-v2-task-review/candidate`分支`codex/review-v2-task-review-20261009`；owned hook/HomeCommandComposer/CreationTaskWorkspace/其局部CSS及直接专项，接上段会话原句/晚失败C1，并修正常进度/成功历史的真实默认样式，红只用于当前失败/具体失败记录。必要估时不能在真实已知数值后还统一称无样本，读取后以字段事实显示。历史保持可恢复折叠，32条不占主操作首屏，不另造日志状态源；只有当前相关失败告警在主操作可见。原103/分页不重复重做。共享main/schema/api/types/Repository仍B独占，必要原子恢复接口给主控串行接线。每次新候选本地Git先设公开weitongxucc-dev/227941069+weitongxucc-dev@users.noreply.github.com身份，禁止全局修改。交clean最小差额/未验，不把旧单缺口藏在报告完成结论中。
+
+F新QA-V2-LOCAL-CLIENT-PORT：原F候选retain，仅复用已有终端，从准确03abe39到`/tmp/main-acceptance-20261009/review-v2-client-port/candidate`，分支`codex/review-v2-client-port-20261009`。主控只读lsof确认当前用户原应用持有3000，不能关闭原应用来为验收让路。允许一个必要且显式的独立本地实例端口入口`--local-web-port=<1..65535>`，仅配合已有绝对`--user-data-dir`且确认为local auth构建时使用；默认仍3000，Supabase稳定callback origin保持3000并拒绝该覆盖。不能默默换端口、借启动失败回退到旧服务或改变用户原数据/认证逻辑。所选端口是本独立userData的固定显式origin，避免每次随机端口丢成员凭据；占用即真实报错，启动和BrowserWindow读同一准确新端口。唯一owned desktop/main.js及既有scripts/lifecycle-smoke.js直接专项，必要desktop README接口说明由主控共享写，不改preload/API/Web/身份/自动更新/外链权限或其他桌面路径。语义ACK后仅源码/节点语法和受控stub验证默认/合法local隔离/无userdata/非法或占用端口/Supabase拒绝/失败释放。公开现有依赖，可启动专项自有无秘密loopback Node fixture；不能启动真实应用/API/Web/GUI/打包/Pi/模型或接触用户服务。具体新测试不得绑定真实3000，免干扰用户App；拒绝清楚，所有ownedfixture PID/端口释放。交clean、两种origin的不存在回退证据与未验，后续真实客户端统一候选再具名运行。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
