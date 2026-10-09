@@ -222,8 +222,14 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert second.status_code == 200 and second.json()["id"] == script_id
     assert len(repo.list_creation_task_scripts("local", "task-one")) == 1
 
-    monkeypatch.setattr(main_module, "run_task_turn", lambda _settings, **_kwargs:
-                        ("草稿已更新，请检查后确认。", {"script_id": script_id}))
+    def run_turn(_settings, **kwargs):
+        if kwargs["stage"] == "script":
+            return "草稿已更新，请检查后确认。", {"script_id": script_id}
+        assert kwargs["stage"] == "narration"
+        assert kwargs["selected_refs"] == []
+        return "可以继续讨论当前已确认文案。", None
+
+    monkeypatch.setattr(main_module, "run_task_turn", run_turn)
     turn = client.post(base + "/turn", json={
         "message": "把开头缩短", "context_stage": "script", "selected_object_refs": [],
     })
@@ -252,9 +258,26 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     repo.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections)
     assert client.post(base + "/script-draft", json=body).status_code == 409
-    for stage in ("script", "topic", "narration", "montage", "review", "subtitle_cover"):
+    for stage in ("script", "topic", "montage", "review", "subtitle_cover"):
         assert client.post(base + "/turn", json={
             "message": "继续修改", "context_stage": stage, "selected_object_refs": [],
         }).status_code == 409, stage
-    assert len(repo.list_task_events("local", "task-one")) == 2
+
+    narration_turn = client.post(base + "/turn", json={
+        "message": "继续讨论", "context_stage": "narration", "selected_object_refs": [],
+    })
+    assert narration_turn.status_code == 200, narration_turn.text
+    assert narration_turn.json()["script_draft"] is None
+    assert narration_turn.json()["edit_preview"] is None
+    persisted_after_narration = ProductionRepository(tmp_path / "isolated.sqlite3", tmp_path / "library")
+    events = persisted_after_narration.list_task_events("local", "task-one")
+    assert [(item.payload["role"], item.payload["stage"]) for item in events] == [
+        ("user", "script"), ("assistant", "script"),
+        ("user", "narration"), ("assistant", "narration"),
+    ]
+    history = client.get(base + "/history")
+    assert history.status_code == 200
+    assert [item["message"] for item in history.json()["items"]] == [
+        "把开头缩短", "草稿已更新，请检查后确认。", "继续讨论", "可以继续讨论当前已确认文案。",
+    ]
     assert repo.get_creation_task("local", "task-one").confirmed_script_id == script_id
