@@ -35,9 +35,9 @@
 
 | 线程 | 工作树与身份 | 当前任务 | 写入边界 |
 | --- | --- | --- | --- |
-| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 102：真实流式与工具过程、输入修复 | 以下UI102；准确4f4f1563新分支；100已交付retain，旧源码权结束 |
+| UI / main-ui-linear | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-ui-linear`；`579066f7-9655-4ee7-9473-53d2e2071f2b:b8a4392e-dd5f-4cac-8267-1671e8118151`；`term_0ff98007-d2b6-442e-b45e-7d1b0b4d9811` | 102：真实流式与工具过程、输入修复 | task_05194521a5cd / ctx_fdf67be27ea0；以下UI102；准确4f4f1563新分支；100旧权结束 |
 | A / manta | `/Users/Zhuanz/orca/workspaces/main/manta`；`68244901-fc27-4dbd-9381-cc158d3ba9dc:942aa671-d4b4-48cc-925c-cd9e94a383d7`；`term_79a48d73-cb24-4736-a0c2-4e995483ea88` | 65：额度中断，已fence | 原脏树保留；无新增写权 |
-| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 103：Pi原子工具覆盖只读核验 | 以下B103；仅准备/核验，不运行；101已交付retain；99脏树保留 |
+| B / pipefish | `/Users/Zhuanz/orca/workspaces/main/pipefish`；`57ae4a00-4977-4585-8947-5223d803c1c8:83f3ee5f-3d33-49b6-9e03-2cf08374cc2c`；`term_2ee18b71-c3c8-4e56-b551-5f5a765c4298` | 103：Pi原子工具覆盖只读核验 | task_987ce2f42945 / ctx_4665a969d39a；以下B103；纯只读；99脏树保留 |
 
 ## 当前波次：B92组合修复实际成片补验（2026-10-09）
 
@@ -59,7 +59,7 @@ Owned源码：assistant_pi.py、agent_tools/diary_tools.ts、main.py两个直接
 
 ### B103：Pi工具与创作原子能力覆盖只读核验（MAIN-ATOMS103-20261009）
 
-复用B原终端，保护platform99四文件脏树，不切换/提交。只读UI仓库准确4f4f1563、当前main架构§2/§9及现有编辑操作消费者链；UI102工作中必须git show固定候选，不能读取混合未提交差额。区分Pi已装内置能力、命令行实际禁用/开放工具、客户端已有但Pi未暴露工具。定向核已安装Pi1.1.0公开源码事件格式（文字delta、tool execution start/end）；不运行Pi、不读会话/模型私密配置。
+复用B原终端，保护platform99四文件脏树，不切换/提交。只读UI仓库准确4f4f1563、当前main架构§2/§9及现有编辑操作消费者链；UI102工作中必须git show固定候选，不能读取混合未提交差额。区分Pi已装内置能力、命令行实际禁用/开放工具、客户端已有但Pi未暴露工具。补核MaterialLibraryWorkspace/AppShell的素材选择→对话上下文、现有asset/segment标签API→回读；飞书仅核已有入口/模块，不读私密配置或云操作。定向核已安装Pi1.1.0公开源码事件格式（文字delta、tool execution start/end）；不运行Pi、不读会话/模型私密配置。
 
 交一张本轮短表：创建方案/任务、选题、文案、读取任务资料素材、修改镜头/比例/字幕/声音、提案应用/撤销/重做、开始/继续/取消、重出/保存，每项准确工具/启用阶段/真实API或草稿命令/客户端结果/证据等级与首个断点。核心追踪一句“把当前镜头调亮一点，保持声音不变”如何得到真实提案、应用版本、重出输入；不能只因注册了工具说能力通，也不能只因禁用文件工具说没有Agent。识别实际断点即可，不广扫或另造平台/框架/长期完成度文档。owned /tmp/main-acceptance-20261009/atoms103/报告与最小准备，不编辑产品/文档/工作树、不开服务/GUI/模型/媒体/账号/Key、不构建/测试/下载。后续实包只等root组合准确候选具名新运行权，不从101或97旧START恢复。
 
