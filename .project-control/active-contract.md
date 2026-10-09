@@ -487,6 +487,10 @@ C消费者Task ctx_14f4fd2f3670已交4e4f0a6并retain；D声音文字登记23dc2
 
 C Web/APItypes/Task写权随旧Task结束正式释放，主控尚未转授其他写者；版本残差按当前准确候选复现后具名处理。B仍独占main/schema/narration/creation_execution，本单production仍C，须等待正式释放。F实证montage waiting_for_user已保存却被执行器记失败：B追加同一现有执行器阶段交接的诊断与最小修正，合法等待保持用户确认，不能把waiting归ready或自动render/降低阈值；复用已有Job/Task/调度终态与继续入口，不造第二状态系统。先报具体可用等待/继续协议和受影响文件，仍不写C production。F已交tests/test_creation_execution.py写权结束，后续成功输入夹具与等待回归须新单，不能硬改期望使低置信镜头自动使用。
 
+### QA-V2-UI-REPLY-NAV-RESIDUAL：组合回归与准确出口
+
+组合a92a0e7146fafe63324b91dd22db6f1dffc6c622的全Web 838 PASS/2 FAIL，tsc通过；需保留原意修两个残差，不用跳过或宽断言。UI原可见终端新单，唯一owned useAssistantConversation.ts、HomeCommandComposer.test.tsx及直接read-race专项、app/production/__tests__/preflight-return.test.tsx；查已消费轮次切任务后draft_version意外从2升3实际来源，源缺陷则最小修原hook，若夹具错误则真实请求版本动态绑定且保留不恢复/不覆盖/晚到隔离断言；预检旧夹具需断言replyOrigin=null符合新增无来源路径。另主控实际读到KnowledgeWorkspace默认collection=sources、ScriptLibraryPanel仅hidden子容器内读取entry_id，故新文案深链不自动打开可见文案集合；UI追加唯一owned app/knowledge/KnowledgeWorkspace.tsx及其直接专项，当前明确entry_id/source_task_id深链选择正确集合与条目，不存在或来源不一致不打开别的对象。C旧Web权已结束；不得改API/types/main/production/B/共享CSS或另造全局导航状态。从准确a92新隔离公开候选，重读DESIGN2/5.1/领域7.5，语义ACK后实施。现成依赖最小受控组件/tsc/Ruff不适用；不重复838未影响测试，不运行服务/Pi/用户资料/GUI/媒体/远端。交clean叶与报告、来源残余和未验，主控统一候选后截图。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
