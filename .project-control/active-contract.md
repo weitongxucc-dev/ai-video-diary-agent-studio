@@ -497,6 +497,10 @@ E原资格诊断已交并retain，私有素材写权限缺陷已由B受控修正
 
 C新仓储叶9f3ca13已审、机械组合f648d65fc33df15cfbe977ef163051213e5878f3，三个直接事务负例/正例通过；msg_b234f669c18a正式RELEASE_ACK production.py并结算retain。现production.py唯一写者转B当前ctx_5948cb0be957，精确追加material_segment_eligible手工/自动共用基础与原automatic wrapper、save_narration_artifact可选connection复用原SQL以完成target/combined/Timeline/Job同事务；不重写N14/CAS/档案规则或新表。B当前合成专项test_material_edit_qualification四项组跑fixture not found，负责人修实际pytest组装，单跑PASS不冒充CI组跑。API/CAS缺token的旧直接fixture按主控全API回归后另具名迁移，不加生产兼容。等待用户确认的执行器修正仍B，必须保持真实确认/继续协议。
 
+B msg_7b750b033f82已核已有协议：Job无waiting枚举，Task已有waiting_for_user；沿complete_unit(next_intent=None)释放当前montage许可且保存Job queued/Task真实待确认，未确认submit不重复制作、不排render，确认后原continue/retry复用Job继续。主控批准此最小已有状态交接及main GET真实等待投影，唯一B和新增tests/test_creation_waiting_confirmation.py；不新增Job状态/调度器，source成功不代表用户确认，撤销/取消/unknown及预算门槛不变。F旧成功fixture三个仍准确失败，不自动改绿。
+
+E N14只读报告已审：ScriptEditor保存过程中输入可继续编辑、setDraft(saved)无条件覆盖晚输入，源码可证实本地数据丢失；UI当前ctx_cd4a6305e221追加唯一CreationTaskWorkspace.tsx及直接新测试，提交快照与编辑代际明确，晚响应保留新正文/来源/画面建议并接返回updated_at供再次CAS保存，不简单禁用全部输入或宽泛回退。PlanReplyDraftAction/父refresh切任务晚响应为待受控复现，只在正例重现后最小修准确对象边界；必要app/tasks/[taskId]/page.tsx仅任务identity key由同UI写者，不能全局导航重架构。C/B无Web权。E报告称knowledge/page.tsx读取entry_id有误，主控准确读到该文件只加载资料、默认sources且scripts hidden；该可见深链缺口仍UI具名单中，源码自动选中子容器不等于用户可见。原报告保留并以本次主控校正为准。
+
 ## 已结案波次：B92组合修复实际成片补验（2026-10-09）
 
 ### B91：冻结许可子进程入口修复（已succeeded结案，源码写权结束）
