@@ -1,7 +1,6 @@
 import Link from "next/link";
+import { PeopleAndVoiceWorkspace } from "@/components/PeopleAndVoiceWorkspace";
 import {
-  createVoiceProfileAction,
-  setDefaultVoiceProfileAction,
   updateProductionProfileAction,
   updateRuntimeSettingsAction,
 } from "@/app/actions";
@@ -9,12 +8,12 @@ import { AppShell } from "@/components/AppShell";
 import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { LlmProviderFields } from "@/components/LlmProviderFields";
+import { AsrFields, FieldRow, type FieldDef } from "@/components/SettingsFields";
 import { ModelInstallPanel } from "@/components/ModelInstallPanel";
 import {
   getLocalModels,
   getProductionFoundation,
   getRuntimeSettings,
-  getVoiceProfiles,
 } from "@/lib/api.server";
 import type {
   LocalModelStatus,
@@ -23,7 +22,6 @@ import type {
   RuntimeSettingItem,
   RuntimeSettings,
   SystemStatus,
-  VoiceProfile,
 } from "@/lib/types";
 
 import styles from "./llm-service-state.module.css";
@@ -34,20 +32,17 @@ async function loadSettings(): Promise<{
   runtime: RuntimeSettings | null;
   models: LocalModelStatus[];
   foundation: ProductionFoundation | null;
-  voices: VoiceProfile[];
   offline: boolean;
 }> {
-  const [runtime, catalog, foundation, voiceCatalog] = await Promise.all([
+  const [runtime, catalog, foundation] = await Promise.all([
     getRuntimeSettings().catch(() => null),
     getLocalModels().catch(() => ({ models: [] })),
     getProductionFoundation().catch(() => null),
-    getVoiceProfiles().catch(() => ({ voices: [], total_count: 0 })),
   ]);
   return {
     runtime,
     models: catalog.models,
     foundation,
-    voices: voiceCatalog.voices,
     offline: runtime === null,
   };
 }
@@ -59,28 +54,17 @@ type SectionDef = {
   tone: "blue" | "green" | "orange" | "purple";
 };
 
-type FieldDef = {
-  name: string;
-  label: string;
-  helper?: string;
-  kind: "text" | "secret" | "directory" | "textarea" | "select";
-  options?: { value: string; label: string }[];
-  defaultValue?: string;
-  placeholder?: string;
-  configured?: boolean;
-};
-
 const SECTIONS: SectionDef[] = [
   {
     id: "paths",
-    title: "本地目录",
+    title: "保存位置",
     description:
       "Obsidian、视频、剪映、数据库与本地模型都使用绝对路径；大模型建议放在空间充足的移动硬盘。",
     tone: "green",
   },
   {
     id: "asr",
-    title: "语音识别 (ASR)",
+    title: "听写设置",
     description:
       "默认本地 Whisper；只有主动选择腾讯云才会外发音频，失败不自动切换。",
     tone: "orange",
@@ -93,18 +77,6 @@ const SECTIONS: SectionDef[] = [
     tone: "purple",
   },
 ];
-
-function statusTone(configured: boolean): "green" | "red" {
-  return configured ? "green" : "red";
-}
-
-/**
- * 密钥类字段的徽章只说明「这一格填了没有」——这些服务（腾讯云、Product Hunt）
- * 没有服务状态线，任何「已配置」都只等于字段非空。这里不说「可用」。
- */
-function statusLabel(configured: boolean): string {
-  return configured ? "已填写" : "未填写";
-}
 
 function getSetting(
   settings: RuntimeSettingItem[],
@@ -134,30 +106,30 @@ const LLM_SERVICE_VIEWS: Record<
   { label: string; detail: string; nextStep: string; tone: string }
 > = {
   missing: {
-    label: "未填写",
+    label: "未配置",
     detail:
       "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。",
     nextStep: "下一步：在下面填齐服务商、连接地址、模型和 API Key 后保存。",
     tone: "missing",
   },
   unverified: {
-    label: "已填写，未验证",
+    label: "已配置·待验证",
     detail:
       "地址、模型和密钥都填了，但还没有真的连过一次服务；这把密钥能不能被认，要等下一次真实对话或写稿才知道。",
     nextStep:
-      "下一步：保存后发起一次对话或写稿，再回到这一页看它有没有变成「可用」。",
+      "下一步：保存后发起一次对话或写稿，再回到这一页查看最近实际调用结果。",
     tone: "unverified",
   },
   available: {
-    label: "可用",
+    label: "最近调用成功",
     detail:
-      "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。",
+      "上一次真实调用成功返回了回复；这里只记录那次结果，不代表下一次调用一定成功。",
     nextStep:
-      "下一步：保持现状即可。改动地址、模型或密钥之后，这一档会退回「已填写，未验证」，需要重新验证一次。",
+      "下一步：改动地址、模型或密钥之后会退回「已配置·待验证」，需要重新验证一次；上次成功不保证本次可用。",
     tone: "available",
   },
   failed: {
-    label: "失败",
+    label: "最近调用失败",
     detail:
       "上一次真实调用没有成功。当前状态接口没有返回失败原因，所以这里拿不到更具体的原因，不替它猜一个。",
     nextStep:
@@ -167,7 +139,7 @@ const LLM_SERVICE_VIEWS: Record<
 };
 
 const LLM_SERVICE_UNKNOWN_VIEW = {
-  label: "拿不到服务状态",
+  label: "暂时无法读取连接状态",
   detail:
     "这一页没有取到后端的服务状态行，所以不知道现在是可用还是失败。字段填了也不等于服务认得它。",
   nextStep:
@@ -236,8 +208,8 @@ function buildFields(
 
   return {
     paths: [
-      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "text", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
-      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "text", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
+      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "file", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
+      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "file", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
       {
         name: "obsidian_vault_path",
         label: "Obsidian Vault 路径",
@@ -281,8 +253,8 @@ function buildFields(
       {
         name: "database_path",
         label: "SQLite 数据库",
-        helper: "存放创作内容、选题和反馈等结构化数据。",
-        kind: "directory",
+        helper: "选择已有的 SQLite 数据库文件，保存只更改使用位置，不会搬迁现有数据。",
+        kind: "file",
         defaultValue: valueOf("DATABASE_PATH"),
         placeholder: "/Users/you/.ai-video-diary/studio.db",
       },
@@ -312,7 +284,7 @@ function buildFields(
         options: [{ value: "whisper_cpp", label: "whisper.cpp（原生运行）" }, { value: "openai_whisper", label: "OpenAI Whisper（Python）" }],
       },
       {
-        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "text",
+        name: "local_whisper_cli_path", label: "whisper.cpp 程序", kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_CLI_PATH"), helper: "选择 whisper.cpp 时使用；模型须为 GGML 格式。",
       },
       {
@@ -362,23 +334,23 @@ function buildFields(
       },
       {
         name: "local_whisper_python_path",
-        label: "Local Whisper Python",
+        label: "Python 程序文件",
         helper: "本地 Whisper 解释器绝对路径，例如 /opt/homebrew/bin/python3。",
-        kind: "text",
+        kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_PYTHON_PATH"),
         placeholder: "/opt/homebrew/bin/python3",
       },
       {
         name: "local_whisper_model_path",
-        label: "Local Whisper Model",
+        label: "听写模型文件",
         helper: "模型文件路径：whisper.cpp 使用 ggml .bin，Python 使用 .pt。",
-        kind: "text",
+        kind: "file",
         defaultValue: valueOf("LOCAL_WHISPER_MODEL_PATH"),
         placeholder: "/Users/you/.cache/whisper/medium",
       },
       {
         name: "local_whisper_language",
-        label: "Local Whisper Language",
+        label: "听写语言",
         helper: "auto 自动检测；也可指定 zh 中文或 en 英文。",
         kind: "text",
         defaultValue: valueOf("LOCAL_WHISPER_LANGUAGE") || "auto",
@@ -414,113 +386,6 @@ function buildFields(
   };
 }
 
-function FieldRow({ field }: { field: FieldDef }) {
-  if (field.kind === "select") {
-    return <label className="settings-field"><span>{field.label}</span>
-      <select aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
-        {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      {field.helper ? <small className="settings-field-helper">{field.helper}</small> : null}
-    </label>;
-  }
-  if (field.kind === "secret") {
-    return (
-      <label className="settings-field">
-        <span>
-          {field.label}
-          <span
-            className={`settings-secret-badge ${statusTone(Boolean(field.configured))}`}
-          >
-            {statusLabel(Boolean(field.configured))}
-          </span>
-        </span>
-        <input
-          aria-label={field.label}
-          autoComplete="off"
-          maxLength={field.name === "deepseek_api_key" ? 256 : 512}
-          minLength={field.name === "deepseek_api_key" ? 20 : 4}
-          name={field.name}
-          pattern={
-            field.name === "deepseek_api_key"
-              ? "^sk-[A-Za-z0-9_-]{8,}$"
-              : undefined
-          }
-          placeholder={field.placeholder}
-          title={
-            field.name === "deepseek_api_key"
-              ? "DeepSeek API Key 必须以 sk- 开头，长度 ≥ 20"
-              : `${field.label} 至少 4 字符`
-          }
-          type="password"
-        />
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.kind === "directory") {
-    return (
-      <label className="settings-field">
-        <span>{field.label}</span>
-        <div className="settings-field-row">
-          <input
-            aria-label={field.label}
-            maxLength={512}
-            name={field.name}
-            placeholder={field.placeholder}
-            title="支持 POSIX 与 Windows 绝对路径，留空保持现有值"
-            type="text"
-            defaultValue={field.defaultValue ?? ""}
-          />
-          <DirectoryPickerButton targetName={field.name} />
-        </div>
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.kind === "textarea") {
-    return (
-      <label className="settings-field wide">
-        <span>{field.label}</span>
-        <textarea
-          aria-label={field.label}
-          maxLength={2000}
-          name={field.name}
-          rows={4}
-          title="每行一个以 http(s):// 开头的 URL"
-          defaultValue={field.defaultValue ?? ""}
-        />
-        {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
-        ) : null}
-      </label>
-    );
-  }
-
-  return (
-    <label className="settings-field">
-      <span>{field.label}</span>
-      <input
-        aria-label={field.label}
-        maxLength={512}
-        minLength={1}
-        name={field.name}
-        placeholder={field.placeholder}
-        title={`${field.label} 最多 512 字符`}
-        type="text"
-        defaultValue={field.defaultValue ?? ""}
-      />
-      {field.helper ? (
-        <small className="settings-field-helper">{field.helper}</small>
-      ) : null}
-    </label>
-  );
-}
 
 type SettingsCategory =
   "model" | "production" | "voices" | "paths" | "asr" | "sources";
@@ -550,7 +415,7 @@ export default async function SettingsPage({
   )
     ? (requestedSection as SettingsCategory)
     : "model";
-  const { runtime, models, foundation, voices, offline } = await loadSettings();
+  const { runtime, models, foundation, offline } = await loadSettings();
   const profile = foundation?.profile;
   const settingItems = runtime?.settings ?? [];
   const status = runtime?.status;
@@ -576,11 +441,9 @@ export default async function SettingsPage({
             <div>
               <dt>语音识别</dt>
               <dd>
-                {status?.asr.configured
-                  ? status.asr.engine_model_type
-                  : status?.asr.local_whisper_configured
-                    ? "本地 Whisper"
-                    : "未配置"}
+                {!status ? "暂时无法读取配置" : valueOfSetting(settingItems, "ASR_PROVIDER") === "tencentcloud"
+                  ? `腾讯云 · ${status.asr.configured ? "已配置·待验证" : "未配置"}`
+                  : `本地 Whisper · ${status.asr.local_whisper_configured ? "已配置·待验证" : "未配置"}`}
               </dd>
             </div>
             <div>
@@ -598,8 +461,8 @@ export default async function SettingsPage({
       inspectorTitle="设置状态"
     >
       <div className="workspace-page settings-page">
-        <aside className="settings-category-panel" aria-label="设置分类">
-          <nav className="settings-category-nav">
+        <header className="settings-category-panel">
+          <nav className="settings-category-nav" aria-label="设置分类">
             {SETTINGS_CATEGORIES.map((item) => (
               <Link
                 aria-current={activeCategory === item.id ? "page" : undefined}
@@ -616,7 +479,7 @@ export default async function SettingsPage({
             <Link href="/privacy">隐私政策</Link>
             <Link href="/terms">使用条款</Link>
           </nav></details>
-        </aside>
+        </header>
         <section className="workspace-main ui-panel">
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
 
@@ -705,7 +568,7 @@ export default async function SettingsPage({
                     />
                   </label>
                   <label className="settings-field">
-                    <span>品牌名称</span>
+                    <span>品牌名称（可选）</span>
                     <input
                       name="brand_name"
                       defaultValue={profile.brand_name}
@@ -740,18 +603,24 @@ export default async function SettingsPage({
                     </small>
                   </label>
                   <label className="settings-field">
-                    <span>品牌模板</span>
+                    <span>品牌样式备注（可选）</span>
                     <input
                       name="brand_template_name"
                       defaultValue={profile.brand_template_name}
+                      maxLength={80}
+                      placeholder="例如：公司产品介绍风格"
                     />
+                    <small className="settings-field-helper">记录常用样式的名称；保存备注不会自动改变画面。</small>
                   </label>
                   <label className="settings-field">
-                    <span>字幕风格</span>
+                    <span>字幕偏好备注（可选）</span>
                     <input
                       name="subtitle_style"
                       defaultValue={profile.subtitle_style}
+                      maxLength={240}
+                      placeholder="例如：白字黑边，重点词用黄色"
                     />
+                    <small className="settings-field-helper">记录希望的字幕样式；目前不会自动应用到成片字幕，请在任务中调整字幕。</small>
                   </label>
                 </div>
                 <input
@@ -822,142 +691,7 @@ export default async function SettingsPage({
                 </div>
               </FormErrorBanner>
 
-              <section
-                className="settings-voice-section"
-                aria-labelledby="voice-library-title"
-                hidden={activeCategory !== "voices"}
-              >
-                <div className="settings-product-heading">
-                  <div>
-                    <span className="section-kicker">授权资产</span>
-                    <h2 id="voice-library-title">声音库</h2>
-                    <p>
-                      可保存多个声音。默认声音用于新内容，单条创作内容
-                      仍可临时切换。
-                    </p>
-                  </div>
-                </div>
-                <div className="settings-voice-list">
-                  {voices.map((voice) => (
-                    <div className="settings-voice-row" key={voice.id}>
-                      <div className="settings-voice-copy">
-                        <strong>{voice.name}</strong>
-                        <span>
-                          {voice.is_default ? "默认声音" : "可选声音"} ·{" "}
-                          {voice.status === "ready"
-                            ? "已就绪"
-                            : voice.message || voice.status}
-                        </span>
-                      </div>
-                      <audio
-                        controls
-                        preload="none"
-                        src={`/api/production/voices/${voice.id}/media`}
-                      />
-                      {voice.is_default ? (
-                        <span className="settings-voice-default">当前默认</span>
-                      ) : (
-                        <form action={setDefaultVoiceProfileAction}>
-                          <input
-                            type="hidden"
-                            name="voice_profile_id"
-                            value={voice.id}
-                          />
-                          <input type="hidden" name="name" value={voice.name} />
-                          <input
-                            type="hidden"
-                            name="reference_audio_path"
-                            value={voice.reference_audio_path}
-                          />
-                          <input
-                            type="hidden"
-                            name="reference_text"
-                            value={voice.reference_text}
-                          />
-                          <input
-                            type="hidden"
-                            name="consent_confirmed"
-                            value={String(voice.consent_confirmed)}
-                          />
-                          <button
-                            className="ui-button secondary"
-                            type="submit"
-                          >
-                            设为默认
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  ))}
-                  {!voices.length ? (
-                    <p className="settings-voice-empty">
-                      还没有可用声音，请添加已获授权的 WAV 参考音频。
-                    </p>
-                  ) : null}
-                </div>
-                <FormErrorBanner
-                  action={createVoiceProfileAction}
-                  className="settings-voice-create"
-                  emptyMessage="请补全声音授权信息"
-                >
-                  <div className="settings-grid">
-                    <label className="settings-field">
-                      <span>声音名称</span>
-                      <input
-                        name="name"
-                        required
-                        placeholder="例如：张三旁白"
-                      />
-                    </label>
-                    <label className="settings-field">
-                      <span>WAV 参考音频</span>
-                      <div className="settings-field-row">
-                        <input
-                          name="reference_audio_path"
-                          required
-                          placeholder="/Volumes/External/voices/name.wav"
-                        />
-                        <DirectoryPickerButton
-                          kind="wav"
-                          targetName="reference_audio_path"
-                        />
-                      </div>
-                      <small className="settings-field-helper">
-                        仅记录原文件绝对路径，不复制到内置硬盘。
-                      </small>
-                    </label>
-                    <label className="settings-field wide">
-                      <span>参考音频文字</span>
-                      <textarea
-                        name="reference_text"
-                        required
-                        rows={3}
-                        placeholder="逐字填写参考音频中的内容"
-                      />
-                    </label>
-                  </div>
-                  <div className="settings-voice-consent">
-                    <label>
-                      <input
-                        name="consent_confirmed"
-                        required
-                        type="checkbox"
-                      />
-                      我确认已获得该声音所有者授权
-                    </label>
-                    <label>
-                      <input name="is_default" type="checkbox" />
-                      添加后设为默认声音
-                    </label>
-                  </div>
-                  <div className="settings-actions">
-                    <button className="ui-button" type="submit">
-                      添加声音
-                    </button>
-                    <span>模型就绪前会保留参考档案和可解释状态。</span>
-                  </div>
-                </FormErrorBanner>
-              </section>
+              {activeCategory === "voices" ? <PeopleAndVoiceWorkspace initialView="voices" embedded /> : null}
             </div>
           ) : null}
 
@@ -992,7 +726,7 @@ export default async function SettingsPage({
                       {section.description}
                     </p>
                     <div className="settings-grid">
-                      {sectionFields.map((field) => (
+                      {section.id === "asr" ? <AsrFields fields={sectionFields} /> : sectionFields.map((field) => (
                         <FieldRow field={field} key={field.name} />
                       ))}
                     </div>

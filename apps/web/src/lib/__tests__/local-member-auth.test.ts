@@ -9,6 +9,10 @@ import {
   readLocalMemberToken,
   storeLocalMemberToken,
 } from "../local-member-auth";
+import {
+  localMemberTokenCookieAssignment,
+  localMemberTokenCookieName,
+} from "../native-media-auth";
 
 describe("local member token storage", () => {
   beforeEach(() => {
@@ -22,6 +26,28 @@ describe("local member token storage", () => {
   it("reads back a stored token", () => {
     storeLocalMemberToken("tok-123");
     expect(readLocalMemberToken()).toBe("tok-123");
+  });
+
+  it("syncs the stored token to a port-scoped /api session cookie and clears it", () => {
+    window.history.replaceState({}, "", "/api/native-media-test");
+    const name = localMemberTokenCookieName(window.location.protocol, window.location.port);
+    storeLocalMemberToken("synthetic-token");
+    expect(document.cookie).toContain(`${name}=synthetic-token`);
+    clearLocalMemberToken();
+    expect(document.cookie).not.toContain(`${name}=`);
+    expect(readLocalMemberToken()).toBeNull();
+  });
+
+  it("uses distinct cookie names per origin port and strict scoped attributes", () => {
+    expect(localMemberTokenCookieName("http:", "3000")).not.toBe(
+      localMemberTokenCookieName("http:", "3001"),
+    );
+    expect(localMemberTokenCookieName("http:", "")).toContain("port-80");
+    expect(localMemberTokenCookieAssignment("token", "http:", "3000")).toBe(
+      `${localMemberTokenCookieName("http:", "3000")}=token; Path=/api; SameSite=Strict`,
+    );
+    expect(localMemberTokenCookieAssignment("token", "https:", "3000")).toContain("; Secure");
+    expect(localMemberTokenCookieAssignment(null, "https:", "3000")).toContain("Max-Age=0; Secure");
   });
 
   it("treats blank / whitespace tokens as absent and ignores blank writes", () => {

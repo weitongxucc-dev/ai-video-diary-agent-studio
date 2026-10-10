@@ -9,6 +9,19 @@ const { pipeline } = require('stream/promises');
 const { autoUpdater } = require('electron-updater');
 const { loadOrCreateIdentity } = require('./device-identity');
 
+// Chromium's explicit profile directory must also govern Electron's own
+// dotenv, device identity and logs before any of them are read or created.
+const explicitUserDataPath = app.commandLine.getSwitchValue('user-data-dir');
+if (explicitUserDataPath) {
+  if (!path.isAbsolute(explicitUserDataPath)) {
+    throw new Error('--user-data-dir must be an absolute path.');
+  }
+  fs.mkdirSync(explicitUserDataPath, { recursive: true });
+  app.setPath('userData', explicitUserDataPath);
+  app.setPath('sessionData', explicitUserDataPath);
+  app.setAppLogsPath(path.join(explicitUserDataPath, 'logs'));
+}
+
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
 let apiProcess = null;
@@ -25,7 +38,32 @@ const buildIdentityMetadataFile = path.join(__dirname, 'build-identity.generated
 // in the user's browser, sets the password, and can then be followed by a fresh
 // sign-in inside Electron; a random port makes that link unreachable.
 const authWebPort = 3000;
-const authWebOrigin = `http://localhost:${authWebPort}`;
+function resolveWebPort() {
+  if (!app.commandLine.hasSwitch('local-web-port')) return authWebPort;
+  const value = app.commandLine.getSwitchValue('local-web-port');
+  if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('--local-web-port must be an integer from 1 to 65535.');
+  }
+  if (!explicitUserDataPath) {
+    throw new Error('--local-web-port requires an explicit absolute --user-data-dir.');
+  }
+  if (isDev) {
+    throw new Error('--local-web-port requires a local auth build that starts its own Web service, not development mode.');
+  }
+  const configPath = path.join(__dirname, 'assets', 'distribution-config.generated.json');
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (error) {
+    throw new Error('--local-web-port requires readable local auth build configuration.');
+  }
+  if (config?.authMode !== 'local') {
+    throw new Error('--local-web-port is only allowed for local auth builds; Supabase callbacks must remain on port 3000.');
+  }
+  return Number(value);
+}
+const webPort = resolveWebPort();
+const webOrigin = `http://localhost:${webPort}`;
 const serviceStates = {
   api: { label: '本地 API 服务', state: 'not-started', error: null },
   web: { label: '本地 Web 服务', state: 'not-started', error: null },
@@ -268,8 +306,10 @@ function getFreePort() {
 function ensurePortAvailable(port) {
   return new Promise((resolve, reject) => {
     const server = require('net').createServer();
-    server.once('error', () => {
-      reject(new Error(`本地登录端口 ${port} 已被占用，请关闭占用该端口的应用后重试`));
+    server.once('error', (error) => {
+      reject(new Error(error.code === 'EADDRINUSE'
+        ? `本地 Web 端口 ${port} 已被占用，本次未启动 Web 服务。`
+        : `本地 Web 端口 ${port} 无法绑定（${error.code || error.message}）。`));
     });
     server.listen(port, '127.0.0.1', () => {
       server.close(resolve);
@@ -429,15 +469,15 @@ async function startNextServer() {
   setServiceState('web', 'starting');
 
   if (isDev) {
-    nextPort = authWebPort;
+    nextPort = webPort;
     await waitForNext(nextPort);
     setServiceState('web', 'ready');
     return nextPort;
   }
 
   const serverJs = findNextServer();
-  await ensurePortAvailable(authWebPort);
-  nextPort = authWebPort;
+  await ensurePortAvailable(webPort);
+  nextPort = webPort;
   console.log(`[main] Starting Next.js server on port ${nextPort}...`);
 
   const env = {
@@ -1154,6 +1194,15 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  ipcMain.handle('open-file', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: '选择文件',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('open-wav-file', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
@@ -1344,10 +1393,10 @@ function createWindow() {
   });
 
   if (isDev) {
-    window.loadURL(authWebOrigin);
+    window.loadURL(webOrigin);
     window.webContents.openDevTools({ mode: 'detach' });
   } else {
-    window.loadURL(authWebOrigin);
+    window.loadURL(webOrigin);
   }
 
   // Open external links in browser

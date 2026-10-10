@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -74,14 +75,7 @@ def main() -> None:
     model = load_model(str(model_path))
     print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
     print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
-    results = list(
-        model.generate(
-            text=request["text"],
-            lang_code=LANGUAGE_CODES[request["language"]],
-            ref_audio=str(reference_path),
-            ref_text=request["reference_text"],
-        )
-    )
+    results = _generate_with_pronunciation(model, request, reference_path)
     if not results:
         raise RuntimeError("model generated no audio")
     print("QWEN_PHASE inference_returned", file=sys.stderr, flush=True)
@@ -117,8 +111,22 @@ def _validate_request(payload: object) -> None:
         raise ValueError("unsupported request schema")
     if not isinstance(payload.get("language"), str) or payload["language"] not in LANGUAGE_CODES:
         raise ValueError("language must be zh, en or zh-en")
-    if payload.get("pronunciation_dictionary"):
-        raise ValueError("this worker does not support pronunciation dictionaries")
+    dictionary = payload.get("pronunciation_dictionary", [])
+    if not isinstance(dictionary, list):
+        raise ValueError("pronunciation_dictionary must be a list")
+    for entry in dictionary:
+        if not isinstance(entry, dict) or any(
+            not isinstance(entry.get(field), str) or not entry[field].strip()
+            for field in ("id", "version", "term", "language", "target_pronunciation", "scope")
+        ):
+            raise ValueError("pronunciation dictionary entry is invalid")
+        if entry["language"] not in LANGUAGE_CODES:
+            raise ValueError("pronunciation dictionary language is invalid")
+        if entry["scope"] not in {"workspace", "person", "task"}:
+            raise ValueError("pronunciation dictionary scope is invalid")
+        if not isinstance(entry.get("scope_reference", ""), str):
+            raise ValueError("pronunciation dictionary scope is invalid")
+    _resolved_pronunciation_rules(dictionary, payload["language"])
     if payload.get("model_id") != MODEL_ID:
         raise ValueError("unexpected model id")
     for key in (
@@ -133,6 +141,57 @@ def _validate_request(payload: object) -> None:
             raise ValueError(f"{key} is required")
     if Path(payload["output_path"]).suffix.lower() != ".wav":
         raise ValueError("output must be WAV")
+
+
+def _resolved_pronunciation_rules(dictionary: list[dict], language: str) -> dict[str, str]:
+    scope_priority = {"workspace": 0, "person": 1, "task": 2}
+    by_term: dict[str, list[dict]] = {}
+    for entry in dictionary:
+        if entry["language"] == language or entry["language"] == "zh-en":
+            by_term.setdefault(entry["term"], []).append(entry)
+
+    resolved: dict[str, str] = {}
+    for term, candidates in by_term.items():
+        targets_by_level: dict[tuple[str, str], set[str]] = {}
+        for entry in candidates:
+            level = (entry["language"], entry["scope"])
+            targets_by_level.setdefault(level, set()).add(entry["target_pronunciation"])
+        for (rule_language, scope), targets in targets_by_level.items():
+            if len(targets) > 1:
+                raise ValueError(
+                    f"conflicting pronunciation rules for {term!r} ({rule_language}, {scope})"
+                )
+        strongest_scope = max(scope_priority[entry["scope"]] for entry in candidates)
+        candidates = [entry for entry in candidates if scope_priority[entry["scope"]] == strongest_scope]
+        exact_language = [entry for entry in candidates if entry["language"] == language]
+        if exact_language:
+            candidates = exact_language
+        targets = {entry["target_pronunciation"] for entry in candidates}
+        resolved[term] = next(iter(targets))
+    return resolved
+
+
+def _apply_pronunciation_dictionary(text: str, dictionary: list[dict], language: str) -> str:
+    rules = _resolved_pronunciation_rules(dictionary, language)
+    if not rules:
+        return text
+    alternatives = sorted(rules, key=lambda term: (-len(term), term))
+    pattern = re.compile("|".join(re.escape(term) for term in alternatives))
+    return pattern.sub(lambda match: rules[match.group(0)], text)
+
+
+def _generate_with_pronunciation(model, request: dict, reference_path: Path) -> list:
+    spoken_text = _apply_pronunciation_dictionary(
+        request["text"], request["pronunciation_dictionary"], request["language"]
+    )
+    return list(
+        model.generate(
+            text=spoken_text,
+            lang_code=LANGUAGE_CODES[request["language"]],
+            ref_audio=str(reference_path),
+            ref_text=request["reference_text"],
+        )
+    )
 
 
 if __name__ == "__main__":

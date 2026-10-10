@@ -1,15 +1,63 @@
 import json
 import shutil
 import subprocess
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.assistant_pi import AssistantUnavailable, _last_answer_and_preview, run_plan_turn, run_task_turn
+from app.conversation_repository import ConversationRepository
+from app.assistant_pi import (
+    AssistantStopped,
+    AssistantUnavailable,
+    _PiStreamProjector,
+    _last_answer_and_preview,
+    _run_pi_streaming,
+    _safe_tool_result_summary,
+    register_turn_control,
+    request_stop_turn,
+    run_material_turn,
+    run_plan_turn,
+    run_task_turn,
+)
 from app.config import Settings
+
+
+def test_stopping_assistant_turn_terminates_its_controlled_child_group(tmp_path):
+    turn_id = "synthetic-turn-stop"
+    started = threading.Event()
+    failures: list[BaseException] = []
+    register_turn_control(turn_id)
+
+    def run_child():
+        try:
+            _run_pi_streaming(
+                [sys.executable, "-u", "-c",
+                 "import json,time; print(json.dumps({'type':'tool_execution_start','toolName':'read_current_task','toolCallId':'test'}),flush=True); time.sleep(60)"],
+                message="synthetic stop test", env=dict(__import__("os").environ), cwd=tmp_path,
+                timeout_seconds=10, on_event=lambda _event: started.set(), turn_id=turn_id,
+            )
+        except BaseException as cause:
+            failures.append(cause)
+
+    worker = threading.Thread(target=run_child)
+    worker.start()
+    try:
+        assert started.wait(timeout=5), "isolated child did not emit its synthetic first event"
+        assert request_stop_turn(turn_id) is True
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "assistant child runner did not release after stop"
+        assert len(failures) == 1 and isinstance(failures[0], AssistantStopped)
+    finally:
+        if worker.is_alive():
+            request_stop_turn(turn_id)
+            worker.join(timeout=5)
 
 
 @pytest.mark.parametrize("rejected", [False, True])
@@ -52,6 +100,10 @@ globalThis.fetch = async (url, init) => {
 };
 const {default: register} = await import(input.extension);
 register({registerTool: tool => tools.set(tool.name, tool)});
+let unreadError;
+try { await tools.get('preview_edit').execute('unread', {command: '水平裁剪到40%'}); }
+catch (e) { unreadError = e.message; }
+const unreadPostCount = calls.length;
 await tools.get('read_current_task').execute('read', {});
 let result, error, duplicateError;
 try {
@@ -59,11 +111,9 @@ try {
     command: '水平裁剪到40%', context_stage: 'montage', selected_refs: ['clip:clip-1'],
   });
 } catch (e) { error = e.message; }
-if (result) {
-  try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
-  catch (e) { duplicateError = e.message; }
-}
-console.log(JSON.stringify({calls, result, error, duplicateError}));
+try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
+catch (e) { duplicateError = e.message; }
+console.log(JSON.stringify({calls, result, error, duplicateError, unreadError, unreadPostCount}));
 """
     result = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -76,6 +126,9 @@ console.log(JSON.stringify({calls, result, error, duplicateError}));
              "AI_VIDEO_DIARY_AGENT_SELECTED_REFS": '["clip:clip-2"]'},
     )
     observed = json.loads(result.stdout)
+    assert observed["unreadError"] == "请先读取当前创作任务，再预览修改"
+    assert observed["unreadPostCount"] == 0
+    assert "本轮已请求修改预览" in observed["duplicateError"]
     assert observed["calls"] == [{
         "url": "http://127.0.0.1:1/api/creation-tasks/task-one/edits/preview",
         "body": {"raw_command": "水平裁剪到40%", "context_stage": "montage",
@@ -96,7 +149,78 @@ console.log(JSON.stringify({calls, result, error, duplicateError}));
     assert "/private/" not in observed["result"]["content"][0]["text"]
     assert "source.mp4" not in observed["result"]["content"][0]["text"]
     assert observed["result"]["details"] == {"kind": "edit_preview", "preview": preview}
-    assert "本轮已生成" in observed["duplicateError"]
+
+
+def test_requested_execution_tool_uses_fixed_task_routes_and_real_start_facts(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Pi business tools require Node.js")
+    extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+    script = r"""
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const tools = new Map();
+const calls = [];
+globalThis.fetch = async (url, init) => {
+  calls.push({url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : null});
+  const path = new URL(url).pathname;
+  const payload = path.endsWith('/execution/preview')
+    ? {script_id: 'confirmed-script', input_digest: 'a'.repeat(64), requirements: {can_continue: true}}
+    : path.endsWith('/execution')
+      ? {job: null, video_ready: false}
+      : path.endsWith('/execution/start') || path.endsWith('/execution/resume') || path.endsWith('/execution/cancel')
+        ? {job: {status: 'queued'}, video_ready: false}
+        : {task: {name: '当前任务', stage: 'montage'}, montage: {clips: []}};
+  return new Response(JSON.stringify(payload), {status: 200});
+};
+const {default: register} = await import(input.extension);
+register({registerTool: tool => tools.set(tool.name, tool)});
+let beforeReadError;
+try { await tools.get('start_creation_execution').execute('start', {}); }
+catch (e) { beforeReadError = e.message; }
+await tools.get('read_current_task').execute('read', {});
+const result = await tools.get('start_creation_execution').execute('start', {});
+let duplicateError;
+try { await tools.get('cancel_creation_execution').execute('again', {}); }
+catch (e) { duplicateError = e.message; }
+let mixedEditError;
+try { await tools.get('preview_edit').execute('edit', {command: '换镜头'}); }
+catch (e) { mixedEditError = e.message; }
+const followUpTools = new Map();
+register({registerTool: tool => followUpTools.set(tool.name, tool)});
+await followUpTools.get('read_current_task').execute('read', {});
+const resume = await followUpTools.get('resume_creation_execution').execute('resume', {});
+const cancelTools = new Map();
+register({registerTool: tool => cancelTools.set(tool.name, tool)});
+await cancelTools.get('read_current_task').execute('read', {});
+const cancel = await cancelTools.get('cancel_creation_execution').execute('cancel', {});
+console.log(JSON.stringify({calls, result, resume, cancel, beforeReadError, duplicateError, mixedEditError}));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        input=json.dumps({"extension": extension.as_uri()}),
+        capture_output=True, text=True, check=True, timeout=15, cwd=tmp_path,
+        env={"PATH": str(Path(node).parent), "HOME": str(tmp_path),
+             "AI_VIDEO_DIARY_AGENT_API_BASE": "http://127.0.0.1:1",
+             "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",
+             "AI_VIDEO_DIARY_AGENT_STAGE": "montage"},
+    )
+    observed = json.loads(result.stdout)
+    assert observed["beforeReadError"] == "请先读取当前创作任务"
+    assert "本轮制作动作已经提交" in observed["duplicateError"]
+    assert "本轮已执行制作动作" in observed["mixedEditError"]
+    assert observed["resume"]["details"]["action"] == "resume"
+    assert observed["cancel"]["details"]["action"] == "cancel"
+    assert [(call["url"].rsplit("/", 1)[-1], call["method"]) for call in observed["calls"]] == [
+        ("task-one", "GET"), ("preview", "GET"), ("execution", "GET"), ("start", "POST"),
+        ("task-one", "GET"), ("resume", "POST"), ("task-one", "GET"), ("cancel", "POST"),
+    ]
+    assert observed["calls"][3]["body"] == {
+        "script_id": "confirmed-script", "input_digest": "a" * 64,
+        "requirements_confirmed": True,
+    }
+    assert observed["result"]["details"]["kind"] == "execution_action"
+    assert observed["result"]["details"]["status"]["job"]["status"] == "queued"
 
 
 @pytest.mark.parametrize("operation_type,before,after", [
@@ -142,9 +266,206 @@ def test_pi_events_leave_failed_edit_reply_without_a_proposal():
     assert _last_answer_and_preview(output) == ("没有明确裁剪位置，请先说明百分比。", None)
 
 
+def test_material_read_preserves_pi_clarification_and_requires_settled_turn():
+    material = {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["旧标签"]}
+    pi_answer = "我已读取这条素材的标签。你希望替换成什么，还是只添加一项？"
+    events = [
+        {"type": "tool_execution_end", "toolName": "read_selected_material", "isError": False,
+         "result": {"details": material}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": pi_answer}]}},
+        {"type": "agent_settled"},
+    ]
+    assert _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events), "material_result") == (
+        pi_answer,
+        {"kind": "material_result", "material_result": material},
+    )
+    with pytest.raises(AssistantUnavailable):
+        _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events[:-1]), "material_result")
+
+
+def test_material_saved_update_reply_comes_from_write_readback():
+    details = {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["成片素材"],
+               "action": "replace", "changed": True, "previous_user_tags": ["旧标签"]}
+    output = "\n".join(json.dumps(event, ensure_ascii=False) for event in [
+        {"type": "tool_execution_end", "toolName": "read_selected_material", "isError": False,
+         "result": {"details": {"scope": "asset", "asset_ref": "asset:asset-1", "user_tags": ["旧标签"]}}},
+        {"type": "tool_execution_end", "toolName": "update_selected_material_tags", "isError": False,
+         "result": {"details": details}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "我已经把未确认的请求写进去了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    reply, result = _last_answer_and_preview(output, "material_result")
+    assert reply == "整条素材的我的标签已保存并回读：成片素材。"
+    assert result == {"kind": "material_result", "material_result": details}
+
+
+def test_material_tool_success_without_exact_object_readback_is_not_claimed():
+    output = "\n".join(json.dumps(event, ensure_ascii=False) for event in [
+        {"type": "tool_execution_end", "toolName": "update_selected_material_tags", "isError": False,
+         "result": {"details": {"scope": "segment", "asset_ref": "asset:asset-1", "user_tags": ["标签"]}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "已经保存。"}]}},
+        {"type": "agent_settled"},
+    ])
+    with pytest.raises(AssistantUnavailable):
+        _last_answer_and_preview(output, "material_result")
+
+
+def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monkeypatch, tmp_path):
+    seen = {}
+
+    def capture(_settings, **kwargs):
+        seen.update(kwargs)
+        return "收到。", None
+
+    monkeypatch.setattr("app.assistant_pi._run_turn", capture)
+    selection = {"scope": "segment", "asset_id": "asset-1", "segment_id": "segment-2"}
+    assert run_material_turn(
+        Settings(model_root_path=str(tmp_path), llm_provider="minimax"),
+        workspace_id="workspace-1", conversation_id="conversation-1", message="读取这个片段标签",
+        selection=selection,
+    ) == ("收到。", None)
+    assert seen["tool_names"] == "read_material_library_status,search_material_library,read_selected_material,update_selected_material_tags"
+    assert seen["material_selection"] == {
+        "scope": "segment", "assetId": "asset-1", "segmentId": "segment-2",
+    }
+    assert seen["stage"] == "material"
+    assert "segment-2" in seen["session_key"]
+
+
 def test_pi_events_reject_incomplete_turn():
-    with pytest.raises(AssistantUnavailable, match="完整回复"):
+    with pytest.raises(AssistantUnavailable):
         _last_answer_and_preview('{"type":"agent_settled"}')
+
+
+def test_pi_stream_projects_only_text_and_safe_business_tool_status():
+    projector = _PiStreamProjector()
+    assert projector.project(json.dumps({
+        "type": "message_update", "assistantMessageEvent": {
+            "type": "text_delta", "contentIndex": 0, "delta": "我先检查当前任务。",
+        },
+    })) == {"type": "text_delta", "delta": "我先检查当前任务。"}
+    assert projector.project(json.dumps({
+        "type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "delta": "private thought"},
+    })) is None
+    started = projector.project(json.dumps({
+        "type": "tool_execution_start", "toolCallId": "private-id",
+        "toolName": "read_current_task", "args": {"path": "/private/user/key.json"},
+    }))
+    assert started == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    ended = projector.project(json.dumps({
+        "type": "tool_execution_end", "toolCallId": "private-id",
+        "toolName": "read_current_task", "isError": False,
+        "result": {"details": {"status": "ready", "path": "/private/user/key.json"}},
+    }))
+    assert ended == {
+        "type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+        "summary": "当前任务和所选对象状态已读取。",
+    }
+    assert "/private/" not in json.dumps([started, ended])
+    assert "private-id" not in json.dumps([started, ended])
+
+
+def test_stream_tool_summary_uses_the_real_material_details_field():
+    assert _safe_tool_result_summary("find_materials", {
+        "details": {"matches": [{"asset_ref": "asset:one"}, {"asset_ref": "asset:two"}]},
+    }, False) == "已读取 2 项素材候选。"
+
+
+def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
+    monkeypatch.setattr(main_module, "_workspace_settings_for",
+                        lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
+    sanitizer = main_module._AssistantStreamTextSanitizer("local")
+    emitted = sanitizer.feed("先说结论：fixture-sec")
+    emitted += sanitizer.feed("ret-123 已核实。")
+    emitted += sanitizer.feed("", final=True)
+    assert "先说结论：" in emitted
+    assert "fixture-secret-123" not in emitted
+    assert "[已隐藏凭据]" in emitted
+
+    marked = main_module._AssistantStreamTextSanitizer("local")
+    redacted = marked.feed("说明 api_key=fixture-")
+    redacted += marked.feed("secret-123 可以读取。")
+    redacted += marked.feed("", final=True)
+    assert "fixture-secret-123" not in redacted
+
+
+def test_assistant_stream_response_sends_safe_events_then_authoritative_result(monkeypatch):
+    monkeypatch.setattr(main_module, "_workspace_settings_for",
+                        lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
+    app = FastAPI()
+
+    @app.get("/assistant-stream")
+    def stream():
+        def execute(publish):
+            publish({"type": "text_delta", "delta": "输出 fixture-secret-"})
+            publish({"type": "tool_start", "tool_id": 1, "label": "读取当前任务", "args": {"path": "/private/key"}})
+            publish({"type": "text_delta", "delta": "123 完成"})
+            publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                     "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
+            return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
+        return main_module._assistant_stream_response(execute, workspace_id="local")
+
+    response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert [event["type"] for event in events] == ["text_delta", "tool_start", "text_delta", "tool_end", "result"]
+    streamed_text = "".join(event.get("delta", "") for event in events if event["type"] == "text_delta")
+    assert "fixture-secret-123" not in streamed_text and "[已隐藏凭据]" in streamed_text
+    assert events[1] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    assert events[3] == {"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                         "summary": "当前任务和所选对象状态已读取。"}
+    assert events[-1]["result"]["reply"] == "当前制作条件已回读。"
+
+
+def test_pi_execution_action_reply_uses_returned_job_state_not_model_claim():
+    output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
+        {"type": "tool_execution_end", "toolName": "start_creation_execution", "isError": False,
+         "result": {"details": {"kind": "execution_action", "action": "start",
+         "status": {"job": {"status": "queued"}, "video_ready": False}}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "成片已经做好了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    assert _last_answer_and_preview(output, "execution_action") == (
+        "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。",
+        {"kind": "execution_action", "action": "start",
+         "status": {"job": {"status": "queued"}, "video_ready": False}},
+    )
+
+
+def test_pi_topic_generation_reply_preserves_real_candidates_and_unconfirmed_state():
+    topics = {"task": {"id": "task-one"}, "candidates": [{"id": "topic-one"}],
+              "evidence_references": [], "selected_topic_id": None, "latest_run": None,
+              "route_preflight": {}, "egress_preflight": {}}
+    output = "\n".join(json.dumps(item, ensure_ascii=False) for item in [
+        {"type": "tool_execution_end", "toolName": "generate_creation_task_topics", "isError": False,
+         "result": {"details": {"kind": "topic_generation", "topics": topics}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "已经替你选好了。"}]}},
+        {"type": "agent_settled"},
+    ])
+    reply, generated = _last_answer_and_preview(output, "topic_generation")
+    assert reply == "已为当前任务生成 1 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。"
+    assert generated == {"kind": "topic_generation", "topics": topics}
+
+
+def test_task_turn_exposes_only_stage_tools_and_named_actions(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.assistant_pi._run_turn", lambda _settings, **kwargs: calls.append(kwargs) or ("ok", None))
+    for stage in ("topic", "script", "narration"):
+        run_task_turn(None, workspace_id="local", task_id="task-one", message="用自然语言表达意图",
+                      stage=stage, selected_refs=[], playhead_ms=None)
+    assert "generate_creation_task_topics" in calls[0]["tool_names"]
+    assert "start_creation_execution" not in calls[0]["tool_names"]
+    assert "start_creation_execution" not in calls[1]["tool_names"]
+    assert "preview_script_draft" in calls[1]["tool_names"]
+    assert all(name in calls[2]["tool_names"] for name in (
+        "start_creation_execution", "resume_creation_execution", "cancel_creation_execution",
+    ))
 
 
 def test_pi_events_keep_plan_preview_separate_from_edit_preview():
@@ -194,7 +515,10 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
     assert edit_preview is None
     assert commands[3][commands[3].index("--session-id") + 1] != commands[0][commands[0].index("--session-id") + 1]
-    assert commands[3][commands[3].index("--tools") + 1] == "read_current_task,find_knowledge,find_materials,preview_edit"
+    assert commands[3][commands[3].index("--tools") + 1] == (
+        "read_current_task,find_knowledge,find_materials,preview_edit,"
+        "start_creation_execution,resume_creation_execution,cancel_creation_execution"
+    )
 
 
 def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_path):
@@ -348,7 +672,7 @@ def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):
                       stage="montage", selected_refs=[], playhead_ms=None)
 
 
-def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
+def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     seen = []
     def scoped_task(workspace_id, task_id):
         if workspace_id != "workspace-a" or task_id != "task-a":
@@ -374,12 +698,18 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
         )),
     )
     monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
+    repo = ConversationRepository(tmp_path / "assistant-task.sqlite3")
+    monkeypatch.setattr(main_module, "conversation_repo", repo)
+    conversation = repo.current_or_create("workspace-a", "member-caller", "task", "task-a")
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
-    payload = {"message": "请检查镜头", "context_stage": "montage",
+    message = "请检查镜头"
+    saved = repo.save_draft(conversation["id"], "workspace-a", "member-caller", message, 0)
+    payload = {"conversation_id": conversation["id"], "message": message, "context_stage": "montage",
+               "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
                "selected_object_refs": ["clip:clip-1"], "playhead_ms": 1200}
     denied = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload,
                          headers={"x-test-workspace": "workspace-b"})
@@ -392,24 +722,67 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch):
     assert seen[0]["selected_refs"] == ["clip:clip-1"]
 
 
-def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch):
+def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(main_module, "current_workspace_id",
                         lambda request: request.headers.get("x-test-workspace", "workspace-a"))
     monkeypatch.setattr(main_module, "run_plan_turn",
                         lambda settings, **kwargs: (seen.append(kwargs) or ("请说明视频目标。", None)))
+    monkeypatch.setattr(main_module, "_local_member_token", lambda _request: "member-caller")
+    monkeypatch.setattr(main_module, "local_members_service", SimpleNamespace(
+        resolve_member=lambda token: SimpleNamespace(member_id=token, role="member", name="成员甲", created_at=None),
+    ))
+    repo = ConversationRepository(tmp_path / "assistant-plan.sqlite3")
+    monkeypatch.setattr(main_module, "conversation_repo", repo)
+    conversation = repo.current_or_create("workspace-b", "member-caller", "home", "home")
     client = TestClient(main_module.app)
-    conversation_id = "11111111-1111-4111-8111-111111111111"
     rejected = client.post("/api/assistant/plan/turn", json={"message": "做视频", "conversation_id": "bad"})
     assert rejected.status_code == 422
     assert seen == []
-    response = client.post("/api/assistant/plan/turn",
-                           json={"message": "做视频", "conversation_id": conversation_id},
+    message = "做视频"
+    saved = client.patch(f"/api/assistant/conversations/{conversation['id']}",
+                         json={"draft_text": message, "expected_draft_version": conversation["draft_version"]},
+                         headers={"x-test-workspace": "workspace-b"})
+    assert saved.status_code == 200
+    request_body = {"message": message, "conversation_id": conversation["id"],
+                    "client_request_id": str(uuid4()),
+                    "expected_draft_version": saved.json()["draft_version"]}
+    response = client.post("/api/assistant/plan/turn", json=request_body,
                            headers={"x-test-workspace": "workspace-b"})
     assert response.status_code == 200
     assert response.json()["plan_preview"] is None
+    assert response.json()["draft_version"] == saved.json()["draft_version"] + 1
     assert seen[0]["workspace_id"] == "workspace-b"
-    assert seen[0]["conversation_id"] == conversation_id
+    assert seen[0]["conversation_id"] == conversation["id"]
+    replay = client.post("/api/assistant/plan/turn", json=request_body,
+                         headers={"x-test-workspace": "workspace-b"})
+    assert replay.status_code == 200 and replay.json() == response.json()
+    assert len(seen) == 1
+    reused = client.post("/api/assistant/plan/turn", json={**request_body, "message": "复用身份提交其他内容"},
+                         headers={"x-test-workspace": "workspace-b"})
+    assert reused.status_code == 409
+    assert len(seen) == 1
+
+    streamed_message = "补充新的制作要求"
+    latest = repo.get(conversation["id"], "workspace-b", "member-caller")
+    streamed_draft = client.patch(f"/api/assistant/conversations/{conversation['id']}",
+                                  json={"draft_text": streamed_message,
+                                        "expected_draft_version": latest["draft_version"]},
+                                  headers={"x-test-workspace": "workspace-b"})
+    assert streamed_draft.status_code == 200
+    streamed_body = {"message": streamed_message, "conversation_id": conversation["id"],
+                     "client_request_id": str(uuid4()),
+                     "expected_draft_version": streamed_draft.json()["draft_version"]}
+    stream_response = client.post("/api/assistant/plan/turn", json=streamed_body,
+                                  headers={"x-test-workspace": "workspace-b", "accept": "text/event-stream"})
+    assert stream_response.status_code == 200
+    stream_events = [json.loads(line[6:]) for line in stream_response.text.splitlines() if line.startswith("data: ")]
+    consumed_version = streamed_draft.json()["draft_version"] + 1
+    assert any(event.get("type") == "turn_started" and event.get("draft_version") == consumed_version
+               for event in stream_events)
+    terminal_result = next(event["result"] for event in stream_events if event.get("type") == "result")
+    assert terminal_result["draft_version"] == consumed_version
+    assert len(seen) == 2
 
 
 def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):

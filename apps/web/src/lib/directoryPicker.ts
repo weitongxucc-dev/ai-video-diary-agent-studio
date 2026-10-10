@@ -21,6 +21,7 @@ declare global {
   interface Window {
     electronAPI?: {
       openDirectory?: () => Promise<string | null>;
+      openFile?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;
       importMaterials?: (identity: MaterialImportIdentity) => Promise<MaterialImportResult>;
       saveRenderedVideo?: (taskId: string) => Promise<{
@@ -54,7 +55,8 @@ declare global {
 export type DirectoryPickResult =
   | { kind: "picked"; path: string }
   | { kind: "canceled" }
-  | { kind: "unavailable" };
+  | { kind: "unavailable" }
+  | { kind: "failed" };
 
 export type MaterialImportFailure = { sourceName: string; error: string };
 
@@ -140,5 +142,19 @@ export async function pickWavFile(): Promise<DirectoryPickResult> {
     return { kind: "canceled" };
   } catch {
     return { kind: "canceled" };
+  }
+}
+
+export function hasFilePicker(): boolean {
+  return typeof window !== "undefined" && typeof window.electronAPI?.openFile === "function";
+}
+
+export async function pickFile(): Promise<DirectoryPickResult> {
+  if (!hasFilePicker()) return { kind: "unavailable" };
+  try {
+    const path = await window.electronAPI!.openFile!();
+    return path ? { kind: "picked", path } : { kind: "canceled" };
+  } catch {
+    return { kind: "failed" };
   }
 }

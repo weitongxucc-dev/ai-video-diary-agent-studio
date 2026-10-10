@@ -982,6 +982,9 @@ export type CreationPlanInput = {
   duration_target_seconds: number;
   presenter_share_target?: 0 | 20 | 40 | 60 | 80 | 100;
   lipsync_quality?: "high" | "fast";
+
+  selected_voice?: { profile_id: string; version: string } | null;
+  selected_person?: { profile_id: string; version: string } | null;
 };
 
 export type CreationPlanKnowledgeReference = {
@@ -1173,6 +1176,7 @@ export type CreationTaskScript = {
   updated_at: string;
   confirmed_at: string | null;
   reused_from_entry_id?: string | null;
+  source_reply_reference?: { conversation_id: string; turn_id: string; response_digest: string } | null;
 };
 
 export type CreationTaskScriptsResponse = {
@@ -1200,12 +1204,16 @@ export type CreationTaskNarrationSegment = {
   audio_url: string | null;
   duration_seconds: number | null;
   sample_rate: number | null;
-  model_id: string;
-  voice_profile_id: string;
-  voice_version: string;
+  model_id: string | null;
+  voice_profile_id: string | null;
+  voice_version: string | null;
   language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   status: "pending" | "ready" | "generating" | "failed";
+  source_kind: "generated" | "recorded";
+  source_artifact_ref: string | null;
+  source_sha256: string | null;
+  source_script_digest: string | null;
 };
 
 export type CreationTaskNarration = {
@@ -1213,9 +1221,13 @@ export type CreationTaskNarration = {
   script_id: string;
   audio_reference: string;
   duration_seconds: number;
-  sample_rate: number;
-  model_id: string;
-  voice_profile_id: string;
+  sample_rate: number | null;
+  model_id: string | null;
+  voice_profile_id: string | null;
+  source_kind: "generated" | "recorded";
+  source_artifact_ref: string | null;
+  source_sha256: string | null;
+  source_script_digest: string | null;
   language: "zh" | "en" | "zh-en";
   pronunciation_version: string;
   segments: CreationTaskNarrationSegment[];
@@ -1387,7 +1399,7 @@ export type CreationTaskMontageClip = {
 };
 
 export type TimelineAudioClip = {
-  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number;
+  id: string; name: string; source_ref: string; source_start_ms: number; source_end_ms: number; timeline_start_ms: number; playback_rate?: number;
   gain_db: number; fade_in_ms: number; fade_out_ms: number; muted: boolean; locked: boolean; denoise_db: number; loudness_target_lufs?: number | null;
   gain_points: { offset_ms: number; gain_db: number }[]; editor_gain_points?: { offset_ms: number; gain_db: number }[]; envelope_offset_ms: number; envelope_duration_ms: number | null;
 };
@@ -1480,12 +1492,19 @@ export type CreationExecutionPreview = {
   script_title: string;
   script_sections: { title: string; content: string }[];
   plan_id: string;
+  narration_source: {
+    source_kind: "generated" | "recorded";
+    source_artifact_ref: string | null;
+    duration_seconds: number;
+  } | null;
   requirements: {
     aspect_ratio: string;
     duration_target_seconds: number;
     presenter_share_target: number;
     lipsync_quality: "high" | "fast";
     selected_voice: string | null;
+    can_continue: boolean;
+    continuation_blocker: string | null;
     template_settings: Record<string, unknown>;
   };
   input_digest: string;
@@ -1503,7 +1522,7 @@ export type CreationExecutionStatus = {
     repair_action: string | null;
   } | null;
   stages: { stage: string; status: string; reason?: string; at: string }[];
-  current_stage: "narration" | "montage_plan" | "render" | "cover" | null;
+  current_stage: "narration" | "person_render" | "montage_plan" | "render" | "cover" | null;
   waiting_reason: string | null;
   status_updated_at: string | null;
   video_ready: boolean;
@@ -1632,6 +1651,79 @@ export type CreationTaskAssistantTurnResponse = {
   model: string;
   edit_preview: CreationTaskEditPreviewResponse | null;
   script_draft: CreationTaskScript | null;
+  execution_action: "start" | "resume" | "cancel" | null;
+  execution_status: CreationExecutionStatus | null;
+  topic_candidates: CreationTaskTopicsResponse | null;
+  turn_id?: string | null;
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
+};
+
+export type AssistantStreamEvent =
+  | { type: "turn_started"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped"; draft_version?: number }
+  | { type: "turn_status"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped" }
+  | { type: "text_delta"; delta: string }
+  | { type: "tool_start"; tool_id: number; label: string }
+  | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string };
+
+export type AssistantToolActivity = {
+  tool_id: number;
+  label: string;
+  state: "running" | "succeeded" | "failed";
+  summary?: string;
+};
+
+export type AssistantTurnActivity = {
+  text: string;
+  tools: AssistantToolActivity[];
+  events: Extract<AssistantStreamEvent, { type: "text_delta" | "tool_start" | "tool_end" }>[];
+};
+
+export type AssistantConversationTurn = {
+  id: string;
+  sequence: number;
+  user_message: string;
+  assistant_text: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  events: AssistantTurnActivity["events"];
+  result: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AssistantConversation = {
+  id: string;
+  workspace_id: string;
+  scope_kind: "home" | "material" | "task";
+  scope_id: string;
+  title: string;
+  draft_text: string;
+  draft_version: number;
+  created_at: string;
+  updated_at: string;
+  turns: AssistantConversationTurn[];
+};
+
+export type AssistantConversationScope = Pick<AssistantConversation, "scope_kind" | "scope_id">;
+
+export type AssistantCapabilities = {
+  application_commands: string[];
+  pi_tui_commands: {
+    available: boolean;
+    inventory_source: string;
+    inventory_version: string;
+    runtime_version: string | null;
+    runtime_status: string;
+    runtime_reason: string;
+    runtime_check: string;
+    product_mode: string;
+    reason: string;
+    commands: string[];
+  };
+  extension_commands: { available: boolean; reason: string };
+  skills: { available: boolean; reason: string };
+  prompt_templates: { available: boolean; reason: string };
+  business_tools: Record<string, string[]>;
 };
 
 export type CreationTaskAssistantHistory = {
@@ -1665,7 +1757,15 @@ export type CreationTaskEditConfirmResponse = {
   narration?: CreationTaskNarration | null;
 };
 
-export type CreationPlanPreview = CreationPlanInput & {
+export type CreationTaskEditQueuedResponse = {
+  status: "queued";
+  job_id: string;
+  request_id: string;
+};
+export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
+
+
+export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
   template_settings?: VideoTemplateSettings;
   name: string;
   knowledge_references: CreationPlanKnowledgeReference[];
@@ -1681,6 +1781,7 @@ export type CreationPlanPreview = CreationPlanInput & {
   blockers: CreationPlanBlocker[];
   confirmable: boolean;
   preflight_fingerprint: string;
+  selected_person?: { profile_id: string; version: string } | null;
 };
 
 export type WorkspaceAssistantPlanTurnResponse = {
@@ -1688,6 +1789,34 @@ export type WorkspaceAssistantPlanTurnResponse = {
   provider: string;
   model: string;
   plan_preview: CreationPlanPreview | null;
+  turn_id?: string | null;
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
+};
+
+export type MaterialAssistantSelection =
+  | { scope: "asset"; asset_id: string }
+  | { scope: "segment"; asset_id: string; segment_id: string };
+
+export type MaterialAssistantResult = {
+  scope: "asset" | "segment";
+  asset_ref: string;
+  segment_ref: string | null;
+  user_tags: string[];
+  system_tags?: string[];
+  action?: "replace" | "add" | "remove";
+  changed?: boolean;
+  previous_user_tags?: string[];
+};
+
+export type MaterialAssistantTurnResponse = {
+  reply: string;
+  provider: string;
+  model: string;
+  material_result: MaterialAssistantResult | null;
+  turn_id?: string | null;
+  turn_status?: "running" | "completed" | "stopped";
+  draft_version?: number | null;
 };
 
 export type CreationPlan = CreationPlanPreview & {
@@ -2099,4 +2228,37 @@ export type KnowledgeGrantState = {
   cross_workspace_status: "AVAILABLE" | "UNVERIFIED";
   targets: { workspace_id: string; name: string }[];
   grants: KnowledgeGrant[];
+};
+
+export type PublishPlatform = "douyin" | "wechat" | "xiaohongshu";
+
+export type PublishPlatformCapability = {
+  platform: PublishPlatform;
+  label: string;
+  browser_connect: boolean;
+  browser_publish: boolean;
+  verified: boolean;
+  status: "candidate_unverified" | "not_connected";
+  requirement: string;
+};
+
+export type PlatformBrowserAccount = {
+  workspace_id: string;
+  user_id: string;
+  platform: PublishPlatform;
+  account_ref: string;
+  verified_at: string;
+};
+
+export type PlatformPublishJob = {
+  id: string;
+  task_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  progress: number;
+  queue_state: "waiting" | "blocked" | "granted" | "done" | "failed" | "cancelled" | "not_submitted" | string;
+  queue_wait_reason: string | null;
+  failure_reason: string | null;
+  impact: string | null;
+  repair_action: string | null;
+  events: Array<{ type: string; payload: Record<string, unknown>; created_at: string }>;
 };

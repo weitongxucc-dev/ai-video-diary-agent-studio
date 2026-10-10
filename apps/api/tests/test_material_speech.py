@@ -35,7 +35,8 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     assert analyzed.speech_analysis.status == "ready"
     assert analyzed.speech_analysis.observations[0].end_ms == 1000
     segment = analyzed.segments[0]
-    repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
+    asset = repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
+    repo.set_asset_visibility("workspace", asset.id, "shared")
     restarted = ProductionRepository(tmp_path / "db.sqlite", library, scene_reader=lambda path, duration: [], speech_analyzer=analyzer)
     restarted.analyze_asset("workspace", asset.id)
     assert transcribe.call_count == 1

@@ -52,7 +52,7 @@ def _save_knowledge(title: str = "设备资料") -> dict:
     assert source.status_code == 200, source.text
     saved = client.post(
         f"/api/source-items/{source.json()['id']}/save-to-knowledge",
-        json={"ownership": "自有", "authorization": "自有"},
+        json={},
         headers=_OWNER_HEADERS,
     )
     assert saved.status_code == 200, saved.text
@@ -157,11 +157,13 @@ def test_visibility_survives_reparse_new_version(tmp_path, monkeypatch):
             "filename": "说明书.md",
             "content_base64": "IyDmlbDlvJU=",
         },
+        headers=_OWNER_HEADERS,
     )
     assert parsed.status_code == 200, parsed.text
     saved = client.post(
         f"/api/source-items/{parsed.json()['id']}/save-to-knowledge",
-        json={"ownership": "自有", "authorization": "自有"},
+        json={},
+        headers=_OWNER_HEADERS,
     )
     assert saved.status_code == 200, saved.text
     # 新版本沿用同一条目，显式设置仍为 shared。

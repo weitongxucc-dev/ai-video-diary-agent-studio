@@ -55,7 +55,7 @@ def _save_private_knowledge(title: str, token: str) -> dict:
     assert source.status_code == 200, source.text
     saved = client.post(
         f"/api/source-items/{source.json()['id']}/save-to-knowledge",
-        json={"ownership": "自有", "authorization": "自有"},
+        json={},
         headers=headers,
     )
     assert saved.status_code == 200, saved.text

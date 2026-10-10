@@ -27,11 +27,11 @@ it("selects an actual audio range and keeps solo in listening requests",async()=
   expect(position).toHaveBeenCalledWith(4.5);
 });
 
-it("sends an exact gain proposal without changing the source range",()=>{
+it("sends an exact gain submission without changing the source range",()=>{
   const preview=vi.fn();
   render(<AudioTimelineInspector track={track} clip={track.clips[0]} versionId="version" playhead={5} busy={false} onPreview={preview} onDraftChange={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("音量（dB）"),{target:{value:"-12"}});
-  fireEvent.click(screen.getByRole("button",{name:"预览音频修改"}));
+  fireEvent.click(screen.getByRole("button",{name:"保存音频草稿"}));
   expect(preview).toHaveBeenCalledWith({base_version_id:"version",target_id:"clip",action:"update",values:{gain_db:-12}});
   expect(track.clips[0].source_start_ms).toBe(1000);
 });

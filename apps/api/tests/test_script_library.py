@@ -55,7 +55,10 @@ def library(tmp_path, monkeypatch):
             "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", json.dumps(asdict(script), default=str),
                                       script.updated_at.isoformat()),
         )
-    repo.confirm_creation_task_script("local", task.id, script.id, title=script.title, sections=script.sections)
+    repo.confirm_creation_task_script(
+        "local", task.id, script.id, title=script.title, sections=script.sections,
+        expected_updated_at=script.updated_at,
+    )
     monkeypatch.setattr(main, "production_repo", repo)
     monkeypatch.setattr(main, "source_repository", sources)
     # Use the actual routes without starting background workers/models.
@@ -104,8 +107,14 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
     assert draft["sections"][0]["id"] != "section_original"
     assert draft["sections"][0]["evidence_reference_ids"] == ["knowledge:knowledge_own:1"]
     assert client.get(f"/api/creation-tasks/{task.id}").status_code == 200
-    confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
+    stale_confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
         "title": draft["title"], "sections": draft["sections"],
+        "expected_updated_at": "2000-01-01T00:00:00+00:00",
+    })
+    assert stale_confirm.status_code == 409
+    assert repo.get_creation_task(task.workspace_id, task.id).confirmed_script_id is None
+    confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
+        "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     })
     assert confirm.status_code == 200, confirm.text
     assert repo.get_creation_task("local", task.id).confirmed_script_id == draft["id"]
@@ -130,13 +139,51 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
     assert save(client)["version"] == 2  # Owned confirmed history can still be saved.
     draft = created["script"]
     assert client.post(f"/api/creation-tasks/{created['task_id']}/scripts/{draft['id']}/confirm", json={
-        "title": draft["title"], "sections": draft["sections"],
+        "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     }).status_code == 409
     assert repo.get_creation_task("local", created["task_id"]).confirmed_script_id is None
     with sources._connect() as conn:
         conn.execute("UPDATE knowledge_items SET workspace_id='other' WHERE id='knowledge_own'")
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
     assert states[0]["status"] == "missing" and states[0]["title"] is None
+
+
+def test_reference_only_source_remains_a_reference_but_excluded_knowledge_is_blocked(library):
+    client, _, sources = library
+    entry = save(client)
+    sources.set_knowledge_item_use_state("local", "knowledge_own", "reference_only")
+    readable = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
+    assert readable[0]["status"] == "readable"
+    sources.set_knowledge_item_use_state("local", "knowledge_own", "excluded")
+    excluded = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
+    assert excluded[0]["status"] == "missing"
+    assert excluded[0]["title"] is None
+    assert reuse(client, entry["id"]).status_code == 409
+
+
+def test_library_rechecks_reference_without_legacy_rights_proof_fields(library):
+    client, repo, sources = library
+    with sources._connect() as conn:
+        conn.execute(
+            "UPDATE knowledge_items SET authorization='', ownership='' WHERE id='knowledge_own'"
+        )
+    with repo._connect() as conn:
+        row = conn.execute(
+            "SELECT payload FROM creation_plans WHERE id='plan_original'"
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        payload["knowledge_references"][0]["authorization"] = ""
+        payload["knowledge_references"][0]["ownership"] = ""
+        conn.execute(
+            "UPDATE creation_plans SET payload=? WHERE id='plan_original'",
+            (json.dumps(payload),),
+        )
+    entry = save(client)
+    sources_state = client.get(
+        f"/api/production/script-library/{entry['id']}/sources"
+    ).json()
+    assert sources_state[0]["status"] == "readable"
+    assert reuse(client, entry["id"]).status_code == 200
 
 
 def test_citation_reports_the_cited_version_facts_after_the_current_version_moved(library):
@@ -195,6 +242,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     repo.confirm_creation_task_script(
         "local", "task_original", "script_original", title="模块化介绍",
         sections=[CreationTaskScriptSection(**section) for section in payload["sections"]],
+        expected_updated_at=repo.get_creation_task_script("local", "script_original").updated_at,
     )
     entry = save(client)
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()

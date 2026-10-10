@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from app.database_migrations import (
@@ -16,6 +16,38 @@ from app.knowledge_files import KnowledgeParameter, KnowledgeSection
 
 if TYPE_CHECKING:
     from app.source_repository import SourceRepository
+
+
+ContentUseState = Literal[
+    "available",
+    "reference_only",
+    "excluded",
+    "not_for_automation",
+    "not_for_publish",
+]
+ContentUsePurpose = Literal[
+    "read", "reference", "understanding", "automatic_selection", "media", "preview", "publish"
+]
+CONTENT_USE_STATES = frozenset(
+    {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}
+)
+
+
+def content_allows_use(state: str, purpose: ContentUsePurpose) -> bool:
+    """Return whether a saved item may serve this consumer purpose."""
+    if state not in CONTENT_USE_STATES:
+        raise ValueError(f"unknown content use state: {state}")
+    if purpose not in {"read", "reference", "understanding", "automatic_selection", "media", "preview", "publish"}:
+        raise ValueError(f"unknown content use purpose: {purpose}")
+    if state == "excluded":
+        return False
+    if state == "reference_only" and purpose in {"automatic_selection", "media", "publish"}:
+        return False
+    if purpose == "automatic_selection" and state == "not_for_automation":
+        return False
+    if purpose == "publish" and state == "not_for_publish":
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -54,6 +86,7 @@ class SourceItem:
     parameters: tuple[KnowledgeParameter, ...] = ()
     # 网页快照的抓取时间；其他来源没有抓取动作时为空。
     fetched_at: datetime | None = None
+    use_state: ContentUseState = "available"
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -95,6 +128,7 @@ class KnowledgeItem:
     # 当前版本内容的抓取时间；不是网页快照时为空。
     fetched_at: datetime | None = None
     source_url: str | None = None
+    use_state: ContentUseState = "available"
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

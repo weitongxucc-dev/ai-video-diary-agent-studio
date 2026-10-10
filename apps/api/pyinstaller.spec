@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from PyInstaller.utils.hooks import collect_all
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 _SPEC_DIR = Path(SPECPATH)  # type: ignore[name-defined]  # noqa: F821
@@ -71,6 +72,12 @@ _HIDDEN_IMPORTS = sorted(
     )
 )
 
+# Playwright locates its Node driver relative to its installed package and
+# imports implementation modules dynamically; collect its runtime payload as
+# well as hidden imports so the approved browser path survives the API bundle.
+_PLAYWRIGHT_DATAS, _PLAYWRIGHT_BINARIES, _PLAYWRIGHT_HIDDEN = collect_all("playwright")
+_HIDDEN_IMPORTS = sorted(set(_HIDDEN_IMPORTS + _PLAYWRIGHT_HIDDEN))
+
 # ── Excludes: trim large, unused packages ────────────────────────────────────
 _EXCLUDES: list[str] = [
     "tkinter",
@@ -110,8 +117,8 @@ _EXCLUDE_BINARIES: list[str] = [
 a = Analysis(  # type: ignore[name-defined]  # noqa: F821
     [str(_ENTRY)],
     pathex=[str(_SPEC_DIR), str(_REPO_ROOT)],
-    binaries=[],
-    datas=[(src, dest) for src, dest in _ASSET_DIRS],
+    binaries=_PLAYWRIGHT_BINARIES,
+    datas=[(src, dest) for src, dest in _ASSET_DIRS] + _PLAYWRIGHT_DATAS,
     hiddenimports=_HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},

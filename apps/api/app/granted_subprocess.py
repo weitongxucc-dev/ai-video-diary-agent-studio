@@ -19,23 +19,6 @@ from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, Recove
 from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits
 
 
-_TRAMPOLINE = """
-import os, sys
-gate = int(sys.argv[1])
-try:
-    approved = os.read(gate, 1)
-finally:
-    os.close(gate)
-if approved != b'G':
-    sys.exit(126)
-try:
-    os.execvp(sys.argv[2], sys.argv[2:])
-except OSError as exc:
-    print(f'exec failed: {exc}', file=sys.stderr)
-    sys.exit(127)
-"""
-
-
 @dataclass(frozen=True)
 class GrantedCommandResult:
     returncode: int
@@ -184,8 +167,9 @@ def run_granted_command(
     resources = getattr(scheduler, "resources", None)
     scene_unit = (isinstance(grant, Grant) and grant.owner_type == "material_asset"
                   and grant.unit_key.startswith("scene-window:v1:"))
-    model_unit = (isinstance(grant, Grant) and grant.owner_type == "creation_job"
-                  and grant.unit_key.startswith("narration:"))
+    model_unit = (isinstance(grant, Grant) and (
+        (grant.owner_type == "creation_job" and grant.unit_key.startswith(("narration:", "person_render:", "person_edit:")))
+        or (grant.owner_type == "media_preview" and grant.unit_key.startswith(("voice:", "avatar_lipsync:")))))
     if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None
@@ -197,9 +181,12 @@ def run_granted_command(
     outputs = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
     exec_ack = False
+    entrypoint = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", _TRAMPOLINE, str(read_fd), *argv],
+            [*entrypoint, "--grant-exec", str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
             env=env,
@@ -226,7 +213,7 @@ def run_granted_command(
 
         def check_running_unit():
             nonlocal next_permission_sample
-            if isinstance(grant, Grant) and grant.owner_type == "creation_job" and time.monotonic() >= next_permission_sample:
+            if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit) and time.monotonic() >= next_permission_sample:
                 scheduler.assert_grant(grant)
                 next_permission_sample = time.monotonic() + 1.0
             if max_output_file_bytes is not None:

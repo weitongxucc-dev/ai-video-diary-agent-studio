@@ -9,12 +9,15 @@ from typing import Sequence
 from uuid import uuid4
 
 from app.sources import (
+    CONTENT_USE_STATES,
+    ContentUsePurpose,
     KnowledgeItem,
     KnowledgeItemVersion,
     KnowledgeGrant,
     SourceConnector,
     SourceItem,
     SourceRunEvidence,
+    content_allows_use,
 )
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
@@ -130,6 +133,28 @@ class SourceRepository:
             raise KeyError(item_id)
         return self._source_item_from_row(row)
 
+    def set_source_item_use_state(
+        self, workspace_id: str, item_id: str, use_state: str
+    ) -> SourceItem:
+        self._require_workspace(workspace_id)
+        self._validate_use_state(use_state)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE source_items SET use_state = ? WHERE id = ? AND workspace_id = ?",
+                (use_state, item_id, workspace_id),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(item_id)
+        return self.get_source_item(workspace_id, item_id)
+
+    def get_source_item_for_use(
+        self, workspace_id: str, item_id: str, *, purpose: ContentUsePurpose
+    ) -> SourceItem:
+        item = self.get_source_item(workspace_id, item_id)
+        if not content_allows_use(item.use_state, purpose):
+            raise KeyError(item_id)
+        return item
+
     def list_source_items(
         self, workspace_id: str, connector_id: str | None = None
     ) -> list[SourceItem]:
@@ -143,6 +168,14 @@ class SourceRepository:
         with self._connect() as conn:
             rows = conn.execute(query, values).fetchall()
         return [self._source_item_from_row(row) for row in rows]
+
+    def list_source_items_for_use(
+        self, workspace_id: str, *, purpose: ContentUsePurpose
+    ) -> list[SourceItem]:
+        return [
+            item for item in self.list_source_items(workspace_id)
+            if content_allows_use(item.use_state, purpose)
+        ]
 
     def create_knowledge_item(
         self,
@@ -173,17 +206,30 @@ class SourceRepository:
         return self.create_knowledge_item(replace(item, owner_user_id=owner))
 
     def _validate_knowledge_item(self, item: KnowledgeItem) -> None:
-        if (
-            not item.title.strip()
-            or not all(
-                (item.ownership.strip(), item.authorization.strip(), item.version.strip())
-            )
-        ):
-            raise ValueError(
-                "knowledge item requires title, ownership, authorization, and version"
-            )
+        if not item.title.strip() or not item.version.strip():
+            raise ValueError("knowledge item requires title and version")
+        self._validate_use_state(item.use_state)
         if not item.body and not item.file_reference:
             raise ValueError("knowledge item requires body or file_reference")
+
+    @staticmethod
+    def _validate_use_state(use_state: str) -> None:
+        if use_state not in CONTENT_USE_STATES:
+            raise ValueError(f"unknown content use state: {use_state}")
+
+    def set_knowledge_item_use_state(
+        self, workspace_id: str, item_id: str, use_state: str
+    ) -> KnowledgeItem:
+        self._require_workspace(workspace_id)
+        self._validate_use_state(use_state)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE knowledge_items SET use_state = ? WHERE id = ? AND workspace_id = ?",
+                (use_state, item_id, workspace_id),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(item_id)
+        return self.get_knowledge_item(workspace_id, item_id)
 
     def _insert_knowledge_item(
         self, conn: sqlite3.Connection, item: KnowledgeItem
@@ -199,8 +245,8 @@ class SourceRepository:
                 id, workspace_id, content_type, title, body, file_reference,
                 authorization, ownership, source_item_id, version, created_at,
                 visibility, content_hash, sections, parameters, fetched_at, source_url,
-                owner_user_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                owner_user_id, use_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -224,6 +270,7 @@ class SourceRepository:
                 item.source_url,
                 # 上传者身份随内容落库，读取时据此判断私有内容归属。
                 item.owner_user_id,
+                item.use_state,
             ),
         )
 
@@ -232,9 +279,8 @@ class SourceRepository:
         workspace_id: str,
         source_item_id: str,
         *,
-        ownership: str,
-        authorization: str,
-        version: str = "1",
+        ownership: str = "",
+        authorization: str = "",
         verified_owner_user_id: str | None = None,
     ) -> KnowledgeItem:
         """保存为知识条目。手动来源保持原有行为，不参与文件版本链。
@@ -245,10 +291,16 @@ class SourceRepository:
         owner = str(verified_owner_user_id or "").strip() or None
         source = self.get_source_item(workspace_id, source_item_id)
         if source.content_hash is None:
-            # 未经过文件解析的来源（如手动链接）保持原有行为。
-            return self.create_knowledge_item(
+            # 重试同一来源只返回本成员首次保存的知识对象，并同步用户当前限制状态。
+            with self._connect() as conn:
+                existing = conn.execute(
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND source_item_id = ? AND owner_user_id IS ? ORDER BY created_at LIMIT 1",
+                    (workspace_id, source.id, owner),
+                ).fetchone()
+                if existing is not None:
+                    return self._knowledge_item_from_row(existing)
+            return self.create_knowledge_item_owned(
                 KnowledgeItem(
-                    owner_user_id=owner,
                     id=f"ki_{uuid4().hex}",
                     workspace_id=workspace_id,
                     content_type=source.content_type,
@@ -258,8 +310,10 @@ class SourceRepository:
                     authorization=authorization,
                     ownership=ownership,
                     source_item_id=source.id,
-                    version=version,
-                )
+                    version="1",
+                    use_state=source.use_state,
+                ),
+                verified_user_id=owner,
             )
         return self._save_parsed_source_to_knowledge(
             workspace_id, source, ownership=ownership, authorization=authorization,
@@ -290,10 +344,10 @@ class SourceRepository:
             same_head = conn.execute(
                 f"""
                 SELECT * FROM knowledge_items
-                WHERE workspace_id = ? AND content_hash = ? {scope_sql}
+                WHERE workspace_id = ? AND owner_user_id IS ? AND content_hash = ? {scope_sql}
                 ORDER BY created_at LIMIT 1
                 """,
-                (workspace_id, source.content_hash, *scope),
+                (workspace_id, verified_owner_user_id, source.content_hash, *scope),
             ).fetchone()
             if same_head is not None:
                 return self._knowledge_item_from_row(same_head)
@@ -304,11 +358,11 @@ class SourceRepository:
                 FROM knowledge_item_versions v
                 JOIN knowledge_items k ON k.id = v.knowledge_item_id
                 WHERE v.workspace_id = ? AND v.content_hash = ?
-                  AND k.workspace_id = ? AND k.content_hash <> v.content_hash
+                  AND k.workspace_id = ? AND k.owner_user_id IS ? AND k.content_hash <> v.content_hash
                   {"AND k.file_reference = ?" if is_web_snapshot else ""}
                 ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
                 """,
-                (workspace_id, source.content_hash, workspace_id, *scope),
+                (workspace_id, source.content_hash, workspace_id, verified_owner_user_id, *scope),
             ).fetchone()
             if stored_version is not None:
                 head = conn.execute(
@@ -323,10 +377,10 @@ class SourceRepository:
                     """
                     SELECT * FROM knowledge_items
                     WHERE workspace_id = ? AND file_reference = ?
-                      AND content_hash IS NOT NULL
+                      AND owner_user_id IS ? AND content_hash IS NOT NULL
                     ORDER BY created_at DESC LIMIT 1
                     """,
-                    (workspace_id, source.file_reference),
+                    (workspace_id, source.file_reference, verified_owner_user_id),
                 ).fetchone()
                 if source.file_reference
                 else None
@@ -336,10 +390,10 @@ class SourceRepository:
                     """
                     SELECT * FROM knowledge_items
                     WHERE workspace_id = ? AND source_item_id = ?
-                      AND content_hash IS NOT NULL
+                      AND owner_user_id IS ? AND content_hash IS NOT NULL
                     ORDER BY created_at DESC LIMIT 1
                     """,
-                    (workspace_id, source.id),
+                    (workspace_id, source.id, verified_owner_user_id),
                 ).fetchone()
         if parent is None:
             item = KnowledgeItem(
@@ -359,6 +413,7 @@ class SourceRepository:
                 parameters=source.parameters,
                 fetched_at=source.fetched_at,
                 source_url=source.source_url,
+                use_state=source.use_state,
             )
             self._validate_knowledge_item(item)
             # 知识条目头与它的第一版快照在同一事务写入，回查不会看到没有版本的条目。
@@ -399,6 +454,7 @@ class SourceRepository:
                 content_hash=source.content_hash,
                 sections=source.sections,
                 parameters=source.parameters,
+                use_state=previous.use_state,
             )
         )
         # 当前版本头与新版本快照在同一个事务里写入，回查不会看到半套状态。
@@ -408,7 +464,7 @@ class SourceRepository:
                 UPDATE knowledge_items SET
                     content_type = ?, title = ?, body = ?, file_reference = ?,
                     version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?, fetched_at = ?, source_url = ?
+                    source_item_id = ?, fetched_at = ?, source_url = ?, use_state = ?
                 WHERE id = ? AND workspace_id = ?
                 """,
                 (
@@ -423,6 +479,7 @@ class SourceRepository:
                     source.id,
                     source.fetched_at.isoformat() if source.fetched_at else None,
                     source.source_url,
+                    previous.use_state,
                     previous.id,
                     workspace_id,
                 ),
@@ -451,6 +508,7 @@ class SourceRepository:
         content_hash: str,
         *,
         knowledge_item_id: str | None = None,
+        verified_owner_user_id: str | None = None,
     ) -> KnowledgeItemVersion | None:
         """查出某个内容指纹对应的已保存历史版本（重复结果定位）。
 
@@ -463,10 +521,14 @@ class SourceRepository:
                 f"""
                 SELECT * FROM knowledge_item_versions
                 WHERE workspace_id = ? AND content_hash = ?
+                  AND knowledge_item_id IN (
+                    SELECT id FROM knowledge_items WHERE workspace_id = ? AND owner_user_id IS ?
+                  )
                 {"AND knowledge_item_id = ?" if knowledge_item_id else ""}
                 ORDER BY saved_at DESC LIMIT 1
                 """,
-                (workspace_id, content_hash, *((knowledge_item_id,) if knowledge_item_id else ())),
+                (workspace_id, content_hash, workspace_id, verified_owner_user_id,
+                 *((knowledge_item_id,) if knowledge_item_id else ())),
             ).fetchone()
         if row is None:
             return None
@@ -600,7 +662,7 @@ class SourceRepository:
         with self._connect() as conn:
             if visibilities is None:
                 rows = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND use_state != 'excluded' ORDER BY created_at DESC",
                     (workspace_id,),
                 ).fetchall()
             else:
@@ -610,16 +672,28 @@ class SourceRepository:
                 placeholders = ", ".join("?" for _ in wanted)
                 rows = conn.execute(
                     f"SELECT * FROM knowledge_items WHERE workspace_id = ? "
-                    f"AND visibility IN ({placeholders}) ORDER BY created_at DESC",
+                    f"AND visibility IN ({placeholders}) AND use_state != 'excluded' ORDER BY created_at DESC",
                     (workspace_id, *wanted),
                 ).fetchall()
         return [self._knowledge_item_from_row(row) for row in rows]
+
+    def list_knowledge_items_for_use(
+        self, workspace_id: str, *, purpose: ContentUsePurpose,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> list[KnowledgeItem]:
+        return [
+            item for item in self.list_knowledge_items_readable_by(
+                workspace_id, user_id=user_id, local_diagnostic=local_diagnostic
+            )
+            if content_allows_use(item.use_state, purpose)
+        ]
 
     @staticmethod
     def _knowledge_access_clause() -> str:
         # Both reads and references consume this one predicate. A shared flag
         # applies only inside the source workspace; cross-space needs a grant.
         return """(
+            knowledge_items.use_state != 'excluded' AND (
             (knowledge_items.workspace_id = :workspace_id AND
                 (visibility = :shared OR (visibility = :private AND owner_user_id = :user_id)))
             OR EXISTS (
@@ -629,7 +703,7 @@ class SourceRepository:
                   AND grant.target_workspace_id = :workspace_id
                   AND grant.revoked_at IS NULL
                   AND grant.granted_by = knowledge_items.owner_user_id
-            )
+            ))
         )"""
 
     def list_knowledge_items_readable_by(
@@ -645,7 +719,7 @@ class SourceRepository:
         with self._connect() as conn:
             if local_diagnostic:
                 rows = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE workspace_id = ? ORDER BY created_at DESC",
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND use_state != 'excluded' ORDER BY created_at DESC",
                     (workspace_id,),
                 ).fetchall()
             else:
@@ -670,7 +744,7 @@ class SourceRepository:
         with self._connect() as conn:
             if local_diagnostic:
                 row = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND id = ?",
+                    "SELECT * FROM knowledge_items WHERE workspace_id = ? AND id = ? AND use_state != 'excluded'",
                     (workspace_id, item_id),
                 ).fetchone()
             else:
@@ -683,6 +757,18 @@ class SourceRepository:
         if row is None:
             raise KeyError(item_id)
         return self._knowledge_item_from_row(row)
+
+    def get_knowledge_item_for_use(
+        self, workspace_id: str, item_id: str, *, purpose: ContentUsePurpose,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> KnowledgeItem:
+        """Resolve an authorized item only when its saved use state permits purpose."""
+        item = self.get_knowledge_item_readable_by(
+            workspace_id, item_id, user_id=user_id, local_diagnostic=local_diagnostic
+        )
+        if not content_allows_use(item.use_state, purpose):
+            raise KeyError(item_id)
+        return item
 
     def get_knowledge_version_readable_by(
         self, workspace_id: str, item_id: str, version: str, *,
@@ -1009,6 +1095,7 @@ class SourceRepository:
                     file_reference TEXT,
                     fetched_at TEXT,
                     created_at TEXT NOT NULL,
+                    use_state TEXT NOT NULL DEFAULT 'available',
                     FOREIGN KEY(connector_id) REFERENCES source_connectors(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_source_items_workspace
@@ -1031,6 +1118,7 @@ class SourceRepository:
                     visibility TEXT NOT NULL DEFAULT 'private',
                     -- 上传者身份（已验证的 user_id）；旧行与本地无身份写入留空。
                     owner_user_id TEXT,
+                    use_state TEXT NOT NULL DEFAULT 'available',
                     FOREIGN KEY(source_item_id) REFERENCES source_items(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
@@ -1102,6 +1190,12 @@ class SourceRepository:
             }
             if "owner_user_id" not in knowledge_columns:
                 conn.execute("ALTER TABLE knowledge_items ADD COLUMN owner_user_id TEXT")
+            for table in ("source_items", "knowledge_items"):
+                existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if "use_state" not in existing:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN use_state TEXT NOT NULL DEFAULT 'available'"
+                    )
             # 本卡（WIL-134）新增网页快照列：抓取时间和当次读到的网址。
             for table in ("source_items", "knowledge_items"):
                 existing = {
@@ -1165,14 +1259,16 @@ class SourceRepository:
             ).fetchone()
             if connector is None:
                 raise KeyError(item.connector_id)
+            # A normal refresh may update source facts but must not reset an explicit
+            # use restriction; callers change it through set_source_item_use_state.
             conn.execute(
                 """
                 INSERT INTO source_items (
                     id, workspace_id, connector_id, source_label, source_url, content_type,
                     author, published_at, body, subtitles, media_references,
                     license, title, file_reference, created_at, content_hash,
-                    sections, parameters, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sections, parameters, fetched_at, use_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_label = excluded.source_label,
                     source_url = excluded.source_url,
@@ -1211,6 +1307,7 @@ class SourceRepository:
                     _sections_json(item.sections),
                     _parameters_json(item.parameters),
                     item.fetched_at.isoformat() if item.fetched_at else None,
+                    item.use_state,
                 ),
             )
 
@@ -1243,6 +1340,7 @@ class SourceRepository:
             sections=tuple(KnowledgeSection(**section) for section in json.loads(row["sections"])),
             parameters=tuple(KnowledgeParameter(**parameter) for parameter in json.loads(row["parameters"])),
             fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
+            use_state=row["use_state"],
             created_at=_parse_datetime(row["created_at"]),
         )
 
@@ -1258,6 +1356,7 @@ class SourceRepository:
             fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
             source_url=row["source_url"],
             owner_user_id=str(row["owner_user_id"]) if row["owner_user_id"] else None,
+            use_state=row["use_state"],
             created_at=_parse_datetime(row["created_at"]),
         )
 
@@ -1274,6 +1373,7 @@ class SourceRepository:
     def _validate_source_item(self, workspace_id: str, item: SourceItem) -> None:
         if item.workspace_id != workspace_id:
             raise ValueError("source item workspace does not match save workspace")
+        self._validate_use_state(item.use_state)
         if (
             not item.title.strip()
             or not item.source_label.strip()

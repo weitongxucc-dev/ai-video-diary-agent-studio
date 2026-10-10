@@ -43,13 +43,23 @@ class TaskAudio:
         transform = self.repository.get_transform_run(workspace_id, transform_id)
         duration_ms = transform.parameters.get("duration_ms")
         task = self.repository.get_creation_task(workspace_id, task_id)
-        if (job.task_id != task_id or job.status != "succeeded" or transform.task_id != task_id
+        saved_script_id = transform.parameters.get("script_id")
+        saved_script_digest = transform.parameters.get("script_digest")
+        current_script_digest = self.repository.confirmed_creation_task_script_digest(
+            workspace_id, task_id, task.confirmed_script_id,
+        )
+        saved_montage_id = transform.parameters.get("montage_plan_id")
+        if (job.task_id != task_id or job.kind != "task_recording" or job.status != "succeeded"
+                or transform.transform_type != "task_recording" or transform.task_id != task_id
                 or transform.job_id != job.id or transform.status != "succeeded"
                 or transform.output_refs != [reference]
-                or transform.parameters.get("script_id") != task.confirmed_script_id
-                or transform.parameters.get("montage_plan_id") != task.montage_plan_id
+                or (saved_montage_id is not None
+                    and saved_montage_id != task.montage_plan_id)
                 or type(duration_ms) is not int or duration_ms <= 0):
             raise ValueError("电脑录音尚未完整保存")
+        if (not task.confirmed_script_id or saved_script_id != task.confirmed_script_id
+                or not current_script_digest or saved_script_digest != current_script_digest):
+            raise ValueError("当前确认文案已变化，不能采用旧录音；请为当前文案重新录制")
         path = self.source(workspace_id, task_id, reference)
         if path.stat().st_size != record.size_bytes:
             raise ValueError("电脑录音文件已变化")
@@ -75,12 +85,34 @@ class TaskAudio:
             elif current in records:
                 pending.extend(records[current].input_refs)
 
-    def validate(self, workspace_id: str, task_id: str, timeline: AudioTimeline, duration_seconds: float):
+    def validate(self, workspace_id: str, task_id: str, timeline: AudioTimeline, duration_seconds: float,
+                 *, draft_only: bool = False):
         durations = {}
         for track in timeline.tracks:
             for clip in track.clips:
                 if clip.source_ref not in durations:
-                    durations[clip.source_ref] = probe_audio_source(self.source(workspace_id, task_id, clip.source_ref))
+                    path = self.source(workspace_id, task_id, clip.source_ref)
+                    if not draft_only:
+                        durations[clip.source_ref] = probe_audio_source(path)
+                    elif clip.source_ref.startswith("narration://artifact/"):
+                        artifact = self.repository.get_narration_artifact(
+                            workspace_id, clip.source_ref.removeprefix("narration://artifact/"))
+                        durations[clip.source_ref] = artifact.duration_seconds
+                    elif clip.source_ref.startswith("workspace://"):
+                        with self.repository._connect() as conn:
+                            row = conn.execute(
+                                "SELECT payload FROM material_assets WHERE workspace_id=? AND file_path=?",
+                                (workspace_id, str(path))).fetchone()
+                        durations[clip.source_ref] = json.loads(row["payload"]).get("duration_seconds") if row else None
+                    else:
+                        record = next(item for item in self.repository.list_artifact_records(workspace_id, task_id)
+                                      if item.logical_ref == clip.source_ref)
+                        transform = self.repository.get_transform_run(
+                            workspace_id, record.producer_job_id.replace("job_", "transform_", 1))
+                        measured_ms = transform.parameters.get("duration_ms")
+                        durations[clip.source_ref] = measured_ms / 1000 if type(measured_ms) is int and measured_ms > 0 else None
+                    if durations[clip.source_ref] is None:
+                        raise ValueError("音频缺少已保存的时长，请重新导入后再编辑草稿")
                 if clip.source_end_ms > round(durations[clip.source_ref] * 1000) + 20:
                     raise ValueError("音频裁剪区间超出原文件时长")
                 if clip.timeline_start_ms + clip.duration_ms > round(duration_seconds * 1000):
@@ -120,7 +152,7 @@ class TaskAudio:
             transform = self.repository.create_transform_run(TransformRun(id=f"transform_{identity}", workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, transform_type=kind, input_digest=digest, input_refs=input_refs,
                 output_refs=[artifact.logical_ref], engine=engine,
-                parameters={**parameters, **({"duration_ms": round(duration * 1000)} if kind == "task_recording" else {})},
+                parameters={**parameters, "duration_ms": round(duration * 1000)},
                 status="succeeded", started_at=running.started_at, finished_at=utc_now()))
             for index, reference in enumerate(input_refs):
                 self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,

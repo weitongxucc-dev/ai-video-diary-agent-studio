@@ -55,6 +55,15 @@ vi.mock("../DesktopVoiceRecorder", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  createAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `new-conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  listAssistantConversations: vi.fn().mockResolvedValue({ items: [] }),
+  getAssistantConversation: vi.fn(),
+  resumeAssistantConversation: vi.fn(),
+  updateAssistantConversation: vi.fn(async (id: string, update: { draft_text?: string; title?: string; expected_draft_version?: number }) => ({ id, workspace_id: "local", scope_kind: "task" as const, scope_id: "task-1", title: update.title ?? "新对话", draft_text: update.draft_text ?? "", draft_version: (update.expected_draft_version ?? 0) + (update.draft_text === undefined ? 0 : 1), created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
+  restoreUnpersistedAssistantTurnDraft: vi.fn(async (id: string, input: { user_message: string; expected_draft_version: number }) => ({ status: "restored" as const, conversation: { id, workspace_id: "local", scope_kind: "task" as const, scope_id: "task-1", title: "新对话", draft_text: input.user_message, draft_version: input.expected_draft_version + 1, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] } })),
+  stopAssistantConversationTurn: vi.fn(),
+  getAssistantCapabilities: vi.fn().mockResolvedValue({ application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"], pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] }, extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {} }),
   apiUrl: (path: string) => path,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
   getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
@@ -73,6 +82,7 @@ vi.mock("@/lib/api", () => ({
   getCreationTaskMontageClipCandidates: vi.fn(),
   getCreationTaskTopics: vi.fn(),
   getCreationTaskWorkspace: mocks.getWorkspace,
+  listCreationTaskRecordings: vi.fn().mockResolvedValue({ items: [] }),
   getCreationTaskQualityCheck: mocks.getQualityCheck,
   checkCreationTaskQuality: mocks.checkQuality,
   initializeCreationTaskTimeline: vi.fn(),
@@ -95,7 +105,7 @@ vi.mock("@/lib/api", () => ({
   selectCreationTaskNarrationVoice: vi.fn(),
   undoCreationTaskTimeline: vi.fn(),
   redoCreationTaskTimeline: vi.fn(),
-  getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 200, offset: 0, has_more: false }),
+  getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, limit: 100, offset: 0, has_more: false }),
 }));
 
 // 输出页所需的最小工作区：stage=review、有 output_url、无有效字幕轨
@@ -346,9 +356,13 @@ describe("CreationTaskWorkspace 字幕保存", () => {
     }));
     await waitFor(() => expect(save).toBeEnabled());
     expect(screen.queryByText(/字幕已保存/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "本地未提交草稿" } });
     fireEvent.click(save);
     expect(await screen.findByRole("alert")).toHaveTextContent("当前字幕版本已变化");
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("本地未提交草稿");
+    expect(screen.getByRole("alert")).toHaveTextContent("当前任务与字幕草稿未修改");
     fireEvent.click(save);
     expect(await screen.findByText(/字幕已保存：task-1-zh-en.srt/)).toBeInTheDocument();
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("本地未提交草稿");
   });
 });

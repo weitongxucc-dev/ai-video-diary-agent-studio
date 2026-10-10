@@ -23,10 +23,23 @@ function statusLabel(status: RuntimeHealthStatus): string {
     degraded: "受限制",
     invalid: "需调整",
     missing: "未备好",
-    ready: "可使用",
+    ready: "检查通过",
   };
   return labels[status];
 }
+
+function itemStatusLabel(item: RuntimeHealthItem): string {
+  // This endpoint checks configuration and local prerequisites, not model calls.
+  return item.id === "deepseek" && item.status === "ready"
+    ? "已配置·待验证"
+    : statusLabel(item.status);
+}
+
+const settingsTargets: Record<string, string> = {
+  deepseek: "model", local_whisper: "asr", external_sources: "sources",
+  obsidian: "paths", video_inbox: "paths", video_output: "paths",
+  draft_output: "paths", jianying: "paths", local_vlm: "paths", local_visual_semantics: "paths",
+};
 
 function healthRows(items: RuntimeHealthItem[]): RuntimeHealthItem[] {
   const order = ["deepseek", "obsidian", "ffmpeg", "local_whisper"];
@@ -54,8 +67,11 @@ export default async function HealthPage() {
     <div className={styles.sectionHeading}><h2>制作准备</h2><Link className={styles.secondaryButton} href="/settings">打开设置</Link></div>
     {offline ? <section className={styles.errorState} role="alert"><AlertCircle size={20}/><p>暂时连不上本机服务，请重试。</p></section> : <div className={styles.healthCards}>
       {health && healthRows(health.items).map(item => <details key={item.id} className={styles.healthCard}>
-        <summary><span>{item.status === "ready" ? <Check size={16}/> : <AlertCircle size={16}/>}<strong>{names[item.label] ?? item.label}</strong></span><small>{statusLabel(item.status)}</small></summary>
-        <div><p>{item.reason}</p><p>{item.impact}</p><p>{item.repair_action}</p></div>
+        <summary><span>{item.status === "ready" ? <Check size={16}/> : <AlertCircle size={16}/>}<strong>{names[item.label] ?? item.label}</strong></span><small>{itemStatusLabel(item)}</small></summary>
+        <div><p>{item.reason}</p><p>{item.impact}</p><p>{item.repair_action}</p>
+          <p>检查时间：<time dateTime={item.last_checked_at}>{new Date(item.last_checked_at).toLocaleString("zh-CN")}</time></p>
+          {settingsTargets[item.id] ? <Link href={`/settings?section=${settingsTargets[item.id]}`}>调整相关设置</Link> : null}
+        </div>
       </details>)}
     </div>}
   </div></AppShell>;

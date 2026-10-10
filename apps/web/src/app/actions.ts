@@ -169,7 +169,6 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
 
     await updateRuntimeSettings(payload);
     revalidatePath("/settings");
-    redirectWithToast(destination, "success", "配置已保存");
   } catch (err) {
     redirectWithToast(
       destination,
@@ -177,6 +176,7 @@ export async function updateRuntimeSettingsAction(formData: FormData) {
       `保存配置失败：${safeErrorMessage(err, "未知错误")}`,
     );
   }
+  redirectWithToast(destination, "success", "配置已保存");
 }
 
 export async function updateProductionProfileAction(formData: FormData) {

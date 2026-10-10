@@ -13,4 +13,7 @@ class ChannelsAdapter(BaseBrowserAdapter):
     title_selector = "[data-e2e='title']"  # 未验证
     desc_selector = "[data-e2e='desc']"  # 未验证
     topics_selector = "[data-e2e='topics']"  # 未验证
-    draft_button_selector = "[data-e2e='save-draft']"  # 未验证
+    login_evidence_selector = "[data-e2e='creator-avatar']"  # 未验证
+    account_identity_selector = "[data-e2e='creator-name']"  # 未验证
+    submit_selector = "[data-e2e='publish-submit']"  # 未验证
+    published_id_selector = "[data-e2e='publish-result-id']"  # 未验证

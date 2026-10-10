@@ -85,7 +85,7 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const [foundation, persistedTasks] = await Promise.all([
@@ -96,7 +96,7 @@ export default async function ProductionPage({
 
   if (params.view === "automations") {
     return (
-      <AppShell creationTasks={creationTasks}>
+      <AppShell creationTasks={creationTasks} workspaceStatus={{ kind: "attention", label: "定时任务仅供只读预览，尚未接通执行" }}>
         <ScheduledTasksWorkspace />
       </AppShell>
     );
@@ -104,6 +104,13 @@ export default async function ProductionPage({
 
   if (params.new === "1") {
     const initialGoal = params.goal ?? "";
+    const replyValues = [params.reply_conversation_id, params.reply_turn_id, params.reply_request_id];
+    const hasReplyOrigin = replyValues.some(Boolean);
+    const isUuid = (value: string | undefined): value is string => Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+    const replyOrigin = replyValues.every(isUuid) ? {
+      conversation_id: params.reply_conversation_id!, turn_id: params.reply_turn_id!, request_id: params.reply_request_id!,
+    } : null;
+    if (hasReplyOrigin && !replyOrigin) return <AppShell creationTasks={creationTasks}><section role="alert"><h1>回复来源无法识别</h1><p>没有读取对话正文或创建任务；请从已完成的首页回复重新选择。</p></section></AppShell>;
     let template = null;
     if (params.template_id || params.template_version) {
       const templates = await listVideoTemplates().catch(() => null);
@@ -118,6 +125,8 @@ export default async function ProductionPage({
             <CreateProductionTaskForm
               autoFocus={!initialGoal}
               initialGoal={initialGoal}
+              draftId={params.draft_id}
+              replyOrigin={replyOrigin}
               template={template}
             />
           </section>

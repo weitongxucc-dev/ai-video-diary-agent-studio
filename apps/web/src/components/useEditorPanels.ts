@@ -4,8 +4,10 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export function useEditorPanels(enabled: boolean) {
-  const [left, setLeft] = useState(188);
-  const [right, setRight] = useState(280);
+  const [left, setLeft] = useState(160);
+  // Only an explicit user resize becomes a remembered width. Responsive defaults
+  // must not turn into a permanent 360px preference on the first visit.
+  const [right, setRight] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
@@ -16,8 +18,8 @@ export function useEditorPanels(enabled: boolean) {
     if (!enabled) return;
     const savedLeft = Number(localStorage.getItem("video-editor-left-width"));
     const savedRight = Number(localStorage.getItem("video-workspace-chat-width"));
-    if (Number.isFinite(savedLeft) && savedLeft >= 188) setLeft(clamp(savedLeft, 188, 280));
-    if (Number.isFinite(savedRight) && savedRight >= 280) setRight(clamp(savedRight, 280, 400));
+    if (Number.isFinite(savedLeft) && savedLeft >= 160) setLeft(clamp(savedLeft, 160, 280));
+    if (Number.isFinite(savedRight) && savedRight >= 320) setRight(clamp(savedRight, 320, 480));
     setCollapsed(localStorage.getItem("video-editor-left-collapsed") === "true");
     setChatCollapsed(localStorage.getItem("video-workspace-chat-collapsed") === "true");
     setWorkspaceCollapsed(localStorage.getItem("video-editor-workspace-collapsed") === "true");
@@ -29,27 +31,26 @@ export function useEditorPanels(enabled: boolean) {
   useEffect(() => {
     if (!enabled || !loaded) return;
     localStorage.setItem("video-editor-left-width", String(left));
-    localStorage.setItem("video-workspace-chat-width", String(right));
+    if (right !== null) localStorage.setItem("video-workspace-chat-width", String(right));
     localStorage.setItem("video-editor-left-collapsed", String(collapsed));
     localStorage.setItem("video-workspace-chat-collapsed", String(chatCollapsed));
     localStorage.setItem("video-editor-workspace-collapsed", String(workspaceCollapsed));
   }, [enabled, loaded, left, right, collapsed, chatCollapsed, workspaceCollapsed]);
-  const centerMinimum = viewport < 1280 ? 480 : 560;
-  const leftWidth = collapsed ? 64 : Math.min(left, Math.max(188, viewport - 280 - centerMinimum));
-  const maxRight = Math.min(400, viewport - leftWidth - centerMinimum - 40);
-  // 收起只让列宽归零，记住的栏宽不动，恢复即回到原宽度
-  const chatWidth = clamp(right, 280, Math.max(280, maxRight));
-  const rightWidth = chatCollapsed ? 0 : chatWidth;
+  const centerMinimum = 480;
+  const leftWidth = collapsed ? 56 : Math.min(left, Math.max(160, viewport - 320 - centerMinimum));
+  const maxRight = Math.max(320, Math.min(480, viewport - leftWidth - centerMinimum));
+  const chatWidth = clamp(right ?? (viewport >= 1200 ? 360 : 320), 320, maxRight);
+  const rightWidth = chatCollapsed ? 44 : chatWidth;
   function resize(side: "left" | "right", width: number) {
-    if (side === "left") setLeft(clamp(width, 188, Math.max(188, Math.min(280, viewport - chatWidth - centerMinimum))));
-    else setRight(clamp(width, 280, Math.max(280, maxRight)));
+    if (side === "left") setLeft(clamp(width, 160, Math.max(160, Math.min(280, viewport - chatWidth - centerMinimum))));
+    else setRight(clamp(width, 320, maxRight));
   }
   function separator(side: "left" | "right") {
     return {
       role: "separator" as const, tabIndex: 0, "aria-orientation": "vertical" as const,
       "aria-label": side === "left" ? "调整导航栏宽度" : "调整对话栏宽度",
-      "aria-valuemin": side === "left" ? 188 : 280,
-      "aria-valuemax": side === "left" ? 280 : Math.max(280, maxRight),
+      "aria-valuemin": side === "left" ? 160 : 320,
+      "aria-valuemax": side === "left" ? 280 : maxRight,
       "aria-valuenow": Math.round(side === "left" ? left : chatWidth),
       onPointerDown(event: PointerEvent<HTMLDivElement>) {
         if (event.button !== 0) return;

@@ -60,7 +60,7 @@ def _save(client: TestClient, source_item_id: str, workspace: str | None = None)
     headers = {"x-test-workspace": workspace} if workspace else {}
     return client.post(
         f"/api/source-items/{source_item_id}/save-to-knowledge",
-        json={"ownership": "自有", "authorization": "用户提供"},
+        json={},
         headers=headers,
     )
 
@@ -209,10 +209,12 @@ def test_manual_source_keeps_its_own_version_semantics_and_is_not_merged_into_fi
     ).json()
     manual_saved = client.post(
         f"/api/source-items/{manual['id']}/save-to-knowledge",
-        json={"ownership": "自有", "authorization": "用户提供", "version": "v2"},
+        json={},
     ).json()
-    # 手动来源保留调用方给的版本字符串，不被文件链的整数版本改写。
-    assert manual_saved["version"] == "v2"
+    # 手动来源使用仓储分配的版本，不会被调用方伪造版本字符串或并入文件链。
+    assert manual_saved["version"] == "1"
+    assert manual_saved["ownership"] == ""
+    assert manual_saved["authorization"] == ""
     assert manual_saved["content_hash"] is None
     assert manual_saved["duplicate_of_version"] is None
 

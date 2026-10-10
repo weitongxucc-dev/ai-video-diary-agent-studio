@@ -23,8 +23,9 @@ from app.model_runtime import ModelCatalog
 from app.local_members import LocalMemberService
 from app.production import (
     ArtifactRecord,
-    Authorization,
     CreationPlan,
+    CreationPlanPersonReference,
+    CreationPlanVoiceReference,
     CreationPlanBlocker,
     CreationTask,
     DependencyEdge,
@@ -36,7 +37,6 @@ from app.production import (
     MediaAuthorityError,
     NarrationArtifactRecord,
     NarrationSegment,
-    PersonProfile,
     PersonRender,
     PronunciationEntry,
     ProductionBatch,
@@ -60,6 +60,11 @@ from app.topics import (
 from app.task_runtime import JobResult
 from app.visual_semantics import VisualEmbedding
 from app.video_jobs import VideoJobRunner
+from _media_preview_test_fixtures import (
+    register_synthetic_profiles,
+    synthetic_wav_bytes,
+    write_synthetic_video,
+)
 
 
 class _FakeVisualProvider:
@@ -248,57 +253,27 @@ def _save_versioned_voice(
     workspace_id: str,
     voice_id: str,
     version: str,
-    reference_audio_path: str,
+    verified_owner_user_id: str,
     language: str = "zh",
     authorization_status: str = "active",
 ) -> VersionedVoiceProfile:
-    person_authorization = Authorization(
-        id=f"{voice_id}-person-authorization",
+    person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
+        production,
         workspace_id=workspace_id,
-        version="v1",
-        rights_holder="权利人",
-        content_types=("person_likeness",),
-        usage_scopes=("avatar_lipsync",),
-        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        expires_at=None,
-        evidence_reference="consent://person/1",
-        status="active",
-    )
-    person = PersonProfile(
-        id=f"{voice_id}-person",
-        workspace_id=workspace_id,
-        display_name="主播",
-        version="v1",
-        avatar_reference="asset://avatar/host",
-        background_capabilities=("studio",),
-        shot_capabilities=("medium",),
-        authorization=person_authorization,
-    )
-    production.save_person_profile(person)
-    voice = VersionedVoiceProfile(
-        id=voice_id,
-        workspace_id=workspace_id,
-        person_profile_id=person.id,
-        person_version=person.version,
-        version=version,
-        language=language,  # type: ignore[arg-type]
-        reference_audio_path=reference_audio_path,
-        reference_text="经过授权的声音参考文字。",
+        member_id=verified_owner_user_id,
+        person_id=f"{voice_id}-person",
+        voice_id=voice_id,
+        person_version="v1",
+        voice_version=version,
+        language=language,
         model_id="test-voice-model",
-        authorization=Authorization(
-            id=f"{voice_id}-authorization",
-            workspace_id=workspace_id,
-            version="v1",
-            rights_holder="权利人",
-            content_types=("voice",),
-            usage_scopes=("narration",),
-            effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
-            expires_at=None,
-            evidence_reference="consent://voice/1",
-            status=authorization_status,  # type: ignore[arg-type]
-        ),
     )
-    return production.save_versioned_voice_profile(voice)
+    if authorization_status != "active":
+        voice = replace(voice, authorization=replace(voice.authorization, status=authorization_status))
+        voice = production.save_versioned_voice_profile(
+            voice, verified_owner_user_id=verified_owner_user_id
+        )
+    return voice
 
 
 @pytest.fixture
@@ -315,8 +290,8 @@ def _seed_creation_plan_facts(
     sources: SourceRepository,
     *,
     workspace_id: str,
-    verified_owner_user_id: str | None = None,
-) -> None:
+    verified_owner_user_id: str,
+) -> Path:
     connector = SourceConnector(
         id=f"connector-{workspace_id}",
         workspace_id=workspace_id,
@@ -359,25 +334,22 @@ def _seed_creation_plan_facts(
         verified_user_id=verified_owner_user_id,
     )
     video = production.video_library_path / f"{workspace_id}.mp4"
-    video.write_bytes(b"video")
+    write_synthetic_video(video, seconds=25)
     _confirm_library_copies(production, workspace_id)
     asset = production.scan_library(workspace_id)[0]
+    asset.owner_user_id = verified_owner_user_id
+    production._save_asset(asset)
+    video_reference = production.workspace_media_reference_for_asset(workspace_id, asset.id)
+    with production._connect() as conn:
+        production._claim_workspace_media_reference(
+            conn, workspace_id=workspace_id, reference=video_reference
+        )
     production.analyze_asset(workspace_id, asset.id)
-    production.update_asset_review(
-        workspace_id,
-        asset.id,
-        review_status="approved",
-        usage_role="b_roll",
-    )
-    voice_reference = production.video_library_path / "approved" / f"{workspace_id}.wav"
-    voice_reference.parent.mkdir(exist_ok=True)
-    voice_reference.write_bytes(b"voice")
-    voice = _save_versioned_voice(
-        production,
-        workspace_id=workspace_id,
-        voice_id=f"voice-{workspace_id}",
-        version="v1",
-        reference_audio_path=f"workspace://approved/{workspace_id}.wav",
+    production.update_asset_review(workspace_id, asset.id, review_status="approved", usage_role="b_roll")
+    _person, voice, _avatar_authorization, voice_path, _image_path = register_synthetic_profiles(
+        production, workspace_id=workspace_id, member_id=verified_owner_user_id,
+        person_id=f"voice-{workspace_id}-person", voice_id=f"voice-{workspace_id}",
+        person_version="v1", voice_version="v1", language="zh", model_id="test-voice-model",
     )
     production.save_pronunciation_entry(
         PronunciationEntry(
@@ -391,6 +363,7 @@ def _seed_creation_plan_facts(
             version="v1",
         )
     )
+    return voice_path
 
 
 def test_materials_require_analysis_and_usage_review_but_default_user_content_is_usable(tmp_path):
@@ -442,9 +415,13 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
 ])
 def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use_state,usable):
     production=_repository(tmp_path)
-    (production.video_library_path/'state.mp4').write_bytes(b'local fixture')
+    members = LocalMemberService(production.database_path.with_name("members.sqlite3"))
+    member, _token = members.whoami(None)
+    write_synthetic_video(production.video_library_path/'state.mp4', seconds=25)
     _confirm_library_copies(production, 'workspace_a')
     asset=production.scan_library('workspace_a')[0]
+    asset.owner_user_id = member.member_id
+    production._save_asset(asset)
     assert asset.use_state=='available'
     asset=production.analyze_asset('workspace_a',asset.id)
     asset=production.update_asset_review('workspace_a',asset.id,review_status='approved',usage_role='b_roll')
@@ -456,7 +433,9 @@ def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use
     production._save_asset(stale,analysis_only=True)
     restarted=ProductionRepository(database_path=production.database_path,video_library_path=production.video_library_path)
     assert restarted.get_asset('workspace_a',asset.id).use_state==use_state
-    assert bool(restarted.search_material_segments('workspace_a',usage_roles=['b_roll']))==usable
+    assert bool(restarted.search_material_segments(
+        'workspace_a', usage_roles=['b_roll'], viewer_user_id=member.member_id
+    ))==usable
     if usable:
         assert restarted.resolve_clip_media_reference('workspace_a',asset.id,reference).is_file()
     else:
@@ -504,10 +483,14 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     tmp_path,
 ):
     production = _repository(tmp_path)
+    members = LocalMemberService(production.database_path.with_name("members.sqlite3"))
+    member, _token = members.whoami(None)
     video = production.video_library_path / "office-demo.mp4"
-    video.write_bytes(b"video")
+    write_synthetic_video(video, seconds=25)
     _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
+    asset.owner_user_id = member.member_id
+    production._save_asset(asset)
     asset = production.analyze_asset("workspace_a", asset.id)
     asset = production.update_asset_review(
         "workspace_a",
@@ -524,7 +507,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         transcript="演示如何使用电脑完成文档编辑",
         review_status="approved",
         usage_role="b_roll",
-        user_tags=["项目:教程"],
+        user_tags=["项目:教程", "动作:打字"],
     )
     segment = next(item for item in asset.segments if item.id == segment.id)
 
@@ -534,9 +517,10 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         tags=["动作:打字"],
         min_duration_seconds=4,
         max_duration_seconds=6,
+        viewer_user_id=member.member_id,
     )
     natural = production.search_material_segments(
-        "workspace_a", query="我想找办公室打字镜头"
+        "workspace_a", query="我想找办公室打字镜头", viewer_user_id=member.member_id
     )
     assert structured[0].segment_ref == f"segment:{segment.id}"
     assert natural[0].segment_ref == structured[0].segment_ref
@@ -575,7 +559,11 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         name=plan.name,
         scenario=plan.goal,
     )
-    saved_plan, _ = production.confirm_creation_plan(plan, task)
+    plan.owner_user_id = member.member_id
+    task.owner_user_id = member.member_id
+    saved_plan, _ = production.confirm_creation_plan(
+        plan, task, verified_owner_user_id=member.member_id
+    )
     assert saved_plan.material_matches == [structured[0]]
     with pytest.raises(ValueError, match="实际命中"):
         production.confirm_creation_plan(
@@ -622,7 +610,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         structured[0]
     ]
     assert reloaded.search_material_segments(
-        "workspace_a", query="办公室打字"
+        "workspace_a", query="办公室打字", viewer_user_id=member.member_id
     )[0].segment_ref == structured[0].segment_ref
     assert (
         reloaded.get_creation_plan("workspace_a", "legacy-plan-read-only").material_matches
@@ -2000,7 +1988,7 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     )
 
     assert [item.usage_role for item in reviewed.segments] == ["a_roll", "b_roll"]
-    assert production.readiness("workspace_a")["approved_segment_count"] == 1
+    assert production.readiness("workspace_a", local_diagnostic=True)["approved_segment_count"] == 1
 
 
 def test_production_api_exposes_foundation_and_retires_batch_creation(tmp_path, monkeypatch):
@@ -2073,6 +2061,38 @@ def test_production_foundation_reads_legacy_batches_without_recovery_writes(
 def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     production = _repository(tmp_path)
     _save_creation_task(production, workspace_id="workspace_a", task_id="task-person")
+    members = LocalMemberService(production.database_path.with_name("members.sqlite3"))
+    member, _token = members.whoami(None)
+    person, voice, _avatar_auth, _voice_path, _image_path = register_synthetic_profiles(
+        production, workspace_id="workspace_a", member_id=member.member_id,
+        person_id="person-a", voice_id="voice-person", person_version="v1",
+        voice_version="v1", language="zh", model_id="qwen3-tts",
+    )
+    plan = production.get_creation_plan("workspace_a", "plan-task-person")
+    plan.selected_person = CreationPlanPersonReference(person.id, person.version)
+    plan.selected_voice = CreationPlanVoiceReference(
+        voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version,
+        voice.authorization.id, voice.authorization.version, "zh", voice.model_id,
+    )
+    plan.owner_user_id = member.member_id
+    task = production.get_creation_task("workspace_a", "task-person")
+    task.owner_user_id = member.member_id
+    with production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(plan), default=str), "workspace_a", plan.id))
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(task), default=str), "workspace_a", task.id))
+    narration_path = tmp_path / "narration-source.wav"
+    narration_path.write_bytes(synthetic_wav_bytes(6))
+    narration_cache_key = "person-render-narration-v1"
+    narration_reference = production.narration_artifact_reference(narration_cache_key)
+    production.save_narration_artifact(NarrationArtifactRecord(
+        id="narration-artifact-person", workspace_id="workspace_a", task_id="task-person",
+        script_id="script-task-person", voice_profile_id=voice.id,
+        cache_key=narration_cache_key, audio_path=str(narration_path), duration_seconds=5.5,
+        sample_rate=24_000, model_id="qwen3-tts",
+    ))
     script_id, sections = _seed_confirmed_script(
         production,
         workspace_id="workspace_a",
@@ -2086,7 +2106,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         script_id=script_id,
         source_section_id=str(sections[0]["id"]),
         text=str(sections[0]["content"]),
-        audio_reference="narration://segment/person/v1",
+        audio_reference=narration_reference,
         duration_seconds=5.5,
         sample_rate=24_000,
         model_id="qwen3-tts",
@@ -2109,56 +2129,18 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     )
 
     visual = production.video_library_path / "person.mp4"
-    visual.write_bytes(b"person-video")
+    write_synthetic_video(visual, seconds=25)
     _confirm_library_copies(production, "workspace_a")
     asset = production.scan_library("workspace_a")[0]
+    asset.owner_user_id = member.member_id
+    production._save_asset(asset)
     visual_reference = production.workspace_media_reference_for_asset(
         "workspace_a", asset.id
     )
-    (production.video_library_path / "voice.wav").write_bytes(b"voice")
-    authorization = Authorization(
-        id="person-authorization",
-        workspace_id="workspace_a",
-        version="v1",
-        rights_holder="本人",
-        content_types=("person_likeness",),
-        usage_scopes=("avatar_lipsync",),
-        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        expires_at=None,
-        evidence_reference="consent://person/v1",
-        status="active",
-    )
-    person = production.save_person_profile(
-        PersonProfile(
-            id="person-a",
-            workspace_id="workspace_a",
-            display_name="cc",
-            version="v1",
-            avatar_reference=visual_reference,
-            background_capabilities=("office",),
-            shot_capabilities=("medium",),
-            authorization=authorization,
+    with production._connect() as conn:
+        production._claim_workspace_media_reference(
+            conn, workspace_id="workspace_a", reference=visual_reference
         )
-    )
-    production.save_versioned_voice_profile(
-        VersionedVoiceProfile(
-            id="voice-person",
-            workspace_id="workspace_a",
-            person_profile_id=person.id,
-            person_version=person.version,
-            version="v1",
-            language="zh",
-            reference_audio_path="workspace://voice.wav",
-            reference_text="参考声音",
-            model_id="qwen3-tts",
-            authorization=replace(
-                authorization,
-                id="voice-authorization",
-                content_types=("voice",),
-                usage_scopes=("narration", "avatar_lipsync"),
-            ),
-        )
-    )
     pending = production.create_person_render(
         PersonRender(
             id="person-render-a",
@@ -2392,6 +2374,48 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypa
     assert versions == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
+def test_recorded_narration_schema_migrates_v14_generated_rows_without_rewrite(tmp_path, monkeypatch):
+    database_path = tmp_path / "narration-v14.sqlite3"
+    created_at = datetime.now(timezone.utc).isoformat()
+    library_path = tmp_path / "library"
+    library_path.mkdir()
+    monkeypatch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+    ProductionRepository(database_path, library_path)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        for version, sql in _MIGRATIONS:
+            if version == PRODUCTION_SCHEMA_VERSION:
+                break
+            if sql:
+                conn.executescript(
+                    "BEGIN IMMEDIATE;\n" + sql + "\nCOMMIT;"
+                )
+            conn.execute("INSERT INTO production_schema_migrations (version) VALUES (?)", (version,))
+        conn.execute(
+            """INSERT INTO narration_segments
+               (id, workspace_id, task_id, script_id, source_section_id, text,
+                audio_reference, duration_seconds, sample_rate, model_id,
+                voice_profile_id, voice_version, language, pronunciation_version,
+                status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("narration-old", "local", "task-old", "script-old", "section-old",
+             "既有文案", "narration://artifact/generated-old", 2.5, 24000,
+             "qwen-existing", "voice-existing", "v3", "zh", "dict-v1",
+             "ready", created_at, created_at),
+        )
+        apply_production_migrations(conn)
+        row = conn.execute(
+            "SELECT model_id, voice_profile_id, voice_version, source_kind, source_artifact_ref, source_sha256, source_script_digest FROM narration_segments WHERE id='narration-old'"
+        ).fetchone()
+        columns = {item[1]: item for item in conn.execute("PRAGMA table_info(narration_segments)")}
+        trigger = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='narration_segments_stable_identity'"
+        ).fetchone()
+    assert row == ("qwen-existing", "voice-existing", "v3", "generated", None, None, None)
+    assert all(columns[name][3] == 0 for name in ("model_id", "voice_profile_id", "voice_version"))
+    assert trigger == (1,)
+
+
 def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolated(
     tmp_path,
     monkeypatch,
@@ -2421,6 +2445,8 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
         "language": "zh-CN",
         "aspect_ratio": "9:16",
         "duration_target_seconds": 60,
+        "selected_voice": {"profile_id": "voice-workspace_a", "version": "v1"},
+        "selected_person": {"profile_id": "voice-workspace_a-person", "version": "v1"},
     }
     before_hash = hashlib.sha256(production.database_path.read_bytes()).hexdigest()
 
@@ -2541,28 +2567,36 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
 def test_creation_plan_preflight_reports_missing_authorized_voice_wav(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(production, sources, workspace_id="local")
-    (production.video_library_path / "approved" / "local.wav").unlink()
+    voice_path = _seed_creation_plan_facts(
+        production, sources, workspace_id="local",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
+    voice_path.unlink()
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "local")
 
-    response = TestClient(main_module.app).post(
+    response = TestClient(main_module.app, headers=plan_owner[1]).post(
         "/api/creation-plans/preview",
-        json={"goal": "制作一条中文口播视频"},
+        json={
+            "goal": "制作一条中文口播视频",
+            "selected_voice": {"profile_id": "voice-local", "version": "v1"},
+            "selected_person": {"profile_id": "voice-local-person", "version": "v1"},
+        },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert any(
-        blocker["reason"] == "voice_reference_wav_unavailable"
+        blocker["reason"] == "参考文件失联或为空，请重新定位原参考"
         and blocker["stage"] == "narration"
         and blocker["blocks_confirmation"] is False
         for blocker in response.json()["blockers"]
-    )
+    ), response.text
 
 
 def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
@@ -2985,7 +3019,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     ]
     confirmed = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{script['id']}/confirm",
-        json={"title": "用户确认后的文案", "sections": edited_sections},
+        json={"title": "用户确认后的文案", "sections": edited_sections,
+              "expected_updated_at": script["updated_at"]},
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["task"]["stage"] == "narration"
@@ -3040,11 +3075,12 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
         json={"title": "直接修订", "sections": [
             {**asdict(section), "content": "直接压缩正文，无需再次调用文字模型。"} for section in saved_script.sections
-        ]},
+        ], "expected_updated_at": saved_script.updated_at.isoformat()},
     )
     assert direct_repair.status_code == 200, direct_repair.text
     assert direct_repair.json()["task"]["stage_status"] == "not_started"
     assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
+    saved_script = reloaded.get_creation_task_script("workspace_a", saved_script.id)
     assert len(script_calls) == 1
     assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
     reloaded.start_creation_task_narration("workspace_a", task_id)
@@ -3084,6 +3120,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
             )
             for section in saved_script.sections
         ],
+        expected_updated_at=saved_script.updated_at,
     )
     assert repaired_task.stage == "narration"
     assert repaired_task.stage_status == "not_started"
@@ -3102,6 +3139,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
 def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     workspace_id = "workspace_a"
@@ -3150,18 +3188,23 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         stage_impact="未生成配音。",
         stage_repair_action="登记授权声音。",
         stage_retryable=True,
+        owner_user_id=plan_owner[0].member_id,
     )
-    production.confirm_creation_plan(plan, task)
-    reference = production.video_library_path / "approved" / "voice-recovery.wav"
-    reference.parent.mkdir(exist_ok=True)
-    reference.write_bytes(b"valid-wav-reference")
+    plan.owner_user_id = plan_owner[0].member_id
+    plan, task = production.confirm_creation_plan(
+        plan, task, verified_owner_user_id=plan_owner[0].member_id
+    )
     voice = _save_versioned_voice(
         production,
         workspace_id=workspace_id,
         voice_id="voice-recovery",
         version="v1",
-        reference_audio_path="workspace://approved/voice-recovery.wav",
+        verified_owner_user_id=plan_owner[0].member_id,
     )
+    plan.selected_person = CreationPlanPersonReference(voice.person_profile_id, voice.person_version)
+    with production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(plan), default=str), workspace_id, plan.id))
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
@@ -3177,12 +3220,12 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         ),
     )
 
-    response = TestClient(main_module.app).post(
+    response = TestClient(main_module.app, headers=plan_owner[1]).post(
         f"/api/creation-tasks/{task.id}/narration/voice",
         json={"voice_profile_id": voice.id, "voice_version": voice.version},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     body = response.json()
     assert body["plan"]["selected_voice"]["profile_id"] == voice.id
     assert body["task"]["stage"] == "narration"
@@ -3311,28 +3354,12 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
     assert unavailable_state.json()["latest_run"]["route_snapshot"]["availability"] == "unconfigured"
     assert unavailable_state.json()["candidates"] == []
 
-    _configure_workspace_text_service(
-        "workspace_a",
-        provider="custom",
-        base_url="https://model.example/v1",
-        model="topic-test",
-        api_key="test-key",
-    )
     source = sources.get_source_item("workspace_a", "source-workspace_a")
     sources.save_source_items(
         "workspace_a",
         [replace(source, license="unknown")],
     )
     license_task = create_task("许可未知")
-    blocked = client.post(
-        f"/api/creation-tasks/{license_task}/topics/generate", json={}
-    )
-    assert blocked.status_code == 503
-    assert blocked.json()["detail"]["reason"] == "source_license_unverified"
-    blocked_state = client.get(f"/api/creation-tasks/{license_task}/topics").json()
-    assert blocked_state["latest_run"]["status"] == "failed"
-    assert blocked_state["latest_run"]["route_snapshot"]["availability"] == "unverified"
-
     local_calls = []
 
     class LocalGenerator:
@@ -3361,6 +3388,13 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         "_creation_task_topic_generator_for",
         lambda _settings: LocalGenerator(),
     )
+    task = production.get_creation_task("workspace_a", license_task)
+    plan = production.get_creation_plan("workspace_a", task.plan_id)
+    prepared, references, _ = main_module._creation_task_topic_inputs(
+        "workspace_a", task, plan, cloud_egress=True,
+    )
+    assert any(item.reference_id == "source:source-workspace_a" for item in prepared)
+    assert any(item["object_id"] == "source-workspace_a" for item in references)
     local_allowed = client.post(
         f"/api/creation-tasks/{license_task}/topics/generate", json={}
     )
@@ -3447,6 +3481,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
 def test_creation_plan_confirmation_requires_current_preflight_and_content_truth(
     tmp_path,
     monkeypatch,
+    plan_owner,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
@@ -3458,8 +3493,12 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", "local"),
     )
-    client = TestClient(main_module.app)
-    payload = {"goal": "一个需要真实资料的目标"}
+    client = TestClient(main_module.app, headers=plan_owner[1])
+    payload = {
+        "goal": "一个需要真实资料的目标",
+        "selected_voice": {"profile_id": "voice-local", "version": "v1"},
+        "selected_person": {"profile_id": "voice-local-person", "version": "v1"},
+    }
 
     blocked_preview = client.post("/api/creation-plans/preview", json=payload)
     assert blocked_preview.status_code == 200
@@ -3474,10 +3513,13 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     assert blocked_confirm.status_code == 409
     assert blocked_confirm.json()["detail"]["error"] == "content_sources_missing"
 
-    _seed_creation_plan_facts(production, sources, workspace_id="local")
+    _seed_creation_plan_facts(
+        production, sources, workspace_id="local",
+        verified_owner_user_id=plan_owner[0].member_id,
+    )
     first_preview = client.post("/api/creation-plans/preview", json=payload)
     assert first_preview.status_code == 200
-    sources.create_knowledge_item(
+    sources.create_knowledge_item_owned(
         KnowledgeItem(
             id="knowledge-local-second",
             workspace_id="local",
@@ -3489,7 +3531,8 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
             ownership="user_owned",
             source_item_id=None,
             version="v1",
-        )
+        ),
+        verified_user_id=plan_owner[0].member_id,
     )
     stale_confirm = client.post(
         "/api/creation-plans/confirm",
@@ -3536,11 +3579,11 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     changed_authorization_preview = client.post(
         "/api/creation-plans/preview", json=payload)
     assert any(
-        blocker["reason"] == "authorization_revoked"
+        blocker["reason"] == "参考使用受限：authorization_revoked"
         and blocker["stage"] == "avatar_lipsync"
         and blocker["blocks_confirmation"] is False
         for blocker in changed_authorization_preview.json()["blockers"]
-    )
+    ), changed_authorization_preview.text
     authorization_stale = client.post(
         "/api/creation-plans/confirm",
         json={
@@ -3834,3 +3877,225 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
         production._save_asset(analyzed)
     assert production.get_visual_feature('workspace_a',segment.id,provider.model_id) is None
     assert production.get_visual_feature('workspace_b',segment.id,provider.model_id) is None
+
+
+@pytest.fixture
+def foundation_state(tmp_path, monkeypatch):
+    from app.avatar_lipsync import ProfileReference
+    from app.production import MaterialAsset, MaterialSegment
+    from app.sources import ObsidianVault
+
+    production = _repository(tmp_path)
+    members = LocalMemberService(tmp_path / "foundation-members.sqlite3")
+    owner, owner_token = members.whoami(None)
+    other, other_token = members.join(members.create_invite_code(), "合成另成员")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "model_catalog", SimpleNamespace(
+        status=lambda _spec: SimpleNamespace(ready=True, state="ready", message="受控模型已就绪")
+    ))
+    configured = Settings(topic_source_urls=("https://fixture.invalid/feed",),
+                          product_hunt_token=None, hermes_radar_path=None,
+                          obsidian_vault_path=None)
+    monkeypatch.setattr(main_module, "settings", configured)
+    monkeypatch.setattr(main_module, "vault", ObsidianVault(None))
+    ws = LEGACY_WORKSPACE_ID
+    production.save_profile(ProductionProfile(ws, source_urls=[], use_obsidian=False, use_hermes=False))
+    reference, _, _ = production.import_voice_reference_wav(
+        ws, synthetic_wav_bytes(), verified_owner_user_id=owner.member_id,
+    )
+    source = production._asset_by_path(ws, str(production.resolve_workspace_media_reference(ws, reference)))
+    voice = production.save_versioned_voice_profile(VersionedVoiceProfile(
+        id="foundation-voice", workspace_id=ws, version="v1", language="zh",
+        display_name="合成独立声音", reference_audio_path=reference,
+        reference_text="合成参考文字", model_id="fixture-voice",
+        reference=ProfileReference(asset_id=source.id),
+    ), verified_owner_user_id=owner.member_id)
+    path = production.video_library_path / "foundation.mp4"
+    path.write_bytes(b"synthetic metadata-only video")
+    stat = path.stat()
+    video = production._save_asset(MaterialAsset(
+        id="foundation-video", workspace_id=ws, owner_user_id=owner.member_id,
+        file_name=path.name, path=str(path), size_bytes=stat.st_size,
+        modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+        duration_seconds=4, analysis_status="ready", review_status="raw", usage_role="b_roll",
+        segments=[MaterialSegment("foundation-segment", "foundation-video", 0, 4, usage_role="b_roll")],
+    ))
+    return SimpleNamespace(repo=production, owner=owner, other=other, voice=voice, video=video,
+        path=path, settings=configured, client=TestClient(main_module.app),
+        headers={"X-Local-Member-Token": owner_token},
+        other_headers={"X-Local-Member-Token": other_token})
+
+
+def test_foundation_uses_current_member_for_private_material_and_voice(foundation_state):
+    state = foundation_state
+    own = state.client.get("/api/production/foundation", headers=state.headers)
+    other = state.client.get("/api/production/foundation", headers=state.other_headers)
+    assert own.status_code == other.status_code == 200
+    assert own.json()["readiness"] == {
+        "ready": True, "blockers": [], "asset_count": 2,
+        "approved_asset_count": 1, "approved_segment_count": 1, "total_duration_seconds": 6.0,
+    }
+    assert other.json()["readiness"]["asset_count"] == 0
+    assert other.json()["readiness"]["approved_segment_count"] == 0
+    blockers = other.json()["readiness"]["blockers"]
+    assert {item["code"] for item in blockers} == {
+        "versioned_voice_authorization_missing", "approved_materials_empty",
+    }
+    assert not any("不属于" in item["message"] for item in blockers)
+
+
+def test_foundation_invalid_identity_never_falls_back_to_diagnostic(foundation_state, monkeypatch):
+    state = foundation_state
+    calls = []
+    monkeypatch.setattr(state.repo, "readiness", lambda *args, **kwargs: calls.append(kwargs))
+    response = state.client.get("/api/production/foundation", headers={"X-Local-Member-Token": "invalid"})
+    assert response.status_code == 401
+    assert calls == []
+
+
+def test_foundation_local_diagnostic_is_explicit_and_preserves_single_user_read(foundation_state):
+    response = foundation_state.client.get("/api/production/foundation")
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True
+
+
+@pytest.mark.parametrize("source", ["urls", "vault", "product_hunt", "hermes", "none", "legacy_only"])
+def test_foundation_source_readiness_matches_current_generator(foundation_state, tmp_path, monkeypatch, source):
+    from app.sources import ObsidianVault
+    from app.topics import MissingTopicGenerator, topic_generator_from_settings
+
+    state = foundation_state
+    vault_path = tmp_path / "configured-vault"
+    if source == "vault":
+        vault_path.mkdir()
+    settings = replace(state.settings,
+        topic_source_urls=("https://fixture.invalid/feed",) if source == "urls" else (),
+        product_hunt_token="synthetic-config-only" if source == "product_hunt" else None,
+        hermes_radar_path=str(tmp_path / "not-fetched-radar") if source == "hermes" else None,
+        obsidian_vault_path=str(vault_path) if source == "vault" else None,
+    )
+    vault = ObsidianVault(settings.obsidian_vault_path)
+    state.repo.save_profile(ProductionProfile(LEGACY_WORKSPACE_ID,
+        source_urls=["https://old.invalid/feed"] if source == "legacy_only" else [],
+        use_obsidian=source == "legacy_only", use_hermes=source == "legacy_only"))
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "vault", vault)
+    generator = topic_generator_from_settings(settings, vault)
+    has_current_sources = not isinstance(generator, MissingTopicGenerator)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    blockers = response.json()["readiness"]["blockers"]
+    assert ("source_pool_empty" not in {item["code"] for item in blockers}) == has_current_sources
+    assert has_current_sources == (source not in {"none", "legacy_only"})
+
+
+@pytest.mark.parametrize("mutation", ["lost", "changed", "excluded", "reference_only", "bad_range", "excluded_segment", "unanalysed", "manual_only"])
+def test_foundation_counts_only_current_qualified_material(foundation_state, mutation):
+    state = foundation_state
+    asset = state.video
+    if mutation == "lost":
+        state.path.unlink()
+    elif mutation == "changed":
+        state.path.write_bytes(b"changed source with different bytes")
+    elif mutation in {"excluded", "reference_only"}:
+        asset.use_state = mutation
+    elif mutation == "manual_only":
+        asset.use_state = "not_for_automation"
+    elif mutation == "bad_range":
+        asset.segments[0].end_seconds = 5
+    elif mutation == "excluded_segment":
+        asset.segments[0].usage_role = "exclude"
+    else:
+        asset.analysis_status = "pending"
+    state.repo._save_asset(asset)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    readiness = response.json()["readiness"]
+    assert readiness["asset_count"] == 2
+    assert readiness["approved_asset_count"] == (1 if mutation == "manual_only" else 0)
+    assert readiness["approved_segment_count"] == (1 if mutation == "manual_only" else 0)
+
+
+@pytest.mark.parametrize("issue", ["no_voice", "lost_reference", "empty_text", "restricted", "model_missing", "both_missing", "range"])
+def test_foundation_separates_voice_reference_from_live_engine(foundation_state, monkeypatch, issue):
+    from app.avatar_lipsync import ProfileReference
+
+    state = foundation_state
+    if issue in {"no_voice", "both_missing"}:
+        monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [])
+    elif issue == "lost_reference":
+        state.repo.resolve_workspace_media_reference(LEGACY_WORKSPACE_ID, state.voice.reference_audio_path).unlink()
+    elif issue in {"empty_text", "restricted", "range"}:
+        voice = replace(state.voice, version="v2",
+            reference_text="" if issue == "empty_text" else state.voice.reference_text,
+            use_state="excluded" if issue == "restricted" else "available",
+            reference=ProfileReference(asset_id=state.voice.reference.asset_id, start_seconds=.25, end_seconds=1.25)
+                if issue == "range" else state.voice.reference)
+        state.repo.save_versioned_voice_profile(voice, verified_owner_user_id=state.owner.member_id)
+    if issue in {"model_missing", "both_missing"}:
+        # The real foundation wrapper still reads the current catalog, not old profile state.
+        monkeypatch.setattr(main_module, "model_catalog", SimpleNamespace(
+            status=lambda _spec: SimpleNamespace(ready=False, state="missing", message="受控模型未安装")
+        ))
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    blockers = response.json()["readiness"]["blockers"]
+    codes = {item["code"] for item in blockers}
+    assert ("voice_model_not_ready" in codes) == (issue in {"model_missing", "both_missing"})
+    if issue == "empty_text":
+        assert "voice_reference_missing" in codes
+    elif issue in {"no_voice", "both_missing"}:
+        assert "versioned_voice_authorization_missing" in codes
+        message = next(item["message"] for item in blockers if item["code"] == "versioned_voice_authorization_missing")
+        assert "授权" not in message and "文案" in message
+    elif issue == "range":
+        assert codes == set()
+    elif issue != "model_missing":
+        assert "voice_reference_unavailable" in codes
+    else:
+        assert codes == {"voice_model_not_ready"}
+    assert response.json()["profile"]["voice_model_status"] == ("blocked" if issue in {"model_missing", "both_missing"} else "ready")
+
+
+@pytest.mark.parametrize("ranged", [False, True])
+def test_foundation_video_voice_preparation_never_decodes_or_derives(foundation_state, monkeypatch, ranged):
+    from app.avatar_lipsync import ProfileReference
+
+    state = foundation_state
+    # Registration uses a controlled format qualification for synthetic video bytes.
+    # Preparation must subsequently use source facts, never this decoder or a model.
+    monkeypatch.setattr(state.repo, "_material_file_intact", lambda _asset: True)
+    voice = state.repo.save_versioned_voice_profile(VersionedVoiceProfile(
+        id="video-voice", workspace_id=LEGACY_WORKSPACE_ID, version="v1", language="zh",
+        display_name="合成视频声音参考", model_id="fixture-voice", reference_text="视频中的合成文字",
+        reference_audio_path=state.repo.workspace_media_reference_for_asset(LEGACY_WORKSPACE_ID, state.video.id),
+        reference=ProfileReference(asset_id=state.video.id,
+            segment_id=state.video.segments[0].id if ranged else None,
+            start_seconds=.5 if ranged else None, end_seconds=2 if ranged else None),
+    ), verified_owner_user_id=state.owner.member_id)
+    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [voice])
+
+    def no_decoder(_asset):
+        raise AssertionError("foundation preparation must not decode video")
+
+    monkeypatch.setattr(state.repo, "_material_file_intact", no_decoder)
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True
+    with pytest.raises(PermissionError, match="设备执行许可"):
+        state.repo.materialize_profile_reference(voice, grant_context=None,
+            viewer_user_id=state.owner.member_id)
+    assert not (state.repo.video_library_path / ".profile_references").exists()
+
+
+def test_foundation_checks_all_readable_voices_before_reporting_missing_text(foundation_state, monkeypatch):
+    state = foundation_state
+    incomplete = state.repo.save_versioned_voice_profile(
+        replace(state.voice, id="incomplete-voice", reference_text=""),
+        verified_owner_user_id=state.owner.member_id,
+    )
+    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [incomplete, state.voice])
+    response = state.client.get("/api/production/foundation", headers=state.headers)
+    assert response.status_code == 200
+    assert response.json()["readiness"]["ready"] is True

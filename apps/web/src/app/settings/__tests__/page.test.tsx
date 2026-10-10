@@ -29,7 +29,7 @@ vi.mock("@/components/AppShell", () => ({
 vi.mock("@/components/FormErrorBanner", () => ({
   FormErrorBanner: ({ children }: { children: ReactNode }) => <form>{children}</form>,
 }));
-vi.mock("@/components/DirectoryPickerButton", () => ({ DirectoryPickerButton: () => null }));
+vi.mock("@/components/DirectoryPickerButton", () => ({ DirectoryPickerButton: ({ kind = "directory", targetName }: { kind?: string; targetName: string }) => <button data-picker-kind={kind} data-target={targetName}>选择{kind === "file" ? "文件" : "目录"}</button> }));
 vi.mock("@/components/ModelInstallPanel", () => ({ ModelInstallPanel: () => null }));
 
 import SettingsPage from "@/app/settings/page";
@@ -124,7 +124,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("已填写，未验证"));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("已填写，未验证");
+    expect(node).toHaveTextContent("已配置·待验证");
     expect(node.className).not.toContain("is-ready");
     expect(node.textContent).not.toContain("可用");
   });
@@ -133,7 +133,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("可用"));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("可用");
+    expect(node).toHaveTextContent("最近调用成功");
     expect(node.className).toContain("is-ready");
   });
 
@@ -141,7 +141,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("未填写", false));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("未填写");
+    expect(node).toHaveTextContent("未配置");
     const detail = screen.getByTestId("llm-service-detail");
     expect(detail).toHaveTextContent("API Key");
   });
@@ -151,7 +151,7 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
     api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState(undefined));
     await renderSettings();
     const node = screen.getByTestId("llm-service-badge");
-    expect(node).toHaveTextContent("拿不到");
+    expect(node).toHaveTextContent("暂时无法读取连接状态");
     expect(node.className).not.toContain("is-ready");
     expect(node.textContent).not.toContain("可用");
     expect(node.textContent).not.toContain("已填写，未验证");
@@ -208,4 +208,19 @@ describe("SettingsPage · LLM 服务状态徽章四档", () => {
       view.unmount();
     }
   });
+});
+
+
+it("routes SQLite, executable and model paths to file pickers while retaining directory pickers", async () => {
+  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("已填写，未验证"));
+  const view = render(await SettingsPage({ searchParams: Promise.resolve({ section: "paths" }) }));
+  for (const name of ["database_path", "understanding_runtime_python_path", "native_ocr_worker_path"]) {
+    expect(view.container.querySelector(`[data-target="${name}"]`)).toHaveAttribute("data-picker-kind", "file");
+  }
+  expect(view.container.querySelector('[data-target="video_inbox_path"]')).toHaveAttribute("data-picker-kind", "directory");
+  view.unmount();
+  const asr = render(await SettingsPage({ searchParams: Promise.resolve({ section: "asr" }) }));
+  for (const name of ["local_whisper_python_path", "local_whisper_cli_path", "local_whisper_model_path"]) {
+    expect(asr.container.querySelector(`[data-target="${name}"]`)).toHaveAttribute("data-picker-kind", "file");
+  }
 });

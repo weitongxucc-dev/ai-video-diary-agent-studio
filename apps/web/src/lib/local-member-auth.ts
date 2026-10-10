@@ -14,12 +14,14 @@
  *    才收敛。这是已知闪烁，cookie 方案才能根治，本包不做。
  * 4. whoami 在方案 A 下对匿名调用方返回种子 owner 及其令牌，属过渡态；
  *    切到严格方案 B 时这里要重新设计。
- * 5. `<img src>` 之类媒体 URL 无法带自定义 header。后端单条 GET 目前不过滤
- *    visibility，所以现在不需要处理；**一旦后端给单条 GET 加过滤，此处会失效**。
+ * 5. 原生媒体 GET/HEAD 不能带自定义 header；受限会话 cookie 只把同一已有令牌
+ *    传给 Next local proxy 的明确媒体路由，后端仍逐请求验证成员、workspace 与授权。
  */
 
+import { LOCAL_MEMBER_TOKEN_HEADER, localMemberTokenCookieAssignment } from "./native-media-auth";
+
 export const LOCAL_MEMBER_TOKEN_STORAGE_KEY = "ai-video-diary-local-member-token";
-export const LOCAL_MEMBER_TOKEN_HEADER = "X-Local-Member-Token";
+export { LOCAL_MEMBER_TOKEN_HEADER } from "./native-media-auth";
 
 export type LocalMemberRole = "owner" | "member";
 
@@ -52,20 +54,34 @@ export function readLocalMemberToken(): string | null {
 }
 
 export function storeLocalMemberToken(token: string): void {
+  const cleaned = token.trim();
+  if (!cleaned) return;
   try {
-    const cleaned = token.trim();
-    if (!cleaned) return;
-    storage()?.setItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY, cleaned);
+    const localStorage = storage();
+    if (!localStorage) return;
+    localStorage.setItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY, cleaned);
   } catch {
     // 写不进去（隐私模式/配额）时保持匿名，后端会按方案 A 放行。
+    return;
   }
+  syncLocalMemberTokenCookie(cleaned);
 }
 
 export function clearLocalMemberToken(): void {
   try {
     storage()?.removeItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY);
   } catch {
-    // 忽略：清不掉就维持原状。
+    // 即使 localStorage 不可写，也清除原生媒体请求使用的会话副本。
+  }
+  syncLocalMemberTokenCookie(null);
+}
+
+function syncLocalMemberTokenCookie(token: string | null): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  try {
+    document.cookie = localMemberTokenCookieAssignment(token, window.location.protocol, window.location.port);
+  } catch {
+    // Cookie transport may be unavailable; API fetches still use localStorage.
   }
 }
 

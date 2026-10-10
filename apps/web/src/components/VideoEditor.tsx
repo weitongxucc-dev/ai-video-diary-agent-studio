@@ -3,12 +3,14 @@
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
-import { useState, type RefObject, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type RefObject, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX } from "lucide-react";
 import { apiUrl, listenCreationTaskAudio } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskWorkspace, MontageClipCandidate } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 import quickUi from "./VideoClipQuickEditor.module.css";
+import mediaUi from "./VideoEditorMedia.module.css";
+import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
 import { NarrationWaveformTrack } from "./NarrationWaveformTrack";
 
 export const editorTime = (value: number) => `${Math.floor(value / 60).toString().padStart(2, "0")}:${(value % 60).toFixed(1).padStart(4, "0")}`;
@@ -19,63 +21,131 @@ export function createVideoClipDraft(clip: CreationTaskMontageClip): VideoClipDr
 const sourceUrl = (clip: CreationTaskMontageClip, taskId: string) => apiUrl(clip.person_render_id
   ? `/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/${encodeURIComponent(clip.person_render_id)}/media`
   : `/api/production/materials/${encodeURIComponent(clip.asset_id)}/media`);
+const clipMediaKey = (clip: CreationTaskMontageClip, taskId: string) => JSON.stringify([taskId, clip.id, sourceUrl(clip, taskId), clip.source_reference, clip.source_start_seconds, clip.source_end_seconds]);
 
-export function ClipThumbnail({ clip, taskId, className }: { clip: CreationTaskMontageClip; taskId: string; className?: string }) {
-  return <video className={className} aria-hidden muted playsInline preload="metadata" src={sourceUrl(clip, taskId)} onLoadedMetadata={event => { event.currentTarget.currentTime = clip.source_start_seconds; }} />;
+export function ClipThumbnail({ clip, taskId, className, statusId }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string }) {
+  return <ClipMedia key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} className={className} statusId={statusId} />;
 }
 
-function CanvasControls({ ratio, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
+function ClipMedia({ clip, taskId, className, statusId, preview = false }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string; preview?: boolean }) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [retry, setRetry] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const positioned = useRef(false);
+  const missing = !clip.person_render_id && !clip.asset_id;
+  const identity = clip.person_render_id ? "人物口型预览" : "源素材预览";
+  function frameReady(video: HTMLVideoElement) {
+    if (video !== videoRef.current || video.readyState < 2 || video.seeking) return;
+    if (!positioned.current && Math.abs(video.currentTime - clip.source_start_seconds) > .05) return;
+    positioned.current = true;
+    setState("ready");
+  }
+  const video = missing ? null : <video key={retry} ref={videoRef} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined}
+    controls={preview} muted={!preview} playsInline preload="metadata" src={sourceUrl(clip, taskId)}
+    onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = clip.source_start_seconds; }}
+    onLoadedData={event => frameReady(event.currentTarget)} onSeeked={event => frameReady(event.currentTarget)} onCanPlay={event => frameReady(event.currentTarget)}
+    onError={event => { if (event.currentTarget === videoRef.current) setState("error"); }} />;
+  const message = missing ? "未关联媒体" : state === "loading" ? (preview ? "正在读取原片…" : "读取缩略图…") : state === "error" ? (preview ? "原片暂时无法读取" : "缩略图读取失败") : "缩略图已定位";
+  if (preview) return <>{video}<span className={ui.playerBadge}>{clip.person_render_id ? "人物口型 · 非成片" : "源素材 · 原始画面，非成片"}</span>
+    {missing || state !== "ready" ? <div className={mediaUi.playerState} role={state === "error" ? "alert" : "status"}>
+      <span>{message}</span>{state === "error" && !missing ? <button className={ui.button} type="button" onClick={() => { positioned.current = false; setState("loading"); setRetry(value => value + 1); }}>重新读取原片</button> : null}
+    </div> : null}</>;
+  return <span className={`${mediaUi.thumbnail} ${className ?? mediaUi.thumbnailFill}`} data-media-state={missing ? "missing" : state}>
+    {video}<span id={statusId} className={state === "ready" && !missing ? mediaUi.srOnly : mediaUi.thumbnailState} aria-live="off">{message}</span>
+  </span>;
+}
+
+function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>Promise<boolean>;onDraftChange:()=>void}) {
   const [draft,setDraft]=useState(ratio);
-  const [fit,setFit]=useState<""|"fill"|"fit">("");
-  return <details className={ui.canvasControls}><summary>画幅设置</summary><div className={ui.canvasControlsPanel}>
-    <label className={ui.field}>画幅<select aria-label="成片画幅" disabled={busy} value={draft} onChange={event=>{onDraftChange();setDraft(event.target.value as typeof draft);}}><option value="9:16">9:16 竖屏</option><option value="16:9">16:9 横屏</option><option value="1:1">1:1 方形</option></select></label>
-    <label className={ui.field}>画面<select aria-label="整片画面适配" disabled={busy} value={fit} onChange={event=>{onDraftChange();setFit(event.target.value as typeof fit);}}><option value="">各镜头原样</option><option value="fit">完整画面</option><option value="fill">填满画面</option></select></label>
+  const [fit,setFit]=useState<""|"fill"|"fit">(fitMode);
+  const [open,setOpen]=useState(false);
+  useEffect(() => { setDraft(ratio); setFit(fitMode); }, [ratio, fitMode]);
+  return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
+    <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
+    <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
     <small>填满：可能裁切 · 完整：可能留边</small>
-    <button className={ui.button} disabled={busy || (draft===ratio && !fit)} onClick={()=>onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(fit?{fit_mode:fit}:{})})} type="button">预览画幅</button></div>
-  </details>;
+    </div>
+  </HomeCardDialog> : null}</>;
 }
 
 export function VideoEditingStage({ workspace, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay }:  {
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   workspace: CreationTaskWorkspace; selectedId: string | null; onSelect: (id: string) => void;
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
-  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>void;
+  initialTime: number; renderAction: ReactNode; audioTracks?: ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
 }) {
   const montage = workspace.montage!;
   const [time, setTime] = useState(initialTime);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [playbackError, setPlaybackError] = useState(false);
+  const outputIdentity = JSON.stringify([workspace.task.id, workspace.task.current_timeline_version_id, montage.output_url]);
+  const [outputState, setOutputState] = useState<{ identity: string; state: "loading" | "ready" | "error" }>({ identity: outputIdentity, state: "loading" });
+  const playbackState = outputState.identity === outputIdentity ? outputState.state : "loading";
+  const [outputRetry, setOutputRetry] = useState(0);
+  const storyboardId = useId();
+  useEffect(() => { setPlaying(false); }, [outputIdentity]);
+  const previewRatio = montage.aspect_ratio === "16:9" ? 16 / 9 : montage.aspect_ratio === "1:1" ? 1 : 9 / 16;
+  const canvasFitMode = montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fit")
+    ? "fit"
+    : montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fill")
+      ? "fill"
+      : "";
+  const playerViewport = useRef<HTMLDivElement>(null);
+  const [playerSize, setPlayerSize] = useState<{ width: number; height: number } | null>(null);
   const selected = montage.clips.find(clip => clip.id === selectedId);
+  useEffect(() => {
+    const viewport = playerViewport.current;
+    if (!viewport) return;
+    const resize = () => {
+      const { width, height } = viewport.getBoundingClientRect();
+      const fittedWidth = Math.min(width, height * previewRatio);
+      const next = { width: fittedWidth, height: fittedWidth / previewRatio };
+      setPlayerSize(previous => previous && Math.abs(previous.width - next.width) < .5 && Math.abs(previous.height - next.height) < .5 ? previous : next);
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(viewport);
+    resize();
+    return () => observer.disconnect();
+  }, [previewRatio]);
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
+  function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
+    if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
+  }
   return <div className={ui.stage}>
-    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls key={workspace.task.current_timeline_version_id} ratio={montage.aspect_ratio ?? "9:16"} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
-    <div className={ui.player} data-editor-player data-editor-aspect-ratio={montage.aspect_ratio ?? "9:16"}>
-      {montage.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
-        onLoadedMetadata={event => { event.currentTarget.currentTime = initialTime; setPlaybackError(false); }}
-        onTimeUpdate={event => position(event.currentTarget)} onSeeked={event => position(event.currentTarget)}
-        onPlay={() => setPlaying(true)} onPause={event => { setPlaying(false); position(event.currentTarget); }}
-        onEnded={() => setPlaying(false)} onError={() => setPlaybackError(true)} />
-        : selected ? <video aria-label="源素材预览" controls key={selected.id} playsInline preload="metadata" src={sourceUrl(selected, workspace.task.id)} onLoadedMetadata={event => { event.currentTarget.currentTime = selected.source_start_seconds; }} />
+    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{montage.aspect_ratio ?? "9:16"} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={montage.aspect_ratio ?? "9:16"} fitMode={canvasFitMode} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
+    <div className={ui.playerViewport} ref={playerViewport}>
+    <div className={ui.player} data-editor-player data-editor-aspect-ratio={montage.aspect_ratio ?? "9:16"} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
+      {montage.output_url ? <video key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)} muted={muted}
+        onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = initialTime; }}
+        onLoadedData={event => { if (event.currentTarget.readyState >= 2) outputEvent(event.currentTarget, "ready"); }} onCanPlay={event => outputEvent(event.currentTarget, "ready")}
+        onTimeUpdate={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }} onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }}
+        onPlay={event => { if (event.currentTarget === videoRef.current) setPlaying(true); }} onPause={event => { if (event.currentTarget === videoRef.current) { setPlaying(false); position(event.currentTarget); } }}
+        onEnded={event => { if (event.currentTarget === videoRef.current) setPlaying(false); }} onError={event => outputEvent(event.currentTarget, "error")} />
+        : selected ? <ClipMedia key={clipMediaKey(selected, workspace.task.id)} clip={selected} taskId={workspace.task.id} preview />
           : <p>先选镜头</p>}
-      {!montage.output_url && selected ? <span className={ui.playerBadge}>原始画面</span> : null}
-      {playbackError ? <p className={ui.playerError} role="alert">画面打不开，请重新出片。</p> : null}
+      {montage.output_url ? <span className={ui.playerBadge}>成片画面</span> : null}
+      {montage.output_url && playbackState !== "ready" ? <div className={mediaUi.playerState} role={playbackState === "error" ? "alert" : "status"}>
+        <span>{playbackState === "error" ? "成片暂时无法播放" : "正在读取成片…"}</span>
+        {playbackState === "error" ? <button className={ui.button} type="button" onClick={() => { setOutputState({ identity: outputIdentity, state: "loading" }); setPlaying(false); setOutputRetry(value => value + 1); }}>重新读取成片</button> : null}
+      </div> : null}
+    </div>
     </div>
     {montage.output_url ? <div className={ui.transport} data-editor-transport>
-      <button className={ui.iconButton} aria-label={playing ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => setPlaybackError(true)); else video.pause(); }} type="button">{playing ? <Pause size={17} /> : <Play size={17} />}</button>
+      <button className={ui.iconButton} aria-label={playing && playbackState === "ready" ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => outputEvent(video, "error")); else video.pause(); }} type="button">{playing && playbackState === "ready" ? <Pause size={17} /> : <Play size={17} />}</button>
       <button className={ui.iconButton} aria-label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)} type="button">{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>
       <input aria-label="成片播放位置" type="range" min={0} max={montage.duration_seconds} step={0.01} value={Math.min(time, montage.duration_seconds)} onChange={event => seek(Number(event.target.value))} />
       <time>{editorTime(time)} / {editorTime(montage.duration_seconds)}</time>
       <button className={ui.iconButton} aria-label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></button>
     </div> : null}
     {onSelectOverlay && montage.graphic_overlays?.length ? <div className={ui.overlayList} aria-label="图文叠加层">{montage.graphic_overlays.map((item,index)=><button className={ui.button} type="button" key={item.id} disabled={busy} aria-pressed={selectedOverlayId===item.id} onClick={()=>onSelectOverlay(item.id)}>{item.kind==="image"?"图片":item.kind==="arrow"?"箭头":"标题"}{index+1} · {item.kind==="image"||item.kind==="arrow"?item.name:item.text}</button>)}</div> : null}
-    <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
-      <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={workspace.task.id} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
+    <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-describedby={`${storyboardId}-thumbnail-${index}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
+      <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={workspace.task.id} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div>
     <div className={ui.tracks} aria-label="配音与字幕时间范围">
       <div className={ui.ruler}><span>时间</span><div>{Array.from({ length: 5 }, (_, i) => <time key={i}>{editorTime(montage.duration_seconds * i / 4)}</time>)}</div></div>
+      <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}>{index+1}</button>)}</div></div>
       {audioTracks ?? <NarrationWaveformTrack workspace={workspace} selectedId={selectedId} onSelect={onSelect} />}
       <div className={ui.track}><span>字幕</span><div className={ui.subtitleLane}>{(workspace.subtitle_tracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? workspace.subtitle_tracks.find(track => track.status === "valid" && track.style.enabled !== false))?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ left: `${cue.start_seconds / montage.duration_seconds * 100}%`, width: `${(cue.end_seconds - cue.start_seconds) / montage.duration_seconds * 100}%` }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => { onSelect(clip.id); seek(cue.start_seconds); }}>{cue.text}</button> : null; })}</div></div>
     </div>
@@ -110,9 +180,33 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
   onPreview: (input: CreationTaskExactEditInput) => void; onOpenDetails: () => void;
 }) {
   const [tab, setTab] = useState<"trim" | "frame" | "replace">("trim");
+  const latestDraft = useRef(draft);
+  const lastApplied = useRef<string | null>(null);
+  useEffect(() => { if (!busy) lastApplied.current = null; }, [busy]);
+  latestDraft.current = draft;
   const trimChanged = draft.start !== clip.source_start_seconds;
   const frameChanged = draft.mode !== (clip.fit_mode ?? "fill") || draft.x !== (clip.crop_x ?? .5) || draft.y !== (clip.crop_y ?? .5);
-  function update(next: VideoClipDraft) { onDraftStateChange(next); onDraftChange(); }
+  function update(next: VideoClipDraft) { latestDraft.current = next; lastApplied.current = null; onDraftStateChange(next); onDraftChange(); }
+  function applyTrim() {
+    const next = latestDraft.current;
+    const submission = { operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: next.start } as const;
+    const key = JSON.stringify(submission);
+    if (!busy && !clip.locked && Number.isFinite(next.start) && next.start >= 0 && next.start !== clip.source_start_seconds && lastApplied.current !== key) {
+      lastApplied.current = key;
+      onPreview(submission);
+    }
+  }
+  function applyFrame() {
+    const next = latestDraft.current;
+    const validCrop = Number.isFinite(next.x) && Number.isFinite(next.y) && next.x >= 0 && next.x <= 1 && next.y >= 0 && next.y <= 1;
+    const changed = next.mode !== (clip.fit_mode ?? "fill") || next.x !== (clip.crop_x ?? .5) || next.y !== (clip.crop_y ?? .5);
+    const submission = { operation_type: "ChangeCrop", clip_id: clip.id, fit_mode: next.mode, crop_x: next.x, crop_y: next.y } as const;
+    const key = JSON.stringify(submission);
+    if (!busy && !clip.locked && validCrop && changed && lastApplied.current !== key) {
+      lastApplied.current = key;
+      onPreview(submission);
+    }
+  }
   return <div className={quickUi.editor} aria-label={`镜头 ${index + 1} 快速编辑`}>
     <div className={quickUi.summary}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><span>成片 {editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</span></div>
     <nav className={quickUi.tabs} aria-label="快速编辑类别">
@@ -124,15 +218,15 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
       {tab === "trim" ? <section className={quickUi.controlGroup}>
         <h3>裁剪源画面</h3>
         <p>调整这段镜头从源素材的哪里开始，成片中的位置和时长保持不变。</p>
-        <label>起点（秒）<input aria-label={`镜头 ${index + 1} 快速裁剪起点`} type="number" min={0} step={.1} value={draft.start} disabled={busy || clip.locked} onChange={event => update({ ...draft, start: Number(event.target.value) })} /></label>
-        <div className={quickUi.valueRow}><span>当前源画面</span><output>{editorTime(draft.start)}–{editorTime(draft.start + clip.timeline_end_seconds - clip.timeline_start_seconds)}</output></div>
+        <label>起点（秒）<input aria-label={`镜头 ${index + 1} 快速裁剪起点`} type="number" min={0} step={.1} value={Number.isFinite(draft.start) ? draft.start : ""} disabled={busy || clip.locked} onChange={event => update({ ...latestDraft.current, start: event.target.value === "" ? Number.NaN : Number(event.target.value) })} onBlur={applyTrim} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyTrim(); } }} /></label>
+        <div className={quickUi.valueRow}><span>当前源画面</span><output>{Number.isFinite(draft.start) ? `${editorTime(draft.start)}–${editorTime(draft.start + clip.timeline_end_seconds - clip.timeline_start_seconds)}` : "请输入有效秒数"}</output></div>
       </section> : tab === "frame" ? <section className={quickUi.controlGroup}>
         <h3>画面适配</h3>
         <p>填满画面时可以调整裁切位置；完整显示会保留源画面的全部内容。</p>
-        <label>显示方式<select aria-label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={event => update({ ...draft, mode: event.target.value as "fill" | "fit" })}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>
+        <label>显示方式<CardSelect label={`镜头 ${index + 1} 快速画面方式`} value={draft.mode} disabled={busy || clip.locked} onChange={value => { update({ ...latestDraft.current, mode: value as "fill" | "fit" }); applyFrame(); }} options={[{value:"fill",label:"填满画面"},{value:"fit",label:"完整显示"}]} /></label>
         {draft.mode === "fill" ? <div className={quickUi.cropControls}>
-          <label>水平位置 <output>{Math.round(draft.x * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切水平位置`} type="range" min={0} max={1} step={.05} value={draft.x} disabled={busy || clip.locked} onChange={event => update({ ...draft, x: Number(event.target.value) })} /></label>
-          <label>垂直位置 <output>{Math.round(draft.y * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切垂直位置`} type="range" min={0} max={1} step={.05} value={draft.y} disabled={busy || clip.locked} onChange={event => update({ ...draft, y: Number(event.target.value) })} /></label>
+          <label>水平位置 <output>{Math.round(draft.x * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切水平位置`} type="range" min={0} max={1} step={.05} value={draft.x} disabled={busy || clip.locked} onChange={event => update({ ...latestDraft.current, x: Number(event.target.value) })} onPointerUp={applyFrame} onKeyUp={applyFrame} onBlur={applyFrame} /></label>
+          <label>垂直位置 <output>{Math.round(draft.y * 100)}%</output><input aria-label={`镜头 ${index + 1} 快速裁切垂直位置`} type="range" min={0} max={1} step={.05} value={draft.y} disabled={busy || clip.locked} onChange={event => update({ ...latestDraft.current, y: Number(event.target.value) })} onPointerUp={applyFrame} onKeyUp={applyFrame} onBlur={applyFrame} /></label>
         </div> : null}
       </section> : <section className={quickUi.controlGroup}>
         <h3>换用其他素材</h3>
@@ -140,11 +234,8 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
       </section>}
     </div>
     <footer className={quickUi.footer}>
-      <small>{clip.locked ? "镜头已锁定" : tab === "trim" && trimChanged || tab === "frame" && frameChanged ? "修改尚未应用" : tab === "replace" ? "需在详情选择候选" : "当前设置已保存"}</small>
-      {tab === "replace" ? <button onClick={onOpenDetails} type="button">查看候选</button> :
-        <button disabled={busy || clip.locked || (tab === "trim" ? !trimChanged || !Number.isFinite(draft.start) || draft.start < 0 : !frameChanged)} onClick={() => onPreview(tab === "trim"
-          ? { operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: draft.start }
-          : { operation_type: "ChangeCrop", clip_id: clip.id, fit_mode: draft.mode, crop_x: draft.x, crop_y: draft.y })} type="button">预览修改</button>}
+      <small>{clip.locked ? "镜头已锁定" : tab === "trim" && trimChanged || tab === "frame" && frameChanged ? "完成输入或拖动后直接应用到草稿" : tab === "replace" ? "需在详情选择候选" : "当前设置已保存"}</small>
+      {tab === "replace" ? <button onClick={onOpenDetails} type="button">查看候选</button> : null}
     </footer>
   </div>;
 }
@@ -166,33 +257,63 @@ export function VideoClipInspector({ clip, index, count, workspace, busy, initia
   const [mode, setMode] = useState(initialDraft?.mode ?? clip.fit_mode ?? "fill");
   const [x, setX] = useState(initialDraft?.x ?? clip.crop_x ?? .5);
   const [y, setY] = useState(initialDraft?.y ?? clip.crop_y ?? .5);
+  useEffect(() => {
+    const nextStart = initialDraft?.start ?? clip.source_start_seconds;
+    const nextMode = initialDraft?.mode ?? clip.fit_mode ?? "fill";
+    const nextX = initialDraft?.x ?? clip.crop_x ?? .5;
+    const nextY = initialDraft?.y ?? clip.crop_y ?? .5;
+    setStart(nextStart);
+    setMode(nextMode);
+    setX(nextX);
+    setY(nextY);
+    setTransitionSeconds(clip.transition_in_seconds ?? 0);
+    setRate(Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3)));
+    setLinkedRate(1);
+    setSplitAt(Number(((clip.timeline_start_seconds + clip.timeline_end_seconds) / 2).toFixed(3)));
+  }, [clip.id, clip.source_start_seconds, clip.source_end_seconds, clip.timeline_start_seconds, clip.timeline_end_seconds, clip.fit_mode, clip.crop_x, clip.crop_y, clip.transition_in_seconds, initialDraft?.start, initialDraft?.mode, initialDraft?.x, initialDraft?.y]);
   const captionTrack = workspace.subtitle_tracks.find(item => item.language === "zh-CN" && item.status === "valid")
     ?? workspace.subtitle_tracks.find(item => item.status === "valid");
   const captions = captionTrack?.cues.filter(item => item.start_seconds < clip.timeline_end_seconds && item.end_seconds > clip.timeline_start_seconds) ?? [];
   const personRender = workspace.person_renders.find(item => item.id === clip.person_render_id);
   const audioTimingDirty = start !== clip.source_start_seconds || linkedRate !== 1 || rate !== Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3));
   const framingChanged = mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5);
+  function applyTrim(value = start) {
+    if (!busy && !clip.locked && Number.isFinite(value) && value >= 0 && value !== clip.source_start_seconds) {
+      onPreview({ operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: value });
+    }
+  }
+  function applyFrame(nextMode = mode, nextX = x, nextY = y) {
+    const valid = Number.isFinite(nextX) && Number.isFinite(nextY) && nextX >= 0 && nextX <= 1 && nextY >= 0 && nextY <= 1;
+    const changed = nextMode !== (clip.fit_mode ?? "fill") || nextX !== (clip.crop_x ?? .5) || nextY !== (clip.crop_y ?? .5);
+    if (!busy && !clip.locked && valid && changed) onPreview({ operation_type: "ChangeCrop", clip_id: clip.id, fit_mode: nextMode, crop_x: nextX, crop_y: nextY });
+  }
+  function applyRate(value: number, linked = false) {
+    if (!busy && !clip.locked && Number.isFinite(value) && value >= .25 && value <= 4 && (linked ? value !== 1 : value !== Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3)))) {
+      onPreview(linked
+        ? { operation_type: "ChangeLinkedSpeed", clip_id: clip.id, playback_rate: value }
+        : { operation_type: "ChangeClipSpeed", clip_id: clip.id, playback_rate: value });
+    }
+  }
   return <div className={ui.inspector} aria-label="已选镜头详情">
     <ClipThumbnail clip={clip} taskId={workspace.task.id} className={ui.inspectorImage} />
     <nav className={ui.inspectorTabs} aria-label="镜头详情视图"><button aria-pressed={tab === "properties"} onClick={() => setTab("properties")} type="button">属性</button><button aria-pressed={tab === "source"} onClick={() => setTab("source")} type="button">来源</button></nav>
     {tab === "source" ? <div className={ui.source}><strong>{clip.person_render_id ? "当前人物口型" : clip.source_reference.split("/").pop()}</strong><p>{editorTime(clip.source_start_seconds)} – {editorTime(clip.source_end_seconds)}</p>{clip.person_render_id ? <span>根据当前任务配音制作</span> : <a href="/library">查看素材</a>}<h3>选片依据</h3><ul>{clip.match_reasons?.map(reason => <li key={reason}>{reason}</li>)}</ul><span>匹配程度 {clip.match_score.toFixed(2)}</span></div> : <>
       <dl className={ui.properties}><div><dt>画面用途</dt><dd>{clip.person_render_id ? "人物口型" : clip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div><div><dt>成片位置</dt><dd>{editorTime(clip.timeline_start_seconds)} – {editorTime(clip.timeline_end_seconds)}</dd></div></dl>
-      <section className={ui.propertySection}><h3>裁剪</h3><div className={ui.twoFields}><label>起点（秒）<input aria-label={`镜头 ${index + 1} 裁剪起点`} type="number" min={0} step={.1} value={start} disabled={busy || clip.locked} onChange={event => { onDraftChange(Number(event.target.value) !== clip.source_start_seconds || framingChanged); setStart(Number(event.target.value)); onDraftStateChange?.({ start: Number(event.target.value), mode, x, y }); }} /></label><label>终点（秒）<output>{(start + clip.timeline_end_seconds - clip.timeline_start_seconds).toFixed(1)}</output></label></div>{start !== clip.source_start_seconds ? <button className={ui.button} disabled={busy || clip.locked || start < 0} onClick={() => onPreview({ operation_type: "TrimClip", clip_id: clip.id, source_start_seconds: start })} type="button">预览裁剪</button> : null}</section>
+      <section className={ui.propertySection}><h3>裁剪</h3><div className={ui.twoFields}><label>起点（秒）<input aria-label={`镜头 ${index + 1} 裁剪起点`} type="number" min={0} step={.1} value={Number.isFinite(start) ? start : ""} disabled={busy || clip.locked} onChange={event => { const value = event.target.value === "" ? Number.NaN : Number(event.target.value); onDraftChange(value !== clip.source_start_seconds || framingChanged); setStart(value); onDraftStateChange?.({ start: value, mode, x, y }); }} onBlur={() => applyTrim()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyTrim(); } }} /></label><label>终点（秒）<output>{Number.isFinite(start) ? (start + clip.timeline_end_seconds - clip.timeline_start_seconds).toFixed(1) : "—"}</output></label></div></section>
       <details className={ui.advancedGroup}><summary>更多剪辑</summary><div className={ui.advancedContent}>
-      {clip.role !== "a_roll" && !clip.person_render_id ? <section className={ui.propertySection}><h3>画面速度</h3><label className={ui.field}>倍速<input aria-label="画面倍速" type="number" min={.25} max={4} step={.25} value={rate} disabled={busy || clip.locked} onChange={event => { setRate(Number(event.target.value)); onDraftChange(true); }} /></label><button className={ui.button} type="button" disabled={busy || clip.locked || !Number.isFinite(rate) || rate < .25 || rate > 4} onClick={() => onPreview({ operation_type: "ChangeClipSpeed", clip_id: clip.id, playback_rate: rate })}>预览速度</button><p>保持成片时长、声音和字幕；加速需要更多源素材。</p></section> : null}
-      <section className={ui.propertySection}><h3>一起变速</h3><label className={ui.field}>倍速<input aria-label="关联倍速" type="number" min={.25} max={4} step={.25} value={linkedRate} disabled={busy || clip.locked} onChange={event => { setLinkedRate(Number(event.target.value)); onDraftChange(true); }} /></label><button className={ui.button} type="button" disabled={busy || clip.locked || !Number.isFinite(linkedRate) || linkedRate < .25 || linkedRate > 4 || linkedRate === 1} onClick={() => onPreview({ operation_type: "ChangeLinkedSpeed", clip_id: clip.id, playback_rate: linkedRate })}>预览变速</button><p>声音和字幕一起变速，改变成片时长；后续内容同步移动。</p></section>
-      <section className={ui.propertySection}><h3>复制或删</h3><div className={ui.actions}><button className={ui.button} type="button" disabled={busy || clip.locked} onClick={() => onPreview({ operation_type: "DuplicateClip", clip_id: clip.id })}>预览复制</button><button className={ui.button} type="button" disabled={busy || clip.locked || (workspace.montage?.clips.length ?? 0) < 2} onClick={() => onPreview({ operation_type: "DeleteClip", clip_id: clip.id })}>预览删除</button></div><p>同时处理这段时间内的声音和字幕，后续内容同步移动。</p></section>
-      <section className={ui.propertySection}><h3>切开镜头</h3><label className={ui.field}>切开位置<input aria-label="镜头分割位置" type="number" min={clip.timeline_start_seconds + .04} max={clip.timeline_end_seconds - .04} step={.04} value={splitAt} disabled={busy || clip.locked} onChange={event => { setSplitAt(Number(event.target.value)); onDraftChange(true); }} /></label><div className={ui.actions}>{getPlayhead ? <button className={ui.button} type="button" disabled={busy || clip.locked || !workspace.montage?.output_url} onClick={() => { const time = getPlayhead(); if (time !== null) { setSplitAt(Number(time.toFixed(3))); onDraftChange(true); } }}>取播放点</button> : null}<button className={ui.button} type="button" disabled={busy || clip.locked || !Number.isFinite(splitAt) || splitAt - clip.timeline_start_seconds < .04 || clip.timeline_end_seconds - splitAt < .04} onClick={() => onPreview({ operation_type: "SplitClip", clip_id: clip.id, split_time_seconds: splitAt })}>预览切开</button></div><p>保留总时长、配音和字幕。</p></section>
+      {clip.role !== "a_roll" && !clip.person_render_id ? <section className={ui.propertySection}><h3>画面速度</h3><label className={ui.field}>倍速<input aria-label="画面倍速" type="number" min={.25} max={4} step={.25} value={Number.isFinite(rate) ? rate : ""} disabled={busy || clip.locked} onChange={event => { const value = event.target.value === "" ? Number.NaN : Number(event.target.value); setRate(value); onDraftChange(true); }} onBlur={() => applyRate(rate)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyRate(rate); } }} /></label><p>保持成片时长、声音和字幕；加速需要更多源素材。</p></section> : null}
+      <section className={ui.propertySection}><h3>一起变速</h3><label className={ui.field}>倍速<input aria-label="关联倍速" type="number" min={.25} max={4} step={.25} value={Number.isFinite(linkedRate) ? linkedRate : ""} disabled={busy || clip.locked} onChange={event => { const value = event.target.value === "" ? Number.NaN : Number(event.target.value); setLinkedRate(value); onDraftChange(true); }} onBlur={() => applyRate(linkedRate, true)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyRate(linkedRate, true); } }} /></label><p>声音和字幕一起变速，改变成片时长；后续内容同步移动。</p></section>
+      <section className={ui.propertySection}><h3>复制或删</h3><div className={ui.actions}><button className={ui.button} type="button" disabled={busy || clip.locked} onClick={() => onPreview({ operation_type: "DuplicateClip", clip_id: clip.id })}>复制镜头</button><button className={ui.button} type="button" disabled={busy || clip.locked || (workspace.montage?.clips.length ?? 0) < 2} onClick={() => onPreview({ operation_type: "DeleteClip", clip_id: clip.id })}>删除镜头…</button></div><p>同时处理这段时间内的声音和字幕，后续内容同步移动。</p></section>
+      <section className={ui.propertySection}><h3>切开镜头</h3><label className={ui.field}>切开位置<input aria-label="镜头分割位置" type="number" min={clip.timeline_start_seconds + .04} max={clip.timeline_end_seconds - .04} step={.04} value={splitAt} disabled={busy || clip.locked} onChange={event => { setSplitAt(Number(event.target.value)); onDraftChange(true); }} /></label><div className={ui.actions}>{getPlayhead ? <button className={ui.button} type="button" disabled={busy || clip.locked || !workspace.montage?.output_url} onClick={() => { const time = getPlayhead(); if (time !== null) { setSplitAt(Number(time.toFixed(3))); onDraftChange(true); } }}>取播放点</button> : null}<button className={ui.button} type="button" disabled={busy || clip.locked || !Number.isFinite(splitAt) || splitAt - clip.timeline_start_seconds < .04 || clip.timeline_end_seconds - splitAt < .04} onClick={() => onPreview({ operation_type: "SplitClip", clip_id: clip.id, split_time_seconds: splitAt })}>切开镜头</button></div><p>保留总时长、配音和字幕。</p></section>
       </div></details>
-      <section className={ui.propertySection}><h3>画面适配</h3><label className={ui.field}>显示方式<select aria-label="画面显示方式" value={mode} disabled={busy || clip.locked} onChange={event => { onDraftChange(start !== clip.source_start_seconds || event.target.value !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5)); setMode(event.target.value as "fill" | "fit"); onDraftStateChange?.({ start, mode: event.target.value as "fill" | "fit", x, y }); }}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>{mode === "fill" ? <details><summary>裁切位置</summary><div className={ui.cropFields}><label>水平位置 <span>{Math.round(x * 100)}%</span><input aria-label="裁切水平位置" type="range" min={0} max={1} step={.05} value={x} disabled={busy || clip.locked} onChange={event => { onDraftChange(start !== clip.source_start_seconds || mode !== (clip.fit_mode ?? "fill") || Number(event.target.value) !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5)); setX(Number(event.target.value)); onDraftStateChange?.({ start, mode, x: Number(event.target.value), y }); }} /></label><label>垂直位置 <span>{Math.round(y * 100)}%</span><input aria-label="裁切垂直位置" type="range" min={0} max={1} step={.05} value={y} disabled={busy || clip.locked} onChange={event => { onDraftChange(start !== clip.source_start_seconds || mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || Number(event.target.value) !== (clip.crop_y ?? .5)); setY(Number(event.target.value)); onDraftStateChange?.({ start, mode, x, y: Number(event.target.value) }); }} /></label></div></details> : null}<button className={ui.button} disabled={busy || clip.locked || !framingChanged} onClick={() => onPreview({ operation_type: "ChangeCrop", clip_id: clip.id, fit_mode: mode, crop_x: x, crop_y: y })} type="button">预览画面</button></section>
+      <section className={ui.propertySection}><h3>画面适配</h3><label className={ui.field}>显示方式<select aria-label="画面显示方式" value={mode} disabled={busy || clip.locked} onChange={event => { const nextMode = event.target.value as "fill" | "fit"; onDraftChange(start !== clip.source_start_seconds || nextMode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5)); setMode(nextMode); onDraftStateChange?.({ start, mode: nextMode, x, y }); applyFrame(nextMode); }}><option value="fill">填满画面</option><option value="fit">完整显示</option></select></label>{mode === "fill" ? <details><summary>裁切位置</summary><div className={ui.cropFields}><label>水平位置 <span>{Math.round(x * 100)}%</span><input aria-label="裁切水平位置" type="range" min={0} max={1} step={.05} value={x} disabled={busy || clip.locked} onChange={event => { const nextX = Number(event.target.value); onDraftChange(start !== clip.source_start_seconds || mode !== (clip.fit_mode ?? "fill") || nextX !== (clip.crop_x ?? .5) || y !== (clip.crop_y ?? .5)); setX(nextX); onDraftStateChange?.({ start, mode, x: nextX, y }); }} onPointerUp={event => applyFrame(mode, Number(event.currentTarget.value), y)} onKeyUp={event => applyFrame(mode, Number(event.currentTarget.value), y)} /></label><label>垂直位置 <span>{Math.round(y * 100)}%</span><input aria-label="裁切垂直位置" type="range" min={0} max={1} step={.05} value={y} disabled={busy || clip.locked} onChange={event => { const nextY = Number(event.target.value); onDraftChange(start !== clip.source_start_seconds || mode !== (clip.fit_mode ?? "fill") || x !== (clip.crop_x ?? .5) || nextY !== (clip.crop_y ?? .5)); setY(nextY); onDraftStateChange?.({ start, mode, x, y: nextY }); }} onPointerUp={event => applyFrame(mode, x, Number(event.currentTarget.value))} onKeyUp={event => applyFrame(mode, x, Number(event.currentTarget.value))} /></label></div></details> : null}</section>
       <section className={ui.propertySection}><div className={ui.actionRow}><span>锁定镜头</span><button className={ui.iconButton} aria-label={clip.locked ? "解锁镜头" : "锁定镜头"} aria-pressed={clip.locked} disabled={busy} onClick={() => onPreview({ operation_type: "SetClipLock", clip_id: clip.id, locked: !clip.locked })} type="button">{clip.locked ? <Lock size={16} /> : <Unlock size={16} />}</button></div><div className={ui.actions}><button className={ui.button} aria-label="向前移动" disabled={busy || clip.locked || index === 0} onClick={() => onPreview({ operation_type: "ReorderClip", clip_id: clip.id, position: index - 1 })} type="button"><ArrowLeft size={14} />前移</button><button className={ui.button} aria-label="向后移动" disabled={busy || clip.locked || index === count - 1} onClick={() => onPreview({ operation_type: "ReorderClip", clip_id: clip.id, position: index + 1 })} type="button">后移<ArrowRight size={14} /></button><button className={ui.button} disabled={busy || clip.locked} onClick={onReplace} type="button"><Replace size={14} />换素材</button>{onAddSegment ? <button className={ui.button} disabled={busy} onClick={onAddSegment} type="button"><Plus size={14} />添加片段</button> : null}</div>
-      {onAddSegment && inserting ? candidates.length ? <label className={ui.field}>插在当前镜头之后<select aria-label="插在当前镜头之后" disabled={busy} value="" onChange={event => { const candidate = candidates.find(item => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) onPreview({ operation_type: "InsertClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option value="" disabled>选择候选，预览后确认</option>{candidates.map(item => <option key={`${item.asset_id}:${item.segment_id}`} value={`${item.asset_id}:${item.segment_id}`}>{item.file_name} · {item.description}</option>)}</select><small>插在当前镜头之后，时长继承该片段本身的时长。</small></label> : <p role="status">没有可插入的已审核镜头，请补充素材。</p> : null}
-      {replacing ? candidates.length ? <label className={ui.field}>替换为已审核镜头<select aria-label="替换为已审核镜头" disabled={busy} value="" onChange={event => { const candidate = candidates.find(item => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) onPreview({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option value="" disabled>选择候选，预览后确认</option>{candidates.map(item => <option key={`${item.asset_id}:${item.segment_id}`} value={`${item.asset_id}:${item.segment_id}`}>{item.file_name} · {item.description}</option>)}</select></label> : <p role="status">没有满足时长的其他可用镜头，请补充素材。</p> : null}
+      {onAddSegment && inserting ? candidates.length ? <label className={ui.field}>插在当前镜头之后<select aria-label="插在当前镜头之后" disabled={busy} value="" onChange={event => { const candidate = candidates.find(item => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) onPreview({ operation_type: "InsertClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option value="" disabled>选择候选，应用到草稿</option>{candidates.map(item => <option key={`${item.asset_id}:${item.segment_id}`} value={`${item.asset_id}:${item.segment_id}`}>{item.file_name} · {item.description}</option>)}</select><small>插在当前镜头之后，时长继承该片段本身的时长。</small></label> : <p role="status">没有可插入的已审核镜头，请补充素材。</p> : null}
+      {replacing ? candidates.length ? <label className={ui.field}>替换为已审核镜头<select aria-label="替换为已审核镜头" disabled={busy} value="" onChange={event => { const candidate = candidates.find(item => `${item.asset_id}:${item.segment_id}` === event.target.value); if (candidate) onPreview({ operation_type: "ReplaceClip", clip_id: clip.id, asset_id: candidate.asset_id, segment_id: candidate.segment_id, source_start_seconds: candidate.start_seconds }); }}><option value="" disabled>选择候选，应用到草稿</option>{candidates.map(item => <option key={`${item.asset_id}:${item.segment_id}`} value={`${item.asset_id}:${item.segment_id}`}>{item.file_name} · {item.description}</option>)}</select></label> : <p role="status">没有满足时长的其他可用镜头，请补充素材。</p> : null}
       {clip.needs_confirmation ? <button className={ui.button} disabled={busy} onClick={() => onPreview({ operation_type: "ConfirmClip", clip_id: clip.id })} type="button"><Check size={14} />确认镜头</button> : null}</section>
       {index>0 ? <details className={ui.propertySection}><summary>镜头过渡</summary>
-        <label className={ui.field}>过渡秒数<input aria-label="叠化时长（秒）" type="number" min="0" max="2" step="0.1" value={transitionSeconds} disabled={busy||clip.locked} onChange={event=>{onDraftChange(true);setTransitionSeconds(Number(event.target.value));}} /></label>
+        <label className={ui.field}>过渡秒数<input aria-label="叠化时长（秒）" type="number" min="0" max="2" step="0.1" value={Number.isFinite(transitionSeconds) ? transitionSeconds : ""} disabled={busy||clip.locked} onChange={event=>{onDraftChange(true);setTransitionSeconds(event.target.value === "" ? Number.NaN : Number(event.target.value));}} onBlur={() => { if (Number.isFinite(transitionSeconds) && transitionSeconds >= 0 && transitionSeconds <= 2 && !busy && !clip.locked && transitionSeconds !== (clip.transition_in_seconds ?? 0)) onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds}); }} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); if (Number.isFinite(transitionSeconds) && transitionSeconds >= 0 && transitionSeconds <= 2 && !busy && !clip.locked && transitionSeconds !== (clip.transition_in_seconds ?? 0)) onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds}); } }} /></label>
         <p>0 为硬切；从切点开始混合两段画面，需要前镜头的结尾素材余量。声音与字幕不移动。</p>
-        <button className={ui.button} type="button" disabled={busy||clip.locked||transitionSeconds===(clip.transition_in_seconds ?? 0)} onClick={()=>onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds})}>预览转场</button>
       </details>:null}
       <GraphicOverlayEditor onSelect={onSelectOverlay} taskId={workspace.task.id} items={workspace.montage!.graphic_overlays ?? []} duration={workspace.montage!.duration_seconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={workspace.portrait_available} clip={clip} allClipIds={workspace.montage!.clips.map(item=>item.id)} versionId={workspace.task.current_timeline_version_id} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}

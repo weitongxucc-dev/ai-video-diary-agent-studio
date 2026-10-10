@@ -71,7 +71,10 @@ def _approved_asset(
         )
     for tag in asset_tags or []:
         asset = production.update_asset_tags(workspace_id, asset.id, [tag])
-    return production.get_asset(workspace_id, asset.id)
+    asset = production.get_asset(workspace_id, asset.id)
+    # These repository-level search cases model material explicitly shared to
+    # the workspace reader; they do not bypass the private-owner filter.
+    return production.set_asset_visibility(workspace_id, asset.id, "shared")
 
 
 # 三个片段的时长分别是 5 秒 / 12 秒 / 8 秒（scene_reader 把 25 秒切成这三段）。

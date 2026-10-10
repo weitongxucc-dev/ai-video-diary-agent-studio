@@ -10,14 +10,14 @@
 .controlGroup h3 { margin: 0; color: var(--text-1); font-size: 13px; font-weight: 500; }
 .controlGroup p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.45; }
 .controlGroup > label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-1); font-size: 12px; }
-.controlGroup > label input, .controlGroup > label select { width: 132px; min-width: 0; min-height: 30px; padding: 3px 7px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 13px; }
+.controlGroup > label input, .controlGroup > label select, .controlGroup > label button { width: 132px; min-width: 0; min-height: 32px; padding: 3px 7px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; }
 .valueRow { display: flex; justify-content: space-between; gap: 10px; color: var(--text-2); font-size: 12px; }
 .valueRow output { color: var(--text-1); }
 .cropControls { display: grid; gap: 10px; }
 .cropControls label { display: grid; grid-template-columns: 1fr auto; gap: 4px; color: var(--text-1); font-size: 12px; }
 .cropControls output { color: var(--text-2); font-size: 12px; }
 .cropControls input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
-.footer { display: flex; flex: 0 0 44px; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border-1); }
+.footer { display: flex; flex-wrap:wrap; flex: 0 0 64px; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border-1); }
 .footer small { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .footer button { flex: 0 0 auto; min-height: 30px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--accent-contrast); font: inherit; font-size: 12px; cursor: pointer; }
 .footer button:disabled { cursor: default; opacity: .55; }

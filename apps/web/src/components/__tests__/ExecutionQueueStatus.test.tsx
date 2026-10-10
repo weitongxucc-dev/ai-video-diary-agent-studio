@@ -18,11 +18,14 @@ describe("ExecutionQueueStatus", () => {
     expect(status).not.toHaveTextContent(/预计|倒计时/);
   });
 
-  it("shows a persisted running stage and its update time", () => {
-    render(<ExecutionQueueStatus status="running" currentStage="montage_plan" waitingReason={null} statusUpdatedAt="2026-09-27T08:30:00Z" />);
+  it.each([
+    ["montage_plan", "安排镜头与人物口型"], ["person_render", "人物口型"],
+  ] as const)("shows a persisted running stage and its update time (%s)", (stage, label) => {
+    render(<ExecutionQueueStatus status="running" currentStage={stage} waitingReason={null} statusUpdatedAt="2026-09-27T08:30:00Z" />);
     const status = screen.getByLabelText("制作安排状态");
     expect(within(status).getByText("当前阶段")).toBeInTheDocument();
-    expect(within(status).getByText("安排镜头与人物口型")).toBeInTheDocument();
+    expect(within(status).getByText(label)).toBeInTheDocument();
+    expect(status).not.toHaveTextContent("person_render");
     expect(status.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-27T08:30:00Z");
     expect(within(status).queryByText("等待原因")).not.toBeInTheDocument();
   });

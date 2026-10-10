@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, LoaderCircle, X } from "lucide-react";
+import { AlertCircle, LoaderCircle } from "lucide-react";
 
 import styles from "./TimelineVersionHistory.module.css";
 import {
@@ -15,7 +15,8 @@ import type {
 
 export type TimelineVersionHistoryProps = {
   taskId: string;
-  onClose: () => void;
+  open: boolean;
+  currentVersionId: string | null;
 };
 
 const artifactLabels: Record<CreationTaskTimelineVersionArtifactKind, string> = {
@@ -52,7 +53,7 @@ function errorText(error: unknown) {
   return "历史版本暂时读不出来。";
 }
 
-export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHistoryProps) {
+export function TimelineVersionHistory({ taskId, open, currentVersionId }: TimelineVersionHistoryProps) {
   const [versions, setVersions] = useState<CreationTaskTimelineVersionList | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CreationTaskTimelineVersionDetail | null>(null);
@@ -63,6 +64,7 @@ export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHisto
   const detailRequest = useRef(0);
 
   useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     setLoadingList(true);
     listCreationTaskTimelineVersions(taskId)
@@ -81,7 +83,7 @@ export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHisto
     return () => {
       cancelled = true;
     };
-  }, [taskId]);
+  }, [taskId, open, currentVersionId]);
 
   const loadDetail = useCallback((versionId: string) => {
     // 每次选择自增一次令牌：响应只允许作用于仍是最新选择的那一次，否则快速点 A 再 B 时 A 会覆盖 B
@@ -109,12 +111,6 @@ export function TimelineVersionHistory({ taskId, onClose }: TimelineVersionHisto
   }, [taskId]);
 
   return <section className={styles.history} aria-label="历史时间线版本">
-    <header className={styles.head}>
-      <h2 className={styles.heading}>历史时间线版本</h2>
-      <button type="button" className={styles.close} aria-label="收起历史版本" onClick={onClose}>
-        <X size={15} aria-hidden />
-      </button>
-    </header>
     <p className={styles.note}>只读查看。打开旧版本不会改动当前版本、提案、音轨或任务，也不能在这里回滚。</p>
 
     {loadingList ? <p className={styles.note}><LoaderCircle size={14} aria-hidden /> 正在读取版本…</p> : null}
