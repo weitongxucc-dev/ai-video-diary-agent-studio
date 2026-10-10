@@ -16,6 +16,8 @@ const apiMocks = vi.hoisted(() => ({
   getMaterialLibraryInsights: vi.fn(),
   getProductionFoundation: vi.fn(),
   listCreationTasks: vi.fn(),
+  getCurrentAssistantConversation: vi.fn(),
+  listAssistantConversations: vi.fn(),
 }));
 const identityState = vi.hoisted(() => ({ token: "tok-a" as string | null, ready: true }));
 const routerPush = vi.fn();
@@ -40,6 +42,14 @@ vi.mock("@/lib/api", () => ({
   getHomeDashboard: apiMocks.getHomeDashboard,
   getMaterialLibraryInsights: apiMocks.getMaterialLibraryInsights,
   getProductionFoundation: apiMocks.getProductionFoundation,
+  getCurrentAssistantConversation: apiMocks.getCurrentAssistantConversation,
+  listAssistantConversations: apiMocks.listAssistantConversations,
+  getAssistantCapabilities: vi.fn().mockResolvedValue({
+    application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
+    pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] },
+    extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" },
+    prompt_templates: { available: false, reason: "未接通" }, business_tools: {},
+  }),
   confirmCreationPlan: vi.fn(),
   confirmCreationTaskEdit: vi.fn(),
   CreationPlanApiError: class CreationPlanApiError extends Error {},
@@ -115,6 +125,14 @@ describe("HomePage workspace overview", () => {
     apiMocks.getMaterialLibraryInsights.mockResolvedValue({
       asset_count: 0, segment_count: 0, tags: [], recommended_gaps: [],
     });
+    apiMocks.getCurrentAssistantConversation.mockReset();
+    apiMocks.getCurrentAssistantConversation.mockImplementation(async (scope: { scope_kind: "home" | "material" | "task"; scope_id: string }) => ({
+      id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "workspace", ...scope,
+      title: "新对话", draft_text: "", draft_version: 0,
+      created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [],
+    }));
+    apiMocks.listAssistantConversations.mockReset();
+    apiMocks.listAssistantConversations.mockResolvedValue({ items: [] });
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }),
@@ -126,7 +144,7 @@ describe("HomePage workspace overview", () => {
 
     // Real AppShell provides the assistant region; real composer is inside it.
     const assistant = await screen.findByRole("region", { name: "创作助手" });
-    expect(within(assistant).getByRole("textbox", { name: "制作指令" })).toHaveAttribute("placeholder", "想做什么视频？");
+    expect(within(assistant).getByRole("textbox", { name: "制作要求" })).toHaveAttribute("placeholder", "写下下一条要求；Enter 发送，Shift+Enter 换行");
 
     // 概览读服务端聚合：七项都是真实数值，不是占位横线。
     const metrics = await screen.findByRole("region", { name: "工作空间七项概览" });
@@ -144,7 +162,7 @@ describe("HomePage workspace overview", () => {
     render(<HomePage />);
 
     const assistant = await screen.findByRole("region", { name: "创作助手" });
-    const input = within(assistant).getByRole("textbox", { name: "制作指令" }) as HTMLTextAreaElement;
+    const input = within(assistant).getByRole("textbox", { name: "制作要求" }) as HTMLTextAreaElement;
     // 既有创作入口：带 ?new=1 打开首页时输入框直接获得焦点。
     await waitFor(() => expect(document.activeElement).toBe(input));
 

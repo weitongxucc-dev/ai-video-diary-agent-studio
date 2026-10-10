@@ -503,3 +503,88 @@ def test_high_quality_uses_configured_packaged_worker(tmp_path):
     provider = avatar_lipsync_provider_from_settings(settings, quality="high")
     assert isinstance(provider, LatentSyncAvatarAndLipSyncProvider)
     assert provider.worker_path == worker
+
+
+def test_presenter_provider_and_cache_timing_use_the_same_grant_runner(tmp_path):
+    """Synthetic protocol replies; no model, ffprobe, or media decoding."""
+    import json
+    from types import SimpleNamespace
+    from app.granted_subprocess import GrantedCommandResult
+    request = _request(tmp_path)
+    runtime = tmp_path / "runtime"
+    (runtime / "scripts").mkdir(parents=True)
+    (runtime / "models/musetalkV15").mkdir(parents=True)
+    (runtime / "scripts/inference.py").touch()
+    (runtime / "models/musetalkV15/unet.pth").touch()
+    worker = tmp_path / "worker.py"
+    worker.touch()
+    calls = []
+    checks = []
+    def run(command, **options):
+        calls.append((command, options))
+        if command[0] == "ffprobe":
+            if command[command.index("-of")+1] != "json":
+                return GrantedCommandResult(0, b"8\n", b"")
+            return GrantedCommandResult(0, json.dumps({"format": {"duration": 8}, "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 64, "height": 64,
+                 "duration": 8, "avg_frame_rate": "25/1"},
+                {"codec_type": "audio", "codec_name": "aac", "duration": 8}]}).encode(), b"")
+        payload = json.loads(Path(command[command.index("--request")+1]).read_text())
+        output = Path(payload["output_path"])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"synthetic provider output")
+        Path(command[command.index("--response")+1]).write_text(json.dumps({
+            "schema_version": 1, "status": "succeeded", "artifact_path": str(output),
+            "duration_seconds": 8, "alignment_evidence": "synthetic; not media evidence"}))
+        assert options["output_paths"] == (output,)
+        assert options["env"]["OMP_NUM_THREADS"] == "1"
+        return GrantedCommandResult(0, b"", b"")
+    grant = SimpleNamespace(check=lambda: checks.append(True), run=run, threads=1, max_output_bytes=4096)
+    provider = SubprocessAvatarAndLipSyncProvider(runtime_path=worker, worker_path=worker,
+        runtime_root=runtime, model_id=request.model_id, supported_languages=(request.language,),
+        runner=lambda command: pytest.fail("granted production must not use diagnostic runner"))
+    service = AvatarAndLipSyncService(tmp_path / "output", provider)
+    result = service.render(request, grant_context=grant)
+    assert result.status == "succeeded" and result.duration_seconds == 8
+    assert len(calls) == 3  # Worker plus input and output ffprobe protocol.
+    cached = service.render(request, grant_context=grant)
+    assert cached.status == "succeeded" and len(calls) == 5
+    assert all(command[0] == "ffprobe" for command, _ in calls[3:])
+    revoked = replace(request, authorization=replace(request.authorization, status="revoked"))
+    assert service.render(revoked, grant_context=grant).status == "authorization_denied"
+    assert len(calls) == 5 and len(checks) >= 5
+
+
+def test_granted_avatar_cancellation_is_not_converted_to_provider_failure(tmp_path):
+    from types import SimpleNamespace
+    from app.granted_subprocess import GrantedCommandCancelled
+    request = _request(tmp_path)
+    provider = SubprocessAvatarAndLipSyncProvider(runtime_path=tmp_path / "worker",
+        worker_path=tmp_path / "worker", runtime_root=tmp_path, model_id=request.model_id)
+    def cancelled():
+        raise GrantedCommandCancelled("cancelled")
+    with pytest.raises(GrantedCommandCancelled):
+        AvatarAndLipSyncService(tmp_path / "output", provider).render(request,
+            grant_context=SimpleNamespace(check=cancelled))
+
+
+@pytest.mark.parametrize("quality", ["fast", "high"])
+def test_granted_person_provider_preserves_actual_fast_and_high_argv(tmp_path, quality):
+    from types import SimpleNamespace
+    from app.avatar_lipsync import LatentSyncAvatarAndLipSyncProvider
+    from app.granted_subprocess import GrantedCommandResult
+    calls = []
+    context = SimpleNamespace(check=lambda: None, threads=1,
+        run=lambda command, **options: calls.append((command, options)) or GrantedCommandResult(0, b"", b""))
+    kwargs = dict(runtime_path=tmp_path / "python", worker_path=tmp_path / "worker.py",
+                  runtime_root=tmp_path / "runtime", model_id="synthetic")
+    provider = (LatentSyncAvatarAndLipSyncProvider(pose_root=tmp_path / "pose", **kwargs)
+                if quality == "high" else SubprocessAvatarAndLipSyncProvider(**kwargs))
+    argv = [str(tmp_path / "python"), str(tmp_path / "worker.py"), "--request", "request", "--response", "response",
+            "--runtime-root", str(tmp_path / "runtime")]
+    output = tmp_path / "output.mp4"
+    provider._run_command(argv, grant_context=context, output_paths=(output,))
+    assert calls[0][0] == (argv + ["--pose-root", str((tmp_path / "pose").resolve())] if quality == "high" else argv)
+    assert calls[0][1]["output_paths"] == (output,)
+    assert "timeout" not in calls[0][1]  # The Grant owns the remaining unit deadline.
+    assert calls[0][1]["env"]["HF_HUB_OFFLINE"] == "1"

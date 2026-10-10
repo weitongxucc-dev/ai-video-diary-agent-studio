@@ -21,7 +21,7 @@ vi.mock("@/lib/api", () => ({
 it("seeks original speech evidence and saves a user correction without replacing the evidence", async () => {
   const asset = {
     id: "asset", file_name: "source.mp4", size_bytes: 1000, duration_seconds: 10,
-    usage_role: "b_roll", review_status: "approved", analysis_status: "ready",
+    usage_role: "b_roll", review_status: "approved", analysis_status: "ready", user_tags: [],
     speech_analysis: { status: "ready", observations: [{ start_ms: 6000, end_ms: 8000, text: "USB port" }], message: "本地转写" },
     segments: [{ id: "segment", start_seconds: 5, end_seconds: 10, description: "接口", transcript: "", usage_role: "b_roll",
       understanding: { status: "ready", summary: "桌面上的电脑", sample_times: [5.75, 7.5, 9.25],

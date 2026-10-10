@@ -11,8 +11,9 @@ vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
 }));
 vi.mock("@/components/AppShell", () => ({
-  AppShell: ({ children, creationTasks, inspector }: { children: React.ReactNode; creationTasks?: CreationTask[]; inspector?: React.ReactNode }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><aside data-testid="inspector">{inspector}</aside><main>{children}</main></>,
+  AppShell: ({ children, creationTasks, inspector, workspaceStatus }: { children: React.ReactNode; creationTasks?: CreationTask[]; inspector?: React.ReactNode; workspaceStatus?: { label: string } }) => <><p data-testid="shell-task-states">{creationTasks?.map((task) => `${task.id}:${task.stage_status}`).join(",")}</p><aside data-testid="inspector">{inspector}</aside>{workspaceStatus ? <p>{workspaceStatus.label}</p> : null}<main>{children}</main></>,
 }));
+vi.mock("@/components/ScheduledTasksWorkspace", () => ({ ScheduledTasksWorkspace: () => <section aria-label="定时任务只读预览">已保存定义只读预览</section> }));
 vi.mock("@/components/CreateProductionTaskForm", () => ({ CreateProductionTaskForm: () => null }));
 vi.mock("@/lib/api.server", () => ({
   getProductionFoundation: mocks.getProductionFoundation,
@@ -62,6 +63,16 @@ const foundation = {
 } as unknown as ProductionFoundation;
 
 describe("ProductionPage default CreationTask projection", () => {
+  it("keeps the legacy automations URL as an explicit read-only preview even when foundation is unavailable", async () => {
+    mocks.getProductionFoundation.mockResolvedValue(null);
+    mocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
+    render(await ProductionPage({ searchParams: Promise.resolve({ view: "automations" }) }));
+    expect(screen.getByRole("region", { name: "定时任务只读预览" })).toBeInTheDocument();
+    expect(screen.getByText("定时任务仅供只读预览，尚未接通执行")).toBeInTheDocument();
+    expect(screen.queryByText("无法打开创作任务")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "开始制作" })).not.toBeInTheDocument();
+  });
+
   it("keeps each task stage distinct in the default list and inspector counts", async () => {
     mocks.getProductionFoundation.mockResolvedValue(foundation);
     mocks.listCreationTasks.mockResolvedValue({

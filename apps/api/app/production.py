@@ -10,6 +10,7 @@ import re
 import sqlite3
 import subprocess
 import wave
+from contextlib import nullcontext
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -23,6 +24,9 @@ from app.avatar_lipsync import (
     Authorization,
     AvatarAndLipSyncRequest,
     PersonProfile,
+    ProfileReference,
+    profile_use_failure,
+    _as_utc,
     PronunciationEntry,
     VoiceProfile as VersionedVoiceProfile,
 )
@@ -51,6 +55,7 @@ from app.material_scene import (
 
 if TYPE_CHECKING:
     from app.device_scheduler import Grant
+    from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +136,7 @@ BatchItemStatus = Literal[
     "interrupted",
 ]
 MediaPreviewType = Literal["voice", "avatar_lipsync"]
-MediaPreviewStatus = Literal["running", "succeeded", "unavailable", "blocked", "failed"]
+MediaPreviewStatus = Literal["queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"]
 
 _A_ROLL_PROMPTS = (
     "一个人面对摄像头说话的自拍视频",
@@ -381,6 +386,40 @@ def material_allows_automation(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_publish"}
 
 
+_MATERIAL_COVERAGE_TERMS = {
+    "主体:人物": ("主体:人物", "人物", "人像", "女性", "女人", "男子", "男人", "女孩", "男孩", "女士", "男士", "person", "people"),
+    "场景:办公": ("场景:办公", "办公室", "办公环境", "office"),
+    "场景:户外": ("场景:户外", "室外", "户外", "街道", "outdoor"),
+    "物体:电脑": ("物体:电脑", "电脑", "笔记本", "计算机", "computer", "laptop"),
+    "动作:打字": ("动作:打字", "打字", "typing"),
+    "内容:软件界面": ("内容:软件界面", "软件界面", "应用界面", "app interface"),
+    "镜头:特写": ("镜头:特写", "特写", "close-up"),
+}
+
+def material_segment_eligible(asset, segment, workspace_id, *, automation_only=False):
+    """Metadata/file qualification; deep decoding remains under the executing Grant."""
+    if (asset.workspace_id != workspace_id or asset.review_status == "rejected"
+            or segment.asset_id != asset.id or segment.review_status == "rejected"
+            or not (material_allows_automation(asset) if automation_only else material_allows_footage(asset))
+            or asset.analysis_status != "ready" or asset.media_type != "video"
+            or effective_segment_usage_role(asset, segment) not in {"a_roll", "b_roll"}
+            or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
+            or not (math.isfinite(segment.start_seconds) and math.isfinite(segment.end_seconds)
+                    and 0 <= segment.start_seconds < segment.end_seconds <= asset.duration_seconds)):
+        return False
+    path = Path(asset.path)
+    try:
+        stat = path.stat()
+        return (path.is_file() and stat.st_size > 0 and stat.st_size == asset.size_bytes
+                and abs(stat.st_mtime - asset.modified_at.timestamp()) < 0.001)
+    except OSError:
+        return False
+
+
+def automatic_segment_eligible(asset, segment, workspace_id):
+    return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
+
+
 def _material_analysis_public_error(error: Exception) -> str:
     if isinstance(error, PermissionError):
         return "素材文件没有读取权限"
@@ -412,6 +451,8 @@ class ProductionProfile:
     intro_text: str = ""
     outro_text: str = ""
     background_music_path: str | None = None
+    default_voice_profile_id: str | None = None
+    default_voice_version: str | None = None
     voice_name: str = ""
     voice_reference_path: str | None = None
     voice_reference_text: str = ""
@@ -451,12 +492,16 @@ class NarrationArtifactRecord:
     cache_key: str
     audio_path: str
     duration_seconds: float
-    sample_rate: int
-    model_id: str
+    sample_rate: int | None
+    model_id: str | None
     episode_id: str | None = None
     task_id: str | None = None
     language: str = "zh"
     pronunciation_version: str = ""
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -474,12 +519,16 @@ class NarrationSegment:
     audio_reference: str | None
     duration_seconds: float | None
     sample_rate: int | None
-    model_id: str
-    voice_profile_id: str
-    voice_version: str
+    model_id: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
     language: str
     pronunciation_version: str
     status: NarrationSegmentStatus
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -559,6 +608,11 @@ class MediaPreviewRunRecord:
     repair_action: str | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
+    member_identity: dict = field(default_factory=dict)
+    preview_input: dict = field(default_factory=dict)
+    input_digest: str = ""
+    device_request_id: str | None = None
+
 
 
 @dataclass
@@ -670,6 +724,16 @@ class CreationPlanVoiceReference:
 
 
 @dataclass(frozen=True)
+class CreationPlanPersonReference:
+    profile_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        if not self.profile_id.strip() or not self.version.strip():
+            raise ValueError("人物选择必须固定档案ID与版本")
+
+
+@dataclass(frozen=True)
 class CreationPlanPronunciationReference:
     id: str
     version: str
@@ -708,6 +772,7 @@ class CreationPlan:
     confirmation_points: list[str]
     blockers: list[CreationPlanBlocker]
     preflight_fingerprint: str
+    selected_person: CreationPlanPersonReference | None = None
     presenter_share_target: int = 0
     lipsync_quality: Literal["high", "fast"] = "fast"
     template_id: str | None = None
@@ -860,6 +925,8 @@ class ScriptGenerationRun:
     retryable: bool | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
+    run_kind: Literal["generation", "assistant_reply_transfer"] = "generation"
+    source_reply_reference: dict[str, str] | None = None
 
 
 @dataclass
@@ -887,6 +954,7 @@ class CreationTaskScript:
     confirmed_at: datetime | None = None
     # 复用稿没有自己的生成记录，这里记下它来自文案库的哪一条，供界面如实标注。
     reused_from_entry_id: str | None = None
+    source_reply_reference: dict[str, str] | None = None
 
 
 @dataclass
@@ -1307,6 +1375,7 @@ class ProductionRepository:
         self,
         workspace_id: str,
         content: bytes,
+        *, verified_owner_user_id: str | None = None,
     ) -> tuple[str, int, float]:
         """Persist a validated WAV under the workspace media root.
 
@@ -1349,6 +1418,16 @@ class ProductionRepository:
                     workspace_id=workspace_id,
                     reference=reference,
                 )
+            # Use the existing material ownership/source record, not an unowned
+            # logical-path claim as permission to another member's reference.
+            stat = target.stat()
+            self._save_asset(MaterialAsset(
+                id=f"voice_source_{uuid4().hex}", workspace_id=workspace_id,
+                file_name=target.name, path=str(target), size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime), media_type="audio",
+                duration_seconds=duration_seconds,
+                owner_user_id=content_owner(verified_owner_user_id),
+            ))
         except Exception:
             temporary.unlink(missing_ok=True)
             target.unlink(missing_ok=True)
@@ -1829,9 +1908,267 @@ class ProductionRepository:
             )
         return [self._authorization_from_payload(payload) for payload in payloads]
 
-    def save_person_profile(self, person: PersonProfile) -> PersonProfile:
-        _validate_person_profile(person)
+    def resolve_profile_reference(
+        self, profile: PersonProfile | VersionedVoiceProfile, *,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        for_generation: bool = True,
+    ) -> tuple[Path, float | None, float | None]:
+        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic, for_generation=for_generation)
+        if for_generation and start is not None:
+            if not profile.reference.asset_id:
+                raise ValueError("精确派生参考需要稳定来源素材")
+            asset = self.get_asset(profile.workspace_id, profile.reference.asset_id)
+            if start != 0 or end != asset.duration_seconds:
+                raise ValueError("参考范围需要精确派生输入，不能用整片替代所选范围")
+        return path, start, end
+
+    def _profile_reference_source(
+        self, profile: PersonProfile | VersionedVoiceProfile, *,
+        viewer_user_id: str | None, local_diagnostic: bool, for_generation: bool,
+        probe_media: bool = True,
+    ) -> tuple[Path, float | None, float | None]:
+        """Re-read the source, membership and range; registration never runs a model."""
+        table = "person_profiles" if isinstance(profile, PersonProfile) else "versioned_voice_profiles"
         with self._connect() as conn:
+            row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                               (profile.workspace_id, profile.id)).fetchone()
+            current = ((self._person_profile_from_payload if isinstance(profile, PersonProfile)
+                        else self._versioned_voice_profile_from_payload)(conn, profile.workspace_id, json.loads(row["payload"]))
+                       if row is not None else profile)
+            if row is not None:
+                current = replace(current, authorization=self._current_authorization(conn, profile.workspace_id, current.authorization))
+        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                visibility=current.visibility, owner_user_id=current.owner_user_id):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                visibility=profile.visibility, owner_user_id=profile.owner_user_id):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        if profile.reference_issue is not None:
+            raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
+        reference = profile.reference
+        if reference is not None:
+            _validate_profile_reference_fields(profile)
+        logical = (profile.avatar_reference if isinstance(profile, PersonProfile)
+                   else profile.reference_audio_path)
+        path = self.resolve_workspace_media_reference(profile.workspace_id, logical,
+                                                       require_registered=reference is None or not reference.asset_id)
+        asset = None
+        if reference is not None and reference.asset_id:
+            asset = self.get_asset(profile.workspace_id, reference.asset_id)
+            if self.workspace_media_reference_for_asset(profile.workspace_id, asset.id) != logical:
+                raise ValueError("参考文件与来源素材不一致")
+        else:
+            with self._connect() as conn:
+                row = conn.execute("SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND file_path=?",
+                                   (profile.workspace_id, str(path))).fetchone()
+            if row is not None:
+                asset = self._asset_from_row(row)
+        if asset is not None and not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                                                      visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+            raise PermissionError("来源素材不属于当前成员或已取消共享")
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise ValueError("参考文件失联或为空，请重新定位原参考")
+        if asset is not None:
+            if abs(path.stat().st_mtime - asset.modified_at.timestamp()) > .00001:
+                raise ValueError("原参考已变化，请重新定位并登记新版本")
+            if asset.media_type == "audio" and path.suffix.lower() == ".wav":
+                intact = path.stat().st_size == asset.size_bytes
+                _profile_wav_duration(path)
+            else:
+                intact = (self._material_file_intact(asset) if probe_media else
+                          not path.is_symlink() and path.stat().st_size == asset.size_bytes)
+            if not intact:
+                raise ValueError("原参考已变化，请重新定位并登记新版本")
+            if isinstance(profile, PersonProfile) and asset.media_type not in {"video", "image"}:
+                raise ValueError("人物参考需要已登记的视频或图片")
+            if isinstance(profile, VersionedVoiceProfile) and asset.media_type not in {"audio", "video"}:
+                raise ValueError("声音参考需要已登记音频或视频")
+            if asset.use_state == "excluded" or (for_generation and asset.use_state not in {"available", "not_for_publish"}):
+                raise MediaAuthorityError(reason=f"source_{asset.use_state}",
+                    impact="来源素材的使用限制阻断本次预览或生成，未采用该参考。",
+                    repair_action=f"来源素材使用状态限制：{asset.use_state}；请在来源详情确认允许的用途或选择其他参考。")
+            duration = asset.duration_seconds
+            if asset.media_type != "image" and (duration is None or not math.isfinite(duration) or duration <= 0):
+                raise ValueError("来源时长未知，请重新定位有效参考范围")
+            if reference is not None and reference.segment_id:
+                segment = next((item for item in asset.segments if item.id == reference.segment_id), None)
+                if segment is None or segment.asset_id != asset.id:
+                    raise ValueError("参考片段已失联，请重新选择")
+                if reference.start_seconds is None or reference.end_seconds is None:
+                    raise ValueError("片段参考需要明确起止时间")
+                if reference.start_seconds < segment.start_seconds or reference.end_seconds > segment.end_seconds:
+                    raise ValueError("参考范围超出来源片段")
+                if segment.usage_role == "exclude":
+                    raise ValueError("来源片段已排除使用")
+        else:
+            if isinstance(profile, PersonProfile):
+                raise ValueError("人物参考缺少稳定素材登记，请重新定位")
+            duration = _profile_wav_duration(path)
+            if not local_diagnostic:
+                raise PermissionError("历史声音来源缺少成员归属，请重新导入参考")
+        if isinstance(profile, VersionedVoiceProfile) and path.suffix.lower() == ".wav":
+            duration = _profile_wav_duration(path)
+        start = reference.start_seconds if reference else None
+        end = reference.end_seconds if reference else None
+        if start is not None and (duration is None or end is None or end > duration):
+            raise ValueError("参考范围超出有效来源时长")
+        if for_generation:
+            for version in (profile, current):
+                failure = profile_use_failure(version, content_type=("person_likeness" if isinstance(profile, PersonProfile) else "voice"),
+                                              usage_scope=("avatar_lipsync" if isinstance(profile, PersonProfile) else "narration"))
+                if failure is not None:
+                    raise ValueError(f"参考使用受限：{failure}")
+        return path, start, end
+
+    def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
+                                viewer_user_id: str | None = None, local_diagnostic: bool = False,
+                                for_generation: bool = True) -> ProfileReferenceInput:
+        """Qualified source facts only; never decode/derive during device admission."""
+        from app.profile_reference_media import ProfileReferenceInput
+        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=False)
+        reference = profile.reference
+        asset = self.get_asset(profile.workspace_id, reference.asset_id) if reference and reference.asset_id else None
+        kind = "voice_audio" if isinstance(profile, VersionedVoiceProfile) else "person_visual"
+        if kind == "voice_audio" and asset and asset.media_type not in {"audio", "video"}:
+            raise ValueError("声音参考需要有效音频或视频的声音范围")
+        duration = asset.duration_seconds if asset else _profile_wav_duration(path)
+        return ProfileReferenceInput.from_source(
+            workspace_id=profile.workspace_id, profile_id=profile.id, profile_version=profile.version,
+            asset_id=asset.id if asset else None, segment_id=reference.segment_id if reference else None,
+            source_path=path, source_type=asset.media_type if asset else "audio", kind=kind,
+            start_seconds=start, end_seconds=end, source_duration_seconds=duration)
+
+    def materialize_profile_reference(self, profile: PersonProfile | VersionedVoiceProfile, *,
+                                      grant_context, viewer_user_id: str | None = None,
+                                      local_diagnostic: bool = False) -> ProfileReferenceArtifact:
+        from app.profile_reference_media import materialize_reference
+        if grant_context is None:
+            raise PermissionError("精确参考派生需要现有设备执行许可")
+        grant_context.check()
+        if grant_context.grant.workspace_id != profile.workspace_id:
+            raise PermissionError("参考派生许可工作区不匹配")
+        expected_stages = (("person_render:", "person_edit:") if isinstance(profile, PersonProfile)
+                           else ("narration:", "narration_edit:"))
+        if (not ((grant_context.grant.owner_type == "creation_job"
+                      and grant_context.grant.unit_key.startswith(expected_stages))
+                     or (grant_context.grant.owner_type == "media_preview"
+                         and grant_context.grant.unit_key.startswith("avatar_lipsync:" if isinstance(profile, PersonProfile) else "voice:")))):
+            raise PermissionError("参考派生需要对应声音或人物阶段的专属许可")
+        source = self.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                                              local_diagnostic=local_diagnostic)
+        def recheck():
+            grant_context.check()
+            if self.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                                             local_diagnostic=local_diagnostic) != source:
+                raise ValueError("参考源修订已变化，请重新排队")
+        return materialize_reference(source, output_root=self.video_library_path / ".profile_references",
+                                     grant_context=grant_context, recheck=recheck)
+
+    def _require_profile_write_owner(self, conn, table: str, profile, verified_owner_user_id, local_diagnostic):
+        row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                           (profile.workspace_id, profile.id)).fetchone()
+        if row is not None and not local_diagnostic:
+            owner = json.loads(row["payload"]).get("owner_user_id")
+            if not owner or owner != verified_owner_user_id:
+                raise PermissionError("只有档案原登记成员可以保存新版本；历史归属缺失需要重新定位")
+
+    def resolve_voice_reference(self, voice: VersionedVoiceProfile, *,
+                                viewer_user_id: str | None = None,
+                                local_diagnostic: bool = False, grant_context=None) -> Path:
+        if grant_context is not None:
+            return self.materialize_profile_reference(voice, grant_context=grant_context,
+                viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic).path
+        path, _, _ = self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
+                                                   local_diagnostic=local_diagnostic)
+        _profile_wav_duration(path)
+        return path
+
+    @staticmethod
+    def profile_readable(profile, user_id, local_diagnostic=False):
+        return content_readable(user_id=user_id, local_diagnostic=local_diagnostic, visibility=profile.visibility, owner_user_id=profile.owner_user_id)
+
+    def current_profile_authorization(self, profile):
+        return self.get_authorization(profile.workspace_id, profile.authorization.id) if profile.authorization else None
+
+    def set_default_versioned_voice(self, workspace_id: str, voice_profile_id: str, version: str, *,
+                                    viewer_user_id: str | None = None, local_diagnostic: bool = False) -> VersionedVoiceProfile:
+        if not voice_profile_id.strip() or not version.strip():
+            raise ValueError("默认声音必须指定准确档案与版本")
+        voice = self.get_versioned_voice_profile(workspace_id, voice_profile_id, version)
+        # A default can be stored without a model, but must point at a readable real reference.
+        self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
+                                       local_diagnostic=local_diagnostic, for_generation=False)
+        profile = self.get_profile(workspace_id)
+        profile.default_voice_profile_id, profile.default_voice_version = voice.id, voice.version
+        self.save_profile(profile)
+        return voice
+
+    def get_default_versioned_voice(self, workspace_id: str) -> VersionedVoiceProfile | None:
+        profile = self.get_profile(workspace_id)
+        if profile.default_voice_profile_id is None and profile.default_voice_version is None:
+            return None
+        if not profile.default_voice_profile_id or not profile.default_voice_version:
+            raise ValueError("默认声音引用不完整，请重新选择准确版本")
+        return self.get_versioned_voice_profile(workspace_id, profile.default_voice_profile_id,
+                                                profile.default_voice_version)
+
+    def creation_plan_voice_reference(self, workspace_id, profile_id, version, *, viewer_user_id=None, local_diagnostic=False):
+        voice = self.get_versioned_voice_profile(workspace_id, profile_id, version)
+        self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        auth = self.current_profile_authorization(voice)
+        return CreationPlanVoiceReference(profile_id=voice.id, version=voice.version,
+            person_profile_id=voice.person_profile_id, person_version=voice.person_version,
+            person_authorization_id="", person_authorization_version="",
+            authorization_id=auth.id if auth else "", authorization_version=auth.version if auth else "",
+            language=voice.language, model_id=voice.model_id)
+
+    def automatic_material_segments(self, workspace_id, *, viewer_user_id=None, local_diagnostic=False):
+        result = []
+        for asset in self.list_assets(workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic):
+            try:
+                self.resolve_workspace_media_reference(workspace_id, self.workspace_media_reference_for_asset(workspace_id, asset.id), require_registered=True)
+            except (ValueError, KeyError, OSError):
+                continue
+            result.extend((asset, segment) for segment in asset.segments if automatic_segment_eligible(asset, segment, workspace_id))
+        return result
+
+    def creation_plan_person_reference(self, workspace_id: str, profile_id: str, version: str, *,
+                                       viewer_user_id: str | None = None, local_diagnostic: bool = False) -> CreationPlanPersonReference:
+        selected = CreationPlanPersonReference(profile_id, version)
+        person = self.get_person_profile(workspace_id, selected.profile_id, selected.version)
+        self.profile_reference_input(person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        return selected
+
+    def _retain_profile_authorization(self, table, profile):
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (profile.workspace_id, profile.id)).fetchone()
+            if row is not None and profile.authorization is None:
+                data = json.loads(row["payload"])
+                prior = data.get("authorization")
+                if prior is not None:
+                    authorization = self._authorization_from_payload(prior)
+                    profile = replace(profile, authorization=self._current_authorization(conn, profile.workspace_id, authorization))
+        return profile
+
+    def save_person_profile(
+        self, person: PersonProfile, *, verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> PersonProfile:
+        person = self._retain_profile_authorization("person_profiles", person)
+        _validate_person_profile(person)
+        if person.reference is not None:
+            person = replace(person, owner_user_id=content_owner(verified_owner_user_id))
+            self.resolve_profile_reference(person, viewer_user_id=verified_owner_user_id,
+                                           local_diagnostic=local_diagnostic, for_generation=False)
+            if person.reference.asset_id is None:
+                path = self.resolve_workspace_media_reference(person.workspace_id, person.avatar_reference)
+                asset = self._asset_by_path(person.workspace_id, str(path))
+                person = replace(person, reference=replace(person.reference, asset_id=asset.id))
+        with self._connect() as conn:
+            if person.reference is not None:
+                self._require_profile_write_owner(conn, "person_profiles", person, verified_owner_user_id, local_diagnostic)
             if person.avatar_reference.startswith("workspace://"):
                 self.resolve_workspace_media_reference(
                     person.workspace_id,
@@ -1842,7 +2179,8 @@ class ProductionRepository:
                     workspace_id=person.workspace_id,
                     reference=person.avatar_reference,
                 )
-            self._save_authorization(conn, person.workspace_id, person.authorization)
+            if person.authorization is not None:
+                self._save_authorization(conn, person.workspace_id, person.authorization)
             self._save_versioned_payload(
                 conn,
                 table="person_profiles",
@@ -1894,21 +2232,33 @@ class ProductionRepository:
 
     def save_versioned_voice_profile(
         self,
-        voice: VersionedVoiceProfile,
+        voice: VersionedVoiceProfile, *, verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
+        voice = self._retain_profile_authorization("versioned_voice_profiles", voice)
         _validate_versioned_voice_profile(voice)
+        if voice.reference is not None:
+            voice = replace(voice, owner_user_id=content_owner(verified_owner_user_id))
+            self.resolve_profile_reference(voice, viewer_user_id=verified_owner_user_id,
+                                          local_diagnostic=local_diagnostic, for_generation=False)
+            if voice.reference.asset_id is None:
+                path = self.resolve_workspace_media_reference(voice.workspace_id, voice.reference_audio_path)
+                with self._connect() as conn:
+                    row = conn.execute("SELECT id FROM material_assets WHERE workspace_id=? AND file_path=?",
+                                       (voice.workspace_id, str(path))).fetchone()
+                if row is not None:
+                    voice = replace(voice, reference=replace(voice.reference, asset_id=str(row["id"])))
         with self._connect() as conn:
+            if voice.reference is not None:
+                self._require_profile_write_owner(conn, "versioned_voice_profiles", voice, verified_owner_user_id, local_diagnostic)
             self.resolve_workspace_media_reference(
                 voice.workspace_id,
                 voice.reference_audio_path,
             )
-            self._get_person_profile(
-                conn,
-                voice.workspace_id,
-                voice.person_profile_id,
-                voice.person_version,
-            )
-            self._save_authorization(conn, voice.workspace_id, voice.authorization)
+            if voice.person_profile_id:
+                self._get_person_profile(conn, voice.workspace_id, voice.person_profile_id, voice.person_version)
+            if voice.authorization is not None:
+                self._save_authorization(conn, voice.workspace_id, voice.authorization)
             self._claim_workspace_media_reference(
                 conn,
                 workspace_id=voice.workspace_id,
@@ -2044,8 +2394,12 @@ class ProductionRepository:
                 voice_profile_id,
                 voice_version,
             )
+            current_voice = self._get_versioned_voice_profile(conn, workspace_id, voice_profile_id)
             voice = replace(
                 historical_voice,
+                use_state=(historical_voice.use_state if historical_voice.use_state != "available"
+                           else current_voice.use_state),
+                visibility=current_voice.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
@@ -2079,6 +2433,8 @@ class ProductionRepository:
         authorization_id: str,
         authorization_version: str,
         model_id: str,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        for_generation: bool = True,
     ) -> AvatarAndLipSyncRequest:
         if language not in {"zh", "en", "zh-en"}:
             raise ValueError("人物口型语言必须是 zh、en 或 zh-en")
@@ -2095,8 +2451,12 @@ class ProductionRepository:
                 voice_profile_id,
                 voice_version,
             )
+            current_person = self._get_person_profile(conn, workspace_id, person_id)
+            current_voice = self._get_versioned_voice_profile(conn, workspace_id, voice_profile_id)
             person = replace(
                 historical_person,
+                use_state=(historical_person.use_state if historical_person.use_state != "available" else current_person.use_state),
+                visibility=current_person.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
@@ -2105,23 +2465,31 @@ class ProductionRepository:
             )
             voice = replace(
                 historical_voice,
+                use_state=(historical_voice.use_state if historical_voice.use_state != "available" else current_voice.use_state),
+                visibility=current_voice.visibility,
                 authorization=self._current_authorization(
                     conn,
                     workspace_id,
                     historical_voice.authorization,
                 ),
             )
-            requested_authorization = self._get_authorization(
-                conn,
-                workspace_id,
-                authorization_id,
-                authorization_version,
-            )
+            if bool(authorization_id) != bool(authorization_version):
+                raise ValueError("授权引用必须同时指定ID和版本")
+            requested_authorization = (self._get_authorization(
+                conn, workspace_id, authorization_id, authorization_version,
+            ) if authorization_id else None)
             authorization = self._current_authorization(
                 conn,
                 workspace_id,
                 requested_authorization,
             )
+        if not self.profile_readable(person, viewer_user_id, local_diagnostic) or not self.profile_readable(voice, viewer_user_id, local_diagnostic):
+            raise PermissionError("档案不属于当前成员或已取消共享")
+        visual_input = None
+        if for_generation:
+            self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            visual_input = self.profile_reference_input(person, viewer_user_id=viewer_user_id,
+                                                        local_diagnostic=local_diagnostic)
         return AvatarAndLipSyncRequest(
             workspace_id=workspace_id,
             person=person,
@@ -2133,17 +2501,8 @@ class ProductionRepository:
             expression=expression,
             authorization=authorization,
             model_id=model_id,
-            visual_path=(
-                str(
-                    self.resolve_workspace_media_reference(
-                        workspace_id,
-                        person.avatar_reference,
-                        require_registered=True,
-                    )
-                )
-                if person.avatar_reference.startswith("workspace://")
-                else ""
-            ),
+            visual_path=visual_input.source_path if visual_input is not None else "",
+            visual_reference_input=visual_input,
         )
 
     def migrate_legacy_voice_profile(
@@ -2156,6 +2515,8 @@ class ProductionRepository:
         version: str,
         language: str,
         authorization: Authorization,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
         """Explicitly map a legacy voice row; no automatic migration is performed."""
         if language not in {"zh", "en", "zh-en"}:
@@ -2172,8 +2533,11 @@ class ProductionRepository:
             reference_text=legacy.reference_text,
             model_id=legacy.model_id,
             authorization=authorization,
+            reference=ProfileReference(),
+            display_name=legacy.name,
         )
-        return self.save_versioned_voice_profile(versioned)
+        return self.save_versioned_voice_profile(versioned, verified_owner_user_id=verified_owner_user_id,
+                                                 local_diagnostic=local_diagnostic)
 
     def list_applicable_pronunciation_entries(
         self,
@@ -2366,8 +2730,15 @@ class ProductionRepository:
         self,
         conn: sqlite3.Connection,
         workspace_id: str,
-        authorization: Authorization,
-    ) -> Authorization:
+        authorization: Authorization | None,
+    ) -> Authorization | None:
+        if authorization is None:
+            return None
+        # An explicitly revoked/expired historical version cannot be upgraded by a later record.
+        if authorization.status in {"revoked", "expired"} or (
+            authorization.expires_at is not None and _as_utc(authorization.expires_at) <= utc_now()
+        ):
+            return authorization
         return self._get_authorization(conn, workspace_id, authorization.id, None)
 
     def _get_person_profile(
@@ -2536,7 +2907,7 @@ class ProductionRepository:
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
-        authorization_failure = inputs.voice.authorization.failure_for(
+        authorization_failure = profile_use_failure(inputs.voice,
             content_type="voice",
             usage_scope="narration",
         )
@@ -2566,30 +2937,78 @@ class ProductionRepository:
         record = self._narration_artifact_from_payload(json.loads(str(row["payload"])))
         if not Path(record.audio_path).is_file():
             return None
+        if record.source_kind == "recorded" and not self._recorded_narration_source_is_current(record):
+            return None
         return record
+
+    def _recorded_narration_source_is_current(self, artifact: NarrationArtifactRecord) -> bool:
+        if (artifact.source_kind != "recorded" or not artifact.task_id
+                or not artifact.source_artifact_ref or not artifact.source_sha256
+                or not artifact.source_script_digest
+                or artifact.voice_profile_id is not None or artifact.model_id is not None):
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
+                (artifact.workspace_id, artifact.task_id, artifact.source_artifact_ref),
+            ).fetchone()
+            if row is None:
+                return False
+            source = self._artifact_record_from_row(row)
+            if source.kind != "task_recording" or source.sha256 != artifact.source_sha256:
+                return False
+            try:
+                job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
+                transform = self.get_transform_run(
+                    artifact.workspace_id,
+                    source.producer_job_id.replace("job_", "transform_", 1),
+                )
+            except KeyError:
+                return False
+        if (job.task_id != artifact.task_id or job.status != "succeeded"
+                or transform.task_id != artifact.task_id or transform.status != "succeeded"
+                or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
+                or transform.parameters.get("script_id") != artifact.script_id
+                or transform.parameters.get("script_digest") != artifact.source_script_digest
+                or self.confirmed_creation_task_script_digest(
+                    artifact.workspace_id, artifact.task_id, artifact.script_id
+                ) != artifact.source_script_digest):
+            return False
+        path = Path(artifact.audio_path)
+        if not path.is_file() or path.stat().st_size != source.size_bytes:
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as audio:
+            for chunk in iter(lambda: audio.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest() == source.sha256
 
     def save_narration_artifact(
         self,
         artifact: NarrationArtifactRecord,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> NarrationArtifactRecord:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
-                    id = excluded.id,
-                    payload = excluded.payload,
-                    created_at = excluded.created_at
-                """,
-                (
-                    artifact.id,
-                    artifact.workspace_id,
-                    artifact.cache_key,
-                    _json_payload(artifact),
-                    artifact.created_at.isoformat(),
-                ),
-            )
+        if connection is None:
+            with self._connect() as conn:
+                return self.save_narration_artifact(artifact, connection=conn)
+        connection.execute(
+            """
+            INSERT INTO narration_artifacts (id, workspace_id, cache_key, payload, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, cache_key) DO UPDATE SET
+                id = excluded.id,
+                payload = excluded.payload,
+                created_at = excluded.created_at
+            """,
+            (
+                artifact.id,
+                artifact.workspace_id,
+                artifact.cache_key,
+                _json_payload(artifact),
+                artifact.created_at.isoformat(),
+            ),
+        )
         return artifact
 
     def get_media_preview_run(
@@ -2618,6 +3037,7 @@ class ProductionRepository:
     ) -> MediaPreviewRunRecord:
         _validate_media_preview_run(record)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT payload FROM media_preview_attempts
@@ -2631,7 +3051,11 @@ class ProductionRepository:
                 )
                 if previous.id != record.id:
                     raise ValueError("预览尝试 ID 与现有记录不一致")
-                if previous.status != "running" and previous != record:
+                if previous.device_request_id is not None:
+                    if record.device_request_id not in {None, previous.device_request_id}:
+                        raise ValueError("预览尝试已绑定其他设备请求")
+                    record = replace(record, device_request_id=previous.device_request_id)
+                if previous.status not in {"queued", "running"} and previous != record:
                     raise ValueError("已结束的预览尝试不可覆盖")
             conn.execute(
                 """
@@ -2654,6 +3078,26 @@ class ProductionRepository:
                 ),
             )
         return record
+
+    def bind_preview_device_request(self, run, request_id, *, conn=None):
+        """Bind this attempt, including a terminal checkpoint, to its exact request."""
+        if conn is None:
+            with self._connect() as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                return self.bind_preview_device_request(run, request_id, conn=writer)
+        row = conn.execute("SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
+        if row is None:
+            raise KeyError(run.id)
+        current = self._media_preview_run_from_payload(json.loads(row["payload"]))
+        request = conn.execute("SELECT workspace_id,owner_type,owner_id,input_digest FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+        if (request is None or tuple(request) != (current.workspace_id, "media_preview", current.id, current.input_digest)
+                or (run.identity, run.attempt, run.input_digest) != (current.identity, current.attempt, current.input_digest)):
+            raise ValueError("设备请求与预览尝试或输入不一致")
+        if current.device_request_id not in {None, request_id}:
+            raise ValueError("预览尝试已绑定其他设备请求")
+        updated = replace(current, device_request_id=request_id)
+        conn.execute("UPDATE media_preview_attempts SET payload=? WHERE workspace_id=? AND id=?", (_json_payload(updated), run.workspace_id, run.id))
+        return updated
 
     def claim_media_preview_run(
         self,
@@ -2681,7 +3125,12 @@ class ProductionRepository:
                 else None
             )
             if latest is not None:
-                if latest.status == "running":
+                if latest.status == "queued" and record.status == "running":
+                    running = replace(latest, status="running")
+                    conn.execute("UPDATE media_preview_attempts SET payload=?,updated_at=? WHERE id=?",
+                                 (_json_payload(running), utc_now().isoformat(), running.id))
+                    return running, True
+                if latest.status in {"queued", "running"}:
                     return latest, False
                 if latest.status == "succeeded" and succeeded_reusable:
                     return latest, False
@@ -4564,6 +5013,8 @@ class ProductionRepository:
         min_duration_seconds: float | None = None,
         max_duration_seconds: float | None = None,
         limit: int = 20,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
     ) -> list[MaterialSegmentMatch]:
         """Search one workspace's approved, persisted segments and explain every candidate.
 
@@ -4596,7 +5047,12 @@ class ProductionRepository:
             min_duration_seconds is not None or max_duration_seconds is not None
         )
         matches: list[MaterialSegmentMatch] = []
-        for asset in self.list_assets(workspace_id):
+        for asset in self.list_assets(
+            workspace_id,
+            include_private=viewer_user_id is not None or local_diagnostic,
+            viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic,
+        ):
             if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:
@@ -4989,9 +5445,16 @@ class ProductionRepository:
         segment.description = description.strip()
         segment.transcript = transcript.strip()
         if usage_role is not None:
+            previous_usage_role = segment.usage_role
             segment.usage_role = usage_role
             if usage_role == "exclude":
                 review_status = "rejected"
+            if usage_role != previous_usage_role:
+                segment.system_tags = [
+                    tag for tag in segment.system_tags if not tag.startswith("用途:")
+                ]
+                if usage_role != "unassigned":
+                    segment.system_tags.append(f"用途:{usage_role}")
         if user_tags is not None:
             segment.user_tags = _normalized_labels(user_tags)
         if collection_ids is not None:
@@ -5002,7 +5465,8 @@ class ProductionRepository:
                 raise ValueError("标签夹不存在或不属于当前工作区")
             segment.collection_ids = list(dict.fromkeys(collection_ids))
         segment.review_status = review_status
-        segment.system_tags = _infer_system_tags(asset, segment)
+        # Editing member text does not replace recognition facts. Analysis owns
+        # system_tags and still refreshes them through its existing save path.
         segment.updated_at = utc_now()
         return self._save_asset(asset)
 
@@ -5176,6 +5640,16 @@ class ProductionRepository:
                 item["segment_count"] = int(item["segment_count"]) + 1
                 item["duration_seconds"] = float(item["duration_seconds"]) + duration
                 item["usage_count"] = int(item["usage_count"]) + segment.usage_count
+        coverage_categories = set()
+        for tag in stats:
+            # Existing taxonomy synonyms and role facts are used only for coverage;
+            # original observations and click-to-filter tag counts stay unchanged.
+            lowered = tag.casefold()
+            for category, terms in _MATERIAL_COVERAGE_TERMS.items():
+                if any(term in lowered for term in terms):
+                    coverage_categories.add(category)
+        if any(effective_segment_usage_role(asset, segment) == "a_roll" for asset in assets for segment in asset.segments):
+            coverage_categories.add("主体:人物")
         for tag in DEFAULT_MATERIAL_TAXONOMY:
             stats.setdefault(tag, blank(tag))
         ordered = sorted(
@@ -5192,7 +5666,7 @@ class ProductionRepository:
             "recommended_gaps": [
                 str(item["tag"])
                 for item in ordered
-                if int(item["segment_count"]) == 0
+                if str(item["tag"]) not in coverage_categories
                 and str(item["tag"]) in DEFAULT_MATERIAL_TAXONOMY
             ],
         }
@@ -5305,6 +5779,107 @@ class ProductionRepository:
         *,
         verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
+        reply_reference: dict[str, str] | None = None,
+        request_id: str | None = None,
+    ) -> tuple[CreationPlan, CreationTask]:
+        if reply_reference is not None or request_id is not None:
+            if reply_reference is None or request_id is None:
+                raise ValueError("对话回复来源绑定需要稳定请求身份")
+            return self.confirm_creation_plan_from_reply(
+                plan,
+                task,
+                reply_reference=reply_reference,
+                request_id=request_id,
+                verified_owner_user_id=verified_owner_user_id,
+                local_diagnostic=local_diagnostic,
+            )
+        plan, task = self._prepare_confirmed_creation_plan(
+            plan, task, verified_owner_user_id=verified_owner_user_id,
+            local_diagnostic=local_diagnostic,
+        )
+        with self._connect() as conn:
+            self._insert_confirmed_creation_plan(conn, plan, task)
+        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
+
+    def confirm_creation_plan_from_reply(
+        self,
+        plan: CreationPlan,
+        task: CreationTask,
+        *,
+        reply_reference: dict[str, str],
+        request_id: str,
+        verified_owner_user_id: str | None = None,
+        local_diagnostic: bool = False,
+    ) -> tuple[CreationPlan, CreationTask]:
+        reference = _validated_assistant_reply_reference(reply_reference)
+        if not request_id.strip():
+            raise ValueError("确认方案请求身份不能为空")
+        plan, task = self._prepare_confirmed_creation_plan(
+            plan, task, verified_owner_user_id=verified_owner_user_id,
+            local_diagnostic=local_diagnostic,
+        )
+        fingerprint_payload = {
+            "workspace_id": plan.workspace_id,
+            "owner_user_id": task.owner_user_id,
+            "reply_reference": reference,
+            "plan": _creation_plan_conversion_intent(plan),
+            "task": _creation_task_conversion_intent(task),
+        }
+        request_fingerprint = hashlib.sha256(
+            _json_object(fingerprint_payload).encode("utf-8")
+        ).hexdigest()
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_plan_confirmed", plan.workspace_id, request_id,
+        )
+        replay_ids: tuple[str, str] | None = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM task_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            if existing is not None:
+                event = self._task_event_from_row(existing)
+                if (
+                    event.event_type != "assistant_reply_plan_confirmed"
+                    or event.workspace_id != plan.workspace_id
+                    or event.payload.get("request_fingerprint") != request_fingerprint
+                ):
+                    raise ValueError("方案请求身份已用于不同的对话或方案输入")
+                replay_ids = (str(event.payload["plan_id"]), str(event.payload["task_id"]))
+            else:
+                self._insert_confirmed_creation_plan(conn, plan, task)
+                self.append_task_event(
+                    TaskEvent(
+                        id=event_id,
+                        workspace_id=plan.workspace_id,
+                        task_id=task.id,
+                        job_id=None,
+                        event_type="assistant_reply_plan_confirmed",
+                        payload={
+                            "request_id": request_id,
+                            "request_fingerprint": request_fingerprint,
+                            "reply_reference": reference,
+                            "reply_owner_user_id": task.owner_user_id,
+                            "plan_id": plan.id,
+                            "task_id": task.id,
+                        },
+                    ),
+                    connection=conn,
+                )
+        if replay_ids is not None:
+            return (
+                self.get_creation_plan(plan.workspace_id, replay_ids[0]),
+                self.get_creation_task(plan.workspace_id, replay_ids[1]),
+            )
+        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
+
+    @staticmethod
+    def _prepare_confirmed_creation_plan(
+        plan: CreationPlan,
+        task: CreationTask,
+        *,
+        verified_owner_user_id: str | None,
+        local_diagnostic: bool,
     ) -> tuple[CreationPlan, CreationTask]:
         if not plan.workspace_id.strip() or not task.workspace_id.strip():
             raise ValueError("创作方案和任务必须属于工作区")
@@ -5330,69 +5905,41 @@ class ProductionRepository:
         elif owner:
             plan = replace(plan, owner_user_id=owner)
             task = replace(task, owner_user_id=owner)
+        return plan, task
 
+    def _insert_confirmed_creation_plan(
+        self, conn: sqlite3.Connection, plan: CreationPlan, task: CreationTask,
+    ) -> None:
         now = utc_now()
         plan.creation_task_id = task.id
         plan.updated_at = now
         task.updated_at = now
-        with self._connect() as conn:
-            for match in plan.material_matches:
-                asset_id = match.asset_ref.removeprefix("asset:")
-                segment_id = match.segment_ref.removeprefix("segment:")
-                asset_row = conn.execute(
-                    """
-                    SELECT payload FROM material_assets
-                    WHERE workspace_id = ? AND id = ?
-                    """,
-                    (plan.workspace_id, asset_id),
-                ).fetchone()
-                if asset_row is None:
-                    raise ValueError("创作方案引用的素材不属于当前工作区")
-                asset = self._asset_from_payload(
-                    json.loads(str(asset_row["payload"]))
-                )
-                segment = next(
-                    (item for item in asset.segments if item.id == segment_id),
-                    None,
-                )
-                if (
-                    segment is None
-                    or asset.analysis_status != "ready"
-                    or asset.review_status == "rejected"
-                    or not material_allows_footage(asset)
-                    or segment.review_status == "rejected"
-                ):
-                    raise ValueError("创作方案引用的素材片段不可用")
-            conn.execute(
-                """
-                INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    plan.id,
-                    plan.workspace_id,
-                    _json_payload(plan),
-                    plan.visibility,
-                    plan.updated_at.isoformat(),
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task.id,
-                    task.workspace_id,
-                    task.plan_id,
-                    _json_payload(task),
-                    task.visibility,
-                    task.updated_at.isoformat(),
-                ),
-            )
-        return (
-            self.get_creation_plan(plan.workspace_id, plan.id),
-            self.get_creation_task(task.workspace_id, task.id),
+        for match in plan.material_matches:
+            asset_id = match.asset_ref.removeprefix("asset:")
+            segment_id = match.segment_ref.removeprefix("segment:")
+            asset_row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id = ? AND id = ?",
+                (plan.workspace_id, asset_id),
+            ).fetchone()
+            if asset_row is None:
+                raise ValueError("创作方案引用的素材不属于当前工作区")
+            asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
+            segment = next((item for item in asset.segments if item.id == segment_id), None)
+            if (
+                segment is None
+                or asset.analysis_status != "ready"
+                or asset.review_status == "rejected"
+                or not material_allows_footage(asset)
+                or segment.review_status == "rejected"
+            ):
+                raise ValueError("创作方案引用的素材片段不可用")
+        conn.execute(
+            "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (plan.id, plan.workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (task.id, task.workspace_id, task.plan_id, _json_payload(task), task.visibility, task.updated_at.isoformat()),
         )
 
     def get_creation_plan(self, workspace_id: str, plan_id: str) -> CreationPlan:
@@ -5471,105 +6018,117 @@ class ProductionRepository:
             ).fetchall()
         return [self._task_from_row(row) for row in rows]
 
-    def create_timeline_version(self, version: TimelineVersion) -> TimelineVersion:
+    def create_timeline_version(
+        self, version: TimelineVersion, *, connection: sqlite3.Connection | None = None,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> TimelineVersion:
         _validate_timeline_version(version)
-        with self._connect() as conn:
-            task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.create_timeline_version(version, connection=conn,
+                    expected_current_version_id=expected_current_version_id)
+            return self.get_timeline_version(version.workspace_id, version.id)
+        conn = connection
+        task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+        if (expected_current_version_id is not False
+                and task.current_timeline_version_id != expected_current_version_id):
+            raise ValueError("当前时间线已变化，不能发布旧版本成片")
+        existing_row = conn.execute(
+            "SELECT * FROM timeline_versions WHERE id = ?",
+            (version.id,),
+        ).fetchone()
+        if existing_row is None:
             existing_row = conn.execute(
-                "SELECT * FROM timeline_versions WHERE id = ?",
-                (version.id,),
-            ).fetchone()
-            if existing_row is None:
-                existing_row = conn.execute(
-                    """
-                    SELECT * FROM timeline_versions
-                    WHERE workspace_id = ? AND task_id = ? AND sequence = ?
-                    """,
-                    (version.workspace_id, version.task_id, version.sequence),
-                ).fetchone()
-            if existing_row is not None:
-                persisted = self._timeline_version_from_row(existing_row)
-                if persisted != version:
-                    raise ValueError("时间线版本已存在，不能覆盖")
-                if task.current_timeline_version_id != version.id:
-                    task.current_timeline_version_id = version.id
-                    task.updated_at = utc_now()
-                    conn.execute(
-                        """
-                        UPDATE creation_tasks SET payload = ?, updated_at = ?
-                        WHERE workspace_id = ? AND id = ?
-                        """,
-                        (
-                            _json_payload(task),
-                            task.updated_at.isoformat(),
-                            task.workspace_id,
-                            task.id,
-                        ),
-                    )
-                return persisted
-            latest_row = conn.execute(
                 """
-                SELECT id, sequence FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ?
-                ORDER BY sequence DESC LIMIT 1
+                SELECT * FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND sequence = ?
                 """,
-                (version.workspace_id, version.task_id),
+                (version.workspace_id, version.task_id, version.sequence),
             ).fetchone()
-            if latest_row is None:
-                if version.parent_version_id is not None or version.sequence != 1:
-                    raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
-            else:
-                parent = conn.execute(
-                    """
-                    SELECT sequence FROM timeline_versions
-                    WHERE workspace_id = ? AND task_id = ? AND id = ?
-                    """,
-                    (
-                        version.workspace_id,
-                        version.task_id,
-                        version.parent_version_id,
-                    ),
-                ).fetchone()
-                if parent is None:
-                    raise ValueError("父时间线版本不属于当前工作区与任务")
-                if version.sequence != int(latest_row["sequence"]) + 1:
-                    raise ValueError("时间线版本序号必须连续递增")
-            try:
+        if existing_row is not None:
+            persisted = self._timeline_version_from_row(existing_row)
+            if persisted != version:
+                raise ValueError("时间线版本已存在，不能覆盖")
+            if task.current_timeline_version_id != version.id:
+                task.current_timeline_version_id = version.id
+                task.updated_at = utc_now()
                 conn.execute(
                     """
-                    INSERT INTO timeline_versions
-                        (id, workspace_id, task_id, parent_version_id, sequence,
-                         snapshot_json, created_by_operation_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    UPDATE creation_tasks SET payload = ?, updated_at = ?
+                    WHERE workspace_id = ? AND id = ?
                     """,
                     (
-                        version.id,
-                        version.workspace_id,
-                        version.task_id,
-                        version.parent_version_id,
-                        version.sequence,
-                        _json_object(version.snapshot),
-                        version.created_by_operation_id,
-                        version.created_at.isoformat(),
+                        _json_payload(task),
+                        task.updated_at.isoformat(),
+                        task.workspace_id,
+                        task.id,
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("时间线版本已存在，不能覆盖") from exc
-            task.current_timeline_version_id = version.id
-            task.updated_at = utc_now()
-            conn.execute(
+            return persisted
+        latest_row = conn.execute(
+            """
+            SELECT id, sequence FROM timeline_versions
+            WHERE workspace_id = ? AND task_id = ?
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (version.workspace_id, version.task_id),
+        ).fetchone()
+        if latest_row is None:
+            if version.parent_version_id is not None or version.sequence != 1:
+                raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
+        else:
+            parent = conn.execute(
                 """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
+                SELECT sequence FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
                 """,
                 (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
+                    version.workspace_id,
+                    version.task_id,
+                    version.parent_version_id,
+                ),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("父时间线版本不属于当前工作区与任务")
+            if version.sequence != int(latest_row["sequence"]) + 1:
+                raise ValueError("时间线版本序号必须连续递增")
+        try:
+            conn.execute(
+                """
+                INSERT INTO timeline_versions
+                    (id, workspace_id, task_id, parent_version_id, sequence,
+                     snapshot_json, created_by_operation_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version.id,
+                    version.workspace_id,
+                    version.task_id,
+                    version.parent_version_id,
+                    version.sequence,
+                    _json_object(version.snapshot),
+                    version.created_by_operation_id,
+                    version.created_at.isoformat(),
                 ),
             )
-        return self.get_timeline_version(version.workspace_id, version.id)
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("时间线版本已存在，不能覆盖") from exc
+        task.current_timeline_version_id = version.id
+        task.updated_at = utc_now()
+        conn.execute(
+            """
+            UPDATE creation_tasks SET payload = ?, updated_at = ?
+            WHERE workspace_id = ? AND id = ?
+            """,
+            (
+                _json_payload(task),
+                task.updated_at.isoformat(),
+                task.workspace_id,
+                task.id,
+            ),
+        )
+        return version
 
     def get_timeline_version(
         self, workspace_id: str, version_id: str
@@ -5597,9 +6156,9 @@ class ProductionRepository:
             ).fetchall()
         return [self._timeline_version_from_row(row) for row in rows]
 
-    def create_job_run(self, run: JobRun) -> JobRun:
+    def create_job_run(self, run: JobRun, *, connection: sqlite3.Connection | None = None) -> JobRun:
         _validate_new_job_run(run)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, run.workspace_id, run.task_id)
             existing = conn.execute(
                 """
@@ -5644,7 +6203,7 @@ class ProductionRepository:
                         raise ValueError("幂等键已绑定到不同的任务输入") from exc
                     return persisted
                 raise ValueError("任务运行记录 ID 已存在") from exc
-        return self.get_job_run(run.workspace_id, run.id)
+        return run if connection is not None else self.get_job_run(run.workspace_id, run.id)
 
     def get_job_run(self, workspace_id: str, job_id: str) -> JobRun:
         with self._connect() as conn:
@@ -5926,9 +6485,9 @@ class ProductionRepository:
             ).fetchall()
         return [self._artifact_record_from_row(row) for row in rows]
 
-    def append_task_event(self, event: TaskEvent) -> TaskEvent:
+    def append_task_event(self, event: TaskEvent, *, connection: sqlite3.Connection | None = None) -> TaskEvent:
         _validate_task_event(event)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, event.workspace_id, event.task_id)
             if event.job_id is not None:
                 job = conn.execute(
@@ -5977,7 +6536,7 @@ class ProductionRepository:
                         raise ValueError("任务事件 ID 已存在，且领域字段不一致") from exc
                     return persisted
                 raise ValueError("任务事件 ID 已存在") from exc
-        return self.get_task_event(event.workspace_id, event.id)
+        return event if connection is not None else self.get_task_event(event.workspace_id, event.id)
 
     def get_task_event(self, workspace_id: str, event_id: str) -> TaskEvent:
         with self._connect() as conn:
@@ -6858,8 +7417,9 @@ class ProductionRepository:
         narration_artifact: NarrationArtifactRecord | None = None,
         subtitle_tracks: list[SubtitleTrack] | None = None,
         cover_asset: CoverAsset | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
-        """Atomically confirm one proposal and persist its applied domain facts."""
+        """Confirm applied facts; a supplied permit transaction owns the commit."""
         _validate_edit_operation(operation)
         _validate_timeline_version(result_version)
         if operation.status != "applied":
@@ -6929,7 +7489,7 @@ class ProductionRepository:
                 raise ValueError("确认编辑后的混剪计划状态与操作类型不一致")
             _json_object(montage_payload)
 
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             task = self._require_creation_task(conn, workspace_id, task_id)
             proposal_row = conn.execute(
                 """
@@ -7170,6 +7730,8 @@ class ProductionRepository:
                 ),
             )
 
+        if connection is not None:
+            return replace(proposal, status="confirmed", updated_at=now), operation, result_version, task
         return (
             self.get_edit_proposal(workspace_id, proposal_id),
             self.get_edit_operation(workspace_id, operation.id),
@@ -7403,6 +7965,9 @@ class ProductionRepository:
         )
         if script.selection_status != "confirmed":
             raise ValueError("配音分段只能关联已确认文案")
+        script_digest = self.confirmed_creation_task_script_digest(
+            workspace_id, task_id, script_id,
+        )
         sections = {section.id: section for section in script.sections}
         supplied_section_ids = [segment.source_section_id for segment in segments]
         if (
@@ -7436,6 +8001,8 @@ class ProductionRepository:
                 raise ValueError("配音分段与当前工作区、任务或文案谱系不一致")
             if segment.text != sections[segment.source_section_id].content:
                 raise ValueError("配音分段文字必须与已确认文案段落一致")
+            if segment.source_kind == "recorded" and segment.source_script_digest != script_digest:
+                raise ValueError("电脑录音必须绑定当前确认文案内容")
             identity_row = conn.execute(
                 "SELECT * FROM narration_segments WHERE id = ?",
                 (segment.id,),
@@ -7452,8 +8019,10 @@ class ProductionRepository:
                         (id, workspace_id, task_id, script_id, source_section_id,
                          text, audio_reference, duration_seconds, sample_rate,
                          model_id, voice_profile_id, voice_version, language,
-                         pronunciation_version, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         pronunciation_version, status, created_at, updated_at,
+                         source_kind, source_artifact_ref, source_sha256,
+                         source_script_digest)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _narration_segment_values(segment),
                 )
@@ -7470,7 +8039,8 @@ class ProductionRepository:
                 SET text = ?, audio_reference = ?, duration_seconds = ?,
                     sample_rate = ?, model_id = ?, voice_profile_id = ?,
                     voice_version = ?, language = ?, pronunciation_version = ?,
-                    status = ?, updated_at = ?
+                    status = ?, updated_at = ?, source_kind = ?,
+                    source_artifact_ref = ?, source_sha256 = ?, source_script_digest = ?
                 WHERE workspace_id = ? AND task_id = ? AND script_id = ?
                   AND source_section_id = ? AND id = ?
                 """,
@@ -7486,6 +8056,10 @@ class ProductionRepository:
                     segment.pronunciation_version,
                     segment.status,
                     segment.updated_at.isoformat(),
+                    segment.source_kind,
+                    segment.source_artifact_ref,
+                    segment.source_sha256,
+                    segment.source_script_digest,
                     workspace_id,
                     task_id,
                     script_id,
@@ -7914,6 +8488,8 @@ class ProductionRepository:
         self,
         run: ScriptGenerationRun,
     ) -> tuple[CreationTask, ScriptGenerationRun]:
+        if run.run_kind != "generation" or run.source_reply_reference is not None:
+            raise ValueError("对话回复移交不能伪装成模型生成运行")
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
         with self._connect() as conn:
@@ -7968,6 +8544,315 @@ class ProductionRepository:
             self.get_script_generation_run(run.workspace_id, run.id),
         )
 
+    def transfer_completed_assistant_reply_to_script(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        request_id: str,
+        reply_reference: dict[str, str],
+        plan_conversion_request_id: str | None = None,
+        reply_text: str,
+        expected_plan_id: str,
+        expected_plan_updated_at: datetime | str,
+        expected_topic_id: str,
+        expected_task_updated_at: datetime | str,
+        input_references: list[dict[str, object]],
+        script_id: str,
+        run_id: str,
+        title: str,
+        language: Literal["zh-CN", "en-US", "zh-CN/en-US"],
+        sections: list[CreationTaskScriptSection],
+        replace_existing_script_id: str | None = None,
+        expected_script_updated_at: datetime | str | None = None,
+        verified_owner_user_id: str | None = None,
+    ) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
+        """Persist an explicit reply-to-draft transfer against current task facts."""
+        reference = _validated_assistant_reply_reference(reply_reference)
+        if not request_id.strip() or not reply_text.strip() or not title.strip() or not sections:
+            raise ValueError("移交文案需要请求身份、回复正文、标题和段落")
+        if hashlib.sha256(reply_text.encode("utf-8")).hexdigest() != reference["response_digest"]:
+            raise ValueError("对话回复正文已变化，请重新读取当前回复")
+        if any(
+            not section.id.strip() or not section.title.strip() or not section.content.strip()
+            for section in sections
+        ):
+            raise ValueError("移交文案段落必须包含标题和正文")
+        if "".join(section.content for section in sections) != reply_text:
+            raise ValueError("移交草稿必须保留当前对话回复正文")
+        references_by_id = _assistant_reply_input_references(input_references)
+        evidence_ids = {
+            reference_id
+            for section in sections
+            for reference_id in section.evidence_reference_ids
+        }
+        if not evidence_ids.issubset(references_by_id):
+            raise ValueError("移交文案引用了当前任务输入之外的资料")
+
+        request_payload: dict[str, object] = {
+            "workspace_id": workspace_id,
+            "task_id": task_id,
+            "reply_reference": reference,
+            "plan_conversion_request_id": plan_conversion_request_id,
+            "expected_plan_id": expected_plan_id,
+            "expected_plan_updated_at": _revision_value(expected_plan_updated_at),
+            "expected_topic_id": expected_topic_id,
+            "expected_task_updated_at": _revision_value(expected_task_updated_at),
+            "input_references": input_references,
+            "script_id": script_id,
+            "run_id": run_id,
+            "title": title,
+            "language": language,
+            "sections": [asdict(section) for section in sections],
+            "replace_existing_script_id": replace_existing_script_id,
+            "expected_script_updated_at": (
+                _revision_value(expected_script_updated_at)
+                if expected_script_updated_at is not None else None
+            ),
+            "owner_user_id": content_owner(verified_owner_user_id),
+        }
+        request_payload.pop("script_id")
+        request_payload.pop("run_id")
+        # Revision tokens fence a new write, but a retry may observe revisions
+        # advanced by that same successful write. Keep them out of the stable
+        # request identity so the persisted result can be replayed after readback.
+        fingerprint_payload = {
+            key: value for key, value in request_payload.items()
+            if key not in {"expected_plan_updated_at", "expected_task_updated_at", "expected_script_updated_at"}
+        }
+        request_fingerprint = hashlib.sha256(
+            _json_object(fingerprint_payload).encode("utf-8")
+        ).hexdigest()
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_script_transferred", workspace_id, request_id,
+        )
+        replay_ids: tuple[str, str] | None = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                "SELECT * FROM task_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            if prior is not None:
+                event = self._task_event_from_row(prior)
+                if (
+                    event.event_type != "assistant_reply_script_transferred"
+                    or event.workspace_id != workspace_id
+                    or event.task_id != task_id
+                    or event.payload.get("request_fingerprint") != request_fingerprint
+                ):
+                    raise ValueError("回复移交请求身份已用于不同的任务或输入")
+                replay_ids = (str(event.payload["run_id"]), str(event.payload["script_id"]))
+            else:
+                task = self._require_creation_task(conn, workspace_id, task_id)
+                if task.plan_id != expected_plan_id:
+                    raise ValueError("回复移交的创作方案已变化")
+                plan_row = conn.execute(
+                    "SELECT payload FROM creation_plans WHERE workspace_id = ? AND id = ?",
+                    (workspace_id, task.plan_id),
+                ).fetchone()
+                if plan_row is None:
+                    raise KeyError(task.plan_id)
+                plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
+                if _revision_value(plan.updated_at) != _revision_value(expected_plan_updated_at):
+                    raise ValueError("创作方案版本已变化，请重新读取后移交")
+                if task.selected_topic_id != expected_topic_id:
+                    raise ValueError("回复移交的已确认选题已变化")
+                if task.confirmed_script_id is not None:
+                    raise ValueError("已确认文案不能被对话回复移交覆盖")
+                topic_row = conn.execute(
+                    "SELECT payload FROM topic_candidates WHERE workspace_id = ? AND task_id = ? AND id = ?",
+                    (workspace_id, task_id, expected_topic_id),
+                ).fetchone()
+                if topic_row is None:
+                    raise ValueError("回复移交选题不属于当前任务")
+                topic = self._topic_candidate_from_payload(json.loads(str(topic_row["payload"])))
+                if topic.selection_status != "confirmed":
+                    raise ValueError("回复移交前必须确认当前选题")
+                if task.stage != "script" or task.stage_status not in {"not_started", "waiting_for_user"}:
+                    raise ValueError("当前创作任务不在可移交的文案阶段")
+                if _revision_value(task.updated_at) != _revision_value(expected_task_updated_at):
+                    raise ValueError("创作任务版本已变化，请重新读取后移交")
+                if plan_conversion_request_id is not None:
+                    self._require_assistant_reply_plan_event(
+                        conn,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        plan_id=plan.id,
+                        request_id=plan_conversion_request_id,
+                        reply_reference=reference,
+                        reply_owner_user_id=content_owner(verified_owner_user_id),
+                    )
+                self._validate_assistant_reply_inputs(plan, references_by_id)
+
+                current_scripts = conn.execute(
+                    "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? ORDER BY updated_at DESC, id DESC",
+                    (workspace_id, task_id),
+                ).fetchall()
+                latest = (
+                    self._creation_task_script_from_payload(json.loads(str(current_scripts[0]["payload"])))
+                    if current_scripts else None
+                )
+                if latest is not None:
+                    if (
+                        replace_existing_script_id != latest.id
+                        or expected_script_updated_at is None
+                    ):
+                        raise ValueError("当前已有文案草稿，请明确选择替换")
+                    if latest.selection_status != "draft":
+                        raise ValueError("已有文案不是可替换的待确认草稿")
+                    if _revision_value(latest.updated_at) != _revision_value(expected_script_updated_at):
+                        raise ValueError("文案草稿已变化，请重新读取后确认替换")
+                    script = latest
+                    script_id = latest.id
+                    script.run_id = run_id
+                    script.topic_id = expected_topic_id
+                    script.title = title.strip()
+                    script.language = language
+                    script.sections = sections
+                    script.selection_status = "draft"
+                    script.confirmed_at = None
+                    script.source_reply_reference = reference
+                else:
+                    if replace_existing_script_id is not None or expected_script_updated_at is not None:
+                        raise ValueError("没有当前草稿可按指定修订替换")
+                    script = CreationTaskScript(
+                        id=script_id,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        run_id=run_id,
+                        topic_id=expected_topic_id,
+                        title=title.strip(),
+                        language=language,
+                        sections=sections,
+                        source_reply_reference=reference,
+                    )
+
+                if task.stage_status == "not_started":
+                    task.stage_status = "waiting_for_user"
+                    task.status = "waiting_for_user"
+                    task.progress = max(task.progress, 35)
+                now = utc_now()
+                run = ScriptGenerationRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    task_id=task_id,
+                    plan_id=plan.id,
+                    topic_id=topic.id,
+                    status="succeeded",
+                    route_snapshot={"operation": "explicit_assistant_reply_transfer", "provider": "none"},
+                    prompt_schema_version="assistant-reply-transfer/v1",
+                    input_references=list(input_references),
+                    started_at=now,
+                    finished_at=now,
+                    run_kind="assistant_reply_transfer",
+                    source_reply_reference=reference,
+                )
+                script.updated_at = now
+                task.updated_at = now
+                conn.execute(
+                    "INSERT INTO script_generation_runs (id, workspace_id, task_id, plan_id, topic_id, payload, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run.id, workspace_id, task_id, plan.id, topic.id, _json_payload(run), now.isoformat(), now.isoformat()),
+                )
+                if latest is None:
+                    conn.execute(
+                        "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (script.id, workspace_id, task_id, run.id, _json_payload(script), now.isoformat()),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE creation_task_scripts SET run_id = ?, payload = ?, updated_at = ? WHERE workspace_id = ? AND task_id = ? AND id = ?",
+                        (run.id, _json_payload(script), now.isoformat(), workspace_id, task_id, script.id),
+                    )
+                conn.execute(
+                    "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                    (_json_payload(task), now.isoformat(), workspace_id, task_id),
+                )
+                self.append_task_event(
+                    TaskEvent(
+                        id=event_id,
+                        workspace_id=workspace_id,
+                        task_id=task_id,
+                        job_id=None,
+                        event_type="assistant_reply_script_transferred",
+                        payload={
+                            "request_id": request_id,
+                            "request_fingerprint": request_fingerprint,
+                            "reply_reference": reference,
+                            "plan_conversion_request_id": plan_conversion_request_id,
+                            "plan_id": plan.id,
+                            "topic_id": topic.id,
+                            "task_id": task_id,
+                            "run_id": run.id,
+                            "script_id": script.id,
+                            "expected_task_updated_at": _revision_value(expected_task_updated_at),
+                            "expected_script_updated_at": (
+                                _revision_value(expected_script_updated_at)
+                                if expected_script_updated_at is not None else None
+                            ),
+                        },
+                    ),
+                    connection=conn,
+                )
+        if replay_ids is not None:
+            return (
+                self.get_creation_task(workspace_id, task_id),
+                self.get_script_generation_run(workspace_id, replay_ids[0]),
+                self.get_creation_task_script(workspace_id, replay_ids[1]),
+            )
+        return (
+            self.get_creation_task(workspace_id, task_id),
+            self.get_script_generation_run(workspace_id, run_id),
+            self.get_creation_task_script(workspace_id, script_id),
+        )
+
+    def _require_assistant_reply_plan_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workspace_id: str,
+        task_id: str,
+        plan_id: str,
+        request_id: str,
+        reply_reference: dict[str, str],
+        reply_owner_user_id: str | None,
+    ) -> None:
+        event_id = _assistant_reply_request_event_id(
+            "assistant_reply_plan_confirmed", workspace_id, request_id,
+        )
+        row = conn.execute(
+            "SELECT payload_json FROM task_events WHERE workspace_id = ? AND task_id = ? AND id = ? AND event_type = 'assistant_reply_plan_confirmed'",
+            (workspace_id, task_id, event_id),
+        ).fetchone()
+        payload = _json_object_from_text(str(row["payload_json"])) if row is not None else {}
+        if not (
+            payload.get("plan_id") == plan_id
+            and payload.get("reply_reference") == reply_reference
+            and payload.get("reply_owner_user_id") == reply_owner_user_id
+        ):
+            raise ValueError("当前方案没有绑定这条已完成对话回复")
+
+    @staticmethod
+    def _validate_assistant_reply_inputs(
+        plan: CreationPlan,
+        input_references: dict[str, dict[str, object]],
+    ) -> None:
+        expected: dict[str, dict[str, str]] = {}
+        for item in plan.knowledge_references:
+            reference_id = f"knowledge:{item.id}:{item.version}"
+            expected[reference_id] = {
+                "kind": "knowledge", "object_id": item.id,
+                "version_or_identity": item.version, "title": item.title,
+            }
+        for item in plan.source_references:
+            reference_id = f"source:{item.id}"
+            expected[reference_id] = {
+                "kind": "source", "object_id": item.id,
+                "version_or_identity": item.identity, "title": item.title,
+            }
+        for reference_id, item in input_references.items():
+            if not reference_id or item != expected.get(reference_id):
+                raise ValueError("文案输入来源与当前方案的固定版本不一致")
+
     def complete_script_generation(
         self,
         run_id: str,
@@ -7993,6 +8878,8 @@ class ProductionRepository:
             run = self._script_generation_run_from_payload(json.loads(str(row["payload"])))
             if run.status != "running":
                 raise ValueError("文案运行不是可完成状态")
+            if run.run_kind != "generation":
+                raise ValueError("回复移交记录不能作为模型生成运行完成")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (run.workspace_id, run.task_id),
@@ -8183,6 +9070,28 @@ class ProductionRepository:
             raise KeyError(script_id)
         return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
 
+    def confirmed_creation_task_script_digest(
+        self, workspace_id: str, task_id: str, script_id: str | None = None,
+    ) -> str | None:
+        task = self.get_creation_task(workspace_id, task_id)
+        current_script_id = script_id or task.confirmed_script_id
+        if not current_script_id or task.confirmed_script_id != current_script_id:
+            return None
+        try:
+            script = self.get_creation_task_script(workspace_id, current_script_id)
+        except KeyError:
+            return None
+        if script.task_id != task_id or script.selection_status != "confirmed" or not script.sections:
+            return None
+        manifest = {
+            "script_id": script.id,
+            "sections": [{"id": section.id, "content": section.content}
+                         for section in script.sections],
+        }
+        return hashlib.sha256(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
     def update_assistant_script_draft(
         self,
         workspace_id: str,
@@ -8191,17 +9100,16 @@ class ProductionRepository:
         *,
         title: str,
         sections: list[CreationTaskScriptSection],
+        expected_updated_at: datetime | str | None = None,
     ) -> CreationTaskScript:
         """Revise only the current unconfirmed assistant draft in its existing run."""
         if not title.strip() or not sections or any(
             not section.id.strip()
             or not section.title.strip()
             or not section.content.strip()
-            or not section.visual_prompt.strip()
-            or not section.evidence_reference_ids
             for section in sections
         ):
-            raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+            raise ValueError("文案草稿必须包含标题和正文")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task = self._require_creation_task(conn, workspace_id, task_id)
@@ -8212,6 +9120,10 @@ class ProductionRepository:
             if row is None:
                 raise KeyError(script_id)
             script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+            if expected_updated_at is None:
+                raise ValueError("更新文案草稿必须提供当前 updated_at")
+            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
+                raise ValueError("文案草稿修订已变化，请重新读取后再保存")
             if (
                 task.stage != "script"
                 or task.stage_status != "waiting_for_user"
@@ -8220,6 +9132,11 @@ class ProductionRepository:
                 or script.topic_id != task.selected_topic_id
             ):
                 raise ValueError("当前创作任务不允许修改这份待确认文案")
+            if script.source_reply_reference is None and any(
+                not section.visual_prompt.strip() or not section.evidence_reference_ids
+                for section in sections
+            ):
+                raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
             run_row = conn.execute(
                 "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
                 "AND json_extract(payload, '$.status')='succeeded' "
@@ -8398,13 +9315,17 @@ class ProductionRepository:
         *,
         title: str,
         sections: list[CreationTaskScriptSection],
+        expected_updated_at: datetime | str | None = None,
     ) -> tuple[CreationTask, CreationTaskScript]:
         if not title.strip() or not sections or any(
-            not section.content.strip() or not section.evidence_reference_ids
+            not section.content.strip()
+            or not section.visual_prompt.strip()
+            or not section.evidence_reference_ids
             for section in sections
         ):
-            raise ValueError("确认文案必须包含正文和来源证据")
+            raise ValueError("确认文案必须包含正文、画面建议和来源证据")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (workspace_id, task_id),
@@ -8417,6 +9338,10 @@ class ProductionRepository:
                 raise KeyError(script_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
             script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
+            if expected_updated_at is None:
+                raise ValueError("确认文案必须提供当前 updated_at")
+            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
+                raise ValueError("文案草稿修订已变化，请重新读取后再确认")
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
@@ -8503,12 +9428,15 @@ class ProductionRepository:
         voice_profile_id: str,
         voice_version: str | None = None,
     ) -> VersionedNarrationInputs:
-        return self.resolve_narration_inputs(
+        inputs = self.resolve_narration_inputs(
             workspace_id=workspace_id,
             episode_id=task_id,
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
+        task = self.get_creation_task(workspace_id, task_id)
+        self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
+        return inputs
 
     def select_creation_task_narration_voice(
         self,
@@ -8592,6 +9520,7 @@ class ProductionRepository:
         if not Path(artifact.audio_path).is_file() or Path(artifact.audio_path).stat().st_size == 0:
             raise ValueError("声音克隆没有生成有效 WAV")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (artifact.workspace_id, artifact.task_id),
@@ -8599,12 +9528,22 @@ class ProductionRepository:
             if task_row is None:
                 raise KeyError(artifact.task_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            expected_statuses = {"not_started", "failed"} if artifact.source_kind == "recorded" else {"running"}
             if (
                 task.stage != "narration"
-                or task.stage_status != "running"
+                or task.stage_status not in expected_statuses
                 or task.confirmed_script_id != artifact.script_id
             ):
                 raise ValueError("配音产物与当前创作任务不一致")
+            if artifact.source_kind == "recorded" and not self._recorded_narration_source_is_current(artifact):
+                raise ValueError("采用的电脑录音不再是当前任务的有效来源")
+            if artifact.source_kind == "recorded" and (
+                segments is None or len(segments) != 1
+                or segments[0].source_artifact_ref != artifact.source_artifact_ref
+                or segments[0].source_sha256 != artifact.source_sha256
+                or segments[0].source_script_digest != artifact.source_script_digest
+            ):
+                raise ValueError("录音产物与唯一采用的文案分段来源不一致")
             if segments is not None:
                 self._upsert_narration_segments(
                     conn,
@@ -8655,74 +9594,83 @@ class ProductionRepository:
         task_id: str,
         plan_id: str,
         payload: dict[str, object],
+        *, connection: sqlite3.Connection | None = None,
+        expected_current_version_id: str | None | Literal[False] = False,
     ) -> tuple[CreationTask, dict[str, object]]:
         status = str(payload.get("status", ""))
         if status not in {"waiting_for_user", "ready", "rendering", "rendered", "failed"}:
             raise ValueError("混剪计划状态无效")
-        with self._connect() as conn:
-            task_row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            if task.stage not in {"montage", "review"}:
-                raise ValueError("当前创作任务不在剪辑或成片检查阶段")
-            if str(payload.get("task_id", "")) != task.id:
-                raise ValueError("混剪计划与当前创作任务不一致")
-            now = utc_now()
-            payload = {**payload, "updated_at": now.isoformat()}
-            conn.execute(
-                """
-                INSERT INTO creation_task_montage_plans
-                    (id, workspace_id, task_id, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(workspace_id, task_id) DO UPDATE SET
-                    id = excluded.id, payload = excluded.payload, updated_at = excluded.updated_at
-                """,
-                (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
-            )
-            task.montage_plan_id = plan_id
-            task.output_ready = status == "rendered"
-            if status != "failed":
-                task.stage_reason = None
-                task.stage_impact = None
-                task.stage_repair_action = None
-                task.stage_retryable = None
-            if status == "rendering":
-                task.stage = "montage"
-                task.stage_status = "running"
-                task.status = "running"
-            elif status == "rendered":
-                task.stage = "review"
-                task.stage_status = "waiting_for_user"
-                task.status = "waiting_for_user"
-                task.progress = max(task.progress, 90)
-                task.recovery_point = "review"
-                task.output_ready = True
-            elif status == "failed":
-                task.stage = "montage"
-                task.stage_status = "failed"
-                task.status = "failed"
-                task.recovery_point = "montage"
-                task.stage_reason = "render_failed"
-                task.stage_impact = "未生成可检查的成片。"
-                task.stage_repair_action = str(payload.get("message") or "检查 FFmpeg 日志后重试。")
-                task.stage_retryable = True
-            else:
-                task.stage = "montage"
-                task.stage_status = "waiting_for_user"
-                task.status = "waiting_for_user"
-                task.progress = 70 if status == "waiting_for_user" else 75
-            task.updated_at = now
-            conn.execute(
-                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
-            )
-        return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(
-            workspace_id, task_id
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.save_creation_task_montage_plan(workspace_id, task_id, plan_id, payload,
+                    connection=conn, expected_current_version_id=expected_current_version_id)
+            return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(workspace_id, task_id)
+        conn = connection
+        task_row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if task_row is None:
+            raise KeyError(task_id)
+        task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+        if (expected_current_version_id is not False
+                and task.current_timeline_version_id != expected_current_version_id):
+            raise ValueError("当前时间线已变化，不能覆盖新确认的剪辑计划")
+        if task.stage not in {"montage", "review"}:
+            raise ValueError("当前创作任务不在剪辑或成片检查阶段")
+        if str(payload.get("task_id", "")) != task.id:
+            raise ValueError("混剪计划与当前创作任务不一致")
+        now = utc_now()
+        payload = {**payload, "updated_at": now.isoformat()}
+        conn.execute(
+            """
+            INSERT INTO creation_task_montage_plans
+                (id, workspace_id, task_id, payload, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, task_id) DO UPDATE SET
+                id = excluded.id, payload = excluded.payload, updated_at = excluded.updated_at
+            """,
+            (plan_id, workspace_id, task_id, json.dumps(payload, ensure_ascii=False), now.isoformat()),
         )
+        task.montage_plan_id = plan_id
+        task.output_ready = status == "rendered"
+        if status != "failed":
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+        if status == "rendering":
+            task.stage = "montage"
+            task.stage_status = "running"
+            task.status = "running"
+        elif status == "rendered":
+            task.stage = "review"
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = max(task.progress, 90)
+            task.recovery_point = "review"
+            task.output_ready = True
+        elif status == "failed":
+            task.stage = "montage"
+            task.stage_status = "failed"
+            task.status = "failed"
+            task.recovery_point = "montage"
+            task.stage_reason = "render_failed"
+            task.stage_impact = "未生成可检查的成片。"
+            task.stage_repair_action = str(payload.get("message") or "检查 FFmpeg 日志后重试。")
+            task.stage_retryable = True
+        else:
+            task.stage = "montage"
+            task.stage_status = "waiting_for_user"
+            task.status = "waiting_for_user"
+            task.progress = 70 if status == "waiting_for_user" else 75
+        task.updated_at = now
+        conn.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
+        )
+        return task, payload
 
     def get_creation_task_montage_plan(
         self, workspace_id: str, task_id: str
@@ -8749,32 +9697,39 @@ class ProductionRepository:
         impact: str,
         repair_action: str,
         retryable: bool,
+        connection: sqlite3.Connection | None = None,
     ) -> CreationTask:
         if not all(value.strip() for value in (reason, impact, repair_action)):
             raise ValueError("阶段失败必须包含原因、影响和修复动作")
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
-            if task.stage != stage:
-                raise ValueError("任务当前阶段与失败阶段不一致")
-            task.stage_status = "failed"
-            task.status = "failed"
-            task.recovery_point = stage
-            task.stage_reason = reason
-            task.stage_impact = impact
-            task.stage_repair_action = repair_action
-            task.stage_retryable = retryable
-            task.updated_at = utc_now()
-            conn.execute(
-                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
-            )
-        return self.get_creation_task(workspace_id, task_id)
+        if connection is None:
+            with self._connect() as conn:
+                self.fail_creation_task_stage(
+                    workspace_id, task_id, stage=stage, reason=reason, impact=impact,
+                    repair_action=repair_action, retryable=retryable, connection=conn,
+                )
+            return self.get_creation_task(workspace_id, task_id)
+        row = connection.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+        if task.stage != stage:
+            raise ValueError("任务当前阶段与失败阶段不一致")
+        task.stage_status = "failed"
+        task.status = "failed"
+        task.recovery_point = stage
+        task.stage_reason = reason
+        task.stage_impact = impact
+        task.stage_repair_action = repair_action
+        task.stage_retryable = retryable
+        task.updated_at = utc_now()
+        connection.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+        )
+        return task
 
     def _start_creation_task_stage(
         self,
@@ -8810,56 +9765,53 @@ class ProductionRepository:
         workspace_id: str,
         *,
         profile: ProductionProfile | None = None,
+        viewer_user_id: str | None = None,
+        local_diagnostic: bool = False,
+        topic_sources_configured: bool = False,
     ) -> dict[str, object]:
         profile = profile or self.get_profile(workspace_id)
-        assets = self.list_assets(workspace_id)
-        usable_assets = [
-            asset
+        assets = self.list_assets(
+            workspace_id, include_private=viewer_user_id is not None or local_diagnostic,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+        )
+        qualified = [
+            (asset, [segment for segment in asset.segments
+                     if material_segment_eligible(asset, segment, workspace_id)])
             for asset in assets
-            if asset.analysis_status == "ready"
-            and asset.review_status != "rejected"
-            and material_allows_footage(asset)
         ]
+        usable_assets = [asset for asset, segments in qualified if segments]
         usable_segments = [
             segment
-            for asset in usable_assets
-            for segment in asset.segments
-            if segment.review_status != "rejected"
-            and selectable_segment_usage_role(asset, segment) == "b_roll"
+            for asset, segments in qualified
+            for segment in segments
+            if selectable_segment_usage_role(asset, segment) == "b_roll"
         ]
         blockers: list[dict[str, str]] = []
         versioned_voices = self.list_versioned_voice_profiles(workspace_id)
-        usable_voice = next(
-            (
-                voice
-                for voice in versioned_voices
-                if voice.authorization.failure_for(
-                    content_type="voice",
-                    usage_scope="narration",
-                )
-                is None
-            ),
-            None,
-        )
-        if not profile.brand_name or not profile.brand_template_name:
-            blockers.append(
-                {
-                    "code": "brand_profile_missing",
-                    "message": "尚未配置品牌名称和固定视觉模板。",
-                }
-            )
+        usable_voice = None
+        reference_issue = None
+        reference_issue_code = "voice_reference_unavailable"
+        for voice in versioned_voices:
+            if not self.profile_readable(voice, viewer_user_id, local_diagnostic):
+                continue
+            try:
+                self.profile_reference_input(voice, viewer_user_id=viewer_user_id,
+                                             local_diagnostic=local_diagnostic)
+            except (ValueError, PermissionError, KeyError) as exc:
+                reference_issue = str(exc)
+                reference_issue_code = "voice_reference_unavailable"
+            else:
+                if not voice.reference_audio_path or not voice.reference_text.strip():
+                    reference_issue = "声音档案缺少工作区参考音频或对应文字；仍可先讨论需求或编写文案。"
+                    reference_issue_code = "voice_reference_missing"
+                    continue
+                usable_voice = voice
+                break
         if usable_voice is None:
             blockers.append(
                 {
-                    "code": "versioned_voice_authorization_missing",
-                    "message": "尚未登记可用于配音的版本化授权声音。",
-                }
-            )
-        elif not usable_voice.reference_audio_path or not usable_voice.reference_text.strip():
-            blockers.append(
-                {
-                "code": "voice_reference_missing",
-                    "message": "授权声音缺少工作区参考音频或对应文字。",
+                    "code": reference_issue_code if reference_issue else "versioned_voice_authorization_missing",
+                    "message": reference_issue or "尚未登记可用于配音的版本化声音；仍可先讨论需求或编写文案。",
                 }
             )
         if profile.voice_model_status != "ready":
@@ -8869,11 +9821,11 @@ class ProductionRepository:
                     "message": profile.voice_model_message,
                 }
             )
-        if not (profile.source_urls or profile.use_obsidian or profile.use_hermes):
+        if not topic_sources_configured:
             blockers.append(
                 {
                     "code": "source_pool_empty",
-                    "message": "自动选题来源池为空。",
+                    "message": "尚未配置可尝试的选题来源；仍可先讨论需求或编写文案。",
                 }
             )
         if not usable_segments:
@@ -9475,15 +10427,26 @@ class ProductionRepository:
         return Authorization(
             id=_required_text(data, "id"),
             version=_required_text(data, "version"),
-            rights_holder=_required_text(data, "rights_holder"),
-            content_types=_string_tuple(data, "content_types"),
-            usage_scopes=_string_tuple(data, "usage_scopes"),
+            rights_holder=str(data.get("rights_holder") or ""),
+            content_types=_optional_string_tuple(data, "content_types"),
+            usage_scopes=_optional_string_tuple(data, "usage_scopes"),
             effective_from=_required_datetime(data, "effective_from"),
             expires_at=_optional_datetime(data, "expires_at"),
-            evidence_reference=_required_text(data, "evidence_reference"),
+            evidence_reference=str(data.get("evidence_reference") or ""),
             status=_required_text(data, "status"),  # type: ignore[arg-type]
             workspace_id=_required_text(data, "workspace_id"),
         )
+
+    def _profile_authorization_from_payload(self, conn, workspace_id, data):
+        if not data.get("authorization_id") and not data.get("authorization_version"):
+            return None, None
+        if not data.get("authorization_id") or not data.get("authorization_version"):
+            return None, "historical_authorization_reference_incomplete"
+        try:
+            return self._get_authorization(conn, workspace_id, str(data["authorization_id"]),
+                                           str(data["authorization_version"])), None
+        except KeyError:
+            return None, "historical_authorization_reference_missing"
 
     def _person_profile_from_payload(
         self,
@@ -9491,23 +10454,20 @@ class ProductionRepository:
         workspace_id: str,
         data: dict[str, object],
     ) -> PersonProfile:
-        authorization = self._get_authorization(
-            conn,
-            workspace_id,
-            _required_text(data, "authorization_id"),
-            _required_text(data, "authorization_version"),
-        )
+        authorization, reference_issue = self._profile_authorization_from_payload(conn, workspace_id, data)
         return PersonProfile(
             id=_required_text(data, "id"),
             workspace_id=_required_text(data, "workspace_id"),
             display_name=_required_text(data, "display_name"),
             version=_required_text(data, "version"),
-            avatar_reference=_required_text(data, "avatar_reference"),
+            avatar_reference=str(data.get("avatar_reference") or ""),
             background_capabilities=_optional_string_tuple(
                 data, "background_capabilities"
             ),
             shot_capabilities=_optional_string_tuple(data, "shot_capabilities"),
             authorization=authorization,
+            reference_issue=reference_issue,
+            **_profile_reference_fields(data, authorization),
         )
 
     def _versioned_voice_profile_from_payload(
@@ -9516,23 +10476,21 @@ class ProductionRepository:
         workspace_id: str,
         data: dict[str, object],
     ) -> VersionedVoiceProfile:
-        authorization = self._get_authorization(
-            conn,
-            workspace_id,
-            _required_text(data, "authorization_id"),
-            _required_text(data, "authorization_version"),
-        )
+        authorization, reference_issue = self._profile_authorization_from_payload(conn, workspace_id, data)
         return VersionedVoiceProfile(
             id=_required_text(data, "id"),
             workspace_id=_required_text(data, "workspace_id"),
-            person_profile_id=_required_text(data, "person_profile_id"),
-            person_version=_required_text(data, "person_version"),
+            person_profile_id=str(data.get("person_profile_id") or ""),
+            person_version=str(data.get("person_version") or ""),
             version=_required_text(data, "version"),
             language=_required_text(data, "language"),  # type: ignore[arg-type]
-            reference_audio_path=_required_text(data, "reference_audio_path"),
-            reference_text=_required_text(data, "reference_text"),
-            model_id=_required_text(data, "model_id"),
+            reference_audio_path=str(data.get("reference_audio_path") or ""),
+            reference_text=str(data.get("reference_text") or ""),
+            model_id=str(data.get("model_id") or ""),
             authorization=authorization,
+            reference_issue=reference_issue,
+            display_name=str(data.get("display_name") or ""),
+            **_profile_reference_fields(data, authorization),
         )
 
     @staticmethod
@@ -9634,6 +10592,12 @@ class ProductionRepository:
         knowledge_payloads = data.pop("knowledge_references", [])
         source_payloads = data.pop("source_references", [])
         voice_payload = data.pop("selected_voice", None)
+        # Missing key identifies historical payloads only. Explicit None stays
+        # unselected even if an old voice relationship exists.
+        person_payload = data.pop("selected_person", None) if "selected_person" in data else (
+            {"profile_id": voice_payload["person_profile_id"], "version": voice_payload["person_version"]}
+            if isinstance(voice_payload, dict) and voice_payload.get("person_profile_id")
+            and voice_payload.get("person_version") else None)
         pronunciation_payloads = data.pop("pronunciation_references", [])
         blocker_payloads = data.pop("blockers", [])
         material_match_payloads = data.pop("material_matches", [])
@@ -9655,6 +10619,8 @@ class ProductionRepository:
                 if isinstance(voice_payload, dict)
                 else None
             ),
+            selected_person=(CreationPlanPersonReference(**person_payload)
+                             if isinstance(person_payload, dict) else None),
             pronunciation_references=[
                 CreationPlanPronunciationReference(**item)
                 for item in pronunciation_payloads
@@ -9788,12 +10754,20 @@ class ProductionRepository:
             sample_rate=(
                 int(row["sample_rate"]) if row["sample_rate"] is not None else None
             ),
-            model_id=str(row["model_id"]),
-            voice_profile_id=str(row["voice_profile_id"]),
-            voice_version=str(row["voice_version"]),
+            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
+            voice_profile_id=(str(row["voice_profile_id"])
+                              if row["voice_profile_id"] is not None else None),
+            voice_version=str(row["voice_version"]) if row["voice_version"] is not None else None,
             language=str(row["language"]),
             pronunciation_version=str(row["pronunciation_version"]),
             status=str(row["status"]),  # type: ignore[arg-type]
+            source_kind=str(row["source_kind"]),  # type: ignore[arg-type]
+            source_artifact_ref=(str(row["source_artifact_ref"])
+                                 if row["source_artifact_ref"] is not None else None),
+            source_sha256=(str(row["source_sha256"])
+                           if row["source_sha256"] is not None else None),
+            source_script_digest=(str(row["source_script_digest"])
+                                  if row["source_script_digest"] is not None else None),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
@@ -10102,6 +11076,60 @@ def _json_object(value: dict[str, object]) -> str:
     return json.dumps(value, ensure_ascii=False, default=_json_default)
 
 
+def _validated_assistant_reply_reference(value: dict[str, str]) -> dict[str, str]:
+    conversation_id = value.get("conversation_id", "").strip()
+    turn_id = value.get("turn_id", "").strip()
+    response_digest = value.get("response_digest", "").strip().lower()
+    if not conversation_id or not turn_id or re.fullmatch(r"[0-9a-f]{64}", response_digest) is None:
+        raise ValueError("对话回复来源必须包含会话、已完成轮次和 SHA-256 摘要")
+    return {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "response_digest": response_digest,
+    }
+
+
+def _assistant_reply_input_references(
+    values: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    required = ("reference_id", "kind", "object_id", "version_or_identity", "title")
+    for value in values:
+        if not isinstance(value, dict) or any(not str(value.get(key, "")).strip() for key in required):
+            raise ValueError("文案输入来源缺少固定版本身份")
+        reference_id = str(value["reference_id"])
+        if reference_id in result:
+            raise ValueError("文案输入来源标识重复")
+        result[reference_id] = {key: value[key] for key in required if key != "reference_id"}
+    return result
+
+
+def _revision_value(value: datetime | str) -> str:
+    result = value.isoformat() if isinstance(value, datetime) else value.strip()
+    if not result:
+        raise ValueError("对象修订令牌不能为空")
+    return result
+
+
+def _assistant_reply_request_event_id(event_type: str, workspace_id: str, request_id: str) -> str:
+    identity = hashlib.sha256(f"{workspace_id}\0{request_id}".encode("utf-8")).hexdigest()[:32]
+    return f"{event_type}_{identity}"
+
+
+def _creation_plan_conversion_intent(plan: CreationPlan) -> dict[str, object]:
+    value = asdict(plan)
+    for key in ("id", "creation_task_id", "owner_user_id", "created_at", "confirmed_at", "updated_at"):
+        value.pop(key, None)
+    return value
+
+
+def _creation_task_conversion_intent(task: CreationTask) -> dict[str, object]:
+    value = asdict(task)
+    for key in ("id", "plan_id", "owner_user_id", "created_at", "updated_at"):
+        value.pop(key, None)
+    return value
+
+
 def _json_object_from_text(value: str) -> dict[str, object]:
     decoded = json.loads(value)
     if not isinstance(decoded, dict):
@@ -10166,6 +11194,10 @@ def _narration_segment_values(segment: NarrationSegment) -> tuple[object, ...]:
         segment.status,
         segment.created_at.isoformat(),
         segment.updated_at.isoformat(),
+        segment.source_kind,
+        segment.source_artifact_ref,
+        segment.source_sha256,
+        segment.source_script_digest,
     )
 
 
@@ -10229,6 +11261,47 @@ def _authorization_payload(authorization: Authorization) -> dict[str, object]:
     }
 
 
+def _profile_reference_payload(profile) -> dict[str, object]:
+    return {
+        "reference": asdict(profile.reference) if profile.reference else None,
+        "use_state": profile.use_state,
+        "owner_user_id": profile.owner_user_id,
+        "visibility": profile.visibility,
+    }
+
+
+def _profile_reference_fields(data: dict[str, object], authorization: Authorization | None) -> dict[str, object]:
+    # Old payloads stay unchanged in SQLite. Missing provenance is not ownership.
+    reference = data.get("reference")
+    return {
+        "reference": ProfileReference(**reference) if reference is not None else None,
+        "use_state": data.get("use_state", "excluded" if authorization is not None and (
+            authorization.status in {"revoked", "expired"} or
+            (authorization.expires_at is not None and _as_utc(authorization.expires_at) <= utc_now())
+        ) else "available"),
+        "owner_user_id": data.get("owner_user_id"),
+        "visibility": data.get("visibility", "private"),
+    }
+
+
+def _profile_wav_duration(path: Path) -> float:
+    if path.suffix.lower() != ".wav":
+        raise ValueError("声音参考需要有效 WAV；视频来源需先明确派生音频")
+    try:
+        with wave.open(str(path), "rb") as audio:
+            rate, frames = audio.getframerate(), audio.getnframes()
+            if rate <= 0 or frames <= 0 or audio.getnchannels() not in {1, 2} or audio.getsampwidth() not in {1, 2, 3, 4}:
+                raise ValueError("声音参考 WAV 无有效音频")
+            duration = frames / rate
+            if not 1 <= duration <= 120:
+                raise ValueError("声音参考 WAV 时长必须在 1–120 秒之间")
+            if len(audio.readframes(frames)) != frames * audio.getnchannels() * audio.getsampwidth():
+                raise ValueError("声音参考 WAV 已截断")
+            return duration
+    except (EOFError, wave.Error) as exc:
+        raise ValueError("声音参考不是有效 PCM WAV") from exc
+
+
 def _person_profile_payload(person: PersonProfile) -> dict[str, object]:
     return {
         "id": person.id,
@@ -10238,8 +11311,9 @@ def _person_profile_payload(person: PersonProfile) -> dict[str, object]:
         "avatar_reference": person.avatar_reference,
         "background_capabilities": list(person.background_capabilities),
         "shot_capabilities": list(person.shot_capabilities),
-        "authorization_id": person.authorization.id,
-        "authorization_version": person.authorization.version,
+        "authorization_id": person.authorization.id if person.authorization else None,
+        "authorization_version": person.authorization.version if person.authorization else None,
+        **_profile_reference_payload(person),
     }
 
 
@@ -10254,8 +11328,10 @@ def _versioned_voice_profile_payload(voice: VersionedVoiceProfile) -> dict[str, 
         "reference_audio_path": voice.reference_audio_path,
         "reference_text": voice.reference_text,
         "model_id": voice.model_id,
-        "authorization_id": voice.authorization.id,
-        "authorization_version": voice.authorization.version,
+        "authorization_id": voice.authorization.id if voice.authorization else None,
+        "authorization_version": voice.authorization.version if voice.authorization else None,
+        "display_name": voice.display_name,
+        **_profile_reference_payload(voice),
     }
 
 
@@ -10336,22 +11412,28 @@ def _validate_artifact_record(artifact: ArtifactRecord) -> None:
 
 
 def _validate_narration_segment(segment: NarrationSegment) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            segment.id,
-            segment.workspace_id,
-            segment.task_id,
-            segment.script_id,
-            segment.source_section_id,
-            segment.text,
-            segment.model_id,
-            segment.voice_profile_id,
-            segment.voice_version,
-            segment.language,
-        )
-    ):
-        raise ValueError("配音分段缺少必要谱系、文字、模型或声音版本")
+    identity = (segment.id, segment.workspace_id, segment.task_id, segment.script_id,
+                segment.source_section_id, segment.text, segment.language)
+    if not all(value.strip() for value in identity):
+        raise ValueError("配音分段缺少必要谱系或文字")
+    if segment.source_kind == "generated":
+        if not all(value and value.strip() for value in
+                   (segment.model_id, segment.voice_profile_id, segment.voice_version)):
+            raise ValueError("生成配音分段必须有关联模型与声音版本")
+        if (segment.source_artifact_ref is not None or segment.source_sha256 is not None
+                or segment.source_script_digest is not None):
+            raise ValueError("生成配音不能携带电脑录音来源")
+    elif segment.source_kind == "recorded":
+        if (segment.model_id is not None or segment.voice_profile_id is not None
+                or segment.voice_version is not None
+                or not segment.source_artifact_ref
+                or not segment.source_sha256
+                or not segment.source_script_digest
+                or not re.fullmatch(r"[0-9a-f]{64}", segment.source_sha256)):
+            raise ValueError("电脑录音分段必须仅关联真实录音产物与SHA-256")
+        _validate_logical_reference(segment.source_artifact_ref, "电脑录音来源")
+    else:
+        raise ValueError("配音来源类型无效")
     if segment.audio_reference is not None:
         _validate_logical_reference(segment.audio_reference, "配音分段音频引用")
     if segment.duration_seconds is not None and (
@@ -10364,7 +11446,7 @@ def _validate_narration_segment(segment: NarrationSegment) -> None:
         segment.audio_reference is None
         or segment.duration_seconds is None
         or segment.duration_seconds <= 0
-        or segment.sample_rate is None
+        or (segment.sample_rate is None and segment.source_kind != "recorded")
     ):
         raise ValueError("ready 配音分段必须有可定位音频、时长和采样率")
     if segment.status not in {"pending", "generating", "ready", "failed"}:
@@ -10777,13 +11859,13 @@ def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
         raise ValueError("预览运行记录缺少工作区、ID 或幂等身份")
     if record.preview_type not in {"voice", "avatar_lipsync"}:
         raise ValueError("预览类型无效")
-    if record.status not in {"running", "succeeded", "unavailable", "blocked", "failed"}:
+    if record.status not in {"queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"}:
         raise ValueError("预览运行状态无效")
     if not record.capability_id.strip() or not record.model_id.strip() or not record.language.strip():
         raise ValueError("预览运行记录缺少能力、模型或语言")
     if record.attempt < 1:
         raise ValueError("预览尝试序号必须从 1 开始")
-    if record.status == "running":
+    if record.status in {"queued", "running"}:
         if record.finished_at is not None:
             raise ValueError("运行中的预览不能包含结束时间")
     elif record.status == "succeeded":
@@ -10798,13 +11880,36 @@ def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
         raise ValueError("终态失败或不可用预览必须包含结束时间、原因、影响和修复动作")
 
 
+def _validate_profile_reference_fields(profile) -> None:
+    if profile.use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
+        raise ValueError("档案使用状态无效")
+    if profile.visibility not in {"private", "shared"}:
+        raise ValueError("档案可见范围无效")
+    reference = profile.reference
+    if reference is None:
+        raise ValueError("新档案需要明确来源引用，不能猜测历史来源")
+    if profile.reference_issue is not None:
+        raise ValueError("历史参考未可靠映射，请先重新定位来源")
+    if reference.segment_id and not reference.asset_id:
+        raise ValueError("参考片段必须绑定素材")
+    if (reference.start_seconds is None) != (reference.end_seconds is None):
+        raise ValueError("参考范围必须同时包含起止时间")
+    if reference.start_seconds is not None:
+        if any(type(value) not in {int, float} or not math.isfinite(value)
+               for value in (reference.start_seconds, reference.end_seconds)):
+            raise ValueError("参考时间必须是有限数值")
+        if reference.start_seconds < 0 or reference.end_seconds <= reference.start_seconds:
+            raise ValueError("参考范围无效")
+
+
 def _validate_person_profile(person: PersonProfile) -> None:
     if not all(
         value.strip()
         for value in (person.id, person.workspace_id, person.display_name, person.version, person.avatar_reference)
     ):
         raise ValueError("人物档案缺少必要标识或形象引用")
-    if person.authorization.workspace_id != person.workspace_id:
+    _validate_profile_reference_fields(person)
+    if person.authorization is not None and person.authorization.workspace_id != person.workspace_id:
         raise ValueError("人物授权不属于当前工作区")
 
 
@@ -10814,18 +11919,19 @@ def _validate_versioned_voice_profile(voice: VersionedVoiceProfile) -> None:
         for value in (
             voice.id,
             voice.workspace_id,
-            voice.person_profile_id,
-            voice.person_version,
             voice.version,
             voice.reference_audio_path,
-            voice.reference_text,
-            voice.model_id,
         )
     ):
         raise ValueError("声音档案缺少必要标识或参考资料")
     if voice.language not in {"zh", "en", "zh-en"}:
         raise ValueError("声音语言必须是 zh、en 或 zh-en")
-    if voice.authorization.workspace_id != voice.workspace_id:
+    if bool(voice.person_profile_id) != bool(voice.person_version):
+        raise ValueError("人物关系必须同时指定人物和版本")
+    _validate_profile_reference_fields(voice)
+    if voice.reference is not None and not voice.display_name.strip():
+        raise ValueError("独立声音需要名称")
+    if voice.authorization is not None and voice.authorization.workspace_id != voice.workspace_id:
         raise ValueError("声音授权不属于当前工作区")
 
 

@@ -96,17 +96,23 @@ async function startExternalFixture(port) {
   return child;
 }
 
-function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events') {
+function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', { localWebPort, autoStart = true } = {}) {
   const events = new Map();
   const handlers = new Map();
   const dialogs = [];
   const windows = [];
   let saveDialogResult = { canceled: true };
+  const paths = { logs: logsPath, userData: path.join(path.dirname(logsPath), 'user-data') };
   const app = {
     isPackaged: packaged,
-    whenReady: () => Promise.resolve(),
-    getPath: (name) => name === 'logs' ? logsPath
-      : name === 'userData' ? path.join(path.dirname(logsPath), 'user-data') : os.tmpdir(),
+    commandLine: {
+      getSwitchValue: (name) => name === 'user-data-dir' ? userDataPath : name === 'local-web-port' ? (localWebPort ?? '') : '',
+      hasSwitch: (name) => name === 'local-web-port' && localWebPort !== undefined,
+    },
+    setPath: (name, value) => { paths[name] = value; },
+    setAppLogsPath: (value) => { paths.logs = value; },
+    whenReady: () => autoStart ? Promise.resolve() : new Promise(() => {}),
+    getPath: (name) => paths[name] || os.tmpdir(),
     getVersion: () => 'test',
     requestSingleInstanceLock: () => true,
     on(event, callback) {
@@ -149,7 +155,8 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
         },
       };
     }
-    loadURL() {
+    loadURL(url) {
+      this.loadedURL = url;
       this.loadURLCount = (this.loadURLCount || 0) + 1;
       this.visibleWhenNavigationStarted = this.visible;
       if (windowLoadMode === 'sync-later-events') {
@@ -208,14 +215,16 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
   };
 }
 
-async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events' }) {
-  const mainPath = path.join(resourcesPath, 'app', 'main.js');
+async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', localWebPort, autoStart = true }) {
+  const mainPath = fs.realpathSync(path.join(resourcesPath, 'app', 'main.js'));
   const originalLoad = Module._load;
   const originalResourcesPath = process.resourcesPath;
   const originalNodeEnv = process.env.NODE_ENV;
   const stdoutErrorListeners = new Set(process.stdout.listeners('error'));
   const stderrErrorListeners = new Set(process.stderr.listeners('error'));
-  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode);
+  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode, userDataPath, { localWebPort, autoStart });
+  let mainExports;
+  const children = [];
   const restoreProcessErrorListeners = () => {
     for (const listener of process.stdout.listeners('error')) {
       if (!stdoutErrorListeners.has(listener)) process.stdout.removeListener('error', listener);
@@ -231,10 +240,14 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return mock.electron;
     if (request === 'electron-updater') return mock.updater;
+    if (request === 'child_process' && parent.filename === mainPath) {
+      const childProcess = originalLoad.call(this, request, parent, isMain);
+      return { ...childProcess, spawn(...args) { const child = childProcess.spawn(...args); children.push(child); return child; } };
+    }
     return originalLoad.call(this, request, parent, isMain);
   };
   try {
-    require(mainPath);
+    mainExports = require(mainPath);
     await new Promise((resolve) => setImmediate(resolve));
   } catch (error) {
     Module._load = originalLoad;
@@ -247,6 +260,8 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   }
   return {
     ...mock,
+    mainExports,
+    children,
     restore() {
       Module._load = originalLoad;
       process.resourcesPath = originalResourcesPath;
@@ -328,12 +343,19 @@ async function assertVisibleWindowLifecycleBoundary() {
   }
 }
 
-function createResources({ api = true, web = true, legacyWorker = false, buildIdentity = 'valid', identityRecords = null } = {}) {
+function createResources({ api = true, web = true, legacyWorker = false, buildIdentity = 'valid', identityRecords = null, distributionConfig, portProbe = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-video-diary-lifecycle-'));
   const appRoot = path.join(root, 'app');
   fs.mkdirSync(appRoot, { recursive: true });
   const mainPath = path.join(appRoot, 'main.js');
   fs.copyFileSync(MAIN_SOURCE, mainPath);
+  // Test-only access to the actual selected constants; readiness is held so
+  // default/Supabase origin probes never start services or bind real 3000.
+  if (portProbe) fs.appendFileSync(mainPath, '\nmodule.exports = { webPort, webOrigin };\n');
+  if (distributionConfig !== undefined) {
+    fs.mkdirSync(path.join(appRoot, 'assets'), { recursive: true });
+    writeFixture(path.join(appRoot, 'assets', 'distribution-config.generated.json'), JSON.stringify(distributionConfig));
+  }
   // main.js requires this sibling at load time; without it every fixture dies on
   // MODULE_NOT_FOUND before reaching the behaviour under test.
   fs.copyFileSync(DEVICE_IDENTITY_SOURCE, path.join(appRoot, 'device-identity.js'));
@@ -453,6 +475,34 @@ async function cleanupRuntime({ resources, runtime, status, previousWorkerMarker
     else process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH = previousWorkerMarkerPath;
     if (previousVaultPath === undefined) delete process.env.OBSIDIAN_VAULT_PATH;
     else process.env.OBSIDIAN_VAULT_PATH = previousVaultPath;
+  }
+}
+
+async function assertIsolatedUserData() {
+  const resources = createResources();
+  await assert.rejects(
+    loadMain({ resourcesPath: resources, development: false, userDataPath: 'relative-profile' }),
+    /--user-data-dir must be an absolute path/,
+  );
+  const userDataPath = path.join(resources, 'isolated-profile');
+  const runtime = await loadMain({ resourcesPath: resources, development: false, userDataPath });
+  try {
+    await waitFor(() => runtime.windows.length === 1, 'isolated BrowserWindow creation');
+    const status = await runtime.handlers.get('get-service-status')();
+    assert.equal(runtime.app.getPath('userData'), userDataPath);
+    assert.equal(runtime.app.getPath('sessionData'), userDataPath);
+    assert.equal(runtime.app.getPath('logs'), path.join(userDataPath, 'logs'));
+    assert.equal(fs.readFileSync(path.join(userDataPath, '.env'), 'utf8'), '');
+    assert.equal(fs.existsSync(path.join(userDataPath, 'device-identity.generated.json')), true);
+    assert.equal(fs.existsSync(path.join(userDataPath, 'logs', 'desktop-runtime.jsonl')), true);
+    assert.equal(fs.existsSync(path.join(resources, 'user-data')), false, 'default userData must remain untouched');
+    assert.equal(fs.existsSync(path.join(resources, 'logs')), false, 'default logs must remain untouched');
+    await cleanupRuntime({ resources, runtime, status });
+  } finally {
+    if (fs.existsSync(resources)) {
+      runtime.app.quit();
+      runtime.restore();
+    }
   }
 }
 
@@ -605,7 +655,160 @@ async function assertNativeRenderedVideoSaveBoundary() {
   }
 }
 
+async function assertLocalWebPort() {
+  let checks = 0;
+  const configLocal = { authMode: 'local' };
+  const configSupabase = { authMode: 'supabase', supabaseUrl: 'https://fixture.invalid', supabasePublishableKey: 'public-fixture' };
+  // No startup promise resolves in these probes: neither 3000 nor any API port
+  // is bound, even when verifying the default Supabase callback origin.
+  for (const distributionConfig of [undefined, configLocal, configSupabase]) {
+    const resources = createResources({ distributionConfig, portProbe: true });
+    let runtime;
+    try {
+      runtime = await loadMain({ resourcesPath: resources, development: false, autoStart: false });
+      assert.deepEqual(runtime.mainExports, { webPort: 3000, webOrigin: 'http://localhost:3000' });
+      assert.equal(runtime.windows.length, 0);
+      checks++;
+    } finally {
+      runtime?.restore();
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+  for (const localWebPort of ['1', '32123', '65535']) {
+    const resources = createResources({ distributionConfig: configLocal, portProbe: true });
+    let runtime;
+    try {
+      runtime = await loadMain({ resourcesPath: resources, development: false, autoStart: false, userDataPath: path.join(resources, 'profile'), localWebPort });
+      assert.equal(runtime.mainExports.webPort, Number(localWebPort));
+      assert.equal(runtime.mainExports.webOrigin, `http://localhost:${Number(localWebPort)}`);
+      checks++;
+    } finally {
+      runtime?.restore();
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+  const refused = [
+    ...['', '0', '-1', '65536', '1.5', '3e3', ' 32123', 'abc'].map(localWebPort => ({ localWebPort, expected: /integer from 1 to 65535/ })),
+    { localWebPort: '32123', noProfile: true, expected: /requires an explicit absolute --user-data-dir/ },
+    { localWebPort: '32123', relativeProfile: true, expected: /--user-data-dir must be an absolute path/ },
+    { localWebPort: '32123', distributionConfig: configSupabase, expected: /Supabase callbacks must remain on port 3000/ },
+    { localWebPort: '3000', distributionConfig: configSupabase, expected: /Supabase callbacks must remain on port 3000/ },
+    { localWebPort: '32123', distributionConfig: undefined, expected: /requires readable local auth build configuration/ },
+    { localWebPort: '32123', distributionConfig: null, expected: /only allowed for local auth builds/ },
+    { localWebPort: '32123', malformed: true, expected: /requires readable local auth build configuration/ },
+    { localWebPort: '32123', development: true, expected: /not development mode/ },
+  ];
+  for (const test of refused) {
+    const distributionConfig = Object.hasOwn(test, 'distributionConfig') ? test.distributionConfig : configLocal;
+    const resources = createResources({ distributionConfig });
+    try {
+      if (test.malformed) fs.writeFileSync(path.join(resources, 'app', 'assets', 'distribution-config.generated.json'), '{invalid');
+      await assert.rejects(loadMain({ resourcesPath: resources, development: Boolean(test.development), autoStart: false,
+        userDataPath: test.noProfile ? '' : test.relativeProfile ? 'relative-profile' : path.join(resources, 'profile'), localWebPort: test.localWebPort }), test.expected);
+      assert.equal(fs.existsSync(path.join(resources, 'profile', 'device-identity.generated.json')), false, 'refused override must not launch an API or create device credentials');
+      checks++;
+    } finally {
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+
+  async function ownPort() {
+    const server = net.createServer();
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    const port = server.address().port;
+    assert.notEqual(port, 3000, 'only disposable, non-3000 ports may be bound');
+    await new Promise(resolve => server.close(resolve));
+    return port;
+  }
+  async function stopAndVerify(runtime) {
+    const status = await runtime.handlers.get('get-service-status')();
+    runtime.app.quit();
+    await waitFor(() => runtime.children.every(child => !isAlive(child.pid)), 'owned local-port fixtures exiting');
+    for (const port of [status.api.port, status.web.port].filter(Boolean)) {
+      assert.notEqual(port, 3000);
+      assert.equal(await portIsAvailable(port), true, `owned fixture port ${port} must be released`);
+    }
+    console.log(`local-web-port cleanup: ${JSON.stringify({ childPids: runtime.children.map(child => child.pid), apiPort: status.api.port, webPort: status.web.port, released: true })}`);
+    runtime.restore();
+  }
+
+  const port = await ownPort();
+  const resources = createResources({ distributionConfig: configLocal });
+  const userDataPath = path.join(resources, 'profile');
+  let runtime;
+  try {
+    let identity;
+    for (let restart = 0; restart < 2; restart++) {
+      runtime = await loadMain({ resourcesPath: resources, development: false, userDataPath, localWebPort: String(port) });
+      await waitFor(() => runtime.windows.length === 1, 'isolated local Web fixture startup');
+      const status = await runtime.handlers.get('get-service-status')();
+      assert.equal(status.web.port, port);
+      assert.equal(runtime.windows[0].loadedURL, `http://localhost:${port}`);
+      assert.equal(runtime.app.getPath('userData'), userDataPath);
+      assert.equal(runtime.app.getPath('sessionData'), userDataPath);
+      assert.equal(fs.existsSync(path.join(resources, 'user-data')), false);
+      const current = fs.readFileSync(path.join(userDataPath, 'device-identity.generated.json'), 'utf8');
+      if (restart) assert.equal(current, identity, 'the same isolated profile must retain its identity');
+      else identity = current;
+      await stopAndVerify(runtime);
+      runtime = null;
+      checks++;
+    }
+  } finally {
+    if (runtime) await stopAndVerify(runtime);
+    fs.rmSync(resources, { recursive: true, force: true });
+  }
+
+  const occupied = net.createServer();
+  await new Promise((resolve, reject) => { occupied.once('error', reject); occupied.listen(0, '127.0.0.1', resolve); });
+  const occupiedPort = occupied.address().port;
+  assert.notEqual(occupiedPort, 3000);
+  const failedResources = createResources({ distributionConfig: configLocal });
+  let failedRuntime;
+  try {
+    failedRuntime = await loadMain({ resourcesPath: failedResources, development: false, userDataPath: path.join(failedResources, 'profile'), localWebPort: String(occupiedPort) });
+    await waitFor(() => failedRuntime.dialogs.length === 1, 'occupied explicit Web port failure');
+    assert.match(failedRuntime.dialogs[0].message, new RegExp(`端口 ${occupiedPort} 已被占用`));
+    assert.equal(failedRuntime.windows.length, 0, 'occupied explicit origin must never open a window or use an old service');
+    await waitFor(async () => (await failedRuntime.handlers.get('get-service-status')()).api.pid === null, 'API fixture cleanup after occupied Web port');
+    assert.equal(occupied.listening, true, 'the port holder must remain untouched');
+    const status = await failedRuntime.handlers.get('get-service-status')();
+    assert.equal(status.web.state, 'failed');
+    assert.equal(status.web.pid, null);
+    assert.equal(status.api.state, 'stopped');
+    assert.equal(await portIsAvailable(status.api.port), true);
+    checks++;
+  } finally {
+    if (failedRuntime) await stopAndVerify(failedRuntime);
+    fs.rmSync(failedResources, { recursive: true, force: true });
+    await new Promise(resolve => occupied.close(resolve));
+    assert.equal(await portIsAvailable(occupiedPort), true, 'owned occupied-port fixture must release its port');
+  }
+
+  const exitPort = await ownPort();
+  const exitResources = createResources({ distributionConfig: configLocal });
+  writeFixture(path.join(exitResources, 'web', 'server.js'), 'process.exit(86);\n');
+  let exitRuntime;
+  try {
+    exitRuntime = await loadMain({ resourcesPath: exitResources, development: false, userDataPath: path.join(exitResources, 'profile'), localWebPort: String(exitPort) });
+    await waitFor(() => exitRuntime.dialogs.length === 1, 'owned Web child startup failure');
+    assert.equal(exitRuntime.windows.length, 0, 'failed Web child must not fall back to another origin');
+    await waitFor(async () => (await exitRuntime.handlers.get('get-service-status')()).api.pid === null, 'API fixture exit after Web failure');
+    const status = await exitRuntime.handlers.get('get-service-status')();
+    assert.equal(status.web.port, exitPort);
+    assert.equal(status.web.state, 'failed');
+    assert.equal(status.web.pid, null);
+    assert.equal(await portIsAvailable(exitPort), true);
+    checks++;
+  } finally {
+    if (exitRuntime) await stopAndVerify(exitRuntime);
+    fs.rmSync(exitResources, { recursive: true, force: true });
+  }
+  console.log(`desktop local-web-port: PASS (${checks} checks; no real 3000 binding)`);
+}
+
 async function main() {
+  await assertIsolatedUserData();
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable');
   await assertBuildIdentityMetadataFailure('invalid', 'build identity metadata is invalid');
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable', { development: true, packaged: true });
@@ -624,7 +827,9 @@ async function main() {
 }
 
 const runner = process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
-  : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary : main;
+  : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary
+    : process.argv.includes('--local-web-port') ? assertLocalWebPort
+      : process.argv.includes('--isolated-user-data') ? assertIsolatedUserData : main;
 
 runner().catch((error) => {
   console.error('desktop lifecycle smoke: FAIL');

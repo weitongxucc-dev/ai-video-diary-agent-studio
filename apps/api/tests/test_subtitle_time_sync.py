@@ -90,7 +90,7 @@ def test_exact_chinese_text_change_preserves_all_english_invalidation(
             track, workspace_id=state.workspace_id, task_id=state.task.id,
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
-    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
                         SimpleNamespace(id="text-preview", logical_ref="artifacts/text-preview.mp4"))
     preview = state.client.post(base + "/edits/exact/preview", json={
@@ -125,7 +125,7 @@ def test_preview_reports_new_gaps_without_writing(person_render_edit_state, monk
         state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
-    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
                         SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
     preview = (state.client.post(base + "/edits/preview", json={
@@ -151,7 +151,7 @@ def test_compound_preview_reports_only_final_gaps(person_render_edit_state, monk
         state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
-    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
                         SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
     preview = state.client.post(base + "/edits/preview", json={
@@ -177,7 +177,7 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
     state.production.create_subtitle_track(source)
     state.production.create_subtitle_track(translation)
     before = state.client.get(base).json()
-    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
                         SimpleNamespace(id="timing-preview", logical_ref="artifacts/timing-preview.mp4"))
     preview = (state.client.post(base + "/edits/preview", json={
@@ -228,7 +228,7 @@ def test_broken_link_rejects_preview_without_persisting_any_track(
             track, workspace_id=state.workspace_id, task_id=state.task.id,
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
-    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args: None))
+    monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     rejected = (state.client.post(base + "/edits/preview", json={
         "raw_command": "中文字幕1显示0到1.8秒", "context_stage": "subtitle_cover",
         "selected_object_refs": [],

@@ -1,0 +1,25 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ scope: vi.fn(), push: vi.fn(), raw: "" }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/library", useSearchParams: () => new URLSearchParams({ return_to: mocks.raw }), useRouter: () => ({ push: mocks.push, back: vi.fn() }) }));
+vi.mock("next/link", () => ({ default: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
+vi.mock("next/image", () => ({ default: ({ alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => <img alt={alt} {...props} /> }));
+vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: () => <div>已有助手消费者</div> }));
+vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
+vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
+vi.mock("@/lib/api", () => ({ listCreationTasks: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
+vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: mocks.scope }));
+import { AppShell } from "@/components/AppShell";
+import { preflightReturnUrl, savePreflightDraft, type PreflightDraftFields } from "@/lib/preflight-draft";
+const id = "12345678-1234-4123-8123-123456789abc";
+beforeEach(() => { mocks.push.mockReset(); sessionStorage.clear(); window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }); });
+it("binds a scoped resource return into the existing toolbar and keeps its page/conversation", async () => {
+  const scope = { memberId: "local:member", workspaceId: "space" }; mocks.scope.mockResolvedValue(scope); mocks.raw = preflightReturnUrl(id, null);
+  const fields: PreflightDraftFields = { goal: "目标", name: "", duration: "30", targetCount: "1", language: "zh-CN", aspectRatio: "9:16", presenterShare: 20, lipsyncQuality: "high", voicePin: null, personPin: null, voiceEdited: false, template: null };
+  savePreflightDraft(sessionStorage, scope, id, fields);
+  render(<AppShell><p>素材库正文</p></AppShell>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "返回创作" })).toBeEnabled());
+  expect(screen.getByText("素材库正文")).toBeInTheDocument(); expect(screen.getByText("已有助手消费者")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回创作" }).closest(".desktop-toolbar")).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "返回创作" })); await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(mocks.raw));
+});

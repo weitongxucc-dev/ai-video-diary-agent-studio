@@ -46,6 +46,7 @@ def _asset(library: Path, name: str, *, use_state: ContentUseState = "available"
         review_status="approved",
         analysis_status="ready",
         use_state=use_state,
+        visibility="shared",
         segments=[
             MaterialSegment(
                 id=f"{name}_segment_{index}",

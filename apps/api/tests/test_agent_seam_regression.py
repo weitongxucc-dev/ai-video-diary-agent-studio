@@ -70,7 +70,10 @@ def _approved_asset(
         )
     for tag in asset_tags or []:
         asset = production.update_asset_tags(workspace_id, asset.id, [tag])
-    return production.get_asset(workspace_id, asset.id)
+    asset = production.get_asset(workspace_id, asset.id)
+    # The seam contract is exercised with an explicitly shared fixture, not an
+    # anonymous read of a private upload.
+    return production.set_asset_visibility(workspace_id, asset.id, "shared")
 
 
 def _workspace(tmp_path: Path) -> tuple[ProductionRepository, MaterialAsset]:

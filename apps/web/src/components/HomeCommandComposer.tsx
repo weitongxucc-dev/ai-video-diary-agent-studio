@@ -1,16 +1,30 @@
 "use client";
 
-import { AlertCircle, ArrowUp, Sparkles } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import Image from "next/image";
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline } from "@/lib/api";
-import type { CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse } from "@/lib/types";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
+import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
+import { useAssistantConversation } from "@/components/useAssistantConversation";
+import { AssistantConversationPanel } from "@/components/AssistantConversationPanel";
 
-type HomeCommandComposerProps = { assignLocation?: (url: string) => void; autoFocus?: boolean; task?: CreationTask | null; onTaskUpdated?: () => void };
+type HomeCommandComposerProps = {
+  assignLocation?: (url: string) => void;
+  autoFocus?: boolean;
+  task?: CreationTask | null;
+  onTaskUpdated?: () => void;
+  pageContext?: { pathname: string };
+  materialContext?: {
+    selection: MaterialAssistantSelection | null;
+    label: string | null;
+    onResult: (selection: MaterialAssistantSelection, result: MaterialAssistantResult) => void;
+  };
+};
 
 const issueNames: Record<string, string> = {
   content_sources_missing: "缺少资料",
@@ -49,13 +63,23 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
   </>;
 }
 
-export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated }: HomeCommandComposerProps) {
-  const [message, setMessage] = useState("");
-  const [turns, setTurns] = useState<{ command: string; reply: string }[]>([]);
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext }: HomeCommandComposerProps) {
+  const materialSelectionKey = materialContext
+    ? materialContext.selection
+      ? materialContext.selection.scope === "asset"
+        ? `asset:${materialContext.selection.asset_id}`
+        : `segment:${materialContext.selection.asset_id}:${materialContext.selection.segment_id}`
+      : "browse"
+    : null;
+  const materialConversationScope = materialContext ? "library" : null;
+  const scopeKind = materialConversationScope !== null ? "material" as const : task ? "task" as const : "home" as const;
+  const scopeId = materialConversationScope ?? task?.id ?? "home";
+  const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [shareValue, setShareValue] = useState<PresenterShare>(20);
   const [qualityValue, setQualityValue] = useState<LipSyncQuality>("high");
+  const [activePlanTurnId, setActivePlanTurnId] = useState<string | null>(null);
   const [shareUpdating, setShareUpdating] = useState(false);
   const shareRevision = useRef(0);
   const [taskPreview, setTaskPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
@@ -65,18 +89,37 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [modelConfigured, setModelConfigured] = useState(false);
   const [pending, setPending] = useState<"chat" | "confirm" | "undo" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const conversationId = useRef<string | null>(null);
+  const [taskActionStatus, setTaskActionStatus] = useState<string | null>(null);
   const scopeRevision = useRef(0);
-  const commandInput = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { if (autoFocus) commandInput.current?.focus(); }, [autoFocus]);
+  const restoredPlanKey = useRef<string | null>(null);
+  const replyPlanRequests = useRef(new Map<string, string>());
   useEffect(() => {
     scopeRevision.current += 1;
-    setMessage(""); setTurns([]); setPreview(null); setPreviewOpen(false);
+    setPreview(null); setPreviewOpen(false);
+    setActivePlanTurnId(null);
     shareRevision.current += 1; setShareValue(20); setQualityValue("high"); setShareUpdating(false);
     setTaskPreview(null); setTaskPreviewOpen(false); setUndoReady(false);
-    setPending(null); setError(null);
-    conversationId.current = null;
-  }, [task?.id]);
+    setPending(null); setError(null); setTaskActionStatus(null);
+    restoredPlanKey.current = null;
+  }, [task?.id, materialSelectionKey]);
+  useEffect(() => {
+    const saved = assistant.conversation;
+    if (!saved || saved.scope_kind !== scopeKind || saved.scope_id !== scopeId) return;
+    const planTurn = [...saved.turns].reverse().find((turn) =>
+      turn.result?.kind === "plan_preview"
+      && typeof turn.result.plan_preview === "object"
+      && turn.result.plan_preview !== null,
+    );
+    const key = `${saved.id}:${planTurn?.id ?? "none"}:${planTurn?.updated_at ?? ""}`;
+    if (restoredPlanKey.current === key) return;
+    restoredPlanKey.current = key;
+    const restored = planTurn?.result?.plan_preview as CreationPlanPreview | undefined;
+    setActivePlanTurnId(planTurn?.id ?? null);
+    setPreview(restored ?? null);
+    setPreviewOpen(Boolean(restored));
+    setShareValue(restored?.presenter_share_target ?? 20);
+    setQualityValue(restored?.lipsync_quality ?? "high");
+  }, [assistant.conversation, scopeId, scopeKind]);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
       if (runtime.status.llm.configured) {
@@ -86,44 +129,73 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     }).catch(() => undefined);
   }, []);
 
-  async function sendToAssistant(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const command = message.trim();
+  async function sendToAssistant(rawMessage: string) {
+    const command = rawMessage.trim();
     if (!command || pending) return;
     const revision = scopeRevision.current;
     setPending("chat");
     setError(null);
+    setTaskActionStatus(null);
     setPreview(null);
     setPreviewOpen(false);
     setTaskPreview(null);
     setTaskPreviewOpen(false);
+    let requestConversationId: string | null = null;
+    let requestLocalTurnId: string | null = null;
     try {
-      if (task) {
+      if (!assistant.conversation) await assistant.createNew();
+      const turn = assistant.beginTurn(command);
+      requestConversationId = turn.conversationId;
+      requestLocalTurnId = turn.localTurnId;
+      const onStreamEvent = assistant.bindTurnEvents(turn.conversationId, turn.localTurnId);
+      const expectedDraftVersion = await turn.draftCheckpoint;
+      if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) {
+        await assistant.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
+          "页面或会话已切换；本轮没有发送，原要求已保留为草稿。");
+        return;
+      }
+      if (materialContext) {
+        const selection = materialContext.selection;
+        const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection,
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+        if (!assistant.isCurrentConversation(turn.conversationId)) return;
+        if (selection && result.material_result) materialContext.onResult(selection, result.material_result);
+        if (revision === scopeRevision.current) setModel(`${result.provider} / ${result.model}`);
+      } else if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
+          conversation_id: turn.conversationId,
           message: command, context_stage: task.stage,
+          client_request_id: turn.clientRequestId,
+          expected_draft_version: expectedDraftVersion,
           selected_object_refs: [], playhead_ms: null,
-        });
-        if (revision !== scopeRevision.current) return;
-        setTurns((current) => [...current, { command, reply: result.reply }].slice(-8));
+        }, onStreamEvent);
+        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         setModel(`${result.provider} / ${result.model}`);
+        if (result.execution_action || result.topic_candidates) onTaskUpdated?.();
       } else {
-        conversationId.current ??= crypto.randomUUID();
-        const result = await sendWorkspaceAssistantPlanTurn(command, conversationId.current);
-        if (revision !== scopeRevision.current) return;
-        setTurns((current) => [...current, { command, reply: result.reply }].slice(-8));
+        const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setPreview(result.plan_preview);
+        setActivePlanTurnId(result.turn_id ?? null);
         setShareValue(result.plan_preview?.presenter_share_target ?? 20);
         setQualityValue(result.plan_preview?.lipsync_quality ?? "high");
         setPreviewOpen(Boolean(result.plan_preview));
         setModel(`${result.provider} / ${result.model}`);
       }
-      setMessage("");
+      if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
     } catch (cause) {
-      if (revision === scopeRevision.current) setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+      if (requestConversationId && requestLocalTurnId) {
+        await assistant.failUnpersistedTurn(requestConversationId, requestLocalTurnId,
+          cause instanceof Error ? cause.message : "本轮没有建立持久轮次，请检查后可重试。");
+      }
+      if (revision === scopeRevision.current && (!requestConversationId || assistant.isCurrentConversation(requestConversationId))) {
+        setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+      }
     } finally {
-      if (revision === scopeRevision.current) setPending(null);
+      if (revision === scopeRevision.current && (!requestConversationId || assistant.isCurrentConversation(requestConversationId))) setPending(null);
     }
   }
 
@@ -133,12 +205,13 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setPending("confirm");
     setError(null);
     try {
-      await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
+      const result = await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
       if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
       setTaskPreview(null);
       setTaskPreviewOpen(false);
-      setUndoReady(true);
-      setTurns((current) => [...current, { command: "确认修改", reply: "修改已完成。" }].slice(-8));
+      const queued = "status" in result;
+      setUndoReady(!queued);
+      setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : null);
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current) {
@@ -160,7 +233,6 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       await undoCreationTaskTimeline(task.id);
       if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
       setUndoReady(false);
-      setTurns((current) => [...current, { command: "撤销", reply: "已撤销刚才的修改。" }].slice(-8));
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current) setError(cause instanceof Error ? cause.message : "撤销未完成，请到任务页查看。");
@@ -172,6 +244,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   async function confirmPlan() {
     if (!preview?.confirmable || pending || shareUpdating || shareValue !== (preview.presenter_share_target ?? 20) || qualityValue !== (preview.lipsync_quality ?? "high")) return;
     const revision = scopeRevision.current;
+    const conversationId = assistant.conversation?.id;
     setPending("confirm");
     setError(null);
     try {
@@ -184,17 +257,48 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         ...(preview.template_id ? { template_id: preview.template_id, template_version: preview.template_version } : {}),
         preflight_fingerprint: preview.preflight_fingerprint,
       });
-      if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
+      if (revision !== scopeRevision.current || (conversationId && !assistant.isCurrentConversation(conversationId))) return;
       assignLocation(`/tasks/${encodeURIComponent(plan.creation_task.id)}`);
     } catch (cause) {
-      if (revision === scopeRevision.current) {
+      if (revision === scopeRevision.current && (!conversationId || assistant.isCurrentConversation(conversationId))) {
         setError(cause instanceof Error ? cause.message : "创建任务没有完成，请重新预检。");
         setPreview(null);
         setPreviewOpen(false);
       }
     } finally {
-      if (revision === scopeRevision.current) setPending(null);
+      if (revision === scopeRevision.current && (!conversationId || assistant.isCurrentConversation(conversationId))) setPending(null);
     }
+  }
+
+  function startPlanFromReply(turn: AssistantConversationTurn) {
+    const conversation = assistant.conversation;
+    if (scopeKind !== "home" || task || materialContext || !conversation
+      || !assistant.isCurrentConversation(conversation.id) || turn.status !== "completed"
+      || !turn.assistant_text.trim() || !conversation.turns.some(item => item.id === turn.id && item.status === "completed")) {
+      setError("当前首页对话或完成回复已变化，没有带入其他内容。");
+      return;
+    }
+    const key = `${conversation.id}:${turn.id}`;
+    let requestId = replyPlanRequests.current.get(key);
+    if (!requestId) {
+      const storageKey = `ai-video-diary.reply-plan-request.v1:${conversation.id}:${turn.id}`;
+      try {
+        const saved = window.sessionStorage.getItem(storageKey);
+        const savedRequestId = saved && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(saved)
+          ? saved : null;
+        requestId = savedRequestId ?? crypto.randomUUID();
+        if (!savedRequestId) window.sessionStorage.setItem(storageKey, requestId);
+      } catch {
+        setError("浏览器暂存不可用，没有开始新任务；请恢复暂存后重试。");
+        return;
+      }
+      replyPlanRequests.current.set(key, requestId);
+    }
+    const query = new URLSearchParams({
+      new: "1", reply_conversation_id: conversation.id, reply_turn_id: turn.id,
+      reply_request_id: requestId,
+    });
+    assignLocation(`/production?${query.toString()}`);
   }
 
   async function changePlanOptions(value: PresenterShare, quality: LipSyncQuality) {
@@ -204,36 +308,93 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setShareUpdating(true);
     setError(null);
     const revision = ++shareRevision.current;
+    const scopeAtStart = scopeRevision.current;
+    const conversationId = assistant.conversation?.id;
+    const planTurnId = activePlanTurnId;
     try {
-      const updated = await previewCreationPlan({
+      const input = {
         goal: preview.goal, name: preview.name, target_count: preview.target_count,
         language: preview.language, aspect_ratio: preview.aspect_ratio,
         duration_target_seconds: preview.duration_target_seconds,
         presenter_share_target: value,
         lipsync_quality: quality,
         ...(preview.template_id ? { template_id: preview.template_id, template_version: preview.template_version } : {}),
-      });
-      if (revision === shareRevision.current) setPreview(updated);
+      };
+      const updated = conversationId && planTurnId
+        ? await updateAssistantPlanPreview(conversationId, planTurnId, input)
+        : await previewCreationPlan(input);
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) setPreview(updated);
     } catch (cause) {
-      if (revision === shareRevision.current) {
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) {
         setError(cause instanceof Error ? cause.message : "制作方案未能检查，请重新查看方案。");
         setPreview(null);
         setPreviewOpen(false);
       }
     } finally {
-      if (revision === shareRevision.current) setShareUpdating(false);
+      if (revision === shareRevision.current && scopeAtStart === scopeRevision.current
+        && (!conversationId || assistant.isCurrentConversation(conversationId))) setShareUpdating(false);
     }
   }
 
+  const pathname = pageContext?.pathname ?? "/";
+  const stageSuggestions: Record<CreationTask["stage"], string[]> = {
+    topic: ["先解释当前选题进度", "帮我梳理选题方向"],
+    script: ["先检查当前文案", "把文案写得更简洁"],
+    narration: ["先解释当前配音进度"],
+    montage: ["让节奏快一点", "字幕放大一点"],
+    review: ["先解释当前成片检查结果"],
+  };
+  const pageEntries: Record<string, { label: string; links: { href: string; label: string }[] }> = {
+    "/settings": { label: "设置", links: [{ href: "/health", label: "查看运行情况" }, { href: "/profiles", label: "查看人物与声音" }] },
+    "/profiles": { label: "人物与声音", links: [{ href: "/library", label: "查看参考素材" }, { href: "/settings", label: "查看制作设置" }] },
+    "/members": { label: "成员与空间", links: [{ href: "/", label: "查看工作区首页" }] },
+    "/knowledge": { label: "知识库", links: [{ href: "/sources", label: "管理资料来源" }, { href: "/?new=1", label: "进入新建视频" }] },
+    "/sources": { label: "资料来源", links: [{ href: "/knowledge", label: "查看知识库" }] },
+    "/library": { label: "素材库", links: [{ href: "/?new=1", label: "进入新建视频" }, { href: "/knowledge", label: "查看知识库" }] },
+    "/templates": { label: "视频模板", links: [{ href: "/?new=1", label: "进入新建视频" }] },
+    "/history": { label: "发布与数据", links: [{ href: "/", label: "查看工作区任务" }] },
+    "/health": { label: "运行情况", links: [{ href: "/settings", label: "查看服务设置" }] },
+    "/production": { label: "创作任务", links: [{ href: "/?new=1", label: "进入新建视频" }] },
+  };
+  const pageEntry = pageEntries[pathname];
+  const suggestions = materialContext
+    ? materialContext.selection
+      ? materialContext.selection.scope === "asset"
+        ? ["这条素材包含什么内容？", "这条素材适合什么用途？", "把我的标签改成产品演示", "再加上室内"]
+        : ["这个片段画面里有什么？", "这个片段适合什么用途？", "把我的标签改成产品演示", "再加上室内"]
+      : ["素材库里有多少素材？", "素材库分析情况怎样？", "查找包含产品演示的素材"]
+    : task ? stageSuggestions[task.stage]
+    : pathname === "/" ? ["用我的素材，做一条产品介绍", "把客户常问的问题做成讲解视频"] : [];
+  const showEntry = !assistant.loading && assistant.conversation !== null && !assistant.conversation.turns.length && !assistant.draftText.trim();
   return (
     <div className="home-composer">
-      {!turns.length ? <div className="home-chat-start"><h2>{task ? "这条怎么改？" : "今天想做什么？"}</h2><p>{task ? "说说不满意的地方，先看修改，再决定。" : "说说要介绍什么，剩下的我们一起完成。"}</p>{(task ? ["让节奏快一点", "把字幕放大一点", "露脸占比调到四成"] : ["用我的素材，做一条产品介绍", "把客户常问的问题，做成讲解视频", "把今天拍的片段，剪成工作日常"]).map(text => <button type="button" key={text} onClick={() => { setMessage(text); commandInput.current?.focus(); }}>{text}</button>)}</div> : null}
-      {turns.length ? <div className="home-composer__conversation" aria-label="对话记录">
-        {turns.map((turn, index) => <div className="home-composer__turn" key={index}>
-          <p className="home-composer__command">{turn.command}</p>
-          <p className="home-composer__reply" aria-live={index === turns.length - 1 ? "polite" : undefined}>{turn.reply}</p>
-        </div>)}
-      </div> : null}
+      {showEntry && !task && !materialContext && pageEntry ? <nav className="assistant-suggestions" aria-label="当前页面建议入口"><p>{pageEntry.label}：以下入口只跳转页面，不会发送对话。</p>{pageEntry.links.map(item => <Link key={item.href} href={item.href}>{item.label}</Link>)}</nav> : null}
+      {showEntry && suggestions.length ? <p className="assistant-entry-hint">点击建议只填入草稿，发送后才处理。</p> : null}
+      {materialContext ? <p className="home-composer__context" aria-label="当前素材对话范围">
+        {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "当前未选中素材或片段。"}
+      </p> : null}
+      {materialContext ? <p className="home-composer__context">
+        {materialContext.selection
+          ? "当前对话围绕所选范围；只有明确要求后才会修改我的标签。"
+          : "可询问全库数量、分析状态或按词查找，无需先选素材；要读具体内容/用途或改标签，请先选整条素材或片段。"}
+      </p> : null}
+      <AssistantConversationPanel
+        autoFocus={autoFocus}
+        busy={pending !== null}
+        configured={modelConfigured}
+        input={assistant.draftText}
+        inputLabel={materialContext ? "素材对话" : task ? "任务对话要求" : "制作要求"}
+        onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
+        onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setPending(null); setShareUpdating(false); setError(null); }}
+        onSend={sendToAssistant}
+        onCreatePlanFromReply={scopeKind === "home" && !task && !materialContext ? startPlanFromReply : undefined}
+        scopeLabel={materialContext ? (materialContext.label ?? (materialContext.selection ? "当前素材" : "素材库")) : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
+        state={assistant}
+        suggestions={showEntry ? suggestions : []}
+      />
+      {taskActionStatus ? <p role="status" aria-live="polite">{taskActionStatus}</p> : null}
       {preview ? <button className="home-composer__open-card" onClick={() => setPreviewOpen(true)} type="button">查看方案</button> : null}
       {preview && previewOpen ? <HomeCardDialog onClose={() => setPreviewOpen(false)} title="制作方案"><section className="home-composer__result" aria-label="制作方案">
         <div className="home-composer__result-head"><strong>{preview.name.replace(/^创作任务[:：]\s*/, "")}</strong><span>{preview.aspect_ratio} · {preview.duration_target_seconds} 秒</span></div>
@@ -262,26 +423,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           <div className="home-edit-preview__actions"><button onClick={() => setTaskPreviewOpen(false)} type="button">先不改</button><button className="composer-submit" disabled={pending !== null} onClick={() => void confirmTaskPreview()} type="button">{pending === "confirm" ? "修改中" : "确认修改"}</button></div>
         </div>
       </HomeCardDialog> : null}
-      <form onSubmit={(event) => void sendToAssistant(event)}>
-        <div className="home-composer__input-row">
-          <Sparkles aria-hidden="true" size={18} />
-          <textarea aria-label="制作指令" disabled={pending !== null} ref={commandInput}
-            onChange={(event) => { setMessage(event.target.value); setPreview(null); setPreviewOpen(false); }}
-            placeholder={task ? "说说怎么改" : "想做什么视频？"}
-            rows={2} value={message} />
-        </div>
-        <div className="home-composer__toolbar">
-          <div className="home-composer__meta">
-            <span>{modelConfigured ? "仅传文字 · 可能收费" : "尚未连接"}</span>
-            {modelConfigured ? <details><summary>服务详情</summary><p>当前服务：{model}。只发送这段话和相关文字，不发送原视频或声音。费用由服务方收取。</p></details> : <a href="/settings">去设置</a>}
-          </div>
-          <button aria-label="发送" className="composer-submit" disabled={!modelConfigured || !message.trim() || pending !== null} type="submit">
-            <ArrowUp size={17} /><span>{pending === "chat" ? "发送中" : "发送"}</span>
-          </button>
-        </div>
-      </form>
+      {modelConfigured ? <p className="home-composer__meta">当前服务：{model}。本轮只提交文字和当前页面明确选择的上下文，不上传原始素材。</p> : <a href="/settings">连接文字模型</a>}
       {error ? <p className="home-composer__error" role="alert">{error}</p> : null}
-      <div className="home-composer__footer">{task ? <><a href={`/tasks/${encodeURIComponent(task.id)}`}>打开任务</a>{undoReady ? <button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button> : null}</> : <a href="/production?new=1">手动创建</a>}</div>
+      {!materialContext ? <div className="home-composer__footer">{task ? <><a href={`/tasks/${encodeURIComponent(task.id)}`}>打开任务</a>{undoReady ? <button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button> : null}</> : <a href="/production?new=1">手动创建</a>}</div> : null}
     </div>
   );
 }

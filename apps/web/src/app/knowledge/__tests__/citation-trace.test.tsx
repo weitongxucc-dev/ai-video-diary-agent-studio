@@ -48,7 +48,7 @@ function detail(overrides: Partial<KnowledgeItemDetail> = {}): KnowledgeItemDeta
   return {
     id: "ki-one", workspace_id: "workspace-one", content_type: "file", title: "设备说明书",
     body: "当前版正文：先通电。", file_reference: "/manual.pdf", authorization: "内部使用",
-    ownership: "我的内容", source_item_id: "source-one", version: "3", content_hash: "hash-v3",
+    ownership: "我的内容", source_item_id: "source-one", version: "3", use_state: "available", content_hash: "hash-v3",
     sections: [{ locator: "第3段", title: "新版", text: "当前版第3段" }],
     parameters: [{ key: "净重", value: "700", unit: "g", locator: "第3段" }],
     fetched_at: null, source_url: null, created_at: "2026-10-03T00:00:00Z",
@@ -115,7 +115,8 @@ describe("文案引用回查", () => {
   it("shows the fixed cited version facts and the unbound locator state on the row", async () => {
     // 摘要行直接显示服务端按引用版本回填的事实；没有绑定定位时明说未绑定。
     await openEntry([source({ cited_source_url: "https://example.test/v2", cited_fetched_at: "2026-10-02T08:00:00Z" })]);
-    const row = screen.getByText(/knowledge:ki-one:2 · 设备说明书/).parentElement!;
+    const row = screen.getByText(/设备说明书 · 2/).closest("li")!;
+    expect(within(row).getByText("引用记录：knowledge:ki-one:2")).not.toBeVisible();
     expect(within(row).getByText(/引用版本 2 · 指纹 hash-v2/)).toBeInTheDocument();
     expect(within(row).getByText(/抓取于/)).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "该版原始来源" })).toHaveAttribute("href", "https://example.test/v2");

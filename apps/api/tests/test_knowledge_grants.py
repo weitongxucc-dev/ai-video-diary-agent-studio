@@ -56,6 +56,13 @@ def test_grant_survives_reopen_and_revoke_blocks_reads_and_fixed_references(tmp_
     referenced = repo.get_knowledge_reference_readable_by("workspace-b", item.id, "1", user_id=reader.member_id)
     assert referenced.body == fixed.body and referenced.workspace_id == "workspace-a"
     assert referenced.owner_user_id == uploader.member_id
+    repo.set_knowledge_item_use_state("workspace-a", item.id, "excluded")
+    assert repo.list_knowledge_items_readable_by("workspace-b", user_id=reader.member_id) == []
+    with pytest.raises(KeyError):
+        repo.get_knowledge_reference_readable_by(
+            "workspace-b", item.id, "1", user_id=reader.member_id
+        )
+    repo.set_knowledge_item_use_state("workspace-a", item.id, "available")
     with pytest.raises(KeyError):
         repo.get_knowledge_item_readable_by("workspace-c", item.id, user_id=reader.member_id)
     revoked = repo.revoke_knowledge_grant("workspace-a", item.id, grant.id, user_id=uploader.member_id)

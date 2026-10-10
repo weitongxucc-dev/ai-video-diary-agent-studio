@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeItem } from "@/lib/source-api";
+import type { ScriptLibraryEntry } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
   getKnowledgeGrants: vi.fn(),
@@ -13,6 +15,8 @@ const api = vi.hoisted(() => ({
   sourceErrorMessage: vi.fn(),
   findCitedVersion: vi.fn(),
   parseKnowledgeReferenceId: vi.fn(),
+  listScriptLibraryEntries: vi.fn(),
+  getScriptLibrarySources: vi.fn(),
 }));
 vi.mock("@/lib/source-api", () => ({
   listKnowledgeItems: api.listKnowledgeItems,
@@ -25,7 +29,8 @@ vi.mock("@/lib/source-api", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
-  listScriptLibraryEntries: vi.fn().mockResolvedValue({ items: [], total_count: 0 }),
+  listScriptLibraryEntries: api.listScriptLibraryEntries,
+  getScriptLibrarySources: api.getScriptLibrarySources,
   getKnowledgeGrants: api.getKnowledgeGrants,
   grantKnowledgeToWorkspace: api.grantKnowledgeToWorkspace,
   revokeKnowledgeGrant: api.revokeKnowledgeGrant,
@@ -40,14 +45,22 @@ const item: KnowledgeItem = {
   id: "knowledge-one", workspace_id: "workspace-one", content_type: "file",
   title: "设备说明书", body: "设备运行前请先检查电源。",
   file_reference: "/local/reference/manual.pdf", authorization: "内部使用",
-  ownership: "当前工作区", source_item_id: "source-one", version: "v2",
+  ownership: "当前工作区", source_item_id: "source-one", version: "v2", use_state: "available",
   visibility: "private",
   content_hash: null, sections: [], parameters: [],
   fetched_at: null, source_url: null,
   created_at: "2026-09-27T08:00:00Z",
 };
+const scriptEntry: ScriptLibraryEntry = {
+  id: "script-entry-one", name: "已确认文案", category: "产品介绍", version: 2,
+  supersedes_entry_id: null, source_script_id: "script-one", source_task_id: "task-one",
+  source_run_id: "run-one", source_topic_id: "topic-one", title: "产品记录",
+  language: "zh-CN", sections: [{ id: "section-one", title: "开场", content: "先讲产品用途。", visual_prompt: "", reference_ids: [] }],
+  created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z",
+};
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
+  window.history.replaceState({}, "", "/knowledge");
   api.getKnowledgeGrants.mockResolvedValue({
     can_manage: true, source_workspace_id: "workspace-one", access_via_grant: false,
     target_resolution: "resolved", target_resolution_message: "隔离UI响应示例", cross_workspace_status: "AVAILABLE",
@@ -57,25 +70,32 @@ beforeEach(() => {
   api.getKnowledgeItem.mockRejectedValue(new Error("detail read failed"));
   api.sourceErrorMessage.mockReturnValue("请求失败：502");
   api.parseKnowledgeReferenceId.mockReturnValue(null);
+  api.listScriptLibraryEntries.mockResolvedValue({ items: [], total_count: 0 });
+  api.getScriptLibrarySources.mockResolvedValue([]);
 });
 describe("KnowledgePage", () => {
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
     render(<KnowledgePage />);
+    const listModes = screen.getByRole("group", { name:"资料列表显示方式" });
+    fireEvent.click(within(listModes).getByRole("button", { name:"对象列表" }));
+    expect(within(listModes).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
     expect(screen.queryByRole("heading", { name: "主题关系" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "从来源中找答案" })).not.toBeInTheDocument();
-    expect(screen.getByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).toBeInTheDocument();
-    expect(screen.getAllByText(/未分类/)).not.toHaveLength(0);
+    expect(screen.queryByText(/主题关系、参数冲突核对、任务引用、问答和来源召回尚未接入/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/用途分类尚未接入/)).not.toBeInTheDocument();
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
     expect(detail).toHaveTextContent("尚无可核对的摘要来源");
     expect(detail).toHaveTextContent("没有显式参数格式就不生成参数");
     expect(detail).toHaveTextContent("v2");
     expect(detail).toHaveTextContent("内部使用");
-    fireEvent.click(within(screen.getByRole("navigation", { name: "知识用途分类" })).getByRole("button", { name: /产品知识/ }));
-    expect(screen.getByText(/不能按文件格式推断/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看全部来源" }));
+    expect(screen.queryByRole("button", { name: /产品知识/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name:"文案库" }));
+    const scriptModes = screen.getByRole("group", { name:"文案列表显示方式" });
+    fireEvent.click(within(scriptModes).getByRole("button", { name:"对象列表" }));
+    expect(within(scriptModes).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows parsed parameters with their locators and the saved versions", async () => {
@@ -114,6 +134,9 @@ describe("KnowledgePage", () => {
     await screen.findByRole("button", { name: /设备说明书/ });
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "找不到" } });
     expect(screen.getByText("没有匹配的来源")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+    expect(screen.getByRole("textbox", { name: "查找来源" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "查找来源" }), { target: { value: "电源" } });
     expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
@@ -124,8 +147,34 @@ describe("KnowledgePage", () => {
     api.listKnowledgeItems.mockRejectedValue(new Error("offline"));
     render(<KnowledgePage />);
     expect(await screen.findByRole("alert")).toHaveTextContent("请求失败：502");
-    expect(screen.getByText(/读取失败 · 选来源查看内容/)).toBeInTheDocument();
+    expect(screen.getByText(/读取失败 · 选择资料查看正文/)).toBeInTheDocument();
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the last successful list visible when a refresh fails", async () => {
+    api.listKnowledgeItems.mockResolvedValueOnce({ items: [item], total_count: 1 }).mockRejectedValueOnce(new Error("offline"));
+    render(<KnowledgePage />);
+    expect(await screen.findByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "刷新知识库" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("上次成功读取的资料");
+    expect(screen.getByRole("button", { name: /设备说明书/ })).toBeInTheDocument();
+  });
+
+  it("ignores a late list response from the superseded mount read", async () => {
+    let resolveFirst!: (value: { items: KnowledgeItem[]; total_count: number }) => void;
+    let resolveSecond!: (value: { items: KnowledgeItem[]; total_count: number }) => void;
+    api.listKnowledgeItems
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSecond = resolve; }));
+    render(<StrictMode><KnowledgePage /></StrictMode>);
+    await waitFor(() => expect(api.listKnowledgeItems).toHaveBeenCalledTimes(2));
+    const newer = { ...item, id: "newer", title: "较新列表" };
+    const older = { ...item, id: "older", title: "迟到旧列表" };
+    await act(async () => { resolveSecond({ items: [newer], total_count: 1 }); });
+    expect(await screen.findByRole("button", { name: /较新列表/ })).toBeInTheDocument();
+    await act(async () => { resolveFirst({ items: [older], total_count: 1 }); });
+    expect(screen.getByRole("button", { name: /较新列表/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /迟到旧列表/ })).not.toBeInTheDocument();
   });
 
   it("renders correction and task-reference actions honestly while interfaces are absent", async () => {
@@ -227,14 +276,25 @@ describe("knowledge workspace grants", () => {
     const target = await screen.findByRole("combobox", { name: "目标工作空间" });
     fireEvent.change(target, { target: { value: "workspace-two" } });
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("dialog", { name: "跨空间授权确认" });
+    expect(confirmation).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(target).toHaveValue("workspace-two");
+    fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "授予读取与引用" })).toBeEnabled());
     expect(target).toHaveValue("workspace-two");
     expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     const revoke = await screen.findByRole("button", { name: "撤销授权" });
     expect(api.grantKnowledgeToWorkspace).toHaveBeenLastCalledWith(item.id, "workspace-two");
     expect(target).toHaveValue("");
     fireEvent.click(revoke);
+    expect(api.revokeKnowledgeGrant).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认撤销授权" }));
     await screen.findByText("乙的空间 · 已撤销");
     expect(api.revokeKnowledgeGrant).toHaveBeenCalledWith(item.id, "grant-one");
     expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
@@ -263,5 +323,33 @@ describe("knowledge workspace grants", () => {
     expect(screen.queryByRole("combobox", { name: "目标工作空间" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
     expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("opens the visible scripts collection and exact source-matched entry from a deep link", async () => {
+    window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("heading", { name: "已确认文案 · 版本 2" })).toBeInTheDocument();
+    expect(screen.getByText("先讲产品用途。")).toBeInTheDocument();
+    expect(api.listScriptLibraryEntries).toHaveBeenCalledWith("", "");
+  });
+
+  it.each([
+    ["source mismatch", "different-task", "文案版本与来源任务不匹配；没有打开其他版本。"],
+    ["missing entry", "task-one", "链接中的文案版本当前不可用；你仍可从列表查找其他版本。"],
+  ])("does not open another entry when a deep link has a %s", async (_case, sourceTaskId, message) => {
+    window.history.replaceState({}, "", `/knowledge?entry_id=script-entry-one&source_task_id=${sourceTaskId}`);
+    api.listScriptLibraryEntries.mockResolvedValue({
+      items: sourceTaskId === "different-task" ? [scriptEntry] : [{ ...scriptEntry, id: "sibling-entry", name: "其他文案" }],
+      total_count: 1,
+    });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("heading", { name: /版本 2/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("先讲产品用途。")).not.toBeInTheDocument();
   });
 });

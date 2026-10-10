@@ -18,7 +18,7 @@
   border: 0;
   background: transparent;
   box-shadow: none;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-1);
 }
 
@@ -44,3 +44,16 @@
   font-size: 13px;
   color: var(--text-3);
 }
+
+.structureLabel { color: var(--accent); font-size: 12px; }
+.structureStrip { color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
+.preview { margin: 8px 0 12px; padding: 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-2); }
+.preview h4 { margin: 0 0 8px; font-size: 13px; font-weight: 500; }
+.preview > p, .preview li p { margin: 6px 0; color: var(--text-2); font-size: 13px; line-height: 1.65; }
+.preview small { color: var(--text-3); font-size: 12px; }
+.preview ol { margin: 10px 0; padding-left: 20px; }
+.preview li { padding: 5px 0; font-size: 13px; }
+.preview li strong { font-weight: 500; }
+.detailFooter { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.detailFooter > span { color: var(--text-3); font-size: 12px; }
+.detailFooter a { margin: 0; }

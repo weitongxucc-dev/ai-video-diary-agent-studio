@@ -1,3 +1,4 @@
+import json
 import shutil
 import sqlite3
 import sys
@@ -38,6 +39,7 @@ from app.host_resource_probes import (
     resource_kinds,
     sample_host_capacity,
 )
+from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
@@ -69,6 +71,34 @@ def run(scheduler, argv, **options):
         max_stderr_bytes=options.pop("max_stderr_bytes", 4096),
         **options,
     )
+
+
+@pytest.fixture(params=["source", "simulated_frozen"])
+def grant_entry(request, tmp_path, monkeypatch):
+    if request.param == "source":
+        return
+    # Exercise the real fixed server entry through a standalone executable.
+    # This is a simulated frozen launcher, not a PyInstaller acceptance result.
+    import app.granted_subprocess as commands
+
+    server = Path(__file__).resolve().parents[1] / "server.py"
+    executable = tmp_path / "simulated-api-server"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import builtins, runpy, sys\n"
+        "original_import = builtins.__import__\n"
+        "def guarded_import(name, *args, **kwargs):\n"
+        "    if name == 'uvicorn' or name == 'app' or name.startswith('app.'):\n"
+        "        raise AssertionError('Grant child must not load API/recovery')\n"
+        "    return original_import(name, *args, **kwargs)\n"
+        "builtins.__import__ = guarded_import\n"
+        "sys.frozen = True\n"
+        f"runpy.run_path({str(server)!r}, run_name='__main__')\n"
+    )
+    executable.chmod(0o700)
+    monkeypatch.setattr(commands, "sys", SimpleNamespace(
+        executable=str(executable), frozen=True, platform=sys.platform,
+    ))
 
 
 def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
@@ -107,10 +137,43 @@ def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):
         tmp_path / "production.sqlite", disk_paths=(tmp_path,),
         budget=HostBudget(100, 0, 2**63, 0, 2**63, 1024, 0.02),
     )
-    assert probe.admit(SimpleNamespace(resources={"kind": "material_hash", "size_bytes": 10})) is True
-    assert probe.admit(SimpleNamespace(resources={"kind": "material_probe_meta", "size_bytes": 10})) is True
-    assert probe.admit(SimpleNamespace(resources={"kind": "creation_render", "size_bytes": 10})) is None
-    assert probe.admit(SimpleNamespace(resources={"kind": "material_hash", "size_bytes": 1025})) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 10})) is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_probe_meta", "size_bytes": 10})) is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "creation_render", "size_bytes": 10})) is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 1025})) is False
+
+
+def test_platform_publish_uses_real_size_finite_browser_deadline_and_shared_host_budget(tmp_path, monkeypatch):
+    probe = HostResourceProbe(
+        tmp_path / "isolated.sqlite", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 100, 0, 200, 1000, 4096, 0.01),
+    )
+    counters = iter((SimpleNamespace(read_bytes=10, write_bytes=20),
+                     SimpleNamespace(read_bytes=10, write_bytes=20)))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_kwargs: next(counters))
+    monkeypatch.setattr(psutil, "cpu_percent", lambda **_kwargs: 1.0)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=10000))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, "disk_usage", lambda _path: SimpleNamespace(free=10000))
+    ticks = iter((10.0, 11.0))
+    monkeypatch.setattr("app.host_resource_probes.time.monotonic", lambda: next(ticks))
+
+    resources = {"kind": "platform_publish", "size_bytes": 512,
+                 "timeout_seconds": PUBLISH_OPERATION_TIMEOUT_SECONDS,
+                 "browser_channel": "chrome"}
+    decision = probe._sample(resources)
+    assert decision.verdict is True
+    assert decision.checks["size_bytes"] == {"actual": 512, "maximum": 4096, "passed": True}
+    assert decision.checks["timeout_seconds"]["passed"] is True
+    assert decision.checks[f"disk_free_bytes:{tmp_path}"]["minimum"] == 200
+
+    too_large = probe._sample({**resources, "size_bytes": 4097})
+    assert too_large.verdict is False and too_large.reason == "declared_resources_exceed_budget"
+    too_slow = probe._sample({**resources, "timeout_seconds": PUBLISH_OPERATION_TIMEOUT_SECONDS + 0.01})
+    assert too_slow.verdict is False and too_slow.reason == "declared_resources_exceed_budget"
+    missing_deadline = probe._sample({key: value for key, value in resources.items()
+                                      if key != "timeout_seconds"})
+    assert missing_deadline.verdict is None and missing_deadline.reason == "platform_publish_timeout_invalid"
 
 
 def _render_resources():
@@ -138,15 +201,15 @@ def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_p
     unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                 budget=HostBudget(**base))
     resources = _render_resources()
-    assert unknown.admit(SimpleNamespace(resources=resources)) is None
+    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)) is None
     measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                  budget=HostBudget(**base, cpu_render=_render_budget()))
-    assert measured.admit(SimpleNamespace(resources=resources)) is True
-    assert measured.admit(SimpleNamespace(resources={**resources, "execution_mode": "gpu"})) is None
-    assert measured.admit(SimpleNamespace(resources={k: v for k, v in resources.items()
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "gpu"})) is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={k: v for k, v in resources.items()
                                                      if k != "overlay_count"})) is None
-    assert measured.admit(SimpleNamespace(resources={**resources, "duration_seconds": 2})) is False
-    assert measured.admit(SimpleNamespace(resources={**resources, "overlay_count": 5})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "duration_seconds": 2})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "overlay_count": 5})) is False
 
 
 def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
@@ -154,7 +217,109 @@ def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
                         cpu_render=_render_budget())
     probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
-    assert probe.admit(SimpleNamespace(resources=_render_resources())) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=_render_resources())) is False
+
+
+@pytest.mark.parametrize("failure", [
+    "cpu_percent", "available_memory_bytes", "swap_used_bytes",
+    "disk_free_bytes", "disk_io_bytes_per_second", "memory_unknown", None,
+])
+def test_admission_logs_same_observation_without_resampling(
+    tmp_path, monkeypatch, caplog, failure,
+):
+    import app.host_resource_probes as probes
+
+    values = {"cpu_percent": 75, "available_memory_bytes": 100,
+              "swap_used_bytes": 50, "disk_free_bytes": 200,
+              "disk_io_bytes_per_second": 100}
+    if failure in values:
+        values[failure] += -1 if failure in {"available_memory_bytes", "disk_free_bytes"} else 1
+    calls = []
+    counters = iter([SimpleNamespace(read_bytes=0, write_bytes=0),
+                     SimpleNamespace(read_bytes=values["disk_io_bytes_per_second"], write_bytes=0)])
+    def io():
+        calls.append("io")
+        return next(counters)
+    def memory():
+        calls.append("memory")
+        if failure == "memory_unknown":
+            raise OSError("fixture memory unavailable")
+        return SimpleNamespace(available=values["available_memory_bytes"])
+    ticks = iter([10.0, 11.0])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", io)
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: values["cpu_percent"])
+    monkeypatch.setattr(psutil, "virtual_memory", memory)
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=values["swap_used_bytes"]))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=values["disk_free_bytes"]))
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                              budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    observations = []
+    sample = probe._sample
+    def observe(resources):
+        observations.append(sample(resources))
+        return observations[-1]
+    monkeypatch.setattr(probe, "_sample", observe)
+    request = SimpleNamespace(id="request-admission94", resources={
+        "kind": "material_hash", "size_bytes": 10,
+        "text": "PRIVATE_USER_BODY", "api_key": "PRIVATE_KEY",
+        "token": "PRIVATE_TOKEN", "private_numeric": 8675309,
+    })
+    with caplog.at_level("WARNING", logger=probes.__name__):
+        verdict = probe.admit(request)
+    assert len(observations) == 1
+    assert calls == ["io", "io", "memory"]
+    decision = observations[0]
+    assert verdict is decision.verdict
+    if failure is None:
+        assert verdict is True
+        assert not caplog.records
+        return
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    payload = json.loads(record.args[0])
+    assert payload["request_id"] == request.id
+    assert payload["declared"] == {"size_bytes": 10}
+    assert payload["checks"] == decision.checks
+    assert payload["reason"] == decision.reason
+    assert payload["observed_interval_seconds"] == 1
+    assert "PRIVATE" not in record.getMessage()
+    assert "8675309" not in record.getMessage()
+    if failure == "memory_unknown":
+        assert verdict is None and payload["verdict"] is None
+        assert payload["reason"] == "available_memory_bytes: OSError: fixture memory unavailable"
+        assert "actual" not in payload["checks"]["available_memory_bytes"]
+    else:
+        assert verdict is False and payload["verdict"] is False
+        key = f"disk_free_bytes:{tmp_path}" if failure == "disk_free_bytes" else failure
+        check = payload["checks"][key]
+        assert check["actual"] == values[failure] and check["passed"] is False
+        boundary = "minimum" if failure in {"available_memory_bytes", "disk_free_bytes"} else "maximum"
+        assert check[boundary] == values[failure] + (1 if boundary == "minimum" else -1)
+
+
+def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monkeypatch, caplog):
+    import app.host_resource_probes as probes
+
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                              budget=HostBudget(100, 1, 50, 200, 100, 1024,
+                                                cpu_render=_render_budget()))
+    def no_host_sample(*args, **kwargs):
+        pytest.fail("Declared refusal must not sample host resources")
+    monkeypatch.setattr(psutil, "disk_io_counters", no_host_sample)
+    request = SimpleNamespace(id="request-declared94", resources={
+        **_render_resources(), "duration_seconds": 2, "text": "PRIVATE_BODY",
+    })
+    with caplog.at_level("WARNING", logger=probes.__name__):
+        assert probe.admit(request) is False
+    assert len(caplog.records) == 1
+    payload = json.loads(caplog.records[0].args[0])
+    assert payload["request_id"] == request.id
+    assert payload["reason"] == "declared_resources_exceed_budget"
+    assert payload["declared"]["duration_seconds"] == 2
+    assert payload["checks"]["render_budget"]["limits"]["max_duration_seconds"] == 1
+    assert payload["observed_interval_seconds"] is None
+    assert "PRIVATE_BODY" not in caplog.text
 
 
 def _scene_resources():
@@ -188,28 +353,60 @@ def test_scene_window_requires_calibrated_input_decode_and_hard_timeout(tmp_path
     resources = _scene_resources()
     unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                 budget=HostBudget(**base))
-    assert unknown.admit(SimpleNamespace(resources=resources)) is None
+    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)) is None
     measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                  budget=HostBudget(**base, scene_window=_scene_budget()))
-    assert measured.admit(SimpleNamespace(resources=resources)) is True
-    assert measured.admit(SimpleNamespace(resources={**resources, "source_codec": "av1"})) is None
-    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": None})) is None
-    assert measured.admit(SimpleNamespace(resources={**resources, "source_width_px": 3840})) is False
-    assert measured.admit(SimpleNamespace(resources={**resources, "source_frame_rate_fps": 240})) is False
-    assert measured.admit(SimpleNamespace(resources={**resources, "scan_seconds": 16})) is False
-    assert measured.admit(SimpleNamespace(resources={**resources, "output_max_frames": 20})) is None
-    assert measured.admit(SimpleNamespace(resources={**resources, "timeout_seconds": 20})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_codec": "av1"})) is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": None})) is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_width_px": 3840})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": 240})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "scan_seconds": 16})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "output_max_frames": 20})) is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": 20})) is False
 
 
-def test_registration_ack_precedes_real_exec(tmp_path):
+def test_registration_ack_precedes_real_exec(tmp_path, grant_entry):
     marker = tmp_path / "must-not-exist"
     scheduler = RecordingScheduler(reject_registration=True)
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         run(scheduler, [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"])
     assert not marker.exists()
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_cancel_before_or_during_registration_never_execs_marker(tmp_path):
+@pytest.mark.parametrize("revoked", [False, True])
+def test_grant_is_rechecked_after_registration_before_exec(tmp_path, grant_entry, revoked):
+    marker = tmp_path / "executed"
+
+    class CheckedScheduler(RecordingScheduler):
+        def register_child(self, grant, child):
+            assert not marker.exists()
+            super().register_child(grant, child)
+            time.sleep(0.05)
+            assert not marker.exists()
+
+        def assert_grant(self, grant):
+            super().assert_grant(grant)
+            if self.children:
+                assert not marker.exists()
+                if revoked:
+                    raise PermissionError("grant revoked before exec ACK")
+
+    scheduler = CheckedScheduler()
+    command = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
+    if revoked:
+        with pytest.raises(PermissionError, match="grant revoked"):
+            run(scheduler, command)
+        assert not marker.exists()
+    else:
+        assert run(scheduler, command).returncode == 0
+        assert marker.exists()
+    assert len(scheduler.children) == 1
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+def test_cancel_before_or_during_registration_never_execs_marker(tmp_path, grant_entry):
     marker = tmp_path / "must-not-exist"
     command = [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"]
     cancelled = threading.Event()
@@ -227,7 +424,7 @@ def test_cancel_before_or_during_registration_never_execs_marker(tmp_path):
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_cancel_after_output_eof_still_stops_live_process():
+def test_cancel_after_output_eof_still_stops_live_process(grant_entry):
     scheduler = RecordingScheduler()
     cancelled = threading.Event()
     timer = threading.Timer(0.15, cancelled.set)
@@ -244,7 +441,7 @@ def test_cancel_after_output_eof_still_stops_live_process():
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_real_command_timeout_cancel_output_limit_and_release():
+def test_real_command_timeout_cancel_output_limit_and_release(grant_entry):
     scheduler = RecordingScheduler()
     with pytest.raises(GrantedCommandTimeout):
         run(scheduler, [sys.executable, "-c", "import time; time.sleep(5)"], timeout_seconds=0.25)
@@ -261,7 +458,7 @@ def test_real_command_timeout_cancel_output_limit_and_release():
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
-def test_timeout_stops_real_grandchild_in_same_process_group():
+def test_timeout_stops_real_grandchild_in_same_process_group(grant_entry):
     scheduler = RecordingScheduler()
     spawn = ("import subprocess,sys,time; "
              "subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)']); "
@@ -684,11 +881,11 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                  "text_chars": 80, "section_count": 1, "reference_bytes": 1048576,
                  "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
-    assert probe.admit(SimpleNamespace(resources=resources)) is True
-    assert probe.admit(SimpleNamespace(resources={**resources, "text_chars": 81})) is False
-    assert probe.admit(SimpleNamespace(resources={**resources, "reference_bytes": 1048577})) is False
-    assert probe.admit(SimpleNamespace(resources={**resources, "execution_mode": "in_process"})) is None
-    assert probe.admit(SimpleNamespace(resources={**resources, "timeout_seconds": None})) is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "text_chars": 81})) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "reference_bytes": 1048577})) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "in_process"})) is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": None})) is None
     assert reads == ["cpu"]  # Declared rejection never becomes a ready host resample.
 
 
@@ -827,3 +1024,112 @@ def test_narration_admission_requires_complete_window_without_blocking(tmp_path,
         assert probe._sample(resources).reason == "io_window_incomplete"
     assert probe._sample(resources).verdict is True
     assert intervals == [0.1] * 6  # A 30s backoff must require a new complete 3s observation.
+
+
+def test_presenter_probe_keeps_dedicated_caps_unknown_and_measured_floor(tmp_path, monkeypatch):
+    import app.host_resource_probes as probes
+    from app.host_resource_probes import PresenterBudget
+    presenter = PresenterBudget(1, 1024, 15, 4096, 1, 5, 8192, 8, .1, 8192, 4096)
+    resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
+        "section_count": 1, "input_bytes": 1024, "duration_seconds": 15,
+        "max_output_bytes": 4096, "threads": 1, "timeout_seconds": 5}
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=HostBudget(75, 100, 50, 200, 100, 1024))
+    assert probe._sample(resources).reason == "stage_budget_unavailable"
+    probe.budget = replace(probe.budget, presenter=presenter)
+    over = probe._sample({**resources, "input_bytes": 1025})
+    assert over.verdict is False and over.checks["input_bytes"] == {"actual": 1025, "maximum": 1024, "passed": False}
+    assert probe._sample({**resources, "duration_seconds": None}).verdict is None
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: 75)
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **kwargs: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=100+8192))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=50))
+    monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=200+4096+4096))
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **kwargs: [])
+    ticks = iter([10., 13.])
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    decision = probe._sample(resources)
+    assert decision.verdict is True
+    assert decision.checks["available_memory_bytes"]["minimum"] == 100+8192
+    assert decision.checks[f"disk_free_bytes:{tmp_path}"]["minimum"] == 200+4096+4096
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **kwargs: None)
+    unknown = probe._sample(resources)
+    assert unknown.verdict is None and unknown.reason == "disk_io_before_unavailable"
+    # A calibrated pure-material budget never stands in for the presenter combination budget.
+    composition = {"kind": "creation_presenter_render", "execution_mode": "cpu_ffmpeg"}
+    assert probe._sample(composition).reason == "render_budget_or_execution_mode_unavailable"
+
+
+@pytest.mark.parametrize("unit_key", ["person_render:input", "person_edit:input"])
+def test_person_model_child_rejects_non_host_probe_before_exec(tmp_path, unit_key):
+    grant = Grant("request", "local", "creation_job", "job", unit_key, "digest", 1, 1, "token", tmp_path / "db")
+    scheduler = RecordingScheduler()
+    scheduler.assert_grant = lambda current: None
+    scheduler.resources = SimpleNamespace(scene_runtime_limits=lambda grant: None)
+    marker = tmp_path / "must-not-exec"
+    from app.device_scheduler import RecoveryBlocked
+    with pytest.raises(RecoveryBlocked, match="真实资源探针"):
+        run_granted_command(scheduler, grant, [sys.executable, "-c", f"open({str(marker)!r},'w').close()"],
+            timeout_seconds=1, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert not marker.exists() and not scheduler.children
+
+
+@pytest.mark.parametrize("unit_key", ["voice:input", "avatar_lipsync:input"])
+def test_media_preview_child_requires_real_probe_and_declared_budget(tmp_path, unit_key):
+    from app.device_scheduler import RecoveryBlocked
+    grant = Grant("preview-request", "local", "media_preview", "preview", unit_key,
+                  "digest", 1, 1, "token", tmp_path / "db")
+    scheduler = RecordingScheduler()
+    scheduler.assert_grant = lambda current: None
+    scheduler.resources = SimpleNamespace(scene_runtime_limits=lambda current: None)
+    marker = tmp_path / "must-not-exec"
+    with pytest.raises(RecoveryBlocked, match="真实资源探针"):
+        run_granted_command(scheduler, grant, [sys.executable, "-c", f"open({str(marker)!r},'w').close()"],
+                            timeout_seconds=1, max_stdout_bytes=100, max_stderr_bytes=100)
+    assert not marker.exists() and not scheduler.children
+
+
+@pytest.mark.parametrize("scenario", ["allowed", "register_refused", "cancel_before_exec", "revoked", "resource_limit", "timeout"])
+def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeypatch, scenario):
+    """Real POSIX children, controlled resource facts; no host capacity sampling/model."""
+    from app.host_resource_probes import SceneRuntimeLimits
+    import app.granted_subprocess as commands
+    grant = Grant("preview-request", "local", "media_preview", "preview", "voice:input",
+                  "digest", 1, 1, "token", tmp_path / "db")
+    cancel = threading.Event()
+    class PreviewScheduler(RecordingScheduler):
+        samples = 0
+        def assert_grant(self, current):
+            assert current == grant
+            self.samples += 1
+            if scenario == "revoked" and self.samples >= 4:
+                raise GrantedCommandCancelled("synthetic permit revoked")
+        def register_child(self, current, child):
+            self.assert_grant(current)
+            if scenario == "register_refused":
+                raise PermissionError("synthetic child registration refused")
+            self.children.append(child)
+            if scenario == "cancel_before_exec":
+                cancel.set()
+    scheduler = PreviewScheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+                                            budget=HostBudget(100,1,2**63,1,2**63,1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current: SceneRuntimeLimits(10**9,16,1,2**63,0.05))
+    def controlled_sample(*args):
+        if scenario == "resource_limit":
+            raise GrantedCommandResourceUnavailable("synthetic resource sample limit")
+    monkeypatch.setattr(commands, "_check_scene_runtime", controlled_sample)
+    marker = tmp_path / "executed"
+    argv = [sys.executable, "-c", f"import time;open({str(marker)!r},'w').write('allowed');time.sleep({0 if scenario=='allowed' else 2})"]
+    expected = {"register_refused":PermissionError,"cancel_before_exec":GrantedCommandCancelled,
+                "revoked":GrantedCommandCancelled,"resource_limit":GrantedCommandResourceUnavailable,"timeout":GrantedCommandTimeout}
+    if scenario == "allowed":
+        assert run_granted_command(scheduler,grant,argv,timeout_seconds=1,max_stdout_bytes=100,max_stderr_bytes=100,cancel_event=cancel).returncode==0
+        assert marker.read_text()=="allowed" and len(scheduler.children)==1
+    else:
+        with pytest.raises(expected[scenario]) as refusal:
+            run_granted_command(scheduler,grant,argv,timeout_seconds=0.3,max_stdout_bytes=100,max_stderr_bytes=100,cancel_event=cancel)
+        assert refusal.value.command_diagnostics["group_released"] is True
+        if scenario in {"register_refused","cancel_before_exec"}:
+            assert refusal.value.command_diagnostics["exec_ack"] is False
+            assert not marker.exists()
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True

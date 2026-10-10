@@ -1,57 +1,73 @@
-"""平台发布浏览器自动化基座：按平台适配器，公共流程收在 base。
+"""Browser-driven platform publishing contracts.
 
-「留路不堵死」：save_draft 本轮实现（结构到位），publish 本轮只留桩、显式抛错。
-真实平台执行需要已登录浏览器 + 真实账号，本包不真跑（红线：不许用真实平台账号验证）；
-所有真实 URL/选择器标注「未验证」，逻辑用单元测试 + mock driver 验证。
+The driver is attached to one isolated, persistent Chromium profile per member,
+workspace and platform. Platform selectors remain explicitly unverified until
+an independently authorized real account acceptance confirms them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 
-class PublishNotAvailable(RuntimeError):
-    """发布 action 未开放（本轮只留桩）。"""
+# The DeviceRuntime resource contract and the complete browser operation share
+# one finite wall-clock cap. This is an operational deadline, not a measured
+# Chrome memory or CPU calibration.
+PUBLISH_OPERATION_TIMEOUT_SECONDS = 30.0
 
-    def __init__(self) -> None:
-        super().__init__("发布功能未开放，需用户授权后开启")
+
+class BrowserUnavailable(RuntimeError):
+    """The configured browser/profile cannot be opened or used."""
+
+
+class LoginRequired(RuntimeError):
+    """No current, observable signed-in account was found."""
+
+
+class HumanInterventionRequired(RuntimeError):
+    """The page requires a user to resolve a challenge or risk check."""
+
+
+class PublishOutcomeUnknown(RuntimeError):
+    """Submission may have reached the platform, but no receipt was observed."""
 
 
 @dataclass(frozen=True)
 class LoginState:
     logged_in: bool
     platform: str
+    account_ref: str | None = None
     detail: str = ""
 
 
 @dataclass(frozen=True)
 class UploadHandle:
     platform: str
-    ref: str
-
-
-@dataclass(frozen=True)
-class DraftRef:
-    platform: str
-    draft_id: str
-    mocked: bool  # 真实平台未跑时必为 True，绝不冒充「已打通平台」
+    file_name: str
 
 
 @dataclass(frozen=True)
 class PublishConfirm:
+    """Exact user-confirmed content; callers construct only after confirmation."""
+
+    account_ref: str
     title: str
     description: str
-    topics: tuple[str, ...] = ()
+    topics: tuple[str, ...]
+    content_digest: str
+    confirmed: bool
 
 
 @dataclass(frozen=True)
 class PublishRef:
     platform: str
     publish_id: str
+    account_ref: str
+    response_text: str
 
 
-# 风控 / 验证码 / 频控 → 一律「需人工介入」，不绕过。
 _INTERVENTION_KINDS = {"captcha", "risk_control", "rate_limit"}
 
 
@@ -60,8 +76,6 @@ def needs_human_intervention(kind: str) -> bool:
 
 
 class BrowserDriver(Protocol):
-    """真实浏览器驱动（Playwright/CDP）的最小接口。真跑时由已登录 profile 注入。"""
-
     async def goto(self, url: str) -> None: ...
     async def upload(self, selector: str, path: str) -> None: ...
     async def fill(self, selector: str, value: str) -> None: ...
@@ -74,74 +88,68 @@ class PlatformAdapter(Protocol):
     platform: str
 
     async def login(self) -> LoginState: ...
-    async def upload_video(self, path: str) -> UploadHandle: ...
-    async def fill_copywriting(self, title: str, desc: str, topics: tuple[str, ...]) -> None: ...
-    async def save_draft(self) -> DraftRef: ...          # 本轮实现（结构到位）
-    async def publish(self, confirm: PublishConfirm) -> PublishRef: ...  # 本轮只留桩
+    async def publish(self, confirm: PublishConfirm, video_path: str,
+                      before_submit: Callable[[], None]) -> PublishRef: ...
 
 
 class BaseBrowserAdapter:
-    """公共流程：拿登录态、传文件、错误分类；平台差异在子类常量/选择器。"""
-
-    platform: str = ""
-    # 真实 URL / 选择器——全部「未验证」，需真实账号核实后替换。
-    publish_url: str = ""
-    upload_selector: str = ""
-    title_selector: str = ""
-    desc_selector: str = ""
-    topics_selector: str = ""
-    draft_button_selector: str = ""
-    # 登录态证据元素：已登录才有的元素（用户名/头像）；空 = 无证据可判 → logged_in=False
-    login_evidence_selector: str = ""
+    platform = ""
+    publish_url = ""
+    upload_selector = ""
+    title_selector = ""
+    desc_selector = ""
+    topics_selector = ""
+    login_evidence_selector = ""
+    account_identity_selector = ""
+    submit_selector = ""
+    publish_success_selector = ""
+    published_id_selector = ""
+    publish_success_text = ""
 
     def __init__(self, driver: BrowserDriver | None = None) -> None:
         self._driver = driver
 
     def _require_driver(self) -> BrowserDriver:
         if self._driver is None:
-            raise RuntimeError("未接入真实浏览器会话（需已登录账号），无法执行")
+            raise BrowserUnavailable("没有为此成员和平台打开独立浏览器会话")
         return self._driver
 
     async def login(self) -> LoginState:
-        # 不许默认 True：真去读登录态证据；判不出来就 logged_in=False，不冒充已登录。
-        if self._driver is None:
-            return LoginState(
-                logged_in=False, platform=self.platform, detail="无浏览器驱动，无法判定登录态"
-            )
-        await self._driver.goto(self.publish_url)
-        evidence = ""
-        if self.login_evidence_selector:
-            try:
-                evidence = (await self._driver.read_text(self.login_evidence_selector)).strip()
-            except Exception:
-                evidence = ""
-        if evidence:
-            return LoginState(
-                logged_in=True, platform=self.platform, detail=f"已登录：{evidence}"
-            )
-        return LoginState(
-            logged_in=False, platform=self.platform, detail="无法判定登录态（无已登录证据）"
-        )
-
-    async def upload_video(self, path: str) -> UploadHandle:
         driver = self._require_driver()
-        await driver.upload(self.upload_selector, path)
-        return UploadHandle(platform=self.platform, ref=path)
+        await driver.goto(self.publish_url)
+        evidence = (await driver.read_text(self.login_evidence_selector)).strip()
+        account_ref = (await driver.read_text(self.account_identity_selector)).strip()
+        if not evidence or not account_ref:
+            return LoginState(False, self.platform, detail="未读到可验证的登录账号信息")
+        return LoginState(True, self.platform, account_ref=account_ref, detail="已读到当前页面账号身份")
 
-    async def fill_copywriting(self, title: str, desc: str, topics: tuple[str, ...]) -> None:
+    async def publish(self, confirm: PublishConfirm, video_path: str,
+                      before_submit: Callable[[], None] = lambda: None) -> PublishRef:
+        if not confirm.confirmed:
+            raise PermissionError("发布内容尚未得到明确确认")
+        if not confirm.account_ref or not confirm.content_digest:
+            raise ValueError("缺少已确认账号或成片摘要")
         driver = self._require_driver()
-        await driver.fill(self.title_selector, title)
-        await driver.fill(self.desc_selector, desc)
-        if topics:
-            await driver.fill(self.topics_selector, " ".join(topics))
+        state = await self.login()
+        if not state.logged_in:
+            raise LoginRequired(state.detail)
+        if state.account_ref != confirm.account_ref:
+            raise LoginRequired("当前浏览器登录账号已变化，请重新确认目标账号")
 
-    async def save_draft(self) -> DraftRef:
-        # 本轮实现到「点保存草稿」为止；真实平台未跑，draft_id 只能是 mock 占位。
-        driver = self._require_driver()
-        await driver.click(self.draft_button_selector)
-        draft_id = await driver.read_text(self.draft_button_selector)
-        return DraftRef(platform=self.platform, draft_id=f"mock:{self.platform}:{draft_id or 'draft'}", mocked=True)
+        # Only interact after all caller-confirmed data is present and the current
+        # browser identity matches that confirmation. Selectors are platform-owned.
+        await driver.upload(self.upload_selector, video_path)
+        await driver.fill(self.title_selector, confirm.title)
+        await driver.fill(self.desc_selector, confirm.description)
+        if confirm.topics:
+            await driver.fill(self.topics_selector, " ".join(f"#{topic}" for topic in confirm.topics))
+        before_submit()
+        await driver.click(self.submit_selector)
+        success = (await driver.read_text(self.publish_success_selector)).strip()
+        receipt = (await driver.read_text(self.published_id_selector)).strip()
+        if not self.is_success_receipt(success, receipt):
+            raise PublishOutcomeUnknown("提交动作已触发，但成功状态或平台编号未同时核实；不得自动重发")
+        return PublishRef(self.platform, receipt, confirm.account_ref, "页面回执已读取")
 
-    async def publish(self, confirm: PublishConfirm) -> PublishRef:
-        # 发布本轮不实现，但位置留出：将来真发 = 填这个方法 + 加人工确认，不是重写。
-        raise PublishNotAvailable()
+    def is_success_receipt(self, success_text: str, platform_id: str) -> bool:
+        return False

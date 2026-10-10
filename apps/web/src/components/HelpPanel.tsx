@@ -1,6 +1,7 @@
 "use client";
+import { HomeCardDialog } from "./HomeCardDialog";
 
-import { CircleHelp, X } from "lucide-react";
+import { CircleHelp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
@@ -21,7 +22,7 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
     match: (path) => path === "/" || path === "",
     content: {
       title: "从一个制作目标开始",
-      intro: "首页只负责检查条件并创建任务，不会在你确认前直接运行模型。",
+      intro: "在首页描述制作目标，检查实际条件后进入任务；生成与保存分别显示真实结果。",
       steps: ["写下想制作的内容", "检查资料、素材、声音和模型", "确认方案后进入创作任务"],
     },
   },
@@ -29,8 +30,8 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
     match: (path) => path.startsWith("/library"),
     content: {
       title: "管理可进入成片的素材",
-      intro: "素材必须经过用途、版权和品牌安全审核，才能被任务自动选用。",
-      steps: ["扫描素材目录或搜索文件", "在右侧预览识别片段", "批准用途、排除素材或补充自己的标签"],
+      intro: "导入或选择到当前工作区的素材默认可用于创作；你主动设置的使用限制会被任务遵守。",
+      steps: ["扫描素材目录或搜索文件", "在右侧预览片段、查看来源与版本", "补充标签，按需标记仅参考、不使用、不用于自动任务或不用于发布"],
     },
   },
   {
@@ -38,15 +39,15 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
     content: {
       title: "区分已有内容与外部信息",
       intro: "知识库保存你已经拥有的内容；信息源负责从外部获取候选内容。",
-      steps: ["在知识库搜索或添加已有内容", "在信息源配置连接和获取规则", "确认授权后再保存到知识库或素材库"],
+      steps: ["在知识库搜索或添加已有内容", "在信息源配置连接和获取规则", "保存内容并保留来源与版本，按需设置使用限制；外发和发布另行确认"],
     },
   },
   {
     match: (path) => path.startsWith("/profiles"),
     content: {
-      title: "建立可执行的人物与声音版本",
-      intro: "人物、声音和授权分别版本化；缺少真实模型或授权时不会生成占位结果。",
-      steps: ["从已审核素材创建人物或导入声音 WAV", "登记参考文字与授权证据", "确认模型状态后生成配音或口型预览"],
+      title: "保存人物与声音参考",
+      intro: "人物和声音分别保存版本，声音可独立登记；保存参考与生成预览是两个动作，缺少模型只影响生成。",
+      steps: ["选择人物参考，或独立导入支持的音频与视频声音片段", "填写名称和参考文字，查看原始参考并按需设置使用限制", "检查真实模型与发送范围，再生成配音或口型预览；保存参考不代表已经克隆"],
     },
   },
   {
@@ -60,9 +61,9 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
   {
     match: (path) => path.startsWith("/tasks/"),
     content: {
-      title: "按确认点推进一条成片",
-      intro: "每个阶段只保留一个主要动作；生成结果先检查，再由你确认推进。",
-      steps: ["确认选题和文案", "生成授权配音并检查故事板", "渲染、播放并通过原生对话框保存成片"],
+      title: "按阶段完成一条成片",
+      intro: "每个阶段只保留一个主要动作；编辑保存到草稿，生成、检查和保存分别看真实结果。",
+      steps: ["确认选题和文案", "选择可用声音生成配音并检查故事板", "渲染、播放并通过原生对话框保存成片；平台发布另行确认"],
     },
   },
   {
@@ -85,7 +86,7 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
     match: (path) => path.startsWith("/settings") || path.startsWith("/health"),
     content: {
       title: "修复运行条件",
-      intro: "模型、目录、授权和本地服务都必须显示真实状态与可执行修复动作。",
+      intro: "模型、目录和本地服务显示真实状态与可执行修复动作；内容外发有独立的范围说明。",
       steps: ["定位需要处理的能力", "进入对应设置完成配置", "重新检查后回到原任务继续"],
     },
   },
@@ -114,10 +115,7 @@ export function HelpPanel() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && open) {
-        event.preventDefault();
-        closeHelpPanel();
-      } else if (event.key === "?" && !isEditable(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key === "?" && !isEditable(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         toggleHelpPanel();
       }
@@ -129,20 +127,18 @@ export function HelpPanel() {
   if (!open) return null;
 
   return (
-    <div className="help-panel" role="presentation">
-      <button aria-label="关闭帮助" className="help-panel-backdrop" onClick={closeHelpPanel} type="button" />
-      <aside aria-label="应用帮助" className="help-panel-card" role="complementary">
+    <HomeCardDialog kind="detail" title="应用帮助" onClose={closeHelpPanel}>
+      <aside aria-label="应用帮助" className="help-panel-content" role="complementary">
         <header className="help-panel-head">
           <span className="help-panel-icon-frame" aria-hidden="true"><CircleHelp size={19} /></span>
-          <div><h2>{help.title}</h2><p>{help.intro}</p></div>
-          <button aria-label="关闭帮助" className="shell-icon-button" onClick={closeHelpPanel} type="button"><X size={16} /></button>
+          <div><h3>{help.title}</h3><p>{help.intro}</p></div>
         </header>
         <ol className="help-panel-steps">
           {help.steps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}
         </ol>
         <footer><kbd>?</kbd> 打开帮助 <span>·</span> <kbd>Esc</kbd> 关闭</footer>
       </aside>
-    </div>
+    </HomeCardDialog>
   );
 }
 

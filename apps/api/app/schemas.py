@@ -43,7 +43,7 @@ def validate_logical_media_reference(
         raise ValueError(f"{field} must use {allowed} logical reference")
     if parsed.query or parsed.fragment or "@" in parsed.netloc or ":" in parsed.netloc:
         raise ValueError(f"{field} must not contain authority, query, or fragment")
-    components = [parsed.netloc, *parsed.path.lstrip("/").split("/")]
+    components = [parsed.netloc, *(parsed.path.lstrip("/").split("/") if parsed.path else [])]
     if any(not component for component in components):
         raise ValueError(f"{field} must contain a relative path")
     for component in components:
@@ -291,6 +291,8 @@ class ProductionProfileResponse(BaseModel):
     use_hermes: bool
     factuality_gate_enabled: bool
     cloud_enhancement_enabled: bool
+    default_voice_profile_id: str | None = None
+    default_voice_version: str | None = None
     updated_at: datetime
 
 
@@ -829,6 +831,11 @@ class ProductionBatchesResponse(BaseModel):
     total_count: int
 
 
+class PlanProfileReference(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
 class CreationPlanDefaultsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -840,6 +847,8 @@ class CreationPlanDefaultsRequest(BaseModel):
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 20
     lipsync_quality: Literal["high", "fast"] = "high"
+    selected_voice: PlanProfileReference | None = None
+    selected_person: PlanProfileReference | None = None
     template_id: str | None = Field(default=None, min_length=1, max_length=120)
     template_version: int | None = Field(default=None, ge=1)
 
@@ -866,8 +875,17 @@ class CreationPlanPreviewRequest(CreationPlanDefaultsRequest):
     pass
 
 
+class AssistantReplyPlanOriginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    turn_id: UUID
+    request_id: UUID
+
+
 class CreationPlanConfirmRequest(CreationPlanDefaultsRequest):
     preflight_fingerprint: str = Field(min_length=64, max_length=64)
+    reply_origin: AssistantReplyPlanOriginRequest | None = None
 
 
 class CreationPlanKnowledgeReferenceResponse(BaseModel):
@@ -1082,6 +1100,39 @@ class CreationTaskScriptConfirmRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sections: list[CreationTaskScriptSectionRequest] = Field(min_length=1, max_length=20)
 
+    expected_updated_at: datetime
+
+
+class CreationTaskScriptDraftSectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=4000)
+    visual_prompt: str = Field(default="", max_length=1000)
+    evidence_reference_ids: list[str] = Field(default_factory=list, max_length=12)
+
+
+class CreationTaskScriptDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(min_length=1, max_length=20)
+    expected_updated_at: datetime | None = None
+
+
+class AssistantReplyScriptTransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    turn_id: UUID
+    request_id: UUID
+    plan_conversion_request_id: UUID | None = None
+    expected_plan_updated_at: datetime
+    expected_task_updated_at: datetime
+    replace_existing_script_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_script_updated_at: datetime | None = None
+
 
 class CreationTaskScriptSectionResponse(BaseModel):
     id: str
@@ -1116,6 +1167,7 @@ class CreationTaskScriptResponse(BaseModel):
     updated_at: datetime
     confirmed_at: datetime | None
     reused_from_entry_id: str | None = None
+    source_reply_reference: dict[str, str] | None = None
 
 
 class CreationTaskScriptsResponse(BaseModel):
@@ -1133,11 +1185,15 @@ class CreationTaskNarrationSegmentResponse(BaseModel):
     audio_url: str | None
     duration_seconds: float | None = Field(default=None, gt=0)
     sample_rate: int | None = Field(default=None, gt=0)
-    model_id: str
-    voice_profile_id: str
-    voice_version: str
+    model_id: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
     language: Literal["zh", "en", "zh-en"]
     status: Literal["pending", "ready", "generating", "failed"]
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
 
 
 class CreationTaskNarrationResponse(BaseModel):
@@ -1145,9 +1201,13 @@ class CreationTaskNarrationResponse(BaseModel):
     script_id: str
     audio_reference: str
     duration_seconds: float = Field(gt=0)
-    sample_rate: int = Field(gt=0)
-    model_id: str
-    voice_profile_id: str
+    sample_rate: int | None = Field(default=None, gt=0)
+    model_id: str | None
+    voice_profile_id: str | None
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
     language: Literal["zh", "en", "zh-en"]
     pronunciation_version: str
     segments: list[CreationTaskNarrationSegmentResponse]
@@ -1158,6 +1218,14 @@ class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
 
     voice_profile_id: str = Field(min_length=1, max_length=120)
     voice_version: str = Field(min_length=1, max_length=120)
+
+
+class CreationTaskRecordingAdoptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: str = Field(min_length=1, max_length=120)
+    source_section_id: str = Field(min_length=1, max_length=120)
+    source_ref: str = Field(min_length=1, max_length=240)
 
 
 class CreationTaskPersonRenderRequest(BaseModel):
@@ -1550,10 +1618,85 @@ class CreationTaskEditPreviewResponse(BaseModel):
     proposal: EditProposalResponse
 
 
+class AssistantConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_kind: Literal["home", "material", "task"]
+    scope_id: str = Field(min_length=1, max_length=240)
+    title: str = Field(default="新对话", min_length=1, max_length=80)
+
+
+class AssistantConversationCurrentRequest(AssistantConversationCreateRequest):
+    pass
+
+
+class AssistantConversationUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    draft_text: str | None = Field(default=None, max_length=4000)
+    expected_draft_version: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def require_draft_version(self):
+        if self.draft_text is not None and self.expected_draft_version is None:
+            raise ValueError("保存草稿必须提供expected_draft_version")
+        return self
+
+
+class AssistantConversationDraftRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_request_id: UUID
+    user_message: str = Field(min_length=2, max_length=4000)
+    expected_draft_version: int = Field(ge=0)
+
+
+class AssistantConversationTurnResponse(BaseModel):
+    id: UUID
+    sequence: int
+    user_message: str
+    assistant_text: str
+    status: Literal["running", "completed", "failed", "stopped"]
+    events: list[dict[str, object]]
+    result: dict[str, object] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssistantConversationResponse(BaseModel):
+    id: UUID
+    workspace_id: str
+    scope_kind: Literal["home", "material", "task"]
+    scope_id: str
+    title: str
+    draft_text: str
+    draft_version: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+    turns: list[AssistantConversationTurnResponse] = Field(default_factory=list)
+
+
+class AssistantConversationDraftRestoreResponse(BaseModel):
+    status: Literal["restored", "already_recovered", "already_persisted"]
+    conversation: AssistantConversationResponse
+
+
+class AssistantConversationListResponse(BaseModel):
+    items: list[AssistantConversationResponse]
+
+
+class AssistantConversationStopRequest(BaseModel):
+    turn_id: UUID
+
+
 class CreationTaskAssistantTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    conversation_id: UUID
     message: str = Field(min_length=2, max_length=1000)
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
     context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
@@ -1565,6 +1708,12 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     model: str
     edit_preview: CreationTaskEditPreviewResponse | None = None
     script_draft: CreationTaskScriptResponse | None = None
+    execution_action: Literal["start", "resume", "cancel"] | None = None
+    execution_status: dict[str, object] | None = None
+    topic_candidates: CreationTaskTopicsResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
 
 
 class CreationTaskAssistantHistoryEntry(BaseModel):
@@ -1634,6 +1783,12 @@ class CreationTaskEditConfirmResponse(BaseModel):
     narration: CreationTaskNarrationResponse | None = None
 
 
+class CreationTaskEditQueuedResponse(BaseModel):
+    status: Literal["queued"] = "queued"
+    job_id: str
+    request_id: str
+
+
 class CreationPlanPreviewResponse(BaseModel):
     template_id: str | None = None
     template_version: int | None = None
@@ -1648,6 +1803,7 @@ class CreationPlanPreviewResponse(BaseModel):
     lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]
+    selected_person: PlanProfileReference | None = None
     selected_voice: CreationPlanVoiceReferenceResponse | None
     pronunciation_references: list[CreationPlanPronunciationReferenceResponse]
     approved_asset_count: int = Field(ge=0)
@@ -1666,6 +1822,8 @@ class WorkspaceAssistantPlanTurnRequest(BaseModel):
 
     message: str = Field(min_length=2, max_length=1000)
     conversation_id: UUID
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
 
 
 class WorkspaceAssistantPlanTurnResponse(BaseModel):
@@ -1673,6 +1831,73 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     provider: str
     model: str
     plan_preview: CreationPlanPreviewResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["running", "completed", "stopped"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
+
+
+class MaterialAssistantSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["asset", "segment"]
+    asset_id: str = Field(min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.scope == "segment" and self.segment_id is None:
+            raise ValueError("片段范围需要明确片段")
+        if self.scope == "asset" and self.segment_id is not None:
+            raise ValueError("整条素材范围不能带片段")
+        return self
+
+
+class MaterialAssistantTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=2, max_length=1000)
+    conversation_id: UUID
+    client_request_id: UUID
+    expected_draft_version: int = Field(ge=0)
+    selection: MaterialAssistantSelectionRequest | None = None
+
+
+class MaterialAssistantResultResponse(BaseModel):
+    scope: Literal["asset", "segment"]
+    asset_ref: str
+    segment_ref: str | None = None
+    user_tags: list[str]
+    system_tags: list[str] | None = None
+    action: Literal["replace", "add", "remove"] | None = None
+    changed: bool | None = None
+    previous_user_tags: list[str] | None = None
+
+
+class MaterialAssistantTurnResponse(BaseModel):
+    reply: str
+    provider: str
+    model: str
+    material_result: MaterialAssistantResultResponse | None = None
+    turn_id: UUID | None = None
+    turn_status: Literal["running", "completed", "stopped", "failed"] = "completed"
+    draft_version: int | None = Field(default=None, ge=0)
+
+
+class AssistantStreamEvent(BaseModel):
+    """UI-safe projection of Pi text/tool events and the existing final response."""
+
+    type: Literal["turn_started", "turn_status", "text_delta", "tool_start", "tool_end", "result", "error"]
+    turn_id: UUID | None = None
+    turn_state: Literal["running", "completed", "failed", "stopped"] | None = None
+    draft_version: int | None = Field(default=None, ge=0)
+    delta: str | None = None
+    tool_id: int | None = None
+    label: str | None = None
+    ok: bool | None = None
+    summary: str | None = None
+    result: dict[str, object] | None = None
+    message: str | None = None
+    status: int | None = None
 
 
 class CreationPlanResponse(CreationPlanPreviewResponse):
@@ -2060,7 +2285,10 @@ class SourceItemsResponse(BaseModel):
 
 
 class ManualLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str
+    use_state: ContentUseState = "available"
 
 
 class SourceConnectorCreateRequest(BaseModel):
@@ -2139,6 +2367,7 @@ class SourceItemDetailResponse(BaseModel):
     content_hash: str | None = None
     sections: list[KnowledgeSectionResponse] = Field(default_factory=list)
     parameters: list[KnowledgeParameterResponse] = Field(default_factory=list)
+    use_state: ContentUseState = "available"
     # 网页快照的抓取时间；不是网页抓取时为空。
     fetched_at: datetime | None = None
     created_at: datetime
@@ -2162,14 +2391,11 @@ class ManualSourceItemRequest(BaseModel):
     author: str | None = Field(default=None, max_length=300)
     published_at: datetime | None = None
     license: str = Field(default="unknown", min_length=1, max_length=300)
+    use_state: ContentUseState = "available"
 
 
 class SaveSourceItemToKnowledgeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    ownership: str = Field(min_length=1, max_length=300)
-    authorization: str = Field(min_length=1, max_length=2000)
-    version: str = Field(default="1", min_length=1, max_length=100)
 
 
 class KnowledgeFileImportRequest(BaseModel):
@@ -2177,6 +2403,7 @@ class KnowledgeFileImportRequest(BaseModel):
 
     filename: str = Field(min_length=1, max_length=400)
     content_base64: str = Field(min_length=1, max_length=40_000_000)
+    use_state: ContentUseState = "available"
 
 
 class KnowledgeItemResponse(BaseModel):
@@ -2190,6 +2417,7 @@ class KnowledgeItemResponse(BaseModel):
     ownership: str
     source_item_id: str | None
     version: str
+    use_state: ContentUseState = "available"
     # 当前可见范围：shared / private。回读同一列，与保存时写入的值一致。
     visibility: str = CONTENT_VISIBILITY_LEGACY
     content_hash: str | None = None
@@ -2201,6 +2429,8 @@ class KnowledgeItemResponse(BaseModel):
     created_at: datetime
     # 保存时命中已有内容指纹时给出重复结果（对应已有版本号），不新建条目。
     duplicate_of_version: str | None = None
+    # 仅保存接口用于确认此次请求绑定的来源；不改变知识条目的原始来源关系。
+    saved_source_item_id: str | None = None
 
 
 class ContentVisibilityRequest(BaseModel):
@@ -2312,6 +2542,18 @@ class AuthorizationsResponse(BaseModel):
     total_count: int
 
 
+class ProfileReferenceResponse(BaseModel):
+    asset_id: str | None = None
+    segment_id: str | None = None
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None, gt=0)
+
+
+class FixedProfileReference(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
 class PersonProfileResponse(BaseModel):
     id: str
     workspace_id: str
@@ -2320,8 +2562,8 @@ class PersonProfileResponse(BaseModel):
     avatar_reference: str
     background_capabilities: list[str]
     shot_capabilities: list[str]
-    authorization: AuthorizationResponse
-    current_authorization: AuthorizationResponse
+    authorization: AuthorizationResponse | None
+    current_authorization: AuthorizationResponse | None
     runnable: bool
     runnable_reason: str | None
     body_reference_kind: str
@@ -2330,17 +2572,22 @@ class PersonProfileResponse(BaseModel):
     body_reference_reason: str | None
     body_reference_repair_action: str | None
 
+    reference: ProfileReferenceResponse | None = None
+    use_state: str = "available"
+    reference_issue: str | None = None
+    reference_url: str | None = None
+
 
 class PersonProfileUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=120)
     display_name: str = Field(min_length=1, max_length=300)
-    version: str = Field(min_length=1, max_length=120)
+    version: str | None = Field(default=None, min_length=1, max_length=120)
     avatar_reference: str = Field(min_length=1, max_length=4000)
     background_capabilities: list[str] = Field(default_factory=list, max_length=40)
     shot_capabilities: list[str] = Field(default_factory=list, max_length=40)
-    authorization: AuthorizationUpsertRequest
+    authorization: AuthorizationUpsertRequest | None = None
 
     @field_validator("avatar_reference")
     @classmethod
@@ -2350,6 +2597,9 @@ class PersonProfileUpsertRequest(BaseModel):
             field="avatar reference",
             allowed_schemes={"asset", "workspace"},
         )
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"] = "available"
 
 
 class PersonProfilesResponse(BaseModel):
@@ -2367,24 +2617,31 @@ class VersionedVoiceProfileResponse(BaseModel):
     reference_audio_path: str
     reference_text: str
     model_id: str
-    authorization: AuthorizationResponse
-    current_authorization: AuthorizationResponse
+    authorization: AuthorizationResponse | None
+    current_authorization: AuthorizationResponse | None
     runnable: bool
     runnable_reason: str | None
+
+    display_name: str = ""
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: str = "available"
+    reference_issue: str | None = None
+    reference_url: str | None = None
 
 
 class VersionedVoiceProfileUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=120)
-    person_profile_id: str = Field(min_length=1, max_length=120)
-    person_version: str = Field(min_length=1, max_length=120)
-    version: str = Field(min_length=1, max_length=120)
+    person_profile_id: str = Field(default="", max_length=120)
+    person_version: str = Field(default="", max_length=120)
+    version: str | None = Field(default=None, min_length=1, max_length=120)
     language: Literal["zh", "en", "zh-en"]
     reference_audio_path: str = Field(min_length=1, max_length=4000)
-    reference_text: str = Field(min_length=1, max_length=4000)
-    model_id: str = Field(min_length=1, max_length=300)
-    authorization: AuthorizationUpsertRequest
+    reference_text: str = Field(default="", max_length=4000)
+    model_id: str = Field(default="", max_length=300)
+    authorization: AuthorizationUpsertRequest | None = None
 
     @field_validator("reference_audio_path")
     @classmethod
@@ -2392,8 +2649,12 @@ class VersionedVoiceProfileUpsertRequest(BaseModel):
         return validate_logical_media_reference(
             value,
             field="reference audio path",
-            allowed_schemes={"workspace"},
+            allowed_schemes={"asset", "workspace"},
         )
+
+    reference: ProfileReferenceResponse | None = None
+    use_state: Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"] = "available"
+    display_name: str = Field(min_length=1, max_length=300)
 
 
 class VersionedVoiceProfilesResponse(BaseModel):
@@ -2464,8 +2725,8 @@ class AvatarLipSyncPreviewRequest(BaseModel):
     voice_preview_identity: str = Field(min_length=1, max_length=200)
     motion: str = Field(min_length=1, max_length=120)
     expression: str = Field(min_length=1, max_length=120)
-    authorization_id: str = Field(min_length=1, max_length=120)
-    authorization_version: str = Field(min_length=1, max_length=120)
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=120)
+    authorization_version: str | None = Field(default=None, min_length=1, max_length=120)
     model_id: str = Field(min_length=1, max_length=300)
     retry: bool = False
 
@@ -2476,7 +2737,7 @@ class MediaPreviewRunResponse(BaseModel):
     preview_type: Literal["voice", "avatar_lipsync"]
     identity: str
     attempt: int = Field(ge=1)
-    status: Literal["running", "succeeded", "unavailable", "blocked", "failed"]
+    status: Literal["queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"]
     capability_id: str
     model_id: str
     language: str

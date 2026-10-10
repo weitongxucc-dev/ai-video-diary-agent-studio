@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,16 +9,16 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.local_members import LocalMemberService
-from app.avatar_lipsync import (
-    Authorization,
-    AvatarPreviewService,
-    PersonProfile,
-    UnavailableAvatarAndLipSyncProvider,
-    VoiceProfile,
-)
+from app.avatar_lipsync import AvatarPreviewService, UnavailableAvatarAndLipSyncProvider
+from app.creation_execution import CreationExecutionActor
 from app.narration import VoicePreviewService
-from app.production import ProductionRepository
+from app.production import MaterialAsset, ProductionRepository
 from app.voice_clone import UnavailableVoiceCloneProvider, VoiceCloneResult
+from _media_preview_test_fixtures import (
+    build_preview_runtime,
+    register_synthetic_profiles,
+    synthetic_wav_bytes,
+)
 
 
 class _VoiceProvider:
@@ -35,70 +35,14 @@ class _VoiceProvider:
     def generate(self, *, output_path, reference_audio_path, **_kwargs):
         self.calls += 1
         self.reference_paths.append(Path(reference_audio_path))
+        grant = _kwargs.get("grant_context")
+        assert grant is not None and grant.grant.owner_type == "media_preview"
+        assert grant.grant.unit_key.startswith("voice:")
         output = Path(output_path)
         if self.writes_output:
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"fixture audio")
+            output.write_bytes(synthetic_wav_bytes())
         return VoiceCloneResult(str(output), 1.0, 24000)
-
-
-def _authorization(
-    workspace_id: str,
-    authorization_id: str,
-    content_type: str,
-    scopes: tuple[str, ...],
-) -> Authorization:
-    return Authorization(
-        id=authorization_id,
-        version="v1",
-        rights_holder="权利人",
-        content_types=(content_type,),
-        usage_scopes=scopes,
-        effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        expires_at=None,
-        evidence_reference="consent://preview-fixture",
-        status="active",
-        workspace_id=workspace_id,
-    )
-
-
-def _save_media_profiles(repository: ProductionRepository, workspace_id: str) -> tuple[PersonProfile, VoiceProfile, Authorization, Path]:
-    reference = repository.video_library_path / "approved" / f"{workspace_id}-voice.wav"
-    reference.parent.mkdir(parents=True, exist_ok=True)
-    reference.write_bytes(b"voice reference")
-    person = PersonProfile(
-        id="person-a",
-        workspace_id=workspace_id,
-        display_name="主播 A",
-        version="person-v1",
-        avatar_reference="asset://avatar/person-a",
-        background_capabilities=("studio",),
-        shot_capabilities=("medium",),
-        authorization=_authorization(
-            workspace_id, "person-auth", "person_likeness", ("avatar_lipsync",)
-        ),
-    )
-    voice = VoiceProfile(
-        id="voice-a",
-        workspace_id=workspace_id,
-        person_profile_id=person.id,
-        person_version=person.version,
-        version="voice-v1",
-        language="zh-en",
-        reference_audio_path=f"workspace://approved/{reference.name}",
-        reference_text="声音参考文字",
-        model_id="voice-model-v1",
-        authorization=_authorization(
-            workspace_id, "voice-auth", "voice", ("narration", "avatar_lipsync")
-        ),
-    )
-    avatar_authorization = _authorization(
-        workspace_id, "avatar-auth", "avatar_video", ("avatar_lipsync",)
-    )
-    repository.save_person_profile(person)
-    repository.save_versioned_voice_profile(voice)
-    repository.save_authorization(avatar_authorization)
-    return person, voice, avatar_authorization, reference
 
 
 @pytest.fixture
@@ -119,15 +63,13 @@ def preview_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "settings",
         SimpleNamespace(video_inbox_path=library, video_output_path=output_root),
     )
-    monkeypatch.setattr(
-        main_module,
-        "voice_preview_service",
-        VoicePreviewService(output_root, provider),
-    )
+    voice_service = VoicePreviewService(output_root, provider)
+    avatar_service = AvatarPreviewService(output_root, UnavailableAvatarAndLipSyncProvider())
+    monkeypatch.setattr(main_module, "voice_preview_service", voice_service)
     monkeypatch.setattr(
         main_module,
         "avatar_preview_service",
-        AvatarPreviewService(output_root, UnavailableAvatarAndLipSyncProvider()),
+        avatar_service,
     )
     monkeypatch.setattr(
         main_module,
@@ -138,18 +80,34 @@ def preview_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     members = LocalMemberService(tmp_path / "members.sqlite3")
     monkeypatch.setattr(main_module, "local_members_service", members)
     owner_member, owner_token = members.whoami(None)
-    person, voice, avatar_authorization, reference = _save_media_profiles(repository, "workspace-a")
-    return (
-        TestClient(main_module.app),
-        repository,
-        provider,
-        person,
-        voice,
-        avatar_authorization,
-        reference,
-        output_root,
-        SimpleNamespace(owner_token=owner_token, owner_member_id=owner_member.member_id),
+    person, voice, avatar_authorization, reference, _image = register_synthetic_profiles(
+        repository, workspace_id="workspace-a", member_id=owner_member.member_id,
+        person_id="person-a", voice_id="voice-a",
     )
+    runtime_harness = build_preview_runtime(
+        repository, output_root=output_root, voice_service=voice_service,
+        avatar_service=avatar_service, member_id=owner_member.member_id,
+        workspace_id="workspace-a",
+    )
+    headers = {"X-Local-Member-Token": owner_token}
+
+    def permit_actor(request, workspace_id):
+        member = members.resolve_member(request.headers.get("x-local-member-token"))
+        assert member.member_id == owner_member.member_id
+        return CreationExecutionActor(workspace_id, member.member_id)
+
+    monkeypatch.setattr(main_module, "_creation_runtime", lambda: runtime_harness.runtime)
+    monkeypatch.setattr(main_module, "_require_permit_actor", permit_actor)
+    try:
+        yield (
+            TestClient(main_module.app), repository, provider, person, voice,
+            avatar_authorization, reference, output_root,
+            SimpleNamespace(owner_token=owner_token, owner_member_id=owner_member.member_id,
+                            headers=headers, runtime=runtime_harness.runtime,
+                            resources=runtime_harness.resources, voice_service=voice_service),
+        )
+    finally:
+        assert runtime_harness.close()
 
 
 def _voice_payload(*, preview_text: str = "声音预览", retry: bool = False) -> dict[str, object]:
@@ -170,7 +128,7 @@ def _avatar_payload(voice_identity: str, *, retry: bool = False) -> dict[str, ob
         "voice_preview_identity": voice_identity,
         "motion": "natural",
         "expression": "neutral",
-        "authorization_id": "avatar-auth",
+        "authorization_id": "person-a-avatar-auth",
         "authorization_version": "v1",
         "model_id": "avatar-model-v1",
         "retry": retry,
@@ -180,48 +138,52 @@ def _avatar_payload(voice_identity: str, *, retry: bool = False) -> dict[str, ob
 def test_materials_expose_workspace_reference_without_absolute_submission(preview_client):
     client, repository, *_rest = preview_client
     identity = _rest[-1]
-    headers = {"X-Local-Member-Token": identity.owner_token}
-    video = repository.video_library_path / "approved" / "demo.mp4"
+    from PIL import Image
+
+    headers = identity.headers
+    video = repository.video_library_path / "approved" / "demo.png"
     video.parent.mkdir(exist_ok=True)
-    video.write_bytes(b"media")
-    repository.bind_material_ingestion(
-        "workspace-a",
-        expected_directory=str(repository.video_library_path),
-        verified_owner_user_id=identity.owner_member_id,
-    )
-    repository.confirm_material_copy_complete(
-        "workspace-a", relative_path="approved/demo.mp4",
-        expected_revision=repository.material_copy_revision(video.stat()),
-        confirmation_source="manual",
-        verified_owner_user_id=identity.owner_member_id,
-    )
-    repository.scan_library("workspace-a")
+    Image.new("RGB", (16, 16), color=(24, 80, 140)).save(video, format="PNG")
+    stat = video.stat()
+    repository._save_asset(MaterialAsset(
+        id="demo-image", workspace_id="workspace-a", file_name=video.name,
+        path=str(video), size_bytes=stat.st_size, modified_at=datetime.fromtimestamp(stat.st_mtime),
+        media_type="image", owner_user_id=identity.owner_member_id,
+    ))
 
     response = client.get("/api/production/materials", headers=headers)
 
     assert response.status_code == 200
-    asset = next(item for item in response.json()["assets"] if item["file_name"] == "demo.mp4")
-    assert asset["workspace_reference"] == "workspace://approved/demo.mp4"
+    asset = next(item for item in response.json()["assets"] if item["file_name"] == "demo.png")
+    assert asset["workspace_reference"] == "workspace://approved/demo.png"
     assert asset["path"] != asset["workspace_reference"]
 
 
 def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview_client):
-    client, _repository, provider, _person, _voice, _authorization, reference, _output, *_ = preview_client
+    client, repository, provider, _person, _voice, _authorization, reference, _output, identity = preview_client
+    headers = identity.headers
 
-    first = client.post("/api/media/previews/voice", json=_voice_payload())
-    second = client.post("/api/media/previews/voice", json=_voice_payload())
-    listed = client.get("/api/media/previews?preview_type=voice")
+    first = client.post("/api/media/previews/voice", json=_voice_payload(), headers=headers)
 
     assert first.status_code == 200
-    assert first.json()["status"] == "succeeded"
+    assert first.json()["status"] == "queued"
     assert first.json()["attempt"] == 1
-    assert first.json()["output_url"]
+    assert first.json()["output_url"] is None
+    assert provider.calls == 0
+    assert identity.runtime.run_once()
+    completed = repository.get_media_preview_run("workspace-a", "voice", first.json()["identity"])
+    assert completed.status == "succeeded" and completed.output_path
+    second = client.post("/api/media/previews/voice", json=_voice_payload(), headers=headers)
+    listed = client.get("/api/media/previews?preview_type=voice", headers=headers)
+
+    assert second.json()["status"] == "succeeded"
+    assert second.json()["output_url"]
     assert second.json()["id"] == first.json()["id"]
     assert provider.calls == 1
     assert provider.reference_paths == [reference.resolve()]
     assert listed.json()["total_count"] == 1
-    assert client.get(first.json()["output_url"]).status_code == 200
-    other_workspace = {"x-test-workspace": "workspace-b"}
+    assert client.get(second.json()["output_url"], headers=headers).status_code == 200
+    other_workspace = {**headers, "x-test-workspace": "workspace-b"}
     assert client.get("/api/media/previews", headers=other_workspace).json()["items"] == []
     assert client.get(
         f"/api/media/previews/voice/{first.json()['identity']}/attempts",
@@ -230,36 +192,45 @@ def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview
 
 
 def test_voice_preview_unavailable_failure_retry_and_attempt_order(preview_client, monkeypatch):
-    client, repository, provider, *_rest, output_root, _identity = preview_client
+    client, repository, provider, *_rest, output_root, identity = preview_client
+    headers = identity.headers
     monkeypatch.setattr(
         main_module,
         "voice_preview_service",
         VoicePreviewService(output_root, UnavailableVoiceCloneProvider("missing runtime")),
     )
     unavailable = client.post(
-        "/api/media/previews/voice", json=_voice_payload(preview_text="unavailable")
+        "/api/media/previews/voice", json=_voice_payload(preview_text="unavailable"), headers=headers
     )
     monkeypatch.setattr(main_module, "voice_preview_service", VoicePreviewService(output_root, provider))
     provider.writes_output = False
-    failed = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="retry"))
-    unchanged = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="retry"))
+    failed = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="retry"), headers=headers)
+    assert failed.json()["status"] == "queued" and provider.calls == 0
+    assert identity.runtime.run_once()
+    unchanged = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="retry"), headers=headers)
     provider.writes_output = True
     retried = client.post(
-        "/api/media/previews/voice", json=_voice_payload(preview_text="retry", retry=True)
+        "/api/media/previews/voice", json=_voice_payload(preview_text="retry", retry=True), headers=headers
     )
+    assert retried.json()["status"] == "queued" and retried.json()["attempt"] == 2
+    assert identity.runtime.run_once()
     attempts = client.get(
-        f"/api/media/previews/voice/{failed.json()['identity']}/attempts"
+        f"/api/media/previews/voice/{failed.json()['identity']}/attempts", headers=headers
     )
-    listed = client.get("/api/media/previews?preview_type=voice")
+    listed = client.get("/api/media/previews?preview_type=voice", headers=headers)
 
     assert (unavailable.status_code, unavailable.json()["status"], unavailable.json()["reason"]) == (
         200,
         "unavailable",
         "capability_unavailable",
     )
-    assert (failed.json()["status"], failed.json()["attempt"]) == ("failed", 1)
     assert unchanged.json()["id"] == failed.json()["id"]
-    assert (retried.json()["status"], retried.json()["attempt"]) == ("succeeded", 2)
+    assert (unchanged.json()["status"], unchanged.json()["attempt"]) == ("failed", 1)
+    assert [(item["status"], item["attempt"]) for item in attempts.json()["items"]] == [
+        ("succeeded", 2), ("failed", 1),
+    ]
+    retried_final = repository.get_media_preview_run("workspace-a", "voice", retried.json()["identity"])
+    assert (retried_final.status, retried_final.attempt) == ("succeeded", 2)
     assert [item["attempt"] for item in attempts.json()["items"]] == [2, 1]
     assert [item["attempt"] for item in listed.json()["items"] if item["identity"] == failed.json()["identity"]] == [2]
 
@@ -267,26 +238,33 @@ def test_voice_preview_unavailable_failure_retry_and_attempt_order(preview_clien
 def test_avatar_preview_requires_same_workspace_succeeded_voice_and_rejects_client_audio_path(
     preview_client,
 ):
-    client, _repository, provider, _person, _voice, _authorization, _reference, _output, *_ = preview_client
-    voice = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="avatar"))
+    client, _repository, provider, _person, _voice, _authorization, _reference, _output, identity_context = preview_client
+    headers = identity_context.headers
+    voice = client.post("/api/media/previews/voice", json=_voice_payload(preview_text="avatar"), headers=headers)
+    assert voice.json()["status"] == "queued" and provider.calls == 0
+    assert identity_context.runtime.run_once()
     identity = voice.json()["identity"]
     forged_audio = client.post(
         "/api/media/previews/avatar-lipsync",
         json={**_avatar_payload(identity), "audio_path": "/tmp/forged.wav"},
+        headers=headers,
     )
     cross_workspace = client.post(
         "/api/media/previews/avatar-lipsync",
-        headers={"x-test-workspace": "workspace-b"},
+        headers={**headers, "x-test-workspace": "workspace-b"},
         json=_avatar_payload(identity),
     )
-    avatar = client.post("/api/media/previews/avatar-lipsync", json=_avatar_payload(identity))
+    avatar = client.post("/api/media/previews/avatar-lipsync", json=_avatar_payload(identity), headers=headers)
     provider.writes_output = False
     failed_voice = client.post(
-        "/api/media/previews/voice", json=_voice_payload(preview_text="blocked")
+        "/api/media/previews/voice", json=_voice_payload(preview_text="blocked"), headers=headers
     )
+    assert failed_voice.json()["status"] == "queued"
+    assert identity_context.runtime.run_once()
     not_succeeded = client.post(
         "/api/media/previews/avatar-lipsync",
         json=_avatar_payload(failed_voice.json()["identity"]),
+        headers=headers,
     )
 
     assert forged_audio.status_code == 422
@@ -298,3 +276,22 @@ def test_avatar_preview_requires_same_workspace_succeeded_voice_and_rejects_clie
     )
     assert not_succeeded.status_code == 409
     assert not_succeeded.json()["detail"]["error"] == "voice_preview_not_succeeded"
+
+
+def test_cancelled_voice_preview_never_calls_provider(preview_client):
+    client, repository, provider, *_rest, identity = preview_client
+    headers = identity.headers
+    queued = client.post(
+        "/api/media/previews/voice", json=_voice_payload(preview_text="取消预览"), headers=headers
+    )
+
+    assert (queued.status_code, queued.json()["status"]) == (200, "queued")
+    assert provider.calls == 0
+    cancelled = client.post(
+        f"/api/media/previews/voice/{queued.json()['identity']}/cancel", headers=headers
+    )
+
+    assert (cancelled.status_code, cancelled.json()["status"]) == (200, "cancelled")
+    assert identity.runtime.run_once() is False
+    persisted = repository.get_media_preview_run("workspace-a", "voice", queued.json()["identity"])
+    assert persisted.status == "cancelled" and provider.calls == 0

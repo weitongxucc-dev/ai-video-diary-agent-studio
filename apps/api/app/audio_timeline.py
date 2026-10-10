@@ -40,6 +40,7 @@ class TimelineAudioClip(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     source_start_ms: int = Field(ge=0)
     source_end_ms: int = Field(gt=0)
+    playback_rate: float = Field(default=1, gt=0, allow_inf_nan=False)
     timeline_start_ms: int = Field(ge=0)
     gain_db: float = Field(default=0, ge=-60, le=12, allow_inf_nan=False)
     fade_in_ms: int = Field(default=0, ge=0)
@@ -54,7 +55,7 @@ class TimelineAudioClip(BaseModel):
 
     @property
     def duration_ms(self) -> int:
-        return self.source_end_ms - self.source_start_ms
+        return round((self.source_end_ms - self.source_start_ms) / self.playback_rate)
 
     @model_validator(mode="after")
     def validate_ranges(self):
@@ -202,8 +203,8 @@ def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_m
             if not 10 <= offset <= clip.duration_ms - 10:
                 raise ValueError("分割位置必须位于音频片段内部")
             base = {**clip.model_dump(), "envelope_duration_ms": clip.envelope_duration_ms or clip.duration_ms}
-            left = {**base, "source_end_ms": clip.source_start_ms + offset}
-            right = {**base, "id": f"audio-{uuid4().hex[:16]}", "source_start_ms": clip.source_start_ms + offset,
+            left = {**base, "source_end_ms": clip.source_start_ms + round(offset * clip.playback_rate)}
+            right = {**base, "id": f"audio-{uuid4().hex[:16]}", "source_start_ms": clip.source_start_ms + round(offset * clip.playback_rate),
                      "envelope_offset_ms": clip.envelope_offset_ms + offset,
                      "timeline_start_ms": edit.values["at_ms"]}
             track.clips[index:index+1] = [TimelineAudioClip.model_validate(left), TimelineAudioClip.model_validate(right)]
@@ -392,7 +393,7 @@ def build_audio_mix_command(
             normalized = (normalized_narration or {}).get(source) if track.role == "narration" else None
             command.extend(["-protocol_whitelist", "file,pipe", "-i", str(normalized or source)])
             chain = [f"atrim=start={clip.source_start_ms/1000}:end={clip.source_end_ms/1000}",
-                     "asetpts=PTS-STARTPTS", "aformat=channel_layouts=stereo", "asetpts=N/SR/TB"]
+                     "asetpts=PTS-STARTPTS", *_tempo_filters(clip.playback_rate), "aformat=channel_layouts=stereo", "asetpts=N/SR/TB"]
             if clip.denoise_db:
                 # A conservative stationary-noise preset; preview remains required before applying.
                 # afftdn must see the source rate: feeding it a resampled 48kHz signal from a
@@ -576,13 +577,7 @@ def probe_audio_source(path: Path, *, scheduler: DeviceScheduler | None = None,
     return duration
 
 
-def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: int,
-                           rate: float, duration_ms: int, output: Path) -> Path:
-    """Local pitch-preserving tempo transform; pad/trim only encoder tail rounding."""
-    if not math.isfinite(rate) or not .25 <= rate <= 4 or duration_ms < 10:
-        raise ValueError("音频变速参数无效")
-    if not 0 <= source_start_ms < source_end_ms <= round(probe_audio_source(source) * 1000) + 20:
-        raise ValueError("变速音频源区间无效")
+def _tempo_filters(rate: float) -> list[str]:
     tempos = []
     remaining = rate
     while remaining > 2:
@@ -592,6 +587,17 @@ def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: in
         tempos.append("atempo=0.5")
         remaining /= .5
     tempos.append(f"atempo={remaining:.9f}")
+    return tempos
+
+
+def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: int,
+                           rate: float, duration_ms: int, output: Path) -> Path:
+    """Local pitch-preserving tempo transform; pad/trim only encoder tail rounding."""
+    if not math.isfinite(rate) or not .25 <= rate <= 4 or duration_ms < 10:
+        raise ValueError("音频变速参数无效")
+    if not 0 <= source_start_ms < source_end_ms <= round(probe_audio_source(source) * 1000) + 20:
+        raise ValueError("变速音频源区间无效")
+    tempos = _tempo_filters(rate)
     chain = [f"atrim=start={source_start_ms / 1000}:end={source_end_ms / 1000}", "asetpts=PTS-STARTPTS",
         *tempos, "aresample=48000", f"apad=whole_dur={duration_ms / 1000}", f"atrim=duration={duration_ms / 1000}"]
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", str(source),
@@ -616,8 +622,8 @@ def narration_source_range(timeline: AudioTimeline, start_ms: int, end_ms: int,
                 continue
             if clip.source_ref not in source_offsets:
                 raise ValueError("所选范围的配音已替换或变速，当前无法映射到原口型分段；请先生成对应配音的口型。")
-            source = clip.source_start_ms + left - clip.timeline_start_ms - source_offsets[clip.source_ref]
-            pieces.append((left, right, source, source + right-left))
+            source = clip.source_start_ms + round((left - clip.timeline_start_ms) * clip.playback_rate) - source_offsets[clip.source_ref]
+            pieces.append((left, right, source, source + round((right-left) * clip.playback_rate)))
     pieces.sort()
     cursor = start_ms
     source_start = source_end = None

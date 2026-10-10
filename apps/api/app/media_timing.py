@@ -12,8 +12,8 @@ class MediaTimingError(ValueError):
     pass
 
 
-def probe_avatar_media(path: Path, *, expected_duration: float | None = None, engine: str = "ffprobe") -> tuple[float, str]:
-    completed = subprocess.run(
+def probe_avatar_media(path: Path, *, expected_duration: float | None = None, engine: str = "ffprobe", runner=None) -> tuple[float, str]:
+    completed = (subprocess.run if runner is None else runner)(
         [
             "ffprobe",
             "-v",
@@ -88,8 +88,8 @@ def probe_avatar_media(path: Path, *, expected_duration: float | None = None, en
     return round(duration, 3), evidence
 
 
-def probe_media_duration(path: Path) -> float:
-    completed = subprocess.run(
+def probe_media_duration(path: Path, *, runner=None) -> float:
+    completed = (subprocess.run if runner is None else runner)(
         [
             "ffprobe",
             "-v",

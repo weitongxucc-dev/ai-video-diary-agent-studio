@@ -122,13 +122,13 @@ def test_repeated_snapshot_does_not_add_a_version_and_update_keeps_the_old_one(c
     first = client.post("/api/source-items/link", json={"url": "https://example.com/page"}).json()
     saved_first = client.post(
         f"/api/source-items/{first['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
 
     repeat = client.post("/api/source-items/link", json={"url": "https://example.com/page"}).json()
     saved_repeat = client.post(
         f"/api/source-items/{repeat['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
 
     # 相同正文不新增版本，指回已有版本。
@@ -147,7 +147,7 @@ def test_repeated_snapshot_does_not_add_a_version_and_update_keeps_the_old_one(c
     updated = client.post("/api/source-items/link", json={"url": "https://example.com/page"}).json()
     saved_updated = client.post(
         f"/api/source-items/{updated['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
 
     detail = client.get(f"/api/knowledge-items/{saved_updated['id']}").json()
@@ -169,7 +169,7 @@ def test_another_workspace_cannot_read_another_workspace_snapshot(client, monkey
     item = client.post("/api/source-items/link", json={"url": "https://example.com/v1"}).json()
     saved = client.post(
         f"/api/source-items/{item['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
 
     other = client.get(
@@ -232,12 +232,12 @@ def test_same_body_under_two_urls_stays_two_separate_origins(client, monkeypatch
     first_item = client.post("/api/source-items/link", json={"url": "https://a.example.com/post"}).json()
     first = client.post(
         f"/api/source-items/{first_item['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
     second_item = client.post("/api/source-items/link", json={"url": "https://b.example.com/post"}).json()
     second = client.post(
         f"/api/source-items/{second_item['id']}/save-to-knowledge",
-        json={"ownership": "我的内容", "authorization": "内部参考", "version": "1"},
+        json={},
     ).json()
 
     assert second["id"] != first["id"]

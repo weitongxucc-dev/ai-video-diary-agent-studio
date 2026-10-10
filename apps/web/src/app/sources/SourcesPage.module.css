@@ -1,0 +1,18 @@
+
+.entry { margin-top: 16px; }
+.methods { display: flex; flex-wrap: wrap; gap: 8px; }
+.methods button { padding: 7px 12px; border: 1px solid var(--border-1); border-radius: 8px; color: var(--text-2); background: var(--surface-1); font-size: 13px; cursor: pointer; }
+.methods button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--surface-2); }
+.entry :global(.source-manual-entry[hidden]) { display: none; }
+.entry :global(.source-manual-entry) { margin-top: 12px; }
+.entry .entryForm, .subscriptions .entryForm { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+.entryForm button { align-self: flex-start; }
+.more { display: flex; flex-direction: column; gap: 10px; }
+.more summary, .subscriptions > summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.more label { margin-top: 10px; }
+.fieldState { margin: 0; color: var(--text-2); font-size: 13px; }
+.fieldState[role="alert"] { color: var(--danger); }
+.subscriptions { margin-top: 24px; border-top: 1px solid var(--border-1); padding-top: 14px; }
+.subscriptions :global(.source-platforms) { margin-top: 14px; }
+.subscriptions :global(div.source-platform) { cursor: default; }
+.subscriptions :global(.source-panel__empty) { min-height: 0; padding: 12px 0; justify-content: flex-start; }

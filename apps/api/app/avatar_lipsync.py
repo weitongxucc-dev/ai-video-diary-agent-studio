@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.voice_clone import MediaRuntimeFailure
 from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
+from app.profile_reference_media import ProfileReferenceInput
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -96,6 +98,16 @@ class Authorization:
 
 
 @dataclass(frozen=True)
+class ProfileReference:
+    """A registered source and its explicit range, independent of model output."""
+
+    asset_id: str | None = None
+    segment_id: str | None = None
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+
+
+@dataclass(frozen=True)
 class PersonProfile:
     id: str
     workspace_id: str
@@ -104,21 +116,66 @@ class PersonProfile:
     avatar_reference: str
     background_capabilities: tuple[str, ...]
     shot_capabilities: tuple[str, ...]
-    authorization: Authorization
+    authorization: Authorization | None = None
+    reference: ProfileReference | None = None
+    use_state: str = "available"
+    owner_user_id: str | None = None
+    visibility: str = "private"
+    reference_issue: str | None = None
 
 
 @dataclass(frozen=True)
 class VoiceProfile:
     id: str
     workspace_id: str
-    person_profile_id: str
-    person_version: str
     version: str
     language: Literal["zh", "en", "zh-en"]
     reference_audio_path: str
     reference_text: str
-    model_id: str
-    authorization: Authorization
+    person_profile_id: str = ""
+    person_version: str = ""
+    model_id: str = ""
+    authorization: Authorization | None = None
+    display_name: str = ""
+    reference: ProfileReference | None = None
+    use_state: str = "available"
+    owner_user_id: str | None = None
+    visibility: str = "private"
+    reference_issue: str | None = None
+
+
+def profile_use_failure(profile, *, content_type: str, usage_scope: str) -> str | None:
+    """Local references need no proof form; explicit restrictions remain binding."""
+    if profile.reference_issue is not None:
+        return profile.reference_issue
+    if profile.use_state not in {"available", "not_for_publish"}:
+        return f"profile_{profile.use_state}"
+    authorization = profile.authorization
+    if authorization is None:
+        return None
+    if authorization.workspace_id != profile.workspace_id:
+        return "authorization_workspace_mismatch"
+    now = datetime.now(timezone.utc)
+    if authorization.status not in {"active", "pending"}:
+        return f"authorization_{authorization.status}"
+    if authorization.expires_at is not None and _as_utc(authorization.expires_at) <= now:
+        return "authorization_expired"
+    if _as_utc(authorization.effective_from) > now:
+        return "authorization_not_effective"
+    if authorization.content_types and content_type not in authorization.content_types:
+        return "authorization_content_type_denied"
+    if authorization.usage_scopes and usage_scope not in authorization.usage_scopes:
+        return "authorization_scope_denied"
+    return None
+
+
+def profile_cache_identity(profile) -> dict[str, object]:
+    return {
+        "id": profile.id, "version": profile.version,
+        "reference": asdict(profile.reference) if profile.reference else None,
+        "use_state": profile.use_state,
+        "authorization": _authorization_cache_identity(profile.authorization),
+    }
 
 
 @dataclass(frozen=True)
@@ -169,9 +226,10 @@ class AvatarAndLipSyncRequest:
     language: Literal["zh", "en", "zh-en"]
     motion: str
     expression: str
-    authorization: Authorization
+    authorization: Authorization | None
     model_id: str
     visual_path: str = ""
+    visual_reference_input: ProfileReferenceInput | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +274,7 @@ class AvatarAndLipSyncProvider(Protocol):
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult: ...
 
 
@@ -241,6 +300,7 @@ class UnavailableAvatarAndLipSyncProvider:
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         return _failure(
             status="unavailable",
@@ -291,6 +351,7 @@ class SubprocessAvatarAndLipSyncProvider:
         *,
         request: AvatarAndLipSyncRequest,
         output_path: str | Path,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         cache_key = avatar_lipsync_cache_key(request)
         output = Path(output_path).expanduser().resolve()
@@ -320,8 +381,8 @@ class SubprocessAvatarAndLipSyncProvider:
                         "language": request.language,
                         "motion": request.motion,
                         "expression": request.expression,
-                        "authorization_id": request.authorization.id,
-                        "authorization_version": request.authorization.version,
+                        "authorization_id": request.authorization.id if request.authorization else "",
+                        "authorization_version": request.authorization.version if request.authorization else "",
                         "output_path": str(output),
                     },
                     ensure_ascii=False,
@@ -329,7 +390,7 @@ class SubprocessAvatarAndLipSyncProvider:
                 encoding="utf-8",
             )
             try:
-                self._runner(
+                command = (
                     [
                         str(self.runtime_path),
                         str(self.worker_path),
@@ -341,7 +402,13 @@ class SubprocessAvatarAndLipSyncProvider:
                         str(self.runtime_root.resolve()),
                     ]
                 )
+                if grant_context is None:
+                    self._runner(command)
+                else:
+                    self._run_command(command, grant_context=grant_context, output_paths=(output,))
             except (OSError, subprocess.SubprocessError) as exc:
+                if grant_context is not None and isinstance(exc, PermissionError):
+                    raise
                 return _failure(
                     status="failed",
                     cache_key=cache_key,
@@ -368,16 +435,30 @@ class SubprocessAvatarAndLipSyncProvider:
                     action=f"检查人物口型服务响应格式后重试：{exc}",
                 )
         return _parse_avatar_result(
-            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key
+            payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key, grant_context=grant_context
         )
 
-    def _run_command(self, command: list[str]) -> None:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        if grant_context is None:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
+        else:
+            grant_context.check()
+            with TemporaryDirectory(prefix="avatar_granted_runtime_") as temporary:
+                root = Path(temporary)
+                for name in ("home", "config", "cache", "tmp"):
+                    (root / name).mkdir()
+                environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": str(root / "home"), "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_CACHE_HOME": str(root / "cache"), "HF_HOME": str(root / "cache"),
+                    "TMPDIR": str(root / "tmp"), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+                    "PYTHONDONTWRITEBYTECODE": "1", "OMP_NUM_THREADS": str(grant_context.threads),
+                    "OPENBLAS_NUM_THREADS": str(grant_context.threads), "VECLIB_MAXIMUM_THREADS": str(grant_context.threads)}
+                completed = grant_context.run(command, env=environment, output_paths=output_paths)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
-            if len(detail) > 4000:
-                detail = detail[-4000:]
-            raise subprocess.SubprocessError(detail or f"exit {completed.returncode}")
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
+            raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
 
 
 class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
@@ -413,11 +494,11 @@ class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
     def message(self) -> str:
         return "高精度口型已就绪；处理时间较长。" if self.ready else "高精度口型环境不完整，请检查外接盘模型与运行依赖。"
 
-    def _run_command(self, command: list[str]) -> None:
-        completed = subprocess.run(
-            [*command, "--pose-root", str(self.pose_root.resolve())],
-            check=False, capture_output=True, text=True, timeout=6 * 60 * 60,
-        )
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        command = [*command, "--pose-root", str(self.pose_root.resolve())]
+        if grant_context is not None:
+            return super()._run_command(command, grant_context=grant_context, output_paths=output_paths)
+        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=6 * 60 * 60)
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
@@ -433,7 +514,12 @@ class AvatarAndLipSyncService:
         request: AvatarAndLipSyncRequest,
         *,
         output_cache_key: str | None = None,
+        grant_context=None,
+        repository: ProductionRepository | None = None,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
     ) -> AvatarAndLipSyncResult:
+        if grant_context is not None:
+            grant_context.check()
         cache_key = output_cache_key or avatar_lipsync_cache_key(request)
         failure = _authorization_failure(request)
         if failure is not None:
@@ -445,6 +531,22 @@ class AvatarAndLipSyncService:
                 action="补充有效的权利人授权、用途范围和证据后重试。",
                 retryable=False,
             )
+        if self.provider.ready and request.visual_reference_input is not None:
+            if repository is not None and grant_context is not None:
+                current = repository.profile_reference_input(request.person, viewer_user_id=viewer_user_id,
+                                                            local_diagnostic=local_diagnostic)
+                if current != request.visual_reference_input:
+                    raise ValueError("人物参考修订已变化，请重新排队")
+                artifact = repository.materialize_profile_reference(request.person, grant_context=grant_context,
+                    viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+                if artifact.source != request.visual_reference_input:
+                    raise ValueError("人物参考修订已变化，请重新排队")
+                request = replace(request, visual_path=str(artifact.path))
+            elif request.visual_reference_input.needs_derivation:
+                raise PermissionError("所选人物范围必须通过设备许可精确派生，不能使用整片")
+        elif (self.provider.ready and request.person.reference is not None
+              and request.person.reference.start_seconds is not None):
+            raise PermissionError("人物范围缺少仓储核实的精确参考输入")
         audio = Path(request.audio_path).expanduser()
         if not audio.is_file() or audio.stat().st_size == 0:
             return _failure(
@@ -489,7 +591,7 @@ class AvatarAndLipSyncService:
             / _safe_component(request.workspace_id)
             / f"{cache_key}.mp4"
         )
-        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path))
+        reusable = _probe_avatar_output(output, audio_path=Path(request.audio_path), grant_context=grant_context)
         if reusable is not None:
             duration_seconds, alignment_evidence = reusable
             return AvatarAndLipSyncResult(
@@ -502,7 +604,17 @@ class AvatarAndLipSyncService:
                 failure_impact=None,
                 remediation_action=None,
             )
-        result = self.provider.render(request=request, output_path=output)
+        from app.device_scheduler import RecoveryBlocked
+        from app.granted_subprocess import GrantedCommandError
+        try:
+            result = (self.provider.render(request=request, output_path=output) if grant_context is None else
+                      self.provider.render(request=request, output_path=output, grant_context=grant_context))
+        except (RecoveryBlocked, PermissionError, GrantedCommandError) as exc:
+            if getattr(exc, "command_diagnostics", {}).get("group_released") is True:
+                output.unlink(missing_ok=True)
+            raise
+        if grant_context is not None:
+            grant_context.check()
         if result.status != "succeeded":
             # A failed attempt is not a reusable cache entry, even when it left
             # behind a playable but incomplete file. This path is generated
@@ -527,6 +639,8 @@ class AvatarAndLipSyncService:
         authorization_id: str,
         authorization_version: str,
         model_id: str,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None,
     ) -> AvatarAndLipSyncResult:
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -542,8 +656,10 @@ class AvatarAndLipSyncService:
             authorization_id=authorization_id,
             authorization_version=authorization_version,
             model_id=model_id,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
         )
-        return self.render(request)
+        return self.render(request, repository=repository, grant_context=grant_context,
+                           viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
 
 class AvatarPreviewService:
@@ -573,8 +689,10 @@ class AvatarPreviewService:
         authorization_version: str,
         model_id: str,
         retry: bool = False,
+        viewer_user_id: str | None = None, local_diagnostic: bool = False,
+        grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
-        from app.production import MediaPreviewRunRecord
+        from app.production import MediaAuthorityError, MediaPreviewRunRecord
 
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -590,14 +708,35 @@ class AvatarPreviewService:
             authorization_id=authorization_id,
             authorization_version=authorization_version,
             model_id=model_id,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+            for_generation=False,
         )
+        authorization_failure = _authorization_failure(request)
+        reference_failure = None
+        # Read both sources before returning any restriction facts: a missing
+        # first source must not hide a private second source's read denial.
+        for profile, reason in ((request.voice, "reference_audio_invalid"), (request.person, "reference_visual_invalid")):
+            try:
+                source = repository.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+                    local_diagnostic=local_diagnostic, for_generation=False)
+                if profile is request.person:
+                    request = replace(request, visual_path=source.source_path, visual_reference_input=source)
+            except MediaAuthorityError as exc:
+                if reference_failure is None:
+                    reference_failure = (exc.reason, exc.impact, exc.repair_action)
+            except (ValueError, KeyError) as exc:
+                if reference_failure is None:
+                    reference_failure = (reason, "原参考不可用于本次预览，未生成或复用视频。", str(exc))
         identity = _avatar_preview_identity(
             request,
             capability_id=self.capability_id,
             provider_model_id=self.provider.model_id,
         )
+        identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
+        if reference_failure is not None:
+            identity = hashlib.sha256(json.dumps([identity, reference_failure]).encode()).hexdigest()
         existing = repository.get_media_preview_run(workspace_id, "avatar_lipsync", identity)
-        succeeded_reusable = not (
+        succeeded_reusable = authorization_failure is None and reference_failure is None and not (
             existing is not None
             and existing.status == "succeeded"
             and not _valid_avatar_preview_output(existing.output_path, self.output_root)
@@ -608,7 +747,8 @@ class AvatarPreviewService:
             workspace_id=workspace_id,
             preview_type="avatar_lipsync",
             identity=identity,
-            status="running",
+            status="queued" if prepare_only else "running",
+            member_identity=member_identity or {},
             capability_id=self.capability_id,
             model_id=request.model_id,
             language=request.language,
@@ -616,8 +756,8 @@ class AvatarPreviewService:
             person_version=request.person.version,
             voice_profile_id=request.voice.id,
             voice_version=request.voice.version,
-            authorization_id=request.authorization.id,
-            authorization_version=request.authorization.version,
+            authorization_id=request.authorization.id if request.authorization else "",
+            authorization_version=request.authorization.version if request.authorization else "",
         )
         running, claimed = repository.claim_media_preview_run(
             candidate,
@@ -626,6 +766,13 @@ class AvatarPreviewService:
         )
         if not claimed:
             return running
+        if authorization_failure is not None:
+            return self._finish(repository, running, status="blocked", reason=authorization_failure,
+                impact="人物预览被使用资格、授权或人物声音引用限制阻断，未生成视频。",
+                repair_action="确认档案使用限制、授权和所选声音版本后，以有效版本重试。")
+        if reference_failure is not None:
+            return self._finish(repository, running, status="blocked", reason=reference_failure[0],
+                impact=reference_failure[1], repair_action=reference_failure[2])
         if existing is not None and existing.status == "succeeded":
             return self._finish(
                 repository,
@@ -634,16 +781,6 @@ class AvatarPreviewService:
                 reason="output_missing",
                 impact="已记录的人物口型预览输出不可用，不能作为成功结果复用。",
                 repair_action="确认输出目录后显式重试人物口型预览。",
-            )
-        authorization_failure = _authorization_failure(request)
-        if authorization_failure is not None:
-            return self._finish(
-                repository,
-                running,
-                status="blocked",
-                reason=authorization_failure,
-                impact="人物口型预览被授权或人物绑定门禁阻断，未生成视频。",
-                repair_action="修复授权、人物声音绑定或语言一致性后，以新身份重试。",
             )
         if not self.provider.ready:
             return self._finish(
@@ -684,7 +821,29 @@ class AvatarPreviewService:
                 impact="人物口型预览没有可用音频，未生成视频。",
                 repair_action="重新生成并选择当前版本的非空配音文件。",
             )
-        result = AvatarAndLipSyncService(self.output_root, self.provider).render(request)
+        if request.visual_reference_input.needs_derivation and grant_context is None and not prepare_only:
+            return self._finish(repository, running, status="blocked", reason="reference_grant_required",
+                impact="所选人物范围尚未派生，未调用人物模型。", repair_action="从设备队列取得本次预览许可。")
+        if prepare_only:
+            return running
+        if grant_context is None:
+            return self._finish(repository, running, status="blocked", reason="device_grant_required",
+                impact="未获独立预览设备许可，未调用人物模型。", repair_action="从人物预览入口提交持久设备请求。")
+        if (grant_context.grant.owner_type != "media_preview" or
+                not grant_context.grant.unit_key.startswith("avatar_lipsync:")):
+            raise PermissionError("独立预览需要准确的media_preview单位许可")
+        from app.granted_subprocess import GrantedCommandError
+        try:
+            result = AvatarAndLipSyncService(self.output_root, self.provider).render(request,
+                repository=repository, grant_context=grant_context, viewer_user_id=viewer_user_id,
+                local_diagnostic=local_diagnostic)
+        except (GrantedCommandError, PermissionError) as exc:
+            self._finish(repository, running, status="failed", reason=type(exc).__name__,
+                impact="设备许可执行未完成，未保存成功人物预览。", repair_action=str(exc))
+            raise
+        except ValueError as exc:
+            return self._finish(repository, running, status="failed", reason="reference_derivation_failed",
+                impact="人物参考派生或源资格校验失败，未保存成功预览。", repair_action=str(exc))
         if result.status == "succeeded":
             if not _valid_avatar_preview_output(result.artifact_path, self.output_root):
                 return self._finish(
@@ -724,18 +883,18 @@ class AvatarPreviewService:
         return repository.save_media_preview_run(completed)
 
 
-def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest) -> str:
+def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest, *, input_facts=None) -> str:
     payload = {
         "person": {
             "id": request.person.id,
             "version": request.person.version,
             "avatar_reference": request.person.avatar_reference,
-            "authorization": _authorization_cache_identity(request.person.authorization),
+            "identity": profile_cache_identity(request.person),
         },
         "voice": {
             "id": request.voice.id,
             "version": request.voice.version,
-            "authorization": _authorization_cache_identity(request.voice.authorization),
+            "identity": profile_cache_identity(request.voice),
         },
         "audio_cache_key": request.audio_cache_key,
         "language": request.language,
@@ -743,7 +902,11 @@ def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest) -> str:
         "expression": request.expression,
         "authorization": _authorization_cache_identity(request.authorization),
         "model_id": request.model_id,
+        "visual_reference_input": (asdict(request.visual_reference_input)
+                                   if request.visual_reference_input is not None else None),
     }
+    if input_facts is not None:
+        payload["input_facts"] = input_facts
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -768,38 +931,28 @@ def _avatar_preview_identity(
 def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
     if request.workspace_id != request.person.workspace_id or request.workspace_id != request.voice.workspace_id:
         return "workspace_mismatch"
-    if any(
-        authorization.workspace_id != request.workspace_id
-        for authorization in (
-            request.person.authorization,
-            request.voice.authorization,
-            request.authorization,
-        )
-    ):
+    if request.authorization is not None and request.authorization.workspace_id != request.workspace_id:
         return "authorization_workspace_mismatch"
-    if request.voice.person_profile_id != request.person.id:
+    if request.voice.person_profile_id:
+        if request.voice.person_profile_id != request.person.id:
+            return "voice_person_mismatch"
+        if request.voice.person_version != request.person.version:
+            return "voice_person_version_mismatch"
+    elif request.voice.person_version:
         return "voice_person_mismatch"
-    if request.voice.person_version != request.person.version:
-        return "voice_person_version_mismatch"
     if request.voice.language != request.language:
         return "language_mismatch"
-    person_failure = request.person.authorization.failure_for(
-        content_type="person_likeness", usage_scope="avatar_lipsync"
-    )
-    if person_failure:
-        return person_failure
-    voice_failure = request.voice.authorization.failure_for(
-        content_type="voice", usage_scope="avatar_lipsync"
-    )
-    if voice_failure:
-        return voice_failure
-    return request.authorization.failure_for(
-        content_type="avatar_video", usage_scope="avatar_lipsync"
-    )
+    for profile, kind in ((request.person, "person_likeness"), (request.voice, "voice")):
+        failure = profile_use_failure(profile, content_type=kind, usage_scope="avatar_lipsync")
+        if failure:
+            return failure
+    if request.authorization is None:
+        return None
+    return request.authorization.failure_for(content_type="avatar_video", usage_scope="avatar_lipsync")
 
 
 def _parse_avatar_result(
-    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str
+    payload: object, *, expected_output: Path, audio_path: Path, cache_key: str, grant_context=None
 ) -> AvatarAndLipSyncResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         return _failure(
@@ -851,7 +1004,7 @@ def _parse_avatar_result(
             impact="人物口型服务没有生成视频，当前视频不能进入后续剪辑。",
             action="检查输出目录权限和供应商任务结果后重试。",
         )
-    media = _probe_avatar_output(expected_output, audio_path=audio_path)
+    media = _probe_avatar_output(expected_output, audio_path=audio_path, grant_context=grant_context)
     if media is None:
         return _failure(
             status="failed",
@@ -955,7 +1108,9 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def _authorization_cache_identity(authorization: Authorization) -> dict[str, str | None]:
+def _authorization_cache_identity(authorization: Authorization | None) -> dict[str, str | None] | None:
+    if authorization is None:
+        return None
     return {
         "id": authorization.id,
         "version": authorization.version,
@@ -992,11 +1147,20 @@ def avatar_lipsync_provider_from_settings(
     )
 
 
-def _probe_avatar_output(path: Path, *, audio_path: Path | None = None) -> tuple[float, str] | None:
+def _probe_avatar_output(path: Path, *, audio_path: Path | None = None, grant_context=None) -> tuple[float, str] | None:
     if not path.is_file() or path.stat().st_size == 0:
         return None
     try:
-        expected_duration = probe_media_duration(audio_path) if audio_path is not None else None
-        return probe_avatar_media(path, expected_duration=expected_duration)
+        def granted_probe(command, **_options):
+            result = grant_context.run(command)
+            return subprocess.CompletedProcess(command, result.returncode,
+                result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace"))
+        options = {} if grant_context is None else {"runner": granted_probe}
+        if grant_context is not None:
+            grant_context.check()
+            if path.stat().st_size > grant_context.max_output_bytes:
+                raise ValueError("人物输出超过专属预算")
+        expected_duration = probe_media_duration(audio_path, **options) if audio_path is not None else None
+        return probe_avatar_media(path, expected_duration=expected_duration, **options)
     except MediaTimingError:
         return None

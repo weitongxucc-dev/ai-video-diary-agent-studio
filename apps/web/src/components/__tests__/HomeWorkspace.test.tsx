@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CreationTask, HomeAggregation } from "@/lib/types";
+import type { CreationTask, HomeAggregation, ProductionFoundation } from "@/lib/types";
 import { HomeWorkspace, TrendChart, type HomeDashboardExample } from "@/components/HomeWorkspace";
 
 const routerPush = vi.fn();
@@ -30,27 +30,33 @@ const sample: HomeDashboardExample = {
 
 beforeEach(() => routerPush.mockReset());
 describe("HomeWorkspace", () => {
-  it("keeps the v4 dashboard structure without inventing unavailable production aggregates", () => {
+  it("keeps actual tasks first and omits unavailable modules", () => {
     render(<HomeWorkspace foundation={null} tasks={[task]} />);
-    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("可见素材");
-    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("作品");
-    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("声音");
-    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("任务");
-    expect(screen.getAllByText("—")).toHaveLength(7);
-    expect(screen.getByText("尚无接收日聚合数据")).toBeInTheDocument();
-    expect(screen.getByText("素材尚无可信行业分类")).toBeInTheDocument();
-    expect(screen.getAllByText("标签统计未载入")).toHaveLength(2);
-    expect(screen.getByText("当前工作区任务；整机队列待接入")).toBeInTheDocument();
-    expect(screen.getByText("还没有可查看的本地成片")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "工作空间七项概览" })).not.toBeInTheDocument();
+    expect(screen.queryByText("尚无接收日聚合数据")).not.toBeInTheDocument();
+    expect(screen.queryByText("素材尚无可信行业分类")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "内容标签" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "待处理" })).toHaveTextContent("设备演示");
+    expect(screen.queryByRole("region", { name: "进行中" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "最近完成" })).not.toBeInTheDocument();
+    expect(screen.queryByText("还没有可查看的本地成片")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /设备演示/ }));
     expect(screen.getByRole("dialog", { name: "任务卡片" })).toHaveTextContent("需要确认镜头");
   });
 
   it("shows local rendered output as an output, without claiming platform publishing", () => {
-    render(<HomeWorkspace foundation={null} tasks={[{ ...task, output_ready: true }]} />);
-    expect(screen.getByText("当前工作区的本地成片，未代表平台发布")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /设备演示.*本地成片可查看/ })).toHaveAttribute("href", "/tasks/task-one");
-    expect(screen.getAllByText("—")).toHaveLength(7);
+    render(<HomeWorkspace foundation={null} tasks={[{ ...task, stage_status: "running", output_ready: true }]} />);
+    const works = screen.getByRole("heading", { name: "近期成果" }).closest("section") as HTMLElement;
+    expect(within(works).getByRole("link", { name: /设备演示.*本地成片/ })).toHaveAttribute("href", "/tasks/task-one");
+    expect(screen.queryByRole("heading", { name: "最近完成" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "工作进度" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "可查看的成片" })).not.toBeInTheDocument();
+  });
+
+  it("does not present a completed stage without a ready output as a recent result", () => {
+    render(<HomeWorkspace foundation={null} tasks={[{ ...task, stage_status: "completed", status: "completed" }]} />);
+    expect(screen.queryByRole("heading", { name: "近期成果" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "已完成步骤" })).toHaveTextContent("设备演示");
   });
 
   it.each([
@@ -124,7 +130,7 @@ describe("HomeWorkspace", () => {
   it("keeps all 0, 1 and 7 trend points inside the chart", () => {
     const zero = render(<TrendChart values={[]} />);
     expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
-    zero.rerender(<TrendChart values={points(1)} />);
+    zero.rerender(<TrendChart values={[{ date: "2026-09-01", count: 1 }]} />);
     expect(screen.getByRole("img", { name: "素材接收趋势" }).querySelector("circle")).toHaveAttribute("cx", "143");
     zero.rerender(<TrendChart values={points(7)} />);
     const circles = screen.getByRole("img", { name: "素材接收趋势" }).querySelectorAll("circle");
@@ -157,18 +163,17 @@ describe("HomeWorkspace", () => {
       ],
       recommended_gaps: [],
     }} />);
-    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    const cloud = screen.getByRole("heading", { name: "内容标签" }).closest("section") as HTMLElement;
     // 数字取素材数量 asset_count，不是片段数量 segment_count
     expect(within(cloud).getByRole("link", { name: /门店/ })).toHaveTextContent("门店3");
     expect(within(cloud).getByRole("link", { name: /操作/ })).toHaveTextContent("操作1");
     expect(within(cloud).getByRole("link", { name: /操作/ })).toHaveAttribute("href", "/library?tag=%E6%93%8D%E4%BD%9C");
   });
 
-  it("keeps the tag card empty when the server reports no tags instead of borrowing segment counts", () => {
+  it("omits the tag module when the server has no labels instead of borrowing segment counts", () => {
     render(<HomeWorkspace foundation={null} tasks={[]} insights={{ asset_count: 0, segment_count: 9, tags: [], recommended_gaps: [] }} />);
-    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
-    expect(within(cloud).getAllByText("当前工作区还没有素材标签")).toHaveLength(2);
-    expect(within(cloud).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "内容标签" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /门店/ })).not.toBeInTheDocument();
   });
 
   it("hides taxonomy tags that no material carries, so a zero count cannot pose as a real tag", () => {
@@ -182,16 +187,15 @@ describe("HomeWorkspace", () => {
       ],
       recommended_gaps: [],
     }} />);
-    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
+    const cloud = screen.getByRole("heading", { name: "内容标签" }).closest("section") as HTMLElement;
     expect(within(cloud).getByRole("link", { name: /门店/ })).toHaveTextContent("门店2");
     expect(within(cloud).queryByRole("link", { name: /设备/ })).not.toBeInTheDocument();
   });
 
   it("says the read failed when the insights could not be loaded, and does not blame an empty workspace", () => {
     render(<HomeWorkspace foundation={null} tasks={[]} insights={null} />);
-    const cloud = screen.getByRole("heading", { name: "内容标签词云" }).closest("section") as HTMLElement;
-    expect(within(cloud).getAllByText("标签统计读取失败，请刷新重试")).toHaveLength(2);
-    expect(within(cloud).queryByText("当前工作区还没有素材标签")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "内容标签" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("暂时无法读取内容标签");
   });
 
   const meta = { scope: "device_anonymous" as const, source: "material_asset", as_of: "2026-10-04T00:00:00Z" };
@@ -219,32 +223,126 @@ describe("HomeWorkspace", () => {
     unknown: [{ key: "materials.by_industry", reason: "行业分类仍待定义，未统计" }],
   };
 
+  const emptyHome: HomeAggregation = {
+    ...home,
+    counts: ["visible_assets", "analysis_ready", "analysis_pending", "knowledge_sources", "voices", "tasks", "works"]
+      .map((key, index) => ({ key, label: ["可见素材", "分析可用", "待分析", "知识来源", "声音", "任务", "作品"][index], value: 0, meta })),
+    trend: { ...home.trend, meta: { ...meta, as_of: "2026-10-09T00:00:00Z" }, points: Array.from({ length: 7 }, (_, index) => ({ date: `2026-10-${String(3 + index).padStart(2, "0")}`, count: 0 })) },
+    device_queue: { ...home.device_queue, counts: {}, records_total: 0, running: 0, queued: 0 },
+    entries: { ...home.entries, queue: [], todos: [], works: [] },
+  };
+
+  it("replaces actual zero-filled daily records and seven zero counts with a compact start entry", () => {
+    const onDays = vi.fn();
+    const foundation = { readiness: { ready: false, blockers: [{ code: "versioned_voice_authorization_missing", message: "尚未登记可用于配音的版本化声音。" }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} live={{ data: emptyHome, loading: false, error: null, days: 7, onDays, onRetry: vi.fn() }} />);
+    const entry = screen.getByRole("region", { name: "开始创作" });
+    expect(within(entry).getByRole("link", { name: "说说视频目标" })).toHaveAttribute("href", "/?new=1");
+    expect(within(entry).getByRole("link", { name: "去素材库导入" })).toHaveAttribute("href", "/library");
+    expect(screen.queryByRole("region", { name: "工作空间七项概览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "素材接收趋势" })).toHaveTextContent("近 7 天");
+    fireEvent.click(screen.getByRole("button", { name: "30 天" }));
+    expect(onDays).toHaveBeenCalledWith(30);
+    expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "7 天" }));
+    expect(onDays).toHaveBeenLastCalledWith(7);
+  });
+
+  it("does not infer an empty workspace from a zero period when the visible library has older data", () => {
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data: { ...home, trend: emptyHome.trend }, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12可见素材");
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
+  });
+
+  it("preserves an actual 30-day selection when the workspace is mounted again", () => {
+    const data = { ...emptyHome, days: 30, trend: { ...emptyHome.trend, days: 30, points: Array.from({ length: 30 }, (_, index) => ({ date: new Date(Date.UTC(2026, 9, index - 20)).toISOString().slice(0, 10), count: 0 })) } };
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data, loading: false, error: null, days: 30, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("region", { name: "素材接收趋势" })).toHaveTextContent("近 30 天");
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+  });
+
+  it("keeps unknown counts distinct from a proven empty workspace", () => {
+    const data = { ...emptyHome, counts: emptyHome.counts.filter(item => item.key !== "voices"), unknown: [{ key: "voices", reason: "声音库统计暂不能读取" }] };
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByText("当前已读取的统计暂无记录。")).toBeInTheDocument();
+    expect(screen.getByText("声音库统计暂不能读取").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("does not call stale zero counts an empty workspace after a read failure", () => {
+    const onRetry = vi.fn();
+    render(<HomeWorkspace foundation={null} tasks={[]} live={{ data: emptyHome, loading: false, error: "统计连接失败", days: 7, onDays: vi.fn(), onRetry }} />);
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(screen.getByText("部分首页数据读取失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["versioned_voice_authorization_missing", "尚未登记可用于配音的版本化声音。", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_missing", "授权声音缺少工作区参考音频或对应文字。", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_unavailable", "参考文件失联或为空，请重新定位原参考", "/settings?section=voices", "添加或检查声音"],
+    ["voice_reference_unavailable", "当前成员无权读取此参考素材", "/settings?section=voices", "添加或检查声音"],
+    ["voice_model_not_ready", "本地声音模型未安装", "/settings?section=paths", "检查本地模型"],
+    ["source_pool_empty", "自动选题来源池为空。", "/sources", "管理选题来源"],
+    ["approved_materials_empty", "可用素材库中还没有明确可作补充画面的镜头。", "/library", "补充或检查素材"],
+  ])("preserves the actual %s message and directs its repair to a real consumer", (code, message, href, label) => {
+    const foundation = { readiness: { ready: false, blockers: [{ code, message }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+    const preparation = screen.getByRole("region", { name: "制作准备事项" });
+    expect(preparation).toHaveTextContent(message);
+    expect(within(preparation).getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expect(within(preparation).queryByRole("link", { name: "查看原因" })).not.toBeInTheDocument();
+    expect(screen.queryByText("声音未授权")).not.toBeInTheDocument();
+    if (code.startsWith("voice") || code.startsWith("versioned_voice")) expect(preparation).toHaveTextContent("可以先讨论目标和编写文案");
+    expect(within(preparation).getByText("查看诊断").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("retains active use restrictions and unfamiliar blockers without inventing a repair route", () => {
+    const message = "声音已标记为仅参考，不可用于配音";
+    const foundation = { readiness: { ready: false, blockers: [{ code: "voice_use_restricted", message }] } } as ProductionFoundation;
+    render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+    const preparation = screen.getByRole("region", { name: "制作准备事项" });
+    expect(preparation).toHaveTextContent(message);
+    expect(within(preparation).queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("renders the real anonymous overview, trend, storage and enterable entries", () => {
     render(<HomeWorkspace foundation={null} live={{ data: home, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[]} />);
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("12");
     // 服务端没给的计数不补 0：显示未知，而不是 0。
-    expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("未知");
+    expect(screen.getByRole("region", { name: "工作空间七项概览" })).not.toHaveTextContent("未知");
     expect(screen.getByRole("img", { name: /素材接收趋势/ })).toBeInTheDocument();
     const queue = screen.getByRole("heading", { name: "我的任务" }).closest("section") as HTMLElement;
     expect(within(queue).getByRole("button", { name: /设备演示/ })).toBeInTheDocument();
-    const todos = screen.getByRole("heading", { name: "待处理" }).closest("section") as HTMLElement;
+    const todos = screen.getByRole("heading", { name: "需要处理" }).closest("section") as HTMLElement;
     expect(within(todos).getByRole("link", { name: /门店介绍/ })).toHaveAttribute("href", "/tasks/task-two");
     const works = screen.getByRole("heading", { name: "近期成果" }).closest("section") as HTMLElement;
     expect(within(works).getByRole("link", { name: /开场演示/ })).toHaveAttribute("href", "/tasks/task-three");
-    const storage = screen.getByRole("heading", { name: "存储" }).closest("section") as HTMLElement;
+    const storage = screen.getByText(/数据盘 · 数据盘可用 · 可用 384.0 GB/).closest("details") as HTMLElement;
+    expect(storage).not.toHaveAttribute("open");
+    fireEvent.click(within(storage).getByText(/数据盘 ·/));
+    expect(storage).toHaveAttribute("open", "");
     expect(storage).toHaveTextContent("128.0 GB");
-    expect(storage).toHaveTextContent("数据盘可用");
     expect(storage).toHaveTextContent("整机匿名汇总");
     expect(storage).toHaveTextContent("数据盘目录状态与容量");
     // 整机匿名运行只有数量，不含归属或名称。
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).not.toHaveTextContent("门店介绍");
     // 没有真实载体的统计项按服务端给出的原因如实显示。
-    const unknown = screen.getByRole("heading", { name: "没有真实数据的项" }).closest("section") as HTMLElement;
+    const unknown = screen.getByText(/暂时没有数据的统计/).closest("details") as HTMLElement;
+    expect(unknown).not.toHaveAttribute("open");
+    fireEvent.click(within(unknown).getByText(/暂时没有数据的统计/));
+    expect(unknown).toHaveAttribute("open", "");
     expect(unknown).toHaveTextContent("行业分类仍待定义，未统计");
     // unknown.key 是技术键，界面上给中文说法。
     expect(unknown).toHaveTextContent("素材行业分布");
     // 整机状态：处理中与排队分开显示，技术状态键不铺到界面。
-    const stage = screen.getByRole("heading", { name: "任务与处理阶段" }).closest("section") as HTMLElement;
+    const stage = screen.getByText("更多任务状态").closest("details") as HTMLElement;
     expect(stage).toHaveTextContent("处理中 2 · 排队 3");
     expect(stage).toHaveTextContent("素材待确认 1");
     // 历史完成数单列，不混进处理中/排队。
@@ -258,6 +356,33 @@ describe("HomeWorkspace", () => {
     expect(stage).toHaveTextContent("素材被数据盘阻塞 2");
   });
 
+  it("keeps a current repair action visible when the task still has a ready local output", () => {
+    const readyButFailedTask: CreationTask = {
+      ...task,
+      id: "task-one",
+      stage_status: "failed",
+      status: "failed",
+      output_ready: true,
+      stage_reason: "新版本输出检查失败",
+      stage_impact: "已有成片仍可查看",
+      stage_repair_action: "选择可写位置后重试",
+    };
+    const withTodo = {
+      ...home,
+      entries: {
+        ...home.entries,
+        todos: [{ task_id: "task-one", title: "设备演示", stage: "视频剪辑", reason: "新版本输出检查失败", repair_action: "选择可写位置后重试" }],
+      },
+    };
+    render(<HomeWorkspace foundation={null} live={{ data: withTodo, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} tasks={[readyButFailedTask]} />);
+
+    const todos = screen.getByRole("heading", { name: "需要处理" }).closest("section") as HTMLElement;
+    expect(within(todos).getByRole("link", { name: /设备演示/ })).toHaveTextContent("新版本输出检查失败");
+    expect(within(todos).getByRole("link", { name: /设备演示/ })).toHaveTextContent("选择可写位置后重试");
+    const works = screen.getByRole("heading", { name: "近期成果" }).closest("section") as HTMLElement;
+    expect(within(works).getByRole("link", { name: /设备演示.*本地成片/ })).toHaveAttribute("href", "/tasks/task-one");
+  });
+
   it("keeps a real retry action when a later read fails, and shows loading before any data", async () => {
     const onRetry = vi.fn();
     const { rerender } = render(<HomeWorkspace foundation={null} live={{ data: null, loading: true, error: null, days: 7, onDays: vi.fn(), onRetry }} tasks={[]} />);
@@ -268,4 +393,44 @@ describe("HomeWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     expect(onRetry).toHaveBeenCalled();
   });
+
+
+it("does not warn about optional brand information but retains other dependency warnings", () => {
+  const foundation = { readiness: { ready: false, blockers: [{ code: "brand_profile_missing", message: "品牌" }] } } as ProductionFoundation;
+  const view = render(<HomeWorkspace foundation={foundation} tasks={[]} />);
+  expect(screen.queryByText("品牌未设置")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "查看原因" })).not.toBeInTheDocument();
+  view.rerender(<HomeWorkspace foundation={{ ...foundation, readiness: { ...foundation.readiness, blockers: [...foundation.readiness.blockers, { code: "voice_model_not_ready", message: "声音模型" }] } }} tasks={[]} />);
+  expect(screen.getByRole("link", { name: "检查本地模型" })).toHaveAttribute("href", "/settings?section=paths");
+  expect(screen.getByRole("region", { name: "制作准备事项" })).toHaveTextContent("声音模型");
+});
+
+
+
+
+it("shows each task once when the task list and home summary share its identity", () => {
+  const duplicatedTask = { ...task, id: "task-one", name: "设备演示" };
+  render(<HomeWorkspace foundation={null} tasks={[duplicatedTask]} live={{ data: home, loading: false, error: null, days: 7, onDays: vi.fn(), onRetry: vi.fn() }} />);
+  expect(screen.getAllByText("设备演示")).toHaveLength(1);
+  expect(screen.getByRole("heading", { name: "我的任务" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "待处理" })).not.toBeInTheDocument();
+});
+
+it("keeps long observations readable in a collapsed details list and preserves the exact tag link", () => {
+  const longTag = "场景:电视访谈节目现场，背景为城市夜景和窗帘";
+  render(<HomeWorkspace foundation={null} tasks={[]} insights={{
+    asset_count: 5, segment_count: 12,
+    tags: [
+      { tag: "门店", asset_count: 3, segment_count: 8, duration_seconds: 20, usage_count: 0 },
+      { tag: longTag, asset_count: 2, segment_count: 4, duration_seconds: 10, usage_count: 0 },
+    ], recommended_gaps: [],
+  }} />);
+  expect(screen.getByRole("link", { name: /门店/ })).toHaveAttribute("href", "/library?tag=%E9%97%A8%E5%BA%97");
+  const more = screen.getByText("更多标签与详细观察（1）").closest("details") as HTMLDetailsElement;
+  expect(more).not.toHaveAttribute("open");
+  expect(more.querySelector("a")).toHaveTextContent(longTag);
+  fireEvent.click(more.querySelector("summary")!);
+  expect(more).toHaveAttribute("open", "");
+  expect(within(more).getByRole("link", { name: longTag })).toHaveAttribute("href", "/library?tag=" + encodeURIComponent(longTag));
+});
 });

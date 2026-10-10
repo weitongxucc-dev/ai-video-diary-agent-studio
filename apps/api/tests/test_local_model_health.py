@@ -3,6 +3,7 @@ import socket
 from pathlib import Path
 
 from app.config import Settings
+from app.config import record_llm_service_verification
 from app.model_runtime import CHINESE_CLIP_VIT_B16, ModelCatalog
 from app.models import utc_now
 from app.runtime_health import (
@@ -31,10 +32,11 @@ def test_closed_local_model_port_is_not_reported_available():
     with socket.socket() as server:
         server.bind(('127.0.0.1', 0))
         port = server.getsockname()[1]
-        item = _deepseek_item(Settings(llm_provider='custom', llm_base_url=f'http://127.0.0.1:{port}/v1', llm_model='local'), utc_now())
+        settings = Settings(llm_provider='custom', llm_base_url=f'http://127.0.0.1:{port}/v1', llm_model='local')
+        item = _deepseek_item(settings, utc_now(), "health-unverified-closed-port")
     assert item['status'] == 'degraded'
-    assert '无法连接' in item['reason']
-    assert '启动本地模型服务' in item['repair_action']
+    assert '还没有真的连过一次服务' in item['reason']
+    assert '核对当前工作区设置' in item['repair_action']
 
 
 def test_listening_port_does_not_claim_model_generation_verified():
@@ -42,25 +44,62 @@ def test_listening_port_does_not_claim_model_generation_verified():
         server.bind(('127.0.0.1', 0))
         server.listen()
         port = server.getsockname()[1]
-        item = _deepseek_item(Settings(llm_provider='custom', llm_base_url=f'http://127.0.0.1:{port}/v1', llm_model='local'), utc_now())
-    assert item['status'] == 'ready'
-    assert '端口可连接' in item['reason']
-    assert '实际生成尚未验证' in item['reason']
+        settings = Settings(llm_provider='custom', llm_base_url=f'http://127.0.0.1:{port}/v1', llm_model='local')
+        item = _deepseek_item(settings, utc_now(), "health-unverified-listening-port")
+    assert item['status'] == 'degraded'
+    assert '还没有真的连过一次服务' in item['reason']
 
 
 def test_cloud_configuration_check_makes_no_network_request(monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError('Cloud health must not send a request')
     monkeypatch.setattr(socket, 'create_connection', unexpected)
-    item = _deepseek_item(Settings(llm_provider='custom', llm_base_url='https://example.com/v1', llm_model='remote'), utc_now())
-    assert item['status'] == 'ready'
-    assert '连接与实际生成尚未验证' in item['reason']
+    item = _deepseek_item(Settings(llm_provider='custom', llm_base_url='https://example.com/v1', llm_model='remote'), utc_now(), "health-unverified-cloud")
+    assert item['status'] == 'degraded'
+    assert '还没有真的连过一次服务' in item['reason']
 
 
 def test_invalid_local_port_returns_actionable_health_result():
-    item = _deepseek_item(Settings(llm_provider='custom', llm_base_url='http://127.0.0.1:bad/v1', llm_model='local'), utc_now())
+    item = _deepseek_item(Settings(llm_provider='custom', llm_base_url='http://127.0.0.1:bad/v1', llm_model='local'), utc_now(), "health-unverified-invalid-port")
     assert item['status'] == 'degraded'
-    assert '端口' in item['repair_action']
+    assert '还没有真的连过一次服务' in item['reason']
+
+
+def test_recent_current_workspace_failure_is_reported_without_cross_workspace_reuse():
+    settings = Settings(llm_provider='custom', llm_base_url='https://provider.example/v1', llm_model='synthetic-model')
+    record_llm_service_verification(
+        settings, ok=False, cause='provider_rejected', detail='最近一次受控调用被拒绝。',
+        repair_action='检查此工作区的模型设置。', workspace_id='health-workspace-failed',
+    )
+
+    failed = _deepseek_item(settings, utc_now(), 'health-workspace-failed')
+    other = _deepseek_item(settings, utc_now(), 'health-workspace-other')
+
+    assert failed['status'] == 'degraded'
+    assert failed['reason'] == '最近一次受控调用被拒绝。'
+    assert failed['repair_action'] == '检查此工作区的模型设置。'
+    assert '还没有真的连过一次服务' in other['reason']
+    assert other['repair_action'] == '核对当前工作区设置；失败时查看该次调用的实际原因。'
+
+    missing = _deepseek_item(Settings(), utc_now(), 'health-workspace-missing')
+    assert missing['status'] == 'missing'
+    assert missing['repair_action'] == '核对当前工作区设置；失败时查看该次调用的实际原因。'
+
+
+def test_recent_success_is_available_only_for_the_workspace_that_was_verified():
+    settings = Settings(llm_provider='custom', llm_base_url='https://provider.example/v1', llm_model='synthetic-model')
+    record_llm_service_verification(
+        settings, ok=True, cause='provider_reply', workspace_id='health-workspace-verified',
+    )
+
+    verified = _deepseek_item(settings, utc_now(), 'health-workspace-verified')
+    other = _deepseek_item(settings, utc_now(), 'health-workspace-unverified')
+
+    assert verified['status'] == 'ready'
+    assert '上一次真实调用成功' in verified['reason']
+    assert '失败时查看' in verified['repair_action']
+    assert other['status'] == 'degraded'
+    assert '还没有真的连过一次服务' in other['reason']
 
 
 def _catalog_with_installed_weights(tmp_path, *, write_runtime=True):

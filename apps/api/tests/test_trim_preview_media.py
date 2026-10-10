@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
@@ -48,11 +49,12 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     asset = MaterialAsset(
         id="asset-trim", workspace_id=workspace_id, owner_user_id=creator_id,
         file_name=video.name, path=str(video),
-        size_bytes=video.stat().st_size, modified_at=main_module.utc_now(), duration_seconds=2.4,
+        size_bytes=video.stat().st_size,
+        modified_at=datetime.fromtimestamp(video.stat().st_mtime, timezone.utc), duration_seconds=2.4,
         usage_role="b_roll", review_status="approved", analysis_status="ready",
         segments=[MaterialSegment(
             id="segment-trim", asset_id="asset-trim", start_seconds=0, end_seconds=2.4,
-            description="red then blue", review_status="approved",
+            description="red then blue", usage_role="b_roll", review_status="approved",
         )],
     )
     repository._save_asset(asset)
@@ -139,7 +141,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         incomplete = client.post(route, json={
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
         }, headers=member_headers)
-    assert incomplete.status_code == 422
+    assert incomplete.status_code == 422, incomplete.text
     assert repository.list_edit_proposals(workspace_id, task_id) == []
     assert repository.list_job_runs(workspace_id, task_id) == []
 

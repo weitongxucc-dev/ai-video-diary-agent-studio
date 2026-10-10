@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MediaProfilesApiError, createAvatarLipsyncPreview, createVoicePreview, getMediaCapability, importVoiceReference, listApprovedMaterials, mediaProfilesErrorMessage, saveVoiceProfile } from "../media-profiles-api";
+import { MediaProfilesApiError, createAvatarLipsyncPreview, createVoicePreview, getMediaCapability, importVoiceReference, listReferenceMaterials, mediaProfilesErrorMessage, saveVoiceProfile } from "../media-profiles-api";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("media profiles API client", () => {
-  it("only requests approved materials for workspace references", async () => {
+  it("reads registered materials with bounded pagination without an approval gate", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ assets: [], total_count: 0 }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await listApprovedMaterials();
-    expect(fetchMock).toHaveBeenCalledWith("/api/production/materials?review_status=approved&limit=24", expect.objectContaining({ cache: "no-store" }));
+    await listReferenceMaterials(100);
+    expect(fetchMock).toHaveBeenCalledWith("/api/production/materials?limit=100&offset=100", expect.objectContaining({ cache: "no-store" }));
   });
 
   it("posts a versioned voice profile to its real endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "voice-1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await saveVoiceProfile({ id: "voice-1", person_profile_id: "person-1", person_version: "v1", version: "v1", language: "zh", reference_audio_path: "workspace://materials/asset-1", reference_text: "测试", model_id: "voice-clone", authorization: { id: "authorization-1", version: "v1", rights_holder: "本人", content_types: ["voice"], usage_scopes: ["narration", "avatar_lipsync"], effective_from: "2026-08-28T00:00:00Z", expires_at: null, evidence_reference: "workspace://proof/1", status: "active" } });
+    await saveVoiceProfile({ id: "voice-1", display_name: "Independent voice", person_profile_id: "person-1", person_version: "v1", version: "v1", language: "zh", reference_audio_path: "workspace://materials/asset-1", reference_text: "测试", model_id: "voice-clone", authorization: { id: "authorization-1", version: "v1", rights_holder: "本人", content_types: ["voice"], usage_scopes: ["narration", "avatar_lipsync"], effective_from: "2026-08-28T00:00:00Z", expires_at: null, evidence_reference: "workspace://proof/1", status: "active" } });
     expect(fetchMock).toHaveBeenCalledWith("/api/media/voice-profiles", expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toMatchObject({ reference_audio_path: "workspace://materials/asset-1" });
   });

@@ -1,7 +1,9 @@
 "use client";
+import { HomeCardDialog } from "./HomeCardDialog";
 
 import { Search } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -22,12 +24,17 @@ type Props = {
   onClose: () => void;
   onNavigate: (href: string) => void;
   open: boolean;
+  parentLayerId?: string;
 };
 
-export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
+export function CommandPalette({ items, onClose, onNavigate, open, parentLayerId }: Props) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const attachInput = useCallback((input: HTMLInputElement | null) => {
+    inputRef.current = input;
+    input?.focus();
+  }, []);
 
   const results = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
@@ -41,7 +48,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
     if (!open) return;
     setQuery("");
     setActiveIndex(0);
-    requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
   useEffect(() => {
@@ -56,12 +62,9 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
   }
 
   return (
-    <div className="command-palette-layer">
-      <button aria-label="关闭搜索" className="command-palette-backdrop" onClick={onClose} type="button" />
+    <HomeCardDialog kind="navigation" parentLayerId={parentLayerId} title="搜索页面和创作任务" onClose={onClose}>
       <section
-        aria-label="搜索页面和创作任务"
-        aria-modal="true"
-        className="command-palette"
+        className="command-palette-content"
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
@@ -77,7 +80,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
             choose(results[activeIndex]);
           }
         }}
-        role="dialog"
       >
         <label className="command-palette-search">
           <Search aria-hidden size={18} strokeWidth={1.8} />
@@ -88,7 +90,7 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
               setActiveIndex(0);
             }}
             placeholder="搜索页面、创作任务或设置"
-            ref={inputRef}
+            ref={attachInput}
             value={query}
           />
           <kbd>ESC</kbd>
@@ -118,6 +120,6 @@ export function CommandPalette({ items, onClose, onNavigate, open }: Props) {
         </div>
         <footer>↑↓ 选择 · Enter 打开 · ⌘K 随时搜索</footer>
       </section>
-    </div>
+    </HomeCardDialog>
   );
 }

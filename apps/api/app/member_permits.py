@@ -42,6 +42,7 @@ from app.host_resource_probes import (
     HostResourceProbe,
     NarrationBudget,
     MontageBudget,
+    PresenterBudget,
 )
 from app.local_members import LocalMember, LocalMemberService
 from app.device_accounts import DeviceAccountService
@@ -167,6 +168,9 @@ def creation_job_registration(
     narration_budget: NarrationBudget | None = None,
     montage_budget: MontageBudget | None = None,
     stage_actions: Mapping[str, Callable] | None = None,
+    presenter_budget: PresenterBudget | None = None,
+    presenter_cpu_render_budget: CpuRenderBudget | None = None,
+    presenter_models: dict | None = None, resolve_presenter_output=None,
 ) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
@@ -178,6 +182,9 @@ def creation_job_registration(
             repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget),
             verify_identity=verify_identity,
             narration_budget=narration_budget, montage_budget=montage_budget,
+            presenter_budget=presenter_budget,
+            presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget),
+            presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output,
         ),
         CreationJobUnitExecutor(
             repository, render_action=render_action, render_is_valid=render_is_valid,
@@ -206,6 +213,29 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
             budgets.append(budget_type(**values))
         except ValueError as exc:
             raise HostBudgetUncalibrated(str(exc)) from None
+    return tuple(budgets)
+
+
+def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
+    """Absent person calibration stays absent; partial calibration is an error."""
+    environment = os.environ if env is None else env
+    budgets = []
+    for kind, prefix in ((PresenterBudget, "DEVICE_PRESENTER_"),
+                         (CpuRenderBudget, "DEVICE_PRESENTER_CPU_RENDER_")):
+        names = {item.name: prefix + item.name.upper() for item in fields(kind)}
+        if not any(environment.get(name, "").strip() for name in names.values()):
+            budgets.append(None)
+            continue
+        missing = [name for name in names.values() if not environment.get(name, "").strip()]
+        if missing:
+            raise HostBudgetUncalibrated("人物专属预算尚未标定：缺少 " + "、".join(missing))
+        try:
+            values = {field: (float(environment[name]) if field in {
+                "max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds", "max_pixel_seconds"}
+                else int(environment[name])) for field, name in names.items()}
+            budgets.append(kind(**values))
+        except ValueError as exc:
+            raise HostBudgetUncalibrated(f"人物专属标定值无效：{exc}") from exc
     return tuple(budgets)
 
 

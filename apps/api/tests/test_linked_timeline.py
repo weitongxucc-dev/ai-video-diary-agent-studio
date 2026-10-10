@@ -71,11 +71,7 @@ def test_linked_speed_moves_subtitles_audio_and_envelopes_together():
     from app.graphic_overlays import TextOverlay
     plan.graphic_overlays=[TextOverlay(text="跟随内容",start_seconds=1,end_seconds=5).model_dump()]
     plan.clips[1].visual_effects={"fade_in_seconds":.4,"fade_out_seconds":.4}
-    calls = []
-    def stretch(clip, rate, duration):
-        calls.append((clip.source_start_ms,clip.source_end_ms,rate,duration))
-        return "artifacts/stretched.wav"
-    changed, captions = retime_clip(plan, subtitles(), audio(), "1", 2, stretch)
+    changed, captions = retime_clip(plan, subtitles(), audio(), "1", 2)
     assert [(item["start_seconds"],item["end_seconds"]) for item in changed.graphic_overlays]==[(1,4)]
     assert changed.graphic_overlays[0]["text"]=="跟随内容"
     assert changed.clips[1].fade_envelope_duration_frames==60
@@ -84,19 +80,20 @@ def test_linked_speed_moves_subtitles_audio_and_envelopes_together():
     assert changed.duration_seconds == 5
     assert [(c.timeline_start_seconds,c.timeline_end_seconds) for c in changed.clips] == [(0,2),(2,3),(3,5)]
     assert changed.clips[1].source_end_seconds == 4
-    assert calls == [(3000,5000,2,1000)]
     clips = changed.audio_timeline.tracks[0].clips
     assert [(c.timeline_start_ms,c.duration_ms,c.envelope_offset_ms) for c in clips] == [(0,2000,0),(2000,1000,1000),(3000,2000,4000)]
+    assert clips[1].source_ref == "narration://artifact/original"
+    assert (clips[1].source_start_ms, clips[1].source_end_ms, clips[1].playback_rate) == (3000, 5000, 2)
     assert clips[1].fade_in_ms == 250 and clips[1].envelope_duration_ms == 3000
     assert [(c.start_seconds,c.end_seconds) for c in captions[0].cues] == [(1,4)]
     plan.clips[-1].locked=True
     with pytest.raises(ValueError,match="锁定"):
-        retime_clip(plan,subtitles(),audio(),"1",2,lambda *_: pytest.fail("locked edit must not execute media"))
+        retime_clip(plan,subtitles(),audio(),"1",2)
     plan.clips[-1].locked=False
     plan.clips[0].timeline_end_seconds=3.96
     plan.clips[1].timeline_start_seconds=3.96
     with pytest.raises(ValueError, match="0.04"):
-        retime_clip(plan,subtitles(),audio(),"1",4,lambda *_: pytest.fail("invalid frame duration must not execute media"))
+        retime_clip(plan,subtitles(),audio(),"1",4)
 
 
 def test_remove_multiple_ranges_keeps_one_clock_and_fade_offsets():

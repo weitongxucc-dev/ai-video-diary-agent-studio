@@ -1,4 +1,4 @@
-.page { width: min(100%, 1160px); margin: 0 auto; padding: 0 0 24px; }
+.page { width: min(100%, 1160px); margin: 0 auto; padding: 16px 20px 24px; container-type: inline-size; }
 .sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
@@ -28,37 +28,37 @@
 .objectRail { display: flex; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
 .objectRail > header { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
 .objectRail > header > div { display: grid; }
-.objectRail > header span { color: var(--text-3); font-size: 11px; }
+.objectRail > header span { color: var(--text-3); font-size:12px; }
 .objectRail > header strong { margin-top: 2px; font-size: 13px; font-weight: 500; }
 .objectRail > header button, .editor header button { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .objectList { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; align-content: start; padding: 8px; }
-.objectList > button { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 8px; min-width: 0; padding: 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-1); cursor: pointer; text-align: left; }
+.objectList > button { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 8px; min-width: 0; min-height:56px; padding:9px; border:1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-1); cursor: pointer; text-align: left; }
 .objectList > button:hover { background: var(--surface-1); }
 .objectList > button.selectedObject { border-color: var(--border-1); background: var(--surface-1); box-shadow: 0 1px 2px rgb(20 20 18 / 4%); }
 .objectList > button > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .objectList button > div { display: grid; min-width: 0; }
 .objectList strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.objectList small { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.objectList small { overflow: hidden; color: var(--text-3); font-size:12px; text-overflow: ellipsis; white-space: nowrap; }
 .objectList button > svg { color: var(--text-3); }
 
 .stage { min-width: 0; background: var(--surface-1); }
 .preview { display: grid; align-content: start; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
 .previewIcon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); color: var(--accent); }
-.preview > strong { font-size: 19px; font-weight: 500; }
+.preview > strong { font-size: 14px; font-weight: 500; }
 .preview > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: 13px; }
 .mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
 .preview video { width: min(100%, 520px); max-height: 320px; margin: 16px 0 8px; border-radius: 10px; background: #111; }
 .preview audio { width: min(100%, 520px); margin: 20px 0 12px; }
 .previewActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
 .previewActions small { max-width: 300px; color: var(--text-2); font-size: 12px; text-align: left; }
-.previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size: 11px; }
+.previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size:12px; }
 .previewHistory { width: min(100%, 520px); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-1); text-align: left; }
 .previewHistory h4 { margin: 0; font-size: 12px; font-weight: 500; }
-.previewHistory p { margin: 5px 0 0; color: var(--text-3); font-size: 11px; }
+.previewHistory p { margin: 5px 0 0; color: var(--text-3); font-size:12px; }
 
 .editor { min-height: 0; padding: 18px; }
 .editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-1); }
-.editor h2 { margin: 0 0 4px; font-size: 19px; font-weight: 500; }
+.editor h2 { margin: 0 0 4px; font-size: 14px; font-weight: 500; }
 .editor header p { margin: 0; color: var(--text-2); font-size: 12px; }
 .editorForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .editorForm label, .inlineForm label, .voiceReference { display: grid; gap: 5px; min-width: 0; }
@@ -68,19 +68,19 @@
 .fullField, .authorizationFields { grid-column: 1 / -1; }
 .authorizationFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 11px 12px; border: 1px solid var(--border-1); border-radius: 9px; background: var(--surface-2); }
 .authorizationFields legend { padding: 0 5px; color: var(--text-2); font-size: 12px; }
-.authorizationFields p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: 11px; }
+.authorizationFields p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size:12px; }
 .editorForm > .primaryButton { grid-column: 2; justify-self: end; }
-.voiceReference small { color: var(--text-3); font-size: 11px; }
+.voiceReference small { color: var(--text-3); font-size:12px; }
 .blockedEditor { display: flex; min-height: 360px; align-items: center; justify-content: center; gap: 12px; color: var(--warning); }
 .blockedEditor strong { color: var(--text-1); font-size: 14px; font-weight: 500; }
 .blockedEditor p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; }
 
 .empty { display: flex; align-items: flex-start; gap: 9px; padding: 18px 12px; color: var(--text-3); }
 .empty strong { color: var(--text-1); font-size: 13px; font-weight: 500; }
-.empty p { margin: 3px 0 0; color: var(--text-2); font-size: 11px; }
+.empty p { margin: 3px 0 0; color: var(--text-2); font-size:12px; }
 .fullStage { margin-top: 14px; padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .sectionHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
-.sectionHeader h2 { margin: 3px 0 2px; font-size: 19px; font-weight: 500; }
+.sectionHeader h2 { margin: 3px 0 2px; font-size: 14px; font-weight: 500; }
 .sectionHeader p { margin: 0; color: var(--text-2); font-size: 12px; }
 .sectionHeader em { color: var(--text-3); font-size: 12px; font-style: normal; }
 .records { display: grid; }
@@ -89,13 +89,20 @@
 .records strong { font-size: 13px; font-weight: 500; }
 .records p, .records small { display: block; margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 .inlineForm { display: grid; grid-template-columns: 1fr 1fr 140px auto; gap: 10px; align-items: end; margin-top: 18px; }
-.status { display: inline-flex; width: fit-content; min-height: 24px; align-items: center; padding: 0 7px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 11px; }
+@container (max-width: 680px) {
+  .inlineForm { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .inlineForm > button { justify-self: start; }
+}
+@container (max-width: 440px) {
+  .inlineForm { grid-template-columns: minmax(0, 1fr); }
+}
+.status { display: inline-flex; width: fit-content; min-height: 24px; align-items: center; padding: 0 7px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size:12px; }
 .success { color: var(--success); }
 .warning { color: var(--warning); }
 .danger { color: var(--danger); }
 
 .inspector { display: grid; align-content: start; }
-.inspector h3 { margin: 5px 0 12px; font-size: 19px; font-weight: 500; }
+.inspector h3 { margin: 5px 0 12px; font-size: 14px; font-weight: 500; }
 .inspector > p, .inspector section p { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.55; }
 .inspector dl { margin: 0; }
 .inspector dl > div { padding: 10px 0; border-top: 1px solid var(--border-1); }
@@ -118,3 +125,15 @@
 .originalPreview { width: 100%; display: grid; justify-items: center; gap: 8px; }
 .originalPreview video { width: 100%; max-height: 330px; object-fit: contain; background: #18202c; border-radius: 8px; }
 .originalPreview small { color: var(--text-3); font-size: 12px; }
+
+.workspaceTabs { display:flex; gap:8px; flex-wrap:wrap; }
+.workspaceTabs button, .sectionHeader button, .stage button { padding:7px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
+.workspaceTabs button[aria-pressed="true"] { background:var(--surface-2); }
+.objectRail > button { display:grid; gap:4px; padding:10px; border:0; border-bottom:1px solid var(--border-1); background:transparent; color:var(--text-1); text-align:left; cursor:pointer; }
+.objectRail > button[aria-pressed="true"] { background:var(--surface-1); }
+.stage { padding:16px; }
+.stage video, .stage img { display:block; max-width:100%; max-height:300px; }
+.stage audio { max-width:100%; }
+.stage label { display:grid; gap:5px; margin:10px 0; }
+.stage select { min-width:0; max-width:100%; color:var(--text-1); background:var(--surface-1); }
+.editorForm > p { grid-column:1/-1; }

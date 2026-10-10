@@ -46,8 +46,8 @@ def splice_audio(timeline: AudioTimeline, intervals) -> AudioTimeline:
                 # Keep the original envelope coordinates, including cuts through fades.
                 clips.append(TimelineAudioClip.model_validate({**clip.model_dump(),
                     "id": clip.id if index == 0 else f"audio-{uuid4().hex[:16]}",
-                    "source_start_ms": clip.source_start_ms + left - start,
-                    "source_end_ms": clip.source_start_ms + right - start,
+                    "source_start_ms": clip.source_start_ms + round((left - start) * clip.playback_rate),
+                    "source_end_ms": clip.source_start_ms + round((right - start) * clip.playback_rate),
                     "timeline_start_ms": at,
                     "envelope_offset_ms": clip.envelope_offset_ms + left - start,
                     "envelope_duration_ms": clip.envelope_duration_ms or clip.duration_ms,
@@ -170,11 +170,11 @@ def _splice_plan(plan, tracks, audio, intervals, new_duration_ms):
     return result, splice_subtitles(tracks, intervals, result.duration_seconds)
 
 
-def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
+def retime_clip(plan, tracks, audio, clip_id: str, rate: float):
     """Scale a shot's occupied interval and every linked lane with one clock.
 
-    Audio stretching creates derived sources via the caller's task artifact store;
-    the original source and each independently editable track remain intact.
+    Drafts preserve authorized source intervals and store their playback clock;
+    only explicit listening/rendering materializes audio.
     """
     import math
     from app.audio_timeline import AudioGainPoint
@@ -228,8 +228,8 @@ def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
             for index, (left, right, _) in enumerate(_pieces(a, b, spans)):
                 partial = TimelineAudioClip.model_validate({**clip.model_dump(),
                     "id": clip.id if index == 0 else f"audio-{uuid4().hex[:16]}",
-                    "source_start_ms": clip.source_start_ms + left - a,
-                    "source_end_ms": clip.source_start_ms + right - a,
+                    "source_start_ms": clip.source_start_ms + round((left - a) * clip.playback_rate),
+                    "source_end_ms": clip.source_start_ms + round((right - a) * clip.playback_rate),
                     "timeline_start_ms": move(left),
                     "envelope_offset_ms": clip.envelope_offset_ms + left - a,
                     "envelope_duration_ms": clip.envelope_duration_ms or clip.duration_ms})
@@ -243,7 +243,7 @@ def retime_clip(plan, tracks, audio, clip_id: str, rate: float, stretch_audio):
                     fade_in = round(partial.fade_in_ms * factor)
                     fade_out = min(round(partial.fade_out_ms * factor), envelope_duration - fade_in)
                     partial = TimelineAudioClip.model_validate({**partial.model_dump(),
-                        "source_ref": stretch_audio(partial, rate, duration), "source_start_ms": 0, "source_end_ms": duration,
+                        "playback_rate": (partial.source_end_ms - partial.source_start_ms) / duration,
                         "envelope_offset_ms": offset, "envelope_duration_ms": envelope_duration,
                         "fade_in_ms": fade_in, "fade_out_ms": fade_out,
                         "gain_points": [AudioGainPoint(offset_ms=at, gain_db=gain) for at, gain in points.items()]})

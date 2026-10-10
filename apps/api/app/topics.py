@@ -1254,13 +1254,18 @@ def _content_template_payload(template: ContentTemplate | None) -> dict[str, obj
     }
 
 
-def topic_generator_from_settings(settings: Settings, vault: ObsidianVault) -> TopicGenerator:
-    has_sources = bool(
+def topic_sources_configured(settings: Settings, vault: ObsidianVault) -> bool:
+    """Configured inputs allow an attempt; they do not prove a successful fetch."""
+    return bool(
         vault.exists
         or settings.product_hunt_token
         or settings.topic_source_urls
         or settings.hermes_radar_path
     )
+
+
+def topic_generator_from_settings(settings: Settings, vault: ObsidianVault) -> TopicGenerator:
+    has_sources = topic_sources_configured(settings, vault)
     if settings.llm_configured and has_sources:
         return DeepSeekTopicGenerator(
             settings,

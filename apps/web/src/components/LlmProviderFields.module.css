@@ -1,0 +1,35 @@
+.keyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.keyRow > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.keyRow .removeButton {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  padding: 6px 8px;
+  min-height: 32px;
+}
+
+.keyRow .removeButton:hover {
+  background: var(--surface-2);
+}
+
+.keyRow .removeButton:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}

@@ -112,3 +112,35 @@ describe("DirectoryPickerButton", () => {
     expect(openWavFile).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe("file picker", () => {
+  afterEach(() => { delete window.electronAPI; });
+  it("uses the file bridge and preserves the existing path on cancel", async () => {
+    const openFile = vi.fn().mockResolvedValue(null);
+    const openDirectory = vi.fn();
+    window.electronAPI = { openFile, openDirectory };
+    render(<div className="settings-field-row"><input aria-label="数据库" name="database_path" defaultValue="/fixture/agent.sqlite3" /><DirectoryPickerButton kind="file" targetName="database_path" /></div>);
+    fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+    await waitFor(() => expect(openFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("数据库")).toHaveValue("/fixture/agent.sqlite3");
+    expect(openDirectory).not.toHaveBeenCalled();
+    openFile.mockResolvedValue("/fixture/other.sqlite3");
+    fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+    await waitFor(() => expect(screen.getByLabelText("数据库")).toHaveValue("/fixture/other.sqlite3"));
+  });
+  it("reports a rejected native bridge without changing the input", async () => {
+    window.electronAPI = { openFile: vi.fn().mockRejectedValue(new Error("fixture IPC failure")) };
+    render(<div className="settings-field-row"><input aria-label="文件" name="model" defaultValue="/fixture/model.pt" /><DirectoryPickerButton kind="file" targetName="model" /></div>);
+    fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法打开文件选择窗口");
+    expect(screen.getByLabelText("文件")).toHaveValue("/fixture/model.pt");
+  });
+  it("preserves manual input when the browser has no native file bridge", async () => {
+    delete window.electronAPI;
+    render(<div className="settings-field-row"><input aria-label="文件" name="model" defaultValue="/fixture/model.pt" /><DirectoryPickerButton kind="file" targetName="model" /></div>);
+    expect(await screen.findByText("桌面端可选择文件；浏览器中请手动输入绝对路径。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+    expect(screen.getByLabelText("文件")).toHaveValue("/fixture/model.pt");
+  });
+});

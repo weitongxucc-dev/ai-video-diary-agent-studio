@@ -3,10 +3,12 @@ from __future__ import annotations
 import dataclasses
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
+import app.local_members as local_members
 from app.database_migrations import LOCAL_MEMBERS_TABLE_DDL
 
 
@@ -128,6 +130,67 @@ def test_demote_owner_allowed_when_another_owner_remains(tmp_path):
     assert {m.member_id for m in service.list_members() if m.role == "owner"} == {
         second_owner.member_id
     }
+
+
+@pytest.mark.parametrize("actions", [("remove", "remove"), ("demote", "demote"), ("remove", "demote")])
+def test_concurrent_owner_writes_preserve_last_owner(tmp_path, monkeypatch, actions):
+    first_service = _service(tmp_path)
+    first_owner = _owner(first_service)
+    second_owner = first_service.add_member("另一位所有者", "owner")
+    second_service = _service(tmp_path)
+    first_checked = threading.Event()
+    second_attempted = threading.Event()
+    connection_order = {}
+    order_lock = threading.Lock()
+    original_open = local_members._open
+    original_guard = local_members._require_remaining_owner
+
+    def observed_open(path):
+        conn = original_open(path)
+        with order_lock:
+            index = len(connection_order) + 1
+            connection_order[id(conn)] = index
+        if index == 2:
+            assert first_checked.wait(5), "first owner check did not run"
+            # Trace fires before SQLite attempts BEGIN's write lock. The first
+            # transaction can now commit without waiting for the second guard.
+            conn.set_trace_callback(lambda sql: second_attempted.set() if sql == "BEGIN IMMEDIATE" else None)
+        return conn
+
+    def observed_guard(conn):
+        original_guard(conn)
+        if connection_order[id(conn)] == 1:
+            first_checked.set()
+            assert second_attempted.wait(5), "second write did not attempt to reserve"
+        else:
+            # On the unfixed deferred path, both guards can pass before either
+            # write. This releases the first writer and exposes the lost owner.
+            second_attempted.set()
+
+    monkeypatch.setattr(local_members, "_open", observed_open)
+    monkeypatch.setattr(local_members, "_require_remaining_owner", observed_guard)
+
+    def write(service, owner, action):
+        try:
+            if action == "remove":
+                service.remove_member(owner.member_id)
+            else:
+                service.set_role(owner.member_id, "member")
+            return "succeeded"
+        except LocalMembersError as exc:
+            assert exc.kind == "conflict"
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(write, first_service, first_owner, actions[0])
+        assert first_checked.wait(5), "first owner check did not run"
+        second = executor.submit(write, second_service, second_owner, actions[1])
+        outcomes = [first.result(timeout=10), second.result(timeout=10)]
+
+    assert outcomes == ["succeeded", "conflict"]
+    with sqlite3.connect(tmp_path / "agent.sqlite3") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM local_members WHERE role = 'owner'").fetchone()[0] == 1
+    assert _owner(first_service).member_id == second_owner.member_id
 
 
 def test_set_role_rejects_invalid_role(tmp_path):

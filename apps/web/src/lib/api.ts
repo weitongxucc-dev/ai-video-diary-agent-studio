@@ -1,6 +1,7 @@
-import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState } from "./types";
+import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState, PublishPlatformCapability, PlatformBrowserAccount, PlatformPublishJob, PublishPlatform } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
-import { localMemberTokenHeader } from "./local-member-auth";
+import { ensureLocalMemberIdentity, localMemberTokenHeader, readLocalMemberToken } from "./local-member-auth";
+import { isLocalAuthMode } from "./auth/routing";
 import type { KnowledgeItemVersion } from "./source-api";
 import type {
   ContentTemplates,
@@ -8,6 +9,8 @@ import type {
   CreationPlanInput,
   CreationPlanPreview,
   WorkspaceAssistantPlanTurnResponse,
+  MaterialAssistantSelection,
+  MaterialAssistantTurnResponse,
   CreationTasksResponse,
   CreationTaskWorkspace,
   CreationExecutionPreview,
@@ -27,9 +30,15 @@ import type {
   CreationTaskMontage,
   CreationTaskExactEditInput,
   CreationTaskEditConfirmResponse,
+  CreationTaskEditResult,
   CreationTaskEditPreviewResponse,
   CreationTaskAssistantTurnResponse,
   CreationTaskAssistantHistory,
+  AssistantStreamEvent,
+  AssistantConversation,
+  AssistantConversationScope,
+  AssistantCapabilities,
+  AssistantConversationTurn,
   CreationTaskTopicsResponse,
   CreationTaskTimelineVersionDetail,
   CreationTaskTimelineVersionList,
@@ -226,6 +235,119 @@ async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise
   }
 
   return payload as T;
+}
+
+async function assistantStreamRequest<T>(
+  path: string,
+  body: unknown,
+  onEvent: (event: AssistantStreamEvent) => void,
+): Promise<T> {
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) {
+    await ensureLocalMemberIdentity();
+  }
+  let response: Response;
+  try {
+    const serverAuthorization = await getServerAuthorization();
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
+        ...localMemberTokenHeader(),
+      },
+      cache: "no-store",
+    });
+  } catch {
+    throw new CreationPlanApiError(0, null, "本地服务未接通。");
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    const payload = text ? parseJson(text) : null;
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail: unknown }).detail
+      : payload;
+    const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
+    throw new CreationPlanApiError(
+      response.status,
+      typeof details.error === "string" ? details.error : null,
+      typeof detail === "string" ? detail
+        : typeof details.detail === "string" ? details.detail
+          : `请求失败：${response.status}`,
+      typeof details.impact === "string" ? details.impact : null,
+      typeof details.repair_action === "string" ? details.repair_action : null,
+      typeof details.reason === "string" ? details.reason : null,
+    );
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new CreationPlanApiError(0, null, "对话连接中断，未收到完整结果。");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: T | undefined;
+  const processFrame = (frame: string) => {
+    const data = frame.split(/\r?\n/).filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).replace(/^ /, "")).join("\n");
+    if (!data) return;
+    const event = parseJson(data);
+    if (!event || typeof event !== "object") return;
+    const value = event as Record<string, unknown>;
+    if (value.type === "result") {
+      result = value.result as T;
+      return;
+    }
+    if (value.type === "error") {
+      throw new CreationPlanApiError(
+        typeof value.status === "number" ? value.status : 0,
+        null,
+        typeof value.message === "string" ? value.message : "对话没有完成，请检查任务状态。",
+      );
+    }
+    if (value.type === "turn_started" && typeof value.turn_id === "string") {
+      const turnState = value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped"
+        ? value.turn_state : "running";
+      const draftVersion = typeof value.draft_version === "number" && Number.isInteger(value.draft_version)
+        && value.draft_version >= 0 ? value.draft_version : undefined;
+      onEvent({ type: "turn_started", turn_id: value.turn_id, turn_state: turnState,
+        ...(draftVersion === undefined ? {} : { draft_version: draftVersion }) });
+    } else if (value.type === "turn_status" && typeof value.turn_id === "string"
+      && (value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped")) {
+      onEvent({ type: "turn_status", turn_id: value.turn_id, turn_state: value.turn_state });
+    } else if (value.type === "text_delta" && typeof value.delta === "string") {
+      onEvent({ type: "text_delta", delta: value.delta });
+    } else if (value.type === "tool_start" && typeof value.tool_id === "number" && typeof value.label === "string") {
+      onEvent({ type: "tool_start", tool_id: value.tool_id, label: value.label });
+    } else if (value.type === "tool_end" && typeof value.tool_id === "number"
+      && typeof value.label === "string" && typeof value.ok === "boolean" && typeof value.summary === "string") {
+      onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary });
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let boundary = buffer.search(/\r?\n\r?\n/);
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        const delimiter = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+        buffer = buffer.slice(boundary + delimiter.length);
+        processFrame(frame);
+        boundary = buffer.search(/\r?\n\r?\n/);
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) processFrame(buffer);
+  } catch (error) {
+    if (error instanceof CreationPlanApiError) throw error;
+    throw new CreationPlanApiError(0, null, "对话连接中断，未收到完整结果。");
+  } finally {
+    reader.releaseLock();
+  }
+  if (result === undefined) throw new CreationPlanApiError(0, null, "连接已结束，但没有收到完整的对话结果。");
+  return result;
 }
 
 async function getServerAuthorization(): Promise<string | null> {
@@ -561,15 +683,114 @@ export function previewCreationPlan(input: CreationPlanInput): Promise<CreationP
   });
 }
 
-export function sendWorkspaceAssistantPlanTurn(message: string, conversationId: string): Promise<WorkspaceAssistantPlanTurnResponse> {
+export function updateAssistantPlanPreview(
+  conversationId: string,
+  turnId: string,
+  input: CreationPlanInput,
+): Promise<CreationPlanPreview> {
+  return creationPlanRequest<CreationPlanPreview>(
+    `/api/assistant/conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/plan-preview`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getCurrentAssistantConversation(scope: AssistantConversationScope): Promise<AssistantConversation> {
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) await ensureLocalMemberIdentity();
+  return creationPlanRequest<AssistantConversation>("/api/assistant/conversations/current", {
+    method: "POST", body: JSON.stringify(scope),
+  });
+}
+
+export async function createAssistantConversation(scope: AssistantConversationScope): Promise<AssistantConversation> {
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) await ensureLocalMemberIdentity();
+  return creationPlanRequest<AssistantConversation>("/api/assistant/conversations", {
+    method: "POST", body: JSON.stringify(scope),
+  });
+}
+
+export function listAssistantConversations(scope: AssistantConversationScope): Promise<{ items: AssistantConversation[] }> {
+  const query = new URLSearchParams({ scope_kind: scope.scope_kind, scope_id: scope.scope_id });
+  return creationPlanRequest(`/api/assistant/conversations?${query.toString()}`);
+}
+
+export function getAssistantConversation(conversationId: string): Promise<AssistantConversation> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`);
+}
+
+export function resumeAssistantConversation(conversationId: string): Promise<AssistantConversation> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/resume`, {
+    method: "POST",
+  });
+}
+
+export function updateAssistantConversation(
+  conversationId: string,
+  update: { title?: string; draft_text?: string; expected_draft_version?: number },
+): Promise<AssistantConversation> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH", body: JSON.stringify(update),
+  });
+}
+
+export function restoreUnpersistedAssistantTurnDraft(
+  conversationId: string,
+  input: { client_request_id: string; user_message: string; expected_draft_version: number },
+): Promise<{ status: "restored" | "already_recovered" | "already_persisted"; conversation: AssistantConversation }> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/restore-unpersisted-turn`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+export function stopAssistantConversationTurn(conversationId: string, turnId: string): Promise<{ turn_id: string; status: "stopping" }> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/stop`, {
+    method: "POST", body: JSON.stringify({ turn_id: turnId }),
+  });
+}
+
+export async function getAssistantCapabilities(): Promise<AssistantCapabilities> {
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) await ensureLocalMemberIdentity();
+  return creationPlanRequest("/api/assistant/capabilities");
+}
+
+export function sendWorkspaceAssistantPlanTurn(
+  message: string,
+  conversationId: string,
+  clientRequestId: string,
+  expectedDraftVersion: number,
+  onEvent?: (event: AssistantStreamEvent) => void,
+): Promise<WorkspaceAssistantPlanTurnResponse> {
+  const input = { message, conversation_id: conversationId, client_request_id: clientRequestId,
+    expected_draft_version: expectedDraftVersion };
+  if (onEvent) return assistantStreamRequest<WorkspaceAssistantPlanTurnResponse>(
+    "/api/assistant/plan/turn", input, onEvent,
+  );
   return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>(
     "/api/assistant/plan/turn",
-    { method: "POST", body: JSON.stringify({ message, conversation_id: conversationId }) },
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function sendMaterialAssistantTurn(
+  message: string,
+  conversationId: string,
+  selection: MaterialAssistantSelection | null,
+  clientRequestId: string,
+  expectedDraftVersion: number,
+  onEvent: (event: AssistantStreamEvent) => void,
+): Promise<MaterialAssistantTurnResponse> {
+  return assistantStreamRequest<MaterialAssistantTurnResponse>(
+    "/api/assistant/material/turn",
+    { message, conversation_id: conversationId, selection, client_request_id: clientRequestId,
+      expected_draft_version: expectedDraftVersion },
+    onEvent,
   );
 }
 
 export function confirmCreationPlan(
-  input: CreationPlanInput & { preflight_fingerprint: string },
+  input: CreationPlanInput & {
+    preflight_fingerprint: string;
+    reply_origin?: { conversation_id: string; turn_id: string; request_id: string };
+  },
 ): Promise<CreationPlan> {
   return creationPlanRequest<CreationPlan>("/api/creation-plans/confirm", {
     method: "POST",
@@ -591,6 +812,42 @@ export function getHomeDashboard(days: 7 | 30): Promise<HomeAggregation> {
 
 export function listCreationTasks(): Promise<CreationTasksResponse> {
   return creationPlanRequest<CreationTasksResponse>("/api/creation-tasks");
+}
+
+async function publishingRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) {
+    await ensureLocalMemberIdentity();
+  }
+  return request<T>(path, init);
+}
+
+export function listPublishingPlatforms(): Promise<{ items: PublishPlatformCapability[] }> {
+  return publishingRequest("/api/publishing/platforms");
+}
+
+export function listPublishingAccounts(): Promise<{ items: PlatformBrowserAccount[] }> {
+  return publishingRequest("/api/publishing/accounts");
+}
+
+export function connectPublishingAccount(platform: PublishPlatform): Promise<{ platform: PublishPlatform; state: string; detail: string }> {
+  return publishingRequest(`/api/publishing/accounts/${encodeURIComponent(platform)}/connect`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function verifyPublishingAccount(platform: PublishPlatform): Promise<{ platform: PublishPlatform; connected: boolean; account_ref?: string; detail?: string }> {
+  return publishingRequest(`/api/publishing/accounts/${encodeURIComponent(platform)}/verify`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function listPlatformPublishJobs(taskId: string): Promise<{ items: PlatformPublishJob[] }> {
+  return publishingRequest(`/api/publishing/tasks/${encodeURIComponent(taskId)}/jobs`);
+}
+
+export function createPlatformPublishJob(taskId: string, input: {
+  platform: PublishPlatform; account_ref: string; timeline_version_id: string;
+  title: string; description: string; topics: string[]; idempotency_key: string; confirmed: true;
+}): Promise<PlatformPublishJob> {
+  return publishingRequest(`/api/publishing/tasks/${encodeURIComponent(taskId)}/publish`, {
+    method: "POST", body: JSON.stringify(input),
+  });
 }
 
 export function getCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
@@ -697,10 +954,46 @@ export function generateCreationTaskScript(taskId: string): Promise<CreationTask
 export function confirmCreationTaskScript(
   taskId: string,
   scriptId: string,
-  input: { title: string; sections: CreationTaskScriptSection[] },
+  input: { title: string; sections: CreationTaskScriptSection[]; expected_updated_at: string },
 ): Promise<CreationTaskScriptsResponse> {
   return creationPlanRequest<CreationTaskScriptsResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/confirm`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function transferAssistantReplyToScript(taskId: string, input: {
+  conversation_id: string;
+  turn_id: string;
+  request_id: string;
+  plan_conversion_request_id?: string;
+  expected_plan_updated_at: string;
+  expected_task_updated_at: string;
+  replace_existing_script_id?: string;
+  expected_script_updated_at?: string;
+}): Promise<CreationTaskScriptsResponse> {
+  return creationPlanRequest<CreationTaskScriptsResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/reply-transfer`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function getAssistantScriptContext(taskId: string): Promise<{
+  task_id: string;
+  sources: { reference_id: string; title: string; text: string }[];
+  draft: CreationTaskScript | null;
+  reply_origin: { conversation_id: string; turn_id: string; request_id: string } | null;
+}> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
+}
+
+export function saveAssistantScriptDraft(taskId: string, input: {
+  title: string;
+  sections: CreationTaskScriptSection[];
+  expected_updated_at?: string;
+}): Promise<CreationTaskScript> {
+  return creationPlanRequest<CreationTaskScript>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
@@ -748,8 +1041,8 @@ export function createCreationTaskMontagePlan(taskId: string): Promise<CreationT
 export function applyCreationTaskExactEdit(
   taskId: string,
   input: CreationTaskExactEditInput,
-): Promise<CreationTaskEditConfirmResponse> {
-  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+): Promise<CreationTaskEditResult> {
+  return creationPlanRequest<CreationTaskEditResult>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`,
     { method: "POST", body: JSON.stringify(input) },
   );
@@ -760,7 +1053,7 @@ export function previewCreationTaskExactEdit(
   input: CreationTaskExactEditInput,
 ): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest<CreationTaskEditPreviewResponse>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview`,
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
@@ -781,7 +1074,10 @@ export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskM
   );
 }
 
-export function getCreationTaskQualityCheck(taskId: string): Promise<import("./types").CreationTaskQualityCheck> {
+export async function getCreationTaskQualityCheck(taskId: string): Promise<import("./types").CreationTaskQualityCheck> {
+  // Quality reads require a trusted identity, unlike anonymous task reads.
+  // In local mode, AppShell's first-browser identity initialization may still be pending.
+  if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken()) await ensureLocalMemberIdentity();
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check`);
 }
 
@@ -800,7 +1096,7 @@ export function previewCreationTaskEdit(
   },
 ): Promise<CreationTaskEditPreviewResponse> {
   return creationPlanRequest<CreationTaskEditPreviewResponse>(
-    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview`,
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
 }
@@ -808,12 +1104,19 @@ export function previewCreationTaskEdit(
 export function sendCreationTaskAssistantTurn(
   taskId: string,
   input: {
+    conversation_id: string;
     message: string;
+    client_request_id: string;
+    expected_draft_version: number;
     context_stage: string;
     selected_object_refs: string[];
     playhead_ms: number | null;
   },
+  onEvent?: (event: AssistantStreamEvent) => void,
 ): Promise<CreationTaskAssistantTurnResponse> {
+  if (onEvent) return assistantStreamRequest<CreationTaskAssistantTurnResponse>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`, input, onEvent,
+  );
   return creationPlanRequest<CreationTaskAssistantTurnResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/turn`,
     { method: "POST", body: JSON.stringify(input) },
@@ -827,15 +1130,15 @@ export function getCreationTaskAssistantHistory(taskId: string): Promise<Creatio
 }
 
 export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse>{
-  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview`,
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview?draft=true`,
     {method:"POST",body:JSON.stringify(typeof selection==="string"?{raw_command:selection}:{included_step_indices:selection})});
 }
 
 export function confirmCreationTaskEdit(
   taskId: string,
   proposalId: string,
-): Promise<CreationTaskEditConfirmResponse> {
-  return creationPlanRequest<CreationTaskEditConfirmResponse>(
+): Promise<CreationTaskEditResult> {
+  return creationPlanRequest<CreationTaskEditResult>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`,
     { method: "POST", body: JSON.stringify({}) },
   );
@@ -1002,10 +1305,17 @@ export function saveVideoTemplate(taskId: string, input: {
 }
 
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
-  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview`, { method: "POST", body: JSON.stringify(input) });
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`);
+}
+export function adoptCreationTaskRecording(taskId: string, input: {
+  script_id: string; source_section_id: string; source_ref: string;
+}): Promise<CreationTaskNarration> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings/adopt`, {
+    method: "POST", body: JSON.stringify(input),
+  });
 }
 export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording> {
   const mediaType = recording.type.split(";")[0].trim().toLowerCase();
@@ -1032,7 +1342,7 @@ export async function importCreationTaskAudio(taskId: string, file: File): Promi
 }
 
 export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
-  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview`, { method: "POST", body: JSON.stringify(input) });
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 
 

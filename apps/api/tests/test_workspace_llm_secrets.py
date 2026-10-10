@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -297,7 +298,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
     """响应里的 provider/model 必须是本次工作区的配置，且不靠网络。"""
     import app.main as main_module
     from app.auth import AuthPrincipal
-    from app.schemas import WorkspaceAssistantPlanTurnRequest
+    from app.schemas import AssistantConversationUpdateRequest, WorkspaceAssistantPlanTurnRequest
 
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
@@ -306,9 +307,12 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
     def fake_run_plan_turn(turn_settings, **kwargs):
         seen["provider"] = turn_settings.effective_llm_provider
         seen["key"] = turn_settings.effective_llm_api_key or ""
+        seen["workspace"] = kwargs["workspace_id"]
         return "已记下", None
 
     monkeypatch.setattr(main_module, "run_plan_turn", fake_run_plan_turn)
+    main_module.conversation_repo.initialize()
+    conversation = main_module.conversation_repo.create("ws-a", "u", "home", "home")
     request = SimpleNamespace(
         state=SimpleNamespace(
             principal=AuthPrincipal(user_id="u", workspace_id="ws-a")
@@ -316,16 +320,24 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
         client=SimpleNamespace(host="127.0.0.1"),
         headers={},
     )
+    main_module.update_assistant_conversation(
+        conversation["id"], request, AssistantConversationUpdateRequest(
+            draft_text="帮我列个提纲", expected_draft_version=conversation["draft_version"],
+        ),
+    )
+    conversation = main_module.conversation_repo.get(conversation["id"], "ws-a", "u")
+    assert conversation is not None and conversation["draft_text"] == "帮我列个提纲"
 
     response = main_module.workspace_assistant_plan_turn(
         request, WorkspaceAssistantPlanTurnRequest(
-            conversation_id="11111111-1111-5111-8111-111111111111", message="帮我列个提纲"
+            conversation_id=conversation["id"], message="帮我列个提纲",
+            client_request_id=str(uuid4()), expected_draft_version=conversation["draft_version"],
         )
     )
 
     assert response.provider == "minimax"
     assert response.model == "MiniMax-M3"
-    assert seen == {"provider": "minimax", "key": "key-a"}
+    assert seen == {"provider": "minimax", "key": "key-a", "workspace": "ws-a"}
 
 
 @macos

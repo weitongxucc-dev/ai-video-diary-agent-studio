@@ -10,20 +10,22 @@ export type MediaAuthorization = {
 export type PersonProfile = {
   id: string; workspace_id: string; display_name: string; version: string;
   avatar_reference: string; background_capabilities: string[]; shot_capabilities: string[];
-  authorization: MediaAuthorization; current_authorization: MediaAuthorization;
+  authorization: MediaAuthorization | null; current_authorization: MediaAuthorization | null;
   runnable: boolean; runnable_reason: string | null;
   body_reference_kind: "workspace" | "asset";
   body_reference_name: string | null;
   body_reference_available: boolean;
   body_reference_reason: string | null;
   body_reference_repair_action: string | null;
+  reference?: ProfileReference | null; use_state?: string; reference_issue?: string | null; reference_url?: string | null;
 };
 
 export type VoiceProfile = {
   id: string; workspace_id: string; person_profile_id: string; person_version: string;
   version: string; language: "zh" | "en" | "zh-en"; reference_audio_path: string;
-  reference_text: string; model_id: string; authorization: MediaAuthorization;
-  current_authorization: MediaAuthorization; runnable: boolean; runnable_reason: string | null;
+  display_name: string; reference?: ProfileReference | null; use_state?: string; reference_issue?: string | null; reference_url?: string | null;
+  reference_text: string; model_id: string; authorization: MediaAuthorization | null;
+  current_authorization: MediaAuthorization | null; runnable: boolean; runnable_reason: string | null;
 };
 
 export type PronunciationEntry = {
@@ -37,10 +39,9 @@ export type MediaCapability = {
   impact: string | null; repair_action: string | null;
 };
 
-export type ApprovedMaterial = { id: string; file_name: string; duration_seconds: number | null; review_status: "approved"; workspace_reference: string | null };
 export type MediaPreview = {
   id: string; workspace_id: string; preview_type: "voice" | "avatar_lipsync"; identity: string;
-  attempt: number; status: "running" | "succeeded" | "unavailable" | "blocked" | "failed";
+  attempt: number; status: "queued" | "cancelled" | "running" | "succeeded" | "unavailable" | "blocked" | "failed";
   capability_id: string; model_id: string; language: string;
   person_profile_id: string | null; person_version: string | null;
   voice_profile_id: string | null; voice_version: string | null;
@@ -49,8 +50,9 @@ export type MediaPreview = {
   repair_action: string | null; started_at: string; finished_at: string | null;
 };
 export type AuthorizationInput = Omit<MediaAuthorization, "workspace_id">;
-export type PersonInput = Pick<PersonProfile, "id" | "display_name" | "version" | "avatar_reference" | "background_capabilities" | "shot_capabilities"> & { authorization: AuthorizationInput };
-export type VoiceInput = Pick<VoiceProfile, "id" | "person_profile_id" | "person_version" | "version" | "language" | "reference_audio_path" | "reference_text" | "model_id"> & { authorization: AuthorizationInput };
+export type ProfileReference = { asset_id?: string | null; segment_id?: string | null; start_seconds?: number | null; end_seconds?: number | null };
+export type PersonInput = Pick<PersonProfile, "id" | "display_name" | "avatar_reference" | "background_capabilities" | "shot_capabilities"> & { version?: string; reference?: ProfileReference; use_state?: string; authorization?: AuthorizationInput | null };
+export type VoiceInput = Pick<VoiceProfile, "id" | "display_name" | "language" | "reference_audio_path" | "reference_text" | "model_id"> & { version?: string; person_profile_id?: string; person_version?: string; reference?: ProfileReference; use_state?: string; authorization?: AuthorizationInput | null };
 export type PronunciationInput = Omit<PronunciationEntry, "workspace_id">;
 export type VoiceReferenceImport = {
   reference: string; file_name: string; size_bytes: number; duration_seconds: number;
@@ -92,12 +94,20 @@ export const listPronunciationEntries = () => request<{ items: PronunciationEntr
 export const savePronunciationEntry = (input: PronunciationInput) => request<PronunciationEntry>("/api/media/pronunciation-entries", { method: "POST", body: JSON.stringify(input) });
 export const listAuthorizations = () => request<{ items: MediaAuthorization[]; total_count: number }>("/api/media/authorizations");
 export const getMediaCapability = (name: "voice-clone" | "avatar-lipsync") => request<MediaCapability>(`/api/media/capabilities/${name}`);
-export const listApprovedMaterials = () => request<{ assets: ApprovedMaterial[]; total_count: number }>("/api/production/materials?review_status=approved&limit=24");
+export type ReferenceMaterial = { id: string; file_name: string; media_type: "video" | "audio" | "image"; duration_seconds: number | null; workspace_reference: string | null; use_state: string; segments: Array<{ id: string; start_seconds: number; end_seconds: number }> };
+export const listReferenceMaterials = (offset = 0) => request<{ assets: ReferenceMaterial[]; total_count: number }>(`/api/production/materials?limit=100&offset=${offset}`);
+export const getReferenceMaterial = (assetId: string) => request<ReferenceMaterial>(`/api/production/materials/${encodeURIComponent(assetId)}`);
+export const getPersonProfile = (id: string, version: string) => request<PersonProfile>(`/api/media/person-profiles/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`);
+export const getVoiceProfile = (id: string, version: string) => request<VoiceProfile>(`/api/media/voice-profiles/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`);
+export const listVoiceProfileVersions = (id: string) => request<{ items: VoiceProfile[]; total_count: number }>(`/api/media/voice-profiles/${encodeURIComponent(id)}/versions`);
+export const getDefaultVoice = () => request<VoiceProfile | null>("/api/media/default-voice");
+export const setDefaultVoice = (profile_id: string, version: string) => request<VoiceProfile>("/api/media/default-voice", { method: "PUT", body: JSON.stringify({ profile_id, version }) });
+export const cancelPreview = (preview: MediaPreview) => request<MediaPreview>(`/api/media/previews/${preview.preview_type}/${encodeURIComponent(preview.identity)}/cancel`, { method: "POST" });
 export const createVoicePreview = (input: { voice_profile_id: string; voice_version: string; preview_text: string; retry: boolean }) => request<MediaPreview>("/api/media/previews/voice", { method: "POST", body: JSON.stringify(input) });
 export const createAvatarLipsyncPreview = (input: {
   person_profile_id: string; person_version: string; voice_profile_id: string; voice_version: string;
   voice_preview_identity: string; motion: string; expression: string;
-  authorization_id: string; authorization_version: string; model_id: string; retry: boolean;
+  authorization_id?: string | null; authorization_version?: string | null; model_id: string; retry: boolean;
 }) => request<MediaPreview>("/api/media/previews/avatar-lipsync", { method: "POST", body: JSON.stringify(input) });
 export const listMediaPreviews = (previewType?: MediaPreview["preview_type"]) => request<{ items: MediaPreview[]; total_count: number }>(`/api/media/previews${previewType ? `?preview_type=${previewType}` : ""}`);
 export const listMediaPreviewAttempts = (previewType: MediaPreview["preview_type"], identity: string) => request<{ items: MediaPreview[]; total_count: number }>(`/api/media/previews/${previewType}/${encodeURIComponent(identity)}/attempts`);

@@ -8,22 +8,52 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.production import ProductionRepository, VideoTemplate
 from app.source_repository import SourceRepository
+from app.sources import SourceConnector, SourceItem, KnowledgeItem
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator, CreationTaskScriptGenerationError
-from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, _save_versioned_voice, plan_owner as plan_owner
+from test_production_foundation import _repository, _missing_model_catalog, plan_owner as plan_owner
 from test_creation_task_topic_provider import _script_input, _script_document, _response
+from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset
+from app.avatar_lipsync import PronunciationEntry as ProfilePronunciationEntry
 
 
 @pytest.fixture
 def state(tmp_path, monkeypatch, plan_owner):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
-    _seed_creation_plan_facts(
-        production, sources, workspace_id="workspace_a",
-        verified_owner_user_id=plan_owner[0].member_id,
+    owner_id = plan_owner[0].member_id
+    connector = SourceConnector(
+        id="connector-workspace-a", workspace_id="workspace_a", platform="manual",
+        protocol="manual", account_or_rule="operator", frequency="on_demand", permissions=("read",),
     )
-    asset = production.list_assets("workspace_a")[0]
+    sources.upsert_connector(connector)
+    source_item = SourceItem(
+        id="source-workspace-a", workspace_id="workspace_a", connector_id=connector.id,
+        source_label="manual", source_url="https://example.com/source", content_type="article",
+        author="operator", published_at=None, body="真实信息源正文。", subtitles=None,
+        media_references=(), license="authorized", title="信息源条目",
+    )
+    sources.save_source_items("workspace_a", [source_item])
+    sources.create_knowledge_item_owned(KnowledgeItem(
+        id="knowledge-workspace-a", workspace_id="workspace_a", content_type="note",
+        title="用户知识", body="用户拥有并授权的知识内容。", file_reference=None,
+        authorization="authorized", ownership="user_owned", source_item_id=source_item.id, version="v1",
+    ), verified_user_id=owner_id)
+    person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
+        production, workspace_id="workspace_a", member_id=owner_id,
+        person_id="voice-workspace_a-person", voice_id="voice-workspace_a",
+        person_version="v1", voice_version="v1", language="zh", model_id="test-voice-model",
+    )
+    asset, _asset_reference = register_synthetic_video_asset(
+        production, workspace_id="workspace_a", member_id=owner_id,
+        path=production.video_library_path / "workspace_a.mp4", asset_id="asset-workspace-a", seconds=25,
+    )
     asset.segments[0].description = "完全不同的新主题"
     production._save_asset(asset)
+    production.save_pronunciation_entry(ProfilePronunciationEntry(
+        id="pronunciation-workspace-a", workspace_id="workspace_a", term="Codex",
+        language="zh", target_pronunciation="科德克斯", scope="person",
+        scope_reference=voice.person_profile_id, version="v1",
+    ))
     monkeypatch.setattr(main, "production_repo", production)
     monkeypatch.setattr(main, "source_repository", sources)
     monkeypatch.setattr(main, "model_catalog", _missing_model_catalog(tmp_path))
@@ -64,7 +94,10 @@ def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
 
 def test_preflight_preserves_exact_voice_version_and_new_plan_snapshot(state):
     production, template, client = state
-    _save_versioned_voice(production, workspace_id="workspace_a", voice_id="voice-workspace_a", version="v2", reference_audio_path="workspace://approved/workspace_a.wav")
+    voice = production.get_versioned_voice_profile("workspace_a", "voice-workspace_a", "v1")
+    production.save_versioned_voice_profile(
+        replace(voice, version="v2"), verified_owner_user_id=template.owner_user_id
+    )
     payload = {"goal": "完全不同的新主题", "template_id": template.id, "template_version": 1}
     preview = client.post("/api/creation-plans/preview", json=payload).json()
     assert preview["selected_voice"]["version"] == "v1"

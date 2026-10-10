@@ -27,6 +27,7 @@ const member = { member_id: "m-2", name: "小王", role: "member" as const, crea
 const OWNER_CONTROLS = [
   { name: "button", text: "添加成员" },
   { name: "button", text: "移除" },
+  { name: "button", text: /管理成员 / },
   { name: "button", text: "设为所有者" },
   { name: "button", text: "设为成员" },
   { name: "button", text: "生成邀请码" },
@@ -61,10 +62,14 @@ describe("members page renders by real identity", () => {
     expect(screen.getByRole("button", { name: "添加成员" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "生成邀请码" })).toBeInTheDocument();
     expect(screen.getByLabelText("所有者操作")).toBeInTheDocument();
-    // per-member 控件：每位成员一行，所以是多个（移除/改角色）
-    expect(screen.getAllByRole("button", { name: "移除" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "设为成员" }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByRole("button", { name: "设为所有者" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: /管理成员 / })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "管理成员 本机创作者" }));
+    expect(screen.getByRole("button", { name: "移除" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "设为成员" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "管理成员 小王" }));
+    expect(screen.getByRole("button", { name: "移除" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "设为所有者" })).toBeEnabled();
   });
 
   it("renders no identity UI while identity is still loading (no owner flash on first paint)", async () => {

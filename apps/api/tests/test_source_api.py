@@ -75,18 +75,17 @@ def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client)
 
     saved = client.post(
         f"/api/source-items/{source['id']}/save-to-knowledge",
-        json={
-            "ownership": "user-owned",
-            "authorization": "creator approved this copy",
-            "version": "v2",
-        },
+        json={},
     )
     assert saved.status_code == 200
     knowledge = saved.json()
     assert knowledge["id"] != source["id"]
     assert knowledge["source_item_id"] == source["id"]
-    assert knowledge["authorization"] == "creator approved this copy"
-    assert knowledge["version"] == "v2"
+    assert knowledge["authorization"] == ""
+    assert knowledge["ownership"] == ""
+    assert knowledge["version"] == "1"
+    assert knowledge["use_state"] == "available"
+    assert knowledge["saved_source_item_id"] == source["id"]
 
     rebuilt = SourceRepository(main_module.source_repository._database_path)
     main_module.source_repository = rebuilt
@@ -172,7 +171,7 @@ def test_payloads_match_the_web_source_api_contract(client):
         # WIL-103：文件解析产出的内容指纹、出处和参数
         "content_hash", "sections", "parameters",
         # WIL-134：网页快照的抓取时间
-        "fetched_at",
+        "fetched_at", "use_state",
     }
     listed_sources = client.get(
         f"/api/source-items?connector_id={source['connector_id']}"
@@ -181,11 +180,7 @@ def test_payloads_match_the_web_source_api_contract(client):
 
     saved = client.post(
         f"/api/source-items/{source['id']}/save-to-knowledge",
-        json={
-            "ownership": "user-owned",
-            "authorization": "creator approved",
-            "version": "1",
-        },
+        json={},
     )
     assert saved.status_code == 200
     knowledge = saved.json()
@@ -193,15 +188,18 @@ def test_payloads_match_the_web_source_api_contract(client):
         "id", "workspace_id", "content_type", "title", "body", "file_reference",
         "authorization", "ownership", "source_item_id", "version", "created_at",
         "content_hash", "sections", "parameters", "duplicate_of_version",
+        "use_state", "saved_source_item_id",
         # WIL-134：当前版本的抓取时间和原网址
         "fetched_at", "source_url",
         # WIL-112：可见性回读同一列
         "visibility",
     }
-    assert client.get("/api/knowledge-items").json() == {
-        "items": [knowledge],
-        "total_count": 1,
-    }
+    listed = client.get("/api/knowledge-items").json()
+    assert listed["total_count"] == 1
+    assert len(listed["items"]) == 1
+    assert listed["items"][0]["id"] == knowledge["id"]
+    # 来源绑定只属于本次保存回执，不冒充列表对象本身的来源字段。
+    assert listed["items"][0]["saved_source_item_id"] is None
 
 
 def test_connector_sync_payload_matches_the_web_source_api_contract(client, monkeypatch):
@@ -266,24 +264,22 @@ def test_connector_rejects_whitespace_required_input(client, field, value):
 
 
 @pytest.mark.parametrize("field", ["ownership", "authorization", "version"])
-def test_save_to_knowledge_rejects_whitespace_contract_input(client, field):
+def test_save_to_knowledge_rejects_retired_caller_identity_fields(client, field):
     created = client.post(
         "/api/source-items/manual",
         json={"title": "source", "content_type": "text", "body": "body"},
     )
-    payload = {
-        "ownership": "user-owned",
-        "authorization": "approved",
-        "version": "1",
-    }
-    payload[field] = "  "
-
     response = client.post(
         f"/api/source-items/{created.json()['id']}/save-to-knowledge",
-        json=payload,
+        json={field: "forged caller value"},
     )
 
     assert response.status_code == 422
+    errors = response.json()["detail"]
+    assert any(
+        error["type"] == "extra_forbidden" and error["loc"] == ["body", field]
+        for error in errors
+    )
 
 
 @pytest.mark.parametrize("source_url", ["file:///tmp/source.txt", "ftp://example.com/feed"])
