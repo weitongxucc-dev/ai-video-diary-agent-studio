@@ -1373,7 +1373,7 @@ export type TextOverlay = {kind?:"text";id:string;text:string;start_seconds:numb
 export type ImageOverlay = {kind:"image";id:string;source_ref:string;name:string;start_seconds:number;end_seconds:number;x:number;y:number;width:number;opacity:number};
 export type ArrowOverlay = {kind:"arrow";id:string;x:number;y:number;name:string;purpose:string;start_seconds:number;end_seconds:number;position:"left-top"|"right-top"|"right-bottom"|"left-bottom";color:string};
 export type GraphicOverlay = TextOverlay | ImageOverlay | ArrowOverlay;
-export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number};
+export type GraphicSource = {source_ref:string;artifact_id:string;name:string;width:number;height:number;sha256?:string;size_bytes?:number};
 
 export type CreationTaskMontageClip = {
   transition_in_seconds?: number;
@@ -1703,6 +1703,18 @@ export type AssistantBusinessContinuation = {
   waiting_reason?: string | null;
 };
 
+export type AssistantScriptToolReceipt = {
+  action: "save" | "query" | "update" | "revoke";
+  status: "recorded" | "unknown" | "rejected" | "not_submitted";
+  request_id?: string | null;
+  tool_id?: string | null;
+  tool_version?: number | null;
+  expected_version?: number | null;
+  query_url: string;
+  submitted_input?: Record<string, unknown> | null;
+  tool?: Record<string, unknown> | null;
+};
+
 export type CreationTaskAssistantTurnResponse = {
   reply: string;
   provider: string;
@@ -1710,6 +1722,7 @@ export type CreationTaskAssistantTurnResponse = {
   edit_preview: CreationTaskEditPreviewResponse | null;
   media_job?: TaskMediaJob | null;
   edit_request?: AssistantEditRequest | null;
+  script_tool?: AssistantScriptToolReceipt | null;
   script_draft: CreationTaskScript | null;
   execution_action: "start" | "resume" | "cancel" | null;
   execution_status: CreationExecutionStatus | null;

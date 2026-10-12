@@ -131,7 +131,7 @@ def test_current_cli_allowlist_has_registered_business_implementations(scope, to
     extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
     selection = {"scope": "asset", "assetId": "asset-current"} if scope == "asset" else TOOL_SELECTION
     script = "const {default:register}=await import(process.argv[1]);const names=[];await register({registerTool:tool=>names.push(tool.name)});console.log(JSON.stringify(names));"
-    from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS, MediaScriptPreviewRequest
+    from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS, MediaScriptPreviewRequest, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
     capability = {"schema": CreationTaskExactEditRequest.model_json_schema(), "supported_operations": list(EXACT_EDIT_FIELDS)}
     modules = sorted((Path.home() / ".nvm/versions/node").glob("*/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js"))
     if not modules:
@@ -144,6 +144,8 @@ def test_current_cli_allowlist_has_registered_business_implementations(scope, to
              "AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION": json.dumps(selection),
              "AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES": json.dumps(capability),
              "AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES": json.dumps({"schema": MediaScriptPreviewRequest.model_json_schema(), "available": False}),
+             "AI_VIDEO_DIARY_AGENT_SCRIPT_TOOL_CAPABILITIES": json.dumps({"schemas": {name:model.model_json_schema() for name,model in (
+                 ("save",MediaScriptToolSaveRequest),("update",MediaScriptToolUpdateRequest),("revoke",MediaScriptToolRevokeRequest),("invoke",MediaScriptToolPreviewRequest))}}),
              "AI_VIDEO_DIARY_AGENT_PI_MODULE": str(modules[-1])},
     )
     assert set(pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]) <= set(json.loads(completed.stdout))

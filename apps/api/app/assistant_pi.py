@@ -30,6 +30,7 @@ FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
 FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
 
 MEMORY_TOOLS = ("read_preference_memory", "update_preference_memory")
+SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_tools", "describe_media_script_tool", "read_media_script_tool_creation")
 
 ASSISTANT_BUSINESS_TOOLS = {
     "home": (
@@ -50,10 +51,11 @@ ASSISTANT_BUSINESS_TOOLS = {
 
 TASK_READ_PREVIEW_TOOLS = ("read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit",
+                           "save_media_script_tool", "update_media_script_tool", "revoke_media_script_tool", "preview_media_script_tool",
                            "read_media_script_capabilities", "read_task_graphic_sources", "preview_media_script", "read_media_script_request", "read_clip_candidates", "read_edit_control_context", "preview_edit_selection",
                            "find_materials", "codemode")
 ASSISTANT_BUSINESS_TOOLS = {
-    stage: tuple(dict.fromkeys(tools + (TASK_READ_PREVIEW_TOOLS if stage in {"topic", "script", "task_edit"} else ()) + MEMORY_TOOLS))
+    stage: tuple(dict.fromkeys(tools + (TASK_READ_PREVIEW_TOOLS if stage in {"topic", "script", "task_edit"} else ()) + SCRIPT_TOOL_READS + MEMORY_TOOLS))
     for stage, tools in ASSISTANT_BUSINESS_TOOLS.items()
 }
 
@@ -137,6 +139,14 @@ _PI_TOOL_LABELS = {
     "read_task_graphic_sources": "读取可编辑图片来源",
     "preview_media_script": "创建图片来源",
     "read_media_script_request": "回读原图片程序请求",
+    "read_media_script_tool_capabilities": "查看可复用工具能力",
+    "list_media_script_tools": "查找可复用图片工具",
+    "describe_media_script_tool": "查看工具版本与参数",
+    "read_media_script_tool_creation": "查询工具保存结果",
+    "save_media_script_tool": "保存可复用图片工具",
+    "update_media_script_tool": "更新可复用工具",
+    "revoke_media_script_tool": "停用可复用工具",
+    "preview_media_script_tool": "用工具准备图片来源",
     "codemode": "编排受控业务工具",
     "start_creation_execution": "提交连续制作",
     "resume_creation_execution": "继续连续制作",
@@ -556,6 +566,7 @@ _session_locks_guard = threading.Lock()
 
 
 SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。你只能处理当前创作任务。
+当前source_start/end是当前取用区间，不是全部可用素材范围；未知全部可用范围时不能据此断言素材不足。ChangeClipSpeed保持时间槽时sourceSpan=slotSpan*playback_rate，倍率是源时长/时间轴时长；linkedSpeed的relative语义只沿API实际说明。narration.segment_count=0不代表无配音，selected_voice空不代表无音频，以本轮音频存在事实为准。
 每轮先读取当前任务；细节用 read_task_object，真实编辑动作和单位用 read_task_edit_capabilities。已声明动作直接调用 preview_typed_edit，不把类型化动作改写成固定自然语言语法。阶段只排序工具，不代替对象/身份/版本门禁。未声明动作明确说明实际缺口，不能静默调用旧解析器。
 用户让你为当前镜头挑选替换素材时，调用 read_clip_candidates 读取真实候选及依据；用户已委托你选择时，根据候选决定并用 preview_typed_edit 生成待确认修改。对象资格和可替换范围以本轮工具结果为准，不凭历史回复增加必须由用户手动选择素材的限制。
 给当前镜头对应素材修改用户标签时，先 read_selected_material 回读，再按用户明确的添加、移除或替换要求调用 update_selected_material_tags；标签建议用 suggest_selected_material_tags，建议不自动保存。普通标签无需剪辑预览，只有写后同对象回读成功才可说已保存。
@@ -570,7 +581,7 @@ typed动作直接提供API已声明字段，原句仍由宿主绑定为来源；
 旧preview_edit只服务尚未迁移的真实原句消费者。typed预览每轮至多3个不同候选，每次重新核验本轮版本；失败或未知结果不可盲重放。需要组合时可用codemode，必须await全部调用；脚本失败不抹去已提交的真实业务回执。
 preview_edit 返回 task_media_job 是后台媒体安排回执，预览尚未完成，不是工具失败；说明已安排并等待工作台回读，不在本轮重试或轮询，不声称预览已生成或修改已应用。
 预览成功后只依据工具返回的 operation_type、before、after 和影响说明实际变化；不得把位置说成宽度收窄或猜测中心对齐。预览不是执行或出片，必须等待用户确认。
-生成图片来源时先读read_media_script_capabilities；不可用说明实际缺口，不猜运行时路径或安装包。用read_task_graphic_sources读取已登记PNG与修订，preview_media_script提交Python/Pillow单PNG程序。程序使用parameters、inputs、outputs命名空间，只写声明的outputs[name]。只把succeeded graphic_source的实际source_ref供后续preview_typed_edit EditGraphicOverlay使用；来源成功不是已经应用或出片。可以read_task_media_job wait_seconds至多20作有限只读等待；仍pending就说明事实，不无限查询或重复程序POST。原请求未知用read_media_script_request的phase=script定位查询，不能重发。配方保存/调用接口未冻结，不猜入口。
+生成图片来源时先读read_media_script_capabilities；不可用说明实际缺口，不猜运行时路径或安装包。用read_task_graphic_sources读取已登记PNG与修订，preview_media_script提交Python/Pillow单PNG程序。程序使用parameters、inputs、outputs命名空间，只写声明的outputs[name]。只把succeeded graphic_source的实际source_ref供后续preview_typed_edit EditGraphicOverlay使用；来源成功不是已经应用或出片。可以read_task_media_job wait_seconds至多20作有限只读等待；仍pending就说明事实，不无限查询或重复程序POST。原请求未知用read_media_script_request的phase=script定位查询，不能重发。复用工具先读实际capabilities/list/describe；只用真实tool_id/version调用新任务、新输入的普通API，不继承旧输入授权。仅用户明确要求时save/update/revoke；原保存unknown只查创建UUID，CAS写丢回应不自动重复；程序成功不自动保存或采用。
 不要请求、读取或发送原始媒体文件。只用已提供的业务工具。
 回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案、版本号等内部词；必要的影响和修复要说清。"""
 
@@ -736,6 +747,8 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
     }
     orchestration_failed = False
     edit_request_status = None
+    script_tool_result = None
+    script_tool_status = None
     for line in _business_event_lines(output):
         try:
             event = json.loads(line)
@@ -744,14 +757,22 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 FAILURE_UNKNOWN,
                 explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
             ) from exc
-        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_typed_edit", "read_typed_edit_request", "preview_media_script", "read_media_script_request"}:
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request"}:
             status_details = (event.get("result") or {}).get("details") or {}
             if status_details.get("kind") == "edit_request_status":
                 edit_request_status = status_details
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"save_media_script_tool", "update_media_script_tool", "revoke_media_script_tool", "read_media_script_tool_creation"}:
+            tool_details = (event.get("result") or {}).get("details") or {}
+            if tool_details.get("kind") == "media_script_tool_result" and not event.get("isError"):
+                script_tool_result = tool_details
+                script_tool_status = None
+            elif tool_details.get("kind") == "media_script_tool_status":
+                script_tool_status = tool_details
+                script_tool_result = None
         if event.get("type") == "tool_execution_end" and event.get("toolName") == "codemode" and event.get("isError"):
             orchestration_failed = True
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
-            "preview_edit", "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "read_media_script_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
+            "preview_edit", "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
             "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
             "generate_creation_task_topics", *action_tools,
             "read_selected_material", "update_selected_material_tags",
@@ -819,7 +840,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                         topic_result = details.get("topics")
             if not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
-                if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "read_media_script_request"}:
+                if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request"}:
                     kind = "edit_preview"
                 if kind == "edit_preview" and details.get("kind") == "task_media_job":
                     media_job = details["media_job"]
@@ -850,6 +871,17 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
             )
         raise _fail(cause)
+    if script_tool_status is not None and preview is None:
+        if media_job is not None:
+            script_tool_status = {**script_tool_status, "related_media_job": media_job}
+        return "工具写入尚未取得可核验结果；原定位和输入已保留，只读取结果，不重复写入。", script_tool_status
+    if script_tool_result is not None and preview is None:
+        if media_job is not None:
+            script_tool_result = {**script_tool_result, "related_media_job": media_job}
+        action = script_tool_result.get("action")
+        message = {"save": "可复用图片工具已保存；未应用图片或生成成片。", "query": "已回读原工具创建结果，不代表其他新输入已经保存。",
+                   "update": "可复用工具的新版本已保存；既有媒体保持不变。", "revoke": "工具已停用；已存在的合法图片和视频仍保留。"}.get(action, "工具实际回执已返回。")
+        return message, script_tool_result
     if edit_request_status is not None and preview is None:
         if media_job is not None:
             edit_request_status = {**edit_request_status, "related_media_job": media_job}
@@ -1090,7 +1122,7 @@ def _read_task_before_pi(extension: Path, env: dict[str, str], cwd: Path) -> dic
         raise _fail(FAILURE_RUNTIME_MISSING)
     # Use the exact packaged extension and its existing HTTP whitelist. No Pi hook
     # is used here: extension hook exceptions are caught by Pi and cannot fail closed.
-    script = "const {readCurrentTaskFacts,readTaskEditCapabilities,readMediaScriptCapabilities}=await import(process.argv[1]); const facts=await readCurrentTaskFacts(); facts._edit_capabilities=await readTaskEditCapabilities(); facts._media_script_capabilities=await readMediaScriptCapabilities(); console.log(JSON.stringify(facts));"
+    script = "const {readCurrentTaskFacts,readTaskEditCapabilities,readMediaScriptCapabilities,readMediaScriptToolCapabilities}=await import(process.argv[1]); const facts=await readCurrentTaskFacts(); facts._edit_capabilities=await readTaskEditCapabilities(); facts._media_script_capabilities=await readMediaScriptCapabilities(); facts._script_tool_capabilities=await readMediaScriptToolCapabilities(); console.log(JSON.stringify(facts));"
     try:
         result = _run_pi_streaming([node, "--experimental-strip-types", "--input-type=module", "-e", script, extension.resolve().as_uri()],
                                    message="", env=env, cwd=cwd, timeout_seconds=35, on_event=lambda _event: None,
@@ -1217,6 +1249,7 @@ def _run_turn(
         "AI_VIDEO_DIARY_AGENT_SCRIPT_DRAFT_UPDATED_AT": "",
         "AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES": "",
         "AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES": "",
+        "AI_VIDEO_DIARY_AGENT_SCRIPT_TOOL_CAPABILITIES": "",
         "AI_VIDEO_DIARY_AGENT_PI_MODULE": "",
         "AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS": tool_names,
 
@@ -1256,7 +1289,7 @@ def _run_turn(
     )
     prompt += "\n" + capability_envelope
     if task_id:
-        prompt += "\n当前阶段只排序已有对象的读取和预览能力。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。程序命名空间为parameters、inputs、outputs；写声明outputs[name]。实际source_ref可供EditGraphicOverlay/ImageOverlay后续类型化提案，不自动采用或生成成片。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
+        prompt += "\n当前阶段只排序已有对象的读取和预览能力。source_start/end仅是当前取用区间，不是全部可用范围；未知范围不能断言素材不足。ChangeClipSpeed固定slot时sourceSpan=slotSpan*rate，linkedSpeed另循API实际说明。音频存在性看narration摘要及montage逻辑引用，0segments/空selected_voice不代表无配音。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。程序命名空间为parameters、inputs、outputs；写声明outputs[name]。实际source_ref可供EditGraphicOverlay/ImageOverlay后续类型化提案，不自动采用或生成成片。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
     if knowledge_reference:
         prompt += "\n本轮用户明确引用了知识固定版本和范围。涉及这份资料的事实先调用 read_selected_knowledge，不能用 find_knowledge 的其他版本或定位替代；工具不可访问时说明引用不可读取。"
     if profile_reference:
@@ -1321,6 +1354,10 @@ def _run_turn(
             if media_capabilities is not None:
                 env["AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES"] = json.dumps(media_capabilities, ensure_ascii=False)
                 facts["media_script_capabilities"] = {key: value for key, value in media_capabilities.items() if key != "schema"}
+            tool_capabilities = facts.pop("_script_tool_capabilities", None)
+            if tool_capabilities is not None:
+                env["AI_VIDEO_DIARY_AGENT_SCRIPT_TOOL_CAPABILITIES"] = json.dumps(tool_capabilities, ensure_ascii=False)
+                facts["script_tool_capabilities"] = {key: value for key, value in tool_capabilities.items() if key != "schemas"}
             facts_text = json.dumps(facts, ensure_ascii=False)
             cmd[cmd.index("--system-prompt") + 1] += "\n宿主发送前已实际读取本轮任务事实（不是历史对话）：\n" + facts_text
             model_message = (

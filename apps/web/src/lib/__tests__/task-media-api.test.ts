@@ -8,6 +8,16 @@ const queued: TaskMediaJob = { operation: "audio_listen", target_refs: [], input
   waiting_reason: "等待设备空闲", base_version_id: "version-one", result: null, failure_reason: null, repair_action: null };
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); window.localStorage.clear(); });
 
+it("recognizes registered script image-source recovery without requiring editor target refs or treating it as an edit", () => {
+  const graphic: TaskMediaJob = {...queued, operation: "media_script_tool_preview", result_kind: "graphic_source",
+    target_refs: ["artifact:input-source"], status: "succeeded", result: {source_ref:"artifact:output",artifact_id:"output",
+      sha256:"a".repeat(64),size_bytes:100,name:"panel.png",width:64,height:64,applied:false}};
+  expect(taskMediaJobMatchesContext(graphic,"version-one",["clip:clip-1"])).toBe(true);
+  expect(taskMediaJobMatchesContext({...graphic,base_version_id:"old"},"version-one",[])).toBe(false);
+  expect(taskMediaJobMatchesContext({...graphic,status:"stale"},"version-one",[])).toBe(false);
+  expect(taskMediaJobMatchesContext({...graphic,operation:"unregistered-script"},"version-one",[])).toBe(false);
+});
+
 it("keeps the 202 receipt and only returns playable media after an authorized persistent read", async () => {
   vi.useFakeTimers();
   window.localStorage.setItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY, "member-token");

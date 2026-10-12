@@ -37,7 +37,7 @@ node scripts/yaohe.mjs material search --query "城市街景" --role b_roll --li
 
 全局能力读取 `/api/assistant/capabilities`；任务能力读取 `/api/creation-tasks/TASK/assistant/edit-capabilities`。`describe` 返回指定动作的实际可用性、参数 schema 和单位。素材读取沿 `/api/production/materials/ASSET` 和 `/api/production/materials/search`，仍受原成员与用途规则约束。
 
-脚本仅接入当前API的Python/Pillow单PNG来源预览；配方/扩展注册和导出尚未接入，本CLI不猜测这些路由。服务端能力目录中的其他入口也不代表本 CLI 已实现对应命令。
+脚本仅接入当前API的Python/Pillow单PNG来源预览；可复用图片工具使用下方已冻结API；个人扩展加载和导出尚未接入，本CLI不猜这些路由。服务端能力目录中的其他入口也不代表本 CLI 已实现对应命令。
 
 ## Python/Pillow 图片来源程序
 
@@ -68,6 +68,27 @@ node scripts/yaohe.mjs job wait TASK JOB --timeout-seconds 20
 程序请求复用原请求查询与幂等协议，phase固定为 `script`；编辑预览和应用仍分别用 `preview/apply`。同UUID已经recorded时，本次代码/参数仍提交给共同API比较，不复制旧程序冒充本次成功；只复用原版本绑定。未知请求仅查询，不重POST或换UUID盲重试。
 
 提交返回普通媒体Job。只有实际 `succeeded` 且返回 `graphic_source` 才取得可编辑PNG来源；这不表示当前时间线已变或成片已完成。需要使用时，另用实际 `source_ref` 创建 `EditGraphicOverlay`/`ImageOverlay` 类型化提案，沿既有预览、采用与生成流程。
+
+## 保存和调用可复用图片工具
+
+```bash
+node scripts/yaohe.mjs tool capabilities
+node scripts/yaohe.mjs tool list
+node scripts/yaohe.mjs tool describe TOOL --version 1
+node scripts/yaohe.mjs tool save TASK --file tool.json --request-id UUID
+node scripts/yaohe.mjs tool request UUID
+node scripts/yaohe.mjs tool update TOOL --file update.json
+node scripts/yaohe.mjs tool revoke TOOL --expected-tool-version 2
+node scripts/yaohe.mjs tool preview NEW_TASK TOOL --file invocation.json --request-id INVOKE_UUID
+```
+
+实际能力端点 `/api/media-script-tools/capabilities` 返回 `schemas.save/update/revoke/invoke`。列表、明确版本读取及停用状态来自同一API，不作为旧任务授权。仅用户明确要求时保存、更新或停用，程序成功不自动发布工具。
+
+保存文件按真实Save DTO填写 `producer_job_id/name/description/parameter_schema`，只从本任务、当前成员真实成功的producer保存。更新文件按Update DTO填写相同元数据及 `expected_version`；停用使用明确旧版本CAS。程序代码、输出槽和运行时身份由API读取，文件不能再提供这些字段。API验证参数schema的有界子集，CLI不写第二套validator。
+
+保存请求用调用方提供的稳定UUID；未知时最多回查原创建UUID一次，不自动重POST。已有原v1回执时仍由同POST比较本次真实元数据，差异拒绝，不能将旧内容冒充本次成功。更新/停用丢回应只读取工具HEAD，不能凭HEAD变化判定本次写入成功或自动重复CAS。
+
+调用文件使用Preview DTO的 `tool_version/parameters/input_refs`，并绑定新任务的明确当前版本；不继承旧输入、成员或许可。请求定位仍用phase=script，结果为普通graphic_source Job。代码与输出契约由服务端从工具版本读取，等待/取消沿既有Job命令。来源成功不自动应用图片或出片。
 
 ## 编辑预览与原提案应用
 

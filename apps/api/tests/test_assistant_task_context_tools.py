@@ -173,3 +173,35 @@ def test_real_node_missing_confirmed_identity_is_unreadable_not_an_empty_script(
     output = run_tool(tmp_path, workspace, stage="narration")
     assert not output["ok"] and "已确认文案不可读" in output["error"]
     assert "result" not in output
+
+
+def test_actual_api_narration_without_segments_and_montage_audio_are_not_omitted(tmp_path):
+    workspace=task_workspace()
+    workspace["narration"]={"audio_reference":"narration://artifact/pi-qa-audio","duration_seconds":5,
+                            "sample_rate":24000,"language":"zh","segments":[]}
+    workspace["montage"]={"clips":[],"cues":[],"narration_reference":"narration://artifact/pi-qa-audio",
+        "audio_timeline":{"format_version":1,"tracks":[{"id":"voice-track","name":"本人声音","kind":"voice",
+        "clips":[{"id":"voice-clip","source_ref":"narration://artifact/pi-qa-audio","source_start_ms":0,
+                   "source_end_ms":5000,"timeline_start_ms":0,"playback_rate":1,"gain_db":0}]}]}}
+    seen=run_tool(tmp_path,workspace)["result"]["details"]
+    assert seen["narration_segment_count"]==0
+    assert seen["narration"]["has_audio_reference"] and seen["narration"]["duration_seconds"]==5
+    assert seen["narration"]["audio_reference"]==seen["narration"]["montage_narration_reference"]
+    assert seen["audio_track_count"]==1 and seen["audio_tracks"][0]["clips"][0]["duration_ms"]==5000
+
+
+def test_actual_relative_artifact_refs_preserve_distinct_current_and_registered_audio(tmp_path):
+    workspace=task_workspace()
+    workspace["narration"]={"audio_reference":"artifacts/task-real/job-cached/audio.wav","duration_seconds":5,
+                            "sample_rate":24000,"model_id":"synthetic-pcm","voice_profile_id":"synthetic-only",
+                            "source_kind":"generated","segments":[]}
+    workspace["montage"]={"clips":[],"cues":[],"narration_reference":"artifacts/task-real/job-current/edited.wav",
+                           "audio_timeline":{"format_version":1,"tracks":[]}}
+    facts=run_tool(tmp_path,workspace)["result"]["details"]["narration"]
+    assert facts["audio_reference"]==workspace["narration"]["audio_reference"]
+    assert facts["montage_narration_reference"]==workspace["montage"]["narration_reference"]
+    assert not facts["montage_uses_registered_narration"] and "status" not in facts
+    assert facts["duration_seconds"]==5 and facts["model_id"]=="synthetic-pcm"
+    for physical in ("/private/audio.wav","file:///private/audio.wav"):
+        workspace["narration"]["audio_reference"]=physical
+        assert run_tool(tmp_path,workspace)["result"]["details"]["narration"]["audio_reference"] is None

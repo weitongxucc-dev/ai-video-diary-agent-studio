@@ -375,3 +375,52 @@ test('unknown script receipt does not POST or change its request phase',async t=
   const queried=await f.cli('request','query',TASK,REQUEST,'--phase','script');
   assert.equal(queried.code,4);assert.ok(f.calls.every(call=>call.method==='GET'));
 });
+
+const TOOL='script_tool_actual';
+const toolRecipe={tool_id:TOOL,version:1,active:true,name:'Panel',description:'Draw a panel',parameter_schema:{type:'object',properties:{color:{type:'string'}}}};
+const toolQuery=`/api/media-script-tools/requests/${REQUEST}`;
+
+test('tool discovery and metadata save use ordinary authenticated routes and compare changed inputs',async t=>{
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===toolQuery)return send(res,200,toolRecipe);
+    if(call.method==='POST')return send(res,409,{detail:'same create UUID with different metadata'});
+    return send(res,200,call.url==='/api/media-script-tools'?{items:[toolRecipe],truncated:false}:toolRecipe);
+  });
+  await f.cli('tool','list');await f.cli('tool','describe',TOOL,'--version','1');
+  const file=join(f.directory,'tool.json');await writeFile(file,JSON.stringify({producer_job_id:'producer_actual',name:'Changed name',description:'different',parameter_schema:toolRecipe.parameter_schema}));
+  const saved=await f.cli('tool','save',TASK,'--file',file,'--request-id',REQUEST);
+  assert.equal(saved.code,1);assert.equal(f.calls.at(-1).body.name,'Changed name');
+  assert.equal(f.calls.at(-1).body.request_id,REQUEST);assert.ok(!Object.hasOwn(f.calls.at(-1).body,'assistant_turn_id'));
+  assert.equal(f.calls.at(-1).url,PREFIX+'/media-script-tools');
+});
+
+test('lost creation response reads original UUID once without claiming old metadata fulfilled current request',async t=>{
+  let queried=0;
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===toolQuery)return ++queried===1?absent(res):send(res,200,toolRecipe);
+    return res.destroy();
+  });
+  const file=join(f.directory,'tool.json');await writeFile(file,JSON.stringify({producer_job_id:'producer_actual',name:'Panel',description:'draw',parameter_schema:toolRecipe.parameter_schema}));
+  const saved=await f.cli('tool','save',TASK,'--file',file,'--request-id',REQUEST);
+  assert.equal(saved.code,4);assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+  assert.equal(queried,2);assert.equal(saved.json.request_locator,toolQuery);
+});
+
+test('tool invocation uses explicit tool version with new task/version/inputs and normal script locator',async t=>{
+  const f=await fixture(t,(call,res)=>call.url===scriptQuery?absent(res):call.url===PREFIX?
+    send(res,200,{task:{current_timeline_version_id:'new-base',timeline_sequence:9}}):send(res,202,scriptJob));
+  const file=join(f.directory,'invoke.json');await writeFile(file,JSON.stringify({tool_version:1,parameters:{color:'red'},input_refs:[]}));
+  const result=await f.cli('tool','preview',TASK,TOOL,'--file',file,'--request-id',REQUEST);
+  assert.equal(result.code,3);assert.equal(f.calls.at(-1).url,PREFIX+`/media-script-tools/${TOOL}/preview`);
+  assert.equal(f.calls.at(-1).body.expected_timeline_version_id,'new-base');
+  assert.deepEqual(f.calls.at(-1).body.parameters,{color:'red'});
+  assert.ok(!Object.hasOwn(f.calls.at(-1).body,'script_source'));
+});
+
+test('update and revoke lost replies are not automatically repeated',async t=>{
+  const f=await fixture(t,(_call,res)=>res.destroy());
+  const file=join(f.directory,'update.json');await writeFile(file,JSON.stringify({expected_version:1,producer_job_id:'producer_new',name:'new',description:'new',parameter_schema:toolRecipe.parameter_schema}));
+  assert.equal((await f.cli('tool','update',TOOL,'--file',file)).code,4);
+  assert.equal((await f.cli('tool','revoke',TOOL,'--expected-tool-version','1')).code,4);
+  assert.deepEqual(f.calls.map(call=>call.method),['PATCH','POST']);
+});

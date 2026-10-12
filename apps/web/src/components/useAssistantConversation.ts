@@ -30,7 +30,8 @@ const settledBusinessStatuses = new Set(["confirmed", "rejected", "cancelled", "
 export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {
   const result = assistantTaskTurnResult(turn);
   if (result?.continuation && settledBusinessStatuses.has(result.continuation.status)) return false;
-  return result?.continuation?.status === "unknown" || result?.response?.edit_request?.status === "unknown";
+  return result?.continuation?.status === "unknown" || result?.response?.edit_request?.status === "unknown"
+    || result?.response?.script_tool?.status === "unknown";
 }
 
 export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn) {

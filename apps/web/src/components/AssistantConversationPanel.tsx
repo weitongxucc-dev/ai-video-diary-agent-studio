@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
 import { getAssistantCapabilities } from "@/lib/api";
-import type { AssistantConversationTurn } from "@/lib/types";
+import type { AssistantConversationTurn, AssistantScriptToolReceipt } from "@/lib/types";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest } from "./useAssistantConversation";
 
@@ -179,20 +179,39 @@ function canOpenTurnProposal(turn: AssistantConversationTurn) {
   return result.edit_preview === true && (!result.response?.edit_preview || result.response.edit_preview.proposal.status === "proposed");
 }
 
+function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefined) {
+  if (!receipt) return null;
+  const action = {save: "保存", query: "查询", update: "更新", revoke: "停用"}[receipt.action];
+  const name = typeof receipt.tool?.name === "string" ? `「${receipt.tool.name}」` : "";
+  const version = receipt.tool_version ? `（v${receipt.tool_version}）` : "";
+  if (receipt.status === "unknown") {
+    return `工具${action}结果尚未核实；原请求和输入已保留，只查询结果，不重复写入。${receipt.action === "update" || receipt.action === "revoke"
+      ? `当前观察到的工具版本${version}不能证明本次${action}成功。` : ""}`;
+  }
+  if (receipt.status === "rejected") return `工具${action}请求已被拒绝；本轮没有取得该操作的成功回执。`;
+  if (receipt.status === "not_submitted") return `工具${action}请求没有提交；请查看具体原因。`;
+  return receipt.action === "revoke" ? `工具${name}${version}已停用；已有图片和视频仍保留。`
+    : receipt.action === "update" ? `工具${name}的新版本${version}已保存；已有图片和视频保持不变。`
+      : receipt.action === "query" ? `已回读原工具${name}的登记结果${version}；不代表新输入已经保存。`
+        : `可复用图片工具${name}${version}已保存；尚未应用图片或生成成片。`;
+}
+
 function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean }) {
   const result = turn.result;
   const taskResult = assistantTaskTurnResult(turn);
   const continuation = taskResult?.continuation;
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
+  const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
   const outcomeStatus = continuation?.status ?? job?.status;
   const unknownRequest = assistantTurnHasUnknownRequest(turn);
   const pendingResult = assistantTurnNeedsResultRefresh(turn);
   const graphicSourceReady = job?.result_kind === "graphic_source" && job.status === "succeeded"
     && job.result && "source_ref" in job.result && "artifact_id" in job.result;
+  const graphicSourceSummary = "图片来源已生成，可以继续预览它在视频里的效果；尚未应用到草稿或生成成片。";
   const businessSummary = taskResult ? unknownRequest
     ? "请求结果尚未核实；原请求定位已保留。先查询结果，不重复提交。"
-    : graphicSourceReady ? "图片来源已生成，可以继续预览它在视频里的效果；尚未应用到草稿或生成成片。"
+    : graphicSourceReady ? graphicSourceSummary
     : outcomeStatus === "confirmed"
       ? continuation?.result_version_id ? "修改已应用并保存到草稿，可撤销；成片尚未重新生成。" : "已收到采用决定，保存结果仍待核实。"
       : outcomeStatus === "rejected" ? "修改方案已放弃，当前草稿保持不变。"
@@ -211,7 +230,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
   };
-  const resultSummary = businessSummary ?? (result?.kind === "plan_preview"
+  const resultSummary = businessSummary ?? toolSummary ?? (result?.kind === "plan_preview"
     ? (result.plan_preview as Record<string, unknown> | undefined)?.confirmable === true
       ? "方案已检查，可查看页面中的方案卡后决定是否创建。"
       : "方案检查已返回阻断项；请按页面中的真实原因处理。"
@@ -233,6 +252,8 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     <TurnContent turn={turn} reading={reading} />
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
+      {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
+      {unknownRequest && graphicSourceReady ? <p>{graphicSourceSummary}</p> : null}
       {continuation?.waiting_reason || job?.waiting_reason ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
       {job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}

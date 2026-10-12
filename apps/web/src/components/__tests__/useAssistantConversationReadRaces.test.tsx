@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAssistantConversation } from "../useAssistantConversation";
-import type { AssistantConversation } from "@/lib/types";
+import type { AssistantConversation, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
   getCurrentAssistantConversation: vi.fn(),
@@ -68,7 +68,78 @@ function businessConversation(status: "queued" | "running" | "confirmed" | "unkn
         status: "confirmed", actionable: false, base_version_id: "version-base", result_version_id: "version-saved"}} : {})}}]};
 }
 
+function scriptToolConversation(action: AssistantScriptToolReceipt["action"], status: AssistantScriptToolReceipt["status"] = "unknown") {
+  const initial = businessConversation("unknown");
+  initial.turns[0].result = {...initial.turns[0].result, response: {
+    ...initial.turns[0].result!.response as CreationTaskAssistantTurnResponse, edit_request: null,
+    script_tool: {action, status, request_id: "original-creation", tool_id: status === "recorded" ? "tool-real" : null,
+      tool_version: status === "recorded" ? 1 : null, query_url: "/api/media-script-tools/requests/original-creation", submitted_input: {name: "小标题"}},
+  }};
+  return initial;
+}
+
 describe("same-turn business result reads", () => {
+  it.each(["save", "update", "revoke"] as const)("bounds unknown tool %s reads without repeating writes", async action => {
+    const initial = scriptToolConversation(action);
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(24);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    expect(result.current.conversation?.turns[0].id).toBe(initial.turns[0].id);
+    expect(result.current.conversation?.turns[0].result?.response).toMatchObject({script_tool: {action, status: "unknown"}});
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("stops querying when the original tool save has been read back as recorded", async () => {
+    api.getCurrentAssistantConversation.mockResolvedValue(scriptToolConversation("save"));
+    api.getAssistantConversation.mockResolvedValue(scriptToolConversation("save", "recorded"));
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.conversation?.turns[0].result?.response).toMatchObject({script_tool: {status: "recorded", tool_id: "tool-real"}});
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("keeps a new draft while the unknown tool save is read on the same turn", async () => {
+    const initial = scriptToolConversation("save"), late = deferred<AssistantConversation>();
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockReturnValue(late.promise);
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await waitFor(() => expect(result.current.conversation?.id).toBe(initial.id));
+    let reading!: Promise<AssistantConversation | null>;
+    act(() => { reading = result.current.refresh(); result.current.setDraftText("本轮查询期间的新草稿"); });
+    await act(async () => { late.resolve(scriptToolConversation("save", "recorded")); await reading; });
+    expect(result.current.draftText).toBe("本轮查询期间的新草稿");
+    expect(result.current.conversation?.turns[0].id).toBe(initial.turns[0].id);
+    expect(result.current.conversation?.turns[0].result?.response).toMatchObject({script_tool: {status: "recorded"}});
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does not poll a stopped turn with an unknown tool write", async () => {
+    const initial = scriptToolConversation("save");
+    initial.turns[0].status = "stopped";
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it.each(["queued", "running", "unknown"] as const)("reads a completed model turn while %s still awaits an actual result", async status => {
     const initial = businessConversation(status);
     api.getCurrentAssistantConversation.mockResolvedValue(initial);

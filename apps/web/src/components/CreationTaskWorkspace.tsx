@@ -44,6 +44,8 @@ import {
   getCreationTaskMediaJob,
   listCreationTaskMediaJobs,
   taskMediaJobMatchesContext,
+  getCreationTaskGraphicSources,
+  readCreationTaskGraphicSource,
   cancelCreationTaskMediaJob,
   resolveCreationTaskMediaResponse,
   taskMediaJobLabel,
@@ -1579,6 +1581,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setEditPreview(result as CreationTaskEditPreviewResponse);
         setAssistantPreview(true);
       } else {
+        if (response.result_kind === "graphic_source") {
+          const source = result as TaskMediaResultMap["graphic_source"];
+          const registered = (await getCreationTaskGraphicSources(task.id, controller.signal)).find(item =>
+            item.source_ref === source.source_ref && item.artifact_id === source.artifact_id
+            && item.sha256 === source.sha256 && item.size_bytes === source.size_bytes);
+          if (!stillCurrent()) return;
+          if (!registered) throw new Error("图片来源尚未登记或修订已变化，未恢复。");
+          setNotice("已读取当前任务登记的图片来源，尚未应用到草稿或生成成片。");
+        }
         setRecoveredMedia({ taskId: task.id, job: settledJob, result });
         if (response.result_kind === "recording") {
           const recording = result as CreationTaskRecording;
@@ -2506,7 +2517,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <header className={styles.stageHeading} data-timeline-version={task.timeline_sequence}>
           <div><h2>{productStages.find(stage => stage.id === activeView)?.title}</h2><span className={styles.stateBadge}>{activeView === task.stage ? creationTaskStatusPresentation(task.stage_status, task.stage).label : productStageState(activeView, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid").detail}</span></div>
           {execution?.job && ["queued", "running"].includes(execution.job.status) ? <span className={styles.runtimeState} role="status">连续制作：{execution.job.status === "queued" ? "已排队" : "后台制作中"}{execution.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</span> : null}
-          <JobProgressPanel selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
+          <JobProgressPanel graphicEditor={<GraphicOverlayEditor taskId={task.id} items={workspace.montage?.graphic_overlays ?? []}
+            selectedId={null} duration={workspace.montage?.duration_seconds ?? 0} busy={busy !== null}
+            onPreview={input => void previewExactEdit(input)} onDraftChange={() => {invalidateEditPreview(); setEditorDraft(true);}} />}
+            selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
         </header>
         <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
           <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} />
@@ -2624,11 +2638,12 @@ function jobKindLabel(kind: string): string {
  * 作业还在排队或执行时按固定间隔重新读取，结束后停止；切换任务时丢弃旧结果。
  * 读不到就明说并给出重试，不静默当成没有作业。
  */
-function JobProgressPanel({ task, taskId, refreshToken, pendingEditJobId, onEditSettled, showLiveStatus, mediaJob, onCancelMedia, selectedRefs, restoreBusy, onRestoreMedia, recoveredMedia }: {
+function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pendingEditJobId, onEditSettled, showLiveStatus, mediaJob, onCancelMedia, selectedRefs, restoreBusy, onRestoreMedia, recoveredMedia }: {
   selectedRefs: string[];
   restoreBusy: boolean;
   onRestoreMedia: (job: TaskMediaJob) => void;
   recoveredMedia: { job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] } | null;
+  graphicEditor: ReactNode;
   mediaJob: TaskMediaJob | null;
   onCancelMedia: () => void;
   showLiveStatus: boolean;
@@ -2711,13 +2726,13 @@ function JobProgressPanel({ task, taskId, refreshToken, pendingEditJobId, onEdit
         {mediaReadError ? <p role="alert">预览记录未读取：{mediaReadError}<button type="button" onClick={() => setMediaRetry(value => value + 1)}>重读预览记录</button></p> : null}
         {!mediaLoading && !mediaReadError && mediaPage ? <>
           {recoveryCandidates.length ? <ol>{recoveryCandidates.map(item => <li key={item.job_id}>
-            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
+            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频", graphic_source: "图片来源" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
             <button type="button" disabled={restoreBusy} onClick={() => onRestoreMedia(item)}>恢复这次预览</button>
           </li>)}</ol> : <p>这一页没有符合当前版本与选择的预览记录。</p>}
           {mediaPage.next_cursor ? <button type="button" onClick={() => setMediaCursor(mediaPage.next_cursor)}>查看更多预览记录</button> : null}
           {mediaCursor ? <button type="button" onClick={() => setMediaCursor(null)}>回到最新预览记录</button> : null}
         </> : null}
-        {recoveredMedia ? <RecoveredMediaResult job={recoveredMedia.job} result={recoveredMedia.result} /> : null}
+        {recoveredMedia ? <RecoveredMediaResult taskId={taskId} graphicEditor={graphicEditor} job={recoveredMedia.job} result={recoveredMedia.result} /> : null}
       </section>
       {mediaJob ? <p>{taskMediaJobLabel(mediaJob)}{mediaJob.repair_action ? ` · ${mediaJob.repair_action}` : ""}</p> : null}
       {current ? <p>{jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}</p> : <p>{progress ? "这个任务还没有后台作业记录。" : "正在读取后台记录…"}</p>}
@@ -2730,7 +2745,8 @@ function JobProgressPanel({ task, taskId, refreshToken, pendingEditJobId, onEdit
   </section>;
 }
 
-function RecoveredMediaResult({ job, result }: { job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] }) {
+function RecoveredMediaResult({ taskId, graphicEditor, job, result }: {taskId: string; graphicEditor: ReactNode; job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] }) {
+  if (job.result_kind === "graphic_source") return <RecoveredGraphicSource key={`${taskId}:${(result as TaskMediaResultMap["graphic_source"]).artifact_id}`} taskId={taskId} source={result as TaskMediaResultMap["graphic_source"]} graphicEditor={graphicEditor} />;
   if (job.result_kind === "audio_listen") return <audio aria-label="恢复的音频试听" controls preload="metadata" src={apiUrl((result as TaskMediaResultMap["audio_listen"]).audio_url)} />;
   if (job.result_kind === "audio_source") {
     const source = result as TaskMediaResultMap["audio_source"];
@@ -2749,4 +2765,23 @@ function RecoveredMediaResult({ job, result }: { job: TaskMediaJob; result: Task
     return <div aria-label="恢复的音频波形"><svg viewBox="0 0 240 32" role="img" aria-label="实际音频波形"><path d={points.join(" ")} stroke="currentColor" /></svg><p>每个采样点覆盖 {wave.seconds_per_peak} 秒。</p></div>;
   }
   return null;
+}
+
+function RecoveredGraphicSource({taskId,source,graphicEditor}:{taskId:string;source:TaskMediaResultMap["graphic_source"];graphicEditor:ReactNode}) {
+  const [url,setUrl]=useState<string|null>(null);
+  const [error,setError]=useState<string|null>(null);
+  const [preparing,setPreparing]=useState(false);
+  useEffect(()=>{
+    const controller=new AbortController();let active=true;let objectUrl:string|null=null;
+    void readCreationTaskGraphicSource(taskId,source.artifact_id,controller.signal).then(blob=>{
+      if(!active)return;objectUrl=URL.createObjectURL(blob);setUrl(objectUrl);
+    }).catch(cause=>{if(active)setError(cause instanceof Error?cause.message:"图片来源未读取。");});
+    return()=>{active=false;controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};
+  },[taskId,source.artifact_id]);
+  return <section aria-label="恢复的图片来源">
+    <p>{source.name} · {source.width}×{source.height}；尚未应用到草稿或生成成片。</p>
+    {url?<NextImage src={url} alt="实际登记的图片来源" width={source.width} height={source.height} unoptimized/>:error?<p role="alert">{error}</p>:<p role="status">正在读取图片来源…</p>}
+    <button type="button" disabled={!url} onClick={()=>setPreparing(true)}>准备图片图层</button>
+    {preparing?graphicEditor:null}
+  </section>;
 }

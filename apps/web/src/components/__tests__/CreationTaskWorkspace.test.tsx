@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace as ActualCreationTaskWorkspace, FinalVideoQualityCheck, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
-import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility } from "@/lib/api";
+import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources } from "@/lib/api";
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -4196,6 +4196,32 @@ function savedMediaJob(initial: ReturnType<typeof recoveryWorkspace>, jobId: str
     result_url: `/api/creation-tasks/task-1/media-jobs/${jobId}`, device_request_id: null, waiting_reason: null,
     base_version_id: initial.task.current_timeline_version_id, result: { audio_url: `/${jobId}.wav` }, failure_reason: null, repair_action: null };
 }
+
+it("recovers a registered image source with authenticated bytes and the existing layer editor without applying it", async () => {
+  const initial=recoveryWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  mocks.realMediaJobReads=true;
+  const source={source_ref:"artifact:png-source",artifact_id:"png-source",sha256:"a".repeat(64),size_bytes:128,
+    name:"panel.png",width:64,height:64,applied:false};
+  const job={...savedMediaJob(initial,"png-job"),operation:"media_script_preview",result_kind:"graphic_source",result:source};
+  const createUrl=vi.fn().mockReturnValue("blob:registered-image"),revokeUrl=vi.fn();
+  vi.stubGlobal("URL",class extends URL { static createObjectURL=createUrl; static revokeObjectURL=revokeUrl; });
+  vi.mocked(getCreationTaskGraphicSources).mockResolvedValue([source]);
+  const fetch=vi.fn(async(url:string,init?:RequestInit)=>{
+    if(init?.method==="POST")throw new Error("恢复不得提交");
+    if(url.includes("/graphics/source/"))return new Response(new Uint8Array([137,80,78,71]),{headers:{"Content-Type":"image/png"}});
+    return new Response(JSON.stringify(url.includes("?limit=")?{items:[job],next_cursor:null}:job));
+  });vi.stubGlobal("fetch",fetch);
+  render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  fireEvent.click(screen.getByRole("button",{name:"运行详情"}));
+  fireEvent.click(await screen.findByRole("button",{name:"恢复这次预览"}));
+  expect(await screen.findByAltText("实际登记的图片来源")).toHaveAttribute("src","blob:registered-image");
+  expect(within(screen.getByLabelText("恢复的图片来源")).getByText(/尚未应用到草稿或生成成片/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button",{name:"准备图片图层"}));
+  fireEvent.click(screen.getByText("图文叠加"));
+  expect(await screen.findByLabelText("已导入图片")).toBeVisible();
+  expect(mocks.confirmEdit).not.toHaveBeenCalled();expect(mocks.exactPreview).not.toHaveBeenCalled();
+  vi.mocked(getCreationTaskGraphicSources).mockResolvedValue([]);
+});
 
 it("offers bounded recovery after remount and reads only the explicitly chosen original job", async () => {
   const initial = recoveryWorkspace();

@@ -113,6 +113,43 @@ function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "
 }
 
 describe("persisted business result cards", () => {
+  it.each([
+    ["save", "已保存"], ["query", "已回读原工具"], ["update", "新版本"], ["revoke", "已停用"],
+  ] as const)("shows the actual %s tool receipt without offering edit adoption", (action, text) => {
+    const saved = projectedTaskConversation("queued");
+    saved.turns[0].result = {...saved.turns[0].result, response: {
+      ...saved.turns[0].result!.response as Record<string, unknown>, media_job: null,
+      script_tool: {action, status: "recorded", tool_id: "tool-real", tool_version: 2,
+        expected_version: 1, query_url: "/api/media-script-tools/tool-real", tool: {name: "小标题"}},
+    }};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} onOpenEditProposal={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText(new RegExp(text))).toBeVisible();
+    expect(screen.getByText(/v2/)).toBeVisible();
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "查询本轮结果"})).not.toBeInTheDocument();
+  });
+
+  it("shows an unknown CAS write as unverified while retaining the actual source and the original query", async () => {
+    const saved = projectedTaskConversation("queued");
+    saved.turns[0].result = {...saved.turns[0].result, response: {
+      ...saved.turns[0].result!.response as Record<string, unknown>,
+      media_job: {status: "succeeded", result_kind: "graphic_source", result: {source_ref: "source", artifact_id: "image"}},
+      script_tool: {action: "update", status: "unknown", tool_id: "tool-real", tool_version: 3,
+        expected_version: 1, query_url: "/api/media-script-tools/tool-real", submitted_input: {expected_version: 1}},
+    }};
+    const refresh = vi.fn().mockResolvedValue(saved), send = vi.fn();
+    render(<AssistantConversationPanel state={state({conversation: saved, refresh})} input="新草稿" onInput={vi.fn()}
+      onSend={send} onOpenEditProposal={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText(/v3.*不能证明本次更新成功/)).toBeVisible();
+    expect(screen.getByText(/图片来源已生成，可以继续预览它在视频里的效果/)).toBeVisible();
+    expect(screen.queryByText(/新版本.*已保存/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "查询本轮结果"}));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+  });
+
   it("shows a real succeeded PNG source without presenting it as an applied edit or finished video", () => {
     const saved = projectedTaskConversation("queued");
     const result = saved.turns[0].result!;

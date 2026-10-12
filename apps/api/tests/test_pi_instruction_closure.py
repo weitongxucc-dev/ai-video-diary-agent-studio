@@ -16,7 +16,7 @@ import app.assistant_pi as pi
 import app.main as main
 from app.config import Settings
 from app.production import TimelineVersion
-from app.schemas import CreationTaskEditPreviewRequest, CreationTaskExactEditRequest, MediaScriptPreviewRequest, EXACT_EDIT_FIELDS
+from app.schemas import CreationTaskEditPreviewRequest, CreationTaskExactEditRequest, MediaScriptPreviewRequest, EXACT_EDIT_FIELDS, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
 from app.visual_effects import compile_crop_command
 from test_assistant_task_context_tools import task_workspace
 from test_task_assistant_timeline_snapshot import task_client as task_client
@@ -109,7 +109,12 @@ def loopback_task():
             if state["block"]:
                 state["entered"].set()
                 state["release"].wait(timeout=5)
-            if self.path.endswith("/assistant/edit-capabilities"):
+            if self.path == "/api/media-script-tools/capabilities":
+                body = {"schemas": {name: model.model_json_schema() for name,model in (
+                    ("save",MediaScriptToolSaveRequest),("update",MediaScriptToolUpdateRequest),
+                    ("revoke",MediaScriptToolRevokeRequest),("invoke",MediaScriptToolPreviewRequest))},
+                    "invocation_phase":"script", "result_kind":"graphic_source"}
+            elif self.path.endswith("/assistant/edit-capabilities"):
                 body = {"task_id":"task-real", "timeline_version_id": None, "timeline_sequence": 0,
                         "schema":CreationTaskExactEditRequest.model_json_schema(),
                         "supported_operations":list(EXACT_EDIT_FIELDS), "operations":[], "units":{}}
@@ -167,7 +172,7 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         assert state["calls"] == [(path, "trusted-member") for path in (
             "/api/creation-tasks/task-real", "/api/creation-tasks/task-real/execution",
             "/api/creation-tasks/task-real/assistant/edit-capabilities",
-            "/api/creation-tasks/task-real/assistant/media-script-capabilities")]
+            "/api/creation-tasks/task-real/assistant/media-script-capabilities", "/api/media-script-tools/capabilities")]
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TASK_READ_READY"] == "1"
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         model_input = json.loads(kwargs["message"].split("本轮输入（JSON）：\n", 1)[1])
@@ -195,7 +200,7 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         assert state["calls"] == [(path, "trusted-member") for path in (
             "/api/creation-tasks/task-real", "/api/creation-tasks/task-real/execution",
             "/api/creation-tasks/task-real/assistant/edit-capabilities",
-            "/api/creation-tasks/task-real/assistant/media-script-capabilities")]
+            "/api/creation-tasks/task-real/assistant/media-script-capabilities", "/api/media-script-tools/capabilities")]
     assert events[0] == {"type":"tool_start","tool_id":0,"label":"读取当前任务（发送前）"}
 
 

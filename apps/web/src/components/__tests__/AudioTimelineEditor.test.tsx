@@ -56,7 +56,7 @@ it("clears the old waveform while a changed source is being read", async () => {
   const props = { onSelect: vi.fn(), onPreview: vi.fn(), busy: false, selectedId: "clip" };
   const { rerender } = render(<AudioTimelineTracks {...props} workspace={workspace} />);
   await waitFor(() => expect(screen.getByRole("button", { name: "选择音频：背景音乐" }).querySelector("svg")).not.toBeNull());
-  const changed = { ...workspace, montage: { ...workspace.montage!, audio_timeline: { format_version: 1, tracks: [{ ...track, clips: [{ ...track.clips[0], source_ref: "artifacts/new-music" }] }] } } };
+  const changed = { ...workspace, montage: { ...workspace.montage!, audio_timeline: { format_version: 1 as const, tracks: [{ ...track, clips: [{ ...track.clips[0], source_ref: "artifacts/new-music" }] }] } } };
   rerender(<AudioTimelineTracks {...props} workspace={changed} />);
   expect(screen.getByText("读取波形…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "选择音频：背景音乐" }).querySelector("svg")).toBeNull();

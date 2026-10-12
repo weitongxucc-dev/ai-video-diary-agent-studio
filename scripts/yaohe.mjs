@@ -12,6 +12,13 @@ const HELP = `曜核 CLI — Node >=22，普通业务 API 消费者
   task inspect TASK
   material inspect ASSET
   material search --query TEXT [--role a_roll|b_roll] [--limit 20]
+  tool capabilities|list
+  tool describe TOOL [--version N]
+  tool save TASK --file tool.json --request-id UUID
+  tool request UUID
+  tool update TOOL --file update.json
+  tool revoke TOOL --expected-tool-version N
+  tool preview TASK TOOL --file invocation.json --request-id UUID
   script capabilities TASK
   script sources TASK
   script submit TASK --file script.json --request-id UUID
@@ -22,7 +29,7 @@ const HELP = `曜核 CLI — Node >=22，普通业务 API 消费者
   timeline undo|redo TASK [--expected-version VERSION --expected-sequence N]
 全局：--config FILE（默认 ~/.config/yaohe/config.json，POSIX mode 0600）
 预览版本可写入 edit.json；缺少时只读一次当前任务绑定。
-脚本仅消费API的Python/Pillow单PNG来源预览；不自动应用或出片。配方/扩展注册及导出尚未接入。
+脚本仅消费API的Python/Pillow单PNG来源预览；不自动应用或出片。配方命令复用普通API；不继承旧任务授权，不自动应用。扩展加载和导出尚未接入。
 退出：0 已完成；1 API/终态失败；2 参数/配置；3 尚未完成；4 结果未知。
 `;
 
@@ -33,7 +40,7 @@ class CliError extends Error {
 function parse(args) {
   const flags = {}, positional = [];
   const allowed = new Set(['config','task','file','request-id','phase','query','role','limit',
-    'timeout-seconds','expected-version','expected-sequence']);
+    'timeout-seconds','expected-version','expected-sequence','version','expected-tool-version']);
   for (let i = 0; i < args.length; i++) {
     const value = args[i];
     if (value === '--help' || value === '-h') return {help: true};
@@ -234,6 +241,64 @@ async function dispatch(api,args) {
       const limit = number(f.limit,20,100); if (!Number.isInteger(limit)) throw new CliError('limit须为整数');
       const query = new URLSearchParams({q:f.query,limit:String(limit),...(f.role ? {usage_role:f.role} : {})});
       return {data:await api('/api/production/materials/search?'+query)};
+    }
+  }
+  if (group === 'tool') {
+    if (command === 'capabilities') {check(2,[]);return {data:await api('/api/media-script-tools/capabilities')};}
+    if (command === 'list') {check(2,[]);return {data:await api('/api/media-script-tools')};}
+    if (command === 'describe') {
+      check(3,['version']);
+      const query=f.version ? `?version=${number(f.version,1,Number.MAX_SAFE_INTEGER)}` : '';
+      return {data:await api(`/api/media-script-tools/${id(task)}${query}`)};
+    }
+    if (command === 'request') {
+      check(3,[]);const locator=`/api/media-script-tools/requests/${uuid(task)}`;
+      try {return {data:await api(locator),request_locator:locator,submitted:false};}
+      catch(error){throw new CliError(error.message,error.code,{...error.details,request_locator:locator});}
+    }
+    if (command === 'revoke') {
+      check(3,['expected-tool-version']);
+      if (!f['expected-tool-version']) throw new CliError('停用需要明确expected-tool-version');
+      return {data:await api(`/api/media-script-tools/${id(task)}/revoke`,{method:'POST',
+        body:{expected_version:number(f['expected-tool-version'],1,Number.MAX_SAFE_INTEGER)}})};
+    }
+    if (['save','update','preview'].includes(command)) {
+      check(command==='preview'?4:3,command==='update'?['file']:['file','request-id']);
+      if (!f.file) throw new CliError('配方动作需要 --file JSON');
+      let value,file;
+      try {file=await open(f.file,constants.O_RDONLY|constants.O_NONBLOCK);
+        const stat=await file.stat();if(!stat.isFile()||stat.size>262144)throw new CliError('配方JSON超过读取上限');
+        value=await boundedJson(file,262144);
+      } catch{throw new CliError('配方动作文件须是有界完整JSON');}finally{await file?.close();}
+      if(!value||Array.isArray(value)||typeof value!=='object'||
+          ['request_id','assistant_turn_id','workspace_id','member_id','task_id','runtime_paths','script_source','requested_outputs'].some(key=>Object.hasOwn(value,key)))
+        throw new CliError('配方动作仅使用API元数据/参数/输入字段，不提供身份、程序代码或输出槽');
+      if(command==='update')return {data:await api(`/api/media-script-tools/${id(task)}`,{method:'PATCH',body:value})};
+      const requestId=uuid(f['request-id']);
+      if(command==='save'){
+        const locator=`/api/media-script-tools/requests/${requestId}`;
+        const previous=await receipt(api,locator);
+        if(previous&&!previous.tool_id)return {code:4,state:'unknown',data:previous,request_locator:locator,submitted_input:value,submitted:false};
+        try{return {data:await api(`${taskPath(task)}/media-script-tools`,{method:'POST',body:{...value,request_id:requestId}}),request_locator:locator,submitted:true};}
+        catch(error){
+          if(error.code!==4)throw new CliError(error.message,error.code,{...error.details,request_locator:locator});
+          let original=null;
+          try{original=await receipt(api,locator);}catch{/* Query failure stays unknown; never rePOST. */}
+          throw new CliError('配方保存结果未知；仅保留原UUID查询，不用旧元数据冒充本次成功',4,
+            {request_locator:locator,submitted_input:value,original_result:original});
+        }
+      }
+      const locator=requestPath(task,requestId,'script');
+      const previous=await receipt(api,locator);
+      if(previous?.status==='unknown')return {...knownReceipt(previous,locator),submitted_input:value};
+      let body;
+      if(previous&&!Object.hasOwn(value,'expected_timeline_version_id')&&!Object.hasOwn(value,'expected_timeline_sequence')){
+        const original=previous.submitted_input;
+        if(!original||!Object.hasOwn(original,'expected_timeline_version_id')||!Number.isSafeInteger(original.expected_timeline_sequence))
+          throw new CliError('原调用版本不可核验，不换绑当前任务',4,{request_locator:locator});
+        body={...value,expected_timeline_version_id:original.expected_timeline_version_id,expected_timeline_sequence:original.expected_timeline_sequence};
+      }else body=await version(api,task,value);
+      return submit(api,`${taskPath(task)}/media-script-tools/${id(object)}/preview`,{...body,request_id:requestId},locator,'script');
     }
   }
   if (group === 'script') {

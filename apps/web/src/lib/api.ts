@@ -1375,8 +1375,17 @@ export async function importCreationTaskGraphic(taskId:string,file:File):Promise
   if(!response.ok)throw new Error(typeof payload.detail==="string"?payload.detail:"图片导入失败");
   return payload;
 }
-export function getCreationTaskGraphicSources(taskId:string):Promise<import("./types").GraphicSource[]> {
-  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`);
+export function getCreationTaskGraphicSources(taskId:string, signal?:AbortSignal):Promise<import("./types").GraphicSource[]> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`,{signal});
+}
+
+export async function readCreationTaskGraphicSource(taskId:string, artifactId:string, signal?:AbortSignal):Promise<Blob> {
+  const authorization=await getServerAuthorization();
+  const response=await fetch(`${API_BASE}/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/source/${encodeURIComponent(artifactId)}`,{
+    headers:{...(authorization?{Authorization:authorization}:{}),...localMemberTokenHeader()},signal,cache:"no-store",
+  });
+  if(!response.ok) throw new CreationPlanApiError(response.status,null,"当前任务图片来源无法读取。");
+  return response.blob();
 }
 
 // 定时任务：任务定义管理（创建/启停/删除）。到点真实执行属后续接线，本页不触发任何自动运行。
@@ -1579,6 +1588,7 @@ export function taskMediaJobMatchesContext(job: TaskMediaJob, baseVersionId: str
     if (!(job.operation.endsWith("_edit_preview") || job.operation === "compound_selection_preview")) return false;
     return job.target_refs.length === selectedRefs.length && job.target_refs.every(ref => selectedRefs.includes(ref));
   }
+  if (job.result_kind === "graphic_source") return ["media_script_preview", "media_script_tool_preview"].includes(job.operation);
   if (job.target_refs.length !== 0) return false;
   return (job.operation === "audio_import" && job.result_kind === "audio_source")
     || (job.operation === "recording_save" && job.result_kind === "recording")

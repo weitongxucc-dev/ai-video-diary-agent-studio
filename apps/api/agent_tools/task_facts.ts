@@ -54,6 +54,34 @@ export function narrationFacts(segment: any) {
   };
 }
 
+export function narrationSummary(task: any) {
+  const narration=task.narration;
+  const logical=(value: unknown) => {
+    if(typeof value!=="string"||!value)return null;
+    // The actual task API also uses its established narration:// logical references.
+    if(value.startsWith("narration://"))return value;
+    // ArtifactStore._target publishes POSIX relative references, not physical paths.
+    if(value.includes(":")||value.includes("\\")||value.startsWith("/")
+      ||value.split("/").some(part=>!part||part==="."||part===".."))return null;
+    return value;
+  };
+  return {
+    has_audio_reference: typeof narration?.audio_reference === "string" && narration.audio_reference.length > 0,
+    audio_reference: logical(narration?.audio_reference),
+    metadata_reference: logical(narration?.audio_reference),
+    metadata_meaning: "时长/采样率/模型/声音元数据属于此登记配音引用，不自动代表montage当前引用。",
+    montage_narration_reference: logical(task.montage?.narration_reference),
+    montage_uses_registered_narration: typeof narration?.audio_reference === "string"
+      && narration.audio_reference===task.montage?.narration_reference,
+    duration_seconds: narration?.duration_seconds ?? null, sample_rate: narration?.sample_rate ?? null,
+    ...(narration && Object.hasOwn(narration,"status") ? {status:narration.status} : {}),
+    language: narration?.language ?? null, model_id:narration?.model_id ?? null,
+    voice_profile_id:narration?.voice_profile_id ?? null, source_kind:narration?.source_kind ?? null,
+    segment_count: narration?.segments?.length ?? 0,
+    meaning: "分段数量为0只表示没有分段记录，不代表没有已存在音频；未选声音档案也不代表没有音频。",
+  };
+}
+
 export function executionFacts(execution: any) {
   const job = execution.job;
   return {
@@ -67,7 +95,7 @@ export function executionFacts(execution: any) {
 }
 
 export function audioFacts(task: any) {
-  const tracks = task.audio_timeline?.tracks || [];
+  const tracks = task.montage?.audio_timeline?.tracks || [];
   return tracks.slice(0, 8).map((track: any) => {
     const clips = track.clips || [];
     return {id: track.id, kind: track.kind, name: boundedText(track.name, 120), clip_count: clips.length,
