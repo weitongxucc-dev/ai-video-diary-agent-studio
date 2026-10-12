@@ -84,7 +84,9 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     assert contexts[0]["scope_kind"] == "material" and contexts[0]["task_id"] is None
     assert "preview_edit" not in contexts[0]["tool_names"]
     assert contexts[1]["scope_kind"] == "task" and contexts[1]["task_id"] == "task-current"
-    assert {"preview_edit", "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
+    assert "preview_edit" not in contexts[1]["tool_names"]
+    assert {"preview_typed_edit", "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
+    assert "不自行重新生成或用同名图替换" in calls[1]["cmd"][calls[1]["cmd"].index("--system-prompt") + 1]
     assert contexts[1]["selected_object_refs"] == ["clip:clip-current"]
     assert contexts[1]["material_selection"] == TOOL_SELECTION
     assert contexts[1]["task_version"]["timeline_sequence"] == 3
@@ -121,6 +123,7 @@ def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, 
     assert expected in tools and excluded not in tools
     assert "preview_edit" not in tools
     assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
+    assert "找不到或同名歧义时说明具体缺口或询问" in calls[0]["cmd"][calls[0]["cmd"].index("--system-prompt") + 1]
 
 
 @pytest.mark.parametrize("scope,tool_scope", [("asset", "material"), ("segment", "task_edit")])
@@ -148,7 +151,10 @@ def test_current_cli_allowlist_has_registered_business_implementations(scope, to
                  ("save",MediaScriptToolSaveRequest),("update",MediaScriptToolUpdateRequest),("revoke",MediaScriptToolRevokeRequest),("invoke",MediaScriptToolPreviewRequest))}}),
              "AI_VIDEO_DIARY_AGENT_PI_MODULE": str(modules[-1])},
     )
-    assert set(pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]) <= set(json.loads(completed.stdout))
+    registered = set(json.loads(completed.stdout))
+    assert set(pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]) <= registered
+    assert "preview_edit" not in registered
+    assert all("preview_edit" not in names for names in pi.ASSISTANT_BUSINESS_TOOLS.values())
 
 
 @pytest.mark.parametrize("name,label", [

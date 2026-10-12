@@ -2,6 +2,10 @@
 
 ## 2026-10-12 PI-OPEN：按已审方案实施并同步教学
 
+2026-10-13 PI窄修复六文件写lease已RELEASE：root审阅后接Git保存与真实新候选验证，下方该窄包绑定只作本轮交接依据，不继续授予源码写权。
+
+PI-OPEN真实QA后续窄修复：root已在9dd74cd产品候选完成正常MiniMax类型化ChangeClipSpeed真实预览/采用/重放/撤销，并见普通Web真实PNG来源与保存工具卡。Pi Owner 01a12a7e-52a9-7241-a0af-db4ef06b91ff重新独占assistant_pi.py、diary_tools.ts及其直接宿主/工具测试，仅修已复现的codemode早期纯语法错误在后续成功后仍误报未完成，加入沿既有用户目标/素材选择的明确复用语义说明，并退役preview_edit的默认模型注册/默认消费。真实未知写入、后续未恢复错误与已提交回执仍保留，不用后续任意读取掩盖未知；GUI原句API消费者沿原领域规则保留，typed失败不fallback到旧工具。源码唯一Owner接收指定精确文件；不改API、Web、用户配置/凭据/历史，不运行服务/模型或Git，不增代理。最小相关测试后RELEASE，由root审diff、保存并在新候选重新正常实证。
+
 用户最新明确授权按[0.11计划 §4.2](0.11-development-plan.md#42-2026-10-12pi-开放能力脚本扩展与外部-agent-接入方案)实施 Pi 接入改造，开发阶段同步教学线程并及时提交 GitHub。本绑定接续此前只读审阅；下方历史包不恢复写 lease。owner=/Volumes/Dujiangyan-VM/AI视频日记/repositories/desktop-v32；branch=codex/desktop-v32-20261010；起点16670415e41e2a4cac9ea10acec76d76d9b56153，包含已保存方案c823d3c及main的手机整合5968e9b。原original脏树与运行中的用户实例保留。
 
 2026-10-13用户明确批准“允许临时退出，验证后恢复”：root可正常退出当前安装的曜核1.0，在同一物理设备锁下使用独立合成验收库运行已保存候选，完成真实剪辑、脚本、CLI及可见UI验证后停止验收进程并重新打开原应用。此许可覆盖临时进程交接，不含替换安装包、修改用户凭据、删除或改写私人历史/旧队列；原实例保留规则在本轮临时交接期间由该新决定覆盖。产品源码写lease仍RELEASE，实测发现缺陷时由root重新绑定唯一Owner。

@@ -155,6 +155,54 @@ def test_source_success_is_not_parsed_as_proposal_or_applied_edit(stage_kind):
     assert "PNG来源已生成" in answer and "尚未应用" in answer and result == {"kind": "media_job", "media_job": job}
 
 
+def _completed_source_codemode(call_id="source-read"):
+    job = {"job_id": "script-job", "result_kind": "graphic_source", "status": "succeeded", "result": SOURCE}
+    return {"type": "tool_execution_end", "toolName": "codemode", "toolCallId": call_id, "isError": False,
+        "result": {"details": {"calls": [{"name": "read_task_media_job", "status": "ok"}], "incomplete_calls": False,
+            "business_receipts": [{"tool_name": "read_task_media_job", "tool_call_id": call_id + "/1", "is_error": False,
+                "result": {"kind": "task_media_job", "media_job": job}}]}}}
+
+
+def _syntax_before_calls():
+    return {"type": "tool_execution_end", "toolName": "codemode", "isError": True,
+        "result": {"content": [{"type": "text", "text": "Script failed\nSyntaxError: invalid redefinition of parameter name\nNo tool calls were made."}],
+            "details": {"calls": [], "business_receipts": [], "incomplete_calls": False}}}
+
+
+def _settled_events(*events):
+    return "\n".join(json.dumps(event) for event in [*events,
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "model claims completion"}]}},
+        {"type": "agent_settled"}])
+
+
+def test_recovered_pre_call_syntax_error_does_not_mislabel_the_actual_source_receipt():
+    answer, result = host._last_answer_and_preview(_settled_events(_syntax_before_calls(), _completed_source_codemode()))
+    assert "后续工具编排未完成" not in answer
+    assert "PNG来源已生成" in answer and "尚未应用" in answer
+    assert result["media_job"]["result"] == SOURCE
+
+
+@pytest.mark.parametrize("failure", [
+    {"content": [{"type": "text", "text": "Script failed\nError: script threw"}],
+        "details": {"calls": [], "business_receipts": [], "incomplete_calls": False}},
+    {"content": [{"type": "text", "text": "Script failed\nSyntaxError: after business calls"}],
+        "details": {"calls": [{"status": "ok"}], "business_receipts": [], "incomplete_calls": False}},
+    {"details": {"calls": [{"status": "cancelled"}], "business_receipts": [], "incomplete_calls": True}},
+])
+def test_later_success_does_not_erase_other_orchestration_failures(failure):
+    failed = {"type": "tool_execution_end", "toolName": "codemode", "isError": True, "result": failure}
+    answer, result = host._last_answer_and_preview(_settled_events(failed, _completed_source_codemode()))
+    assert "后续工具编排未完成" in answer
+    assert result["media_job"]["result"] == SOURCE
+
+
+def test_last_syntax_error_and_empty_success_do_not_count_as_recovered_business_work():
+    empty = {"type": "tool_execution_end", "toolName": "codemode", "isError": False,
+        "result": {"details": {"calls": [], "business_receipts": [], "incomplete_calls": False}}}
+    answer, result = host._last_answer_and_preview(_settled_events(_completed_source_codemode(), _syntax_before_calls(), empty))
+    assert "后续工具编排未完成" in answer and result["media_job"]["result"] == SOURCE
+
+
 def test_later_unknown_overlay_keeps_both_original_locator_and_successful_source_job():
     job = {"job_id": "script-job", "result_kind": "graphic_source", "status": "succeeded", "result": SOURCE}
     locator = {"kind": "edit_request_status", "phase": "preview", "status": "result_unknown",
@@ -164,6 +212,7 @@ def test_later_unknown_overlay_keeps_both_original_locator_and_successful_source
          "result": {"details": {"kind": "task_media_job", "media_job": job}}},
         {"type": "tool_execution_end", "toolName": "preview_typed_edit", "isError": True, "result": {"details": locator}},
         {"type": "tool_execution_end", "toolName": "codemode", "isError": True, "result": {"details": {}}},
+        _completed_source_codemode("later-read"),
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "later failed"}]}},
         {"type": "agent_settled"}])
     answer, result = host._last_answer_and_preview(output)

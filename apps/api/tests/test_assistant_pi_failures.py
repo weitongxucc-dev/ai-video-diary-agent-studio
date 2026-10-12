@@ -169,7 +169,7 @@ def test_missing_extension_points_at_the_business_tool(monkeypatch, tmp_path):
 
 
 def test_business_tool_failure_is_not_reported_as_a_key_problem(monkeypatch, tmp_path):
-    log = json.dumps({"type": "tool_execution_end", "toolName": "preview_edit",
+    log = json.dumps({"type": "tool_execution_end", "toolName": "preview_typed_edit",
                       "isError": True}) + "\n"
     with pytest.raises(AssistantUnavailable) as caught:
         _turn(monkeypatch, tmp_path, returncode=1, stdout=log)
@@ -255,7 +255,7 @@ def test_a_missing_runtime_does_not_mark_the_service_failed(monkeypatch, tmp_pat
 
 def test_a_business_tool_failure_does_not_mark_the_service_failed(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
-    log = json.dumps({"type": "tool_execution_end", "toolName": "preview_edit",
+    log = json.dumps({"type": "tool_execution_end", "toolName": "preview_typed_edit",
                       "isError": True}) + "\n"
     with pytest.raises(AssistantUnavailable):
         _turn(monkeypatch, tmp_path, returncode=1, stdout=log)

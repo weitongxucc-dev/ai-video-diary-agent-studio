@@ -43,7 +43,7 @@ ASSISTANT_BUSINESS_TOOLS = {
                  "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"),
     "topic": ("read_current_task", "find_knowledge", "generate_creation_task_topics"),
     "script": ("read_current_task", "find_knowledge", "preview_script_draft"),
-    "task_edit": ("read_current_task", "find_knowledge", "find_materials", "preview_edit",
+    "task_edit": ("read_current_task", "find_knowledge", "find_materials",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution"),
@@ -128,7 +128,6 @@ _PI_TOOL_LABELS = {
     "generate_creation_task_topics": "生成选题候选",
     "find_knowledge": "查找内容资料",
     "preview_script_draft": "保存文案草稿",
-    "preview_edit": "准备修改预览",
     "preview_typed_edit": "准备类型化修改预览",
     "read_task_edit_capabilities": "读取真实编辑能力",
     "read_task_object": "读取任务对象细节",
@@ -271,7 +270,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return f"新建方案预检已返回，{len(blockers)} 项需处理；尚未创建任务。"
     if tool_name == "preview_script_draft":
         return "文案草稿已保存，尚待你检查和确认。"
-    if tool_name in {"preview_edit", "preview_typed_edit"}:
+    if tool_name == "preview_typed_edit":
         return "修改预览已生成；草稿尚未应用。"
     if tool_name in {"undo_last_edit", "redo_last_edit", "discard_edit_proposal"}:
         return "编辑控制已执行并返回持久记录；实际成片以当前有效产物为准。"
@@ -578,8 +577,7 @@ preview_typed_edit只生成待确认提案；让用户在工作台检查影响�
 界面选择只是默认上下文；用户给出镜头序号时，从当前任务事实的index找到实际clip_id并用typed字段提交，查候选也可传该clip_id，不要求界面先多选。任务、阶段与selected_refs仍由宿主绑定；模型选出的提案目标不能被当作界面当前选择。范围不明确才问。资料不足或工具失败时说明具体阻断，不虚构结果。
 typed动作直接提供API已声明字段，原句仍由宿主绑定为来源；替换使用本轮实际读到的候选素材和片段。用户的限制必须由实际作用对象和提案影响满足；不能满足就先说明阻断，不丢弃限制。
 水平、垂直裁剪百分比表示裁剪窗口的位置，不是画面宽度、面积或保留比例；“向左一点”等缺少明确位置时先问，不猜步长。
-旧preview_edit只服务尚未迁移的真实原句消费者。typed预览每轮至多3个不同候选，每次重新核验本轮版本；失败或未知结果不可盲重放。需要组合时可用codemode，必须await全部调用；脚本失败不抹去已提交的真实业务回执。
-preview_edit 返回 task_media_job 是后台媒体安排回执，预览尚未完成，不是工具失败；说明已安排并等待工作台回读，不在本轮重试或轮询，不声称预览已生成或修改已应用。
+typed预览每轮至多3个不同候选，每次重新核验本轮版本；失败或未知结果不可盲重放。需要组合时可用codemode，必须await全部调用；脚本失败不抹去已提交的真实业务回执。
 预览成功后只依据工具返回的 operation_type、before、after 和影响说明实际变化；不得把位置说成宽度收窄或猜测中心对齐。预览不是执行或出片，必须等待用户确认。
 生成图片来源时先读read_media_script_capabilities；不可用说明实际缺口，不猜运行时路径或安装包。用read_task_graphic_sources读取已登记PNG与修订，preview_media_script提交Python/Pillow单PNG程序。程序使用parameters、inputs、outputs命名空间，只写声明的outputs[name]。只把succeeded graphic_source的实际source_ref供后续preview_typed_edit EditGraphicOverlay使用；来源成功不是已经应用或出片。可以read_task_media_job wait_seconds至多20作有限只读等待；仍pending就说明事实，不无限查询或重复程序POST。原请求未知用read_media_script_request的phase=script定位查询，不能重发。复用工具先读实际capabilities/list/describe；只用真实tool_id/version调用新任务、新输入的普通API，不继承旧输入授权。仅用户明确要求时save/update/revoke；原保存unknown只查创建UUID，CAS写丢回应不自动重复；程序成功不自动保存或采用。
 不要请求、读取或发送原始媒体文件。只用已提供的业务工具。
@@ -746,6 +744,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         "cancel_creation_execution": "cancel",
     }
     orchestration_failed = False
+    unresolved_syntax_error = False
     edit_request_status = None
     script_tool_result = None
     script_tool_status = None
@@ -769,10 +768,22 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             elif tool_details.get("kind") == "media_script_tool_status":
                 script_tool_status = tool_details
                 script_tool_result = None
-        if event.get("type") == "tool_execution_end" and event.get("toolName") == "codemode" and event.get("isError"):
-            orchestration_failed = True
+        if event.get("type") == "tool_execution_end" and event.get("toolName") == "codemode":
+            result = event.get("result") or {}
+            details = result.get("details") or {}
+            if event.get("isError"):
+                syntax_before_calls = (details.get("calls") == [] and details.get("business_receipts") == []
+                    and details.get("incomplete_calls") is False
+                    and any(block.get("type") == "text" and "SyntaxError:" in block.get("text", "")
+                            for block in result.get("content", [])))
+                if syntax_before_calls:
+                    unresolved_syntax_error = True
+                else:
+                    orchestration_failed = True
+            elif event.get("isError") is False and details.get("incomplete_calls") is False and details.get("business_receipts"):
+                unresolved_syntax_error = False
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
-            "preview_edit", "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
+            "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
             "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
             "generate_creation_task_topics", *action_tools,
             "read_selected_material", "update_selected_material_tags",
@@ -994,7 +1005,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         state = "已保存并回读" if material_write_result["changed"] else "已核对，无需重复修改"
         tag_answer = f"{object_label}的我的标签{state}：{tags}。"
         answer = f"{tag_answer}\n{answer}" if preview is not None else tag_answer
-    if orchestration_failed and preview is not None:
+    if (orchestration_failed or unresolved_syntax_error) and preview is not None:
         answer = "后续工具编排未完成；已经返回的真实预览保留，尚未应用修改。\n" + answer
     return answer, preview
 
@@ -1290,6 +1301,7 @@ def _run_turn(
     prompt += "\n" + capability_envelope
     if task_id:
         prompt += "\n当前阶段只排序已有对象的读取和预览能力。source_start/end仅是当前取用区间，不是全部可用范围；未知范围不能断言素材不足。ChangeClipSpeed固定slot时sourceSpan=slotSpan*rate，linkedSpeed另循API实际说明。音频存在性看narration摘要及montage逻辑引用，0segments/空selected_voice不代表无配音。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。程序命名空间为parameters、inputs、outputs；写声明outputs[name]。实际source_ref可供EditGraphicOverlay/ImageOverlay后续类型化提案，不自动采用或生成成片。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
+        prompt += "\n用户明确复用已有指定图片来源时，按本轮真实列表的source_ref、artifact_id及sha256/size_bytes修订使用原来源，不自行重新生成或用同名图替换。找不到或同名歧义时说明具体缺口或询问，不能把另一个来源说成原输入。"
     if knowledge_reference:
         prompt += "\n本轮用户明确引用了知识固定版本和范围。涉及这份资料的事实先调用 read_selected_knowledge，不能用 find_knowledge 的其他版本或定位替代；工具不可访问时说明引用不可读取。"
     if profile_reference:

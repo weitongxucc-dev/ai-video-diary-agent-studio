@@ -389,7 +389,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       invokeParameters.properties.tool_id = {type: "string"}; invokeParameters.required.push("tool_id");
       let invoked = false;
       pi.registerTool({name: "preview_media_script_tool", label: "用已有工具准备图片来源",
-        description: "用真实tool_id/version、当前任务/新输入/参数调用普通API。只取得graphic_source Job，不继承旧输入或权限，不自动采用或出片；代码和输出槽由服务端读取。",
+        description: "用真实tool_id/version、当前任务/新输入/参数调用普通API。用户明确复用指定已有来源时，输入绑定该真实来源及修订，不重新生成同名替代；缺失或同名歧义先说明或询问。只取得graphic_source Job，不继承旧输入或权限，不自动采用或出片；代码和输出槽由服务端读取。",
         parameters: invokeParameters,
         execute: async (call: string, params: any) => {
           const turn = sourceTurn(); guardedFields(params, invokeParameters);
@@ -1098,7 +1098,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
     });
     pi.registerTool({
       name: "read_task_graphic_sources", label: "读取当前任务图片来源",
-      description: "只读取本任务已成功登记的可编辑PNG来源和输入修订；不读取图片文件，不把模型自报来源当有效数据。",
+      description: "只读取本任务已成功登记的可编辑PNG来源和输入修订。明确复用指定已有图片时使用该真实source_ref和修订，不另生成同名替代；缺失或同名歧义先说明或询问。不读取图片文件，不把模型自报来源当有效数据。",
       parameters: {type: "object", properties: {offset: {type: "integer", minimum: 0}}, additionalProperties: false},
       execute: async (_id: string, params: {offset?: number} = {}) => {
         const offset = params.offset ?? 0;
@@ -1318,61 +1318,6 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
           instruction: "文案已保存为待确认草稿，请用户在工作台检查并明确确认。尚未开始制作。",
         }) }],
         details: { kind: "script_draft", preview },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "preview_edit",
-    label: "预览剪辑修改",
-    description: "仅为尚未迁移的原句消费者保留：配音重生成、人物更换与既有画面效果。API已声明的精确编辑使用preview_typed_edit，不能自动回退。原句、任务和阶段由宿主绑定；每轮最多一次，失败不重放，只预览不应用。",
-    parameters: {type: "object", properties: {}, additionalProperties: false},
-    execute: async (_id: string, params: Record<string, unknown> = {}) => {
-      if (!taskId || !currentTaskRead) throw new Error("请先读取当前创作任务，再预览修改");
-      if (creationActionApplied || editControlWriteAttempted) throw new Error("本轮已执行制作或历史控制动作，不再创建修改预览");
-      if (Object.keys(params).length) throw new Error("旧原句预览不接受模型字段；类型化动作请使用preview_typed_edit");
-      const originalInstruction = process.env.AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION;
-      const assistantTurnId = process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;
-      if (!originalInstruction || !assistantTurnId) throw new Error("本轮原始要求不可核验，未生成修改提案");
-      const effectiveStage = stage;
-      const effectiveRefs = selectedRefs;
-      if (!effectiveStage) throw new Error("请先选择要修改的任务阶段");
-      if (previewCreated) throw new Error("本轮已请求修改预览，请向用户说明结果后再决定下一步");
-      previewCreated = true;
-      const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/edits/preview`, {
-        method: "POST",
-        body: JSON.stringify({
-          raw_command: originalInstruction,
-          assistant_turn_id: assistantTurnId,
-          context_stage: effectiveStage,
-          selected_object_refs: effectiveRefs,
-          playhead_ms: playheadMs,
-        }),
-      });
-      if (preview.job_id && preview.result_kind === "edit_preview") {
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            status: preview.status,
-            waiting_reason: preview.waiting_reason,
-            instruction: "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。本轮不要重试或轮询作业，不得声称预览已生成或修改已应用。",
-          }) }],
-          details: { kind: "task_media_job", media_job: preview },
-        };
-      }
-      return {
-        content: [{ type: "text", text: JSON.stringify({
-          proposal_id: preview.proposal.id,
-          summary: preview.proposal.summary,
-          target_refs: preview.proposal.target_refs,
-          operation_type: preview.proposal.operation.operation_type,
-          before: preview.proposal.preview.before.detail,
-          after: preview.proposal.preview.after.detail,
-          invalidated_refs: preview.proposal.invalidated_refs,
-          external_effects: preview.proposal.external_effects,
-          status: preview.proposal.status,
-          instruction: "仅依据上述实际前后变化和影响说明预览；水平/垂直百分比是裁剪窗口位置，不是宽度或面积比例，不猜中心对齐或收窄。必须由用户确认后才能执行，尚未出片。",
-        }) }],
-        details: { kind: "edit_preview", preview },
       };
     },
   });
