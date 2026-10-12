@@ -878,7 +878,7 @@ describe("CreationTaskWorkspace", () => {
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     expect(await screen.findByText(/当前内容是待确认草稿/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "当前知识资料" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "当前知识资料" }));
     fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), {
       target: { value: "展示资料中的实际功能。" },
     });
