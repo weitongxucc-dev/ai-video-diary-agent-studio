@@ -194,9 +194,9 @@ textarea {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible,
+input:not([data-input-group] input):focus-visible,
 select:focus-visible,
-textarea:focus-visible {
+textarea:not(.assistant-conversation-entry textarea):focus-visible {
   box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 4px var(--focus) !important;
 }
 
@@ -446,49 +446,6 @@ textarea:focus-visible {
   color: var(--text-2);
 }
 
-.desktop-sidebar__footer {
-  display: grid;
-  gap: 1px;
-  padding: 8px;
-  border-top: 1px solid var(--border-1);
-}
-
-.desktop-user-row {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  gap: 9px;
-  padding: 2px 2px 2px 9px;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.desktop-user-row > span:nth-child(2) {
-  min-width: 0;
-  flex: 1;
-}
-
-.desktop-user-avatar {
-  display: grid;
-  width: 23px;
-  height: 23px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-
-.health-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-3);
-}
-
-.health-dot--connected { background: var(--success); }
-.health-dot--attention { background: var(--warning); }
-.health-dot--failed { background: var(--danger); }
-
 .desktop-workspace {
   display: grid;
   grid-template-rows: 46px minmax(0, 1fr) auto;
@@ -603,7 +560,7 @@ textarea:focus-visible {
 
 :where(input:not([type="checkbox"]):not([type="radio"])),
 :where(select),
-:where(textarea:not(.home-composer textarea):not([aria-label="局部修改要求"]):not([aria-label="文案要求"])),
+:where(textarea:not(.home-composer textarea):not(.assistant-conversation-entry textarea):not([aria-label="局部修改要求"]):not([aria-label="文案要求"])),
 .pixel-input {
   min-height: 38px;
   padding: 8px 10px;
@@ -9806,3 +9763,13 @@ select:user-invalid:focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* A search field has one frame and one focus indicator. */
+[data-input-group] { min-width: 0; }
+[data-input-group]:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-input-group] input { flex: 1; min-width: 0; width: 0; border: 0 !important; border-radius: 0 !important; background: transparent; box-shadow: none !important; outline: none; }
+
+[data-input-group] input::placeholder { color: var(--text-2) !important; opacity: 1; }
+
+.home-composer__context button { border: 0; border-radius: 5px; padding: 2px 6px; background: transparent; color: var(--text-2); font: inherit; }
+.home-composer__context button:hover { background: var(--surface-2); }

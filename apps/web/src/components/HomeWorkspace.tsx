@@ -1,65 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowRight, CheckCircle2, CircleDashed, CircleDot, Clock3, LoaderCircle, PlayCircle } from "lucide-react";
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
+import { ArrowRight, ChevronRight, Columns3, Info, List, LoaderCircle, Plus, Search, Volume2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
-import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
-import { getHomeDashboard, getMaterialLibraryInsights, getProductionFoundation, listCreationTasks } from "@/lib/api";
+import { creationTaskFailureReason, creationTaskRepairAction, creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
+import { CreationTaskStageIcon } from "@/components/CreationTaskStageIcon";
+import { getHomeDashboard, getMaterialLibraryInsights, getProductionFoundation, getProductionMaterials, listCreationTasks } from "@/lib/api";
+import { referenceAssistantMaterial } from "@/lib/assistant-reference";
 import { readLocalMemberToken } from "@/lib/local-member-auth";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import type { HomeAggregation } from "@/lib/types";
-import type { CreationTask, MaterialLibraryInsights, ProductionFoundation } from "@/lib/types";
+import type { CreationTask, MaterialAsset, MaterialLibraryInsights, ProductionFoundation } from "@/lib/types";
 import styles from "./HomeWorkspace.module.css";
 
-type Count = { label: string; value: number };
-type Entry = { label: string; count: number };
 type TrendPoint = { date: string; count: number };
-export type HomeMaterialFilterIntent = { kind: "industry" | "tag"; key: string; label: string };
-type HomeExampleAsset = { id: string; title: string; receivedDate: string; analysisStatus: "ready" | "pending" | "failed"; industry: string; tags: string[] };
-export type HomeDashboardExample = {
-  scopeLabel: string;
-  example: true;
-  asOfDate: string;
-  assets: HomeExampleAsset[];
-  knowledgeSources: { id: string }[];
-  queue: { id: string; title: string; stage: string; detail: string }[];
-  works: { id: string; title: string; status: string }[];
-};
 
-const countLabels = ["可见素材", "分析可用", "待分析", "知识来源", "声音", "任务", "作品"];
-function summarizeExample(dashboard: HomeDashboardExample) {
-  const assets = dashboard.assets;
-  const countBy = (key: "industry" | "tags") => {
-    const counts = new Map<string, number>();
-    assets.forEach((asset) => (key === "tags" ? [...new Set(asset.tags)] : [asset.industry]).forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1)));
-    return [...counts].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
-  };
-  const trend = (days: number): TrendPoint[] => {
-    const end = new Date(dashboard.asOfDate + "T00:00:00Z");
-    return Array.from({ length: days }, (_, index) => {
-      const date = new Date(end);
-      date.setUTCDate(end.getUTCDate() - (days - index - 1));
-      const label = date.toISOString().slice(0, 10);
-      return { date: label, count: assets.filter((asset) => asset.receivedDate === label).length };
-    });
-  };
-  const counts: Count[] = [
-    { label: "可见素材", value: assets.length },
-    { label: "分析可用", value: assets.filter((asset) => asset.analysisStatus === "ready").length },
-    { label: "待分析", value: assets.filter((asset) => asset.analysisStatus === "pending").length },
-    { label: "知识来源", value: dashboard.knowledgeSources.length },
-    // 示例页里的声音/任务同样由这份可见素材推不出来，如实显示未知而不是编数。
-    { label: "声音", value: -1 },
-    { label: "任务", value: dashboard.queue.length },
-    { label: "作品记录", value: dashboard.works.length },
-  ];
-  return { counts, sevenDays: trend(7), thirtyDays: trend(30), industries: countBy("industry"), tags: countBy("tags") };
-}
 function taskName(name: string) {
   return name.replace(/\bb-?roll\b/gi, "补充画面").replace(/\bbatch\b/gi, "创作任务")
     .replace(/\bepisode\b/gi, "内容").replace(/\brecipe\b/gi, "制作方案").replace(/\bprovider\b/gi, "服务");
+}
+function tagLabel(tag: string) {
+  return tag.replaceAll("a_roll", "人物主镜头").replaceAll("b_roll", "补充画面");
 }
 function readinessRepair(code: string) {
   switch (code) {
@@ -77,189 +40,239 @@ function readinessRepair(code: string) {
   }
 }
 export function TrendChart({ values }: { values: TrendPoint[] }) {
-  if (!values.some(point => point.count > 0)) return <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p>;
+  if (!values.length) return <p className={styles.trendEmptyText}>接收趋势暂无数据</p>;
+  const peak = Math.max(...values.map(point => point.count));
   const maximum = Math.max(1, ...values.map((point) => point.count));
   const x = (index: number) => values.length === 1 ? 143 : 12 + index * 262 / (values.length - 1);
   const y = (count: number) => 66 - count / maximum * 48;
   const points = values.map((point, index) => [x(index), y(point.count)].join(",")).join(" ");
   return <div className={styles.chart}>
+    <div className={styles.chartAxis} aria-hidden><span>{peak > 0 ? peak : "条"}</span><span>0</span></div>
     <svg aria-label="素材接收趋势" preserveAspectRatio="none" role="img" viewBox="0 0 286 78">
-      <path d="M12 68H274" fill="none" stroke="var(--border-1)" />
-      {values.length > 1 ? <polyline fill="none" points={points} stroke="var(--accent)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" /> : null}
-      {values.map((point, index) => <g key={point.date}><circle aria-label={point.date + " 接收 " + point.count + " 条"} cx={x(index)} cy={y(point.count)} fill="var(--accent)" r={values.length > 7 ? 2.5 : 3.5}><title>{point.date + "：" + point.count + " 条素材"}</title></circle>{values.length <= 7 ? <text fill="var(--text-2)" fontSize="9" textAnchor="middle" x={x(index)} y={Math.max(10, y(point.count) - 9)}>{point.count}</text> : null}</g>)}
+      <path d="M12 18V66H274" fill="none" stroke="var(--border-1)" vectorEffect="non-scaling-stroke" />
+      <path data-zero-line d="M12 66H274" fill="none" stroke="var(--text-3)" vectorEffect="non-scaling-stroke" />
+      {values.length > 1 ? <polyline fill="none" points={points} stroke="var(--accent)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" vectorEffect="non-scaling-stroke" /> : null}
+      {values.map((point, index) => <g key={point.date}><circle aria-label={point.date + " 接收 " + point.count + " 条"} cx={x(index)} cy={y(point.count)} fill="var(--accent)" r={values.length > 7 ? 1.5 : 2}><title>{point.date + "：" + point.count + " 条素材"}</title></circle></g>)}
     </svg>
     <div className={styles.chartLabels}><time>{values[0].date}</time><time>{values[values.length - 1].date}</time></div>
+    {peak === 0 ? <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p> : null}
   </div>;
 }
-function IndustryDonut({ items, selected, onSelect }: { items: Entry[]; selected: HomeMaterialFilterIntent | null; onSelect: (intent: HomeMaterialFilterIntent) => void }) {
-  const total = Math.max(1, items.reduce((sum, item) => sum + item.count, 0));
-  const colors = ["var(--accent)", "var(--warning)", "var(--success)"];
-  let offset = 0;
-  const arcs = items.map((item, index) => {
-    const start = offset;
-    const length = item.count / total * 251.3;
-    offset += length;
-    const angle = -Math.PI / 2 + (start + length / 2) / 251.3 * Math.PI * 2;
-    return { item, index, start, length, x: 50 + 40 * Math.cos(angle), y: 50 + 40 * Math.sin(angle) };
+type Overview = "trend" | "tags" | "device" | null;
+type TaskFilter = "all" | CreationTask["stage_status"];
+type HomeTaskStatus = CreationTask["stage_status"] | "needs_action";
+type HomeTaskItem = {
+  id: string; title: string; stage: string; status: HomeTaskStatus;
+  reason: string | null; rawReason: string | null; repair: string | null; updatedAt: string; outputReady: boolean;
+  task?: CreationTask;
+};
+
+function mergeHomeTasks(tasks: CreationTask[], home: HomeAggregation | null): HomeTaskItem[] {
+  const items = new Map<string, HomeTaskItem>();
+  home?.entries.works.forEach(work => items.set(work.task_id, {
+    id: work.task_id, title: work.title, stage: "review", status: "completed", reason: null, rawReason: null,
+    repair: null, updatedAt: work.updated_at, outputReady: true,
+  }));
+  home?.entries.queue.forEach(entry => items.set(entry.task_id, {
+    id: entry.task_id, title: entry.title, stage: entry.stage,
+    status: entry.status === "created" ? "not_started" : entry.status === "处理中" ? "running" : entry.status as CreationTask["stage_status"],
+    reason: null, rawReason: null, repair: null, updatedAt: entry.updated_at,
+    outputReady: items.get(entry.task_id)?.outputReady ?? false,
+  }));
+  home?.entries.todos.forEach(todo => items.set(todo.task_id, {
+    id: todo.task_id, title: todo.title, stage: todo.stage, status: "needs_action",
+    reason: creationTaskFailureReason(todo.reason, todo.stage), rawReason: todo.reason, repair: todo.repair_action,
+    updatedAt: items.get(todo.task_id)?.updatedAt ?? "", outputReady: items.get(todo.task_id)?.outputReady ?? false,
+  }));
+  // The full task is the current stage fact. A previous output never overrides a new failure or running stage.
+  tasks.forEach(task => {
+    items.set(task.id, {
+      id: task.id, title: task.name, stage: task.stage,
+      status: task.status === "created" ? "not_started" : task.stage_status,
+      reason: creationTaskFailureReason(task.stage_reason, task.stage),
+      rawReason: task.stage_reason,
+      repair: task.stage_repair_action,
+      updatedAt: task.updated_at, outputReady: task.output_ready, task,
+    });
   });
-  return <div className={styles.donutInteractive}>
-    <svg aria-label="示例行业占比；可点环段筛选" className={styles.donut} role="img" viewBox="0 0 100 100">
-      {arcs.map(({ item, index, start, length }) => <circle aria-hidden="true" cx="50" cy="50" fill="none" key={item.label} onClick={() => onSelect({ kind: "industry", key: item.label, label: item.label })} r="40" stroke={colors[index % colors.length]} strokeDasharray={length + " 251.3"} strokeDashoffset={-start} strokeWidth="18" transform="rotate(-90 50 50)" />)}
-      <circle cx="50" cy="50" fill="var(--surface-1)" pointerEvents="none" r="30" />
-      <text fill="var(--text-1)" fontSize="18" pointerEvents="none" textAnchor="middle" x="50" y="48">{items.reduce((sum, item) => sum + item.count, 0)}</text>
-      <text fill="var(--text-2)" fontSize="8" pointerEvents="none" textAnchor="middle" x="50" y="61">可见素材</text>
-    </svg>
-    {arcs.map(({ item, x, y }) => <button aria-label={"查看" + item.label + "示例素材"} aria-pressed={selected?.kind === "industry" && selected.key === item.label} className={styles.donutHit} key={item.label} onClick={() => onSelect({ kind: "industry", key: item.label, label: item.label })} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect({ kind: "industry", key: item.label, label: item.label }); } }} style={{ left: x + "%", top: y + "%" }} type="button" />)}
-  </div>;
+  return [...items.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+function itemPresentation(item: HomeTaskItem) {
+  if (item.status === "needs_action") return { stageLabel: `${homeStageLabel(item.stage)}：待处理`, label: "待处理" };
+  return homeStageKeys.has(item.stage)
+    ? creationTaskStatusPresentation(item.status, item.stage as CreationTask["stage"])
+    : { stageLabel: homeStageLabel(item.stage), label: homeStatusLabel(item.status) };
+}
+function taskNextAction(item: HomeTaskItem) {
+  if (item.status === "running") return "查看制作进度";
+  if (item.task?.can_revise_script) return "修改文案";
+  if (item.status === "completed" && !item.outputReady) return "查看已完成步骤（尚无成片）";
+  if (item.outputReady && item.status !== "failed") return "检查成片";
+  return ({ topic: "查看选题", script: "检查文案", narration: "检查配音条件", montage: "查看视频剪辑", review: "检查成片" } as Record<string, string>)[item.stage] ?? "打开任务";
+}
+function MaterialPreview({ asset, controls = false }: { asset: MaterialAsset; controls?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const url = `/api/production/materials/${encodeURIComponent(asset.id)}/media`;
+  if (failed) return <span className={styles.mediaUnavailable}>预览暂不可用</span>;
+  if (asset.media_type === "audio") return controls
+    ? <audio aria-label="原素材预览" controls preload="metadata" src={url} onError={() => setFailed(true)} />
+    : <Volume2 aria-hidden size={20} />;
+  if (asset.media_type === "image") return <img alt={controls ? `原素材预览：${asset.file_name}` : ""} src={url} loading="lazy" onError={() => setFailed(true)} />;
+  return <video aria-label={controls ? "原素材预览" : undefined} aria-hidden={!controls} controls={controls} muted={!controls} playsInline preload="metadata" src={url} onError={() => setFailed(true)} />;
 }
 
-export function HomeWorkspace({ tasks, foundation, dashboard, insights, live }: { tasks: CreationTask[]; foundation: ProductionFoundation | null; dashboard?: HomeDashboardExample; insights?: MaterialLibraryInsights | null; live?: HomeLiveState }) {
-  const router = useRouter();
+export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets = null }: {
+  tasks: CreationTask[]; foundation: ProductionFoundation | null;
+  insights?: MaterialLibraryInsights | null; live?: HomeLiveState; recentAssets?: MaterialAsset[] | null;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<MaterialAsset | null>(null);
+  const [factsOpen, setFactsOpen] = useState(false);
   const [range, setRange] = useState<7 | 30>(live?.days ?? 7);
-  const [selectedFilter, setSelectedFilter] = useState<HomeMaterialFilterIntent | null>(null);
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
-  const selectedTaskState = selectedTask ? creationTaskStatusPresentation(selectedTask.stage_status, selectedTask.stage) : null;
-  const readyOutputTasks = tasks.filter((task) => task.output_ready);
-  const readyOutputIds = new Set(readyOutputTasks.map((task) => task.id));
-  const homeTaskIds = new Set([
-    ...(live?.data?.entries.queue.map((item) => item.task_id) ?? []),
-    ...(live?.data?.entries.todos.map((item) => item.task_id) ?? []),
-    ...(live?.data?.entries.works.map((item) => item.task_id) ?? []),
-    ...readyOutputIds,
-  ]);
-  const unlistedTasks = tasks.filter((task) => !homeTaskIds.has(task.id));
-  const pendingTasks = unlistedTasks.filter((task) => task.stage_status === "not_started" || task.stage_status === "waiting_for_user" || task.stage_status === "failed");
-  const runningTasks = unlistedTasks.filter((task) => task.stage_status === "running");
-  const completedTasks = unlistedTasks.filter((task) => task.stage_status === "completed")
-    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-  const dependencyBlockers = foundation?.readiness.blockers.filter(blocker => blocker.code !== "brand_profile_missing") ?? [];
-  const example = dashboard ? summarizeExample(dashboard) : null;
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<TaskFilter>("all");
+  const [view, setView] = useState<"board" | "list">("board");
+  const [activeOverview, setActiveOverview] = useState<Exclude<Overview, null>>("trend");
+  const [overviewFocused, setOverviewFocused] = useState(false);
+  const [overviewInfo, setOverviewInfo] = useState<Overview>(null);
+  const [preparationOpen, setPreparationOpen] = useState(false);
+  const [taskPage, setTaskPage] = useState(0);
+  const focused = overviewFocused;
   const home = live?.data ?? null;
-  // 整机计数按服务端给的 key 口径显示；没有真实载体的项由 unknown 说明原因，
-  // 页面不补 0、不换口径。
-  const displayedCounts = example
-    ? example.counts.filter((item) => item.value >= 0)
-    : home?.counts.map((fact) => ({ label: fact.label, value: fact.value })) ?? [];
+  const items = mergeHomeTasks(tasks, home);
+  const filteredTasks = items.filter(item => taskName(item.title).toLocaleLowerCase().includes(query.toLocaleLowerCase()) && (filter === "all" || item.status === filter));
+  const pageCount = Math.max(1, Math.ceil(filteredTasks.length / 25));
+  const currentPage = Math.min(taskPage, pageCount - 1);
+  const pageTasks = filteredTasks.slice(currentPage * 25, (currentPage + 1) * 25);
+  const groups = [
+    { title: "待处理", items: filteredTasks.filter(item => !["running", "completed"].includes(item.status)), empty: "没有待处理事项" },
+    { title: "进行中", items: filteredTasks.filter(item => item.status === "running"), empty: "没有正在制作的任务" },
+    { title: "最近完成", items: filteredTasks.filter(item => item.status === "completed"), empty: "完成的任务会显示在这里" },
+  ];
+  const selectedTask = items.find(item => item.id === selectedTaskId);
+  const displayedCounts = home?.counts ?? [];
   const hasCounts = displayedCounts.some(item => item.value > 0);
-  const trendValues = example ? (range === 7 ? example.sevenDays : example.thirtyDays) : home?.trend.points ?? [];
-  const hasTrend = trendValues.some(point => point.count > 0);
-  // 只有七项真实计数都已读到且为零、也没有任务/趋势记录时，才称当前范围为空。
-  // 某个时段没接收素材或部分统计未知，都不能推成空库。
+  const trendValues = home?.trend.points ?? [];
   const emptyWorkspace = Boolean(home && !live?.loading && !live?.error
     && ["visible_assets", "analysis_ready", "analysis_pending", "knowledge_sources", "voices", "tasks", "works"]
       .every(key => home.counts.some(fact => fact.key === key && fact.value === 0))
-    && tasks.length === 0 && home.entries.queue.length === 0 && home.entries.todos.length === 0
-    && home.entries.works.length === 0 && !hasTrend);
-  // 真实词云只认素材数量 asset_count；片段数量 segment_count 语义不同，不做兜底。
-  // 服务端为默认分类表补了零值行，asset_count 为 0 的项没有任何素材，不能进词云。
-  const realTags = !example && insights?.tags.length
-    ? insights.tags.filter((item) => item.asset_count > 0).sort((a, b) => b.asset_count - a.asset_count || a.tag.localeCompare(b.tag))
-    : [];
-  const featuredTags = realTags.filter((item) => item.tag.length <= 18).slice(0, 12);
-  const featuredTagSet = new Set(featuredTags.map((item) => item.tag));
-  const moreTags = realTags.filter((item) => !featuredTagSet.has(item.tag));
-  const taskGroups = [
-    { key: "pending", title: "待处理", items: pendingTasks },
-    { key: "running", title: "进行中", items: runningTasks },
-    { key: "completed", title: "已完成步骤", items: completedTasks },
-  ].filter((group) => group.items.length > 0);
-  const todoIds = new Set(home?.entries.todos.map((item) => item.task_id) ?? []);
-  const workIds = new Set(home?.entries.works.map((item) => item.task_id) ?? []);
-  const recentWorks = [
-    ...(home?.entries.works ?? []),
-    ...readyOutputTasks.filter((task) => !workIds.has(task.id)).map((task) => ({ task_id: task.id, title: task.name, updated_at: task.updated_at })),
-  ];
-  const homeTodos = home?.entries.todos ?? [];
-  const homeQueue = (home?.entries.queue ?? []).filter((item) => !todoIds.has(item.task_id) && !workIds.has(item.task_id) && !readyOutputIds.has(item.task_id));
-  const filteredExampleAssets = dashboard?.assets.filter((asset) => selectedFilter?.kind === "industry" ? asset.industry === selectedFilter.key : asset.tags.includes(selectedFilter?.key ?? "")) ?? [];
-  const trendRangePicker = <div aria-label="趋势范围" className={styles.range}><button aria-pressed={range === 7} onClick={() => { setRange(7); live?.onDays(7); }} type="button">7 天</button><button aria-pressed={range === 30} onClick={() => { setRange(30); live?.onDays(30); }} type="button">30 天</button></div>;
-  useEffect(() => {
-    const refreshVisible = () => { if (document.visibilityState === "visible") router.refresh(); };
-    const timer = window.setInterval(refreshVisible, 10000);
-    document.addEventListener("visibilitychange", refreshVisible);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refreshVisible); };
-  }, [router]);
-
-  // 真实数据还没到：显示加载状态而不是空白或编造数字。
-  if (live && live.loading && !live.data) {
-    return <div className={styles.home}><p className={styles.cardEmpty} role="status">正在读取整机概览…</p></div>;
+    && items.length === 0 && !trendValues.some(point => point.count > 0));
+  const dependencyBlockers = foundation?.readiness.blockers.filter(blocker => blocker.code !== "brand_profile_missing") ?? [];
+  const realTags = insights ? insights.tags.filter(item => item.asset_count > 0).sort((a, b) => b.asset_count - a.asset_count || a.tag.localeCompare(b.tag)) : [];
+  const featuredTags = realTags.filter(item => item.tag.length <= 18).slice(0, 12);
+  const featuredTagSet = new Set(featuredTags.map(item => item.tag));
+  const moreTags = realTags.filter(item => !featuredTagSet.has(item.tag));
+  const liveDays = live?.days;
+  useEffect(() => { if (liveDays !== undefined) setRange(liveDays); }, [liveDays]);
+  function setOverview(next: Overview) {
+    setActiveOverview(next ?? "trend");
+    setOverviewFocused(next !== null);
+    // This element owns only the right workspace; never touch document or conversation scroll.
+    if (contentRef.current) contentRef.current.scrollTop = 0;
   }
-  if (live?.error && !home) {
-    return <div className={styles.home}><div className={styles.readiness} role="alert"><strong>首页数据读取失败</strong><button onClick={live.onRetry} type="button">重新读取</button><details><summary>查看详情</summary><p>{live.error}</p></details></div></div>;
+  const maxTagCount = Math.max(1, ...featuredTags.map(item => item.asset_count));
+  function cloudWord(item: MaterialLibraryInsights["tags"][number]) {
+    const weight = Math.log1p(item.asset_count) / Math.log1p(Math.max(12, maxTagCount));
+    return <Link href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} data-frequency={item.asset_count} title={`${tagLabel(item.tag)} · ${item.asset_count} 条素材`} style={{fontSize:12 + 18 * weight,fontWeight:weight > .65 ? 500 : 400,marginInline:2 + 5 * weight}}>{tagLabel(item.tag)}<sup>{item.asset_count}</sup></Link>;
   }
+  function taskRow(item: HomeTaskItem) {
+    return <button className={view === "board" ? styles.taskCard : styles.taskRow} key={item.id} onClick={() => setSelectedTaskId(item.id)} type="button" title={taskName(item.title)}>
+      <span className={styles.taskName}><CreationTaskStageIcon stage={item.stage} className={styles.taskStatusIcon} /><strong>{taskName(item.title)}</strong><ChevronRight aria-hidden size={14} /></span>
+      <span className={styles.taskState} data-status={item.status}>{item.status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{creationTaskShortStatus(item.status, item.stage)}</span>
+      <span className={styles.taskNext}>{taskNextAction(item)}<ArrowRight aria-hidden size={12} /></span>
+    </button>;
+  }
+  const trendRangePicker = <div aria-label="趋势范围" className={styles.range}>{([7, 30] as const).map(days => <button aria-pressed={range === days} key={days} onClick={() => { setRange(days); live?.onDays(days); }} type="button">{days} 天</button>)}</div>;
+  if (live?.loading && !home) return <div className={styles.home}><p className={styles.cardEmpty} role="status">正在读取整机概览…</p></div>;
+  if (live?.error && !home) return <div className={styles.home}><div className={styles.readiness} role="alert"><strong>首页数据读取失败</strong><button onClick={live.onRetry} type="button">重新读取</button><details><summary>查看详情</summary><p>{live.error}</p></details></div></div>;
 
   return <div className={styles.home}>
-    {dashboard ? <header className={styles.heading}><div><p>{dashboard.scopeLabel}</p></div><span className={styles.exampleBadge}>示例数据 · 不连接真实服务</span></header> : null}
-    {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h2>从一个视频目标开始</h2><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library">去素材库导入</Link></div></section> : null}
-    {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div>
-      : !foundation.readiness.ready && dependencyBlockers.length ? <section aria-label="制作准备事项" className={styles.preparation}><h2>制作前需要准备</h2>{dependencyBlockers.map((blocker, index) => {
-        const repair = readinessRepair(blocker.code);
-        return <article className={styles.preparationRow} key={`${blocker.code}-${index}`}><div><p>{blocker.message}</p>{repair ? <small>{repair.impact}</small> : null}<details><summary>查看诊断</summary><p>{blocker.code}</p></details></div>{repair ? <Link href={repair.href}>{repair.label}<ArrowRight aria-hidden size={14} /></Link> : null}</article>;
-      })}</section> : null}
-    {!dashboard && taskGroups.length > 0 ? <section className={styles.taskGroups} aria-label="创作任务状态分组">
-      <div className={styles.taskGroupsHeading}><h2>创作任务</h2><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>
-      {taskGroups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.key}>
-        <h3>{group.title}<span>{group.items.length}</span></h3>
-        {group.items.slice(0, 3).map(task => {
-          const state = creationTaskStatusPresentation(task.stage_status, task.stage);
-          const StatusIcon = task.stage_status === "not_started" ? CircleDashed : task.stage_status === "waiting_for_user" ? CircleDot : task.stage_status === "running" ? LoaderCircle : task.stage_status === "completed" ? CheckCircle2 : AlertCircle;
-          return <button className={styles.taskRow} key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button">
-            <StatusIcon aria-hidden className={`${styles.taskStatusIcon}${task.stage_status === "running" ? " is-spinning" : ""}`} data-status={task.stage_status} size={16} />
-            <span><strong>{taskName(task.name)}</strong><small>{state.stageLabel} · {state.label}{task.output_ready ? " · 本地成片可查看" : ""}</small></span><ArrowRight aria-hidden size={14} />
-          </button>;
-        })}
-      </section>)}
-    </section> : null}
-    {!dashboard && home ? (
-      <details className={styles.metaDetails}>
-        <summary>更多任务状态</summary>
-        <p>
-          整机状态：处理中 {home.device_queue.running ?? "未知"} · 排队 {home.device_queue.queued ?? "未知"}
-          {Object.keys(home.device_queue.counts).length
-            ? ` · ${Object.entries(home.device_queue.counts).map(([key, value]) => `${runtimeStateLabel(key)} ${value}`).join(" · ")}`
-            : " · 状态分布未读到"}
-          {` · ${scopeLabel(home.device_queue.meta.scope)} · 更新于 ${new Date(home.device_queue.meta.as_of).toLocaleString("zh-CN")}`}
-        </p>
-      </details>
-    ) : null}
-    {homeQueue.length > 0 ? <section className={styles.card}><h2>我的任务</h2>{homeQueue.map((item) => <button className={styles.queueRow} key={item.task_id} onClick={() => router.push("/tasks/" + encodeURIComponent(item.task_id))} type="button"><span className={styles.queueDot} /><div><strong>{taskName(item.title)}</strong><small>{homeStageLabel(item.stage)} · {homeStatusLabel(item.status)}</small></div><ArrowRight size={14} /></button>)}</section> : null}
-    {homeTodos.length ? <section className={styles.card}><h2>需要处理</h2>{homeTodos.map((item) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(item.task_id)} key={item.task_id}><div><strong>{taskName(item.title)}</strong><small>{homeStageLabel(item.stage)} · {item.reason}</small>{item.repair_action ? <small>下一步：{item.repair_action}</small> : null}</div><ArrowRight size={14} /></Link>)}</section> : null}
-    {recentWorks.length ? <section className={styles.card}><h2>近期成果</h2>{recentWorks.map((item) => <Link className={styles.workRow} href={"/tasks/" + encodeURIComponent(item.task_id)} key={item.task_id}><span><PlayCircle size={16} /></span><div><strong>{taskName(item.title)}</strong><small>{new Date(item.updated_at).toLocaleString("zh-CN")} · 本地成片</small></div></Link>)}</section> : null}
-    <div className={styles.dashboard}>
-      {hasCounts ? <section aria-label="工作空间七项概览" className={styles.metrics}>{displayedCounts.map((item) => <div className={styles.metric} key={item.label}><strong>{item.value}</strong><small>{item.label}</small></div>)}</section> : null}
-      {home && home.counts.length > 0 ? <details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map((entry) => <div key={entry.key}><dt>{entry.label}</dt><dd>{entry.value} · {scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details> : null}
-      {!hasCounts && home && home.counts.length > 0 && !emptyWorkspace ? <p className={styles.trendEmptyText}>当前已读取的统计暂无记录。</p> : null}
-      {example || home ? <section aria-label="素材接收趋势" className={hasTrend ? styles.card : styles.trendEmpty}>
-        <div className={styles.cardHeading}><div><h2>素材接收趋势</h2><small>{dashboard ? "示例素材接收日" : `按接收日统计 · 近 ${home?.trend.days} 天 · 单位：条`}</small></div>{trendRangePicker}</div>
-        {hasTrend ? <TrendChart values={trendValues} /> : <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p>}
-        {home ? <details className={styles.metaDetails}><summary>趋势口径与更新时间</summary><p>{scopeLabel(home.trend.meta.scope)} · {sourceLabel(home.trend.meta.source)} · 更新于 {new Date(home.trend.meta.as_of).toLocaleString("zh-CN")}</p>{trendValues.length ? <p>{trendValues[0].date} — {trendValues[trendValues.length - 1].date}</p> : null}</details> : null}
-      </section> : null}
-      {dashboard ? <section className={styles.card}><h2>素材行业分布</h2>{example?.industries.length ? <div className={styles.donutLayout}><IndustryDonut items={example.industries} onSelect={setSelectedFilter} selected={selectedFilter} /><div className={styles.legend}>{example.industries.map((item) => <button aria-pressed={selectedFilter?.kind === "industry" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "industry", key: item.label, label: item.label })} type="button"><i />{item.label}<strong>{item.count}</strong></button>)}</div></div> : null}</section> : null}
-      {dashboard ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>任务与处理阶段</h2><small>{"整机队列 · 示例"}</small></div><Link href="/production">全部任务 <ArrowRight size={14} /></Link></div>{dashboard.queue.map((item) => <div className={styles.queueRow} key={item.id}><span className={styles.queueDot} /><div><strong>{item.title}</strong><small>{item.stage} · {item.detail}</small></div></div>)}</section> : null}
-      {dashboard || realTags.length > 0 ? <section className={styles.card}><div className={styles.cardHeading}><div><h2>内容标签</h2><small>{dashboard ? "示例范围内可见素材的真实标签" : "按素材数排列 · 点击标签查看对应素材"}</small></div></div>{dashboard && example?.tags.length ? <div className={styles.cloudField}>{example.tags.map((item) => <button aria-pressed={selectedFilter?.kind === "tag" && selectedFilter.key === item.label} key={item.label} onClick={() => setSelectedFilter({ kind: "tag", key: item.label, label: item.label })} style={{ fontSize: 12 + Math.min(12, item.count * 2) }} type="button">{item.label}<sup>{item.count}</sup></button>)}</div> : null}{!dashboard && featuredTags.length ? <div className={styles.cloudField}>{featuredTags.map((item) => <Link className={styles.cloudLink} href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} style={{ fontSize: 12 + Math.min(12, item.asset_count * 2) }}>{item.tag}<sup>{item.asset_count}</sup></Link>)}</div> : null}{moreTags.length ? <details className={styles.moreTags}><summary>更多标签与详细观察（{moreTags.length}）</summary><ul>{moreTags.map((item) => <li key={item.tag}><Link href={"/library?tag=" + encodeURIComponent(item.tag)}>{item.tag}</Link><small>{item.asset_count} 条素材</small></li>)}</ul></details> : null}</section> : null}
-      {!dashboard && insights === null && !live?.error ? <div className={styles.tagReadError} role="alert"><span>暂时无法读取内容标签</span>{live ? <button onClick={live.onRetry} type="button">重新读取</button> : null}</div> : null}
-      {dashboard ? <section className={styles.card}><h2>近期作品</h2>{dashboard.works.map((item) => <div className={styles.workRow} key={item.id}><span><PlayCircle size={16} /></span><div><strong>{item.title}</strong><small>{item.status}</small></div></div>)}</section> : null}
+    <div className={styles.toolbar}>
+      <label className={styles.search} data-input-group><Search aria-hidden size={16} /><input aria-label="搜索任务" ref={searchRef} value={query} placeholder="搜索任务" onChange={event => { setQuery(event.target.value); setTaskPage(0); }} />{query ? <button aria-label="清空任务搜索" title="清空搜索" onClick={() => { setQuery(""); setTaskPage(0); searchRef.current?.focus(); }} type="button"><X aria-hidden size={14} /></button> : null}</label>
+      <AppSelect aria-label="任务状态" value={filter} onValueChange={value => { setFilter(value as TaskFilter); setTaskPage(0); }}><AppSelectOption value="all">全部状态</AppSelectOption><AppSelectOption value="not_started">等待开始</AppSelectOption><AppSelectOption value="waiting_for_user">等你确认</AppSelectOption><AppSelectOption value="running">正在制作</AppSelectOption><AppSelectOption value="completed">已完成步骤</AppSelectOption><AppSelectOption value="failed">需要处理</AppSelectOption></AppSelect>
+      <button aria-label={view === "board" ? "切换为列表" : "切换为看板"} title={view === "board" ? "切换为列表" : "切换为看板"} className={styles.viewButton} onClick={() => setView(view === "board" ? "list" : "board")} type="button">{view === "board" ? <List aria-hidden size={16} /> : <Columns3 aria-hidden size={16} />}</button>
+      <Link className={styles.newTask} href="/production"><Plus aria-hidden size={16} />新建视频</Link>
     </div>
-    {home ? <>
-      <details className={styles.metaDetails}><summary>数据盘 · {directoryStateLabel(home.storage.directory_state)} · 可用 {home.storage.capacity ? formatBytes(home.storage.capacity.free_bytes) : "未知"}</summary><dl className={styles.homeFacts}>
-        <div><dt>已用</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.used_bytes) : "未知"}</dd></div>
-        <div><dt>容量</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.total_bytes) : "未知"}</dd></div>
-        <div><dt>可用</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.free_bytes) : "未知"}</dd></div>
-        <div><dt>数据盘</dt><dd>{directoryStateLabel(home.storage.directory_state)}{home.storage.bound_to_another_workspace ? "（绑定在其他空间）" : ""}{home.storage.configured_path_changed ? "（保存位置已变更）" : ""}</dd></div>
-        <div><dt>统计口径</dt><dd>{scopeLabel(home.storage.meta.scope)} · {sourceLabel(home.storage.meta.source)} · 更新于 {new Date(home.storage.meta.as_of).toLocaleString("zh-CN")}</dd></div>
-      </dl></details>
-      {home.unknown.length > 0 ? <details className={styles.metaDetails}><summary>暂时没有数据的统计（{home.unknown.length}）</summary><dl className={styles.homeFacts}>{home.unknown.map((item) => <div key={item.key}><dt>{unknownKeyLabel(item.key)}</dt><dd>{item.reason}</dd></div>)}</dl></details> : null}
+    <div className={`${styles.content}${focused ? ` ${styles.overviewFocused}` : ""}`} ref={contentRef}>
+      <section aria-label="创作任务看板"><div className={styles.sectionHeading}><h2><button aria-expanded={!focused} aria-controls="home-task-body" onClick={() => setOverview(null)} type="button">{focused ? <ChevronRight aria-hidden size={14} /> : null}创作任务</button></h2><small>{items.length} 个任务</small></div>
+        <div id="home-task-body" hidden={focused}>
+          {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h3>从一个视频目标开始</h3><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library">去素材库导入</Link></div></section>
+            : !filteredTasks.length ? <div className={styles.empty}><p>{query || filter !== "all" ? "没有匹配的任务" : "还没有创作任务"}</p>{query || filter !== "all" ? <button onClick={() => { setQuery(""); setFilter("all"); searchRef.current?.focus(); }} type="button">清除筛选</button> : <Link href="/production">新建视频</Link>}</div>
+              : view === "board" ? <div className={styles.taskGroups}>{groups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.title}><h3>{group.title}<span>{group.items.length}</span></h3><div className={styles.taskColumn} tabIndex={group.items.length ? 0 : undefined} aria-label={`${group.title}任务滚动列表`}>{group.items.length ? group.items.map(taskRow) : <p className={styles.taskGroupEmpty}>{group.empty}</p>}</div></section>)}</div>
+                : <><div className={styles.taskList} aria-label="创作任务列表">{pageTasks.map(taskRow)}</div>{pageCount > 1 ? <nav className={styles.pagination} aria-label="已读取任务分页"><button disabled={currentPage === 0} onClick={() => setTaskPage(currentPage - 1)} type="button">上一页</button><span>{currentPage + 1} / {pageCount} · 已读 {filteredTasks.length} 项</span><button disabled={currentPage === pageCount - 1} onClick={() => setTaskPage(currentPage + 1)} type="button">下一页</button></nav> : null}</>}
+        </div>
+      </section>
+      <section aria-label="最近素材"><div className={styles.sectionHeading}><h2><button aria-expanded={!focused} aria-controls="home-recent-body" onClick={() => setOverview(null)} type="button">{focused ? <ChevronRight aria-hidden size={14} /> : null}最近素材</button></h2><Link href="/library">素材库 <ArrowRight aria-hidden size={14} /></Link></div>
+        <div id="home-recent-body" hidden={focused}>
+          {recentAssets?.length ? <div className={styles.recentGrid}>{recentAssets.slice(0, 3).map(asset => <button className={styles.materialRow} key={asset.id} type="button" onClick={() => { setSelectedAsset(asset); referenceAssistantMaterial({ selection: { scope: "asset", asset_id: asset.id, expected_updated_at: asset.updated_at }, label: asset.file_name }); }} title={asset.file_name}><span className={styles.materialPreview}><MaterialPreview asset={asset} /></span><span><strong>{asset.file_name}</strong><small>{asset.user_tags.slice(0, 2).join(" · ") || (asset.media_type === "audio" ? "音频" : asset.media_type === "image" ? "图片" : "视频")}</small><small>最近更新 · {new Date(asset.updated_at).toLocaleDateString("zh-CN")}</small></span></button>)}</div>
+            : <p className={styles.compactEmpty}>{recentAssets === null ? "暂时无法读取最近素材" : "还没有素材，可以去素材库导入"}{recentAssets === null && live ? <button onClick={live.onRetry} type="button">重新读取</button> : null}</p>}
+          {live?.materialsError ? <div className={styles.tagReadError} role="alert"><span>最近素材暂未更新</span><details className={styles.metaDetails}><summary>查看素材读取详情</summary><p>{live.materialsError}</p></details></div> : null}
+        </div>
+      </section>
+      {!emptyWorkspace && home ? <div className={styles.resourceLine}><span>可用内容</span>{[["素材", "visible_assets"], ["资料", "knowledge_sources"], ["声音", "voices"]].map(([label, key]) => <button key={key} onClick={() => setFactsOpen(true)} type="button"><strong>{home.counts.find(fact => fact.key === key)?.value ?? "未知"}</strong>{label}</button>)}<button aria-label="查看内容统计范围" title="查看内容统计范围" onClick={() => setFactsOpen(true)} type="button"><Info aria-hidden size={16} /></button></div> : null}
+      <section aria-label="内容与设备概览" className={styles.overviews}>
+        <div className={styles.overviewTabs} role="tablist" aria-label="首页概览" aria-orientation="horizontal">
+          {([['trend','素材接收趋势'],['tags','内容标签与行业'],['device','设备与存储']] as const).map(([key,title]) => <button key={key} id={`home-${key}-tab`} role="tab" aria-selected={activeOverview === key} aria-controls={`home-${key}-body`} tabIndex={activeOverview === key ? 0 : -1} onClick={() => setOverview(key)} onKeyDown={event => {
+            if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+            event.preventDefault();
+            const tabs = Array.from(event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+            const current = tabs.indexOf(event.currentTarget);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+            tabs[next].focus(); setOverview((['trend','tags','device'] as const)[next]);
+          }}>{title}</button>)}
+        </div>
+        {activeOverview ? <div className={styles.cardHeading}>
+          <h3>{activeOverview === 'trend' ? '素材接收趋势' : activeOverview === 'tags' ? '内容标签' : '设备与存储'}</h3>
+          <div className={styles.cardMeta}>
+            {activeOverview === 'trend' ? <><time dateTime={home?.trend.meta.as_of}>{home ? `更新 ${new Date(home.trend.meta.as_of).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false})}` : '更新时间未知'}</time>{trendRangePicker}</> : null}
+            <button className={styles.infoButton} aria-label={activeOverview === 'trend' ? '趋势统计口径' : activeOverview === 'tags' ? '标签统计口径' : '设备范围与诊断'} title="范围与数据来源" onClick={() => setOverviewInfo(activeOverview)} type="button"><Info aria-hidden size={15} /></button>
+            {focused ? <button className={styles.infoButton} aria-label="返回任务" title="返回任务" onClick={() => setOverview(null)} type="button"><X aria-hidden size={15} /></button> : null}
+          </div>
+        </div> : null}
+        <div id="home-trend-body" role="tabpanel" aria-labelledby="home-trend-tab" className={styles.overviewBody} hidden={activeOverview !== 'trend'}>
+          {home ? <TrendChart values={trendValues} /> : <p className={styles.compactEmpty}>暂未读取接收趋势</p>}
+        </div>
+        <div id="home-tags-body" role="tabpanel" aria-labelledby="home-tags-tab" className={styles.overviewBody} hidden={activeOverview !== 'tags'}>
+          <div className={styles.cloudField} aria-label="按真实素材频数排列的词云"><div className={styles.cloudCore}>{featuredTags.slice(0,1).map(cloudWord)}</div><div className={`${styles.cloudRow} ${styles.cloudTop}`}>{featuredTags.filter((_,index) => index > 0 && index % 2 === 1).map(cloudWord)}</div><div className={`${styles.cloudRow} ${styles.cloudBottom}`}>{featuredTags.filter((_,index) => index > 0 && index % 2 === 0).map(cloudWord)}</div></div>
+          {!insights ? <div className={styles.tagReadError} role="alert"><span>暂时无法读取内容标签</span>{live ? <button onClick={live.onRetry} type="button">重新读取</button> : null}</div> : realTags.length === 0 ? <p className={styles.compactEmpty}>素材还没有可用标签</p> : null}
+          {moreTags.length ? <details className={styles.moreTags}><summary>更多标签（{moreTags.length}）</summary><ul>{moreTags.map(item => <li key={item.tag}><Link href={'/library?tag=' + encodeURIComponent(item.tag)}>{tagLabel(item.tag)}</Link><small>{item.asset_count} 条素材</small></li>)}</ul></details> : null}
+        </div>
+        <div id="home-device-body" role="tabpanel" aria-labelledby="home-device-tab" className={styles.overviewBody} hidden={activeOverview !== 'device'}>
+          {home ? <><dl className={styles.deviceMetrics}>
+            <div><dt>处理中</dt><dd>{home.device_queue.running ?? '未知'}</dd></div><div><dt>排队</dt><dd>{home.device_queue.queued ?? '未知'}</dd></div>
+            <div><dt>数据盘</dt><dd>{directoryStateLabel(home.storage.directory_state)}</dd></div><div><dt>可用空间</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.free_bytes) : '未知'}</dd></div>
+          </dl>{home.storage.capacity && home.storage.capacity.total_bytes > 0 ? <progress aria-label="数据盘已用容量" value={home.storage.capacity.used_bytes} max={home.storage.capacity.total_bytes} /> : null}<Link href="/settings?section=paths">检查保存位置 <ArrowRight aria-hidden size={14} /></Link></> : <p className={styles.compactEmpty}>暂未读取设备与存储信息</p>}
+        </div>
+      </section>
+      {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div> : dependencyBlockers.length && !foundation.readiness.ready ? <div className={styles.preparation} role="status"><span>制作前还有 {dependencyBlockers.length} 项需要准备。</span><button onClick={() => setPreparationOpen(true)} type="button">查看准备事项<ArrowRight aria-hidden size={14} /></button></div> : null}
+      {live?.loading ? <p className={styles.compactEmpty} role="status">正在更新首页数据…</p> : null}
       {live?.error ? <div className={styles.readiness} role="alert"><strong>部分首页数据读取失败</strong><button onClick={live.onRetry} type="button">重新读取</button><details><summary>查看详情</summary><p>{live.error}</p></details></div> : null}
-    </> : null}
-    {dashboard ? <p className={styles.note}>这里显示的是示例数据，与真实工作区分开。</p> : null}
-    {dashboard && selectedFilter ? <HomeCardDialog kind="detail" onClose={() => setSelectedFilter(null)} title="示例素材筛选">
-      <div className={styles.filterResults}><p>筛选意图：{selectedFilter.kind === "industry" ? "行业" : "标签"} · {selectedFilter.label}。真实素材库精确筛选尚未接入。</p><strong>{filteredExampleAssets.length} 条对应示例素材</strong>{filteredExampleAssets.map((asset) => <div className={styles.filterResult} key={asset.id}><span>{asset.title}</span><small>{asset.industry} · {asset.tags.join("、")}</small></div>)}</div>
-    </HomeCardDialog> : null}
-    {selectedTask && selectedTaskState ? <HomeCardDialog kind="detail" onClose={() => setSelectedTaskId(null)} title="任务卡片"><div className="home-task-card"><h3>{taskName(selectedTask.name)}</h3><p>{selectedTaskState.stageLabel} · {selectedTaskState.label}</p>{selectedTask.stage_reason ? <div className="home-task-card__detail"><strong>需要处理</strong><p>{selectedTask.stage_reason}</p>{selectedTask.stage_impact ? <p>{selectedTask.stage_impact}</p> : null}{selectedTask.stage_repair_action ? <p>{selectedTask.stage_repair_action}</p> : null}</div> : null}<div className="home-task-card__detail"><Clock3 size={16} /><span>{new Date(selectedTask.updated_at).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div><div className="home-task-card__actions"><button className="home-task-card__open" onClick={() => router.push("/tasks/" + encodeURIComponent(selectedTask.id))} type="button">对话修改</button><Link href={"/tasks/" + encodeURIComponent(selectedTask.id)}>打开任务 <ArrowRight size={15} /></Link></div></div></HomeCardDialog> : null}
+    </div>
+    {overviewInfo ? <HomeCardDialog kind="detail" title={overviewInfo === 'trend' ? '趋势统计口径' : overviewInfo === 'tags' ? '标签统计口径' : '设备范围与诊断'} onClose={() => setOverviewInfo(null)}><div className={styles.infoDetails}>
+      {overviewInfo === 'trend' && home ? <><p>按接收日统计 · 近 {home.trend.days} 天 · 单位：条。</p><p>{scopeLabel(home.trend.meta.scope)} · {sourceLabel(home.trend.meta.source)}</p><p>更新于 <time dateTime={home.trend.meta.as_of}>{new Date(home.trend.meta.as_of).toLocaleString('zh-CN')}</time></p></> : null}
+      {overviewInfo === 'tags' ? <><p>字号依据当前可见素材的真实出现频数；点击词语可查看对应素材。</p><p>标签接口未提供统计更新时间。暂无可信行业分类。</p>{home?.unknown.filter(item => item.key.startsWith('materials.')).map(item => <p key={item.key}>{unknownKeyLabel(item.key)}：{item.reason}</p>)}</> : null}
+      {overviewInfo === 'device' && home ? <><p>{Object.keys(home.device_queue.counts).length ? Object.entries(home.device_queue.counts).map(([key,value]) => `${runtimeStateLabel(key)} ${value}`).join(' · ') : '状态分布未读到'}</p><p>作业记录 {home.device_queue.records_total ?? '未知'} · {scopeLabel(home.device_queue.meta.scope)} · {sourceLabel(home.device_queue.meta.source)} · 更新于 {new Date(home.device_queue.meta.as_of).toLocaleString('zh-CN')}</p><dl className={styles.homeFacts}><div><dt>已用</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.used_bytes) : '未知'}</dd></div><div><dt>容量</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.total_bytes) : '未知'}</dd></div><div><dt>可用</dt><dd>{home.storage.capacity ? formatBytes(home.storage.capacity.free_bytes) : '未知'}</dd></div><div><dt>数据盘</dt><dd>{directoryStateLabel(home.storage.directory_state)}{home.storage.bound_to_another_workspace ? '（绑定在其他空间）' : ''}{home.storage.configured_path_changed ? '（保存位置已变更）' : ''} · {home.storage.bound_to_current_workspace ? '已绑定当前空间' : '未绑定当前空间'}</dd></div><div><dt>统计口径</dt><dd>{scopeLabel(home.storage.meta.scope)} · {sourceLabel(home.storage.meta.source)} · 更新于 {new Date(home.storage.meta.as_of).toLocaleString('zh-CN')}</dd></div></dl>{home.unknown.filter(item => !item.key.startsWith('materials.')).map(item => <p key={item.key}>{unknownKeyLabel(item.key)}：{item.reason}</p>)}</> : null}
+    </div></HomeCardDialog> : null}
+    {preparationOpen ? <HomeCardDialog kind="detail" title="制作准备事项" onClose={() => setPreparationOpen(false)}><section aria-label="制作准备事项">{dependencyBlockers.map((blocker,index) => { const repair = readinessRepair(blocker.code); return <article className={styles.preparationRow} key={`${blocker.code}-${index}`}><div><p>{blocker.message}</p>{repair ? <small>{repair.impact}</small> : null}</div>{repair ? <Link href={repair.href}>{repair.label}<ArrowRight aria-hidden size={14} /></Link> : <Link href="/health">检查运行情况<ArrowRight aria-hidden size={14} /></Link>}</article>; })}<details className={styles.metaDetails}><summary>后台准备记录</summary>{dependencyBlockers.map((blocker,index) => <p key={`${blocker.code}-${index}`}>{blocker.code}：{blocker.message}</p>)}</details></section></HomeCardDialog> : null}
+    {factsOpen ? <HomeCardDialog kind="detail" title="内容总览" onClose={() => setFactsOpen(false)}><section aria-label="工作空间七项概览" className={styles.metrics}>{displayedCounts.map(item => <div className={styles.metric} key={item.label}><strong>{item.value}</strong><small>{item.label}</small></div>)}</section>{!hasCounts ? <p className={styles.compactEmpty}>当前已读取的统计暂无记录。</p> : null}{home ? <><details className={styles.metaDetails}><summary>每个数字的口径与更新时间</summary><dl className={styles.homeFacts}>{home.counts.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd>{entry.value} · {scopeLabel(entry.meta.scope)} · {sourceLabel(entry.meta.source)} · {new Date(entry.meta.as_of).toLocaleString("zh-CN")}</dd></div>)}</dl></details><p className={styles.compactEmpty}>{scopeLabel(home.entries.meta.scope)} · {sourceLabel(home.entries.meta.source)} · 更新于 {new Date(home.entries.meta.as_of).toLocaleString("zh-CN")}</p>{home.unknown.length ? <details className={styles.metaDetails}><summary>暂时没有数据的统计（{home.unknown.length}）</summary><dl className={styles.homeFacts}>{home.unknown.map(item => <div key={item.key}><dt>{unknownKeyLabel(item.key)}</dt><dd>{item.reason}</dd></div>)}</dl></details> : null}</> : null}</HomeCardDialog> : null}
+    {selectedTask ? <HomeCardDialog kind="detail" onClose={() => setSelectedTaskId(null)} title={taskName(selectedTask.title)} footer={<Link className={styles.taskOpen} href={"/tasks/" + encodeURIComponent(selectedTask.id)}>{taskNextAction(selectedTask)}<ArrowRight aria-hidden size={15} /></Link>}><div className={styles.taskDetail}>
+      <span className={styles.taskState}>{itemPresentation(selectedTask).stageLabel}</span>
+      {selectedTask.reason ? <p>{selectedTask.reason}</p> : null}
+      {selectedTask.outputReady ? <p>已有本地成片可查看</p> : null}
+      <details className={styles.metaDetails}><summary>原因与任务记录</summary><dl className={styles.homeFacts}>
+        {selectedTask.rawReason ? <div><dt>后台原始原因</dt><dd>{selectedTask.rawReason}</dd></div> : null}
+        {selectedTask.task?.stage_impact ? <div><dt>本次影响</dt><dd>{selectedTask.task.stage_impact}</dd></div> : null}
+        {selectedTask.repair ? <div><dt>处理建议</dt><dd>{creationTaskRepairAction(selectedTask.repair)}</dd></div> : null}
+        {selectedTask.repair ? <div><dt>后台处理原文</dt><dd>{selectedTask.repair}</dd></div> : null}
+        {selectedTask.updatedAt ? <div><dt>最近更新</dt><dd><time dateTime={selectedTask.updatedAt}>{new Date(selectedTask.updatedAt).toLocaleString("zh-CN")}</time></dd></div> : null}
+      </dl></details>
+    </div></HomeCardDialog> : null}
+    {selectedAsset ? <HomeCardDialog kind="detail" title={selectedAsset.file_name} onClose={() => setSelectedAsset(null)}><div className={styles.assetDetail}><MaterialPreview asset={selectedAsset} controls /><p>{selectedAsset.user_description || "尚未填写素材说明"}</p><p>{selectedAsset.user_tags.join(" · ")}</p><Link href="/library">打开素材库 <ArrowRight aria-hidden size={14} /></Link></div></HomeCardDialog> : null}
+
   </div>;
 }
-
 
 /** 真实概览的加载/失败/真空状态；不显示任何编造数字。 */
 export type HomeLiveState = {
@@ -269,6 +282,7 @@ export type HomeLiveState = {
   days: 7 | 30;
   onDays: (days: 7 | 30) => void;
   onRetry: () => void;
+  materialsError?: string | null;
 };
 
 // 口径与来源的中文说明：不向用户铺 state 键或源码路径。
@@ -339,7 +353,7 @@ function homeStageLabel(stage: string) {
 function homeStatusLabel(status: string) {
   // 创建后的任务还没开始执行：按任务自身状态说「等待开始」，
   // 不能拿时间线的 not_started 冒充。
-  if (status === "created") return "等待开始";
+  if (status === "created" || status === "not_started") return "等待开始";
   if (!homeStatusKeys.has(status)) return status;
   const stage: CreationTask["stage"] = "montage";
   const label = creationTaskStatusPresentation(status as CreationTask["stage_status"], stage).label;
@@ -368,6 +382,8 @@ export function HomeDashboardLive() {
   const [tasks, setTasks] = useState<CreationTask[]>([]);
   const [foundation, setFoundation] = useState<ProductionFoundation | null>(null);
   const [insights, setInsights] = useState<MaterialLibraryInsights | null>(null);
+  const [recentAssets, setRecentAssets] = useState<MaterialAsset[] | null>(null);
+  const [materialsError, setMaterialsError] = useState<string | null>(null);
   const [days, setDays] = useState<7 | 30>(7);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -375,33 +391,46 @@ export function HomeDashboardLive() {
   // 页面不自己读 localStorage，避免两处令牌来源互相遮蔽。
   const identity = useLocalMemberIdentity();
   const identityKey = identity.token ?? "";
+  const identityToken = identity.token;
+  const refreshIdentity = identity.refresh;
   // 只有最后一次请求的结果可以提交：切身份或切天数之后，之前的响应一律丢弃，
   // 不让旧身份的私有标题或旧天数的数字落到当前页面上。
   const requestRef = useRef(0);
   const daysRef = useRef(days);
   daysRef.current = days;
 
-  async function load(targetDays: 7 | 30) {
+  async function load(targetDays: 7 | 30, onlyTrend = false) {
     const request = ++requestRef.current;
     setLoading(true); setError(null);
-    try {
-      const [dashboard, taskResponse, foundationResult, insightsResult] = await Promise.all([
-        getHomeDashboard(targetDays),
-        listCreationTasks(),
-        getProductionFoundation().catch(() => null),
-        getMaterialLibraryInsights().catch(() => null),
-      ]);
-      if (request !== requestRef.current) return;
-      setData(dashboard);
-      setTasks(taskResponse.items ?? []);
-      setFoundation(foundationResult);
-      setInsights(insightsResult);
-      setLoading(false);
-    } catch (cause) {
-      if (request !== requestRef.current) return;
-      setError(cause instanceof Error ? cause.message : "首页数据读取失败。");
-      setLoading(false);
+    if (onlyTrend) {
+      try {
+        const dashboard = await getHomeDashboard(targetDays);
+        if (request !== requestRef.current) return;
+        setData(dashboard);
+      } catch (cause) {
+        if (request !== requestRef.current) return;
+        setError(cause instanceof Error ? cause.message : "接收趋势读取失败。");
+      }
+      if (request === requestRef.current) setLoading(false);
+      return;
     }
+    const [dashboard, taskResponse, foundationResult, insightsResult, materialsResult] = await Promise.allSettled([
+      getHomeDashboard(targetDays), listCreationTasks(), getProductionFoundation(),
+      getMaterialLibraryInsights(), getProductionMaterials({ limit: 3, offset: 0 }),
+    ]);
+    if (request !== requestRef.current) return;
+    if (dashboard.status === "fulfilled") setData(dashboard.value);
+    else setError(dashboard.reason instanceof Error ? dashboard.reason.message : "首页数据读取失败。");
+    if (taskResponse.status === "fulfilled") setTasks(taskResponse.value.items);
+    else if (dashboard.status === "fulfilled") setError(taskResponse.reason instanceof Error ? taskResponse.reason.message : "创作任务读取失败。");
+    setFoundation(foundationResult.status === "fulfilled" ? foundationResult.value : null);
+    setInsights(insightsResult.status === "fulfilled" ? insightsResult.value : null);
+    if (materialsResult.status === "fulfilled") {
+      setRecentAssets(materialsResult.value.assets); setMaterialsError(null);
+    } else {
+      setMaterialsError(materialsResult.reason instanceof Error ? materialsResult.reason.message : "最近素材读取失败。");
+    }
+    setLoading(false);
   }
 
   // 跨标签页写入或切回窗口：只有本地成员令牌真的变了才算换身份。
@@ -409,12 +438,12 @@ export function HomeDashboardLive() {
   useEffect(() => {
     const apply = () => {
       const stored = readLocalMemberToken();
-      if (stored === (identity.token ?? null)) return;
+      if (stored === (identityToken ?? null)) return;
       // 令牌已变：先作废在途请求并清空当前身份的私有内容，再让钩子收敛。
       requestRef.current += 1;
-      setData(null); setTasks([]); setFoundation(null); setInsights(null);
+      setData(null); setTasks([]); setFoundation(null); setInsights(null); setRecentAssets(null); setMaterialsError(null);
       setLoading(true); setError(null);
-      identity.refresh();
+      refreshIdentity();
     };
     window.addEventListener("storage", apply);
     window.addEventListener("focus", apply);
@@ -422,14 +451,14 @@ export function HomeDashboardLive() {
       window.removeEventListener("storage", apply);
       window.removeEventListener("focus", apply);
     };
-  }, [identity.refresh, identity.token]);
+  }, [refreshIdentity, identityToken]);
 
   const previousIdentity = useRef<string | null>(null);
   useEffect(() => {
     if (previousIdentity.current !== null && previousIdentity.current !== identityKey) {
       // 换身份：让在途请求全部作废，旧身份的私有标题不得留在页面上。
       requestRef.current += 1;
-      setData(null); setTasks([]); setFoundation(null); setInsights(null);
+      setData(null); setTasks([]); setFoundation(null); setInsights(null); setRecentAssets(null); setMaterialsError(null);
       setLoading(true); setError(null);
     }
     previousIdentity.current = identityKey;
@@ -438,12 +467,25 @@ export function HomeDashboardLive() {
   // 身份收敛前不发请求：首帧匿名请求会把不该给这一身份的私有内容取回来。
   useEffect(() => {
     if (!identity.ready) return;
-    void load(days);
-  }, [days, identityKey, identity.ready]);
+    void load(daysRef.current);
+    return () => { requestRef.current += 1; };
+  }, [identityKey, identity.ready]);
+
+  useEffect(() => {
+    if (!identity.ready) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(daysRef.current);
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [identityKey, identity.ready]);
 
   const live: HomeLiveState = {
     data, loading, error, days,
-    onDays: setDays,
+    materialsError,
+    onDays: nextDays => {
+      setDays(nextDays);
+      void load(nextDays, true);
+    },
     // 重试用当前选择的天数，不回到首次的 7 天。
     onRetry: () => void load(daysRef.current),
   };
@@ -453,8 +495,8 @@ export function HomeDashboardLive() {
   }
   if (error && !data) {
     return <div className={styles.home}>
-      <div className={styles.readiness} role="alert"><strong>{error}</strong><button onClick={live.onRetry} type="button">重新读取</button></div>
+      <div className={styles.readiness} role="alert"><strong>首页数据读取失败</strong><details><summary>查看详情</summary><p>{error}</p></details><button onClick={live.onRetry} type="button">重新读取</button></div>
     </div>;
   }
-  return <HomeWorkspace foundation={foundation} insights={insights} live={live} tasks={tasks} />;
+  return <HomeWorkspace foundation={foundation} insights={insights} live={live} tasks={tasks} recentAssets={recentAssets} />;
 }

@@ -37,6 +37,7 @@ from app.device_runtime import OwnerRegistration
 from app.device_scheduler import SessionHeartbeat, VerifiedSession
 from app.host_resource_probes import (
     CpuRenderBudget,
+    CpuAudioBudget,
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
@@ -171,6 +172,7 @@ def creation_job_registration(
     presenter_budget: PresenterBudget | None = None,
     presenter_cpu_render_budget: CpuRenderBudget | None = None,
     presenter_models: dict | None = None, resolve_presenter_output=None,
+    task_media=None,
 ) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
@@ -184,20 +186,24 @@ def creation_job_registration(
             narration_budget=narration_budget, montage_budget=montage_budget,
             presenter_budget=presenter_budget,
             presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget),
-            presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output,
+            presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media,
         ),
         CreationJobUnitExecutor(
             repository, render_action=render_action, render_is_valid=render_is_valid,
-            stage_actions=stage_actions,
+            stage_actions=stage_actions, task_media=task_media,
         ),
     )
 
 
 #: 整机预算的标定项。这些值必须由这台设备的标定结果显式给出，没有内置默认值。
 def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
+    """An uncalibrated stage stays unavailable without blocking other stages."""
     environment = os.environ if env is None else env
     budgets = []
     for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
+        if not any(environment.get(prefix + item.name.upper(), "").strip() for item in fields(budget_type)):
+            budgets.append(None)
+            continue
         values = {}
         for item in fields(budget_type):
             name = prefix + item.name.upper()
@@ -376,3 +382,18 @@ class DeviceHeartbeatRequest(BaseModel):
     recording: bool = False
     editing: bool = False
     interaction: bool = False
+
+
+def cpu_audio_budget_from_env(env: Mapping[str, str] | None = None):
+    environment = os.environ if env is None else env
+    names = {item.name: "DEVICE_CPU_AUDIO_" + item.name.upper() for item in fields(CpuAudioBudget)}
+    if not any(environment.get(name, "").strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not environment.get(name, "").strip()]
+    if missing:
+        raise HostBudgetUncalibrated("CPU 音频预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        return CpuAudioBudget(**{field: float(environment[name]) if field.endswith("seconds")
+            else int(environment[name]) for field, name in names.items()})
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(str(exc)) from None

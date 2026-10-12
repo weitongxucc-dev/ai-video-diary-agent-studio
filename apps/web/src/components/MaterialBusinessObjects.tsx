@@ -1,5 +1,6 @@
 "use client";
 
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { useEffect, useRef, useState } from "react";
 import type { BusinessObjectKind, MaterialBusinessObject } from "@/lib/types";
 import styles from "./MaterialLibraryControls.module.css";
@@ -237,15 +238,15 @@ export function MaterialBusinessObjects({
 
       <label>
         类型
-        <select
+        <AppSelect
           disabled={!canOperate || busy}
-          onChange={event => setDraftState(current => ({ ...current, kind: event.target.value as BusinessObjectKind }))}
+          onValueChange={newValue => setDraftState(current => ({ ...current, kind: newValue as BusinessObjectKind }))}
           value={draft.kind}
         >
           {kindOptions.map(option => (
-            <option key={option.value} value={option.value}>{option.label}</option>
+            <AppSelectOption key={option.value} value={option.value}>{option.label}</AppSelectOption>
           ))}
-        </select>
+        </AppSelect>
       </label>
       <label>
         名称

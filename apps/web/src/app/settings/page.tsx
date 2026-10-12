@@ -4,8 +4,10 @@ import {
   updateProductionProfileAction,
   updateRuntimeSettingsAction,
 } from "@/app/actions";
+import { SettingsHelpButton } from "@/components/SettingsHelpButton";
+import { SettingsAppearance } from "@/components/SettingsAppearance";
+import { SettingsCreators } from "@/components/SettingsCreators";
 import { AppShell } from "@/components/AppShell";
-import { DirectoryPickerButton } from "@/components/DirectoryPickerButton";
 import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { LlmProviderFields } from "@/components/LlmProviderFields";
 import { AsrFields, FieldRow, type FieldDef } from "@/components/SettingsFields";
@@ -25,6 +27,7 @@ import type {
 } from "@/lib/types";
 
 import styles from "./llm-service-state.module.css";
+import own from "./SettingsWorkspace.module.css";
 
 export const dynamic = "force-dynamic";
 
@@ -175,7 +178,7 @@ function LlmServiceBadge({ settings }: { settings: RuntimeSettingItem[] }) {
   const view = llmServiceView(settings);
   return (
     <span
-      className={`settings-connection-state ${styles[view.tone]} ${
+      className={`settings-connection-state ${own[view.tone]} ${
         view.state === "available" ? "is-ready" : ""
       }`}
       data-llm-service-state={view.state}
@@ -190,9 +193,9 @@ function LlmServiceBadge({ settings }: { settings: RuntimeSettingItem[] }) {
 function LlmServiceDetail({ settings }: { settings: RuntimeSettingItem[] }) {
   const view = llmServiceView(settings);
   return (
-    <p className={styles.detail} data-testid="llm-service-detail">
+    <details className={own.help}><summary>状态依据与修复</summary><p className={styles.detail} data-testid="llm-service-detail">
       {view.detail} {view.nextStep}
-    </p>
+    </p></details>
   );
 }
 
@@ -208,11 +211,11 @@ function buildFields(
 
   return {
     paths: [
-      { name: "understanding_runtime_python_path", label: "画面理解 Python", kind: "file", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
-      { name: "native_ocr_worker_path", label: "本地 OCR 程序", kind: "file", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
+      { name: "understanding_runtime_python_path", label: "画面理解程序", kind: "file", defaultValue: valueOf("UNDERSTANDING_RUNTIME_PYTHON_PATH"), helper: "Qwen3-VL 独立运行环境；模型、环境和缓存建议一起放在外接盘。" },
+      { name: "native_ocr_worker_path", label: "画面文字程序", kind: "file", defaultValue: valueOf("NATIVE_OCR_WORKER_PATH"), helper: "macOS Vision OCR 的本地可执行文件。" },
       {
         name: "obsidian_vault_path",
-        label: "Obsidian Vault 路径",
+        label: "本地资料目录",
         helper: "存放选题素材与每日日记的 Vault 根目录。",
         kind: "directory",
         defaultValue: valueOf("OBSIDIAN_VAULT_PATH"),
@@ -252,7 +255,7 @@ function buildFields(
       },
       {
         name: "database_path",
-        label: "SQLite 数据库",
+        label: "数据库文件",
         helper: "选择已有的 SQLite 数据库文件，保存只更改使用位置，不会搬迁现有数据。",
         kind: "file",
         defaultValue: valueOf("DATABASE_PATH"),
@@ -314,7 +317,7 @@ function buildFields(
       },
       {
         name: "tencentcloud_asr_region",
-        label: "ASR Region",
+        label: "腾讯云区域",
         helper: "腾讯云 ASR 服务区域，常见 ap-shanghai / ap-guangzhou。",
         kind: "text",
         defaultValue:
@@ -324,7 +327,7 @@ function buildFields(
       },
       {
         name: "tencentcloud_asr_engine_model_type",
-        label: "ASR Engine",
+        label: "腾讯云引擎",
         helper: "腾讯云引擎模型类型，常见 16k_zh_en / 16k_zh。",
         kind: "text",
         defaultValue:
@@ -377,7 +380,7 @@ function buildFields(
       },
       {
         name: "topic_source_urls",
-        label: "Topic Source URLs",
+        label: "资料来源链接",
         helper: "外链素材列表，每行一个 URL 或逗号分隔。",
         kind: "textarea",
         defaultValue: status.external_sources.urls.join("\n"),
@@ -388,25 +391,38 @@ function buildFields(
 
 
 type SettingsCategory =
-  "model" | "production" | "voices" | "paths" | "asr" | "sources";
+  "model" | "production" | "voices" | "paths" | "asr" | "sources" | "creators" | "appearance" | "runtime" | "about";
 
 const SETTINGS_CATEGORIES: Array<{
   id: SettingsCategory;
   label: string;
   description: string;
 }> = [
+  { id: "creators", label: "创作者与成员", description: "当前身份与成员名册" },
+  { id: "appearance", label: "外观", description: "界面主题" },
   { id: "model", label: "对话服务", description: "模型服务、能力与连接" },
   { id: "production", label: "制作习惯", description: "文案时长与品牌" },
   { id: "voices", label: "声音库", description: "默认声音与授权" },
   { id: "paths", label: "保存位置", description: "移动硬盘与输出" },
   { id: "asr", label: "听写设置", description: "云端与本地 ASR" },
   { id: "sources", label: "资料来源", description: "知识库与外部来源" },
+  { id: "runtime", label: "运行与诊断", description: "本机检查和修复" },
+  { id: "about", label: "关于与隐私", description: "帮助、法律和使用说明" },
+];
+
+const SETTINGS_GROUPS: Array<{ id: string; label: string; sections: SettingsCategory[] }> = [
+  { id: "mine", label: "我的", sections: ["creators"] },
+  { id: "appearance", label: "外观", sections: ["appearance"] },
+  { id: "creation", label: "创作", sections: ["model", "production", "voices", "asr"] },
+  { id: "files", label: "文件与资料", sections: ["paths", "sources"] },
+  { id: "runtime", label: "运行", sections: ["runtime"] },
+  { id: "about", label: "关于", sections: ["about"] },
 ];
 
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ section?: string }>;
+  searchParams?: Promise<{ section?: string; member?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const requestedSection = params.section ?? "model";
@@ -415,6 +431,7 @@ export default async function SettingsPage({
   )
     ? (requestedSection as SettingsCategory)
     : "model";
+  const activeGroup = SETTINGS_GROUPS.find(group => group.sections.includes(activeCategory))!;
   const { runtime, models, foundation, offline } = await loadSettings();
   const profile = foundation?.profile;
   const settingItems = runtime?.settings ?? [];
@@ -447,12 +464,12 @@ export default async function SettingsPage({
               </dd>
             </div>
             <div>
-              <dt>ffmpeg</dt>
-              <dd>{status?.video.ffmpeg_available ? "可用" : "不可用"}</dd>
+              <dt>视频编码工具</dt>
+              <dd>{!status ? "暂时无法读取配置" : status.video.ffmpeg_available ? "已找到程序" : "未找到程序"}</dd>
             </div>
             <div>
               <dt>数据库</dt>
-              <dd>{status?.storage.database_exists ? "已创建" : "未创建"}</dd>
+              <dd>{!status ? "暂时无法读取配置" : status.storage.database_exists ? "已创建" : "未创建"}</dd>
             </div>
           </dl>
           <p>密钥只显示是否已填写，不会返回原文。</p>
@@ -460,28 +477,25 @@ export default async function SettingsPage({
       }
       inspectorTitle="设置状态"
     >
-      <div className="workspace-page settings-page">
-        <header className="settings-category-panel">
+      <div className={`workspace-page ${own.page}`}>
+        <header className={`settings-category-panel ${own.categoryPanel}`}>
           <nav className="settings-category-nav" aria-label="设置分类">
-            {SETTINGS_CATEGORIES.map((item) => (
-              <Link
-                aria-current={activeCategory === item.id ? "page" : undefined}
-                className={activeCategory === item.id ? "is-active" : ""}
-                href={`/settings?section=${item.id}`}
-                key={item.id}
-              >
-                <strong>{item.label}</strong>
-
-              </Link>
-            ))}
+            {SETTINGS_GROUPS.map(group => <Link
+              aria-current={activeGroup.id === group.id ? "page" : undefined}
+              className={activeGroup.id === group.id ? "is-active" : undefined}
+              href={`/settings?section=${activeGroup.id === group.id ? activeCategory : group.sections[0]}`}
+              key={group.id}
+            >{group.label}</Link>)}
           </nav>
-          <details className="settings-legal"><summary>使用须知</summary><nav aria-label="法律信息">
-            <Link href="/privacy">隐私政策</Link>
-            <Link href="/terms">使用条款</Link>
-          </nav></details>
         </header>
-        <section className="workspace-main ui-panel">
+        <section className={own.main}>
+          {activeGroup.sections.length > 1 ? <nav className={own.subnav} aria-label="设置项目">{activeGroup.sections.map(section => <Link key={section} href={`/settings?section=${section}`} aria-current={activeCategory === section ? "page" : undefined}>{SETTINGS_CATEGORIES.find(item => item.id === section)!.label}</Link>)}</nav> : null}
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
+          {activeCategory === "creators" ? <SettingsCreators selectedMemberId={params.member} /> : null}
+          {activeCategory === "appearance" ? <section className={own.auxiliary} aria-label="外观设置"><h2>外观</h2><SettingsAppearance /></section> : null}
+          {activeCategory === "runtime" ? <section className={own.auxiliary} aria-label="运行与诊断"><h2>运行与诊断</h2><Link href="/health">打开运行情况与修复入口</Link><Link href="/settings?section=paths">本地模型安装与路径诊断</Link><Link href="/settings?section=model">对话服务状态与连接</Link></section> : null}
+          {activeCategory === "about" ? <section className={own.auxiliary} aria-label="关于与隐私"><h2>智能视频日记</h2><SettingsHelpButton/><nav aria-label="法律与帮助"><Link href="/privacy">隐私政策</Link><Link href="/terms">使用条款</Link><Link href="/health">运行检查与技术诊断</Link></nav><details><summary>数据与模型使用说明</summary><p>本地素材处理使用本机能力；对话和文案使用你配置的文字服务。发送范围、凭据与外部服务费用在相应设置中说明。原始音视频不会因普通文字对话自动上传。</p></details></section> : null}
+
 
           {activeCategory === "model" ? (
             <FormErrorBanner
@@ -544,11 +558,9 @@ export default async function SettingsPage({
                 hidden={activeCategory !== "production"}
               >
                 <div>
-                  <span className="section-kicker">生产默认值</span>
                   <h2>文案与成片</h2>
                   <p>
-                    新内容默认以 90 秒为目标，但可按工作区设置制作 5
-                    分钟或更长视频。
+                    作为新任务的制作范围，单个任务可另行调整。
                   </p>
                 </div>
               </div>
@@ -711,7 +723,7 @@ export default async function SettingsPage({
                 return (
                   <fieldset
                     aria-labelledby={`settings-section-${section.id}`}
-                    className={`settings-section ${section.tone}`}
+                    className={`settings-section ${own.section}`}
                     key={section.id}
                   >
                     <legend className="settings-section-legend">
@@ -722,9 +734,9 @@ export default async function SettingsPage({
                         {section.title}
                       </strong>
                     </legend>
-                    <p className="settings-section-description">
+                    <details className={own.help}><summary>使用说明</summary><p>
                       {section.description}
-                    </p>
+                    </p></details>
                     <div className="settings-grid">
                       {section.id === "asr" ? <AsrFields fields={sectionFields} /> : sectionFields.map((field) => (
                         <FieldRow field={field} key={field.name} />
@@ -735,13 +747,13 @@ export default async function SettingsPage({
               })}
 
               {activeCategory === "paths" ? (
-                <ModelInstallPanel
+                <details className={own.help}><summary>本地模型安装与诊断</summary><ModelInstallPanel
                   modelRootPath={valueOfSetting(
                     settingItems,
                     "MODEL_ROOT_PATH",
                   )}
                   models={models}
-                />
+                /></details>
               ) : null}
 
               <div className="settings-actions">

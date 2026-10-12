@@ -466,8 +466,6 @@ def _profile() -> ProductionProfile:
 def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     from app.local_members import LocalMemberService
 
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="fixture-visual-preview", logical_ref="artifacts/fixture-visual-preview.mp4"))
     output_root = tmp_path / "output"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
@@ -800,6 +798,89 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
             "headers": [(b"x-local-member-token", member_token.encode("ascii"))],
         }),
     )
+
+
+def _granted_domain_preview_adapter(state, monkeypatch, capture=None):
+    """Use real membership/version/JobRun/permit/checkpoint for domain assertions.
+
+    This fixture's old-person file is an intentionally non-decodable lineage
+    receipt. Only media measurement/rendering is a seam here. Real decoding,
+    silence/size/duration checks remain in the separate real-media regressions.
+    """
+    from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.device_runtime import OwnerRegistration, build_device_runtime
+    from app.member_permits import MemberDeviceAccess
+    from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT
+    from app.host_resource_probes import HostProcessProbe
+    from _media_preview_test_fixtures import ControlledResources
+    actor = CreationExecutionActor(state.workspace_id,state.member.member_id)
+    def live_identity(candidate):
+        return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
+    access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
+    def facts(workspace,task_id,operation,arguments,original):
+        assert original==actor
+        current=state.production.get_creation_task(workspace,task_id)
+        assert current.owner_user_id==state.member.member_id
+        payload=state.production.get_creation_task_montage_plan(workspace,task_id)
+        stable={key:value for key,value in payload.items() if key not in {'status','message','updated_at','output_path','subtitle_path'}}
+        return {'base_version_id':current.current_timeline_version_id,'montage':stable}, {
+            'kind':'creation_render','execution_mode':'cpu_ffmpeg','threads':1,'timeout_seconds':10,'max_output_bytes':1024**2}
+    def render(workspace,task_id,inputs,path,context):
+        assert TASK_MEDIA_CONTEXT.get()[0].grant == context.grant
+        assert TASK_MEDIA_CONTEXT.get()[0].scheduler is context.scheduler
+        assert context.grant.workspace_id==state.workspace_id and context.grant.owner_type=='creation_job'
+        context.check()
+        state.preview_inputs.append(inputs)
+        if capture is not None:capture(inputs)
+        path.write_bytes(b'domain-render-receipt')
+    def measure(self,path,operation,inputs,context):
+        context.check()
+        duration=(min(5,inputs['clip']['timeline_end_seconds']-inputs['clip']['timeline_start_seconds'])
+                  if 'clip' in inputs else inputs['plan']['duration_seconds'])
+        return {'duration_seconds':duration,'sample_rate':None,'channels':None}
+    def validate(job,event,result,context):
+        context.check()
+        assert state.production.get_job_run(job.workspace_id,job.id).status=='running'
+    state.preview_inputs=[]
+    def execute(job,event,original):
+        try:return main_module._execute_task_media_operation(job,event,original)
+        except Exception as exc:
+            state.preview_error=repr(exc)
+            raise
+    media=TaskMediaJobs(state.production,facts=facts,execute_operation=execute,
+        validate_result=validate,verify_identity=access.verify_identity)
+    runtime=build_device_runtime(database_path=state.production.database_path,
+        device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
+        registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
+            verify_identity=access.verify_identity,task_media=media),CreationJobUnitExecutor(state.production,
+            render_action=None,render_is_valid=None,task_media=media))},resources=ControlledResources(),
+        processes=HostProcessProbe())
+    state.preview_runtime=runtime
+    monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
+    def permit(request,workspace):
+        member=state.members.resolve_member(request.headers.get('x-local-member-token'))
+        assert member.member_id==actor.member_id and workspace==actor.workspace_id
+        return actor
+    monkeypatch.setattr(main_module,'_require_permit_actor',permit)
+    monkeypatch.setattr(main_module,'_task_audio',lambda:TaskAudio(state.production,main_module.artifact_store,
+        main_module.settings.effective_temporary_root_path,picture_renderer=render))
+    monkeypatch.setattr(TaskAudio,'_measure_publication',measure)
+    # The domain tests use persisted receipts, not claims of playable video.
+    monkeypatch.setattr(main_module,'_task_media_outputs_current',lambda job:True)
+    original_post=state.client.post
+    def post(*args,**kwargs):
+        response=original_post(*args,**kwargs)
+        if response.status_code!=202:return response
+        receipt=response.json()
+        assert receipt['result'] is None and receipt['device_request_id']
+        assert runtime.run_once()
+        completed=state.client.get(receipt['result_url'])
+        assert completed.status_code==200 and completed.json()['status']=='succeeded',(completed.text,getattr(state,'preview_error',None))
+        response.status_code=200
+        response._content=json.dumps(completed.json()['result']).encode()
+        return response
+    state.client.post=post
+    return runtime
 
 
 @pytest.fixture
@@ -1384,7 +1465,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
         ],
     )
     asset = _asset(tmp_path)
-    plan = MontagePlanner().build_for_creation_task(
+    plan = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a",
         task_id="task_1",
         script=script,
@@ -1423,7 +1504,7 @@ def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
         ) for index, (section_id, _) in enumerate(sections)],
     )
     chosen = select_presenter_sections(sections, 20)
-    plan = MontagePlanner().build_for_creation_task(
+    plan = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a", task_id="task_mix", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"),
         assets=[_asset(tmp_path)],
@@ -1444,7 +1525,7 @@ def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
     assert plan.duration_seconds == pytest.approx(20.0)
     assert plan.presenter_share_target == 20
 
-    all_face = MontagePlanner().build_for_creation_task(
+    all_face = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a", task_id="task_mix", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"), assets=[],
         media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
@@ -1534,12 +1615,27 @@ def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path, monk
             self.assert_grant(grant)
             self.children.append(child)
 
+    commands = []
+    import app.montage as montage_module
+    actual_runner = montage_module._run_granted_media_command
+    def record_runner(scheduler, grant, command, **kwargs):
+        commands.append(command.copy())
+        return actual_runner(scheduler, grant, command, **kwargs)
+    monkeypatch.setattr(montage_module, "_run_granted_media_command", record_runner)
     scheduler = RecordingGrant()
     rendered = MontageRenderer(tmp_path).render(
         plan, audio, job_staging_path=tmp_path / "job", scheduler=scheduler,
         grant="one-render-grant", deadline_monotonic=time.monotonic() + 90,
-        max_output_bytes=8 * 1024 * 1024, threads=1,
+        max_output_bytes=8 * 1024 * 1024, threads=2,
     )
+    encode = next(command for command in commands if command[0] == "ffmpeg")
+    inputs = [index for index, value in enumerate(encode) if value == "-i"]
+    assert len(inputs) == 3  # video, authorized narration, current subtitle image
+    assert all(encode[index - 2:index] == ["-threads", "2"] for index in inputs)
+    assert encode[encode.index("-threads:v") + 1] == "2"
+    assert encode[encode.index("-filter_threads") + 1] == "2"
+    assert encode[encode.index("-filter_complex_threads") + 1] == "2"
+    assert encode[encode.index("-fs") + 1] == str(8 * 1024 * 1024)
     assert rendered.status == "rendered"
     assert (tmp_path / "job" / "preview.mp4").stat().st_size <= 8 * 1024 * 1024
     assert len(scheduler.children) == 3  # duration probe, encoder, output probe
@@ -2428,8 +2524,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert current_tracks[0].transform_id is not None
 
     before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="fixture-crop-preview", logical_ref="artifacts/fixture-crop-preview.mp4"))
+    crop_state=SimpleNamespace(workspace_id=workspace_id,production=production,members=members,
+        member=member,client=client)
+    crop_runtime=_granted_domain_preview_adapter(crop_state,monkeypatch)
     crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
     crop_preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload)
     assert crop_preview.status_code == 200, crop_preview.text
@@ -2488,8 +2585,11 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
     assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
 
+    assert crop_runtime.stop(1)
 
 @pytest.mark.parametrize("visual_only", [False, True])
+
+
 def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     tmp_path, monkeypatch, visual_only
 ):
@@ -3404,7 +3504,7 @@ def test_creation_task_retrieval_uses_visual_requirement_without_changing_narrat
         embed_texts=lambda texts: observed_queries.extend(texts) or [[1.0, 0.0] for _ in texts])
     planner = MontagePlanner(semantic_provider=provider,
         visual_feature_loader=lambda _workspace, segment_id, _model: [1.0, 0.0] if segment_id == "relevant" else [0.0, 1.0])
-    plan = planner.build_for_creation_task(workspace_id="workspace_a", task_id="task", script=script,
+    plan = planner.build_for_creation_task(duration_target_seconds=90, workspace_id="workspace_a", task_id="task", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"), assets=[replace(asset, segments=[spoken_only, relevant])],
         media_reference_for_asset=lambda _: "workspace://source.mp4",
         narration_audio_path="narration://artifact/test", narration_duration_seconds=4)
@@ -3790,15 +3890,14 @@ def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_rende
     base = f"/api/creation-tasks/{state.task.id}"
     clip = state.montage.clips[1]
     seen_rates = []
-    def publish(*args, **kwargs):
-        seen_rates.append(main_module.clip_playback_rate(args[5]))
-        return SimpleNamespace(id=f"preview-{len(seen_rates)}", logical_ref=f"artifacts/preview-{len(seen_rates)}.mp4")
-    monkeypatch.setattr(main_module, "publish_color_preview", publish)
+    def capture(inputs):
+        seen_rates.append(main_module.clip_playback_rate(MontageClip(**inputs['clip'])))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,capture)
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为0.5倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert preview.status_code == 200, preview.text
     assert seen_rates == [1, .5]
-    assert preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("preview-2")
+    assert preview.json()["proposal"]["preview"]["after"]["video_url"].startswith(base+"/visual/artifacts/")
     response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert response.status_code == 200, response.text
     after = state.client.get(base).json()
@@ -3819,6 +3918,7 @@ def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_rende
     assert response.status_code == 409 and "口型" in response.text
     response = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为9倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert response.status_code == 422
+    assert runtime.stop(1)
 
 
 def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(person_render_edit_state, monkeypatch):
@@ -3830,7 +3930,6 @@ def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(
         return SimpleNamespace(id=f"preview-{len(published)}", logical_ref=f"artifacts/audio-{len(published)}.wav")
     service = SimpleNamespace(source=lambda *args: main_module.Path("fixture.wav"), publish=publish, validate=lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs: SimpleNamespace(id="visual-preview", logical_ref="artifacts/preview.mp4"))
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeLinkedSpeed", "clip_id":state.montage.clips[1].id,"playback_rate":2})
     assert preview.status_code == 200, preview.text
@@ -3977,10 +4076,7 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     seen=[]
-    def local_preview(*args,**kwargs):
-        seen.append(kwargs['aspect_ratio'])
-        return SimpleNamespace(id='canvas-preview',logical_ref='artifacts/canvas.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',local_preview)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:seen.append(inputs['plan']['aspect_ratio']))
     from copy import deepcopy
     locked=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
     locked['clips'][0]['locked']=True
@@ -3991,6 +4087,14 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
         assert seen==[]
     preview=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio,'fit_mode':'fit'})
     assert preview.status_code==200,preview.text
+    with state.production._connect() as conn:
+        saved = conn.execute("SELECT e.payload_json FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id AND j.id=e.job_id "
+            "WHERE e.event_type='task_media_submitted' AND j.workspace_id=? AND j.task_id=? ORDER BY j.created_at DESC LIMIT 1",
+            (state.workspace_id,state.task.id)).fetchone()
+    saved_payload=json.loads(saved['payload_json'])['arguments']['payload']
+    assert set(saved_payload)=={'operation_type','aspect_ratio','fit_mode'}
+    restored=main_module.CreationTaskExactEditRequest.model_validate(saved_payload)
+    assert restored.model_fields_set=={'operation_type','aspect_ratio','fit_mode'}
     assert seen==['9:16',ratio]
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
     confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
@@ -4004,6 +4108,7 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
+    assert runtime.stop(1)
 
 
 @pytest.mark.parametrize("status", ["unavailable", "failed"])
@@ -4041,8 +4146,8 @@ def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history
                 (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
                 ("valid", None, None, None),
             ]
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="canvas-preview", logical_ref="artifacts/canvas.mp4"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
+        pytest.fail("ordinary canvas draft must not encode media"))
 
     changed = state.client.post(base + "/edits/exact", json={"operation_type": "ChangeCanvas", "aspect_ratio": "1:1"})
     assert changed.status_code == 200, changed.text
@@ -4088,7 +4193,7 @@ def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_e
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     selected=before['montage']['clips'][0]
-    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(id='geometry',logical_ref='artifacts/geometry.mp4'))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch)
     preview=state.client.post(base+'/edits/preview',json={'context_stage':'montage','raw_command':'当前镜头缩小到0.8倍','selected_object_refs':[f"clip:{selected['id']}"]})
     assert preview.status_code==200,preview.text
     assert preview.json()['proposal']['operation']['payload']['effects']['zoom']==.8
@@ -4102,6 +4207,7 @@ def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_e
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_state,monkeypatch):
@@ -4113,15 +4219,15 @@ def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_
     plan['clips'][0]['source_end_seconds']=3
     monkeypatch.setattr(state.production,'get_creation_task_montage_plan',lambda *args:plan)
     ranges=[]
-    def capture(*args,**kwargs):
-        target=args[5]
-        ranges.append((target.source_start_seconds,target.source_end_seconds))
-        return SimpleNamespace(id='geometry-person',logical_ref='artifacts/geometry-person.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',capture)
+    def capture(inputs):
+        target=inputs['plan']['clips'][0]
+        ranges.append((target['source_start_seconds'],target['source_end_seconds']))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,capture)
     response=state.client.post(f'/api/creation-tasks/{state.task.id}/visual/preview',json={
         'base_version_id':version.id,'clip_ids':[plan['clips'][0]['id']],'effects':{'zoom':.8}})
     assert response.status_code==200,response.text
     assert ranges==[(1,3),(1,3)]
+    assert runtime.stop(1)
 
 
 def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_state,monkeypatch):
@@ -4131,10 +4237,7 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
     limits=[]
-    def publish(*args,**kwargs):
-        limits.append(kwargs['max_seconds'])
-        return SimpleNamespace(id='fade',logical_ref='artifacts/fade.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:limits.append(None))
     invalid=state.client.post(base+'/visual/preview',json={'base_version_id':before['task']['current_timeline_version_id'],
         'clip_ids':[c['id'] for c in before['montage']['clips']],'effects':{'fade_in_seconds':5,'fade_out_seconds':5}})
     assert invalid.status_code==422 and not limits
@@ -4153,6 +4256,7 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
@@ -4331,10 +4435,7 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     before=state.client.get(base).json()
     clip_id=before['montage']['clips'][0]['id']
     calls=[]
-    def publish(*args,**kwargs):
-        calls.append(True)
-        return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:calls.append(True))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f'clip:{clip_id}']})
     assert preview('亮一点，加上闪电特效').status_code==422
     assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
@@ -4350,6 +4451,7 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state,monkeypatch):
@@ -5130,7 +5232,7 @@ def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notic
         return [] if mode=='invalid_count' else [[1.0,0.0] for _ in texts]
     provider=SimpleNamespace(ready=mode!='unavailable',model_id='test-local',embed_texts=embed)
     planner=MontagePlanner(semantic_provider=provider,visual_feature_loader=lambda *_:None if mode=='missing_index' else [1.0,0.0])
-    plan=planner.build_for_creation_task(workspace_id='workspace_a',task_id='diagnostic-task',script=script,
+    plan=planner.build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id='diagnostic-task',script=script,
         profile=ProductionProfile(workspace_id='workspace_a'),assets=[replace(asset,segments=[segment])],
         media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
     assert plan.clips[0].needs_confirmation is True
@@ -5149,14 +5251,14 @@ def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,r
     asset=_asset(tmp_path)
     asset=replace(asset,segments=[replace(asset.segments[0],end_seconds=20)])
     asset=ProductionRepository._asset_from_payload({**asdict(asset),"rights_confirmed":rights,"brand_safe":brand})
-    plan=MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+    plan=MontagePlanner().build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id=script.task_id,script=script,
         profile=ProductionProfile(workspace_id='workspace_a'),assets=[asset],
         media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
     assert plan.clips[0].asset_id==asset.id
     # Removing obsolete proof flags must not remove explicit exclusion or review.
     for excluded in [replace(asset,review_status='rejected'),replace(asset,usage_role='exclude',segments=[replace(asset.segments[0],usage_role='exclude')])]:
         with pytest.raises(ValueError,match='可用素材库'):
-            MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+            MontagePlanner().build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id=script.task_id,script=script,
                 profile=ProductionProfile(workspace_id='workspace_a'),assets=[excluded],
                 media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
 
@@ -5193,11 +5295,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     target=before['montage']['clips'][1]
     original_fit,original_y=target['fit_mode'],target['crop_y']
     publishes=[]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
-        publish=lambda *args,**kwargs:publishes.append(kwargs.get('kind')) or
-        SimpleNamespace(id='crop-preview',logical_ref='artifacts/crop-preview.mp4'),
-        validate_material_use=lambda *args:None))
-
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:publishes.append(inputs))
     # 明确单轴指令：画面预览不写时轴、不派生声音、不动另一轴和原 fit_mode
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 20%','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
@@ -5241,11 +5339,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert vague.status_code==422,vague.text
     assert '缺少可执行参数' in vague.json()['detail']
 
-    # 改画幅仍走 ChangeCanvas 既有链路，不被编成裁剪。画幅预览直调 publish_color_preview（不经过
-    # _task_audio），必须单独替换，否则这里会真调 ffmpeg。夹具本身就是 9:16，先切到 16:9，
-    # 「改成竖版」才是真的改画幅而不是撞上「画幅与适配方式没有变化」的 409。
-    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(
-        id='canvas-preview',logical_ref='artifacts/canvas-preview.mp4'))
+    # 改画幅沿当前持久 Job/grant 回读，不被编成单轴裁剪。
     wide=state.client.post(base+'/edits/preview',json={'raw_command':'改成横版','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
     assert wide.status_code==200,wide.text
@@ -5262,6 +5356,9 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert state.client.get(base).json()['montage']['aspect_ratio']=='16:9'
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
+
+    assert len(publishes)==4
+    publishes.clear()
 
     # 时间线在预览后变化：旧提案确认被拒
     stale=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 40%','context_stage':'montage',
@@ -5282,6 +5379,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert locked.status_code==409,locked.text
     assert '请先解锁' in locked.json()['detail']
     assert publishes==[]
+    assert runtime.stop(1)
 
 
 def test_v3_exact_draft_persists_and_restores_only_registered_output(person_render_edit_state, monkeypatch, tmp_path):
@@ -5410,7 +5508,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert not main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=unsealed,
     )
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
     jobs_before = state.production.list_job_runs(state.workspace_id, state.task.id)
     changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"1:1"})
     assert changed.status_code == 200, changed.text
@@ -5440,7 +5538,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
 def test_v3_natural_proposal_applies_once_without_media(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *a, **kw: pytest.fail("draft proposal must not encode media"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("draft proposal must not encode media"))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     proposal = state.client.post(base + "/edits/preview?draft=true", json={
         "raw_command":"露脸占比调到0%", "context_stage":"montage", "selected_object_refs":[]})
@@ -5654,3 +5752,23 @@ def test_failed_person_edit_requires_new_preview_and_reuses_concurrent_active_re
     assert len(_person_edit_versions(state)) == 2
     assert len(state.provider.output_cache_keys) == 1
     assert not state.runtime.run_once()
+
+
+def test_tag_and_observation_relevance_precedes_semantic_similarity_and_repeat_preference(tmp_path):
+    from app.visual_understanding import SegmentUnderstanding
+    asset = _asset(tmp_path)
+    cue = NarrationCue(id="cue", source_section_id="section", text="人物走路", duration_seconds=2)
+    irrelevant = replace(asset.segments[0], description="电脑键盘特写", user_tags=[], system_tags=[], usage_count=0)
+    tagged = replace(irrelevant, description="街道画面", user_tags=["人物走路"], usage_count=100)
+    observed = replace(irrelevant, description="", understanding=SegmentUnderstanding("ready", summary="街道",
+        facts=[{"kind": "action", "label": "人物走路", "text": "人物走路穿过街道", "sample_times": [.3, 1.7]}]))
+    unrelated = _score_candidate(cue, asset, irrelevant, 0, 0, visual_score=1.0, visual_only=True)
+    by_tag = _score_candidate(cue, asset, tagged, 10, 10, visual_score=0.0, visual_only=True)
+    by_observation = _score_candidate(cue, asset, observed, 0, 0, visual_score=0.0, visual_only=True)
+    assert by_tag[0] > unrelated[0]
+    assert by_observation[0] > unrelated[0]
+    assert "标签依据：人物走路" in by_tag[-1]
+    assert any("主体、动作或场景命中" in reason for reason in by_observation[-1])
+    # A manual correction continues to shadow contradictory model observations.
+    corrected = replace(observed, description="这是电脑键盘特写", system_tags=[])
+    assert _score_candidate(cue, asset, corrected, 0, 0, visual_only=True)[0] < by_observation[0]

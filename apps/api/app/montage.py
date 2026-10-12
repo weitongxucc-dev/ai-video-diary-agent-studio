@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from collections.abc import Callable
 from dataclasses import replace, asdict, dataclass, field
 from datetime import datetime
+from decimal import Decimal, ROUND_CEILING
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -413,6 +414,7 @@ class MontagePlanner:
         task_id: str,
         script: CreationTaskScript,
         profile: ProductionProfile,
+        duration_target_seconds: int,
         assets: list[MaterialAsset],
         media_reference_for_asset: Callable[[str], str],
         narration_audio_path: str,
@@ -440,7 +442,7 @@ class MontagePlanner:
         cues = _build_creation_task_cues(
             script,
             min_seconds=profile.target_duration_min_seconds,
-            max_seconds=profile.target_duration_max_seconds,
+            max_seconds=duration_target_seconds,
             narration_duration_seconds=narration_duration_seconds,
             narration_segment_ids_by_section=narration_segment_ids_by_section,
             narration_segment_durations_by_section=narration_segment_durations_by_section,
@@ -659,6 +661,8 @@ class MontageRenderer:
         threads: int | None = None,
         deadline_monotonic: float | None = None,
     ) -> MontagePlan | CreationTaskMontagePlan:
+        if isinstance(plan, CreationTaskMontagePlan) and (scheduler is None or grant is None):
+            raise PermissionError("CreationTask 媒体渲染必须取得设备许可")
         if (scheduler is None) != (grant is None):
             raise ValueError("渲染许可和调度器必须一起提供")
         if grant is not None and (max_output_bytes is None or max_output_bytes <= 0
@@ -685,7 +689,7 @@ class MontageRenderer:
             narration_duration = self.audio_duration(narration_path, scheduler=scheduler, grant=grant,
                                                      cancel_event=cancel_event,
                                                      deadline_monotonic=deadline_monotonic)
-            # Allow encoder padding, but never let -shortest silently truncate a changed voice track.
+            # Allow encoder padding, but reject a changed voice before bounding the picture output.
             if abs(narration_duration - plan.duration_seconds) > 0.25:
                 raise ValueError("配音与剪辑时长不一致，请按当前配音重新生成故事板后渲染。")
             if job_staging_path is None:
@@ -729,22 +733,35 @@ class MontageRenderer:
                         subtitle_overlays.append(path)
                 intervals=([(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else
                     [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips])
+                subtitle_sequence = None
                 if isinstance(plan, CreationTaskMontagePlan):
+                    if schedule:
+                        subtitle_sequence = _write_timed_subtitle_input(
+                            schedule, subtitle_overlays, Path(overlay_dir),
+                            size=canvas_size(plan.aspect_ratio), duration_seconds=plan.duration_seconds,
+                        )
                     graphics=validate_overlays(plan.graphic_overlays,plan.duration_seconds)
                     graphic_paths=[]
                     for index,graphic in enumerate(graphics):
                         path=Path(overlay_dir)/f"graphic-{index}.png"
                         write_graphic_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
                         graphic_paths.append(path)
-                    subtitle_overlays=graphic_paths+subtitle_overlays
-                    intervals=[(item.start_seconds,item.end_seconds) for item in graphics]+intervals
+                    subtitle_overlays=graphic_paths
+                    intervals=[(item.start_seconds,item.end_seconds) for item in graphics]
                 command = self.build_command(
                     plan, narration_path, output_path, subtitle_overlays,
                     subtitle_intervals=intervals,
+                    subtitle_sequence=subtitle_sequence,
                 )
                 if grant is None:
                     self.runner(command)
                 else:
+                    bounded_command: list[str] = []
+                    for argument in command:
+                        if argument == "-i":
+                            bounded_command.extend(["-threads", str(threads)])
+                        bounded_command.append(argument)
+                    command = bounded_command
                     command[2:2] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
                     command[-1:-1] = ["-threads:v", str(threads), "-fs", str(max_output_bytes)]
                     _run_granted_media_command(scheduler, grant, command, timeout_seconds=None,
@@ -785,6 +802,8 @@ class MontageRenderer:
         output_path: Path,
         subtitle_overlays: list[Path],
         subtitle_intervals: list[tuple[float,float]] | None = None,
+        *,
+        subtitle_sequence: tuple[Path, tuple[int, int]] | None = None,
     ) -> list[str]:
         width,height = canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920)
         command = ["ffmpeg", "-y"]
@@ -822,6 +841,25 @@ class MontageRenderer:
                 f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
             )
             output_label = next_label
+        if subtitle_sequence is not None:
+            subtitle_manifest, (subtitle_x, subtitle_y) = subtitle_sequence
+            subtitle_input = audio_index + 1 + len(subtitle_overlays)
+            # Only our job-local manifest is consumed. Its image options require
+            # safe=0; the file-only protocol and generated relative names remain fixed.
+            command.extend(["-f", "concat", "-safe", "0", "-protocol_whitelist", "file",
+                            "-i", str(subtitle_manifest)])
+            filters.append(
+                f"[{subtitle_input}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]"
+            )
+            filters.append(
+                f"{output_label}[subtitleclock]overlay={subtitle_x}:{subtitle_y}:eof_action=pass:"
+                "repeatlast=0:shortest=0[vsubtitles]"
+            )
+            output_label = "[vsubtitles]"
+        picture_end_seconds = sum(
+            round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+            for clip in plan.clips
+        ) / 30
         command.extend(
             [
                 "-filter_complex",
@@ -832,7 +870,7 @@ class MontageRenderer:
                 f"{audio_index}:a:0",
                 "-af", ",".join([
                     *([] if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None else ["loudnorm", FINITE_LOUDNESS_FILTER]),
-                    f"apad=whole_dur={sum(round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30) for clip in plan.clips)/30:.10f}",
+                    f"apad=whole_dur={picture_end_seconds:.10f}",
                 ]),
                 "-c:v",
                 "libx264",
@@ -844,7 +882,7 @@ class MontageRenderer:
                 "aac",
                 "-ar",
                 "48000",
-                "-shortest",
+                *(["-t", f"{picture_end_seconds:.10f}"] if isinstance(plan, CreationTaskMontagePlan) else ["-shortest"]),
                 "-movflags",
                 "+faststart",
                 str(output_path),
@@ -1094,8 +1132,16 @@ def _score_candidate(
     visual_only: bool = False,
 ):
     automatic_description = segment.understanding.summary if segment.understanding and segment.understanding.status == "ready" else ""
+    # Manual description is a correction: stale model observations must not
+    # override it. User tags remain searchable regardless of that correction.
+    visual_facts = segment.understanding.facts if not segment.description and segment.understanding and segment.understanding.status == "ready" else []
+    related_tags = [tag for tag in (*segment.system_tags, *segment.user_tags, *asset.user_tags)
+                    if not tag.startswith("用途:")]
+    observation_text = " ".join(fact["text"] for fact in visual_facts)
     metadata = " ".join(item for item in (
-        segment.description or automatic_description or Path(asset.file_name).stem,
+        segment.description or automatic_description,
+        observation_text,
+        " ".join(related_tags),
         (segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds))
         if not visual_only else "",
     ) if item)
@@ -1119,6 +1165,10 @@ def _score_candidate(
         score = lexical_score * 0.72 + duration_score * 0.2
     else:
         score = lexical_score * 0.37 + max(0.0, visual_score) * 0.43 + duration_score * 0.12
+    # Actual visual/label overlap is the first ranking tier. Duration,
+    # repetition and vector similarity cannot promote an unrelated shot above it.
+    if lexical_score > 0:
+        score += 1.0
     if segment_usage == 0:
         score += 0.08
     score -= min(0.36, segment_usage * 0.22 + asset_usage * 0.04)
@@ -1133,8 +1183,13 @@ def _score_candidate(
             if visual_only else
             "自动观察命中相关内容；仍需核对画面，语音证据不能确认画面匹配"
         )
+    matching_tags = [tag for tag in related_tags if _tokens(tag.split(":", 1)[-1]) & cue_tokens]
+    if matching_tags:
+        reasons.append("标签依据：" + "、".join(matching_tags))
+    if observation_text and _tokens(observation_text) & cue_tokens:
+        reasons.append("片段观察中的主体、动作或场景命中画面要求")
     if visual_score is not None:
-        reasons.insert(1, f"画面向量相似度 {round(visual_score * 100)}%")
+        reasons.insert(1, f"画面语义排序分 {visual_score:.3f}（不是准确概率）")
     if segment_usage == 0:
         reasons.append("优先使用未重复镜头")
     else:
@@ -1198,6 +1253,78 @@ def _write_subtitle_overlays(
         _write_subtitle_image(cue,path)
         overlays.append(path)
     return overlays
+
+
+def _subtitle_frame_boundary(seconds: float) -> int:
+    # The existing overlay enables use six decimal places on a 30fps picture clock.
+    return int((Decimal(f"{seconds:.6f}") * 30).to_integral_value(rounding=ROUND_CEILING))
+
+
+def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, *,
+                                size: tuple[int, int], duration_seconds: float) -> tuple[Path, tuple[int, int]]:
+    """One bounded-cadence PNG stream with the same frame visibility/layer order."""
+    bounds = None
+    for path in images:
+        with Image.open(path) as layer:
+            # Alpha content is always retained. A zero-opacity colored panel
+            # also stores RGB with A=0; retain those bytes for exact RGBA recovery.
+            visible = layer.getbbox(alpha_only=False)
+        if visible is not None:
+            bounds = visible if bounds is None else (
+                min(bounds[0], visible[0]), min(bounds[1], visible[1]),
+                max(bounds[2], visible[2]), max(bounds[3], visible[3]),
+            )
+    if bounds is None:
+        bounds = (0, 0, *size)
+    # Every frame shares this box. Even offsets preserve the original positions
+    # when overlay negotiates yuv420 chroma coordinates; never shrink alpha edges.
+    crop = (bounds[0] // 2 * 2, bounds[1] // 2 * 2,
+            min(size[0], (bounds[2] + 1) // 2 * 2),
+            min(size[1], (bounds[3] + 1) // 2 * 2))
+    cropped_size = (crop[2] - crop[0], crop[3] - crop[1])
+    for path in dict.fromkeys(images):
+        with Image.open(path) as layer:
+            cropped = layer.crop(crop)
+        cropped.save(path)
+    # Match clip_video_filters' absolute picture endpoint, rather than rounding
+    # the six-decimal cue enable expression into an extra terminal frame.
+    frame_count = round(duration_seconds * 30)
+    spans = [(min(frame_count, _subtitle_frame_boundary(cue.start_seconds)),
+              min(frame_count, _subtitle_frame_boundary(cue.end_seconds))) for cue in schedule]
+    boundaries = sorted({0, frame_count, *(frame for span in spans for frame in span)})
+    transparent = output_dir / "subtitle-transparent.png"
+    Image.new("RGBA", cropped_size, (0, 0, 0, 0)).save(transparent)
+    frames: dict[tuple[int, ...], Path] = {(): transparent}
+    lines = ["ffconcat version 1.0"]
+    for start, end in zip(boundaries, boundaries[1:]):
+        active = tuple(index for index, (first, last) in enumerate(spans) if first <= start < last)
+        if active not in frames:
+            if len(active) == 1:
+                frames[active] = images[active[0]]
+            else:
+                composite = Image.new("RGBA", cropped_size, (0, 0, 0, 0))
+                for index in active:
+                    with Image.open(images[index]) as layer:
+                        composite.alpha_composite(layer)
+                frames[active] = output_dir / f"subtitle-composite-{len(frames):03}.png"
+                composite.save(frames[active])
+        # Concat stores durations in microseconds. Differences of absolute
+        # boundaries avoid accumulating rounding drift across many captions.
+        start_us = (start * 1_000_000 + 15) // 30
+        end_us = (end * 1_000_000 + 15) // 30
+        # A sparse PNG followed by fps needs the NEXT cue before it can emit;
+        # framesync also looks ahead. Emit current-image packets every 1/30s
+        # inside this single demuxer instead. The exclusive outpoint lies halfway
+        # after the last wanted packet, avoiding microsecond boundary rounding.
+        lines.extend([f"file {frames[active].name}", "option framerate 30", "option loop 1",
+                      f"outpoint {(end - start - .5) / 30:.6f}",
+                      f"duration {(end_us - start_us) / 1_000_000:.6f}"])
+    # One non-looped transparent frame at the exact end supplies EOF after the
+    # last picture frame; overlay passes the main picture after EOF, never text.
+    lines.extend([f"file {transparent.name}", "option framerate 30"])
+    manifest = output_dir / "subtitles.ffconcat"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest, (crop[0], crop[1])
 
 
 def _write_subtitle_image(cue, path: Path, *, size=(1080,1920)):
@@ -1623,3 +1750,50 @@ def _plan_from_payload(data: dict[str, object]) -> MontagePlan:
         cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
         clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
     )
+
+
+def probe_preview_video(path: Path, context, *, expected_size, expected_duration_seconds, silent=False):
+    """Check a granted preview as video; silent clips require no audio stream."""
+    context.check()
+    command = ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,duration:format=duration", "-of", "json", str(path)]
+    completed = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=30,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
+    data = json.loads(completed.stdout)
+    video = next((item for item in data.get("streams", []) if item.get("codec_type") == "video"), None)
+    audio = next((item for item in data.get("streams", []) if item.get("codec_type") == "audio"), None)
+    if (video is None or video.get("codec_name") != "h264"
+            or (video.get("width"), video.get("height")) != expected_size
+            or (silent and audio is not None) or (not silent and audio is None)):
+        raise ValueError("视频预览的画幅、编码或声音范围不符合请求")
+    duration = float(video.get("duration", data.get("format", {}).get("duration", 0)))
+    if not math.isfinite(duration) or abs(duration - expected_duration_seconds) > .1:
+        raise ValueError("视频预览未覆盖请求窗口或超出请求时长")
+    if not path.is_file() or path.stat().st_size <= 0 or path.stat().st_size > context.max_output_bytes:
+        raise ValueError("视频预览文件不符合许可输出上限")
+    return {"duration_seconds": duration, "sample_rate": None, "channels": None,
+            "width_px": video["width"], "height_px": video["height"], "silent": silent}
+
+
+def render_granted_clip_preview(clip, source: Path, output: Path, context, *, aspect_ratio, max_seconds=5):
+    from app.canvas import preview_size
+    from app.visual_effects import clip_video_filters, clip_playback_rate, VisualEffects
+    context.check()
+    if not 0 < max_seconds <= 5:
+        raise ValueError("镜头对比窗口必须在五秒以内")
+    effects = VisualEffects.model_validate(clip.visual_effects)
+    if effects.beauty_strength or effects.skin_exposure:
+        raise ValueError("本机人像效果尚无受许可执行路径")
+    width, height = preview_size(aspect_ratio)
+    rate = clip_playback_rate(clip)
+    source_duration = min(max_seconds * rate, clip.source_end_seconds - clip.source_start_seconds)
+    expected = min(max_seconds, clip.timeline_end_seconds - clip.timeline_start_seconds)
+    command = ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
+        "-filter_threads", str(context.threads), "-filter_complex_threads", str(context.threads),
+        "-ss", str(clip.source_start_seconds), "-t", str(source_duration), "-threads", str(context.threads), "-i", str(source),
+        "-vf", clip_video_filters(clip, width=width, height=height, max_seconds=max_seconds),
+        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-threads:v", str(context.threads), "-fs", str(context.max_output_bytes), "-movflags", "+faststart", str(output)]
+    result = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
+    probe_preview_video(output, context, expected_size=(width,height), expected_duration_seconds=expected, silent=True)
+    return output

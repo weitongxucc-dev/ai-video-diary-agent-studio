@@ -1,3 +1,4 @@
+import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
@@ -12,6 +13,7 @@ vi.mock("@/components/DesktopVoiceRecorder", () => ({ DesktopVoiceRecorder: (pro
   recorder.props = props;
   return <span>录音组件测试替身</span>;
 } }));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token:"test-member", role:"owner", ready:true, error:null, refresh:vi.fn() }) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector, conversation }: { children: React.ReactNode; inspector: React.ReactNode; conversation: React.ReactNode }) => <>{children}{inspector}{conversation}</> }));
 vi.mock("@/lib/api", () => ({
   getProductionMaterials: vi.fn(), getMaterialLibraryInsights: vi.fn(), getMaterialIntakeStatus: vi.fn(), getRuntimeSettings: vi.fn(), sendMaterialAssistantTurn: vi.fn(), bindMaterialIntake: vi.fn(), confirmMaterialCopyComplete: vi.fn(), scanMaterialIntake: vi.fn(), retryMaterialIntake: vi.fn(), updateMaterialUseState: vi.fn(), updateMaterialAssetTags: vi.fn(), updateProductionMaterialSegment: vi.fn(), updateMaterialNotes: vi.fn(), transcribeMaterialVoiceNote: vi.fn(), getMaterialBusinessObjects: vi.fn(), createMaterialBusinessObject: vi.fn(), getAssetBusinessObjects: vi.fn(), saveAssetBusinessObjects: vi.fn(), getAssetSegmentUsageRecords: vi.fn(),
@@ -35,6 +37,8 @@ vi.mock("@/lib/api", () => ({
     return conversation;
   }),
   listAssistantConversations: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ items: [...assistantFixtures.conversations.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
+  getAssistantConversationReference: vi.fn(async () => ({ selected_reference: null, reference_version: 0, status: "ready", reason: null })),
+  saveAssistantConversationReference: vi.fn(async (_id, selected_reference, expectedReferenceVersion) => ({ selected_reference, reference_version: expectedReferenceVersion + 1, status: "ready", reason: null })),
   getAssistantConversation: vi.fn(async (id: string) => assistantFixtures.conversations.get(id)!),
   resumeAssistantConversation: vi.fn(async (id: string) => {
     const conversation = assistantFixtures.conversations.get(id)!;
@@ -68,6 +72,7 @@ import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeSt
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
+import { AssistantConversationProvider, useAssistantMaterialReference } from "@/components/AssistantConversationProvider";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", visibility:"private", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
@@ -114,15 +119,51 @@ it("switches the material collection between cover grid and object rows", async 
   expect(within(collection).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
 });
 
+it("shows pending analysis and unknown duration without inventing a queue or manual execution action", async () => {
+  const waiting = { ...asset, analysis_status:"pending" as const, analysis_message:"复制完成确认已保存，正在分析；确认不代表文件通过校验。", duration_seconds:null, usage_role:"unassigned" as const, suggested_usage_role:"a_roll" as const, review_status:"raw" as const };
+  const waitingLibrary = { ...library, assets:[waiting] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(waitingLibrary);
+  render(<MaterialLibraryWorkspace initialLibrary={waitingLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const card = screen.getByRole("button", { name:/local\.mp4/ });
+  expect(within(card).getByText(/等待分析/)).toBeInTheDocument();
+  expect(within(card).getByText("时长未知")).toBeInTheDocument();
+  expect(within(card).getByText(/建议：人物主镜头/)).toBeInTheDocument();
+  fireEvent.click(card);
+  expect(screen.getByText("等待分析，完成时间暂未知。")).toBeInTheDocument();
+  expect(screen.getByText(waiting.analysis_message)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name:/开始分析|重新分析|重试分析/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/队列中|预计.*秒/)).not.toBeInTheDocument();
+});
+
+it("folds a pending backend diagnostic while keeping its original text", async () => {
+  const waiting = { ...asset, analysis_status:"pending" as const, analysis_message:"Error: source probe\n/Volumes/Test/source.mp4", duration_seconds:null };
+  const waitingLibrary = { ...library, assets:[waiting] };
+  render(<MaterialLibraryWorkspace initialLibrary={waitingLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  const diagnostic = screen.getByText("后台分析记录").closest("details")!;
+  expect(diagnostic).not.toHaveAttribute("open");
+  expect(diagnostic.textContent).toContain(waiting.analysis_message);
+  fireEvent.click(screen.getByText("后台分析记录"));
+  expect(screen.getByText("后台分析记录")).toBeInTheDocument();
+});
+
+it("keeps the reviewed role label when the saved role differs from a suggestion", async () => {
+  const reviewed = { ...asset, usage_role:"b_roll" as const, suggested_usage_role:"a_roll" as const };
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets:[reviewed] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const card = screen.getByRole("button", { name:/local\.mp4/ });
+  expect(within(card).getByText(/补充画面/)).toBeInTheDocument();
+  expect(within(card).queryByText(/建议：/)).not.toBeInTheDocument();
+});
+
 it("does not bind the automatic first material, then binds only explicit asset and segment picks", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  expect(screen.getByText("当前未选中素材或片段。"))
-    .toBeInTheDocument();
+  expect(screen.queryByLabelText("当前素材对话范围"))
+    .not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
   expect(screen.getByText(/当前范围：整条素材 · local\.mp4/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /0:01.*0:03/ }));
-  expect(screen.getByText(/当前范围：local\.mp4 · 片段 0:01–0:03 · 画面说明/)).toBeInTheDocument();
+  expect(screen.getByText(/当前范围：local\.mp4 · 片段 0:01–0:03/)).toBeInTheDocument();
 });
 
 it("shows asset labels and applies assistant readback only to the exact selected segment", async () => {
@@ -341,8 +382,8 @@ it.each([
     view = render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   });
   const usage = screen.getByRole("combobox", { name: "片段用途" });
-  expect(usage).toHaveValue(original);
-  fireEvent.change(usage, { target: { value: chosen } });
+  expect(usage).toHaveAttribute("data-selected-value", original);
+  await chooseSelectValue(usage, chosen);
   expect(updateProductionMaterialSegment).not.toHaveBeenCalled();
   expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${oldLabel}`)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
@@ -364,7 +405,7 @@ it.each([
   await act(async () => {
     render(<MaterialLibraryWorkspace initialLibrary={refreshed} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   });
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(chosen);
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", chosen);
   expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${newLabel}`)).toBeInTheDocument();
 });
 
@@ -392,15 +433,16 @@ it("preserves an explicitly selected material's unsaved description while it lea
 
 it("clears only the query with focus retained and resets all filters separately", async () => {
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  fireEvent.click(screen.getByRole("button", { name: "待审核" }));
+  await chooseSelectValue(screen.getByRole("combobox", { name: "审核状态筛选" }), "raw");
   const search = screen.getByRole("textbox", { name: "搜索素材" });
   fireEvent.change(search, { target: { value: "本周" } });
   fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
   expect(search).toHaveValue("");
   expect(search).toHaveFocus();
-  expect(screen.getByRole("button", { name: "待审核" })).toHaveClass("is-active");
+  expect(screen.getByRole("combobox", { name: "审核状态筛选" })).toHaveAttribute("data-selected-value", "raw");
   fireEvent.click(screen.getByRole("button", { name: "重置全部" }));
-  expect(within(screen.getByRole("group", { name: "审核状态筛选" })).getByRole("button", { name: /^全部$/ })).toHaveClass("is-active");
+  expect(screen.getByRole("combobox", { name: "审核状态筛选" })).toHaveAttribute("data-selected-value", "all");
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenLastCalledWith(expect.objectContaining({ query:"", reviewStatus:"all" })));
 });
 
 it("does not let a late search response replace a newer explicit selection", async () => {
@@ -430,7 +472,7 @@ it("keeps edits made from the initial preview anchored across filtering without 
   vi.mocked(updateProductionMaterialSegment).mockResolvedValue({ ...taggedAsset, segments: [{ ...segment, description: "预览草稿" }] });
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "预览草稿" } });
-  expect(screen.getByText("当前未选中素材或片段。")).toBeInTheDocument();
+  expect(screen.queryByLabelText("当前素材对话范围")).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "筛掉当前素材" } });
   await screen.findByText(/草稿已保留；找回该素材后可继续保存/);
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "" } });
@@ -461,6 +503,7 @@ it("keeps the last usable list visible and reports a failed search instead of sh
 
 it("keeps the directory location available while hiding it in the collapsed intake details", async () => {
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect(await screen.findByText("查看接入位置和检查结果")).toBeInTheDocument();
   expect(screen.getByText("/Volumes/Test/media")).not.toBeVisible();
   expect(screen.getByRole("button", { name: "确认接入" })).toBeInTheDocument();
@@ -472,10 +515,10 @@ it("preserves the segment usage choice and existing error when saving fails, the
     .mockRejectedValueOnce(new Error('{"detail":"片段暂时不可写"}'))
     .mockResolvedValueOnce({ ...taggedAsset, segments: [{ ...segment, usage_role: "a_roll", system_tags: ["用途:a_roll"] }] });
   render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "a_roll" } });
+  await chooseSelectValue(screen.getByRole("combobox", { name: "片段用途" }), "a_roll");
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await screen.findByText("片段暂时不可写");
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", "a_roll");
   expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled();
   expect(within(screen.getByLabelText("系统标签")).queryByText("用途:人物主镜头")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
@@ -491,18 +534,18 @@ it("rebinds the usage draft when switching segments or assets instead of saving 
   vi.mocked(getProductionMaterials).mockResolvedValue(initial);
   vi.mocked(updateProductionMaterialSegment).mockResolvedValueOnce({ ...firstAsset, segments: [segment, { ...second, usage_role: "b_roll" }] });
   render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "a_roll" } });
+  await chooseSelectValue(screen.getByRole("combobox", { name: "片段用途" }), "a_roll");
   fireEvent.click(screen.getByRole("button", { name: /第二片段/ }));
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
-  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "b_roll" } });
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", "a_roll");
+  await chooseSelectValue(screen.getByRole("combobox", { name: "片段用途" }), "b_roll");
   fireEvent.click(screen.getByRole("button", { name: /画面说明/ }));
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("b_roll");
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", "b_roll");
   fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("exclude");
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", "exclude");
   fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
   fireEvent.click(screen.getByRole("button", { name: /第二片段/ }));
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue("a_roll");
-  fireEvent.change(screen.getByRole("combobox", { name: "片段用途" }), { target: { value: "b_roll" } });
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", "a_roll");
+  await chooseSelectValue(screen.getByRole("combobox", { name: "片段用途" }), "b_roll");
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "second", expect.objectContaining({ usage_role: "b_roll", description: "第二片段" })));
   await waitFor(() => expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled());
@@ -517,20 +560,21 @@ it.each([
   vi.mocked(getProductionMaterials).mockResolvedValue(initial);
   vi.mocked(updateProductionMaterialSegment).mockResolvedValueOnce(preserved);
   render(<MaterialLibraryWorkspace initialLibrary={initial} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(role);
-  expect(screen.getByRole("option", { name: label })).toBeDisabled();
-  expect(screen.getByRole("option", { name: "人物主镜头" })).not.toBeDisabled();
-  expect(screen.getByRole("option", { name: "补充画面" })).not.toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", role);
+  await inspectSelectOptions(screen.getByRole("combobox", { name: "片段用途" }),()=>{expect(screen.getByRole("option", { name: label })).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("option", { name: "人物主镜头" })).not.toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("option", { name: "补充画面" })).not.toHaveAttribute("aria-disabled", "true");});
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ usage_role: role })));
   await waitFor(() => expect(screen.getByRole("combobox", { name: "片段用途" })).not.toBeDisabled());
-  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveValue(role);
+  expect(screen.getByRole("combobox", { name: "片段用途" })).toHaveAttribute("data-selected-value", role);
 });
 
 it("requires confirmation of the configured directory before automatic intake", async () => {
   const bound = { ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory, file_counts: { observing: 2, running: 1, ready: 3, failed: 0, blocked_disk: 0 } };
   vi.mocked(bindMaterialIntake).mockResolvedValue(bound);
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect(await screen.findByText("/Volumes/Test/media")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name:"确认接入" }));
@@ -545,6 +589,7 @@ it("confirms the displayed file revision and uses the server intake readback", a
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(pending);
   vi.mocked(confirmMaterialCopyComplete).mockResolvedValue({ confirmed: true, intake: { ...pending, pending_files: [] } });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   const button = await screen.findByRole("button", { name: "复制完成，开始接收" });
   expect(screen.getByText(/此声明不代表文件已经通过解析或内容校验/)).toBeInTheDocument();
   fireEvent.click(button);
@@ -559,6 +604,7 @@ it("keeps a failed copy confirmation visible and submits the revised file after 
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(pending);
   vi.mocked(confirmMaterialCopyComplete).mockRejectedValueOnce(new Error("文件修订已变化，请重新确认复制完成"));
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   fireEvent.click(await screen.findByRole("button", { name: "复制完成，开始接收" }));
   expect(await screen.findByText(/文件修订已变化，请重新确认复制完成/)).toBeInTheDocument();
   expect(screen.getByText("external.mp4")).toBeInTheDocument();
@@ -574,6 +620,7 @@ it("keeps a failed copy confirmation visible and submits the revised file after 
 it("does not reveal or bind a directory owned by another workspace", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, binding_available:false, configured_directory:null, directory_state:"unknown", directory_message:"素材目录已关联其他工作区；当前工作区不能读取。" });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect(await screen.findByText(/已接入其他工作区/)).toBeInTheDocument();
   expect(screen.queryByText("/Volumes/Test/media")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"确认接入" })).not.toBeInTheDocument();
@@ -586,6 +633,7 @@ it("requires a fresh confirmation if the configured directory changes during bin
     .mockResolvedValueOnce(intakeReady)
     .mockResolvedValue({ ...intakeReady, configured_directory:"/Volumes/Test/new-media" });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   fireEvent.click(await screen.findByRole("button", { name:"确认接入" }));
   expect(await screen.findByText("素材目录配置已变化，请刷新后重新确认")).toBeInTheDocument();
   expect(await screen.findByText("/Volumes/Test/new-media")).toBeInTheDocument();
@@ -595,6 +643,7 @@ it("requires a fresh confirmation if the configured directory changes during bin
 it("blocks rebinding when the configured directory changed", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace:true, bound_directory:"/Volumes/Old/media", directory_state:"changed", directory_message:"当前设置的素材目录与本工作区原绑定目录不同。", repair_action:"先检查目录设置并处理原绑定，再重新确认。" });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect(await screen.findByText(/原接入|原绑定/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"确认接入" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
@@ -603,6 +652,7 @@ it("blocks rebinding when the configured directory changed", async () => {
 it("shows disk repair instead of offering a scan while the bound disk is missing", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace:true, bound_directory:intakeReady.configured_directory, directory_state:"unmounted", directory_message:"素材所在的外接盘没有挂载。", repair_action:"连接原数据盘后重试。", file_counts:{ observing:0, running:0, ready:0, failed:0, blocked_disk:1 } });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name:"导入素材" }));
   expect(await screen.findByText(/素材所在的外接盘没有挂载/)).toBeInTheDocument();
   expect(screen.getByText("等待磁盘 1")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"立即检查" })).not.toBeInTheDocument();
@@ -611,6 +661,7 @@ it("shows disk repair instead of offering a scan while the bound disk is missing
 it("names a read-only directory and offers a repair instead of binding it", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, directory_state:"read_only", directory_message:"素材目录当前不可写，素材无法进入分析。", repair_action:"检查磁盘是否以只读方式挂载或目录权限是否被改动，再重新检查。" });
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect(await screen.findByText("目录不可写")).toBeInTheDocument();
   expect(screen.getByText(/检查磁盘是否以只读方式挂载/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name:"确认接入" })).toBeDisabled();
@@ -623,6 +674,7 @@ it("keeps failed intake visible and retries the selected asset", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace:true, bound_directory:intakeReady.configured_directory, file_counts:{ observing:0, running:0, ready:0, failed:1, blocked_disk:0 } });
   vi.mocked(retryMaterialIntake).mockResolvedValue(retried);
   render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets:[failed] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect((await screen.findAllByText("本地分析服务暂不可用；检查服务后重试。")).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name:"重试分析" }));
   await waitFor(() => expect(retryMaterialIntake).toHaveBeenCalledWith("asset"));
@@ -633,6 +685,7 @@ it("uses manual scan only as a secondary repair action for a bound ready directo
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace:true, bound_directory:intakeReady.configured_directory });
   vi.mocked(scanMaterialIntake).mockResolvedValue(library);
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   fireEvent.click(await screen.findByRole("button", { name:"立即检查" }));
   await waitFor(() => expect(scanMaterialIntake).toHaveBeenCalledTimes(1));
   expect(screen.queryByRole("button", { name:"找新素材" })).not.toBeInTheDocument();
@@ -658,8 +711,8 @@ it("keeps a loaded second page, selected asset and draft during background refre
     expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ limit:2, offset:0 }));
     expect(screen.getByRole("button", { name:/自造素材B\.mp4/ })).toHaveClass("is-selected");
     expect(screen.getByLabelText("添加标签")).toHaveValue("尚未保存的草稿");
-    expect(screen.getAllByText("分析服务暂不可用")).toHaveLength(2);
-    expect(screen.getByText("已载入 2 / 2")).toBeInTheDocument();
+    expect(screen.getAllByText("分析服务暂不可用")).toHaveLength(1);
+    expect(screen.getByText(/已载入 2 \/ 2/)).toBeInTheDocument();
   } finally {
     vi.useRealTimers();
   }
@@ -670,9 +723,11 @@ const boundReadyIntake = () => ({
   bound_to_current_workspace: true,
   bound_directory: intakeReady.configured_directory,
 });
-const renderBound = (props = {}) => render(
-  <MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} {...props} />,
-);
+const renderBound = (props = {}) => {
+  const result = render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} {...props} />);
+  fireEvent.click(screen.getByRole("button", { name:"导入素材" }));
+  return result;
+};
 
 it("offers local import only for a bound ready directory and sends no path", async () => {
   vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
@@ -952,7 +1007,7 @@ it("stops editing when the selected segment disappears from a material that stay
   }
 });
 
-it("offers the uncovered taxonomy tags as a library-wide suggestion", async () => {
+it("does not invent target-specific shortages from taxonomy counts", async () => {
   const withGaps = { ...insights, recommended_gaps: ["场景:办公", "镜头:特写"] };
   vi.mocked(getMaterialLibraryInsights).mockResolvedValue(withGaps);
   render(
@@ -963,14 +1018,16 @@ it("offers the uncovered taxonomy tags as a library-wide suggestion", async () =
     />,
   );
 
-  expect(await screen.findByText("覆盖建议")).toBeInTheDocument();
-  expect(screen.getByText(/素材库暂时没有：场景:办公、镜头:特写/)).toBeInTheDocument();
-  expect(screen.getByText(/按需补充即可，不影响使用/)).toBeInTheDocument();
+  expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
+  expect(screen.queryByText(/素材库暂时没有/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "查看素材统计" }));
+  expect(await screen.findByRole("dialog", { name: "素材统计" })).toHaveTextContent("具体缺口会在制作任务检查素材时显示");
 });
 
 it("leaves the coverage suggestion out when every taxonomy tag already has material", async () => {
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
 
+  fireEvent.click(screen.getByRole("button", { name: "查看素材统计" }));
   await waitFor(() => expect(screen.getByLabelText("素材覆盖")).toBeInTheDocument());
   expect(screen.queryByText("覆盖建议")).not.toBeInTheDocument();
 });
@@ -987,9 +1044,10 @@ it.each(["audio", "video"] as const)("seeks loaded %s to the clicked segment wit
   const play = vi.spyOn(media, "play").mockResolvedValue();
   const pause = vi.spyOn(media, "pause").mockImplementation(() => {});
   fireEvent.loadedMetadata(media);
-  expect(media.currentTime).toBe(1);
+  expect(media.currentTime).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
   expect(media.currentTime).toBe(2.5);
+  expect(screen.getByLabelText("当前素材对话范围")).toHaveTextContent("片段 0:02.5–0:03.5");
   Object.defineProperty(media, "paused", { configurable: true, value: false });
   fireEvent.click(screen.getByRole("button", { name: /画面说明/ }));
   expect(media.currentTime).toBe(1);
@@ -998,7 +1056,12 @@ it.each(["audio", "video"] as const)("seeks loaded %s to the clicked segment wit
   fireEvent.timeUpdate(media);
   expect(media.currentTime).toBe(3.9);
   expect(play).not.toHaveBeenCalled();
-  expect(pause).not.toHaveBeenCalled();
+  expect(pause).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name:"切回整条素材" }));
+  expect(media.currentTime).toBe(0);
+  media.currentTime = 3.9;
+  fireEvent.timeUpdate(media);
+  expect(pause).toHaveBeenCalledTimes(1);
 });
 
 it.each(["audio", "video"] as const)("defers unloaded %s seeking until metadata for the latest selected segment", async (mediaType) => {
@@ -1030,7 +1093,7 @@ it("switches audio assets and video without seeking the previous media element",
   expect(second).not.toBe(first);
   Object.defineProperty(second, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
   fireEvent.loadedMetadata(second);
-  expect(second.currentTime).toBe(0.5);
+  expect(second.currentTime).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: /后段声音/ }));
   expect(second.currentTime).toBe(2);
   fireEvent.loadedMetadata(first);
@@ -1040,13 +1103,13 @@ it("switches audio assets and video without seeking the previous media element",
   const video = screen.getByLabelText<HTMLMediaElement>("原素材预览");
   Object.defineProperty(video, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
   fireEvent.loadedMetadata(video);
-  expect(video.currentTime).toBe(1.5);
+  expect(video.currentTime).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: /声音B\.wav/ }));
   const returnedAudio = screen.getByLabelText<HTMLMediaElement>("原素材预览");
   Object.defineProperty(returnedAudio, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_METADATA });
   fireEvent.loadedMetadata(returnedAudio);
-  expect(returnedAudio.currentTime).toBe(0.5);
-  expect(video.currentTime).toBe(1.5);
+  expect(returnedAudio.currentTime).toBe(0);
+  expect(video.currentTime).toBe(0);
 });
 
 const linkUrl = "https://media.example.com/clip.mp4";
@@ -1091,6 +1154,7 @@ it("previews an imported image with its own element and shows the recorded sourc
   const preview = await screen.findByAltText(/原素材预览：link-abcd\.jpg/);
   expect(preview).toHaveAttribute("src", "/api/production/materials/asset-still/media");
   expect(screen.queryByLabelText("原素材预览")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("原文件与来源"));
   expect(screen.getByRole("link", { name: "https://media.example.com/still.png" })).toBeInTheDocument();
   expect(screen.getAllByText(/内容分析尚未接入/).length).toBeGreaterThan(0);
 });
@@ -1320,7 +1384,7 @@ it("creates a name entry but writes it to the material only after an explicit sa
   await waitFor(() => expect(screen.getByRole("checkbox",{name:/曜核一体机/})).toBeEnabled());
 
   fireEvent.change(screen.getByLabelText("名称"), { target: { value:"老张" } });
-  fireEvent.change(screen.getByLabelText("类型"), { target: { value:"person" } });
+  await chooseSelectValue(screen.getByLabelText("类型"), "person");
   fireEvent.click(screen.getByRole("button",{name:"新增并选中"}));
 
   expect(createMaterialBusinessObject).toHaveBeenCalledWith({ kind:"person", name:"老张" });
@@ -1393,32 +1457,31 @@ it("keeps a late create/save failure on the material that asked, not on the one 
 });
 
 // 132 媒体类型筛选：接在 128 的名称关联用例之后，两组断言各自独立。
-const typeGroup = () => screen.getByRole("group", { name: "媒体类型筛选" });
-const typeButton = (label: string) => within(typeGroup()).getByRole("button", { name: label });
-const activeType = () => typeGroup().querySelector(".is-active")?.textContent;
+const typeGroup = () => screen.getByRole("combobox", { name: "媒体类型筛选" });
+const typeButton = (label: string) => screen.getByRole("option", { name: label === "全部" ? "全部类型" : label });
+const activeType = () => ({ all: "全部", video: "视频", audio: "音频", image: "图片" })[typeGroup().getAttribute("data-selected-value") as "all" | "video" | "audio" | "image"];
 
 it("switches the flat media types and starts the new type from the first page", async () => {
   const paged = { ...library, total_count: 2, has_more: true };
   vi.mocked(getProductionMaterials).mockResolvedValue(paged);
   render(<MaterialLibraryWorkspace initialLibrary={paged} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
 
-  expect(["全部", "视频", "音频", "图片"].map(label => typeButton(label).textContent))
-    .toEqual(["全部", "视频", "音频", "图片"]);
+  await inspectSelectOptions(typeGroup(),()=>expect(["全部", "视频", "音频", "图片"].map(label => typeButton(label).textContent)).toEqual(["全部类型", "视频", "音频", "图片"]));
   expect(activeType()).toBe("全部");
 
   // 先翻到第二页，再切类型：新类型必须从第一页开始，不能接着旧的页码。
   fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 1 })));
 
-  fireEvent.click(typeButton("音频"));
+  await chooseSelectValue(typeGroup(), "audio");
   expect(activeType()).toBe("音频");
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "audio" })));
 
   // 类型和审核状态是各自独立的一条条件，叠上以后类型不能被冲掉。
-  fireEvent.click(screen.getByRole("button", { name: "已批准" }));
+  await chooseSelectValue(screen.getByRole("combobox", { name: "审核状态筛选" }), "approved");
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "audio", reviewStatus: "approved" })));
 
-  fireEvent.click(typeButton("全部"));
+  await chooseSelectValue(typeGroup(), "all");
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "all" })));
 });
 
@@ -1427,7 +1490,7 @@ it("keeps the chosen media type in the URL and restores it after a refresh", asy
     vi.mocked(getProductionMaterials).mockResolvedValue(library);
     const first = render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
 
-    fireEvent.click(typeButton("视频"));
+    await chooseSelectValue(typeGroup(), "video");
     expect(window.location.search).toBe("?media_type=video");
     first.unmount();
 
@@ -1437,7 +1500,7 @@ it("keeps the chosen media type in the URL and restores it after a refresh", asy
     await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, mediaType: "video" })));
     expect(activeType()).toBe("视频");
 
-    fireEvent.click(typeButton("全部"));
+    await chooseSelectValue(typeGroup(), "all");
     expect(window.location.search).toBe("");
   } finally {
     window.history.replaceState(null, "", "/library");
@@ -1496,4 +1559,109 @@ it("keeps the previous segment's records off screen while the next one loads", a
   expect(screen.queryByText(/第一条成片/)).not.toBeInTheDocument();
   expect(screen.queryByText(/plan-1/)).not.toBeInTheDocument();
   expect(screen.getByText("正在读取使用记录……")).toBeInTheDocument();
+});
+
+
+it("opens intake only from the toolbar and closes the sidecard without losing the collection", async () => {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue(boundReadyIntake());
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.queryByRole("dialog", { name:"导入素材" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name:"导入本地素材" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:"导入素材" }));
+  await screen.findByRole("button", { name:"导入本地素材" });
+  fireEvent.click(within(screen.getByRole("dialog", { name:"导入素材" })).getByRole("button", { name:"关闭卡片" }));
+  expect(screen.queryByRole("dialog", { name:"导入素材" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name:/local\.mp4/ })).toBeInTheDocument();
+});
+
+it("retains the usable collection on explicit refresh failure and retries the real query", async () => {
+  vi.mocked(getProductionMaterials).mockRejectedValueOnce(new Error("素材列表暂不可用"));
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
+  await screen.findByText("素材列表暂不可用");
+  expect(screen.getByRole("button", { name:/local\.mp4/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByText("素材列表暂不可用")).not.toBeInTheDocument());
+});
+
+it("does not let a late explicit refresh overwrite the active search", async () => {
+  let resolveRefresh!: (value: typeof library) => void;
+  vi.mocked(getProductionMaterials).mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets:[], total_count:0 });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
+  fireEvent.change(screen.getByRole("textbox", { name:"搜索素材" }), { target:{ value:"没有结果" } });
+  await screen.findByText("没有匹配的素材");
+  await act(async () => resolveRefresh(library));
+  expect(screen.getByText("没有匹配的素材")).toBeInTheDocument();
+});
+
+it("reopens the actual original media after a visible preview failure", async () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  const failedPreview = screen.getByLabelText("原素材预览");
+  fireEvent.error(failedPreview);
+  expect(screen.getByRole("alert")).toHaveTextContent("原素材暂时无法预览");
+  fireEvent.click(screen.getByRole("button", { name:"重新读取预览" }));
+  const retryPreview = screen.getByLabelText("原素材预览");
+  expect(retryPreview).not.toBe(failedPreview);
+  expect(retryPreview).toHaveAttribute("src", "/api/production/materials/asset/media");
+  expect(screen.queryByText(/原素材暂时无法预览/)).not.toBeInTheDocument();
+});
+
+it("retries a failed usage read for the same real segment", async () => {
+  vi.mocked(getAssetSegmentUsageRecords).mockRejectedValueOnce(new Error("使用记录暂不可用"));
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByText("使用记录暂不可用");
+  fireEvent.click(screen.getByRole("button", { name:"重新读取使用记录" }));
+  await screen.findByText("这个片段还没有被任何成片使用过。");
+  expect(getAssetSegmentUsageRecords).toHaveBeenLastCalledWith("asset", "segment");
+});
+
+
+it("publishes only explicit material references with actual versions and leaves cancellation cleared", async () => {
+  const fractional = { ...taggedAsset, segments:[{ ...segment, start_seconds:1.25, end_seconds:3.75, updated_at:"2026-10-10T02:00:00Z" }] };
+  function ReferenceProbe() {
+    const reference = useAssistantMaterialReference();
+    return <output aria-label="共享素材引用">{JSON.stringify(reference?.reference ?? null)}</output>;
+  }
+  render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={{...library, assets:[fractional]}} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /><ReferenceProbe /></AssistantConversationProvider>);
+  expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
+  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"整条素材 · local.mp4", selection:{scope:"asset", asset_id:"asset", expected_updated_at:fractional.updated_at}}));
+  fireEvent.click(screen.getByRole("button", { name:/0:01.25.*0:03.75/ }));
+  await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"local.mp4 · 片段 0:01.25–0:03.75", selection:{scope:"segment", asset_id:"asset", segment_id:"segment", expected_updated_at:fractional.updated_at, expected_segment_updated_at:"2026-10-10T02:00:00Z"}}));
+  fireEvent.click(screen.getByRole("button", { name:"取消素材引用" }));
+  await waitFor(() => expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null"));
+  fireEvent.click(screen.getByRole("button", { name:"对象列表" }));
+  expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
+  const refreshed = { ...fractional, updated_at:"2026-10-10T03:00:00Z", segments:[{...fractional.segments[0], updated_at:"2026-10-10T03:00:00Z"}] };
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets:[refreshed] });
+  fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
+  await waitFor(() => expect(screen.getByRole("button", { name:"刷新素材列表" })).not.toBeDisabled());
+  expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
+  fireEvent.click(screen.getByRole("button", { name:/0:01.25.*0:03.75/ }));
+  await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!).selection).toEqual({scope:"segment", asset_id:"asset", segment_id:"segment", expected_updated_at:refreshed.updated_at, expected_segment_updated_at:refreshed.segments[0].updated_at}));
+});
+
+it("keeps observation tag suggestions separate until explicit adoption returns the same saved segment", async () => {
+  const observed: MaterialSegment = { ...segment, description: "", user_tags: ["旧标签"], understanding: {
+    status: "ready", fingerprint: "test", model_id: "test", sample_times: [1.2, 2.8], summary: "戴眼镜的人走过街道",
+    facts: [{ kind: "action", label: "人物走路", text: "人物从街道左边走向右边", sample_times: [1.2, 2.8] }],
+    unknowns: ["身份不可确认"], ocr_status: "blocked", ocr_model_id: "", ocr_frames: [], message: "",
+  }};
+  const observedAsset = { ...taggedAsset, segments: [observed] };
+  const observedLibrary = { ...library, assets: [observedAsset] };
+  vi.mocked(getProductionMaterials).mockResolvedValue(observedLibrary);
+  vi.mocked(updateProductionMaterialSegment).mockResolvedValue({ ...observedAsset, segments: [{ ...observed, user_tags: ["旧标签", "人物走路"] }] });
+  render(<MaterialLibraryWorkspace initialLibrary={observedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByText("标签建议 · 1 项待采纳")).toBeInTheDocument();
+  expect(screen.getByText("动作观察 · 采样 0:01.2、0:02.8")).toBeInTheDocument();
+  expect(updateProductionMaterialSegment).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText("移除标签 人物走路")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("标签建议 · 1 项待采纳"));
+  fireEvent.click(screen.getByRole("button", { name: "采纳标签 人物走路" }));
+  await waitFor(() => expect(screen.getByLabelText("移除标签 人物走路")).toBeInTheDocument());
+  expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ user_tags: ["旧标签", "人物走路"] }));
+  expect(screen.queryByText("标签建议 · 1 项待采纳")).not.toBeInTheDocument();
 });

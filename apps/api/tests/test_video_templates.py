@@ -232,3 +232,131 @@ def test_template_canvas_survives_new_theme_preflight_and_plan_confirmation(stat
     assert confirmed.status_code==201,confirmed.text
     assert confirmed.json()['aspect_ratio']==ratio
     assert not confirmed.json()['creation_task']['output_ready']
+
+
+def test_template_field_version_endpoint_is_append_only_and_preserves_real_settings(state):
+    production, template, client = state
+    template = replace(template, source_task_id="fixture-source-task", source_timeline_version_id="fixture-timeline")
+    # Establish immutable provenance before this endpoint is used.
+    template = production.save_video_template(replace(template, version=2))
+    payload = {"expected_version": 2, "name": " 新名称 ", "style_instruction": " 新风格 "}
+    response = client.post(f"/api/video-templates/{template.id}/versions", json=payload)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert saved["version"] == 3 and saved["name"] == "新名称" and saved["can_edit"] is True
+    assert saved["settings"] == {**template.settings, "style_instruction": "新风格"}
+    assert saved["source_task_id"] == template.source_task_id
+    assert saved["source_timeline_version_id"] == template.source_timeline_version_id
+    assert saved["owner_user_id"] == template.owner_user_id
+    assert saved["visibility"] == template.visibility
+    assert client.post(f"/api/video-templates/{template.id}/versions", json=payload).status_code == 409
+    reopened = ProductionRepository(production.database_path, production.video_library_path)
+    assert reopened.get_video_template("workspace_a", template.id, 2) == template
+    assert reopened.get_video_template("workspace_a", template.id, 3).settings == saved["settings"]
+    listed = client.get("/api/video-templates").json()["items"]
+    assert {item["version"] for item in listed if item["id"] == template.id} == {1, 2, 3}
+    assert all(item["can_edit"] for item in listed if item["id"] == template.id)
+    blank_style = client.post(f"/api/video-templates/{template.id}/versions", json={"expected_version": 3, "name": "名称", "style_instruction": ""})
+    assert blank_style.status_code == 200 and blank_style.json()["settings"]["style_instruction"] == ""
+
+
+def test_template_field_version_endpoint_requires_actual_owner_and_visible_workspace(state):
+    production, template, client = state
+    _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "模板只读成员")
+    reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
+    payload = {"expected_version": 1, "name": "尝试修改", "style_instruction": ""}
+    path = f"/api/video-templates/{template.id}/versions"
+    assert reader.post(path, json=payload).status_code == 404
+    production.set_video_template_visibility("workspace_a", template.id, "shared")
+    assert reader.post(path, json=payload).status_code == 403
+    shared = reader.get("/api/video-templates").json()["items"]
+    assert next(item for item in shared if item["id"] == template.id)["can_edit"] is False
+    assert client.post(path, headers={"x-test-workspace": "workspace_b"}, json=payload).status_code == 404
+    builtin = next(item for item in client.get("/api/video-templates").json()["items"] if item["origin"] == "built_in")
+    assert builtin["can_edit"] is False
+    assert client.post(f"/api/video-templates/{builtin['id']}/versions", json={**payload, "expected_version": builtin["version"]}).status_code == 409
+    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+
+
+@pytest.mark.parametrize("field,value", [("name", " "), ("name", "名" * 81), ("style_instruction", "字" * 501), ("expected_version", 0)])
+def test_template_field_version_endpoint_rejects_invalid_fields_without_writing(state, field, value):
+    production, template, client = state
+    response = client.post(f"/api/video-templates/{template.id}/versions", json={"expected_version": 1, "name": "名称", "style_instruction": "", field: value})
+    assert response.status_code == 422
+    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+
+
+def test_shared_template_reader_cannot_append_through_existing_task_save(state, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    production, template, _client = state
+    _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "任务模板只读成员")
+    production.set_video_template_visibility("workspace_a", template.id, "shared")
+    reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
+    # This focused permission test substitutes the rendered-task prerequisites only;
+    # the template, trusted member, HTTP guard and immutable versions are real.
+    task = SimpleNamespace(id="fixture-rendered-task", current_timeline_version_id="fixture-timeline")
+    output = tmp_path / "fixture-output"
+    output.write_bytes(b"nonempty fixture; no generated video")
+    monkeypatch.setattr(main, "_creation_task_or_404", lambda *_args: task)
+    monkeypatch.setattr(main, "_creation_plan_for_task_or_404", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(production, "get_creation_task_montage_plan", lambda *_args: {})
+    monkeypatch.setattr(main, "creation_task_montage_plan_from_payload", lambda _payload: SimpleNamespace(status="rendered", output_path=str(output)))
+    monkeypatch.setattr(main, "_creation_task_output_path", lambda *_args, **_kwargs: output)
+    response = reader.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "不能另增他人模板", "template_id": template.id, "expected_version": 1})
+    assert response.status_code == 403, response.text
+    assert "所有者" in response.json()["detail"]
+    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+
+
+def test_template_private_preflight_and_visibility_changes_require_current_owner(state):
+    production, template, owner = state
+    _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "模板读取者")
+    reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
+    payload = {"goal": "完全不同的新主题", "template_id": template.id, "template_version": 1}
+    path = f"/api/video-templates/{template.id}/visibility"
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
+    assert reader.put(path, json={"visibility": "shared"}).status_code == 403
+    assert owner.put(path, json={"visibility": "shared"}).status_code == 200
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 200
+    assert reader.put(path, json={"visibility": "private"}).status_code == 403
+    assert production.get_video_template("workspace_a", template.id, 1).visibility == "shared"
+    assert owner.put(path, json={"visibility": "private"}).status_code == 200
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
+
+
+def test_explicit_knowledge_pin_preserves_history_and_rechecks_current_access(state):
+    production, template, client = state
+    sources = main.source_repository
+    item = sources.create_knowledge_item_owned(KnowledgeItem(
+        id="knowledge-fixed", workspace_id="workspace_a", content_type="note",
+        title="原来的资料", body="重量: 20 kg", file_reference=None,
+        authorization="authorized", ownership="user_owned", source_item_id=None, version="1",
+    ), verified_user_id=template.owner_user_id)
+    sources.edit_knowledge_item("workspace_a", item.id, expected_version="1", title="修订资料", body="重量: 25 kg", verified_user_id=template.owner_user_id)
+    payload = {"goal": "完全不同的新主题", "selected_knowledge": {"knowledge_item_id": item.id, "version": "1"}}
+    response = client.post("/api/creation-plans/preview", json=payload)
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    pinned = next(ref for ref in preview["knowledge_references"] if ref["id"] == item.id)
+    assert pinned["version"] == "1" and pinned["title"] == "原来的资料"
+    assert sum(ref["id"] == item.id for ref in preview["knowledge_references"]) == 1
+    confirmed = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": preview["preflight_fingerprint"]})
+    assert confirmed.status_code == 201, confirmed.text
+    persisted = ProductionRepository(production.database_path, production.video_library_path).get_creation_plan("workspace_a", confirmed.json()["id"])
+    assert next(ref for ref in persisted.knowledge_references if ref.id == item.id).version == "1"
+    assert not confirmed.json()["creation_task"]["output_ready"]
+    assert client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json=payload).status_code == 404
+    assert client.post("/api/creation-plans/preview", json={**payload, "selected_knowledge": {**payload["selected_knowledge"], "body": "伪造正文"}}).status_code == 422
+    _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "知识读取者")
+    reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
+    sources.set_knowledge_item_visibility("workspace_a", item.id, "shared")
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 200
+    sources.set_knowledge_item_visibility("workspace_a", item.id, "private")
+    assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
+    sources.set_knowledge_item_use_state("workspace_a", item.id, "not_for_automation")
+    assert client.post("/api/creation-plans/preview", json=payload).status_code == 200
+    sources.set_knowledge_item_use_state("workspace_a", item.id, "excluded")
+    blocked = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": preview["preflight_fingerprint"]})
+    assert blocked.status_code == 404, blocked.text
+    assert len(production.list_creation_tasks("workspace_a", viewer_user_id=template.owner_user_id)) == 1

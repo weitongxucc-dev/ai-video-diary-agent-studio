@@ -1,3 +1,4 @@
+import type { TaskMediaJob, TaskMediaResultMap, TaskMediaJobPage } from "./types";
 import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState, PublishPlatformCapability, PlatformBrowserAccount, PlatformPublishJob, PublishPlatform } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import { ensureLocalMemberIdentity, localMemberTokenHeader, readLocalMemberToken } from "./local-member-auth";
@@ -125,7 +126,7 @@ export class ApiRequestError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const serverAuthorization = await getServerAuthorization();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -676,6 +677,10 @@ export function updateVoiceProfile(
   });
 }
 
+export function getCreationTaskEditPreview(taskId: string, proposalId: string): Promise<CreationTaskEditPreviewResponse> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}`);
+}
+
 export function previewCreationPlan(input: CreationPlanInput): Promise<CreationPlanPreview> {
   return creationPlanRequest<CreationPlanPreview>("/api/creation-plans/preview", {
     method: "POST",
@@ -752,15 +757,27 @@ export async function getAssistantCapabilities(): Promise<AssistantCapabilities>
   return creationPlanRequest("/api/assistant/capabilities");
 }
 
+export function getAssistantConversationReference(conversationId:string): Promise<import("./types").AssistantConversationReferenceState> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/reference`);
+}
+export function saveAssistantConversationReference(conversationId:string, selectedReference:import("./types").AssistantSavedReference|null, expectedReferenceVersion:number): Promise<import("./types").AssistantConversationReferenceState> {
+  return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/reference`,{
+    method:"PATCH",body:JSON.stringify({selected_reference:selectedReference,expected_reference_version:expectedReferenceVersion}),
+  });
+}
+
 export function sendWorkspaceAssistantPlanTurn(
   message: string,
   conversationId: string,
   clientRequestId: string,
   expectedDraftVersion: number,
   onEvent?: (event: AssistantStreamEvent) => void,
+  profileReference?: { kind: "person" | "voice"; profile_id: string; version: string } | null,
+  knowledgeReference?: { knowledge_item_id: string; version: string; locator?: string } | null,
 ): Promise<WorkspaceAssistantPlanTurnResponse> {
   const input = { message, conversation_id: conversationId, client_request_id: clientRequestId,
-    expected_draft_version: expectedDraftVersion };
+    expected_draft_version: expectedDraftVersion, ...(profileReference ? {selected_profile_reference:profileReference} : {}),
+    ...(knowledgeReference ? {selected_knowledge_reference:knowledgeReference} : {}) };
   if (onEvent) return assistantStreamRequest<WorkspaceAssistantPlanTurnResponse>(
     "/api/assistant/plan/turn", input, onEvent,
   );
@@ -866,10 +883,11 @@ export function generateCreationTaskTopics(taskId: string): Promise<CreationTask
 export function confirmCreationTaskTopic(
   taskId: string,
   topicId: string,
+  input: {title?:string} = {},
 ): Promise<CreationTaskTopicsResponse> {
   return creationPlanRequest<CreationTaskTopicsResponse>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/topics/${encodeURIComponent(topicId)}/confirm`,
-    { method: "POST", body: JSON.stringify({}) },
+    { method: "POST", body: JSON.stringify(input) },
   );
 }
 
@@ -1051,8 +1069,8 @@ export function applyCreationTaskExactEdit(
 export function previewCreationTaskExactEdit(
   taskId: string,
   input: CreationTaskExactEditInput,
-): Promise<CreationTaskEditPreviewResponse> {
-  return creationPlanRequest<CreationTaskEditPreviewResponse>(
+): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse | TaskMediaJob>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
@@ -1094,8 +1112,8 @@ export function previewCreationTaskEdit(
     selected_object_refs: string[];
     playhead_ms: number | null;
   },
-): Promise<CreationTaskEditPreviewResponse> {
-  return creationPlanRequest<CreationTaskEditPreviewResponse>(
+): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
+  return creationPlanRequest<CreationTaskEditPreviewResponse | TaskMediaJob>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/preview?draft=true`,
     { method: "POST", body: JSON.stringify(input) },
   );
@@ -1108,6 +1126,10 @@ export function sendCreationTaskAssistantTurn(
     message: string;
     client_request_id: string;
     expected_draft_version: number;
+    expected_timeline_version_id?: string | null;
+    expected_timeline_sequence?: number;
+    selected_profile_reference?: {kind:"person"|"voice";profile_id:string;version:string} | null;
+    selected_knowledge_reference?: {knowledge_item_id:string;version:string;locator?:string} | null;
     context_stage: string;
     selected_object_refs: string[];
     playhead_ms: number | null;
@@ -1129,8 +1151,8 @@ export function getCreationTaskAssistantHistory(taskId: string): Promise<Creatio
   );
 }
 
-export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse>{
-  return creationPlanRequest<CreationTaskEditPreviewResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview?draft=true`,
+export function previewCompoundSelection(taskId:string,proposalId:string,selection:number[]|string):Promise<CreationTaskEditPreviewResponse | TaskMediaJob>{
+  return creationPlanRequest<CreationTaskEditPreviewResponse | TaskMediaJob>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/selection/preview?draft=true`,
     {method:"POST",body:JSON.stringify(typeof selection==="string"?{raw_command:selection}:{included_step_indices:selection})});
 }
 
@@ -1304,7 +1326,7 @@ export function saveVideoTemplate(taskId: string, input: {
   });
 }
 
-export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse> {
+export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 export function listCreationTaskRecordings(taskId: string): Promise<{ items: CreationTaskRecording[] }> {
@@ -1317,7 +1339,7 @@ export function adoptCreationTaskRecording(taskId: string, input: {
     method: "POST", body: JSON.stringify(input),
   });
 }
-export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording> {
+export async function saveCreationTaskRecording(taskId: string, recording: Blob): Promise<CreationTaskRecording | TaskMediaJob> {
   const mediaType = recording.type.split(";")[0].trim().toLowerCase();
   const suffix = ({ "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a",
     "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav" } as Record<string, string>)[mediaType];
@@ -1328,12 +1350,12 @@ export async function saveCreationTaskRecording(taskId: string, recording: Blob)
     { method: "POST", body, cache: "no-store", headers: { ...localMemberTokenHeader() } });
   const payload = await response.json();
   if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "电脑录音未保存");
-  return payload as CreationTaskRecording;
+  return payload as CreationTaskRecording | TaskMediaJob;
 }
-export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string }> {
+export function listenCreationTaskAudio(taskId: string, input: { base_version_id: string | null; start_seconds: number; end_seconds: number; solo_track_ids: string[] }): Promise<{ audio_url: string } | TaskMediaJob> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/listen`, { method: "POST", body: JSON.stringify(input) });
 }
-export async function importCreationTaskAudio(taskId: string, file: File): Promise<{ source_ref: string; name: string; duration_ms: number }> {
+export async function importCreationTaskAudio(taskId: string, file: File): Promise<TaskMediaResultMap["audio_source"] | TaskMediaJob> {
   const body = new FormData(); body.append("audio", file);
   const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body, headers: { ...localMemberTokenHeader() } });
   const payload = await response.json();
@@ -1341,7 +1363,7 @@ export async function importCreationTaskAudio(taskId: string, file: File): Promi
   return payload;
 }
 
-export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<import("./types").CreationTaskEditPreviewResponse> {
+export function previewCreationTaskVisual(taskId: string, input: import("./types").VisualEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
   return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/visual/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }
 
@@ -1471,4 +1493,95 @@ export function reuseScriptLibraryEntry(entryId: string, input: {
   return creationPlanRequest<{ task_id: string; script: CreationTaskScript }>(
     `/api/production/script-library/${encodeURIComponent(entryId)}/reuse`, { method: "POST", body: JSON.stringify(input) },
   );
+}
+
+export function getCreationTaskMediaJob(taskId: string, jobId: string, signal?: AbortSignal): Promise<TaskMediaJob> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export function cancelCreationTaskMediaJob(taskId: string, jobId: string): Promise<TaskMediaJob> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function getCreationTaskAudioWaveform(taskId: string, clipId: string, signal?: AbortSignal): Promise<TaskMediaResultMap["waveform"] | TaskMediaJob> {
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/waveform/${encodeURIComponent(clipId)}`, { signal });
+}
+
+export function taskMediaJobLabel(job: TaskMediaJob): string {
+  if (job.status === "queued") {
+    // Reuse the ordinary device-wait wording projected by creation execution.
+    const waitingText: Record<string, string> = {
+      dependency: "等待前一步或受许可执行能力就绪。",
+      owner_unknown: "当前成员或任务归属暂不能核实。",
+      authorization_lost: "当前任务授权已变化，请核对权限。",
+      input_stale: "文案或制作要求已变化，请重新确认。",
+      scheduled_time: "等待指定开始时间。",
+      outside_window: "当前不在选择的执行时段内。",
+      activity_unknown: "暂不能确认设备是否空闲。",
+      device_active: "设备有人正在播放、录音或编辑。",
+      resource_unknown: "暂不能确认设备资源是否足够。",
+      resource_busy: "本机资源余量不足，正在等待满足制作条件。",
+      resource_pressure: "本机资源暂时不足，等待恢复。",
+      retry_not_before: "等待下次可重试时间。",
+      recovered: "设备恢复后等待重新核验。",
+    };
+    const reason = waitingText[job.waiting_reason ?? ""];
+    return reason ? `等待处理：${reason}` : "已安排，等待设备空闲";
+  }
+  if (job.status === "running") return job.result_kind === "waveform" ? "正在读取波形…" : ["audio_source", "recording"].includes(job.result_kind) ? "正在处理音频…" : "正在生成预览…";
+  if (job.status === "interrupted") return "预览已中断，等待恢复";
+  if (job.status === "cancelled") return "预览已取消";
+  if (job.status === "stale") return "输入已变化，请重新预览";
+  if (job.status === "failed") return "预览未完成";
+  return "预览已生成";
+}
+
+export class TaskMediaJobError extends Error {
+  constructor(public readonly job: TaskMediaJob) {
+    super(["cancelled", "stale"].includes(job.status) ? taskMediaJobLabel(job) : job.failure_reason || taskMediaJobLabel(job));
+    this.name = "TaskMediaJobError";
+  }
+}
+
+export async function resolveCreationTaskMediaResponse<K extends keyof TaskMediaResultMap>(
+  taskId: string, response: TaskMediaResultMap[K] | TaskMediaJob, kind: K,
+  options: { signal: AbortSignal; onUpdate: (job: TaskMediaJob) => void; baseVersionId: string | null },
+): Promise<TaskMediaResultMap[K]> {
+  if (!("job_id" in response)) return response;
+  let job = response;
+  while (true) {
+    options.signal.throwIfAborted();
+    if (job.result_kind !== kind || job.base_version_id !== options.baseVersionId) throw new Error("预览结果与本次输入不一致，请重新预览。");
+    options.onUpdate(job);
+    if (job.status === "succeeded") {
+      if (!job.result) throw new Error("预览作业未返回可用结果，请重新读取。");
+      return job.result as TaskMediaResultMap[K];
+    }
+    if (["failed", "cancelled", "stale"].includes(job.status)) throw new TaskMediaJobError(job);
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(options.signal.reason); };
+      const timer = setTimeout(() => { options.signal.removeEventListener("abort", abort); resolve(); }, 2500);
+      options.signal.addEventListener("abort", abort, { once: true });
+    });
+    job = await getCreationTaskMediaJob(taskId, job.job_id, options.signal);
+  }
+}
+
+export function listCreationTaskMediaJobs(taskId: string, cursor: string | null = null, signal?: AbortSignal): Promise<TaskMediaJobPage> {
+  const query = new URLSearchParams({ limit: "20" });
+  if (cursor) query.set("cursor", cursor);
+  return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs?${query}`, { signal });
+}
+
+export function taskMediaJobMatchesContext(job: TaskMediaJob, baseVersionId: string | null, selectedRefs: string[]): boolean {
+  if (job.base_version_id !== baseVersionId || !["queued", "running", "interrupted", "succeeded"].includes(job.status)) return false;
+  if (job.result_kind === "edit_preview") {
+    if (!(job.operation.endsWith("_edit_preview") || job.operation === "compound_selection_preview")) return false;
+    return job.target_refs.length === selectedRefs.length && job.target_refs.every(ref => selectedRefs.includes(ref));
+  }
+  if (job.target_refs.length !== 0) return false;
+  return (job.operation === "audio_import" && job.result_kind === "audio_source")
+    || (job.operation === "recording_save" && job.result_kind === "recording")
+    || (job.operation === "audio_listen" && job.result_kind === "audio_listen")
+    || (["audio_waveform", "narration_waveform"].includes(job.operation) && job.result_kind === "waveform");
 }

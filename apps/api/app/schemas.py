@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
@@ -382,6 +382,7 @@ class EpisodeVoiceSelectionResponse(BaseModel):
 class VisualFactResponse(BaseModel):
     kind: Literal["object", "action", "scene"]
     text: str
+    label: str | None = Field(default=None, max_length=32)
     sample_times: list[float]
 
 
@@ -596,6 +597,7 @@ class MaterialReviewRequest(BaseModel):
 
 class MaterialAssetTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    expected_asset_updated_at: datetime | None = None
     user_tags: list[str] = Field(max_length=50)
 
 
@@ -697,6 +699,8 @@ class MaterialUseStateRequest(BaseModel):
 
 
 class MaterialSegmentUpdateRequest(BaseModel):
+    expected_asset_updated_at: datetime | None = None
+    expected_segment_updated_at: datetime | None = None
     description: str = Field(default="", max_length=1000)
     transcript: str = Field(default="", max_length=10000)
     review_status: Literal["raw", "approved", "rejected"] = "raw"
@@ -836,6 +840,12 @@ class PlanProfileReference(BaseModel):
     version: str = Field(min_length=1, max_length=120)
 
 
+class PlanKnowledgeReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    knowledge_item_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=100)
+
+
 class CreationPlanDefaultsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -849,6 +859,7 @@ class CreationPlanDefaultsRequest(BaseModel):
     lipsync_quality: Literal["high", "fast"] = "high"
     selected_voice: PlanProfileReference | None = None
     selected_person: PlanProfileReference | None = None
+    selected_knowledge: PlanKnowledgeReference | None = None
     template_id: str | None = Field(default=None, min_length=1, max_length=120)
     template_version: int | None = Field(default=None, ge=1)
 
@@ -1008,6 +1019,14 @@ class CreationTaskTopicGenerateRequest(BaseModel):
 
 class CreationTaskTopicConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+
+    @field_validator("title")
+    @classmethod
+    def nonempty_title(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("选题标题不能为空")
+        return value.strip() if value is not None else None
 
 
 class TopicRouteSnapshotResponse(BaseModel):
@@ -1495,6 +1514,9 @@ class CreationTaskExactEditRequest(BaseModel):
 
 class CreationTaskTimelineUndoRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    assistant_turn_id: UUID | None = None
+    expected_timeline_version_id: str | None = None
+    expected_timeline_sequence: int | None = Field(default=None, ge=0)
 
 
 class CreationTaskSubtitleCueUpdateRequest(BaseModel):
@@ -1512,12 +1534,22 @@ class CompoundEditSelectionRequest(BaseModel):
 class CreationTaskEditPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    assistant_turn_id: UUID | None = None
     raw_command: str = Field(min_length=2, max_length=500)
     context_stage: Literal[
         "topic", "script", "narration", "montage", "review", "subtitle_cover"
     ]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
+
+    replacement_asset_id: str | None = Field(default=None, min_length=1, max_length=120)
+    replacement_segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def replacement_pair(self):
+        if (self.replacement_asset_id is None) != (self.replacement_segment_id is None):
+            raise ValueError("替换候选须同时包含素材与片段")
+        return self
 
 
 class EditIntentResponse(BaseModel):
@@ -1556,6 +1588,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "DuplicateClip",
         "InsertClip",
         "ReorderClip",
+        "ReorderTimelineItems",
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
@@ -1618,6 +1651,64 @@ class CreationTaskEditPreviewResponse(BaseModel):
     proposal: EditProposalResponse
 
 
+class MaterialAssistantSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["asset", "segment"]
+    asset_id: str = Field(min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_updated_at: datetime | None = None
+    expected_segment_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.scope == "segment" and self.segment_id is None:
+            raise ValueError("片段范围需要明确片段")
+        if self.scope == "asset" and self.segment_id is not None:
+            raise ValueError("整条素材范围不能带片段")
+        return self
+
+
+class AssistantSavedMaterialReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["material"]
+    label: str = Field(min_length=1, max_length=240)
+    selection: MaterialAssistantSelectionRequest
+
+
+class AssistantSavedProfileReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["person", "voice"]
+    label: str = Field(min_length=1, max_length=240)
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
+class AssistantSavedKnowledgeReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["knowledge"]
+    label: str = Field(min_length=1, max_length=240)
+    knowledge_item_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+    locator: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+AssistantSavedReference = Annotated[AssistantSavedMaterialReference | AssistantSavedProfileReference | AssistantSavedKnowledgeReference, Field(discriminator="kind")]
+
+
+class AssistantConversationReferenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selected_reference: AssistantSavedReference | None
+    expected_reference_version: int = Field(ge=0)
+
+
+class AssistantConversationReferenceResponse(BaseModel):
+    selected_reference: AssistantSavedReference | None = None
+    reference_version: int = Field(default=0, ge=0)
+    status: Literal["ready", "unavailable"] = "ready"
+    reason: str | None = None
+
+
 class AssistantConversationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1665,6 +1756,8 @@ class AssistantConversationTurnResponse(BaseModel):
 
 
 class AssistantConversationResponse(BaseModel):
+    selected_reference: AssistantSavedReference | None = None
+    reference_version: int = Field(default=0, ge=0)
     id: UUID
     workspace_id: str
     scope_kind: Literal["home", "material", "task"]
@@ -1690,6 +1783,20 @@ class AssistantConversationStopRequest(BaseModel):
     turn_id: UUID
 
 
+class AssistantProfileReferenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["person", "voice"]
+    profile_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+
+
+class AssistantKnowledgeReferenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    knowledge_item_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+    locator: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class CreationTaskAssistantTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1697,12 +1804,34 @@ class CreationTaskAssistantTurnRequest(BaseModel):
     message: str = Field(min_length=2, max_length=1000)
     client_request_id: UUID
     expected_draft_version: int = Field(ge=0)
+    expected_timeline_version_id: str | None = None
+    expected_timeline_sequence: int | None = Field(default=None, ge=0)
+    selected_profile_reference: AssistantProfileReferenceRequest | None = None
+    selected_knowledge_reference: AssistantKnowledgeReferenceRequest | None = None
     context_stage: Literal["topic", "script", "narration", "montage", "review", "subtitle_cover"]
     selected_object_refs: list[str] = Field(default_factory=list, max_length=8)
     playhead_ms: int | None = Field(default=None, ge=0)
 
 
+class TaskMediaJobResponse(BaseModel):
+    operation: str
+    target_refs: list[str] = Field(default_factory=list, max_length=8)
+    input_digest: str
+    created_at: datetime
+    job_id: str
+    status: Literal["queued", "running", "interrupted", "succeeded", "failed", "cancelled", "stale"]
+    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform"]
+    result_url: str
+    device_request_id: str | None = None
+    waiting_reason: str | None = None
+    base_version_id: str | None = None
+    result: dict[str, object] | None = None
+    failure_reason: str | None = None
+    repair_action: str | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    media_job: TaskMediaJobResponse | None = None
     reply: str
     provider: str
     model: str
@@ -1711,6 +1840,7 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     execution_action: Literal["start", "resume", "cancel"] | None = None
     execution_status: dict[str, object] | None = None
     topic_candidates: CreationTaskTopicsResponse | None = None
+    timeline_action: Literal["undo", "redo", "reject"] | None = None
     turn_id: UUID | None = None
     turn_status: Literal["running", "completed", "stopped"] = "completed"
     draft_version: int | None = Field(default=None, ge=0)
@@ -1752,6 +1882,7 @@ class EditOperationResponse(BaseModel):
         "DuplicateClip",
         "InsertClip",
         "ReorderClip",
+        "ReorderTimelineItems",
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
@@ -1817,6 +1948,94 @@ class CreationPlanPreviewResponse(BaseModel):
     preflight_fingerprint: str
 
 
+class CreationRequestCreateRequest(CreationPlanDefaultsRequest):
+    target_count: int = Field(default=1, ge=1, le=9_007_199_254_740_991)
+    request_key: UUID
+    output_relation: Literal["single", "different_topics", "variants", "series"] | None = None
+    material_scope: Literal["workspace_library", "today_received"] = "workspace_library"
+    assistant_turn_id: UUID | None = None
+
+
+class CreationRequestReviseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    output_relation: Literal["single", "different_topics", "variants", "series"] | None = None
+    material_scope: Literal["workspace_library", "today_received"] | None = None
+    requirements: CreationPlanDefaultsRequest | None = None
+
+
+class CreationRequestWindowGoal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal: str = Field(min_length=1, max_length=2000)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("goal")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("逐条目标不能为空")
+        return value.strip()
+
+
+class CreationRequestWindowPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    goals: list[CreationRequestWindowGoal] = Field(min_length=1, max_length=8)
+
+
+class CreationRequestWindowConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    input_fingerprint: str = Field(min_length=64, max_length=64)
+
+
+class CreationRequestWindowReplanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
+class CreationRequestItemResponse(BaseModel):
+    ordinal: int = Field(ge=1)
+    window_id: str | None = None
+    plan_id: str
+    task_id: str
+    plan: CreationPlanPreviewResponse | None = None
+    task: CreationTaskResponse | None = None
+
+
+class CreationRequestWindowResponse(BaseModel):
+    id: str
+    request_id: str
+    ordinal_start: int = Field(ge=1)
+    status: Literal["proposed", "confirmed"]
+    input_fingerprint: str
+    entries: list[CreationRequestItemResponse] = Field(max_length=8)
+    created_at: datetime
+    confirmed_at: datetime | None = None
+
+
+class CreationRequestResponse(BaseModel):
+    id: str
+    goal: str
+    target_count: int = Field(ge=1)
+    output_relation: Literal["single", "different_topics", "variants", "series"] | None = None
+    requirements: dict[str, object]
+    material_scope: dict[str, object]
+    clarification_questions: list[str]
+    revision: int = Field(ge=1)
+    status: Literal["awaiting_clarification", "awaiting_plan", "awaiting_confirmation", "active"]
+    expanded_count: int = Field(ge=0)
+    confirmed_count: int = Field(ge=0)
+    task_status_counts: dict[str, int]
+    current_window: CreationRequestWindowResponse | None = None
+
+
+class CreationRequestItemsResponse(BaseModel):
+    items: list[CreationRequestItemResponse]
+    next_after_ordinal: int | None
+    has_more: bool
+
+
 class WorkspaceAssistantPlanTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1824,6 +2043,8 @@ class WorkspaceAssistantPlanTurnRequest(BaseModel):
     conversation_id: UUID
     client_request_id: UUID
     expected_draft_version: int = Field(ge=0)
+    selected_profile_reference: AssistantProfileReferenceRequest | None = None
+    selected_knowledge_reference: AssistantKnowledgeReferenceRequest | None = None
 
 
 class WorkspaceAssistantPlanTurnResponse(BaseModel):
@@ -1831,25 +2052,12 @@ class WorkspaceAssistantPlanTurnResponse(BaseModel):
     provider: str
     model: str
     plan_preview: CreationPlanPreviewResponse | None = None
+    creation_request: CreationRequestResponse | None = None
     turn_id: UUID | None = None
     turn_status: Literal["running", "completed", "stopped"] = "completed"
     draft_version: int | None = Field(default=None, ge=0)
 
 
-class MaterialAssistantSelectionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scope: Literal["asset", "segment"]
-    asset_id: str = Field(min_length=1, max_length=120)
-    segment_id: str | None = Field(default=None, min_length=1, max_length=120)
-
-    @model_validator(mode="after")
-    def validate_target(self):
-        if self.scope == "segment" and self.segment_id is None:
-            raise ValueError("片段范围需要明确片段")
-        if self.scope == "asset" and self.segment_id is not None:
-            raise ValueError("整条素材范围不能带片段")
-        return self
 
 
 class MaterialAssistantTurnRequest(BaseModel):
@@ -1910,6 +2118,18 @@ class CreationPlanResponse(CreationPlanPreviewResponse):
     created_at: datetime
     confirmed_at: datetime
     updated_at: datetime
+
+
+class VideoTemplateVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    name: str = Field(min_length=1,max_length=80)
+    style_instruction: str = Field(default="",max_length=500)
+
+    @field_validator("name", "style_instruction", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        return value.strip() if isinstance(value,str) else value
 
 
 class SaveVideoTemplateRequest(BaseModel):
@@ -2443,6 +2663,14 @@ class KnowledgeItemVisibilityRequest(ContentVisibilityRequest):
     """知识条目的可见范围请求；任务、方案、模板与素材共用同一形状。"""
 
 
+class KnowledgeItemContentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=200000)
+
+
 class KnowledgeGrantRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2732,6 +2960,7 @@ class AvatarLipSyncPreviewRequest(BaseModel):
 
 
 class MediaPreviewRunResponse(BaseModel):
+    preview_text: str | None = None
     id: str
     workspace_id: str
     preview_type: Literal["voice", "avatar_lipsync"]
@@ -3088,6 +3317,7 @@ class VoiceTranscriptionResponse(BaseModel):
 
 class CreatorProfileResponse(BaseModel):
     id: str
+    revision: int = 0
     common_expressions: list[str]
     banned_words: list[str]
     style_preferences: dict[str, str]
@@ -3096,9 +3326,23 @@ class CreatorProfileResponse(BaseModel):
 
 
 class CreatorProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
     common_expressions: list[str] | None = None
     banned_words: list[str] | None = None
     style_preferences: dict[str, str] | None = None
+
+
+class CreatorPreferenceChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["remember", "forget"]
+    key: str = Field(min_length=1, max_length=60)
+    value: str | None = Field(default=None, max_length=300)
+    expected_revision: int = Field(ge=0)
+    assistant_turn_id: str = Field(min_length=1, max_length=120)
+    source_quote: str = Field(min_length=1, max_length=1000)
 
 
 class CreatorProfileLearnResult(BaseModel):

@@ -64,7 +64,7 @@ def _asset(library: Path, name: str, *, use_state: ContentUseState = "available"
 
 def _task_plan(assets: list[MaterialAsset]):
     """走真实计划构建：机器从候选池里自己挑镜头。"""
-    return MontagePlanner().build_for_creation_task(
+    return MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id=WORKSPACE,
         task_id="task-gate",
         script=_script(),

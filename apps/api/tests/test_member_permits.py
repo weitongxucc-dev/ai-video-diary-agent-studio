@@ -19,6 +19,7 @@ from app.member_permits import (
     MemberDeviceAccess,
     cpu_render_budget_from_env,
     cpu_render_limits_from_budget,
+    creation_stage_budgets_from_env,
     creation_job_registration,
     find_member,
     host_budget_from_env,
@@ -29,6 +30,24 @@ from app.member_permits import (
 from app.production import ProductionRepository
 
 WORKSPACE = "local"
+
+
+def test_absent_creation_stage_budgets_do_not_block_calibrated_cpu_config():
+    config = {**_HOST_ENV, **_CPU_RENDER_ENV}
+    cpu = cpu_render_budget_from_env(config)
+    assert host_budget_from_env(config, cpu_render=cpu).cpu_render is cpu
+    narration, montage = creation_stage_budgets_from_env(config)
+    assert narration is None and montage is None
+    from app.creation_execution import creation_stage_facts
+    for stage in ("narration", "montage_plan"):
+        with pytest.raises(ValueError, match="预算尚未标定"):
+            creation_stage_facts(None, None, None, None, stage, narration, montage)
+
+
+@pytest.mark.parametrize("field", ["DEVICE_NARRATION_MAX_TEXT_CHARS", "DEVICE_MONTAGE_MAX_SECTION_COUNT"])
+def test_partial_creation_stage_budget_remains_an_explicit_error(field):
+    with pytest.raises(HostBudgetUncalibrated, match="阶段资源预算尚未标定"):
+        creation_stage_budgets_from_env({field: "256"})
 
 _HOST_ENV = {
     "DEVICE_HOST_MAX_CPU_PERCENT": "60",

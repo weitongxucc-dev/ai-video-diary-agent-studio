@@ -21,6 +21,10 @@ class ConversationDraftVersionConflict(RuntimeError):
         super().__init__("对话草稿已在其他位置更新，请重新读取后再编辑。")
 
 
+class ConversationReferenceVersionConflict(RuntimeError):
+    pass
+
+
 class ConversationTurnRequestConflict(RuntimeError):
     pass
 
@@ -101,6 +105,10 @@ class ConversationRepository:
             conversation_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversations)")}
             if "draft_version" not in conversation_columns:
                 conn.execute("ALTER TABLE assistant_conversations ADD COLUMN draft_version INTEGER NOT NULL DEFAULT 0")
+            if "selected_reference_json" not in conversation_columns:
+                conn.execute("ALTER TABLE assistant_conversations ADD COLUMN selected_reference_json TEXT")
+            if "reference_version" not in conversation_columns:
+                conn.execute("ALTER TABLE assistant_conversations ADD COLUMN reference_version INTEGER NOT NULL DEFAULT 0")
             receipt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversation_request_receipts)")}
             if "request_context_json" not in receipt_columns:
                 conn.execute("ALTER TABLE assistant_conversation_request_receipts ADD COLUMN request_context_json TEXT NOT NULL DEFAULT '{}'")
@@ -113,7 +121,10 @@ class ConversationRepository:
 
     @staticmethod
     def _conversation(row: sqlite3.Row) -> dict:
-        return dict(row)
+        value = dict(row)
+        reference_json = value.pop("selected_reference_json", None)
+        value["selected_reference"] = json.loads(reference_json) if reference_json else None
+        return value
 
     def create(self, workspace_id: str, member_id: str, scope_kind: str, scope_id: str,
                title: str = "新对话") -> dict:
@@ -146,7 +157,7 @@ class ConversationRepository:
                 "WHERE current.workspace_id=? AND current.member_id=? "
                 "AND current.scope_kind=? AND current.scope_id=? "
                 "AND c.workspace_id=current.workspace_id AND c.member_id=current.member_id "
-                "AND c.scope_kind=current.scope_kind AND c.scope_id=current.scope_id",
+                "AND (current.scope_kind='home' AND current.scope_id='home' OR (c.scope_kind=current.scope_kind AND c.scope_id=current.scope_id))",
                 (workspace_id, member_id, scope_kind, scope_id),
             ).fetchone()
             if row is not None:
@@ -187,7 +198,12 @@ class ConversationRepository:
 
     def list_for_scope(self, workspace_id: str, member_id: str, scope_kind: str, scope_id: str) -> list[dict]:
         with self._connect() as conn:
-            if scope_kind == "material" and scope_id == "library":
+            if scope_kind == "home" and scope_id == "home":
+                rows = conn.execute(
+                    "SELECT * FROM assistant_conversations WHERE workspace_id=? AND member_id=? "
+                    "ORDER BY updated_at DESC, created_at DESC", (workspace_id, member_id),
+                ).fetchall()
+            elif scope_kind == "material" and scope_id == "library":
                 rows = conn.execute(
                     "SELECT * FROM assistant_conversations WHERE workspace_id=? AND member_id=? "
                     "AND scope_kind='material' ORDER BY updated_at DESC, created_at DESC",
@@ -209,7 +225,7 @@ class ConversationRepository:
             ).fetchone()
         return self._conversation(row) if row else None
 
-    def select_current(self, conversation_id: str, workspace_id: str, member_id: str) -> dict | None:
+    def select_current(self, conversation_id: str, workspace_id: str, member_id: str, *, workspace_session: bool = False) -> dict | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -224,7 +240,7 @@ class ConversationRepository:
                 "(workspace_id,member_id,scope_kind,scope_id,conversation_id,selected_at) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(workspace_id,member_id,scope_kind,scope_id) DO UPDATE SET "
                 "conversation_id=excluded.conversation_id,selected_at=excluded.selected_at",
-                (workspace_id, member_id, row["scope_kind"], row["scope_id"], conversation_id, now),
+                (workspace_id, member_id, "home" if workspace_session else row["scope_kind"], "home" if workspace_session else row["scope_id"], conversation_id, now),
             )
         return self._conversation(row)
 
@@ -272,6 +288,20 @@ class ConversationRepository:
         assert updated is not None
         return self._conversation(updated)
 
+    def save_reference(self, conversation_id: str, workspace_id: str, member_id: str,
+                       reference: dict | None, expected_reference_version: int) -> dict | None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?", (conversation_id, workspace_id, member_id)).fetchone()
+            if row is None:
+                return None
+            if row["reference_version"] != expected_reference_version:
+                raise ConversationReferenceVersionConflict("引用已在其他位置更新，请重新读取这段对话后选择或取消；没有覆盖较新引用。")
+            conn.execute("UPDATE assistant_conversations SET selected_reference_json=?, reference_version=reference_version+1, updated_at=? WHERE id=? AND workspace_id=? AND member_id=?",
+                         (json.dumps(reference,ensure_ascii=False) if reference is not None else None,_now(),conversation_id,workspace_id,member_id))
+            saved = conn.execute("SELECT * FROM assistant_conversations WHERE id=?", (conversation_id,)).fetchone()
+        return self._conversation(saved)
+
     def create_turn_idempotent(
         self, conversation_id: str, workspace_id: str, member_id: str, user_message: str,
         client_request_id: str, expected_draft_version: int, request_context: dict | None = None,
@@ -304,7 +334,8 @@ class ConversationRepository:
                     and existing["scope_id"] == conversation["scope_id"]
                     and existing["user_message"] == user_message
                     and existing["expected_draft_version"] == expected_draft_version
-                    and existing["request_context_json"] == context_json
+                    and {key: value for key, value in json.loads(existing["request_context_json"]).items() if key != "target_snapshot"}
+                        == {key: value for key, value in (request_context or {}).items() if key != "target_snapshot"}
                 )
                 if not same_request:
                     raise ConversationTurnRequestConflict("此请求身份已用于其他内容或对话范围。")
@@ -428,6 +459,14 @@ class ConversationRepository:
             ).fetchone()
         assert restored is not None
         return self._conversation(restored), "restored"
+
+    def request_context(self, client_request_id: str, conversation_id: str, workspace_id: str, member_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT request_context_json FROM assistant_conversation_request_receipts WHERE client_request_id=? AND conversation_id=? AND workspace_id=? AND member_id=? AND outcome='consumed'",
+                (client_request_id, conversation_id, workspace_id, member_id),
+            ).fetchone()
+        return json.loads(row["request_context_json"]) if row else None
 
     def get_turn(self, turn_id: str) -> dict | None:
         with self._connect() as conn:

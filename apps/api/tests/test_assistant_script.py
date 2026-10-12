@@ -108,7 +108,27 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
 
 
 def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_path, monkeypatch):
+    from datetime import datetime
+    from app.montage import MontageClip
+    from app.production import MaterialAsset, MaterialSegment
+
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
+    material_repo = ProductionRepository(tmp_path / "selected-material.sqlite3", tmp_path / "selected-library")
+    material_repo.video_library_path.mkdir()
+    path = material_repo.video_library_path / "source.mp4"
+    path.write_bytes(b"isolated-selection-metadata")
+    material = material_repo._save_asset(MaterialAsset(
+        id="asset-current", workspace_id="local", file_name=path.name, path=str(path),
+        size_bytes=path.stat().st_size, modified_at=datetime.fromtimestamp(path.stat().st_mtime),
+        owner_user_id=member_id, visibility="private", duration_seconds=3,
+        segments=[MaterialSegment(id="material-segment-current", asset_id="asset-current",
+            start_seconds=0, end_seconds=3)],
+    ))
+    clip = MontageClip(id="clip-current", cue_id="cue-current", asset_id=material.id,
+        segment_id=material.segments[0].id, source_path="workspace://source.mp4",
+        source_start_seconds=0, source_end_seconds=3, timeline_start_seconds=0,
+        timeline_end_seconds=3, match_score=1, match_reasons=["existing selected material"],
+        needs_confirmation=False)
     events = []
     calls = []
     task = SimpleNamespace(id="task-one", stage="review", confirmed_script_id="script-one",
@@ -116,8 +136,9 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                            montage_plan_id="plan-one", visibility="shared", owner_user_id=None)
     montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
                               status="rendered", output_path="rendered-video", duration_seconds=30,
-                              clips=[SimpleNamespace(id="clip-current")], graphic_overlays=[])
+                              clips=[clip], graphic_overlays=[])
     repo = SimpleNamespace(
+        get_asset=material_repo.get_asset,
         get_narration_artifact=lambda workspace_id, key: SimpleNamespace(
             task_id=task.id, script_id=task.confirmed_script_id,
         ),
@@ -180,6 +201,10 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
         ("montage", ["clip:clip-current"]), ("review", ["narration:segment-current"]),
         ("narration", []), ("narration", []),
     ]
+    selection = calls[0]["material_selection"]
+    assert selection["asset_id"] == material.id and selection["segment_id"] == material.segments[0].id
+    assert selection["expected_updated_at"] == material.updated_at.isoformat()
+    assert selection["expected_segment_updated_at"] == material.segments[0].updated_at.isoformat()
     assert events == []  # Assistant turns live in the conversation repository, not legacy TaskEvent chat rows.
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["status"]) for item in saved_turns] == [
@@ -220,10 +245,31 @@ def test_confirmed_task_without_production_artifacts_can_use_general_assistant_s
 
 
 def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from test_creation_task_topic_provider import _review_tool_response
+    from app.production import TopicCandidate
+    from app.topics import CreationTaskTopicSource, OpenAICompatibleCreationTaskScriptGenerator
+
     repo = _script_task(tmp_path)
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
-    topic = SimpleNamespace(id="topic-one", title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"])
-    source = SimpleNamespace(reference_id="knowledge:one:v1", title="已授权资料", text="可核实的文字摘录")
+    topic = TopicCandidate(id="topic-one", workspace_id="local", task_id="task-one", run_id="fixture-topic-run",
+        title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"], score=90)
+    source = CreationTaskTopicSource(reference_id="knowledge:one:v1", kind="knowledge", title="已授权资料",
+        text="资料用于介绍测试主题；可以把开头缩短，用更短的句子讲清楚主题。")
+    review_requests = []
+    def review(request):
+        payload = json.loads(request.content)
+        review_requests.append(payload)
+        candidate = json.loads(payload["messages"][1]["content"])["script"]
+        response = {"sections": [{"index": index, "grounded": True, "constraints_met": True,
+            "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
+                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}
+            for index, section in enumerate(candidate["sections"], start=1)]}
+        return _review_tool_response(response)
+    checker = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "controlled-review",
+        transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for", lambda settings: checker)
 
     def inputs(workspace_id, task_id):
         task = main_module._creation_task_or_404(workspace_id, task_id)
@@ -276,6 +322,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         "expected_updated_at": first.json()["updated_at"],
     })
     assert stale.status_code == 409
+    assert len(review_requests) == 2  # First draft and revision; stale CAS never calls the model.
     assert repo.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
 
     def run_turn(_settings, **kwargs):

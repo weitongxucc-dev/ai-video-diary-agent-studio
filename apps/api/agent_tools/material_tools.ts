@@ -1,9 +1,11 @@
 /** Material reads and selected-material commands, using the caller's authenticated request. */
-export type MaterialSelection =
+export type MaterialSelection = (
   | { scope: "asset"; assetId: string }
-  | { scope: "segment"; assetId: string; segmentId: string };
+  | { scope: "segment"; assetId: string; segmentId: string }
+) & { expectedUpdatedAt?: string; expectedSegmentUpdatedAt?: string };
 
 type Segment = {
+  updated_at: string;
   id: string;
   asset_id: string;
   description: string;
@@ -17,12 +19,13 @@ type Segment = {
   end_seconds: number;
   visual_status: string;
   understanding: {
-    status: string; summary: string; facts: { kind: string; text: string; sample_times: number[] }[];
+    status: string; summary: string; facts: { kind: string; label?: string | null; text: string; sample_times: number[] }[];
     unknowns: string[]; message: string; ocr_status: string;
     ocr_frames: { timestamp_seconds: number; observations: { text: string; confidence: number; retrieval_eligible: boolean }[] }[];
   } | null;
 };
 export type MaterialAsset = {
+  updated_at: string;
   id: string; user_tags: string[]; segments: Segment[]; file_name: string; media_type: string;
   duration_seconds: number | null; use_state: string; analysis_status: string; analysis_message: string;
   user_description: string; upload_context: string;
@@ -47,6 +50,12 @@ function normalizedTags(tags: string[]): string[] {
   return [...new Set(tags.map(tag => [...tag.trim()].slice(0, 80).join("")).filter(Boolean))];
 }
 
+// Python isoformat and Pydantic JSON differ only in the UTC suffix here.
+// Preserve every fractional digit; Date milliseconds are not a version key.
+function utcVersion(version: string): string {
+  return version.replace(/\+00:00$/, "Z");
+}
+
 export function registerMaterialTools(
   pi: { registerTool: (tool: unknown) => void },
   context: MaterialToolsContext,
@@ -65,6 +74,11 @@ export function registerMaterialTools(
     const segment = asset.segments.find(item => item.id === target.segmentId && item.asset_id === target.assetId);
     if (!segment) throw new Error("当前选中片段不存在，未确认修改结果");
     return segment;
+  }
+  function verifyVersion(asset: MaterialAsset, target: MaterialSelection) {
+    if (target.expectedUpdatedAt && utcVersion(asset.updated_at) !== utcVersion(target.expectedUpdatedAt)) throw new Error("所选素材版本已变化，请重新查看后发送；未提交修改");
+    const object = selectedObject(asset, target);
+    if (target.scope === "segment" && target.expectedSegmentUpdatedAt && utcVersion(object.updated_at) !== utcVersion(target.expectedSegmentUpdatedAt)) throw new Error("所选片段版本已变化，请重新查看后发送；未提交修改");
   }
   function projection(asset: MaterialAsset, target: MaterialSelection) {
     const object = selectedObject(asset, target);
@@ -127,6 +141,30 @@ export function registerMaterialTools(
     },
   });
   pi.registerTool({
+    name: "suggest_selected_material_tags",
+    label: "查看片段标签建议",
+    description: "仅根据当前选中片段的已保存画面观察给出待采纳标签和采样依据；不修改任何标签，不推断永久习惯。没有明确片段选择时须先选择。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      const target = boundSelection();
+      if (target.scope !== "segment") throw new Error("请先选择需要标签建议的片段");
+      const asset = await read(`/api/production/materials/${encodeURIComponent(target.assetId)}`) as MaterialAsset;
+      verifyVersion(asset, target);
+      const segment = selectedObject(asset, target) as Segment;
+      const seen = new Set(segment.user_tags);
+      const suggestions = asset.use_state === "excluded" || segment.description.trim() || segment.understanding?.status !== "ready" ? []
+        : segment.understanding.facts.flatMap(fact => {
+          const label = (fact.label || fact.text).trim();
+          if (!label || [...label].length > 32 || seen.has(label)) return [];
+          seen.add(label);
+          return [{ label: materialText(label), source: "visual_observation", reason: materialText(fact.text),
+            kind: fact.kind, sample_times: fact.sample_times, segment_ref: `segment:${segment.id}` }];
+        });
+      return result({ ...projection(asset, target), suggestions, changed: false,
+        instruction: "建议尚未采纳，没有写入我的标签。来源为当前片段观察，不是用户习惯或精确动作区间；人工描述优先，未重新提升旧识别。只有用户明确采纳后才可调用标签修改工具。" });
+    },
+  });
+  pi.registerTool({
     name: "read_selected_material",
     label: "读取所选素材",
     description: "读取发送时明确选中的整条素材或片段：文件与原资产时间、用户说明、我的标签和系统标签、画面理解、已有转写及OCR的独立状态和文字证据。整条素材按片段分页，片段只读自身范围；无选择须先选择。不接受模型指定ID、路径、成员或工作区，不读取原始文件。",
@@ -136,6 +174,7 @@ export function registerMaterialTools(
     execute: async (_id: string, params: { offset?: number; limit?: number } = {}) => {
       const target = boundSelection();
       const asset = await read(`/api/production/materials/${encodeURIComponent(target.assetId)}`) as MaterialAsset;
+      verifyVersion(asset, target);
       const object = selectedObject(asset, target);
       if (asset.use_state === "excluded") {
         return result({ ...projection(asset, target), use_state: asset.use_state, content_withheld: true,
@@ -159,7 +198,7 @@ export function registerMaterialTools(
             user_tags: segment.user_tags, system_tags: segment.system_tags,
             visual: { status: visual?.status ?? segment.visual_status ?? "not_recorded",
               summary: visual?.status === "ready" ? materialText(visual.summary) : "",
-              facts: visual?.status === "ready" ? visual.facts.map(fact => ({ kind: fact.kind, text: materialText(fact.text), sample_times: fact.sample_times })) : [],
+              facts: visual?.status === "ready" ? visual.facts.map(fact => ({ kind: fact.kind, label: fact.label ? materialText(fact.label) : null, text: materialText(fact.text), sample_times: fact.sample_times })) : [],
               unknowns: visual ? visual.unknowns.map(materialText) : [], message: materialText(visual?.message ?? "") },
             ocr: { status: visual?.ocr_status ?? "not_recorded", frames: visual?.ocr_status === "ready"
               ? visual.ocr_frames.map(frame => ({ timestamp_seconds: frame.timestamp_seconds,
@@ -190,6 +229,7 @@ export function registerMaterialTools(
       if (!["replace", "add", "remove"].includes(params.action)) throw new Error("请明确替换、添加或移除我的标签");
       const path = `/api/production/materials/${encodeURIComponent(target.assetId)}`;
       const beforeAsset = await context.request(path) as MaterialAsset;
+      verifyVersion(beforeAsset, target);
       const before = selectedObject(beforeAsset, target);
       const tags = normalizedTags(params.tags);
       const updated = params.action === "replace" ? tags
@@ -199,7 +239,9 @@ export function registerMaterialTools(
       if (JSON.stringify(updated) === JSON.stringify(before.user_tags)) {
         return result({ ...projection(beforeAsset, target), action: params.action, changed: false });
       }
-      const body = target.scope === "asset" ? { user_tags: updated } : {
+      const body = target.scope === "asset" ? { user_tags: updated, expected_asset_updated_at: target.expectedUpdatedAt ?? beforeAsset.updated_at } : {
+        expected_asset_updated_at: target.expectedUpdatedAt ?? beforeAsset.updated_at,
+        expected_segment_updated_at: target.expectedSegmentUpdatedAt ?? before.updated_at,
         // Existing segment PUT replaces these fields; omission would erase metadata.
         description: (before as Segment).description,
         transcript: (before as Segment).transcript,
@@ -210,7 +252,11 @@ export function registerMaterialTools(
       };
       const writePath = target.scope === "asset" ? `${path}/tags`
         : `${path}/segments/${encodeURIComponent(target.segmentId)}`;
-      await context.request(writePath, { method: "PUT", body: JSON.stringify(body) });
+      const submittedAsset = await context.request(writePath, { method: "PUT", body: JSON.stringify(body) }) as MaterialAsset;
+      const submitted = selectedObject(submittedAsset, target);
+      if (!Number.isFinite(Date.parse(submittedAsset.updated_at)) || !Number.isFinite(Date.parse(submitted.updated_at))) {
+        throw new Error("标签请求已提交，但写入返回缺少有效对象版本，无法确认保存结果；请刷新当前对象");
+      }
       let afterAsset: MaterialAsset;
       try {
         afterAsset = await context.request(path) as MaterialAsset;
@@ -218,9 +264,16 @@ export function registerMaterialTools(
         throw new Error("标签请求已提交，但回读失败，无法确认保存结果；请刷新当前对象后再决定下一步", { cause });
       }
       const after = selectedObject(afterAsset, target);
+      if (utcVersion(afterAsset.updated_at) !== utcVersion(submittedAsset.updated_at) || utcVersion(after.updated_at) !== utcVersion(submitted.updated_at)) {
+        throw new Error("标签请求已提交，但回读对象版本与本次写入不一致，无法确认保存结果；请刷新当前对象");
+      }
       if (JSON.stringify(after.user_tags) !== JSON.stringify(updated)) {
         throw new Error("标签请求已提交，但回读标签与修改要求不一致，无法确认保存结果；请刷新当前对象");
       }
+      // Only this turn's successful CAS response, verified by the same-object GET,
+      // advances its private expectation; caller selection and IDs stay frozen.
+      target.expectedUpdatedAt = submittedAsset.updated_at;
+      if (target.scope === "segment") target.expectedSegmentUpdatedAt = submitted.updated_at;
       return result({ ...projection(afterAsset, target), action: params.action,
         previous_user_tags: before.user_tags, changed: true });
     },

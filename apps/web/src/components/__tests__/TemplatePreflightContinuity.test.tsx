@@ -35,7 +35,7 @@ it("the actual detail use action changes the same draft's fixed template and ret
   render(<CreateProductionTaskForm draftId={id} template={selected} />);
   await screen.findByText("预检目标时长：30 秒");
   expect(mocks.preview).toHaveBeenCalledWith(expect.objectContaining({ template_id: selected.id, template_version: 7, goal: fields.goal, name: fields.name, target_count: 2, duration_target_seconds: 30, language: "zh-CN", aspect_ratio: "16:9", presenter_share_target: 40, lipsync_quality: "fast", selected_voice: fields.voicePin, selected_person: fields.personPin }));
-  expect(screen.getByLabelText("任务声音")).toHaveValue("voice:v3"); expect(screen.getByLabelText("任务人物")).toHaveValue("person:p2"); expect(mocks.confirm).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "voice:v3"); expect(screen.getByLabelText("任务人物")).toHaveAttribute("data-selected-value", "person:p2"); expect(mocks.confirm).not.toHaveBeenCalled();
 });
 it("preserves the original normal creation link when no repair context exists", async () => {
   render(<TemplateLibraryWorkspace offline={false} templates={[selected]} />);
@@ -53,6 +53,9 @@ it("keeps the original draft and page on marker quota failure after the real too
   const quota = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) { if (key.includes("preflight-repair")) throw new Error("quota"); set.call(this, key, value); });
   fireEvent.click(screen.getByRole("button", { name: "换用此模板并返回创作" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("quota"); expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields); expect(mocks.push).not.toHaveBeenCalled(); quota.mockRestore();
+  fireEvent.click(screen.getByRole("button", { name: "换用此模板并返回创作" }));
+  await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(preflightReturnUrl(id, { id: selected.id, version: selected.version })));
+  expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual({ ...fields, template: { id: selected.id, version: selected.version } });
 });
 it.each(["scope", "uuid"])("refuses a changed %s before template use without touching another draft", async change => {
   seed(); render(<TemplateLibraryWorkspace offline={false} templates={[selected]} />); await screen.findByRole("button", { name: "换用此模板并返回创作" });

@@ -1,3 +1,4 @@
+import { chooseSelectValue, inspectSelectOptions } from "@/components/__tests__/select-interaction";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +74,7 @@ describe("sources file import", () => {
     render(<SourcesPage />);
     fireEvent.click(screen.getByRole("button", { name: "导入文件" }));
     await screen.findByRole("heading", { name: "上传知识文件" });
-    fireEvent.change(within(document.querySelector('input[type=file]')!.closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "reference_only" } });
+    await chooseSelectValue(within(document.querySelector('input[type=file]')!.closest("form")!).getByLabelText("保存后的使用范围"), "reference_only");
     selectFile();
     await waitFor(() => expect(api.importKnowledgeFile).toHaveBeenCalledTimes(1));
     expect(api.importKnowledgeFile.mock.calls[0][0].filename).toBe("说明书.md");
@@ -81,6 +82,7 @@ describe("sources file import", () => {
     expect(await screen.findByText(/已解析《说明书》/)).toHaveTextContent("出处 1 处");
 
     const inspector = await screen.findByRole("complementary", { name: "信息条目详情" });
+    expect(inspector).toHaveTextContent("全文正文");
     fireEvent.click(within(inspector).getByRole("button", { name: /保存到知识库/ }));
     await waitFor(() => expect(api.saveSourceItemToKnowledge).toHaveBeenCalledTimes(1));
     expect(api.saveSourceItemToKnowledge.mock.calls[0][0]).toBe("source-file");
@@ -122,7 +124,7 @@ describe("sources web snapshot", () => {
     await screen.findByRole("heading", { name: "网页快照" });
     const urlInput = screen.getByPlaceholderText("https://example.com/article") as HTMLInputElement;
     fireEvent.change(urlInput, { target: { value: "https://example.com/v1" } });
-    fireEvent.change(within(urlInput.closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "not_for_publish" } });
+    await chooseSelectValue(within(urlInput.closest("form")!).getByLabelText("保存后的使用范围"), "not_for_publish");
     fireEvent.submit(urlInput.closest("form") as HTMLFormElement);
     await waitFor(() => expect(api.captureWebSnapshot).toHaveBeenCalledWith({ url: "https://example.com/v1", use_state: "not_for_publish" }));
     expect(await screen.findByText(/网页正文已存为快照/)).toBeInTheDocument();
@@ -161,9 +163,9 @@ describe("content entry intent and preparation", () => {
     expect(screen.queryByRole("button", { name: /小红书/ })).not.toBeInTheDocument();
     expect(screen.getByText("小红书").closest("div")).not.toHaveAttribute("tabindex");
     const platform = screen.getByLabelText("平台");
-    expect(within(platform).queryByRole("option", { name: /尚未支持/ })).not.toBeInTheDocument();
+    await inspectSelectOptions(platform,()=>{ expect(screen.queryByRole("option", { name: /尚未支持/ })).not.toBeInTheDocument(); });
     fireEvent.click(screen.getByRole("button", { name: /产品社区/ }));
-    expect(platform).toHaveValue("product_hunt");
+    expect(platform).toHaveAttribute("data-selected-value", "product_hunt");
   });
 
   it("shows inline preparation and rejects missing, empty or unsupported files without API calls", async () => {
@@ -196,7 +198,7 @@ describe("content entry intent and preparation", () => {
     render(<SourcesPage />);
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "说明书" } });
     fireEvent.change(screen.getByLabelText("正文"), { target: { value: "全文正文" } });
-    fireEvent.change(within(screen.getByLabelText("正文").closest("form")!).getByLabelText("保存后的使用范围"), { target: { value: "excluded" } });
+    await chooseSelectValue(within(screen.getByLabelText("正文").closest("form")!).getByLabelText("保存后的使用范围"), "excluded");
     fireEvent.submit(screen.getByLabelText("正文").closest("form")!);
     await waitFor(() => expect(api.createManualSourceItem).toHaveBeenCalledWith(expect.objectContaining({ title: "说明书", body: "全文正文", content_type: "text", use_state: "excluded" })));
     expect(await screen.findByText("信息条目已添加，可查看正文并保存到知识库。")).toBeInTheDocument();

@@ -1,3 +1,4 @@
+import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationPlan, CreationPlanPreview } from "@/lib/types";
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => {
     confirmCreationPlan: vi.fn(),
     CreationPlanApiError: MockCreationPlanApiError,
     assignLocation: vi.fn(),
+    getKnowledgeItem: vi.fn(),
   };
 });
 
@@ -27,6 +29,7 @@ vi.mock("@/lib/api", () => ({
   confirmCreationPlan: mocks.confirmCreationPlan,
   CreationPlanApiError: mocks.CreationPlanApiError,
 }));
+vi.mock("@/lib/source-api", () => ({ getKnowledgeItem: mocks.getKnowledgeItem }));
 
 vi.mock("@/lib/preflight-draft", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: vi.fn().mockResolvedValue({ memberId: "local:member-a", workspaceId: "workspace-a" }) }));
 
@@ -51,7 +54,7 @@ function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPrev
     approved_asset_count: 3,
     approved_clip_count: 5,
     material_rule_summary: "仅计入已审核的 B-roll 镜头。",
-    material_matches: [{ asset_ref: "asset:asset-1", segment_ref: "segment:segment-1", score: 0.86, reasons: ["用途匹配补充画面", "标签匹配产品"], match_tier: "text" } as CreationPlanPreview["material_matches"][number]],
+    material_matches: [{ asset_ref: "asset:asset-1", segment_ref: "segment:segment-1", score: 0.86, reasons: ["用途匹配 b_roll", "标签匹配产品"], match_tier: "text" } as CreationPlanPreview["material_matches"][number]],
     model_snapshot: [{ id: "voice-local", capability: "voice_generation", state: "ready", ready: true, message: "本地声音模型已就绪。" }],
     confirmation_points: ["确认资料与来源事实"],
     blockers: [],
@@ -70,6 +73,31 @@ describe("CreateProductionTaskForm", () => {
     mocks.previewCreationPlan.mockReset();
     mocks.confirmCreationPlan.mockReset();
     mocks.assignLocation.mockReset();
+    mocks.getKnowledgeItem.mockReset();
+  });
+
+  it("pins a selected knowledge version in the pending plan and cancels it explicitly", async () => {
+    mocks.getKnowledgeItem.mockResolvedValue({ id: "knowledge-1", title: "设备资料", version: "2" });
+    mocks.previewCreationPlan.mockResolvedValue(preview());
+    render(<CreateProductionTaskForm assignLocation={mocks.assignLocation} initialGoal="制作产品观察视频" initialKnowledgePin={{ knowledge_item_id: "knowledge-1", version: "2" }} />);
+    expect(await screen.findByText("设备资料 · 固定版本 2")).toBeInTheDocument();
+    fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ selected_knowledge: { knowledge_item_id: "knowledge-1", version: "2" } })));
+    expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消本次资料引用" }));
+    fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenCalledTimes(2));
+    expect(mocks.previewCreationPlan.mock.lastCall![0]).not.toHaveProperty("selected_knowledge");
+  });
+
+  it("reads the chosen historical knowledge title without silently upgrading the pin", async () => {
+    mocks.getKnowledgeItem.mockResolvedValue({ id: "knowledge-1", title: "新资料", version: "3", versions: [{ version: "2", title: "原来的资料" }] });
+    mocks.previewCreationPlan.mockResolvedValue(preview());
+    render(<CreateProductionTaskForm initialGoal="制作产品观察视频" initialKnowledgePin={{ knowledge_item_id: "knowledge-1", version: "2" }} />);
+    expect(await screen.findByText("原来的资料 · 固定版本 2")).toBeInTheDocument();
+    fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({ selected_knowledge: { knowledge_item_id: "knowledge-1", version: "2" } })));
+    expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
   });
 
   it("performs one read-only preflight, shows returned facts, and does not confirm before the user acts", async () => {
@@ -94,8 +122,8 @@ describe("CreateProductionTaskForm", () => {
     expect(screen.getAllByText("补充画面", { exact: false })).toHaveLength(2);
     expect(screen.getByText("主题候选")).toBeInTheDocument();
     expect(screen.queryByText("匹配 86%")).not.toBeInTheDocument();
-    expect(screen.getByText("用途匹配补充画面；标签匹配产品")).toBeInTheDocument();
-    expect(screen.getByText("声音生成 · 已就绪")).toBeInTheDocument();
+    expect(screen.getByText("用途匹配 补充画面；标签匹配产品")).toBeInTheDocument();
+    expect(screen.getByText("声音生成 · 安装检查通过")).toBeInTheDocument();
   });
 
   it("keeps confirmation disabled when the returned preflight has a blocking issue", async () => {
@@ -205,10 +233,10 @@ describe("preflight candidate and stage facts", () => {
     expect(count).toHaveTextContent("检索候选与可用计数分别核验");
   });
 
-  it("retains actual model errors and outbound facts while putting raw identifiers in diagnostics", () => {
+  it("retains actual model errors and outbound facts inside collapsed diagnostics", () => {
     render(<PreflightFacts preview={preview({ selected_voice: null, model_snapshot: [{ id: "model-raw-id", capability: "text_generation", state: "unavailable", ready: false, message: "连接失败；调用将向客户配置的服务发送文案。" }] })} />);
     expect(screen.getByText("文字生成 · 不可用")).toBeVisible();
-    expect(screen.getByText("连接失败；调用将向客户配置的服务发送文案。")).toBeVisible();
+    expect(screen.getByText("连接失败；调用将向客户配置的服务发送文案。")).not.toBeVisible();
     expect(screen.queryByText(/已核验声音及人物授权/)).not.toBeInTheDocument();
     const raw = screen.getByText(/model-raw-id/);
     expect(raw).not.toBeVisible();
@@ -338,13 +366,34 @@ it("inherits landscape ratio through the form and preflight, then replaces it wh
 });
 
 describe("fixed independent task profile pins",()=>{
+ it("uses names for opaque versions while retaining exact values and version titles",async()=>{
+  const voiceVersion = "v-11111111-1111-4111-8111-111111111111";
+  const personVersion = "v-22222222-2222-4222-8222-222222222222";
+  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice-exact",version:voiceVersion,display_name:"我的声音"}]});
+  profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-exact",version:personVersion,display_name:"我的人物"},{id:"person-numeric",version:"2",display_name:"数字版本人物"}]});
+  mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();
+  await inspectSelectOptions(screen.getByLabelText("任务声音"),async()=>{const voice = await screen.findByRole("option",{name:"我的声音"});expect(voice).toHaveAttribute("data-app-select-value",`voice-exact:${voiceVersion}`);expect(voice).toHaveAttribute("title",voiceVersion);});
+  await inspectSelectOptions(screen.getByLabelText("任务人物"),async()=>{const person = await screen.findByRole("option",{name:"我的人物"});expect(person).toHaveAttribute("data-app-select-value",`person-exact:${personVersion}`);expect(person).toHaveAttribute("title",personVersion);expect(screen.getByRole("option",{name:"数字版本人物 · 2"})).toHaveAttribute("title","2");});
+  await chooseSelectValue(screen.getByLabelText("任务声音"), `voice-exact:${voiceVersion}`);
+  await chooseSelectValue(screen.getByLabelText("任务人物"), `person-exact:${personVersion}`);
+  fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);
+  await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice-exact",version:voiceVersion},selected_person:{profile_id:"person-exact",version:personVersion}})));
+ });
  it("uses the historical default voice and an independently chosen person in the same real preflight request",async()=>{
-  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice",version:"v2",display_name:"最新声音"}]});profileMocks.getDefaultVoice.mockResolvedValue({id:"voice",version:"v1"});profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-other",version:"p3",display_name:"另一个人物"}]});mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();await screen.findByRole("option",{name:"已固定声音版本 · v1（当前列表未返回）"});expect(screen.getByLabelText("任务声音")).toHaveValue("voice:v1");fireEvent.change(screen.getByLabelText("任务人物"),{target:{value:"person-other:p3"}});fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice",version:"v1"},selected_person:{profile_id:"person-other",version:"p3"}})));
+  profileMocks.listVoiceProfiles.mockResolvedValue({items:[{id:"voice",version:"v2",display_name:"最新声音"}]});profileMocks.getDefaultVoice.mockResolvedValue({id:"voice",version:"v1"});profileMocks.listPersonProfiles.mockResolvedValue({items:[{id:"person-other",version:"p3",display_name:"另一个人物"}]});mocks.previewCreationPlan.mockResolvedValue(preview());renderForm();await screen.findByText("声音固定版本未返回");expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "voice:v1");await chooseSelectValue(screen.getByLabelText("任务人物"), "person-other:p3");fireEvent.submit(screen.getByRole("button",{name:"检查可用内容"}).closest("form")!);await waitFor(()=>expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({selected_voice:{profile_id:"voice",version:"v1"},selected_person:{profile_id:"person-other",version:"p3"}})));
  });
 });
 
 
 describe("preflight business names and necessary diagnostics", () => {
+  it("labels model readiness as installation checks and keeps the complete message in diagnostics", () => {
+    const message = "模型安装记录与权重文件检查完成；内部权重路径保留用于诊断。";
+    render(<PreflightFacts preview={preview({ model_snapshot: [{ id: "voice-local", capability: "voice_generation", state: "ready", ready: true, message }] })} />);
+    expect(screen.getByText("声音生成 · 安装检查通过")).toBeVisible();
+    expect(screen.getByText("安装检查核对运行程序与模型文件，不代表生成实测通过或设备资源许可。")).toBeVisible();
+    expect(screen.getByText(message)).not.toBeVisible();
+    fireEvent.click(screen.getByText("模型诊断"));expect(screen.getByText(message)).toBeVisible();
+  });
   it("shows names for the exact independent pins and leaves IDs/empty proof fields in diagnostics", () => {
     render(<PreflightFacts
       preview={preview({ knowledge_references: [{ id: "knowledge-raw", version: "v1", title: "资料名称", authorization: "", ownership: "" }], selected_person: { profile_id: "independent-person", version: "p3" } })}
@@ -361,4 +410,25 @@ describe("preflight business names and necessary diagnostics", () => {
     expect(screen.getByText("模板指定的固定声音版本不可用，未替换为其他声音。")).toBeVisible();
     expect(screen.getByText(/raw-profile/)).not.toBeVisible(); fireEvent.click(screen.getByText("阻断诊断")); expect(screen.getByText(/raw-profile/)).toBeVisible();
   });
+});
+
+it("shows API shot roles and zh voice in ordinary language while retaining raw diagnostics in a bilingual plan", () => {
+  const facts = preview({ language: "zh-CN/en-US", pronunciation_references: [],
+    material_matches: [{ asset_ref: "asset:actual", segment_ref: "segment:actual", score: .8,
+      reasons: ["用途匹配 a_roll", "用途匹配 b_roll"], match_tier: "text" } as CreationPlanPreview["material_matches"][number]],
+  });
+  render(<PreflightFacts preview={facts} />);
+  expect(screen.getByText("用途匹配 主镜头；用途匹配 补充画面")).toBeVisible();
+  expect(screen.getByText(/适用语言：中文。/)).toBeVisible();
+  expect(screen.queryByText(/适用语言：中英混读/)).not.toBeInTheDocument();
+  const reasons = screen.getByText("原始理由：用途匹配 a_roll；用途匹配 b_roll");
+  const language = screen.getByText("语言：zh");
+  expect(reasons).not.toBeVisible();
+  expect(language).not.toBeVisible();
+  fireEvent.click(screen.getByText("候选诊断"));
+  fireEvent.click(screen.getByText("声音引用诊断"));
+  expect(reasons).toBeVisible();
+  expect(language).toBeVisible();
+  expect(facts.selected_voice?.language).toBe("zh");
+  expect(facts.material_matches[0].reasons).toEqual(["用途匹配 a_roll", "用途匹配 b_roll"]);
 });

@@ -20,6 +20,8 @@ export type MaterialImportIdentity = {
 declare global {
   interface Window {
     electronAPI?: {
+      setCardMediaEscape?: (cardId: string | null) => void;
+      onCardMediaEscape?: (callback: (cardId: string) => void) => () => void;
       openDirectory?: () => Promise<string | null>;
       openFile?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;

@@ -1,3 +1,4 @@
+import { chooseSelectValue } from "./select-interaction";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -52,7 +53,7 @@ it("opens the full editor with the same crop draft", () => {
   const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
   render(<VideoClipInspector clip={clip} index={0} count={1} workspace={workspace} busy={false} initialDraft={initialDraft} onDraftStateChange={onDraftStateChange} onPreview={vi.fn()} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing={false} onPerson={vi.fn()} />);
   expect(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" })).toHaveValue(1.5);
-  expect(screen.getByRole("combobox", { name:"画面显示方式" })).toHaveValue("fit");
+  expect(screen.getByRole("combobox", { name:"画面显示方式" })).toHaveAttribute("data-selected-value", "fit");
   fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" }), { target:{ value:"2" } });
   expect(onDraftStateChange).toHaveBeenLastCalledWith({ start:2, mode:"fit", x:.5, y:.5 });
 });
@@ -104,7 +105,7 @@ it("disables every fine-edit control for a locked clip", () => {
   expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toBeDisabled();
 });
 
-it("submits ordinary inspector fields on valid completion without preview buttons", () => {
+it("submits ordinary inspector fields on valid completion without preview buttons", async () => {
   const onPreview = vi.fn();
   const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
   render(<VideoClipInspector clip={clip} index={1} count={2} workspace={workspace} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
@@ -122,9 +123,9 @@ it("submits ordinary inspector fields on valid completion without preview button
   fireEvent.change(linkedRate, { target:{ value:"0.5" } });
   fireEvent.blur(linkedRate);
   expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeLinkedSpeed", clip_id:"clip-1", playback_rate:.5 });
-  fireEvent.change(screen.getByRole("combobox", { name:"画面显示方式" }), { target:{ value:"fit" } });
+  await chooseSelectValue(screen.getByRole("combobox", { name:"画面显示方式" }), "fit");
   expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"ChangeCrop", clip_id:"clip-1", fit_mode:"fit", crop_x:.5, crop_y:.5 });
-  fireEvent.change(screen.getByRole("combobox", { name:"画面显示方式" }), { target:{ value:"fill" } });
+  await chooseSelectValue(screen.getByRole("combobox", { name:"画面显示方式" }), "fill");
   fireEvent.click(screen.getByText("裁切位置"));
   const cropX = screen.getByRole("slider", { name:"裁切水平位置" });
   fireEvent.change(cropX, { target:{ value:"0.7" } });

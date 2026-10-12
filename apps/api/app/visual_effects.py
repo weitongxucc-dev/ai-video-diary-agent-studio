@@ -312,8 +312,8 @@ _CROP_AXIS=re.compile(r"(?:(?:画面|视频|镜头)(?:的)?)?(?:裁剪|裁切|�
 _CROP_MOVE=re.compile(r"(?:裁剪|裁切|裁)?\s*(?:到)?\s*(?:往|向)\s*(左|右|上|下)\s*(?:移动|移|挪|裁|调)\s*(\d+(?:\.\d+)?)\s*[%％]")
 _CROP_FOREIGN=re.compile(r"声音|配音|字幕|口型|美颜|磨皮|曝光|对比度|饱和度|亮度|色调|缩放|旋转|淡入|淡出|转场|叠化|速度|删除|替换")
 _CROP_AXIS_WORDS={"水平":"x","横向":"x","左右":"x","垂直":"y","纵向":"y","上下":"y"}
-_CROP_SAFE_CLAUSES={"其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变"}
-_CROP_LEAD=re.compile(r"^(?:请|帮我|麻烦|把|将|给|让|需要|想)?(?:(?:当前|这个|该)?(?:镜头|画面|视频))?(?:的)?")
+_CROP_SAFE_CLAUSES={"其他不要动","其他别动","不要改变脸型","不改变脸型","别改脸型","保留口型","保留配音","配音不变","声音不变","保持镜头顺序、时长、配音和字幕不变","生成修改提案"}
+_CROP_LEAD=re.compile(r"^(?:请|帮我|麻烦|把|将|给|让|需要|想)?(?:(?:当前选中的|当前|所选|这个|该)?(?:第[1-9]\d*个)?(?:镜头|画面|视频))?(?:的)?(?:改为|改成)?")
 # 整条只有一个方向、又没有给量：既可能是裁剪也可能要求画面位移，落到裁剪侧只为了回参数提示，
 # 带上百分比或夹带别的子句时仍留给既有画面位移与视觉词表。
 _CROP_BARE_DIRECTION=re.compile(r"(?:往|向)(?:左|右|上|下)(?:移动|移|挪|裁|调)?(?:一点|点|一些)?$")
@@ -369,6 +369,9 @@ def compile_crop_command(command,current):
     raw=command.strip().casefold().rstrip("。！")
     if not _CROP_KEYWORDS.search(raw) and not _CROP_BARE_DIRECTION.fullmatch(_strip_crop_lead(raw)):
         return None
+    ordinal = re.search(r"第([1-9]\d*)个镜头", raw)
+    if ordinal and int(ordinal[1]) != current.get("clip_index"):
+        raise ValueError("指令中的镜头序号与当前选中镜头不一致，没有生成修改提案")
     fit_mode=current.get("fit_mode")
     crop_x=current.get("crop_x")
     crop_y=current.get("crop_y")
@@ -377,7 +380,7 @@ def compile_crop_command(command,current):
     state={"fit_mode":fit_mode,"crop_x":crop_x,"crop_y":crop_y}
     applied=False
     unknown=[]
-    for part in re.split(r"[，,；;]|(?:并且|同时|然后)",raw):
+    for part in re.split(r"[，,；;。]|(?:并且|同时|然后)",raw):
         part=_strip_crop_lead(part.strip())
         if not part or part in _CROP_SAFE_CLAUSES:
             continue

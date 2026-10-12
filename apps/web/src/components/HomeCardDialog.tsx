@@ -11,6 +11,13 @@ const layers: Layer[] = [];
 const ParentCard = createContext<Layer | null>(null);
 const topLayer = () => layers.at(-1);
 
+function syncDesktopMediaEscape() {
+  const current = topLayer();
+  const focused = document.activeElement;
+  const mediaCard = current && focused instanceof HTMLMediaElement && current.node.contains(focused) && !document.fullscreenElement;
+  window.electronAPI?.setCardMediaEscape?.(mediaCard ? current.id : null);
+}
+
 /** Resolve palette ownership from its actual trigger, skipping short menus. */
 export function homeCardParentForTarget(target: EventTarget | null) {
   if (!(target instanceof Node)) return undefined;
@@ -108,9 +115,20 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
     if (contentArea) observer.observe(contentArea);
     if (toolbar) observer.observe(toolbar);
     card.querySelector<HTMLElement>(kind === "confirmation" || kind === "modal" ? "[data-card-cancel], button" : "button, input, select, textarea")?.focus();
+    const syncMediaFocus = () => { if (topLayer() === entry) syncDesktopMediaEscape(); };
+    const releaseMediaEscape = window.electronAPI?.onCardMediaEscape?.((cardId) => {
+      if (cardId === entry.id && topLayer() === entry && !document.fullscreenElement && document.activeElement instanceof HTMLMediaElement && card.contains(document.activeElement)) entry.close();
+    });
+    document.addEventListener("focusin", syncMediaFocus, true);
+    document.addEventListener("focusout", syncMediaFocus, true);
+    document.addEventListener("fullscreenchange", syncMediaFocus);
+    syncMediaFocus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (topLayer() !== entry) return;
-      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); entry.close(); return; }
+      if (event.key === "Escape") {
+        if (card.querySelector('[data-app-select-popup][data-open]')) return;
+        event.preventDefault(); event.stopImmediatePropagation(); entry.close(); return;
+      }
       if (event.key !== "Tab" || !modal) return;
       const focusable = Array.from(card.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]'));
       const first = focusable[0], last = focusable.at(-1);
@@ -149,7 +167,12 @@ export function HomeCardDialog({ title, children, onClose, kind = "modal", ancho
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", outside, true);
       document.removeEventListener("scroll", fieldScroll, true);
+      document.removeEventListener("focusin", syncMediaFocus, true);
+      document.removeEventListener("focusout", syncMediaFocus, true);
+      document.removeEventListener("fullscreenchange", syncMediaFocus);
+      releaseMediaEscape?.();
       const index = layers.indexOf(entry); if (index !== -1) layers.splice(index, 1);
+      syncDesktopMediaEscape();
       previousLayerInert.forEach((inert, cardNode) => { cardNode.inert = inert; });
       if (shell && blocksApplication) shell.inert = wasShellInert || layers.some(value => value.kind === "modal" || value.kind === "navigation" || (value.kind === "confirmation" && !value.parentId));
       positionLayers();

@@ -15,6 +15,12 @@ WEIGHT_READ_BYTES_PER_SECOND = 32 * 1024 * 1024
 WEIGHT_READ_BLOCK_BYTES = 1024 * 1024
 
 
+def _log_mlx_memory(mx, phase: str) -> None:
+    print(f"QWEN_MEMORY phase={phase} active_bytes={mx.get_active_memory()} "
+          f"cache_bytes={mx.get_cache_memory()} peak_bytes={mx.get_peak_memory()}",
+          file=sys.stderr, flush=True)
+
+
 def _pace_weight_reads(model_path: Path) -> tuple[int, float]:
     """Read within the monitored worker; loader/cache behavior remains separate."""
     weights = sorted(model_path.rglob("*.safetensors"))
@@ -59,6 +65,11 @@ def main() -> None:
 
     print("QWEN_PHASE importing_runtime", file=sys.stderr, flush=True)
     import numpy as np
+    import mlx.core as mx
+
+    # Bound retained free buffers; active MLX memory still needs host admission.
+    mx.set_cache_limit(0)
+    _log_mlx_memory(mx, "cache_disabled")
     from mlx_audio.audio_io import write as audio_write
     from mlx_audio.tts.utils import load_model
 
@@ -74,11 +85,14 @@ def main() -> None:
     print("QWEN_PHASE loading_weights", file=sys.stderr, flush=True)
     model = load_model(str(model_path))
     print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
+    _log_mlx_memory(mx, "weights_loaded")
     print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
+    _log_mlx_memory(mx, "inference_started")
     results = _generate_with_pronunciation(model, request, reference_path)
     if not results:
         raise RuntimeError("model generated no audio")
     print("QWEN_PHASE inference_returned", file=sys.stderr, flush=True)
+    _log_mlx_memory(mx, "inference_returned")
     sample_rates = {int(result.sample_rate) for result in results}
     if len(sample_rates) != 1:
         raise RuntimeError("model returned inconsistent sample rates")
@@ -104,6 +118,7 @@ def main() -> None:
     temporary_response.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary_response, response_path)
     print("QWEN_PHASE audio_written", file=sys.stderr, flush=True)
+    _log_mlx_memory(mx, "audio_written")
 
 
 def _validate_request(payload: object) -> None:

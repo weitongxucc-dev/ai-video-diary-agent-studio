@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PRODUCTION_SCHEMA_VERSION = 15
+PRODUCTION_SCHEMA_VERSION = 18
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -26,6 +26,21 @@ VALUES (
     '本机创作者',
     'owner',
     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+);
+"""
+
+
+# Explicit local adoption also installs only this table inside its data transaction.
+# It must not run the general startup migration chain against the reviewed input.
+LOCAL_ADOPTION_RECEIPTS_DDL = """
+CREATE TABLE IF NOT EXISTS local_adoption_receipts (
+    operation_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL CHECK (workspace_id = 'local'),
+    member_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    applied_at TEXT NOT NULL
 );
 """
 
@@ -675,6 +690,107 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         END;
         """,
     ),
+    (
+        16,
+        """
+        CREATE TABLE automations (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            actor_json TEXT NOT NULL,
+            name TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            template_id TEXT NOT NULL,
+            template_version INTEGER NOT NULL CHECK(template_version >= 1),
+            template_snapshot_json TEXT NOT NULL,
+            trigger_json TEXT NOT NULL,
+            source_scope_json TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+            status TEXT NOT NULL CHECK(status IN ('active','paused','running','waiting_review','blocked','failed')),
+            next_due_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_automations_due ON automations(paused,next_due_at);
+        CREATE INDEX idx_automations_member ON automations(workspace_id,member_id,created_at);
+        CREATE TABLE automation_runs (
+            id TEXT PRIMARY KEY,
+            automation_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            automation_revision INTEGER NOT NULL,
+            due_key TEXT NOT NULL,
+            due_at TEXT NOT NULL,
+            definition_json TEXT NOT NULL,
+            input_snapshot_json TEXT,
+            state TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            reason_code TEXT,
+            reason TEXT,
+            repair_action TEXT,
+            plan_id TEXT,
+            task_id TEXT,
+            job_id TEXT,
+            confirmation_json TEXT NOT NULL DEFAULT '{}',
+            execution_json TEXT NOT NULL DEFAULT '{}',
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(automation_id,due_key)
+        );
+        CREATE INDEX idx_automation_runs_scope ON automation_runs(workspace_id,member_id,automation_id,created_at);
+        """,
+    ),
+    (
+        17,
+        """
+        CREATE TABLE creation_requests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            request_key TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            creation_input_digest TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            target_count INTEGER NOT NULL CHECK(target_count > 0 AND target_count <= 9007199254740991),
+            output_relation TEXT,
+            requirements_json TEXT NOT NULL,
+            material_scope_json TEXT NOT NULL,
+            clarification_questions_json TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            status TEXT NOT NULL CHECK(status IN ('awaiting_clarification','awaiting_plan','awaiting_confirmation','active')),
+            current_window_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, owner_user_id, request_key)
+        );
+        CREATE INDEX idx_creation_requests_owner ON creation_requests(workspace_id,owner_user_id,created_at);
+        CREATE TABLE creation_request_windows (
+            id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL REFERENCES creation_requests(id),
+            ordinal_start INTEGER NOT NULL CHECK(ordinal_start > 0),
+            input_fingerprint TEXT NOT NULL,
+            request_revision INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('proposed','confirmed','superseded')),
+            created_at TEXT NOT NULL,
+            confirmed_at TEXT
+        );
+        CREATE INDEX idx_creation_request_windows_request ON creation_request_windows(request_id,status,ordinal_start);
+        CREATE TABLE creation_request_items (
+            window_id TEXT NOT NULL REFERENCES creation_request_windows(id),
+            ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+            plan_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            plan_payload TEXT NOT NULL,
+            task_payload TEXT NOT NULL,
+            PRIMARY KEY(window_id,ordinal),
+            UNIQUE(window_id,plan_id),
+            UNIQUE(window_id,task_id)
+        );
+        """,
+    ),
+    (18, LOCAL_ADOPTION_RECEIPTS_DDL),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。

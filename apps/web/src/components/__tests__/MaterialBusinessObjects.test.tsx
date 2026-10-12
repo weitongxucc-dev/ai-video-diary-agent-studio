@@ -1,3 +1,4 @@
+import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { useRef, useState } from "react";
@@ -83,7 +84,7 @@ it("adds a name entry on an empty list, selects it and saves it explicitly", asy
   expect(screen.getByText("当前工作区还没有名称条目，可以在下面新增一个。")).toBeInTheDocument();
   expect(onSave).not.toHaveBeenCalled();
 
-  fireEvent.change(screen.getByLabelText("类型"), { target: { value: "dish" } });
+  await chooseSelectValue(screen.getByLabelText("类型"), "dish");
   fireEvent.change(screen.getByLabelText("名称"), { target: { value: "红烧肉" } });
   fireEvent.click(screen.getByRole("button", { name: "新增并选中" }));
 
@@ -235,12 +236,12 @@ it("does not report a save result for the previous material", async () => {
   expect(checkbox("红烧肉")).not.toBeChecked();
 });
 
-it("offers only product, dish and person with plain wording", () => {
+it("offers only product, dish and person with plain wording", async () => {
   render(<Harness assetId="asset-1" />);
 
-  const options = screen.getAllByRole("option") as HTMLOptionElement[];
-  expect(options.map(option => option.value)).toEqual(["product", "dish", "person"]);
-  expect(options.map(option => option.textContent)).toEqual(["产品", "菜品", "人物"]);
+  await inspectSelectOptions(screen.getByLabelText("类型"),()=>{ const options = screen.getAllByRole("option");
+  expect(options.map(option => option.getAttribute("data-app-select-value"))).toEqual(["product", "dish", "person"]);
+  expect(options.map(option => option.textContent)).toEqual(["产品", "菜品", "人物"]); });
 
   expect(screen.getByText("选择或新增产品、菜品、人物名称，保存到当前素材。")).toBeInTheDocument();
   expect(screen.getByText("人物名称用于素材分类。")).toBeInTheDocument();

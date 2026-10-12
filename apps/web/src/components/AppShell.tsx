@@ -8,15 +8,13 @@ import {
   ArrowLeft,
   BookOpen,
   ChevronDown,
-  CircleHelp,
-  CircleAlert, CircleCheck, CircleDashed, CircleDot, LoaderCircle,
+  LoaderCircle,
   Clapperboard,
   Columns2,
   FileStack,
   Home,
   Library,
   Menu,
-  Moon,
   PanelLeft,
   PanelRight,
   Plus,
@@ -24,12 +22,13 @@ import {
   Search,
   Settings,
   Sparkles,
-  Sun,
+  SunMoon,
   UserRound,
   Users,
 } from "lucide-react";
 import {
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -44,17 +43,18 @@ import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDi
 import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
-import { listCreationTasks } from "@/lib/api";
-import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
-import { toggleHelpPanel } from "@/lib/helpPanel";
+import { listCreationTasks, listLocalMembers, type LocalMember } from "@/lib/api";
+import { creationTaskShortStatus } from "@/lib/creation-task-status";
+import { CreationTaskStageIcon } from "@/components/CreationTaskStageIcon";
 import type { CreationTask } from "@/lib/types";
 
 import { useEditorPanels } from "./useEditorPanels";
 import editorShell from "./EditorShell.module.css";
+import shellUi from "./AppShellCompact.module.css";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
 type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
-type ThemeMode = "system" | "light" | "dark";
+export type ThemeMode = "system" | "light" | "dark";
 
 function displayTaskName(name?: string) {
   return (name || "未命名创作任务")
@@ -78,12 +78,12 @@ const primaryNav: NavItem[] = [
   { href: "/profiles", label: "人物与声音", icon: UserRound },
   { href: "/templates", label: "视频模板", icon: FileStack },
   { href: "/history", label: "发布与数据", icon: Activity },
-  { href: "/members", label: "成员与空间", icon: Users },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
   ...primaryNav,
-  { href: "/production?view=automations", label: "定时定义预览" },
+  { href: "/members", label: "成员与空间" },
+  { href: "/production?view=automations", label: "定时任务" },
   { href: "/production", label: "创作任务" },
   { href: "/tasks", label: "创作任务" },
   { href: "/sources", label: "资料来源" },
@@ -122,21 +122,17 @@ export type AppShellProps = {
   inspectorDismissKey?: string;
 };
 
-function creationTaskState(task: CreationTask) {
-  return creationTaskStatusPresentation(task.stage_status, task.stage);
-}
-
 function creationTaskHref(task: CreationTask) {
   return `/tasks/${encodeURIComponent(task.id)}`;
 }
 
 function mergeCreationTasks(...groups: CreationTask[][]): CreationTask[] {
-  const seen = new Set<string>();
-  return groups.flat().filter((task) => {
-    if (seen.has(task.id)) return false;
-    seen.add(task.id);
-    return true;
-  }).slice(0, 6);
+  const tasks = new Map<string, CreationTask>();
+  for (const task of groups.flat()) {
+    const previous = tasks.get(task.id);
+    if (!previous || Date.parse(task.updated_at) > Date.parse(previous.updated_at)) tasks.set(task.id, task);
+  }
+  return [...tasks.values()].slice(0, 6);
 }
 
 function isActive(pathname: string, href: string, activePath?: string, search?: Pick<URLSearchParams, "get">): boolean {
@@ -190,7 +186,7 @@ function ToolbarLocationContent({ pathname, searchParams }: { pathname: string; 
   </div>;
 }
 
-function applyTheme(mode: ThemeMode) {
+export function applyTheme(mode: ThemeMode) {
   const resolved =
     mode === "system"
       ? window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -231,7 +227,7 @@ export function AppShell({
   }, []);
   // 身份引导：挂载时拉一次 whoami 并把令牌写进 localStorage（hook 内完成）。
   // 角色未知（加载中）时先显示“成员与空间”，避免 owner 首屏看不到自己的页面。
-  const { role: localMemberRole } = useLocalMemberIdentity();
+  const { role: localMemberRole, ready: identityReady, token: identityToken, error: identityError } = useLocalMemberIdentity();
   const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
@@ -239,8 +235,20 @@ export function AppShell({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [members, setMembers] = useState<LocalMember[]>([]);
+  const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
+  useEffect(() => {
+    let active = true;
+    setMembers([]);
+    if (!localAuthMode) { setMembersState("ready"); return; }
+    if (!identityReady) { setMembersState("loading"); return; }
+    if (identityError || !identityToken) { setMembersState("error"); return; }
+    setMembersState("loading");
+    void listLocalMembers().then(result => { if (active) { setMembers(result.members); setMembersState("ready"); } })
+      .catch(() => { if (active) setMembersState("error"); });
+    return () => { active = false; };
+  }, [localAuthMode, identityReady, identityToken, identityError]);
   const [searchParentId, setSearchParentId] = useState<string | undefined>();
   const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
   const [taskReadState, setTaskReadState] = useState<"loading" | "ready" | "error">("loading");
@@ -257,33 +265,63 @@ export function AppShell({
   useEffect(() => {
     const stored = window.localStorage.getItem("ai-video-diary-theme") as ThemeMode | null;
     const initial = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
-    setThemeMode(initial);
     applyTheme(initial);
     const query = window.matchMedia("(prefers-color-scheme: dark)");
-    const sync = () => initial === "system" && applyTheme("system");
+    const sync = () => document.documentElement.dataset.themeMode === "system" && applyTheme("system");
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
 
-  async function refreshRecentTasks() {
+  const refreshRecentTasks = useCallback(async (background = false) => {
     const request = ++taskReadSequence.current;
-    setTaskReadState("loading"); setTaskReadError(null);
+    if (!background) { setTaskReadState("loading"); setTaskReadError(null); }
     try {
       const payload = await listCreationTasks();
       if (request !== taskReadSequence.current) return;
       setRecentTasks(current => mergeCreationTasks(payload.items, current));
       setTaskReadState("ready");
+      setTaskReadError(null);
     } catch (cause) {
       if (request !== taskReadSequence.current) return;
       setTaskReadError(cause instanceof Error ? cause.message : "任务列表读取失败");
       setTaskReadState("error");
     }
-  }
+  }, []);
 
   useEffect(() => {
     void refreshRecentTasks();
     return () => { ++taskReadSequence.current; };
-  }, []);
+  }, [pathname, refreshRecentTasks]);
+
+  const hasRunningTask = recentTasks.some(task => task.status === "running" || task.stage_status === "running");
+  useEffect(() => {
+    if (!hasRunningTask) return;
+    let active = true;
+    let reading = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (active && !document.hidden) timer = window.setTimeout(() => void read(), 15000);
+    };
+    async function read() {
+      window.clearTimeout(timer);
+      if (!active || reading || document.hidden) return;
+      reading = true;
+      await refreshRecentTasks(true);
+      reading = false;
+      schedule();
+    }
+    const onVisibility = () => {
+      window.clearTimeout(timer);
+      if (!document.hidden) void read();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [hasRunningTask, refreshRecentTasks]);
 
   useEffect(() => {
     if (previousTaskProps.current === creationTasks) return;
@@ -296,14 +334,12 @@ export function AppShell({
 
   useEffect(() => { setSidebarOpen(false); setDetailsOpen(false); }, [pathname]);
 
-  function cycleTheme() {
-    const next: ThemeMode = themeMode === "system" ? "light" : themeMode === "light" ? "dark" : "system";
-    setThemeMode(next);
+  function toggleTheme() {
+    const next: ThemeMode = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     window.localStorage.setItem("ai-video-diary-theme", next);
     applyTheme(next);
   }
 
-  const ThemeIcon = themeMode === "dark" ? Moon : Sun;
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
     { id: "new-production", label: "新建视频", description: "说说想法", href: "/?new=1", icon: Plus },
     ...primaryNav.filter((item) => showMembersNav || item.href !== "/members").map((item) => ({
@@ -316,12 +352,13 @@ export function AppShell({
     ...recentTasks.map((task) => ({
       id: `task-${task.id}`,
       label: displayTaskName(task.name),
-      description: `创作任务 · ${creationTaskState(task).label}`,
+      description: `创作任务 · ${creationTaskShortStatus(task.stage_status, task.stage)}`,
       href: creationTaskHref(task),
       icon: Clapperboard,
     })),
-    { id: "scheduled-preview", label: "定时定义预览", description: "只读查看已保存定义，尚未接通执行", href: "/production?view=automations", icon: Sparkles },
-    { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/health", icon: Activity },
+    { id: "scheduled-tasks", label: "定时任务", description: "安排到期时间，查看待确认步骤与执行记录", href: "/production?view=automations", icon: Sparkles },
+    ...(showMembersNav ? [{ id: "members", label: "成员与空间", description: "管理成员与共享空间", href: "/settings?section=creators", icon: Users }] : []),
+    { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/settings?section=runtime", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
   ], [recentTasks, showMembersNav]);
 
@@ -341,9 +378,9 @@ export function AppShell({
         <div className="desktop-sidebar__brand-row">
           <Link aria-label="返回首页" className="desktop-brand" href="/">
             <span className="desktop-brand__mark">
-              <Image alt="" aria-hidden height={18} src="/favicon.svg" width={18} />
+              <Image alt="" aria-hidden height={18} src="/yaohe-icon.png" unoptimized width={18} />
             </span>
-            <span>智能视频日记</span>
+            <span>曜核1.0</span>
           </Link>
           <button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={16} /></button>
         </div>
@@ -370,13 +407,13 @@ export function AppShell({
               <details><summary>失败详情</summary><p>{taskReadError}</p></details>
             </div> : null}
             {recentTasks.length ? recentTasks.map((task) => {
-              const taskState = creationTaskState(task);
+              const statusLabel = creationTaskShortStatus(task.stage_status, task.stage);
               return (
-                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className="desktop-creation-task" title={`${displayTaskName(task.name)} · ${taskState.label}`} href={creationTaskHref(task)} key={task.id}>
-                  <span className={`desktop-task-status status-${taskState.tone}`} aria-hidden="true">{taskState.tone === "running" ? <LoaderCircle className="is-spinning" size={15} /> : taskState.tone === "success" ? <CircleCheck size={15} /> : task.stage_status === "not_started" ? <CircleDashed size={15} /> : task.stage_status === "waiting_for_user" ? <CircleDot size={15} /> : <CircleAlert size={15} />}</span>
+                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
+                  <CreationTaskStageIcon stage={task.stage} className={shellUi.stageIcon} />
                   <span className="desktop-creation-task__copy">
                     <strong>{displayTaskName(task.name)}</strong>
-                    <small>{taskState.label}</small>
+                    <small className={shellUi.taskState} data-status={task.stage_status}>{task.stage_status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{statusLabel}</small>
                   </span>
                 </Link>
               );
@@ -386,24 +423,16 @@ export function AppShell({
           </div>
         </nav>
 
-        <div className="desktop-sidebar__footer">
-          <Link className={`desktop-nav-row${pathname.startsWith("/health") ? " is-active" : ""}`} href="/health" aria-label="运行情况">
-            <Activity size={16} />
-            <span>运行情况</span>
-            {workspaceStatus ? <i className={`health-dot health-dot--${workspaceStatus.kind}`} title={workspaceStatus.label} /> : null}
-          </Link>
-          <Link className={`desktop-nav-row${pathname.startsWith("/settings") ? " is-active" : ""}`} href="/settings" aria-label="设置">
-            <Settings size={16} />
-            <span>设置</span>
-          </Link>
-          <div className="desktop-user-row">
-            <span className="desktop-user-avatar"><UserRound size={14} /></span>
-            <span>{localAuthMode ? "本机创作者" : "我的工作区"}</span>
-            <button aria-label={`当前主题：${themeMode === "dark" ? "深色" : themeMode === "light" ? "浅色" : "跟随系统"}，点击切换`} className="shell-icon-button" onClick={cycleTheme} type="button">
-              <ThemeIcon size={15} />
-            </button>
+        <nav className={shellUi.creatorControls} aria-label="创作者与设备设置" hidden={panels.collapsed}>
+          {members.length ? <Link className={shellUi.avatarGroup} data-avatar-group href="/settings?section=creators" aria-label={`${members.length}位创作者，打开成员设置`} title={`${members.map(member => member.name).join("、")}；不会切换当前身份`}>
+            {members.slice(0, 3).map(member => <span className={shellUi.avatar} data-avatar key={member.member_id} title={member.name} aria-hidden="true">{Array.from(member.name)[0]}</span>)}
+            {members.length > 3 ? <span className={shellUi.avatarCount} data-avatar-count aria-hidden="true">+{members.length - 3}</span> : null}
+          </Link> : <Link className={shellUi.memberStatus} href="/settings?section=creators" title={membersState === "loading" ? "正在读取成员名册" : membersState === "error" ? "成员名册暂不可读，打开设置处理" : localAuthMode ? "尚无成员，打开成员设置" : "打开成员设置"}>{membersState === "loading" ? "读取名册…" : membersState === "error" ? "名册暂不可读" : "成员设置"}</Link>}
+          <div className={shellUi.quickControls}>
+            <button className={shellUi.quickButton} type="button" aria-label="切换明暗主题" title="切换明暗主题" onClick={toggleTheme}><SunMoon size={16} aria-hidden="true"/></button>
+            <Link className={shellUi.quickButton} href="/settings" aria-label="设备设置" title={workspaceStatus ? `设备设置 · ${workspaceStatus.label}` : "设备设置"}><Settings size={16} aria-hidden="true"/></Link>
           </div>
-        </div>
+        </nav>
         {!panels.collapsed ? <div className={`${editorShell.separator} ${editorShell.leftSeparator}`} {...panels.separator("left")} /> : null}
       </aside>
 
@@ -431,9 +460,7 @@ export function AppShell({
 
             </button>
             {providedInspector ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
-            <button aria-label="帮助" className="shell-icon-button" onClick={() => toggleHelpPanel()} type="button">
-              <CircleHelp size={17} />
-            </button>
+            {panels.collapsed ? <><button type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
             {!localAuthMode ? (
               <form action="/auth/signout" method="post">
                 <button aria-label="退出登录" className="shell-icon-button" type="submit"><UserRound size={17} /></button>
@@ -443,7 +470,7 @@ export function AppShell({
         </header>
 
           <section aria-label="创作助手" className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><small>{pathname.startsWith("/tasks/") ? "当前视频" : "聊聊想法"}</small><button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></button></div></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></button></div></header>
             <div className={editorShell.conversationBody}>
               {conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </div>

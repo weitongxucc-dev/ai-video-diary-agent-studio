@@ -1,4 +1,19 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+// Startup probes use the already-open stderr descriptor, never a log file.
+// The candidate is unknown until the existing build-identity validation finishes.
+let startupBuildIdentity = null;
+function handleStartupStderrError(error) {
+  if (error.code !== 'EPIPE') throw error;
+}
+process.stderr.on('error', handleStartupStderrError);
+function startupCheckpoint(stage) {
+  process.stderr.write(`[desktop-startup] ${JSON.stringify({
+    stage, buildIdentity: startupBuildIdentity, pid: process.pid, ppid: process.ppid,
+  })}\n`);
+}
+startupCheckpoint('main-entry');
+startupCheckpoint('electron-require-start');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, utilityProcess } = require('electron');
+startupCheckpoint('electron-require-end');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -6,11 +21,16 @@ const { spawn } = require('child_process');
 const http = require('http');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
+startupCheckpoint('updater-require-start');
 const { autoUpdater } = require('electron-updater');
+startupCheckpoint('updater-require-end');
+startupCheckpoint('device-identity-module-require-start');
 const { loadOrCreateIdentity } = require('./device-identity');
+startupCheckpoint('device-identity-module-require-end');
 
 // Chromium's explicit profile directory must also govern Electron's own
 // dotenv, device identity and logs before any of them are read or created.
+startupCheckpoint('path-initialization-start');
 const explicitUserDataPath = app.commandLine.getSwitchValue('user-data-dir');
 if (explicitUserDataPath) {
   if (!path.isAbsolute(explicitUserDataPath)) {
@@ -22,6 +42,8 @@ if (explicitUserDataPath) {
   app.setAppLogsPath(path.join(explicitUserDataPath, 'logs'));
 }
 
+startupCheckpoint('path-initialization-end');
+
 // ── State ──────────────────────────────────────────────
 let mainWindow = null;
 let apiProcess = null;
@@ -32,6 +54,11 @@ let apiStopping = false;
 let nextStopping = false;
 let quitInProgress = false;
 let lifecycleLogFile = null;
+let lifecycleLogStream = null;
+let lifecycleLogFailure = null;
+let lifecycleLogClosePromise = null;
+// Keep file-log I/O within the existing API startup wait (60 one-second attempts).
+const LIFECYCLE_LOG_TIMEOUT_MS = 60_000;
 const isDev = process.env.NODE_ENV === 'development';
 const buildIdentityMetadataFile = path.join(__dirname, 'build-identity.generated.json');
 // Supabase invite/recovery links must target a stable origin. The callback runs
@@ -62,7 +89,9 @@ function resolveWebPort() {
   }
   return Number(value);
 }
+startupCheckpoint('web-port-resolve-start');
 const webPort = resolveWebPort();
+startupCheckpoint('web-port-resolve-end');
 const webOrigin = `http://localhost:${webPort}`;
 const serviceStates = {
   api: { label: '本地 API 服务', state: 'not-started', error: null },
@@ -124,23 +153,120 @@ function loadBuildIdentity() {
   return metadata.candidateInputDigest;
 }
 
+startupCheckpoint('build-identity-load-start');
 const buildIdentity = loadBuildIdentity();
+startupBuildIdentity = buildIdentity;
+startupCheckpoint('build-identity-load-end');
 
 function runtimeLogPath() {
   if (lifecycleLogFile) return lifecycleLogFile;
+  startupCheckpoint('lifecycle-log-path-start');
   const directory = app.getPath('logs');
+  startupCheckpoint('lifecycle-log-path-end');
+  startupCheckpoint('lifecycle-log-directory-start');
   fs.mkdirSync(directory, { recursive: true });
+  startupCheckpoint('lifecycle-log-directory-end');
   lifecycleLogFile = path.join(directory, 'desktop-runtime.jsonl');
   return lifecycleLogFile;
 }
 
+function showLifecycleLogFailure(error) {
+  dialog.showErrorBox(
+    '日志写入失败',
+    `运行日志未能完成写入（${error.code || error.name || 'unknown'}）。应用将结束本实例，不继续制作。\n\n请检查外接数据盘连接与日志目录访问，恢复后重新打开应用。不会自动修改文件权限或用户数据。`,
+  );
+}
+
+function failLifecycleLog(error) {
+  if (lifecycleLogFailure) return;
+  lifecycleLogFailure = error;
+  startupCheckpoint('lifecycle-log-failed');
+  lifecycleLogStream?.destroy();
+  if (quitInProgress) return;
+  quitInProgress = true;
+  void app.whenReady().then(async () => {
+    showLifecycleLogFailure(error);
+    startupCheckpoint('lifecycle-log-dialog-returned');
+    await stopAllServices();
+    startupCheckpoint('lifecycle-log-services-stopped');
+  }).finally(() => {
+    startupCheckpoint('lifecycle-log-exit-call-start');
+    app.exit(1);
+  });
+}
+
 function recordLifecycle(event, fields = {}) {
-  fs.appendFileSync(runtimeLogPath(), `${JSON.stringify({
-    timestamp: new Date().toISOString(),
-    event,
-    buildIdentity,
-    ...fields,
-  })}\n`, 'utf8');
+  const line = `${JSON.stringify({
+    timestamp: new Date().toISOString(), event, buildIdentity, ...fields,
+  })}\n`;
+  const write = new Promise((resolve, reject) => {
+    let settled = false;
+    let firstLogWrite = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const failure = error || lifecycleLogFailure;
+      if (failure) reject(failure);
+      else {
+        if (firstLogWrite) startupCheckpoint('lifecycle-log-append-end');
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => finish(Object.assign(new Error('Lifecycle log write timed out'), { code: 'ETIMEDOUT' })), LIFECYCLE_LOG_TIMEOUT_MS);
+    if (lifecycleLogFailure) { finish(lifecycleLogFailure); return; }
+    try {
+      if (!lifecycleLogStream) {
+        const logFile = runtimeLogPath();
+        firstLogWrite = true;
+        startupCheckpoint('lifecycle-log-append-start');
+        lifecycleLogStream = fs.createWriteStream(logFile, { flags: 'a', encoding: 'utf8' });
+        lifecycleLogStream.on('error', failLifecycleLog);
+        lifecycleLogStream.on('close', () => {
+          if (!lifecycleLogStream.writableFinished && !lifecycleLogFailure) {
+            failLifecycleLog(Object.assign(new Error('Lifecycle log closed before finishing'), { code: 'ERR_STREAM_PREMATURE_CLOSE' }));
+          }
+        });
+      }
+      lifecycleLogStream.write(line, finish);
+    } catch (error) { finish(error); }
+  });
+  // Observe every failure even for existing callers which do not await log I/O.
+  // The returned promise still rejects, so the startup gate cannot claim success.
+  void write.catch(failLifecycleLog);
+  return write;
+}
+
+function closeLifecycleLog() {
+  if (lifecycleLogClosePromise) return lifecycleLogClosePromise;
+  if (!lifecycleLogStream) return Promise.resolve();
+  lifecycleLogClosePromise = new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => finish(Object.assign(new Error('Lifecycle log close timed out'), { code: 'ETIMEDOUT' })), LIFECYCLE_LOG_TIMEOUT_MS);
+    if (lifecycleLogFailure) { finish(lifecycleLogFailure); return; }
+    lifecycleLogStream.once('close', () => finish(lifecycleLogFailure));
+    lifecycleLogStream.end();
+  });
+  void lifecycleLogClosePromise.catch(failLifecycleLog);
+  return lifecycleLogClosePromise;
+}
+
+async function exitAfterLifecycleLog(code = 0) {
+  try { await closeLifecycleLog(); }
+  catch (error) {
+    failLifecycleLog(error);
+    await app.whenReady();
+    showLifecycleLogFailure(error);
+    code = 1;
+  }
+  app.exit(code);
 }
 
 function isBrokenPipe(error) {
@@ -158,7 +284,7 @@ function stopAfterMainLogFailure(stream, error) {
     '日志输出失败',
     `桌面日志输出发生错误（${error.code || error.name || 'unknown'}）。应用将退出，避免继续显示无法追溯的核心服务状态。`,
   );
-  void stopAllServices().finally(() => app.exit(1));
+  void stopAllServices().finally(() => exitAfterLifecycleLog(1));
 }
 
 function handleMainLogStreamError(stream, error) {
@@ -170,6 +296,7 @@ function handleMainLogStreamError(stream, error) {
 }
 
 function installMainLogStreamGuards() {
+  process.stderr.removeListener('error', handleStartupStderrError);
   process.stdout.on('error', (error) => handleMainLogStreamError('stdout', error));
   process.stderr.on('error', (error) => handleMainLogStreamError('stderr', error));
 }
@@ -486,34 +613,29 @@ async function startNextServer() {
     PORT: String(nextPort),
     HOSTNAME: '127.0.0.1',
     API_PORT: String(apiPort),
-    // A packaged app cannot rely on a system Node.js installation. Electron's
-    // executable can run the bundled Next server in Node mode instead.
-    ELECTRON_RUN_AS_NODE: '1',
   };
 
-  nextProcess = spawn(process.execPath, [serverJs], {
+  nextProcess = utilityProcess.fork(serverJs, [], {
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: process.platform !== 'win32',
+    stdio: 'pipe',
+    serviceName: 'Yaohe Web',
   });
 
   nextProcess.on('error', (err) => {
-    console.error(`[main] Failed to spawn Next.js server: ${err.message}`);
+    console.error(`[main] Web utility process failed: ${err.type}`);
     nextProcess = null;
-    reportServiceFailure('web', new Error(`无法启动：${err.message}`));
+    reportServiceFailure('web', new Error(`后台网页服务异常（${err.type}）`));
   });
 
   attachChildOutput('web', nextProcess.stdout, 'next', (message) => console.log(message));
   attachChildOutput('web', nextProcess.stderr, 'next:err', (message) => console.error(message));
 
-  nextProcess.on('exit', (code, signal) => {
-    console.log(`[main] Next.js server exited (code=${code}, signal=${signal})`);
-    const pid = nextProcess ? nextProcess.pid : null;
-    recordLifecycle('service-exit', { service: 'web', code, signal, expected: nextStopping });
+  nextProcess.on('exit', (code) => {
+    console.log(`[main] Web utility process exited (code=${code})`);
+    recordLifecycle('service-exit', { service: 'web', code, signal: null, expected: nextStopping });
     nextProcess = null;
     if (!nextStopping) {
-      if (pid) terminateExitedServiceGroup(pid);
-      reportServiceFailure('web', new Error(`进程已退出（code=${code}, signal=${signal}）`));
+      reportServiceFailure('web', new Error(`进程已退出（code=${code}）`));
     }
   });
 
@@ -522,9 +644,10 @@ async function startNextServer() {
   return nextPort;
 }
 
-async function stopService(name, child, setStopping) {
+async function stopService(name, child, setStopping, utility = false) {
   if (!child) return;
-  if (child.exitCode !== null) {
+  const isRunning = () => utility ? child.pid !== undefined : child.exitCode === null;
+  if (!isRunning()) {
     setServiceState(name, 'stopped');
     return;
   }
@@ -532,14 +655,18 @@ async function stopService(name, child, setStopping) {
   console.log(`[main] Stopping ${serviceStates[name].label} (pid=${child.pid})...`);
 
   const exited = new Promise((resolve) => child.once('exit', resolve));
-  signalService(child, 'SIGTERM');
+  if (utility) child.kill();
+  else signalService(child, 'SIGTERM');
   let timeoutId;
   await Promise.race([
     exited,
     new Promise((resolve) => { timeoutId = setTimeout(resolve, 5000); }),
   ]);
   clearTimeout(timeoutId);
-  if (child.exitCode === null) signalService(child, 'SIGKILL');
+  if (isRunning()) {
+    if (utility) process.kill(child.pid, 'SIGKILL');
+    else signalService(child, 'SIGKILL');
+  }
   let killTimeoutId;
   await Promise.race([
     exited,
@@ -571,7 +698,7 @@ function signalServiceGroup(pid, signal) {
 
 async function stopAllServices() {
   await Promise.all([
-    stopService('web', nextProcess, (value) => { nextStopping = value; }),
+    stopService('web', nextProcess, (value) => { nextStopping = value; }, true),
     stopService('api', apiProcess, (value) => { apiStopping = value; }),
   ]);
 }
@@ -1371,7 +1498,7 @@ function createWindow() {
     height: 840,
     minWidth: 1024,
     minHeight: 700,
-    title: 'AI 视频日记',
+    title: '曜核1.0',
     backgroundColor: '#f7f7f5',
     show: true,
     ...(isMac ? {
@@ -1387,8 +1514,23 @@ function createWindow() {
     },
   });
   mainWindow = window;
+  let cardMediaEscape = null;
+  const setCardMediaEscape = (event, cardId) => {
+    if (event.sender === window.webContents) cardMediaEscape = typeof cardId === 'string' ? cardId : null;
+  };
+  ipcMain.on('set-card-media-escape', setCardMediaEscape);
+  window.webContents.on('enter-html-full-screen', () => { cardMediaEscape = null; });
+  window.webContents.on('before-input-event', (event, input) => {
+    // Native media controls consume Escape before the page's DOM listener.
+    // Only an armed object card takes it; fullscreen keeps its normal Escape.
+    if (input.type === 'keyDown' && input.key === 'Escape' && cardMediaEscape) {
+      event.preventDefault();
+      window.webContents.send('card-media-escape', cardMediaEscape);
+    }
+  });
 
   window.on('closed', () => {
+    ipcMain.removeListener('set-card-media-escape', setCardMediaEscape);
     if (mainWindow === window) mainWindow = null;
   });
 
@@ -1496,7 +1638,7 @@ function buildMenu() {
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: '关于 AI视频日记 Agent Studio',
+              title: '关于曜核1.0',
               message: `AI视频日记 Agent Studio v${app.getVersion()}`,
               detail: `构建身份：${buildIdentity}\n\n本地优先的 macOS 内容生产 Agent。\n\n将素材、想法和语音指令推进成可验证、可回滚、可导入剪映的完整视频草稿。\n\n© 2026 AI视频日记 Contributors\nMIT License`,
             });
@@ -1510,9 +1652,10 @@ function buildMenu() {
 }
 
 // ── App Lifecycle ──────────────────────────────────────
-app.whenReady().then(async () => {
+async function startReadyServices() {
   installMainLogStreamGuards();
-  recordLifecycle('app-start', { mode: isDev ? 'development' : 'packaged' });
+  await recordLifecycle('app-start', { mode: isDev ? 'development' : 'packaged' });
+  if (quitInProgress) return;
   buildMenu();
   registerIpcHandlers();
   configureAutoUpdater();
@@ -1545,7 +1688,7 @@ app.whenReady().then(async () => {
     );
     quitInProgress = true;
     await stopAllServices();
-    app.quit();
+    await exitAfterLifecycleLog(1);
     return;
   }
 
@@ -1558,7 +1701,7 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
-});
+}
 
 app.on('window-all-closed', () => {
   // On macOS the app stays alive with its services (API and Next)
@@ -1573,7 +1716,7 @@ app.on('before-quit', (event) => {
   if (quitInProgress) return;
   event.preventDefault();
   quitInProgress = true;
-  void stopAllServices().finally(() => app.exit());
+  void stopAllServices().finally(() => exitAfterLifecycleLog());
 });
 
 // ── Auto Updater ──────────────────────────────────────
@@ -1654,15 +1797,37 @@ function checkForUpdates(silent = true) {
   });
 }
 
-// Prevent multiple instances
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
+// The first completed file write gates the original lock and all services.
+async function startDesktop() {
+  try {
+    await recordLifecycle('single-instance-lock-start', { pid: process.pid, ppid: process.ppid });
+  } catch (error) { failLifecycleLog(error); return; }
+  if (quitInProgress) return;
+  startupCheckpoint('single-instance-lock-call-start');
+  const singleInstanceLockStartedAt = process.hrtime.bigint();
+  const gotLock = app.requestSingleInstanceLock();
+  startupCheckpoint('single-instance-lock-call-end');
+  recordLifecycle('single-instance-lock-end', {
+    pid: process.pid, ppid: process.ppid, gotLock,
+    elapsedMs: Number(process.hrtime.bigint() - singleInstanceLockStartedAt) / 1_000_000,
+  });
+  if (!gotLock) { app.quit(); return; }
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
+  await app.whenReady();
+  if (!quitInProgress) await startReadyServices();
 }
+void startDesktop().catch(error => {
+  // Preserve a visible, explicit failure for lock/initialization exceptions.
+  startupCheckpoint('desktop-startup-failed');
+  if (quitInProgress) return;
+  quitInProgress = true;
+  void app.whenReady().then(() => {
+    dialog.showErrorBox('启动失败', `桌面初始化未完成（${error.code || error.name || 'unknown'}），请查看本次启动诊断并在恢复后重新打开应用。`);
+    return stopAllServices();
+  }).finally(() => exitAfterLifecycleLog(1));
+});

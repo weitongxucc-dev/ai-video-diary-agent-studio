@@ -1,60 +1,72 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
+import Link from "next/link";
+import { Search, RefreshCw, X, ChevronRight, Clock3, Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { listScheduledTasks, type ScheduledTask } from "@/lib/api";
+import { getAutomationOptions, listAutomations, createAutomation, reviseAutomation, pauseAutomation, listAutomationRuns, retryAutomationRun, previewAutomationRun, confirmAutomationRun, syncAutomationRunSources, type Automation, type AutomationInput, type AutomationOptions, type AutomationRun, type AutomationScope } from "@/lib/automation-api";
+import type { CreationPlanPreview } from "@/lib/types";
+import { HomeCardDialog } from "./HomeCardDialog";
 import styles from "./ScheduledTasksWorkspace.module.css";
 
-const taskTypeLabels: Record<string, string> = { material_analysis: "素材解析", creation_render: "成片制作" };
-const modeLabels: Record<string, string> = { scheduled: "指定时间", idle: "设备空闲" };
-
-function formatUtc(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间格式无法识别";
-  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+const statuses:Record<string,string>={active:"已开启",paused:"已暂停",running:"运行中",waiting_review:"待确认",blocked:"受阻",failed:"失败",completed:"已完成",cancelled:"已取消"};
+const stages:Record<string,string>={inputs:"核对输入",trigger:"触发时间",permission:"成员许可",plan:"方案",topic:"选题",script:"文案",make:"制作",narration:"配音",person_render:"人物画面",montage_plan:"故事板",render:"成片",publish:"发布"};
+const time=(value:string|null)=>value?new Date(value).toLocaleString("zh-CN",{hour12:false}):"没有后续触发";
+const message=(error:unknown)=>error instanceof Error?error.message:"读取自动化失败，请重试。";
+function initialInput():AutomationInput {
+  const now=new Date(Date.now()+5*60*1000);const local=new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  return {name:"",goal:"",template_id:"",template_version:1,trigger:{cadence:"once",timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,start_local:local,window_start:null,window_end:null},source_scope:{connector_ids:[],knowledge_ids:[],material_asset_ids:[]}};
 }
+function editable(item:Automation):AutomationInput { return {name:item.name,goal:item.goal,template_id:item.template_id,template_version:item.template_version,trigger:{...item.trigger},source_scope:{...item.source_scope}}; }
 
 export function ScheduledTasksWorkspace() {
-  const [tasks, setTasks] = useState<ScheduledTask[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [items,setItems]=useState<Automation[]|null>(null),[options,setOptions]=useState<AutomationOptions|null>(null),[error,setError]=useState("");
+  const [reading,setReading]=useState(false),[busy,setBusy]=useState(false),[query,setQuery]=useState(""),[filter,setFilter]=useState("all");
+  const [selectedId,setSelectedId]=useState<string|null>(null),[runs,setRuns]=useState<AutomationRun[]>([]),[runId,setRunId]=useState<string|null>(null);
+  const [editing,setEditing]=useState<"new"|"edit"|null>(null),[draft,setDraft]=useState<AutomationInput>(initialInput),[preview,setPreview]=useState<CreationPlanPreview|null>(null);
+  const [legacy,setLegacy]=useState<ScheduledTask[]|null>(null),[legacyError,setLegacyError]=useState("");
+  const revision=useRef(0),runRevision=useRef(0),selectedRef=useRef(selectedId);selectedRef.current=selectedId;
+  const selected=items?.find(item=>item.id===selectedId)??null,run=runs.find(item=>item.id===runId)??null;
 
   async function refresh() {
-    setTasks(null); setLoadError(null);
-    try { setTasks((await listScheduledTasks()).tasks); }
-    catch (cause) { setLoadError(cause instanceof Error ? cause.message : "定时任务定义读取失败"); }
+    const current=++revision.current;setReading(true);
+    try { const [list,settings]=await Promise.all([listAutomations(),getAutomationOptions()]);if(current!==revision.current)return;setItems(list.items);setOptions(settings);setError(""); }
+    catch(cause){if(current===revision.current)setError(message(cause));}
+    finally{if(current===revision.current)setReading(false);}
   }
-  useEffect(() => { void refresh(); }, []);
+  async function readRuns(id:string) {
+    const current=++runRevision.current;
+    try {const result=await listAutomationRuns(id);if(current===runRevision.current && selectedRef.current===id)setRuns(result.items);}
+    catch(cause){if(current===runRevision.current)setError(message(cause));}
+  }
+  useEffect(()=>{const reads=revision;const runReads=runRevision;void refresh();const interval=window.setInterval(()=>{if(document.visibilityState==="visible") {void refresh();if(selectedRef.current)void readRuns(selectedRef.current);}},5000);return()=>{window.clearInterval(interval);reads.current++;runReads.current++;};},[]);
+  useEffect(()=>{setRuns([]);setRunId(null);setPreview(null);if(selectedId)void readRuns(selectedId);else runRevision.current++;},[selectedId]);
+  async function action(operation:()=>Promise<unknown>) {
+    setBusy(true);setError("");try{await operation();await refresh();if(selectedRef.current)await readRuns(selectedRef.current);return true;}catch(cause){setError(message(cause));return false;}finally{setBusy(false);}
+  }
+  const filtered=items?.filter(item=>(filter==="all"||item.status===filter)&&(!query.trim()||[item.name,item.goal,item.template_id].some(value=>value.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))));
+  const closeDetail=()=>{setSelectedId(null);setEditing(null);setRunId(null);setPreview(null);};
+  function toggleScope(field:keyof AutomationScope,id:string) {setDraft(current=>({...current,source_scope:{...current.source_scope,[field]:current.source_scope[field].includes(id)?current.source_scope[field].filter(value=>value!==id):[...current.source_scope[field],id]}}));}
+  async function save() {
+    const saved=await action(async()=>{const item=editing==="edit"&&selected?await reviseAutomation(selected.id,draft,selected.revision):await createAutomation(draft);setSelectedId(item.id);});if(saved)setEditing(null);
+  }
 
-  return <section className={styles.page} aria-label="定时任务只读预览">
-    <div className={styles.previewNote}>
-      <strong>只读预览 · 尚未接通执行</strong>
-      <p>这里只查看已保存的任务定义，不会在指定时间或设备空闲时自动运行。</p>
+  return <section className={styles.page} aria-label="定时任务">
+    <div className={styles.toolbar}>
+      <label className={styles.search}><Search size={15}/><input aria-label="搜索自动化" value={query} placeholder="搜索名称或目标" onChange={event=>setQuery(event.target.value)}/>{query?<button aria-label="清除搜索" type="button" onClick={()=>setQuery("")}><X size={14}/></button>:null}</label>
+      <AppSelect aria-label="自动化状态筛选" value={filter} onValueChange={newValue =>setFilter(newValue)}><AppSelectOption value="all">全部状态</AppSelectOption>{Object.entries(statuses).filter(([value])=>!["completed","cancelled"].includes(value)).map(([value,label])=><AppSelectOption key={value} value={value}>{label}</AppSelectOption>)}</AppSelect>
+      <button className={styles.button} disabled={!options||busy} type="button" onClick={()=>{setDraft(initialInput());setEditing("new");setSelectedId(null);}}><Plus size={14}/>新建安排</button>
+      <button className={styles.refresh} disabled={reading} type="button" aria-label="刷新自动化" onClick={()=>void refresh()}><RefreshCw size={16}/></button>
     </div>
-    {loadError ? <div role="alert" className={styles.errorBox}>
-      <p>定时任务定义读取失败：{loadError}</p>
-      <button className={styles.button} type="button" onClick={() => void refresh()}>重试</button>
-    </div> : tasks === null ? <p role="status">正在读取已保存定义…</p>
-      : tasks.length === 0 ? <div className={styles.empty}>
-        <strong>还没有已保存的定时任务定义</strong>
-        <p>定时执行尚未接通，当前仅提供只读预览。</p>
-      </div> : <>
-        <p className={styles.count}>{tasks.length} 项已保存定义</p>
-        <ul className={styles.list}>
-          {tasks.map(task => <li key={task.id} className={styles.row}>
-            <div className={styles.rowHeading}>
-              <h2>{taskTypeLabels[task.task_type] ?? "任务定义"}</h2>
-              <span className={styles.state}>尚未接通执行</span>
-            </div>
-            <dl className={styles.facts}>
-              <div><dt>已保存触发条件</dt><dd>{modeLabels[task.trigger_mode] ?? "无法识别，详见诊断"}</dd></div>
-              <div><dt>已保存最早时间</dt><dd>{task.not_before_utc ? formatUtc(task.not_before_utc) : "未设置"}</dd></div>
-            </dl>
-            <details className={styles.diagnostics}>
-              <summary>诊断详情</summary>
-              <p>以下是已保存的定义字段，不代表已调度或已执行。</p>
-              <pre>{JSON.stringify(task, null, 2)}</pre>
-            </details>
-          </li>)}
-        </ul>
-      </>}
+    <p className={styles.count}>到期建立本次运行；选题、方案、文案、制作与发布逐次确认。</p>
+    {options&&!options.driver.running?<p role="status" className={styles.errorBox}>到期扫描器未运行，请恢复本地服务。{options.driver.error}</p>:options?.driver.error?<p role="status" className={styles.errorBox}>到期扫描受阻：{options.driver.error}</p>:null}
+    {error&&!selected&&!editing?<div role="alert" className={styles.errorBox}>{error}<button className={styles.button} disabled={reading} onClick={()=>void refresh()} type="button">重试读取</button></div>:null}
+    {items===null?<p role="status" className={styles.count}>正在读取自动化…</p>:<><p className={styles.count}>{items.length} 项安排 · 当前显示 {filtered?.length??0} 项</p>{!filtered?.length?<div className={styles.empty}>{items.length?"没有匹配的安排":"还没有自动化安排"}</div>:<ul className={styles.list}>{filtered.map(item=><li key={item.id}><button type="button" className={`${styles.row} ${selectedId===item.id?styles.selected:""}`} onClick={()=>{setSelectedId(item.id);setEditing(null);}}><Clock3 size={16}/><span className={styles.rowCopy}><strong>{item.name}</strong><small>{item.trigger.cadence==="daily"?"每日":"一次"} · {item.trigger.timezone} · {time(item.next_due_at)}</small></span><span className={styles.state}>{statuses[item.status]??item.status}</span><ChevronRight size={15}/></button></li>)}</ul>}</>}
+    <details className={styles.diagnostics} onToggle={event=>{if(event.currentTarget.open&&legacy===null)void listScheduledTasks().then(result=>setLegacy(result.tasks)).catch(cause=>setLegacyError(message(cause)));}}><summary>旧版已保存定义</summary><p>保留原定义与数据，不自动执行。请新建有固定模板、来源和确认记录的安排。</p>{legacyError?<p role="alert">{legacyError}</p>:legacy?.length?legacy.map(item=><p key={item.id}>{item.task_type} · {item.id} · 仅定义</p>):<p>没有旧定义</p>}</details>
+    {selected&&!editing?<HomeCardDialog title="自动化安排" kind="detail" onClose={closeDetail} footer={<><button className={styles.button} disabled={busy} type="button" onClick={()=>{setDraft(editable(selected));setEditing("edit");}}>编辑后续安排</button><button className={styles.button} disabled={busy} type="button" onClick={()=>void action(()=>pauseAutomation(selected.id,!selected.paused,selected.revision))}>{selected.paused?"重新开启":"暂停安排"}</button></>}><div className={styles.detail}>{error&&!run?<p role="alert" className={styles.errorBox}>{error}</p>:null}<h2>{selected.name}</h2><p>{selected.goal}</p><dl className={styles.facts}><div><dt>当前状态</dt><dd>{statuses[selected.status]??selected.status}</dd></div><div><dt>固定模板</dt><dd>{options?.templates.find(t=>t.id===selected.template_id&&t.version===selected.template_version)?.name??selected.template_id} · v{selected.template_version}</dd></div><div><dt>触发</dt><dd>{selected.trigger.cadence==="daily"?"每日":"一次"} · {selected.trigger.timezone}<br/>{selected.trigger.start_local.replace("T"," ")}</dd></div><div><dt>执行窗口</dt><dd>{selected.trigger.window_start?`${selected.trigger.window_start}–${selected.trigger.window_end}`:"不限时间窗口"}</dd></div><div><dt>来源范围</dt><dd>{selected.source_scope.connector_ids.length} 个信息源 · {selected.source_scope.knowledge_ids.length} 项知识 · {selected.source_scope.material_asset_ids.length} 条素材</dd></div><div><dt>修订</dt><dd>{selected.revision} · 只影响后续运行</dd></div></dl><p className={styles.count}>暂停后不建立新运行；正在执行的媒体单元到既有检查点结束，下一单元等待。</p><h2>执行记录</h2>{runs.length?<ul className={styles.list}>{runs.map(item=><li key={item.id}><button className={styles.row} type="button" onClick={()=>{setRunId(item.id);setPreview(null);}}><span className={styles.rowCopy}><strong>{time(item.due_at)}</strong><small>修订 {item.automation_revision} · {stages[item.stage]??item.stage}</small></span><span className={styles.state}>{statuses[item.state]??item.state}</span><ChevronRight size={14}/></button></li>)}</ul>:<p className={styles.count}>尚未到期认领运行。</p>}</div>
+      {run?<HomeCardDialog title="本次执行" kind="detail" onClose={()=>{setRunId(null);setPreview(null);}}><div className={styles.detail}>{error?<p role="alert" className={styles.errorBox}>{error}</p>:null}<h2>{statuses[run.state]??run.state} · {stages[run.stage]??run.stage}</h2><p>触发 {time(run.due_at)} · 定义修订 {run.automation_revision}</p>{run.reason?<p>{run.reason}</p>:null}{run.repair_action?<p>{run.repair_action}</p>:null}{run.task_id?<Link className={styles.button} href={`/tasks/${encodeURIComponent(run.task_id)}`}>打开创作任务</Link>:<div className={styles.actions}><button className={styles.button} disabled={busy||selected.paused} type="button" onClick={()=>void action(()=>retryAutomationRun(run.id))}>重试本次输入</button>{run.definition.source_scope.connector_ids.length?<button className={styles.button} disabled={busy||selected.paused} type="button" onClick={()=>{setPreview(null);void action(()=>syncAutomationRunSources(run.id));}}>同步所选信息源</button>:null}<button className={styles.button} disabled={busy||selected.paused} type="button" onClick={()=>void action(async()=>{setPreview(await previewAutomationRun(run.id));})}>预检本次方案</button></div>}{preview&&!run.task_id?<div className={styles.preview}><h2>本次方案预检</h2><p>{preview.goal}</p><p>{preview.knowledge_references.length} 项知识 · {preview.source_references.length} 条来源 · {preview.approved_asset_count} 条可用素材</p>{preview.blockers.map((blocker,index)=><p key={index}>{blocker.impact} {blocker.repair_action}</p>)}<button className={styles.button} type="button" disabled={busy||!preview.confirmable||selected.paused} onClick={()=>void action(async()=>{await confirmAutomationRun(run.id,preview.preflight_fingerprint);setPreview(null);})}>确认方案并创建任务</button></div>:null}<details className={styles.diagnostics}><summary>查看真实引用与确认记录</summary><pre>{JSON.stringify({plan_id:run.plan_id,task_id:run.task_id,job_id:run.job_id,inputs:run.input_snapshot,confirmation:run.confirmation,execution:run.execution},null,2)}</pre></details></div></HomeCardDialog>:null}
+    </HomeCardDialog>:null}
+    {editing?<HomeCardDialog title={editing==="new"?"新建自动化安排":"编辑后续安排"} kind="config" onClose={()=>setEditing(null)} footer={<button type="submit" form="automation-form" className={styles.button} disabled={busy||!draft.template_id}>{busy?"正在保存…":"保存安排"}</button>}>{error?<p role="alert" className={styles.errorBox}>{error}</p>:null}<form id="automation-form" className={styles.form} onSubmit={event=>{event.preventDefault();void save();}}><label>名称<input required maxLength={120} value={draft.name} onChange={event=>setDraft({...draft,name:event.target.value})}/></label><label>创作目标<textarea required maxLength={2000} value={draft.goal} onChange={event=>setDraft({...draft,goal:event.target.value})}/></label><label>固定模板版本<AppSelect required value={draft.template_id?`${draft.template_id}|${draft.template_version}`:""} onValueChange={newValue =>{const [id,version]=newValue.split("|");setDraft({...draft,template_id:id,template_version:Number(version)});}}><AppSelectOption value="">请选择模板版本</AppSelectOption>{options?.templates.map(template=><AppSelectOption key={`${template.id}:${template.version}`} value={`${template.id}|${template.version}`}>{template.name} · v{template.version}</AppSelectOption>)}</AppSelect></label><label>触发频率<AppSelect value={draft.trigger.cadence} onValueChange={newValue =>setDraft({...draft,trigger:{...draft.trigger,cadence:newValue as "once"|"daily"}})}><AppSelectOption value="once">一次</AppSelectOption><AppSelectOption value="daily">每日</AppSelectOption></AppSelect></label><label>IANA 时区<input required value={draft.trigger.timezone} placeholder="Asia/Shanghai" onChange={event=>setDraft({...draft,trigger:{...draft.trigger,timezone:event.target.value}})}/></label><label>当地开始时间<input required type="datetime-local" value={draft.trigger.start_local.slice(0,16)} onChange={event=>setDraft({...draft,trigger:{...draft.trigger,start_local:event.target.value}})}/></label><label className={styles.check}><input type="checkbox" checked={draft.trigger.window_start!==null} onChange={event=>setDraft({...draft,trigger:{...draft.trigger,window_start:event.target.checked?"22:00":null,window_end:event.target.checked?"07:00":null}})}/>限制执行窗口</label>{draft.trigger.window_start!==null?<div className={styles.window}><label>开始<input type="time" required value={draft.trigger.window_start} onChange={event=>setDraft({...draft,trigger:{...draft.trigger,window_start:event.target.value}})}/></label><label>结束<input type="time" required value={draft.trigger.window_end??""} onChange={event=>setDraft({...draft,trigger:{...draft.trigger,window_end:event.target.value}})}/></label></div>:null}<p>明确选择本次可用范围；未选择的类别保持为空。</p>{([['connector_ids','信息源',options?.connectors],['knowledge_ids','知识资料',options?.knowledge],['material_asset_ids','素材',options?.materials]] as const).map(([field,label,choices])=><fieldset key={field}><legend>{label}</legend>{choices?.length?choices.map(choice=><label className={styles.check} key={choice.id}><input type="checkbox" checked={draft.source_scope[field].includes(choice.id)} onChange={()=>toggleScope(field,choice.id)}/>{choice.label}</label>):<p>当前没有可用项</p>}</fieldset>)}<p>选题、方案、文案、制作与发布均需逐次确认。修订安排不会更改已建立运行。</p></form></HomeCardDialog>:null}
   </section>;
 }

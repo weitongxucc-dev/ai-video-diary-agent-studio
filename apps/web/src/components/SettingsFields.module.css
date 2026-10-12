@@ -6,8 +6,19 @@
 }
 
 .group > legend {
-  padding: 0 0 12px;
+  padding: 8px 0 4px;
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;
 }
+
+.row { display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:4px 12px;min-width:0;padding:6px 0;border-bottom:1px solid var(--border-1); }
+.row > input, .row > [data-app-select-trigger], .row > textarea, .row > div { grid-column:2;min-width:0; }
+.row:has(> details) { grid-template-columns:110px minmax(0,1fr)32px; }
+.row > details { grid-column:3;grid-row:1; }
+.row > details[open] { grid-column:2/span 2;grid-row:2; }
+.row > [data-app-select-trigger] { width:min(240px,100%);min-height:32px; }
+.help { color:var(--text-3);font-size:12px;line-height:18px; }
+.help > summary { min-height:24px;cursor:pointer; }
+.help p { margin:4px 0;overflow-wrap:anywhere; }
+.group > p { margin:4px 0 8px;color:var(--text-2);font-size:12px;line-height:18px; }

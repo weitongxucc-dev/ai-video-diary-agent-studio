@@ -38,6 +38,19 @@ def searchable_ocr_text(understanding: SegmentUnderstanding | None) -> str:
                     for item in frame["observations"] if item["confidence"] >= OCR_RETRIEVAL_MIN_CONFIDENCE)
 
 
+def observed_system_tags(understanding: SegmentUnderstanding | None) -> list[str]:
+    """Use actual short labels, retaining legacy short observations unchanged."""
+    if not understanding or understanding.status != "ready":
+        return []
+    prefixes = {"object": "主体", "action": "动作", "scene": "场景"}
+    labels = []
+    for fact in understanding.facts:
+        label = (fact.get("label") or fact["text"]).strip()
+        if label and len(label) <= 32:
+            labels.append(f"{prefixes[fact['kind']]}:{label}")
+    return list(dict.fromkeys(labels))
+
+
 def understanding_schema(frame_count: int) -> dict:
     text = {"type": "string", "minLength": 1, "maxLength": 100}
     return {
@@ -47,9 +60,10 @@ def understanding_schema(frame_count: int) -> dict:
             "summary": text,
             "facts": {"type": "array", "maxItems": 5, "items": {
                 "type": "object", "additionalProperties": False,
-                "required": ["kind", "text", "frames"],
+                "required": ["kind", "label", "text", "frames"],
                 "properties": {
                     "kind": {"enum": ["object", "action", "scene"]},
+                    "label": {"type": "string", "minLength": 1, "maxLength": 32},
                     "text": text,
                     "frames": {"type": "array", "minItems": 1, "maxItems": frame_count,
                                "items": {"type": "integer", "enum": list(range(frame_count))}},
@@ -72,14 +86,20 @@ def parse_understanding(payload: dict, sample_times: list[float]) -> dict:
         raise ValueError("画面观察数量无效")
     facts = []
     for item in payload["facts"]:
-        if not isinstance(item, dict) or set(item) != {"kind", "text", "frames"} or not isinstance(item["kind"], str) or item["kind"] not in {"object", "action", "scene"}:
+        if not isinstance(item, dict) or set(item) not in ({"kind", "text", "frames"}, {"kind", "label", "text", "frames"}) or not isinstance(item["kind"], str) or item["kind"] not in {"object", "action", "scene"}:
             raise ValueError("画面观察类型无效")
         indices = item["frames"]
         if not isinstance(indices, list) or not indices or len(indices) > len(sample_times) or any(type(index) is not int or not 0 <= index < len(sample_times) for index in indices):
             raise ValueError("画面观察缺少有效采样帧")
         if item["kind"] == "action" and len({sample_times[index] for index in indices}) < 2:
             raise ValueError("动作观察需要至少两个不同时间的采样帧")
-        facts.append({"kind": item["kind"], "text": text(item["text"]), "sample_times": [sample_times[index] for index in dict.fromkeys(indices)]})
+        fact = {"kind": item["kind"], "text": text(item["text"]), "sample_times": [sample_times[index] for index in dict.fromkeys(indices)]}
+        if "label" in item:
+            label = text(item["label"])
+            if len(label) > 32:
+                raise ValueError("画面观察标签不能超过32字")
+            fact["label"] = label
+        facts.append(fact)
     if not isinstance(payload["unknowns"], list) or len(payload["unknowns"]) > 3:
         raise ValueError("不确定项无效")
     return {"summary": summary, "facts": facts, "unknowns": [text(item) for item in payload["unknowns"]]}
@@ -132,7 +152,7 @@ class LocalVisualUnderstanding:
         pending = []
         for segment in segments:
             fingerprint = hashlib.sha256(json.dumps([source_fingerprint, segment.start_seconds, segment.end_seconds,
-                QWEN3_VL_4B_4BIT.revision, tool_identity, "3-frames:448-vlm:1280-ocr:v1"]).encode()).hexdigest()
+                QWEN3_VL_4B_4BIT.revision, tool_identity, "3-frames:448-vlm:1280-ocr:labels-v2"]).encode()).hexdigest()
             previous = segment.understanding
             if previous and previous.fingerprint == fingerprint and previous.status == "ready" and (not ocr_ready or previous.ocr_status == "ready"):
                 results[segment.id] = previous

@@ -444,8 +444,8 @@ def render_audio_mix(*args, **kwargs) -> Path:
     max_output_bytes = kwargs.pop("max_output_bytes", None)
     threads = kwargs.pop("threads", None)
     normalize_voice_sources = kwargs.pop("normalize_voice_sources", False)
-    if (scheduler is None) != (grant is None):
-        raise ValueError("音轨渲染许可和调度器必须一起提供")
+    if scheduler is None or grant is None:
+        raise PermissionError("音轨渲染必须提供设备许可")
     if grant is not None:
         if (deadline_monotonic is None or max_output_bytes is None or max_output_bytes <= 0
                 or threads is None or threads <= 0):
@@ -464,9 +464,13 @@ def render_audio_mix(*args, **kwargs) -> Path:
                 deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
                 threads=threads, solo_track_ids=kwargs.get("solo_track_ids"))
         command = build_audio_mix_command(*args, **kwargs)
-        if grant is None:
-            subprocess.run(command, capture_output=True, check=True, timeout=600)
-        else:
+        if grant is not None:
+            bounded = []
+            for argument in command:
+                if argument == "-i":
+                    bounded.extend(["-threads", str(threads)])
+                bounded.append(argument)
+            command = bounded
             command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
             command[-1:-1] = ["-threads:a", str(threads), "-fs", str(max_output_bytes)]
             _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
@@ -514,9 +518,13 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
                    "-filter_complex", f"[0:a:0]{WHOLE_SOURCE_LOUDNESS_FILTER},{FINITE_LOUDNESS_FILTER},"
                                       "aresample=48000[out]",
                    "-map", "[out]", "-c:a", "pcm_s16le", "-ar", "48000", "-fs", str(ceiling), str(target)]
-        if grant is None:
-            subprocess.run(command, capture_output=True, check=True, timeout=600)
-        else:
+        if grant is not None:
+            bounded = []
+            for argument in command:
+                if argument == "-i":
+                    bounded.extend(["-threads", str(threads)])
+                bounded.append(argument)
+            command = bounded
             command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
             command[-1:-1] = ["-threads:a", str(threads)]
             _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
@@ -525,7 +533,8 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
         # the final mix is checked; a short file must not go on to set the level of the mix either.
         if target.stat().st_size > ceiling:
             raise OSError("旁白归一化中间产物超出本次输出上限")
-        if abs(probe(target) - expected) > 0.05:
+        if abs(probe_audio_source(target, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+            deadline_monotonic=deadline_monotonic, output=True) - expected) > 0.05:
             raise OSError("旁白归一化未覆盖整源，已中止本次混音")
         rendered[source] = target
     return rendered
@@ -551,30 +560,60 @@ def _run_granted_audio_command(scheduler: DeviceScheduler, grant: Grant, command
     return result
 
 
-def probe_audio_source(path: Path, *, scheduler: DeviceScheduler | None = None,
-                       grant: Grant | None = None, cancel_event: threading.Event | None = None,
-                       deadline_monotonic: float | None = None) -> float:
-    command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0", "-show_entries",
-               "stream=duration:format=duration", "-of", "json", str(path)]
+def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event=None,
+                         deadline_monotonic=None, output=False) -> dict:
     if grant is None:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
-        stdout = result.stdout
-    else:
-        if scheduler is None:
-            raise ValueError("受许可音频探测缺少调度器")
-        stdout = _run_granted_audio_command(scheduler, grant, command, timeout_seconds=30,
-                                            cancel_event=cancel_event,
-                                            deadline_monotonic=deadline_monotonic).stdout
+        from app.task_audio import TASK_MEDIA_CONTEXT
+        active = TASK_MEDIA_CONTEXT.get()
+        if active is None:
+            from app.task_audio import TaskMediaRequired
+            raise TaskMediaRequired("audio_probe")
+        context = active[0]
+        scheduler, grant = context.scheduler, context.grant
+        cancel_event, deadline_monotonic = context.cancel_event, context.deadline_monotonic
+    if scheduler is None:
+        raise ValueError("受许可音频探测缺少调度器")
+    command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0",
+        "-show_entries", "stream=duration,sample_rate,channels:format=duration", "-of", "json", str(path)]
+    stdout = _run_granted_audio_command(scheduler, grant, command, timeout_seconds=30,
+        cancel_event=cancel_event, deadline_monotonic=deadline_monotonic).stdout
     payload = json.loads(stdout)
     if not payload.get("streams"):
         raise ValueError("源文件没有可用音轨")
-    raw = payload["streams"][0].get("duration", payload.get("format", {}).get("duration"))
+    stream = payload["streams"][0]
+    raw = stream.get("duration", payload.get("format", {}).get("duration"))
     if raw is None:
         raise ValueError("源音频缺少时长信息")
-    duration = float(raw)
-    if not math.isfinite(duration) or duration <= 0:
-        raise ValueError("源音频时长无效")
-    return duration
+    measured = {"duration_seconds": float(raw), "sample_rate": int(stream["sample_rate"]), "channels": int(stream["channels"])}
+    if any(not math.isfinite(value) or value <= 0 for value in measured.values()):
+        raise ValueError("源音频时长、采样率或声道无效")
+    with scheduler._connect() as conn:
+        row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+    if row is None:
+        raise PermissionError("音频探测缺少持久许可事实")
+    resources = json.loads(row["resources_json"])
+    if resources.get("kind") == "task_audio":
+        prefix = "output" if output else "source"
+        limits = {"duration_seconds": resources[prefix + "_duration_limit_seconds"],
+                  "sample_rate": resources[prefix + "_sample_rate_limit"],
+                  "channels": resources[prefix + "_channels_limit"]}
+        if any(measured[name] > limit + (.025 if name == "duration_seconds" else 0) for name, limit in limits.items()):
+            raise ValueError("实际音频规格超出本次许可声明，未进入解码或 DSP")
+        if not output:
+            expected = next((item for item in resources["inputs"] if Path(item["path"]).resolve() == path.resolve()), None)
+            if expected is None:
+                raise PermissionError("音频源不在本次固定输入中")
+            for name, actual in measured.items():
+                saved = expected.get(name)
+                if saved is not None and abs(actual - saved) > (.25 if name == "duration_seconds" else 0):
+                    raise ValueError("实际音频规格与持久输入元数据不符，未进入 DSP")
+    return measured
+
+
+def probe_audio_source(path: Path, *, scheduler=None, grant=None, cancel_event=None,
+                       deadline_monotonic=None, output=False) -> float:
+    return probe_audio_metadata(path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+        deadline_monotonic=deadline_monotonic, output=output)["duration_seconds"]
 
 
 def _tempo_filters(rate: float) -> list[str]:
@@ -591,18 +630,28 @@ def _tempo_filters(rate: float) -> list[str]:
 
 
 def render_stretched_audio(source: Path, source_start_ms: int, source_end_ms: int,
-                           rate: float, duration_ms: int, output: Path) -> Path:
-    """Local pitch-preserving tempo transform; pad/trim only encoder tail rounding."""
+                           rate: float, duration_ms: int, output: Path, *, scheduler=None,
+                           grant=None, cancel_event=None, deadline_monotonic=None,
+                           max_output_bytes=None, threads=None) -> Path:
+    """Pitch-preserving tempo transform under the same parent media grant."""
+    if scheduler is None or grant is None or threads is None or max_output_bytes is None:
+        raise PermissionError("音频变速必须提供完整设备许可")
     if not math.isfinite(rate) or not .25 <= rate <= 4 or duration_ms < 10:
         raise ValueError("音频变速参数无效")
-    if not 0 <= source_start_ms < source_end_ms <= round(probe_audio_source(source) * 1000) + 20:
+    measured = probe_audio_source(source, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                                  deadline_monotonic=deadline_monotonic)
+    if not 0 <= source_start_ms < source_end_ms <= round(measured * 1000) + 20:
         raise ValueError("变速音频源区间无效")
-    tempos = _tempo_filters(rate)
     chain = [f"atrim=start={source_start_ms / 1000}:end={source_end_ms / 1000}", "asetpts=PTS-STARTPTS",
-        *tempos, "aresample=48000", f"apad=whole_dur={duration_ms / 1000}", f"atrim=duration={duration_ms / 1000}"]
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", str(source),
-        "-af", ",".join(chain), "-c:a", "pcm_s16le", "-ar", "48000", str(output)],
-        capture_output=True, check=True, timeout=180)
+             *_tempo_filters(rate), "aresample=48000", f"apad=whole_dur={duration_ms / 1000}",
+             f"atrim=duration={duration_ms / 1000}"]
+    command = ["ffmpeg", "-v", "error", "-y", "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
+        "-protocol_whitelist", "file,pipe", "-threads", str(threads), "-i", str(source), "-af", ",".join(chain),
+        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-threads:a", str(threads), "-fs", str(max_output_bytes), str(output)]
+    _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
+                               deadline_monotonic=deadline_monotonic)
+    if output.stat().st_size > max_output_bytes:
+        raise ValueError("音频变速产物超出许可上限")
     return output
 
 

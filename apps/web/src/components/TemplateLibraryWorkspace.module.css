@@ -45,9 +45,7 @@
   color: var(--text-3);
 }
 
-.structureLabel { color: var(--accent); font-size: 12px; }
-.structureStrip { color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
-.preview { margin: 8px 0 12px; padding: 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-2); }
+.preview { margin: 16px 0; padding: 0; }
 .preview h4 { margin: 0 0 8px; font-size: 13px; font-weight: 500; }
 .preview > p, .preview li p { margin: 6px 0; color: var(--text-2); font-size: 13px; line-height: 1.65; }
 .preview small { color: var(--text-3); font-size: 12px; }
@@ -57,3 +55,23 @@
 .detailFooter { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
 .detailFooter > span { color: var(--text-3); font-size: 12px; }
 .detailFooter a { margin: 0; }
+
+.toolbar { gap:8px;padding-bottom:8px; }
+.toolbar .search { flex:0 1 180px;min-width:140px; }
+.templateList { display:grid;padding-top:8px; }
+.templateRow { display:flex;align-items:center;gap:10px;min-height:56px;height:56px;width:100%;min-width:0;padding:8px 6px;border:0;border-bottom:1px solid var(--border-1);background:transparent;color:var(--text-1);text-align:left;cursor:pointer; }
+.templateRow:hover, .templateRow[aria-pressed="true"] { background:var(--surface-2); }
+.templateRow:focus-visible { outline:2px solid var(--accent);outline-offset:-2px; }
+.templateRow > svg { flex-shrink:0;color:var(--text-3); }
+.previewMark { display:grid;flex:0 0 32px;height:32px;place-items:center;border-radius:6px;background:var(--surface-2);color:var(--text-2); }
+.rowCopy { display:grid;flex:1;min-width:0;gap:3px; }
+.rowCopy strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;font-weight:500; }
+.rowCopy small { color:var(--text-2);font-size:12px;line-height:16px; }
+.readOnly { color:var(--text-2);font-size:12px; }
+.editButton { display:inline-flex;align-items:center;gap:6px;min-height:30px;border:1px solid var(--border-1);border-radius:6px;background:var(--surface-1);color:var(--text-1);font:inherit;cursor:pointer; }
+.editForm { display:grid;gap:12px; }
+.editForm label { display:grid;gap:6px;font-size:13px; }
+.editForm input, .editForm textarea { width:100%;min-height:32px;padding:7px 9px;border:1px solid var(--border-1);border-radius:7px;background:var(--surface-1);color:var(--text-1);font:inherit; }
+.editForm textarea { min-height:100px;resize:vertical; }
+.editForm p { margin:0;font-size:12px;line-height:1.6;color:var(--text-2); }
+.detailFooter button:disabled, .toolbar button:disabled { color:var(--text-3);background:var(--surface-2);border-color:var(--border-1);cursor:default; }

@@ -1,0 +1,81 @@
+.assistant-conversation-panel { display:flex; flex-direction:column; min-width:0; min-height:0; gap:8px; color:var(--text-1); font:13px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
+.assistant-conversation-caption { display:flex; justify-content:flex-end; align-items:center; min-height:28px; }
+.assistant-header-actions { display:inline-flex; align-items:center; gap:3px; }
+.assistant-icon-action { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--text-2); cursor:pointer; }
+.assistant-icon-action:hover:not(:disabled) { background:var(--surface-2); color:var(--text-1); }
+.assistant-icon-action:disabled { opacity:.45; cursor:default; }
+.assistant-icon-action:focus-visible,.assistant-reply-menu button:focus-visible,.assistant-conversation-panel summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.assistant-message-scroller { position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }
+.assistant-conversation-panel .assistant-conversation-history { height:100%; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--border-1) transparent; }
+.assistant-conversation-history:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; border-radius:8px; }
+.assistant-transcript { display:flex; flex-direction:column; gap:24px; padding:8px 0 16px; }
+.assistant-empty { display:flex; min-height:100%; box-sizing:border-box; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:24px 12px; text-align:center; }
+.assistant-empty-icon { display:grid; place-items:center; width:44px; height:44px; margin-bottom:8px; border-radius:12px; background:var(--surface-3); color:var(--text-2); }
+.assistant-empty h2 { margin:0; font-size:14px; line-height:20px; font-weight:500; }
+.assistant-empty p { max-width:100%; text-wrap:balance; margin:0; color:var(--text-2); font-size:13px; line-height:21px; }
+.assistant-jump-latest { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); display:grid; place-items:center; width:32px; height:32px; padding:0; border:1px solid var(--border-1); border-radius:50%; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
+.assistant-jump-latest:hover { background:var(--surface-3); }
+.assistant-jump-latest:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.assistant-conversation-panel .assistant-persisted-turn { display:flex; flex-direction:column; min-width:0; gap:5px; border:0; padding:0; }
+.assistant-conversation-panel .assistant-user-message { align-self:flex-end; box-sizing:border-box; width:fit-content; max-width:92%; margin:0 0 8px; padding:10px 12px; border:0; border-radius:14px; background:color-mix(in srgb,var(--border-1) 65%,var(--surface-2)); color:var(--text-1); font-size:13px; font-weight:400; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; text-align:left; }
+.assistant-conversation-panel .assistant-markdown { font-size:13px; line-height:1.75; overflow-wrap:anywhere; }
+.assistant-conversation-panel .assistant-markdown p { margin:7px 0; }
+.assistant-conversation-panel .assistant-markdown p:first-child { margin-top:0; }
+.assistant-conversation-panel .assistant-markdown p:last-child { margin-bottom:0; }
+.assistant-conversation-panel .assistant-markdown :is(ul,ol) { margin:7px 0; padding-left:20px; }
+.assistant-conversation-panel .assistant-markdown :is(h1,h2,h3) { margin:12px 0 5px; font-size:14px; line-height:1.5; }
+.assistant-conversation-panel .assistant-markdown blockquote { margin:8px 0; padding-left:10px; border-left:1px solid var(--border-1); color:var(--text-2); }
+.assistant-conversation-panel .assistant-persisted-turn > p[role="status"] { margin:0; color:var(--text-3); font-size:11px; line-height:1.5; }
+.assistant-reply-actions { display:flex; align-items:center; gap:2px; min-height:28px; }
+.assistant-conversation-panel .assistant-copy.assistant-icon-action { margin:0; padding:0; border:0; background:transparent; font-size:inherit; }
+.assistant-reply-menu { position:fixed; z-index:120; box-sizing:border-box; width:208px; padding:4px; border-radius:10px; background:var(--surface-1); color:var(--text-1); box-shadow:0 6px 24px #0002; }
+.assistant-reply-menu button { display:block; width:100%; min-height:32px; padding:6px 9px; border:0; border-radius:6px; background:transparent; color:inherit; text-align:left; font-size:12px; font-family:inherit; line-height:1.5; cursor:pointer; }
+.assistant-reply-menu button:hover:not(:disabled),.assistant-reply-menu button:focus-visible { background:var(--surface-2); }
+.assistant-reply-menu button:disabled { opacity:.5; cursor:default; }
+.assistant-conversation-panel :is(.assistant-turn-tools,.assistant-turn-result) { font-size:11px; line-height:1.6; color:var(--text-3); }
+.assistant-conversation-panel :is(.assistant-turn-tools,.assistant-turn-result) > summary { min-height:22px; line-height:22px; }
+.assistant-conversation-panel .assistant-turn-tools strong { font-weight:500; }
+.assistant-conversation-panel .assistant-conversation-entry { position:relative; flex:0 0 auto; display:flex; flex-direction:column; gap:0; padding:0; border:1px solid var(--border-1); border-radius:14px; background:var(--surface-1); box-shadow:none; }
+.assistant-conversation-panel .assistant-conversation-entry:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 25%,transparent); }
+.assistant-conversation-panel .assistant-conversation-entry textarea { box-sizing:border-box; width:100%; min-width:0; max-width:100%; min-height:56px; max-height:150px; resize:none; border:0; border-radius:0; padding:12px 12px 4px; margin:0; background:transparent; color:var(--text-1); font:inherit; line-height:20px; outline:none; }
+.assistant-conversation-panel .assistant-conversation-entry textarea::placeholder { color:var(--text-3); opacity:1; }
+.assistant-conversation-panel .assistant-conversation-actions { display:flex; flex-wrap:nowrap; align-items:center; justify-content:space-between; min-height:32px; gap:6px; padding:4px 10px 10px; }
+.assistant-input-tools { display:flex; align-items:center; gap:5px; min-width:0; }
+.assistant-input-status { display:inline-flex; align-items:center; gap:4px; color:var(--text-2); font-size:11px; text-decoration:none; }
+.assistant-input-status:hover { text-decoration:underline; }
+.assistant-conversation-panel .assistant-conversation-actions .assistant-icon-action { padding:0; border:0; background:transparent; }
+.assistant-conversation-panel :is(.assistant-send,.assistant-stop) { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:50%; background:var(--text-1); color:var(--surface-1); cursor:pointer; }
+.assistant-conversation-panel .assistant-send:disabled { background:var(--surface-2); color:var(--text-3); cursor:default; opacity:.7; }
+.assistant-reference { display:flex; align-items:center; gap:5px; min-width:0; margin:0; padding:3px 5px 3px 8px; border-radius:8px; background:var(--surface-2); color:var(--text-2); font-size:11px; line-height:20px; }
+.assistant-reference span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.assistant-reference .assistant-icon-action { width:22px; height:22px; flex:0 0 auto; }
+.assistant-visually-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+.assistant-slash-menu { position:absolute; bottom:calc(100% + 8px); left:0; box-sizing:border-box; width:100%; overflow:auto; z-index:30; padding:4px; border-radius:12px; background:var(--surface-1); color:var(--text-1); box-shadow:0 6px 24px #0002; font:13px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; }
+.assistant-slash-menu button { display:flex; align-items:center; gap:8px; min-height:42px; width:100%; border:0; border-radius:8px; text-align:left; padding:6px 8px; background:transparent; color:inherit; cursor:pointer; }
+.assistant-slash-menu button[aria-selected="true"] { background:var(--surface-2); }
+.assistant-slash-menu button[aria-disabled="true"] { opacity:.5; }
+.assistant-slash-menu button span { flex:1; min-width:0; }
+.assistant-slash-menu strong,.assistant-slash-menu small { display:block; }
+.assistant-slash-menu small { color:var(--text-2); font-size:11px; }
+.assistant-slash-menu code { max-width:42%; overflow-wrap:anywhere; font-size:10px; }
+.assistant-slash-menu p { padding:8px; margin:0; font-size:12px; color:var(--text-2); }
+.assistant-resume-list button { display:flex; flex-direction:column; align-items:flex-start; width:100%; min-height:56px; padding:10px; border:0; background:transparent; color:inherit; border-radius:8px; cursor:pointer; }
+.assistant-resume-list button:hover,.assistant-resume-list button[aria-current="true"] { background:var(--surface-2); }
+.assistant-resume-list small { color:var(--text-3); }
+.assistant-conversation-panel .assistant-conversation-error,.home-composer .home-composer__error { margin:0; padding:7px 9px; border:0; border-radius:8px; background:var(--surface-2); color:var(--text-2); font-size:12px; line-height:1.6; }
+.assistant-conversation-error pre,.home-composer__error pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; }
+.assistant-capability-diagnostics { font-size:11px; line-height:1.6; max-height:200px; overflow:auto; }
+.assistant-conversation-panel ::selection { background:color-mix(in srgb,var(--accent) 18%,transparent); }
+.assistant-conversation-panel :is(.assistant-send,.assistant-stop):focus-visible,.assistant-slash-menu button:focus-visible,.assistant-resume-list button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.assistant-conversation-caption { justify-content:space-between; gap:8px; }
+.assistant-conversation-panel .assistant-conversation-entry:has(.assistant-reference) textarea { max-height:120px; }
+
+.assistant-conversation-panel .assistant-conversation-entry textarea:focus-visible { outline:none; box-shadow:none; }
+.assistant-input-tools:empty { display:none; }
+.assistant-conversation-panel .assistant-send, .assistant-conversation-panel .assistant-stop { margin-left:auto; }
+.assistant-capability-diagnostics { min-width:0; overflow-wrap:anywhere; }
+
+.assistant-stream-status { display:flex; align-items:center; gap:6px; margin:10px 0 0; color:var(--text-2); font-size:12px; line-height:1.5; }
+
+.assistant-text-action { align-self: flex-start; width: auto; min-height: 24px; padding: 0 2px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; line-height: 1.5; text-align: left; white-space: nowrap; cursor: pointer; }
+.assistant-text-action:disabled { opacity: .5; cursor: default; }

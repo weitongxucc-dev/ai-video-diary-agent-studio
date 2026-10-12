@@ -34,7 +34,7 @@ vi.mock("@/lib/api", () => {
       onEvent(event);
     };
     saved.set(conversationId, { ...before, draft_text: "", draft_version: expectedDraftVersion + 1 });
-    emit({ type: "turn_started", turn_id: turnId, draft_version: expectedDraftVersion + 1 } as never);
+    emit({ type: "turn_started", turn_id: turnId, turn_state: "running", draft_version: expectedDraftVersion + 1 } as never);
     const result = await work(emit);
     if (!events.some((event) => (event as { type?: string }).type === "text_delta") && typeof result.reply === "string") {
       emit({ type: "text_delta", delta: result.reply } as never);
@@ -57,7 +57,7 @@ vi.mock("@/lib/api", () => {
     const nextVersion = expectedDraftVersion + 1;
     saved.set(conversationId, { ...existing, draft_text: "", draft_version: nextVersion,
       turns: [...existing.turns.filter((item) => item.id !== turnId), turn], updated_at: turn.updated_at });
-    emit({ type: "turn_status", turn_state: "completed" } as never);
+    emit({ type: "turn_status", turn_id: turnId, turn_state: "completed" } as never);
     const response = { ...result, turn_id: turnId, draft_version: nextVersion };
     mocks.receipts.set(clientRequestId, { request: `${conversationId}:${userMessage}:${expectedDraftVersion}`, response });
     return response;
@@ -113,6 +113,36 @@ describe("HomeCommandComposer", () => {
     return input;
   }
 
+  it("restores the original input after a real-shaped persisted failure stream without deleting the failed turn",async()=>{
+    configuredModel();
+    const message="QA 本机文字连接错误验证，不执行任何写入。";
+    let conversationId="";
+    let consumedVersion=0;
+    mocks.ask.mockImplementationOnce(async(text:string,id:string,emit:(event:never)=>void)=>{
+      conversationId=id;
+      const current=mocks.saved.get(id)!;
+      consumedVersion=current.draft_version;
+      const turnId=`00000000-0000-4000-8000-${String(mocks.sequence).padStart(12,"0")}`;
+      const turn:import("@/lib/types").AssistantConversationTurn={id:turnId,sequence:1,user_message:text,assistant_text:"",status:"failed",events:[],result:{kind:"failure",message:"localhost不属于允许连接的模型地址"},created_at:"2026-10-10T00:00:00Z",updated_at:"2026-10-10T00:00:01Z"};
+      mocks.saved.set(id,{...current,turns:[turn]});
+      mocks.restoreDraft.mockImplementationOnce(async()=>({status:"already_persisted",conversation:mocks.saved.get(id)!}));
+      emit({type:"turn_status",turn_id:turnId,turn_state:"failed"} as never);
+      throw new Error("localhost不属于允许连接的模型地址");
+    });
+    render(<HomeCommandComposer/>);
+    const input=await readyInput("制作要求");
+    fireEvent.change(input,{target:{value:message}});
+    await waitFor(()=>expect(screen.getByRole("button",{name:"发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button",{name:"发送"}));
+    await waitFor(()=>expect(input).toHaveValue(message));
+    await waitFor(()=>expect(mocks.updateConversation).toHaveBeenLastCalledWith(conversationId,{draft_text:message,expected_draft_version:consumedVersion}));
+    expect(mocks.saved.get(conversationId)?.turns).toHaveLength(1);
+    expect(mocks.saved.get(conversationId)?.turns[0].status).toBe("failed");
+    expect(mocks.saved.get(conversationId)?.draft_text).toBe(message);
+    expect(mocks.ask).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button",{name:"继续编辑本条要求"})).toBeDisabled();
+  });
+
   it("routes a completed home reply as a stable source reference without copying its body", async () => {
     configuredModel();
     mocks.ask.mockResolvedValue({ reply: "已完成的回复正文，不放进链接。", provider: "minimax", model: "MiniMax-M3" });
@@ -121,9 +151,11 @@ describe("HomeCommandComposer", () => {
     fireEvent.change(await readyInput("制作要求"), { target: { value: "帮我整理成方案" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    const action = await screen.findByRole("button", { name: "带入新任务文案" });
+    fireEvent.click(await screen.findByRole("button", { name: "回复操作" }));
+    const action = screen.getByRole("menuitem", { name: "带入新任务文案" });
     fireEvent.click(action);
-    fireEvent.click(action);
+    fireEvent.click(screen.getByRole("button", { name: "回复操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "带入新任务文案" }));
 
     expect(assignLocation).toHaveBeenCalledTimes(2);
     const first = new URL(assignLocation.mock.calls[0][0], window.location.origin);
@@ -137,7 +169,7 @@ describe("HomeCommandComposer", () => {
     expect(first.search).not.toContain("已完成的回复正文");
   });
 
-  it("settles an unsent turn as its original draft when scope changes during the draft checkpoint", async () => {
+  it("sends the original home target when navigation changes during the draft checkpoint", async () => {
     configuredModel();
     let releaseInitialSave!: () => void;
     let oldConversationId = "";
@@ -169,11 +201,10 @@ describe("HomeCommandComposer", () => {
       await Promise.resolve();
     });
     vi.useRealTimers();
-    await waitFor(() => expect(mocks.saved.get(oldConversationId)?.draft_text).toBe("本轮原始制作要求"));
-
-    expect(mocks.ask).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.ask).toHaveBeenCalledTimes(1));
+    expect(mocks.ask.mock.calls[0][0]).toBe("本轮原始制作要求");
+    expect(mocks.ask.mock.calls[0][1]).toBe(oldConversationId);
     expect(mocks.materialAsk).not.toHaveBeenCalled();
-    expect(mocks.saved.get(oldConversationId)?.draft_text).not.toContain("切换");
   });
 
   it("allows library status questions without a selected object and does not write back", async () => {
@@ -181,8 +212,8 @@ describe("HomeCommandComposer", () => {
     const onResult = vi.fn();
     mocks.materialAsk.mockResolvedValue({ reply: "当前可见素材共 12 条。", provider: "minimax", model: "MiniMax-M3" });
     render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
-    expect(screen.getByRole("region", { name: "助手对话：素材库" })).toBeInTheDocument();
-    expect(screen.getByText(/可询问全库数量、分析状态或按词查找，无需先选素材/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "助手对话：新对话" })).toBeInTheDocument();
+    expect(screen.queryByText(/可询问全库数量、分析状态或按词查找，无需先选素材/)).not.toBeInTheDocument();
     const input = await readyInput("素材对话");
     fireEvent.change(input, { target: { value: "素材库里有多少素材？" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
@@ -195,12 +226,14 @@ describe("HomeCommandComposer", () => {
     expect(onResult).not.toHaveBeenCalled();
   });
 
-  it("fills a first-entry material suggestion into the draft without sending it", async () => {
+  it("keeps the material conversation empty state quiet and preserves a typed draft without sending it", async () => {
     configuredModel();
     const onResult = vi.fn();
     render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
     const input = await readyInput("素材对话");
-    fireEvent.click(screen.getByRole("button", { name: "素材库分析情况怎样？" }));
+    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "素材库分析情况怎样？" })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "素材库分析情况怎样？" } });
     expect(input).toHaveValue("素材库分析情况怎样？");
     expect(mocks.materialAsk).not.toHaveBeenCalled();
     expect(onResult).not.toHaveBeenCalled();
@@ -485,7 +518,7 @@ describe("HomeCommandComposer", () => {
     expect(mocks.undoEdit).not.toHaveBeenCalled();
   });
 
-  it("does not show an old task reply after switching tasks", async () => {
+  it("keeps the old turn in the same conversation after switching tasks without opening its preview", async () => {
     configuredModel();
     let finish: (value: unknown) => void = () => undefined;
     mocks.editAsk.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
@@ -499,7 +532,7 @@ describe("HomeCommandComposer", () => {
     view.rerender(<HomeCommandComposer task={second} />);
     finish({ reply: "第一条已处理", provider: "minimax", model: "MiniMax-M3", edit_preview: null });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeDisabled());
-    expect(screen.queryByText("第一条已处理")).not.toBeInTheDocument();
+    expect(await screen.findByText("第一条已处理")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "修改预览" })).not.toBeInTheDocument();
   });
 

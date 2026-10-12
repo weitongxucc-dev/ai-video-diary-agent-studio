@@ -238,6 +238,7 @@ class Qwen3TTSSubprocessProvider:
             "OMP_NUM_THREADS": str(grant_context.threads),
             "OPENBLAS_NUM_THREADS": str(grant_context.threads),
             "VECLIB_MAXIMUM_THREADS": str(grant_context.threads),
+            "RAYON_NUM_THREADS": str(grant_context.threads),
         })
         environment.update(
             {

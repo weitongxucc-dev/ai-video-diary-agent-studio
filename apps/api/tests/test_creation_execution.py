@@ -94,6 +94,29 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
     return repo, task_id, script_id, revision_digest(script, persisted_plan)
 
 
+def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
+    repo, task_id, script_id, _digest = _seed(tmp_path)
+    task = repo.get_creation_task("workspace_a", task_id)
+    with repo._connect() as conn:
+        row = conn.execute("SELECT payload FROM creation_plans WHERE id=?", (task.plan_id,)).fetchone()
+        payload = json.loads(row["payload"])
+        payload.pop("visibility")
+        conn.execute("UPDATE creation_plans SET payload=?, visibility='shared' WHERE id=?",
+                     (json.dumps(payload), task.plan_id))
+    script = repo.get_creation_task_script("workspace_a", script_id)
+    plan = repo.get_creation_plan("workspace_a", task.plan_id)
+    actor = CreationExecutionActor("workspace_a", "member-a")
+    job = _execution(repo).start("workspace_a", task_id, script_id, revision_digest(script, plan), actor=actor)
+    owner = CreationJobOwnerVerifier(repo)
+    with repo._connect() as conn:
+        facts = owner._facts(conn, "workspace_a", job.id)
+        assert facts[-1].visibility == plan.visibility == "shared"
+        assert owner._check_facts(*facts, "narration", actor.member_id) == "ready"
+        conn.execute("UPDATE creation_plans SET visibility='private' WHERE id=?", (task.plan_id,))
+        changed = owner._facts(conn, "workspace_a", job.id)
+        assert owner._check_facts(*changed, "narration", actor.member_id) == "stale"
+
+
 def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
     actions = actions or {}
     return CreationExecution(
@@ -395,10 +418,28 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
         scheduler.close()
 
 
-@pytest.mark.parametrize("publication_state", ["normal", "crash", "missing_input_version"])
+@pytest.mark.parametrize("publication_state", ["normal", "crash", "missing_input_version", "legacy_defaults"])
 def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_path, monkeypatch, publication_state):
     """Real main/repository/permit completion; explicit media/quality substitutes."""
     repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    if publication_state == "legacy_defaults":
+        legacy = repo.get_creation_task_montage_plan("local", task_id)
+        for key in ("aspect_ratio", "presenter_share_target", "graphic_overlays", "audio_timeline",
+                    "narration_linkage_created_audio_timeline"):
+            legacy.pop(key)
+        for clip in legacy["clips"]:
+            for key in ("person_render_id", "fit_mode", "crop_x", "crop_y", "visual_effects",
+                        "transition_in_seconds", "fade_envelope_rate", "fade_envelope_offset_frames",
+                        "fade_envelope_duration_frames"):
+                clip.pop(key)
+        for cue in legacy["cues"]:
+            for key in ("narration_segment_id", "subtitle_emphasis", "subtitle_style", "subtitle_emphasis_ranges"):
+                cue.pop(key)
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE task_id=?",
+                         (json.dumps(legacy), task_id))
+        base = repo.create_timeline_version(replace(base, id="timeline_legacy", parent_version_id=base.id,
+            sequence=2, snapshot=dict(base.snapshot, montage=legacy)))
     try:
         monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
             cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5))
@@ -708,6 +749,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert repo.get_job_run(workspace, job_id).status == "queued"
             with repo._connect() as conn:
                 assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone()[0] == "resource_busy"
+            assert main_module._creation_execution_status(workspace, task_id)["waiting_reason"] == "本机资源余量不足，正在等待满足制作条件。"
             return
         assert grant is not None
         assert grant.request_id == request_id and grant.unit_key.startswith("narration:")

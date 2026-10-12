@@ -1,5 +1,6 @@
 "use client";
 
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import {
   AlertCircle,
   Check,
@@ -13,6 +14,8 @@ import {
   FolderPlus,
   FolderSearch,
   Grid2X2,
+  Plus,
+  Info,
   List,
   LoaderCircle,
   Play,
@@ -26,7 +29,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { useAssistantMaterialReference } from "./AssistantConversationProvider";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { DesktopVoiceRecorder } from "@/components/DesktopVoiceRecorder";
 import styles from "./MaterialLibraryControls.module.css";
 import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
@@ -109,21 +114,34 @@ const useStateOptions: { value: MaterialAsset["use_state"]; label: string; impac
 ];
 
 function duration(value: number | null) {
-  if (value === null) return "--:--";
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.round(value % 60)
-    .toString()
-    .padStart(2, "0");
-  return `${minutes}:${seconds}`;
+  if (value === null) return "时长未知";
+  const milliseconds = Math.round(value * 1000);
+  const minutes = Math.floor(milliseconds / 60000);
+  const seconds = Math.floor(milliseconds % 60000 / 1000).toString().padStart(2, "0");
+  const fraction = (milliseconds % 1000).toString().padStart(3, "0").replace(/0+$/, "");
+  return `${minutes}:${seconds}${fraction ? `.${fraction}` : ""}`;
+}
+
+function observedTagSuggestions(segment: MaterialSegment) {
+  if (segment.description.trim() || segment.understanding?.status !== "ready") return [];
+  const seen = new Set(segment.user_tags);
+  return segment.understanding.facts.flatMap(fact => {
+    const label = (fact.label || fact.text).trim();
+    if (!label || label.length > 32 || seen.has(label)) return [];
+    seen.add(label);
+    const source = fact.kind === "action" ? "动作观察" : fact.kind === "scene" ? "场景观察" : "主体观察";
+    return [{ label, source, times: fact.sample_times }];
+  });
 }
 
 function roleLabel(asset: MaterialAsset) {
+  const suggestion = asset.usage_role === "unassigned" ? "建议：" : "";
   const role =
     asset.usage_role === "unassigned"
       ? asset.suggested_usage_role
       : asset.usage_role;
-  if (role === "a_roll") return "人物主镜头";
-  if (role === "b_roll") return "补充画面";
+  if (role === "a_roll") return `${suggestion}人物主镜头`;
+  if (role === "b_roll") return `${suggestion}补充画面`;
   if (asset.usage_role === "exclude") return "不使用";
   return "待判断";
 }
@@ -157,14 +175,9 @@ function readMediaTypeFromUrl(): MediaTypeFilter {
 }
 
 function reviewLabel(asset: MaterialAsset) {
-  if (asset.use_state === "excluded") return "不使用";
-  if (asset.use_state === "reference_only") return "仅参考";
-  if (asset.review_status === "approved") return "已审核";
-  if (asset.review_status === "rejected") return "用途待确认";
-  if (asset.analysis_status === "ready") return "主分析已完成";
-  if (asset.analysis_status === "failed" || asset.analysis_status === "blocked")
-    return "分析受阻";
-  return "等待分析";
+  if (asset.review_status === "approved") return "已人工确认";
+  if (asset.review_status === "rejected") return "已标记排除";
+  return "未人工确认";
 }
 
 function modalityLabel(
@@ -271,6 +284,11 @@ export function MaterialLibraryWorkspace({
     initialLibrary.assets[0]?.segments[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [statisticsOpen, setStatisticsOpen] = useState(false);
+  const [previewErrorId, setPreviewErrorId] = useState<string | null>(null);
+  const [previewReadTick, setPreviewReadTick] = useState(0);
+  const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
   const searchInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
@@ -295,6 +313,9 @@ export function MaterialLibraryWorkspace({
   const [linkImport, setLinkImport] = useState<MediaLinkImport | null>(null);
   const [linkError, setLinkError] = useState("");
   const [detailError, setDetailError] = useState("");
+  const persistentReference = useAssistantMaterialReference();
+  const setMaterialReference = persistentReference?.setReference;
+  const lastPublishedSelection = useRef<MaterialAssistantSelection | null>(null);
   const [assistantSelection, setAssistantSelection] = useState<MaterialAssistantSelection | null>(null);
   const [assetTagDrafts, setAssetTagDrafts] = useState<Record<string, string>>({});
   const [assetTagErrors, setAssetTagErrors] = useState<Record<string, string>>({});
@@ -323,6 +344,7 @@ export function MaterialLibraryWorkspace({
   const [usageRecords, setUsageRecords] = useState<MaterialUsageRecord[]>([]);
   const [usageRead, setUsageRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
   const usageLoadRevision = useRef(0);
+  const [usageReadTick, setUsageReadTick] = useState(0);
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -391,8 +413,17 @@ export function MaterialLibraryWorkspace({
   const materialAssistantLabel = materialAssistantSelection && selected
     ? materialAssistantSelection.scope === "asset"
       ? `整条素材 · ${fileLabel(selected.file_name)}`
-      : `${fileLabel(selected.file_name)} · 片段 ${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.start_seconds)}–${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.end_seconds)} · ${selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.description || "未填写说明"}`
+      : `${fileLabel(selected.file_name)} · 片段 ${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.start_seconds)}–${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.end_seconds)}`
     : null;
+
+  useEffect(() => {
+    if (!materialAssistantSelection || !materialAssistantLabel || !selected) return;
+    // Freeze the actual version at this explicit selection; refresh must not rebind it.
+    if (lastPublishedSelection.current === materialAssistantSelection) return;
+    lastPublishedSelection.current = materialAssistantSelection;
+    const segment = materialAssistantSelection.scope === "segment" ? selected.segments.find(item => item.id === materialAssistantSelection.segment_id) : null;
+    setMaterialReference?.({label: materialAssistantLabel, selection: { ...materialAssistantSelection, expected_updated_at: selected.updated_at, ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}) }});
+  }, [materialAssistantSelection, materialAssistantLabel, selected, setMaterialReference]);
 
   useEffect(() => {
     const context = voiceNoteRef.current;
@@ -588,7 +619,7 @@ export function MaterialLibraryWorkspace({
         setUsageRead({ status: "error", message: visibleError(cause, "使用记录读取失败，请重试。") });
       });
     return () => { active = false; };
-  }, [selected?.id, selectedSegment?.id]);
+  }, [selected?.id, selectedSegment?.id, usageReadTick]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -666,6 +697,11 @@ export function MaterialLibraryWorkspace({
     setUsageRoleDraft(first?.usage_role ?? "unassigned");
     clearSegmentEditAnchor();
     setSelectedId(asset.id);
+    setPreviewErrorId(null);
+    if (selected?.id === asset.id) {
+      const media = asset.media_type === "audio" ? sourceAudio.current : sourceVideo.current;
+      if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) media.currentTime = 0;
+    }
     const target = explicit ? { scope: "asset" as const, asset_id: asset.id } : null;
     setAssistantSelection(target);
     setSelectedSegmentId(first?.id ?? "");
@@ -676,7 +712,7 @@ export function MaterialLibraryWorkspace({
 
   function seekSelectedSegment(media: HTMLMediaElement) {
     if (media !== sourceAudio.current && media !== sourceVideo.current) return;
-    media.currentTime = selectedSegment?.start_seconds ?? 0;
+    media.currentTime = assistantSelection?.scope === "segment" ? selectedSegment?.start_seconds ?? 0 : 0;
   }
 
   function selectSegment(segment: MaterialSegment, explicit = true) {
@@ -841,6 +877,34 @@ export function MaterialLibraryWorkspace({
     }
   }
 
+  async function refreshLibrary() {
+    const revision = assetWriteRevision.current;
+    const searchAtRequest = lastSearch.current;
+    const loadedCount = Math.max(initialLibrary.limit, assets.length);
+    setBusy("search"); setError("");
+    try {
+      const pages: MaterialLibrary[] = [];
+      for (let offset = 0; offset < loadedCount; offset += 100) {
+        pages.push(await getProductionMaterials({ limit: Math.min(100, loadedCount - offset), offset, query: query.trim(), reviewStatus: filter, tag: initialTag, mediaType }));
+        if (searchAtRequest !== lastSearch.current || revision !== assetWriteRevision.current) return;
+      }
+      const refreshed = pages.flatMap(page => page.assets);
+      setAssets(refreshed); setTotalCount(pages[0].total_count); setHasMore(refreshed.length < pages[0].total_count);
+      setFailedThumbnails({});
+    } catch (cause) {
+      if (searchAtRequest === lastSearch.current) setError(visibleError(cause, "素材列表刷新失败，请重试。"));
+    } finally { if (searchAtRequest === lastSearch.current) setBusy(null); }
+  }
+
+  function constrainSegmentPlayback(media: HTMLMediaElement) {
+    if (assistantSelection?.scope !== "segment" || !selectedSegment) return;
+    if (media.currentTime >= selectedSegment.end_seconds) media.pause();
+  }
+  function startSegmentPlayback(media: HTMLMediaElement) {
+    if (assistantSelection?.scope !== "segment" || !selectedSegment) return;
+    if (media.currentTime < selectedSegment.start_seconds || media.currentTime >= selectedSegment.end_seconds) media.currentTime = selectedSegment.start_seconds;
+  }
+
   function selectMediaType(value: MediaTypeFilter) {
     // 只改这一个查询参数，tag 等其它已经生效的筛选原样留在地址栏里。
     const params = new URLSearchParams(window.location.search);
@@ -857,7 +921,6 @@ export function MaterialLibraryWorkspace({
 
   function resetAllFilters() {
     window.history.replaceState(null, "", window.location.pathname);
-    lastSearch.current = { filter: "all", query: "", tag: "", mediaType: "all" };
     setQuery("");
     setFilter("all");
     setMediaType("all");
@@ -1013,6 +1076,10 @@ export function MaterialLibraryWorkspace({
         user_tags: nextTags,
         collection_ids: selectedSegment.collection_ids,
       });
+      const saved = updated.segments.find(segment => segment.id === selectedSegment.id);
+      if (updated.id !== selected.id || !saved || JSON.stringify(saved.user_tags) !== JSON.stringify(nextTags)) {
+        throw new Error("标签请求已提交，但保存结果与当前片段不一致，请重新查看素材。");
+      }
       replaceAsset(updated);
       if (clearInput) setTagDrafts((current) => ({ ...current, [scope]: "" }));
       await refreshInsights();
@@ -1147,33 +1214,40 @@ export function MaterialLibraryWorkspace({
   }
 
   const inspector = selected ? (
-    <div className="library-inspector">
+    <div className={`library-inspector ${styles.inspector}`}>
       <div className={`library-preview ${styles.preview}`}>
         {selected.media_type === "image" ? (
           <img
             alt={`原素材预览：${fileLabel(selected.file_name)}`}
-            key={selected.id}
-            src={`/api/production/materials/${selected.id}/media`}
+            key={`${selected.id}:${previewReadTick}`}
+            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
+            onError={() => setPreviewErrorId(selected.id)}
           />
         ) : selected.media_type === "audio" ? (
           <audio
             ref={sourceAudio}
             onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
             aria-label="原素材预览"
+            onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)}
+            onPlay={event => startSegmentPlayback(event.currentTarget)}
             controls
-            key={selected.id}
+            key={`${selected.id}:${previewReadTick}`}
             preload="metadata"
-            src={`/api/production/materials/${selected.id}/media`}
+            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
+            onError={() => setPreviewErrorId(selected.id)}
           />
         ) : (
           <video
             ref={sourceVideo}
             aria-label="原素材预览"
+            onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)}
+            onPlay={event => startSegmentPlayback(event.currentTarget)}
             onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
             controls
-            key={selected.id}
+            key={`${selected.id}:${previewReadTick}`}
             preload="metadata"
-            src={`/api/production/materials/${selected.id}/media`}
+            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
+            onError={() => setPreviewErrorId(selected.id)}
           />
         )}
         {selected.media_type === "image" ? null : (
@@ -1188,11 +1262,49 @@ export function MaterialLibraryWorkspace({
           {mediaLabel(selected.media_type)} · {roleLabel(selected)} · {reviewLabel(selected)}
         </span>
       </div>
-      {selected.source_url ? (
-        <p className={styles.assetDiagnostic}>
-          来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a>
-        </p>
+      <div className={styles.rangeHeading}><span>{assistantSelection?.scope === "segment" && selectedSegment ? `当前范围：${duration(selectedSegment.start_seconds)}–${duration(selectedSegment.end_seconds)}` : "当前范围：整条素材"}</span>{assistantSelection?.scope === "segment" ? <button onClick={() => selectAsset(selected)} type="button">切回整条素材</button> : null}</div>
+      {previewErrorId === selected.id ? <p className={styles.analysisMessage} role="alert">原素材暂时无法预览，请连接原盘或检查文件后重试。<button type="button" onClick={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }}>重新读取预览</button></p> : null}
+      <p className={styles.modalitySummary}>{analysisSummary(selected)}</p>
+      {selected.analysis_status === "pending" ? (
+        <div className={styles.analysisMessage}>
+          <p role="status">等待分析，完成时间暂未知。</p>
+          {selected.analysis_message.trim() ? (
+            /[{}\n\r]|Traceback|Error:|\/Users\/|\/Volumes\/|[A-Za-z]:\\/.test(selected.analysis_message)
+              ? <details><summary>后台分析记录</summary><p>{selected.analysis_message}</p></details>
+              : <p>{selected.analysis_message}</p>
+          ) : null}
+        </div>
       ) : null}
+      {selected.segments.length ? (
+        <div className="library-segments">
+          <h3>识别片段</h3>
+          {selected.segments.map((segment) => (
+            <button
+              className={
+                assistantSelection?.scope === "segment" && assistantSelection.segment_id === segment.id ? "is-selected" : ""
+              }
+              aria-pressed={assistantSelection?.scope === "segment" && assistantSelection.segment_id === segment.id}
+              disabled={busy !== null}
+              key={segment.id}
+              onClick={() => selectSegment(segment)}
+              type="button"
+            >
+              <span>
+                {duration(segment.start_seconds)}–
+                {duration(segment.end_seconds)}
+              </span>
+              <p>
+                {segment.description ||
+                  segment.understanding?.summary ||
+                  segment.transcript ||
+                  "等待补充片段描述"}
+              </p>
+              <ChevronRight size={14} />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <details className={styles.detailSection}><summary>原文件与来源</summary><p>文件名：{selected.file_name}</p><p>原文件：{selected.path}</p>{selected.source_url ? <p>来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a></p> : null}</details>
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
       ) : null}
@@ -1326,34 +1438,6 @@ export function MaterialLibraryWorkspace({
           用作配图
         </button>
       </div>
-      {selected.segments.length ? (
-        <div className="library-segments">
-          <h3>识别片段</h3>
-          {selected.segments.map((segment) => (
-            <button
-              className={
-                selectedSegment?.id === segment.id ? "is-selected" : ""
-              }
-              disabled={busy !== null}
-              key={segment.id}
-              onClick={() => selectSegment(segment)}
-              type="button"
-            >
-              <span>
-                {duration(segment.start_seconds)}–
-                {duration(segment.end_seconds)}
-              </span>
-              <p>
-                {segment.description ||
-                  segment.understanding?.summary ||
-                  segment.transcript ||
-                  "等待补充片段描述"}
-              </p>
-              <ChevronRight size={14} />
-            </button>
-          ))}
-        </div>
-      ) : null}
       {selectedSegment ? (
         <div className="library-segment-organizer">
           <div className="library-segment-heading">
@@ -1370,11 +1454,11 @@ export function MaterialLibraryWorkspace({
             <strong>使用记录</strong>
             <p>回查这个片段进过哪条成片。只列已实际写入的使用记录，读取不会增加使用次数。用途和版本都只反映该计划当前的取值，不是当次使用时的历史值。</p>
             {usageRead.status === "loading" ? <p>正在读取使用记录……</p> : null}
-            {usageRead.status === "error" ? <p>{usageRead.message}</p> : null}
+            {usageRead.status === "error" ? <p role="alert">{usageRead.message}<button type="button" onClick={() => setUsageReadTick(value => value + 1)}>重新读取使用记录</button></p> : null}
             {usageRead.status === "ready" && !usageRecords.length ? <p>这个片段还没有被任何成片使用过。</p> : null}
             {usageRead.status === "ready" ? usageRecords.map(record => <article key={`${record.plan_id}:${record.clip_id}`}>
               <p>
-                计划 {record.plan_id} · 片段 {record.clip_id} · 当前计划用途：{clipRoleLabel(record.role)}
+                {record.task?.name || "成片使用记录"} · {clipRoleLabel(record.role)}
                 {record.manually_selected === null ? "" : record.manually_selected ? " · 人工选定" : " · 自动匹配"}
               </p>
               <p>
@@ -1386,7 +1470,7 @@ export function MaterialLibraryWorkspace({
               {record.task?.id ? <p><Link href={"/tasks/" + encodeURIComponent(record.task.id)}>打开任务{record.task.name ? `：${record.task.name}` : ""}</Link></p> : null}
               <p>
                 {record.resolution === "current" && record.timeline_version_id
-                  ? `时间线版本：当前版本 ${record.timeline_version_id}（使用记录本身未记录当次版本，这里只显示该任务的当前版本）`
+                  ? "关联任务当前时间线（当次使用版本未记录）"
                   : "时间线版本未记录"}
               </p>
             </article>) : null}
@@ -1417,16 +1501,16 @@ export function MaterialLibraryWorkspace({
           <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => { markSegmentDraftChanged(); setTranscriptDraft(event.target.value); }} /></label>
           <label>
             <span>片段用途</span>
-            <select
+            <AppSelect
               disabled={busy !== null}
               value={usageRoleDraft}
-              onChange={(event) => { markSegmentDraftChanged(); setUsageRoleDraft(event.target.value as MaterialSegment["usage_role"]); }}
+              onValueChange={newValue => { markSegmentDraftChanged(); setUsageRoleDraft(newValue as MaterialSegment["usage_role"]); }}
             >
-              {usageRoleDraft === "unassigned" ? <option value="unassigned" disabled>未指定（当前用途）</option> : null}
-              {usageRoleDraft === "exclude" ? <option value="exclude" disabled>不使用（已排除）</option> : null}
-              <option value="a_roll">人物主镜头</option>
-              <option value="b_roll">补充画面</option>
-            </select>
+              {usageRoleDraft === "unassigned" ? <AppSelectOption value="unassigned" disabled>未指定（当前用途）</AppSelectOption> : null}
+              {usageRoleDraft === "exclude" ? <AppSelectOption value="exclude" disabled>不使用（已排除）</AppSelectOption> : null}
+              <AppSelectOption value="a_roll">人物主镜头</AppSelectOption>
+              <AppSelectOption value="b_roll">补充画面</AppSelectOption>
+            </AppSelect>
           </label>
           {selected.speech_analysis ? <section className="library-speech-evidence" aria-label="原片语音证据">
             <strong>原片语音</strong>
@@ -1444,6 +1528,14 @@ export function MaterialLibraryWorkspace({
               <small>等待画面理解生成系统标签</small>
             ) : null}
           </div>
+          {observedTagSuggestions(selectedSegment).length ? <details className={styles.tagSuggestions}>
+            <summary>标签建议 · {observedTagSuggestions(selectedSegment).length} 项待采纳</summary>
+            <p>根据这段画面的实际观察整理。采纳后加入我的标签。</p>
+            {observedTagSuggestions(selectedSegment).map(suggestion => <div key={suggestion.label}>
+              <span><strong>{suggestion.label}</strong><small>{suggestion.source} · 采样 {suggestion.times.map(duration).join("、")}</small></span>
+              <button type="button" disabled={busy !== null} aria-label={`采纳标签 ${suggestion.label}`} onClick={() => addTag(suggestion.label)}>采纳</button>
+            </div>)}
+          </details> : null}
           <div className={styles.tagEditor}>
             <strong>我的标签</strong>
             <div className={styles.tagChips} aria-label="已保存的我的标签">
@@ -1537,7 +1629,174 @@ export function MaterialLibraryWorkspace({
         onResult: applyMaterialAssistantResult,
       }} />}
     >
-      <div className="modern-library">
+      <div className={`modern-library ${styles.workspace}`}>
+        <div className={`library-toolbar ${styles.toolbar}`}>
+          <label data-input-group className={`library-search ${styles.search}`}>
+            <Search size={15} />
+            <input
+              aria-label="搜索素材"
+              ref={searchInput}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索文件、画面、标签或标签夹…"
+              value={query}
+            />
+            {query ? <button aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></button> : null}
+          </label>
+          <AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
+          <AppSelect className={styles.filterSelect} aria-label="审核状态筛选" value={filter} onValueChange={newValue => setFilter(newValue as Filter)}><AppSelectOption value="all">全部确认状态</AppSelectOption><AppSelectOption value="raw">未人工确认</AppSelectOption><AppSelectOption value="approved">已人工确认</AppSelectOption><AppSelectOption value="rejected">已标记排除</AppSelectOption></AppSelect>
+          {initialTag ? (
+            <span className="library-tag">
+              标签：{initialTag}
+              <Link aria-label="清除标签筛选" href="/library">
+                <X size={12} aria-hidden />
+              </Link>
+            </span>
+          ) : null}
+          {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
+            <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
+          ) : (
+            <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button>
+          ) : null}
+          <div className="library-view-toggle" role="group" aria-label="列表显示方式">
+            <button aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></button>
+            <button aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></button>
+          </div>
+          <button className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></button>
+          <button className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16} />导入素材</button>
+
+        </div>
+        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span><button className={styles.iconButton} aria-label="查看素材统计" title="查看素材统计" onClick={() => setStatisticsOpen(true)} type="button"><Info size={16} /></button></div>
+        {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><button onClick={() => setImportOpen(true)} type="button">查看接入</button></div> : null}
+
+
+        {error ? (
+          <div className="library-error" role="alert">
+            <AlertCircle size={15} />
+            {error}
+          </div>
+        ) : null}
+        {busy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : null}
+
+        {selectionLost || segmentLost ? (
+          <div className="library-error" role="alert">
+            <AlertCircle size={15} />
+            {assistantSelectionLost
+              ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
+              : editAnchorRangeLost
+                ? "正在编辑的片段时间范围已变化。草稿已保留；不会保存到新的时间范围。"
+                : editAnchorLost
+                ? "正在编辑的素材已不在当前结果中。草稿已保留；找回该素材后可继续保存，不会写入其他素材。"
+                : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
+          </div>
+        ) : null}
+
+        {visible.length ? (
+          <div className={`library-grid ${styles.results}${viewMode === "list" ? ` is-list ${styles.objectList}` : ""}`}>
+          {visible.map((asset) => {
+            const AssetStateIcon = asset.analysis_status === "failed" ? CircleAlert
+              : asset.analysis_status === "blocked" ? CircleMinus : asset.use_state === "excluded" ? CircleDot
+                : asset.analysis_status === "ready" ? CircleCheck : CircleDashed;
+            return (
+              <button
+                className={`library-card ${styles.materialCard}${selected?.id === asset.id ? " is-selected" : ""}`}
+                key={asset.id}
+                data-open-details onClick={() => selectAsset(asset)}
+                type="button"
+                >
+                <span className="library-card__poster">
+                  {failedThumbnails[asset.id] ? <Film className="library-card__fallback-icon" size={22} /> : asset.media_type === "image" ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      loading="lazy"
+                      src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`}
+                      onError={() => setFailedThumbnails(current => ({ ...current, [asset.id]: true }))}
+                    />
+                  ) : asset.media_type === "audio" ? (
+                    <Volume2 className="library-card__fallback-icon" size={22} />
+                  ) : (
+                    <video
+                      aria-hidden="true"
+                      muted
+                      playsInline
+                      preload="metadata"
+                      src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`}
+                      onError={() => setFailedThumbnails(current => ({ ...current, [asset.id]: true }))}
+                    />
+                  )}
+                  {asset.media_type === "video" ? (
+                    <Film className="library-card__fallback-icon" size={22} />
+                  ) : null}
+                  <small>
+                    {asset.media_type === "image" ? mediaLabel(asset.media_type) : duration(asset.duration_seconds)}
+                  </small>
+                  <i
+                    className={`library-card__state state-${asset.analysis_status}`}
+                  >
+                    <AssetStateIcon size={13} />
+                  </i>
+                </span>
+                <span className="library-card__copy">
+                  <strong title={asset.file_name}>{fileLabel(asset.file_name)}</strong>
+                  <small>
+                    {mediaLabel(asset.media_type)} · {useStateOptions.find(option => option.value === asset.use_state)?.label}
+                    {asset.analysis_status === "pending" ? " · 等待分析" : ""}
+                  </small>
+                  <small>{asset.user_tags.slice(0, 2).join(" · ") || roleLabel(asset)} · {reviewLabel(asset)}</small>
+                </span>
+              </button>
+            );
+          })}
+          </div>
+        ) : (
+          <div className="library-empty">
+            <Film size={23} />
+            <div>
+              <strong>{query || filter !== "all" || mediaType !== "all" || initialTag ? "没有匹配的素材" : "素材库还是空的"}</strong>
+              <p>
+                {query || filter !== "all" || mediaType !== "all" || initialTag
+                  ? "试试清除搜索词，或重置全部筛选条件。"
+                  : intake?.bound_to_current_workspace
+                    ? "导入本地文件即可开始；外部复制的文件需要先确认复制完成。"
+                    : "点击导入素材，检查接入目录后选择本地文件或媒体直链。"}
+              </p>
+              {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? <Link href="/library" className={styles.resetFilters}>重置全部</Link> : <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button> : <button className={styles.importButton} onClick={() => setImportOpen(true)} type="button">导入素材</button>}
+            </div>
+          </div>
+        )}
+        {hasMore ? (
+          <div className="library-load-more">
+            <button
+              disabled={busy !== null}
+              onClick={() => void loadMore()}
+              type="button"
+            >
+              {busy === "load" ? (
+                <LoaderCircle className="is-spinning" size={15} />
+              ) : null}
+              {busy === "load"
+                ? "正在载入…"
+                : `载入更多（剩余 ${Math.max(0, totalCount - assets.length)}）`}
+            </button>
+          </div>
+        ) : null}
+        <details className={styles.notesEditor}>
+          <summary>给选中素材保存公共背景（可选）</summary>
+          <p>仅列出当前已加载素材。请明确勾选本批文件，不会默认应用到全库。</p>
+          <div className={styles.notesSelection}>
+            {assets.map(asset => <label key={asset.id}><input type="checkbox" checked={noteBatchIds.includes(asset.id)} disabled={busy === "notes"} onChange={event => {
+              setNoteBatchIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id));
+              setBatchNoteSaved(false);
+            }} />{fileLabel(asset.file_name)}</label>)}
+          </div>
+          <label>公共背景（可选）<textarea disabled={busy === "notes"} value={batchContext} onChange={event => { setBatchContext(event.target.value); setBatchNoteSaved(false); }} /></label>
+          <p>当前选中 {noteBatchAssets.length} 份；只更新这些素材的背景，各自说明保持不变。</p>
+          {batchNoteError ? <p role="alert">{batchNoteError}</p> : null}
+          {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
+          <button disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</button>
+        </details>
+
+        {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>
         <section className={styles.intakePanel} aria-label="素材自动接入">
           <div className={styles.intakeHeading}>
             <strong>素材自动接入</strong>
@@ -1694,236 +1953,9 @@ export function MaterialLibraryWorkspace({
             </>
           )}
         </section>
-        <section
-          className="library-coverage"
-          aria-label="素材覆盖"
-        >
-          <div className="library-coverage__summary">
-            <strong>{insights.segment_count} 个片段</strong>
-            <small>{insights.asset_count} 个文件</small>
-          </div>
-          <div className="library-coverage__tags">
-            {insights.tags.slice(0, 3).map((entry) => (
-              <span key={entry.tag}>
-                <strong>{tagLabel(entry.tag)}</strong>
-                <small>
-                  {entry.segment_count} 段
-                </small>
-              </span>
-            ))}
-          </div>
-          {insights.recommended_gaps.length > 0 ? (
-            <div className="library-coverage__gaps">
-              <span>覆盖建议</span>
-              <p>
-                素材库暂时没有：{insights.recommended_gaps.map(tagLabel).join("、")}。按需补充即可，不影响使用。
-              </p>
-            </div>
-          ) : null}
-        </section>
-
-        <details className={styles.notesEditor}>
-          <summary>给选中素材保存公共背景（可选）</summary>
-          <p>仅列出当前已加载素材。请明确勾选本批文件，不会默认应用到全库。</p>
-          <div className={styles.notesSelection}>
-            {assets.map(asset => <label key={asset.id}><input type="checkbox" checked={noteBatchIds.includes(asset.id)} disabled={busy === "notes"} onChange={event => {
-              setNoteBatchIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id));
-              setBatchNoteSaved(false);
-            }} />{fileLabel(asset.file_name)}</label>)}
-          </div>
-          <label>公共背景（可选）<textarea disabled={busy === "notes"} value={batchContext} onChange={event => { setBatchContext(event.target.value); setBatchNoteSaved(false); }} /></label>
-          <p>当前选中 {noteBatchAssets.length} 份；只更新这些素材的背景，各自说明保持不变。</p>
-          {batchNoteError ? <p role="alert">{batchNoteError}</p> : null}
-          {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
-          <button disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</button>
-        </details>
-
-        <div className="library-toolbar">
-          <label className="library-search">
-            <Search size={15} />
-            <input
-              aria-label="搜索素材"
-              ref={searchInput}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索文件、画面、标签或标签夹…"
-              value={query}
-            />
-            {query ? <button aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></button> : null}
-          </label>
-          <div
-            className="library-filters"
-            role="group"
-            aria-label="审核状态筛选"
-          >
-            {(["all", "raw", "approved", "rejected"] as Filter[]).map(
-              (value) => (
-                <button
-                  className={filter === value ? "is-active" : ""}
-                  key={value}
-                  onClick={() => setFilter(value)}
-                  type="button"
-                >
-                  {
-                    {
-                      all: "全部",
-                      raw: "待审核",
-                      approved: "已批准",
-                      rejected: "已排除",
-                    }[value]
-                  }
-                </button>
-              ),
-            )}
-          </div>
-          <div
-            className="library-filters"
-            role="group"
-            aria-label="媒体类型筛选"
-          >
-            {mediaTypeOptions.map((value) => (
-              <button
-                className={mediaType === value ? "is-active" : ""}
-                key={value}
-                onClick={() => selectMediaType(value)}
-                type="button"
-              >
-                {mediaTypeLabels[value]}
-              </button>
-            ))}
-          </div>
-          {initialTag ? (
-            <span className="library-tag">
-              标签：{initialTag}
-              <Link aria-label="清除标签筛选" href="/library">
-                <X size={12} aria-hidden />
-              </Link>
-            </span>
-          ) : null}
-          {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
-            <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
-          ) : (
-            <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button>
-          ) : null}
-          <div className="library-view-toggle" role="group" aria-label="列表显示方式">
-            <button aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></button>
-            <button aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></button>
-          </div>
-          <span className="library-count">
-            已载入 {assets.length} / {totalCount}
-          </span>
-        </div>
-
-        {error ? (
-          <div className="library-error" role="alert">
-            <AlertCircle size={15} />
-            {error}
-          </div>
-        ) : null}
-        {busy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : null}
-
-        {selectionLost || segmentLost ? (
-          <div className="library-error" role="alert">
-            <AlertCircle size={15} />
-            {assistantSelectionLost
-              ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
-              : editAnchorRangeLost
-                ? "正在编辑的片段时间范围已变化。草稿已保留；不会保存到新的时间范围。"
-                : editAnchorLost
-                ? "正在编辑的素材已不在当前结果中。草稿已保留；找回该素材后可继续保存，不会写入其他素材。"
-                : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
-          </div>
-        ) : null}
-
-        {visible.length ? (
-          <div className={`library-grid${viewMode === "list" ? " is-list" : ""}`}>
-          {visible.map((asset) => {
-            const AssetStateIcon = asset.review_status === "approved" ? ShieldCheck
-              : asset.review_status === "rejected" ? CircleDot
-                : asset.analysis_status === "ready" ? CircleCheck
-                  : asset.analysis_status === "blocked" ? CircleMinus
-                    : asset.analysis_status === "failed" ? CircleAlert : CircleDashed;
-            return (
-              <button
-                className={`library-card${selected?.id === asset.id ? " is-selected" : ""}`}
-                key={asset.id}
-                data-open-details onClick={() => selectAsset(asset)}
-                type="button"
-                >
-                <span className="library-card__poster">
-                  {asset.media_type === "image" ? (
-                    <img
-                      alt=""
-                      aria-hidden="true"
-                      src={`/api/production/materials/${asset.id}/media`}
-                    />
-                  ) : asset.media_type === "audio" ? (
-                    <Volume2 className="library-card__fallback-icon" size={22} />
-                  ) : (
-                    <video
-                      aria-hidden="true"
-                      muted
-                      playsInline
-                      preload="metadata"
-                      src={`/api/production/materials/${asset.id}/media`}
-                    />
-                  )}
-                  {asset.media_type === "video" ? (
-                    <Film className="library-card__fallback-icon" size={22} />
-                  ) : null}
-                  <small>
-                    {asset.media_type === "image" ? mediaLabel(asset.media_type) : duration(asset.duration_seconds)}
-                  </small>
-                  <i
-                    className={`library-card__state state-${asset.review_status === "approved" ? "approved" : asset.review_status === "rejected" ? "rejected" : asset.analysis_status}`}
-                  >
-                    <AssetStateIcon size={13} />
-                  </i>
-                </span>
-                <span className="library-card__copy">
-                  <strong title={fileLabel(asset.file_name)}>{fileLabel(asset.file_name)}</strong>
-                  <small>
-                    {roleLabel(asset)} · {reviewLabel(asset)}
-                  </small>
-                  <small>{analysisSummary(asset)}</small>
-                  {(asset.analysis_status === "blocked" || asset.analysis_status === "failed") ? (
-                    <small className={styles.assetDiagnostic}>{analysisMessage(asset)}</small>
-                  ) : null}
-                </span>
-              </button>
-            );
-          })}
-          </div>
-        ) : (
-          <div className="library-empty">
-            <Film size={23} />
-            <div>
-              <strong>{query || filter !== "all" || mediaType !== "all" || initialTag ? "没有匹配的素材" : "素材库还是空的"}</strong>
-              <p>
-                {query || filter !== "all" || mediaType !== "all" || initialTag
-                  ? "试试清除搜索词，或重置全部筛选条件。"
-                  : intake?.bound_to_current_workspace
-                    ? "系统会自动检查新素材。新文件稳定并完成分析后，将显示在这里。"
-                    : "先在上方确认素材目录，系统随后会自动检查新文件。"}
-              </p>
-            </div>
-          </div>
-        )}
-        {hasMore ? (
-          <div className="library-load-more">
-            <button
-              disabled={busy !== null}
-              onClick={() => void loadMore()}
-              type="button"
-            >
-              {busy === "load" ? (
-                <LoaderCircle className="is-spinning" size={15} />
-              ) : null}
-              {busy === "load"
-                ? "正在载入…"
-                : `载入更多（剩余 ${Math.max(0, totalCount - assets.length)}）`}
-            </button>
-          </div>
-        ) : null}
+        </HomeCardDialog> : null}
+        {statisticsOpen ? <HomeCardDialog kind="detail" title="素材统计" onClose={() => setStatisticsOpen(false)}>
+        <section className={styles.statistics} aria-label="素材覆盖"><p>{insights.asset_count} 个可见文件 · {insights.segment_count} 个片段</p><div className={styles.statTags}>{insights.tags.filter(entry => entry.asset_count > 0).map(entry => <Link key={entry.tag} href={"/library?tag=" + encodeURIComponent(entry.tag)}>{tagLabel(entry.tag)}<small>{entry.asset_count} 份素材</small></Link>)}</div><p>此处统计已有内容；具体缺口会在制作任务检查素材时显示。</p></section>        </HomeCardDialog> : null}
       </div>
     </AppShell>
   );

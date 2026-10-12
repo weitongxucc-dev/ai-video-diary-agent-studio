@@ -49,9 +49,6 @@
 .conversationBody :global(.home-composer) { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 12px; border: 0; background: transparent; }
 .conversationBody :global(.assistant-conversation-panel) { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .conversationBody :global(.assistant-conversation-history) { flex: 1; min-height: 0; max-height: none; }
-.conversationBody :global(.assistant-conversation-entry) { margin-top: auto; padding: 12px 10px 8px; border: 1px solid transparent; border-radius: 14px; background: color-mix(in srgb, var(--surface-1) 98%, var(--composer-tint)); box-shadow: 0 2px 5px rgb(25 25 40 / 3%), 0 8px 24px rgb(25 25 40 / 3%); background-image: linear-gradient(color-mix(in srgb, var(--surface-1) 98%, var(--composer-tint)), color-mix(in srgb, var(--surface-1) 98%, var(--composer-tint))), linear-gradient(125deg, color-mix(in srgb, var(--composer-edge-start) 55%, transparent), color-mix(in srgb, var(--composer-edge-mid) 55%, transparent), color-mix(in srgb, var(--composer-edge-end) 55%, transparent)); background-origin: border-box; background-clip: padding-box, border-box; transition: box-shadow 150ms ease, background 150ms ease; }
-.conversationBody :global(.assistant-conversation-entry:hover) { background-image: linear-gradient(color-mix(in srgb, var(--surface-1) 98%, var(--composer-tint)), color-mix(in srgb, var(--surface-1) 98%, var(--composer-tint))), linear-gradient(125deg, color-mix(in srgb, var(--composer-edge-start) 90%, transparent), color-mix(in srgb, var(--composer-edge-mid) 90%, transparent), color-mix(in srgb, var(--composer-edge-end) 90%, transparent)); }
-.conversationBody :global(.assistant-conversation-entry textarea) { min-height: 64px; }
 .conversationBody :global(.home-composer__service) { font-size: 12px; }
 .chatSeparator { right: -4px; top: 0; }
 .chatSeparator::before { top: 88px; }
@@ -94,8 +91,6 @@
 .shell :global(.desktop-task-status.status-warning) {color:var(--warning);}
 .shell :global(.desktop-task-status.status-success) {color:var(--success);}
 .shell :global(.desktop-task-status.status-danger) {color:var(--danger);}
-.conversationBody :global(.home-composer form:focus-within) { background-image: linear-gradient(var(--surface-1), var(--surface-1)), linear-gradient(125deg, var(--composer-focus-start), var(--composer-focus-mid), var(--composer-focus-end)); border-color: transparent; box-shadow:0 2px 5px rgb(25 25 40 / 4%), 0 10px 28px rgb(25 25 40 / 6%), 0 0 14px color-mix(in srgb, var(--focus) 10%, transparent); }
-.conversationBody :global(.home-composer__footer) {margin-top:8px;font-size:12px;}
 .shell h1 {min-width:80px;}
 
 

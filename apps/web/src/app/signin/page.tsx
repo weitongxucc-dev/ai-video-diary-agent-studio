@@ -27,7 +27,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
   return (
     <main className="modern-auth-page">
       <section className="modern-auth-card" aria-labelledby="signin-heading">
-        <div className="modern-auth-brand"><span><Image alt="" aria-hidden height={20} src="/favicon.svg" width={20} /></span><strong>AI 视频日记</strong></div>
+        <div className="modern-auth-brand"><span><Image alt="" aria-hidden height={20} src="/yaohe-icon.png" unoptimized width={20} /></span><strong>曜核1.0</strong></div>
         <div className="modern-auth-heading"><span>桌面账号</span><h1 id="signin-heading">登录工作区</h1><p>输入管理员为你设置的账号和密码。</p></div>
         {error ? <div className="modern-auth-error" role="alert">{error}</div> : null}
         <form action={signIn} className="modern-auth-form">

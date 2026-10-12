@@ -31,6 +31,15 @@ KEY = "private-test-key"
 
 
 @pytest.fixture(autouse=True)
+def _isolated_host_preflight(monkeypatch):
+    # These tests classify synthetic model responses, independently of HTTP
+    # task reads. Real preflight and object snapshots have separate coverage.
+    monkeypatch.setattr("app.assistant_pi._read_task_before_pi", lambda _extension, env, _cwd: {
+        "task_id": env["AI_VIDEO_DIARY_AGENT_TASK_ID"], "selected_refs": [],
+    })
+
+
+@pytest.fixture(autouse=True)
 def _clear_verifications():
     with config_module._llm_service_lock:
         config_module._llm_service_verifications.clear()
@@ -166,8 +175,8 @@ def test_business_tool_failure_is_not_reported_as_a_key_problem(monkeypatch, tmp
         _turn(monkeypatch, tmp_path, returncode=1, stdout=log)
     text = str(caught.value)
     assert caught.value.cause == FAILURE_TOOL_FAILED
-    assert "业务工具执行失败" in text
-    assert "运行时体检" in text
+    assert "本轮业务操作未完成" in text
+    assert "工具记录中的具体阻断" in text
     assert "密钥" not in text
 
 

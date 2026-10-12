@@ -38,7 +38,7 @@ it("starts an arrow draft with contract defaults and submits kind arrow",()=>{
  fireEvent.click(screen.getByRole("button",{name:"新建箭头标注",hidden:true}));
  expect(screen.getByLabelText("箭头名称")).toHaveValue("");
  expect(screen.getByLabelText("箭头作用说明")).toHaveValue("");
- expect(screen.getByLabelText("标注角")).toHaveValue("right-top");
+ expect(screen.getByLabelText("标注角")).toHaveAttribute("data-selected-value", "right-top");
  expect(screen.getByLabelText("箭头颜色（#RRGGBB）")).toHaveValue("#FFFFFF");
  expect((screen.getByLabelText("指向 X（0–1）") as HTMLInputElement).value).toBe("");
  fireEvent.change(screen.getByLabelText("箭头名称"),{target:{value:"电源按钮"}});
@@ -84,7 +84,7 @@ it("selects an existing arrow overlay for editing and updates it",()=>{
  const preview=vi.fn();
  render(<GraphicOverlayEditor taskId="task" items={[{kind:"arrow",id:"arrow-1",x:.6,y:.7,name:"电源按钮",purpose:"指示开机键",start_seconds:0,end_seconds:2,position:"left-top",color:"#00FF00"}]} duration={6} busy={false} onPreview={preview} onDraftChange={vi.fn()}/>);
  fireEvent.click(screen.getByRole("button",{name:"箭头1 · 电源按钮",hidden:true}));
- expect(screen.getByLabelText("标注角")).toHaveValue("left-top");
+ expect(screen.getByLabelText("标注角")).toHaveAttribute("data-selected-value", "left-top");
  expect(screen.getByLabelText("箭头颜色（#RRGGBB）")).toHaveValue("#00FF00");
  fireEvent.click(screen.getByRole("button",{name:"保存箭头草稿",hidden:true}));
  expect(preview).toHaveBeenLastCalledWith(expect.objectContaining({operation_type:"EditGraphicOverlay",overlay_action:"update",overlay_id:"arrow-1",

@@ -4,8 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
   createVoiceProfile,
-  disablePreferenceCard,
-  restorePreferenceCard,
   updateProductionProfile,
   updateRuntimeSettings,
   updateVoiceProfile,
@@ -56,36 +54,6 @@ function safeErrorMessage(err: unknown, fallback: string): string {
     return err.message;
   }
   return fallback;
-}
-
-export async function disablePreferenceCardAction(formData: FormData) {
-  const preferenceId = requiredString(formData, "preference_id");
-  try {
-    await disablePreferenceCard(preferenceId);
-    revalidatePath("/learning");
-    redirectWithToast("/learning", "success", "偏好卡已禁用");
-  } catch (err) {
-    redirectWithToast(
-      "/learning",
-      "error",
-      `禁用偏好卡失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
-}
-
-export async function restorePreferenceCardAction(formData: FormData) {
-  const preferenceId = requiredString(formData, "preference_id");
-  try {
-    await restorePreferenceCard(preferenceId);
-    revalidatePath("/learning");
-    redirectWithToast("/learning", "success", "偏好卡已恢复");
-  } catch (err) {
-    redirectWithToast(
-      "/learning",
-      "error",
-      `恢复偏好卡失败：${safeErrorMessage(err, "未知错误")}`,
-    );
-  }
 }
 
 export async function updateRuntimeSettingsAction(formData: FormData) {

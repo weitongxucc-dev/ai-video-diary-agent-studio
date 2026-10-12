@@ -477,6 +477,11 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
 
 
 def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from test_creation_task_topic_provider import _review_tool_response
+    from app.topics import CreationTaskTopicSource, OpenAICompatibleCreationTaskScriptGenerator
+
     repo = make_repo(tmp_path)
     conversation_id = "11111111-1111-4111-8111-111111111111"
     turn_id = "22222222-2222-4222-8222-222222222222"
@@ -548,13 +553,28 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     readable = SimpleNamespace(
         version="v3", title="当前知识资料", use_state="available",
         authorization="available", ownership="workspace",
+        body="资料介绍核心功能，示例文案可以简洁表达。",
     )
+    bounded_source = CreationTaskTopicSource(reference_id="knowledge:knowledge-one:v3", kind="knowledge",
+        title=readable.title, text=readable.body)
+    review_requests = []
+    def review(request):
+        payload = json.loads(request.content)
+        review_requests.append(payload)
+        section = json.loads(payload["messages"][1]["content"])["script"]["sections"][0]
+        response = {"sections": [{"index": 1, "grounded": True, "constraints_met": True,
+            "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
+                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}]}
+        return _review_tool_response(response)
+    checker = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "controlled-review",
+        transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for", lambda settings: checker)
     monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
     ))
     monkeypatch.setattr(main_module, "_assistant_script_inputs", lambda _workspace, _task_id: (
         repo.get_creation_task(WORKSPACE, task.id), repo.get_creation_plan(WORKSPACE, plan.id),
-        topic, (), INPUT_REFERENCES,
+        topic, (bounded_source,), INPUT_REFERENCES,
     ))
     transfer_payload = AssistantReplyScriptTransferRequest(
         conversation_id=UUID(conversation_id), turn_id=UUID(turn_id),
@@ -568,6 +588,8 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     draft = repo.list_creation_task_scripts(WORKSPACE, task.id)[0]
     assert draft.selection_status == "draft"
     assert draft.sections[0].visual_prompt == "" and draft.sections[0].evidence_reference_ids == []
+    assert draft.sections[0].content == REPLY_TEXT and draft.source_reply_reference is not None
+    assert review_requests == []  # Original-text transfer is not a factual-review pass.
 
     edited = main_module.save_assistant_script_draft(task.id, request,
         main_module.CreationTaskScriptDraftRequest(
@@ -579,6 +601,9 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
             }],
         ))
     assert edited.updated_at != draft.updated_at
+    assert len(review_requests) == 1
+    assert edited.source_reply_reference == draft.source_reply_reference
+    assert edited.selection_status == "draft"
     confirmed = main_module.confirm_creation_task_script(task.id, draft.id, request,
         main_module.CreationTaskScriptConfirmRequest(
             title=edited.title, expected_updated_at=edited.updated_at,

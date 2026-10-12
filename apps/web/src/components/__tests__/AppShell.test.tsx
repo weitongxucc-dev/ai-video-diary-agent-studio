@@ -8,6 +8,7 @@ let pathname = "/";
 let search = "";
 
 const apiMocks = vi.hoisted(() => ({
+  listLocalMembers: vi.fn().mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]}),
   listCreationTasks: vi.fn(),
 }));
 const routerPush = vi.fn();
@@ -30,6 +31,7 @@ vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
 vi.mock("@/lib/api", () => ({
+  listLocalMembers: apiMocks.listLocalMembers,
   listCreationTasks: apiMocks.listCreationTasks,
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: false } } }),
   getCurrentAssistantConversation: vi.fn(async (scope: import("@/lib/types").AssistantConversationScope) => ({
@@ -43,6 +45,7 @@ vi.mock("@/lib/api", () => ({
     extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {},
   } satisfies import("@/lib/types").AssistantCapabilities),
 }));
+
 
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
@@ -91,7 +94,21 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+  Reflect.deleteProperty(document, "hidden");
+});
+
 describe("AppShell", () => {
+
+  it("shows the approved Yaohe brand while retaining home navigation", () => {
+    render(<AppShell><p>当前工作区</p></AppShell>);
+    const home = screen.getByRole("link", { name: "返回首页" });
+    expect(home).toHaveAttribute("href", "/");
+    expect(within(home).getByText("曜核1.0")).toBeInTheDocument();
+    expect(home.querySelector("img")).toHaveAttribute("src", "/yaohe-icon.png");
+    expect(screen.queryByText("智能视频日记")).not.toBeInTheDocument();
+  });
 
   it("keeps conversation visible and opens object details only in a dismissible card", () => {
     const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
@@ -192,7 +209,7 @@ describe("AppShell", () => {
     localStorage.clear();
   });
 
-  it("keeps the seven product entries and CreationTask links in the left rail", () => {
+  it("keeps the six product entries and CreationTask links in the left rail", () => {
     render(
       <AppShell
         creationTasks={[
@@ -205,14 +222,17 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "发布与数据", "成员与空间"]) {
+    for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "发布与数据"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("link", { name: "成员与空间" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "设备设置" })).toHaveAttribute("href", "/settings");
+    expect(screen.queryByRole("button", { name: "创作者与空间菜单" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
     expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
-    expect(screen.getAllByText("等待开始")).not.toHaveLength(0);
+    expect(screen.queryByText("等待开始")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /产品演示视频/ })).toHaveAttribute("href", "/tasks/task-1");
     expect(screen.queryByRole("link", { name: "定时任务" })).not.toBeInTheDocument();
   });
@@ -230,11 +250,17 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    expect(screen.getByRole("link", { name: /等待任务等待开始/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /生成任务选题处理中/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /确认任务等待确认/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /完成任务已完成/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /处理任务需要处理/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /等待任务.*选题待开始/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /生成任务.*正在选题/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /确认任务.*选题待确认/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /完成任务.*已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /处理任务.*选题未生成/ })).toBeInTheDocument();
+    for (const name of ["等待任务", "生成任务", "确认任务", "完成任务", "处理任务"]) {
+      const row = screen.getByRole("link", { name: new RegExp(name) });
+      expect(row.querySelector('svg[data-task-stage="topic"]')).toHaveClass("lucide-lightbulb");
+      expect(row.querySelector("small")).toBeVisible();
+      expect(row.querySelectorAll(".is-spinning")).toHaveLength(name === "生成任务" ? 1 : 0);
+    }
   });
 
   it("shows only persisted CreationTasks returned by the task list", async () => {
@@ -266,27 +292,97 @@ describe("AppShell", () => {
     });
     render(<AppShell creationTasks={[creationTask({ id: "task-1", name: "当前详情任务", stage_status: "not_started" })]}><p>页面内容</p></AppShell>);
 
-    expect(await screen.findByRole("link", { name: /当前详情任务已完成/ })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /当前详情任务等待开始/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /当前详情任务.*已完成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /当前详情任务.*选题待开始/ })).not.toBeInTheDocument();
   });
 
-  it("labels the old automations URL as a preview without a normal primary navigation entry", () => {
+  it("refreshes a background running task across navigation and stops after its persisted failure", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    const running = creationTask({ status: "running", stage_status: "running" });
+    const failed = creationTask({ status: "failed", stage_status: "failed", updated_at: "2026-10-10T02:34:00Z" });
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [running], total_count: 1 });
+    const view = render(<AppShell creationTasks={[running]} conversation={<p>对话</p>}><p>任务页</p></AppShell>);
+    await act(async () => {});
+    pathname = "/production";
+    search = "view=automations";
+    view.rerender(<AppShell conversation={<p>对话</p>}><p>定时页</p></AppShell>);
+    await act(async () => {});
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("link", { name: /已保存创作任务.*正在选题/ })).toBeInTheDocument();
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [failed], total_count: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(screen.getByRole("link", { name: /已保存创作任务.*选题未生成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /正在选题/ })).not.toBeInTheDocument();
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it("pauses running-task refresh while hidden and never overlaps background reads", async () => {
+    vi.useFakeTimers();
+    let hidden = true;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    const running = creationTask({ status: "running", stage_status: "running" });
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [running], total_count: 1 });
+    render(<AppShell conversation={<p>对话</p>}><p>定时页</p></AppShell>);
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(1);
+    let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise(finish => { resolve = finish; }));
+    hidden = false;
+    fireEvent(document, new Event("visibilitychange"));
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2);
+    await act(async () => resolve({ items: [creationTask({ status: "failed", stage_status: "failed" })], total_count: 1 }));
+    expect(screen.getByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
+  });
+
+  it("retains the last task fact with a read error and retries only while it is running", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    const running = creationTask({ status: "running", stage_status: "running" });
+    apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [running], total_count: 1 })
+      .mockRejectedValueOnce(new Error("本地任务状态读取失败"))
+      .mockResolvedValue({ items: [creationTask({ status: "failed", stage_status: "failed" })], total_count: 1 });
+    render(<AppShell conversation={<p>对话</p>}><p>页面</p></AppShell>);
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(screen.getByRole("alert")).toHaveTextContent("已有任务仍可打开");
+    expect(screen.getByRole("link", { name: /正在选题/ })).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
+  });
+
+  it("does not restore an older running page snapshot after the server has reported failure", async () => {
+    const failed = creationTask({ status: "failed", stage_status: "failed", updated_at: "2026-10-10T02:34:00Z" });
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [failed], total_count: 1 });
+    const view = render(<AppShell conversation={<p>对话</p>}><p>页面</p></AppShell>);
+    expect(await screen.findByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
+    view.rerender(<AppShell creationTasks={[creationTask({ status: "running", stage_status: "running" })]} conversation={<p>对话</p>}><p>页面</p></AppShell>);
+    expect(screen.getByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /正在选题/ })).not.toBeInTheDocument();
+  });
+
+  it("labels the connected automations URL without a permanent primary navigation entry", () => {
     pathname = "/production";
     search = "view=automations";
     render(<AppShell><p>页面内容</p></AppShell>);
-    expect(screen.getByText("定时定义预览")).toBeInTheDocument();
+    expect(screen.getByText("定时任务")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "定时任务" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "定时定义预览" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "发布与数据" })).not.toHaveClass("is-active");
   });
 
-  it("keeps a scheduled definition preview discoverable in search with its read-only boundary", () => {
+  it("keeps scheduled tasks discoverable in search with the confirmed execution boundary", () => {
     render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     const palette = screen.getByRole("dialog", { name: "搜索页面和创作任务" });
-    const preview = within(palette).getByRole("option", { name: /定时定义预览/ });
-    expect(preview).toHaveTextContent("只读查看已保存定义，尚未接通执行");
-    expect(within(palette).queryByRole("option", { name: /^定时任务/ })).not.toBeInTheDocument();
+    const preview = within(palette).getByRole("option", { name: /定时任务/ });
+    expect(preview).toHaveTextContent("安排到期时间，查看待确认步骤与执行记录");
+    expect(within(palette).queryByRole("option", { name: /定时定义预览/ })).not.toBeInTheDocument();
     fireEvent.click(preview);
     expect(routerPush).toHaveBeenCalledWith("/production?view=automations");
   });
@@ -311,7 +407,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在更新创作任务…");
     expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
     await act(async () => resolve({ items: [creationTask({ stage_status: "completed" })], total_count: 1 }));
-    expect(screen.getByRole("link", { name: /已保存创作任务已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /已保存创作任务.*已完成/ })).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -338,7 +434,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在更新创作任务");
     expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
     await act(async () => resolve({ items: [creationTask({ stage_status: "completed" })], total_count: 1 }));
-    expect(screen.getByRole("link", { name: /已保存创作任务已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /已保存创作任务.*已完成/ })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -354,7 +450,7 @@ describe("AppShell", () => {
       if (outcome === "success") resolve({ items: initial, total_count: 1 });
       else reject(new Error("过期读取故障"));
     });
-    expect(screen.getByRole("link", { name: /新快照任务已完成/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /新快照任务.*已完成/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /旧快照任务/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();

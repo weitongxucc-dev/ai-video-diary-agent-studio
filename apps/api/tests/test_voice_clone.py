@@ -585,20 +585,33 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
     assert response["segments"][0]["audio_url"].endswith("/segment-language/audio")
 
 
-def test_granted_qwen_lower_io_priority_is_process_scoped_and_offline(tmp_path, monkeypatch):
+@pytest.mark.parametrize("threads", [1, 3])
+def test_granted_qwen_lower_io_priority_is_process_scoped_and_offline(tmp_path, monkeypatch, threads):
     from types import SimpleNamespace
     import app.voice_clone as voices
     calls = []
     provider = _provider(tmp_path, lambda *_args: None)
     monkeypatch.setattr(voices.sys, "platform", "darwin")
-    context = SimpleNamespace(threads=1, run=lambda command, **options:
+    monkeypatch.setenv("RAYON_NUM_THREADS", "64")
+    monkeypatch.setenv("OPENAI_API_KEY", "host-secret-fixture")
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Granted Qwen commands must use the existing grant runner")
+    monkeypatch.setattr(voices.subprocess, "run", forbidden)
+    context = SimpleNamespace(threads=threads, run=lambda command, **options:
         calls.append((command, options)) or SimpleNamespace(returncode=0, stdout=b"", stderr=b""))
-    provider._run_command([str(provider.runtime_python_path), str(provider.worker_path)], grant_context=context)
+    output_paths = (tmp_path / "audio.wav", tmp_path / "response.json")
+    provider._run_command([str(provider.runtime_python_path), str(provider.worker_path)],
+                          grant_context=context, output_paths=output_paths)
+    assert len(calls) == 1
     command, options = calls[0]
     assert command[:3] == ["/usr/sbin/taskpolicy", "-d", "throttle"]
     assert command[3:] == [str(provider.runtime_python_path), str(provider.worker_path)]
     assert options["env"]["HF_HUB_OFFLINE"] == "1"
-    assert options["env"]["OMP_NUM_THREADS"] == "1"
+    assert options["env"]["TRANSFORMERS_OFFLINE"] == "1"
+    for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "RAYON_NUM_THREADS"):
+        assert options["env"][key] == str(threads)
+    assert options["output_paths"] == output_paths
+    assert voices.os.environ["RAYON_NUM_THREADS"] == "64"
     assert not any(key.endswith("KEY") for key in options["env"])
 
 

@@ -1,3 +1,4 @@
+import { chooseSelectValue } from "@/components/__tests__/select-interaction";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
@@ -6,11 +7,13 @@ import type { KnowledgeItem } from "@/lib/source-api";
 import type { ScriptLibraryEntry } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
+  referenceAssistantKnowledge: vi.fn(),
   getKnowledgeGrants: vi.fn(),
   grantKnowledgeToWorkspace: vi.fn(),
   revokeKnowledgeGrant: vi.fn(),
   listKnowledgeItems: vi.fn(),
   getKnowledgeItem: vi.fn(),
+  editKnowledgeItem: vi.fn(),
   setKnowledgeItemVisibility: vi.fn(),
   sourceErrorMessage: vi.fn(),
   findCitedVersion: vi.fn(),
@@ -18,9 +21,11 @@ const api = vi.hoisted(() => ({
   listScriptLibraryEntries: vi.fn(),
   getScriptLibrarySources: vi.fn(),
 }));
+vi.mock("@/lib/assistant-reference", () => ({ referenceAssistantKnowledge: api.referenceAssistantKnowledge }));
 vi.mock("@/lib/source-api", () => ({
   listKnowledgeItems: api.listKnowledgeItems,
   getKnowledgeItem: api.getKnowledgeItem,
+  editKnowledgeItem: api.editKnowledgeItem,
   setKnowledgeItemVisibility: api.setKnowledgeItemVisibility,
   sourceErrorMessage: api.sourceErrorMessage,
   findCitedVersion: api.findCitedVersion,
@@ -86,8 +91,8 @@ describe("KnowledgePage", () => {
     expect(screen.queryByText(/用途分类尚未接入/)).not.toBeInTheDocument();
     const detail = screen.getByRole("complementary", { name: "来源详情" });
     expect(detail).toHaveTextContent("设备运行前请先检查电源。");
-    expect(detail).toHaveTextContent("尚无可核对的摘要来源");
-    expect(detail).toHaveTextContent("没有显式参数格式就不生成参数");
+    expect(within(detail).queryByRole("heading", { name: "摘要" })).not.toBeInTheDocument();
+    expect(detail).toHaveTextContent("此版本未记录结构化参数");
     expect(detail).toHaveTextContent("v2");
     expect(detail).toHaveTextContent("内部使用");
     expect(screen.queryByRole("button", { name: /产品知识/ })).not.toBeInTheDocument();
@@ -118,6 +123,11 @@ describe("KnowledgePage", () => {
     expect(detail).toHaveTextContent("hash-v2");
     expect(detail).toHaveTextContent("版本 1 ·");
     expect(detail).toHaveTextContent("版本 2 ·");
+    expect(api.referenceAssistantKnowledge).not.toHaveBeenCalled();
+    fireEvent.click(within(detail).getByRole("button", { name: "引用第2段" }));
+    expect(api.referenceAssistantKnowledge).toHaveBeenCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title, locator: "第2段" });
+    fireEvent.click(within(detail).getByRole("button", { name: "引用当前查看版本到对话" }));
+    expect(api.referenceAssistantKnowledge).toHaveBeenLastCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title });
   });
 
   it("keeps the add-source action without an empty relation or question panel", async () => {
@@ -177,24 +187,39 @@ describe("KnowledgePage", () => {
     expect(screen.queryByRole("button", { name: /迟到旧列表/ })).not.toBeInTheDocument();
   });
 
-  it("renders correction and task-reference actions honestly while interfaces are absent", async () => {
+  it("saves a versioned owned correction and preserves the draft after a conflict", async () => {
+    api.getKnowledgeItem.mockResolvedValue({ ...item, version: "2", versions: [] });
+    api.editKnowledgeItem.mockRejectedValueOnce(new Error("资料版本已变化"));
+    api.sourceErrorMessage.mockImplementation((error: Error) => error.message);
     render(<KnowledgePage />);
     fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
-    const detail = screen.getByRole("complementary", { name: "来源详情" });
-    expect(detail).toHaveTextContent("纠正保存与任务引用接口尚未接入");
-    expect(screen.getByRole("button", { name: "保存纠正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "用于当前任务" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "摘要纠正" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "参数纠正" })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑标题与正文" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "资料标题" }), { target: { value: "修订设备说明" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "资料正文" }), { target: { value: "先检查电源与接线。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存新版本" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("资料版本已变化");
+    expect(screen.getByRole("textbox", { name: "资料正文" })).toHaveValue("先检查电源与接线。");
+    expect(api.editKnowledgeItem).toHaveBeenCalledWith(item.id, { expected_version: "2", title: "修订设备说明", body: "先检查电源与接线。" });
+    api.getKnowledgeItem.mockResolvedValueOnce({ ...item, title: "另一人已核对", body: "当前版本原文。", version: "3", versions: [] });
+    fireEvent.click(screen.getByRole("button", { name: "读取当前版本，保留我的修改" }));
+    expect(await screen.findByText("请核对当前版本 3 后保存")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "资料标题" })).toHaveValue("修订设备说明");
+    expect(screen.getByRole("textbox", { name: "资料正文" })).toHaveValue("先检查电源与接线。");
+    api.editKnowledgeItem.mockResolvedValueOnce({ ...item, title: "修订设备说明", body: "先检查电源与接线。", version: "4", versions: [{ version: "3", title: "另一人已核对", body: "当前版本原文。", saved_at: item.created_at }] });
+    fireEvent.click(screen.getByRole("button", { name: "保存新版本" }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "资料正文" })).not.toBeInTheDocument());
+    expect(screen.getByRole("complementary", { name: "来源详情" })).toHaveTextContent("先检查电源与接线。");
+    expect(api.editKnowledgeItem).toHaveBeenLastCalledWith(item.id, { expected_version: "3", title: "修订设备说明", body: "先检查电源与接线。" });
   });
 
-  it("shows example correction and task-reference actions in example mode", () => {
-    render(<KnowledgeWorkspace error={null} exampleMode items={[{ ...item, exampleCategory: "产品知识", exampleSummary: "先检查电源。", exampleParameters: "额定功率示例", exampleIssue: "待核对" }]} loading={false} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
-    expect(screen.getByRole("button", { name: /保存纠正 · 示例/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /用于当前任务 · 示例/ })).toBeEnabled();
-    expect(screen.getByRole("textbox", { name: "摘要纠正" })).toHaveValue("先检查电源。");
-    expect(screen.getByRole("textbox", { name: "参数纠正" })).toHaveValue("额定功率示例");
+  it("provides no edit action for a read-only grant", async () => {
+    api.getKnowledgeItem.mockResolvedValue({ ...item, versions: [] });
+    api.getKnowledgeGrants.mockResolvedValue({ can_manage: false, access_via_grant: true, targets: [], grants: [] });
+    render(<KnowledgePage />);
+    fireEvent.click(await screen.findByRole("button", { name: /设备说明书/ }));
+    await waitFor(() => expect(screen.getByText("只有原工作区的资料所有者可以修订。")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "编辑标题与正文" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存纠正" })).not.toBeInTheDocument();
   });
 
   it("keeps category and summary examples isolated from production data", () => {
@@ -273,25 +298,26 @@ describe("knowledge workspace grants", () => {
     api.revokeKnowledgeGrant.mockResolvedValue({ ...grant, revoked_by: "original-uploader", revoked_at: "2026-10-04T11:00:00Z" });
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    fireEvent.click(screen.getByRole("button", { name: "工作空间授权" }));
     const target = await screen.findByRole("combobox", { name: "目标工作空间" });
-    fireEvent.change(target, { target: { value: "workspace-two" } });
+    await chooseSelectValue(target, "workspace-two");
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
     expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
     const confirmation = screen.getByRole("dialog", { name: "跨空间授权确认" });
     expect(confirmation).toHaveAttribute("aria-modal", "true");
     expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(target).toHaveValue("workspace-two");
+    expect(target).toHaveAttribute("data-selected-value", "workspace-two");
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
     fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "授予读取与引用" })).toBeEnabled());
-    expect(target).toHaveValue("workspace-two");
+    expect(target).toHaveAttribute("data-selected-value", "workspace-two");
     expect(screen.queryByRole("button", { name: "撤销授权" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
     fireEvent.click(screen.getByRole("button", { name: "确认授予读取与引用" }));
     const revoke = await screen.findByRole("button", { name: "撤销授权" });
     expect(api.grantKnowledgeToWorkspace).toHaveBeenLastCalledWith(item.id, "workspace-two");
-    expect(target).toHaveValue("");
+    expect(target).toHaveAttribute("data-selected-value", "");
     fireEvent.click(revoke);
     expect(api.revokeKnowledgeGrant).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认撤销授权" }));
@@ -304,6 +330,7 @@ describe("knowledge workspace grants", () => {
     api.getKnowledgeGrants.mockResolvedValue({ can_manage: false, source_workspace_id: "workspace-one", access_via_grant: true, target_resolution: "resolved", target_resolution_message: "隔离UI响应示例", cross_workspace_status: "AVAILABLE", targets: [], grants: [] });
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
+    fireEvent.click(screen.getByRole("button", { name: "工作空间授权" }));
     await screen.findByText(/原工作空间：workspace-one/);
     expect(screen.getByText(/你通过显式授权读取和引用/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
@@ -319,7 +346,9 @@ describe("knowledge workspace grants", () => {
     });
     render(<KnowledgeWorkspace items={[{ ...item, workspace_id: "local" }]} loading={false} error={null} onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /设备说明书/ }));
-    expect(await screen.findByText(/本地成员仅同空间/)).toHaveTextContent("UNVERIFIED");
+    expect(screen.queryByText(/本地成员仅同空间/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "工作空间授权" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("当前只有同一工作空间的本地成员");
     expect(screen.queryByRole("combobox", { name: "目标工作空间" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "授予读取与引用" })).not.toBeInTheDocument();
     expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();

@@ -1,4 +1,8 @@
 "use client";
+import type { TaskMediaJob, TaskMediaJobPage, TaskMediaResultMap } from "@/lib/types";
+import { Tabs } from "@base-ui/react/tabs";
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
+import { SubtitleWorkspace } from "./SubtitleWorkspace";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { ExecutionQueueStatus } from "./ExecutionQueueStatus";
@@ -6,6 +10,7 @@ import { TimelineVersionHistory } from "./TimelineVersionHistory";
 
 import Link from "next/link";
 import NextImage from "next/image";
+import { creationTaskFailureReason, creationTaskRepairAction, creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import {
   AlertCircle,
   Undo2,
@@ -14,6 +19,7 @@ import {
   CheckCircle2,
   Captions,
   Clapperboard,
+  ChevronDown,
   FileText,
   History,
   ImageIcon,
@@ -26,14 +32,22 @@ import {
   UserRound,
   Volume2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CardDisclosure, HomeCardDialog } from "@/components/HomeCardDialog";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { AssistantConversationPanel } from "@/components/AssistantConversationPanel";
+import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import {
   apiUrl,
+  getCreationTaskMediaJob,
+  listCreationTaskMediaJobs,
+  taskMediaJobMatchesContext,
+  cancelCreationTaskMediaJob,
+  resolveCreationTaskMediaResponse,
+  taskMediaJobLabel,
+  TaskMediaJobError,
   checkCreationTaskQuality,
   getCreationTaskQualityCheck,
   confirmCreationTaskEdit,
@@ -51,6 +65,7 @@ import {
   getCreationTaskTopics,
   getCreationPlan,
   getCreationTaskWorkspace,
+  getCreationTaskEditPreview,
   setCreationPlanVisibility,
   setCreationTaskVisibility,
   getProductionMaterials,
@@ -65,6 +80,7 @@ import {
   getRuntimeSettings,
   previewCreationTaskEdit,
   sendCreationTaskAssistantTurn,
+  sendMaterialAssistantTurn,
   previewCompoundSelection,
   previewCreationTaskExactEdit,
   applyCreationTaskExactEdit,
@@ -80,6 +96,7 @@ import type {
   CreationTaskQualityCheck,
   CreationTaskExactEditInput,
   CreationTaskEditPreviewResponse,
+  CreationTaskAssistantTurnResponse,
   CreationTaskEditOperation,
   CreationTaskNarrationSegment,
   CreationTaskRecording,
@@ -175,7 +192,7 @@ type ProductStageState = "done" | "skipped" | "current" | "upcoming";
 // 人物与口型按 PRD 9.1 判断：露脸目标 0% 是明确跳过而不是完成；目标未记录不能当作 0%。
 function personStageFacts(workspace: WorkspaceState): { state: ProductStageState; detail: string } {
   const target = workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null;
-  if (target === 0) return { state: "skipped", detail: "明确跳过 · 全素材画面" };
+  if (target === 0) return { state: "skipped", detail: "明确跳过 · 目标 0%" };
 
   // 只有属于当前配音、人物与声音版本仍是当前方案的口型才算本阶段的当前产物；
   // 旧人物版本留下的记录不代表这一阶段做完了。
@@ -218,7 +235,7 @@ function productStageState(
   if (stageId === "prepare") {
     return task.plan_id ? { state: "done", detail: "已完成" } : { state: "upcoming", detail: "未确认方案" };
   }
-  if (stageId === "publish") return { state: "upcoming", detail: "未接入" };
+  if (stageId === "publish") return { state: "upcoming", detail: "在发布工作区处理" };
 
   if (stageId === "topic") {
     if (topic) return { state: "done", detail: "已完成" };
@@ -226,6 +243,7 @@ function productStageState(
   }
   if (stageId === "script") {
     if (scripts[0]?.selection_status === "confirmed") return { state: "done", detail: "已完成" };
+    if (scripts[0]?.selection_status === "draft" && scripts.some(script => script.id === task.confirmed_script_id && script.selection_status === "confirmed")) return { state: "current", detail: "有新草稿待确认" };
     if (task.stage === "script") return { state: "current", detail: "当前" };
     return scripts.length ? { state: "current", detail: "待确认" } : { state: "upcoming", detail: "未开始" };
   }
@@ -272,7 +290,26 @@ function errorDetails(cause: unknown) {
   };
 }
 
-function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, selectedContext }: { activeView: WorkspaceView; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
+function TaskIssue({ stage, reason, impact, repair, code, label, children }: {
+  stage: string; reason: string | null; impact?: string | null; repair?: string | null;
+  code?: string | null; label?: string; children?: ReactNode;
+}) {
+  return <section className={styles.blocker} role="alert" aria-label={label}>
+    <AlertCircle size={16} /><div className={styles.issueBody}>
+      <strong>{creationTaskFailureReason(reason ?? impact ?? null, stage) ?? "这次操作没有完成"}</strong>
+      {children}
+      <details className={styles.traceDetails}><summary>诊断详情</summary>
+        {reason ? <p>原始原因：{reason}</p> : null}
+        {impact ? <p>本次影响：{impact}</p> : null}
+        {repair ? <p>处理建议：{creationTaskRepairAction(repair)}</p> : null}
+        {repair ? <p>后台处理原文：{repair}</p> : null}
+        {code ? <p>后台标识：{code}</p> : null}
+      </details>
+    </div>
+  </section>;
+}
+
+function Inspector({ activeView, busy, workspace, onPreparePersonEdit, selectedContext }: { activeView: WorkspaceView; busy: boolean; workspace: WorkspaceState; error: ReturnType<typeof errorDetails> | null; onPreparePersonEdit: (clipId: string, command: string) => void; selectedContext: SelectedEditContext | null }) {
   const { task, plan, selected_topic: topic, narration, montage } = workspace;
   const latestScript = workspace.scripts[0] ?? null;
   const currentNarration = narration?.task.id === task.id && narration.script_id === task.confirmed_script_id
@@ -307,7 +344,6 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
         <h3>{stageLabels[activeView]}</h3>
         <p>{viewingCurrentStage ? (task.stage_status === "failed" ? "当前步骤需要处理" : task.stage_status === "waiting_for_user" ? "正在等待你的确认" : task.stage_status === "running" ? "正在处理" : "可以开始下一步") : "这是已经持久化的任务结果，不会因为回看而重新运行。"}</p>
       </section>
-      {viewingCurrentStage && error ? <section className={styles.blocker} role="alert"><AlertCircle size={17} /><div><strong>{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div></section> : null}
       {selectedNarration ? <section aria-label="已选配音详情"><span className={styles.eyebrow}>已选配音</span><h3>{selectedContext?.label}</h3><p>{selectedNarration.text}</p><dl><div><dt>片段时长</dt><dd>{selectedNarration.duration_seconds?.toFixed(1) ?? "—"} 秒</dd></div><div><dt>声音版本</dt><dd>{selectedNarration.voice_version}</dd></div><div><dt>模型</dt><dd>{selectedNarration.model_id}</dd></div><div><dt>状态</dt><dd>{narrationSegmentStatus(selectedNarration.status)}</dd></div></dl></section> : null}
       {selectedClip ? <section aria-label="已选镜头详情">
         <span className={styles.eyebrow}>已选镜头</span><h3>{selectedContext?.label}</h3>
@@ -340,8 +376,8 @@ function Inspector({ activeView, busy, workspace, error, onPreparePersonEdit, se
         {currentNarration?.source_kind === "recorded" ? <dl><div><dt>来源</dt><dd>本人录音 · 已采用</dd></div><div><dt>录音</dt><dd>{currentNarration.source_artifact_ref ?? "任务录音"}</dd></div><div><dt>实际时长</dt><dd>{currentNarration.duration_seconds.toFixed(1)} 秒</dd></div><div><dt>声音模型</dt><dd>本人录音，不使用声音克隆模型</dd></div></dl>
           : <dl><div><dt>声音版本</dt><dd>{plan.selected_voice?.version ?? "未选择"}</dd></div><div><dt>语言</dt><dd>中文</dd></div><div><dt>模型</dt><dd>{currentNarration?.model_id ?? plan.selected_voice?.model_id ?? "未就绪"}</dd></div><div><dt>授权</dt><dd>{plan.selected_voice ? "已纳入方案" : "缺失"}</dd></div></dl>}</section> : null}
       {(activeView === "montage" || activeView === "review") && montage ? <section><span className={styles.eyebrow}>剪辑证据</span><dl><div><dt>镜头</dt><dd>{montage.clips.length} 个</dd></div><div><dt>露脸</dt><dd>目标 {montage.presenter_share_target ?? 0}% · 实际 {montage.presenter_share_actual ?? 0}%</dd></div><div><dt>需要确认</dt><dd>{montage.low_confidence_clip_count} 个</dd></div><div><dt>时长</dt><dd>{montage.duration_seconds.toFixed(1)} 秒</dd></div></dl></section> : null}
-      {activeView === "prepare" ? <section><span className={styles.eyebrow}>本次素材</span><dl><div><dt>方案匹配</dt><dd>{plan.material_matches.length} 个片段</dd></div><div><dt>已审核素材</dt><dd>{plan.approved_asset_count} 个</dd></div><div><dt>已审核镜头</dt><dd>{plan.approved_clip_count} 个</dd></div></dl></section> : null}
-      {activeView === "publish" ? <section><span className={styles.eyebrow}>发布能力</span><dl><div><dt>平台发布</dt><dd>未接入</dd></div><div><dt>定时发布</dt><dd>未接入</dd></div><div><dt>发布后监控</dt><dd>未接入</dd></div></dl></section> : null}
+      {activeView === "prepare" ? <section><span className={styles.eyebrow}>本次素材</span><dl><div><dt>方案匹配</dt><dd>{plan.material_matches.length} 个片段</dd></div><div><dt>方案可用素材</dt><dd>{plan.approved_asset_count} 个</dd></div><div><dt>方案可用镜头</dt><dd>{plan.approved_clip_count} 个</dd></div></dl></section> : null}
+      {activeView === "publish" ? <section><span className={styles.eyebrow}>发布能力</span><dl><div><dt>发布记录</dt><dd>在发布工作区读取</dd></div><div><dt>账号与确认</dt><dd>发布前核对</dd></div><div><dt>本任务结果</dt><dd>未返回发布结果</dd></div></dl></section> : null}
     </div>
   );
 }
@@ -421,12 +457,12 @@ function ConfirmedTopicView({ workspace }: { workspace: WorkspaceState }) {
   if (!topic) return null;
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>已确认选题</span><h2>{topic.title}</h2><p>{topic.angle}</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已确认</span></div>
+      <div className={styles.sectionHeading}><div><h2>{topic.title}</h2><p>{topic.angle}</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已确认</span></div>
       <div className={styles.artifactGrid}>
         <section><strong>目标观众</strong><p>{topic.audience}</p></section>
         <section><strong>内容结构</strong><ol>{topic.outline.map((item) => <li key={item}>{item}</li>)}</ol></section>
       </div>
-      <div className={styles.evidenceList}><strong>来源证据</strong>{workspace.topic_evidence.length ? workspace.topic_evidence.map((item) => <article key={item.id}><span>{item.kind === "knowledge" ? "知识库" : "信息源"}</span><div><strong>{item.title}</strong><small>{item.authorization_or_license}</small></div></article>) : <p>当前选题没有返回可展示的来源条目。</p>}</div>
+      <details className={styles.requirementDetails}><summary>来源证据</summary><div className={styles.evidenceList}>{workspace.topic_evidence.length ? workspace.topic_evidence.map((item) => <article key={item.id}><span>{item.kind === "knowledge" ? "知识库" : "信息源"}</span><div><strong>{item.title}</strong><small>{item.authorization_or_license}</small></div></article>) : <p>当前选题没有返回可展示的来源条目。</p>}</div></details>
     </section>
   );
 }
@@ -434,10 +470,22 @@ function ConfirmedTopicView({ workspace }: { workspace: WorkspaceState }) {
 function ConfirmedScriptView({ script }: { script: CreationTaskScript }) {
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>已确认文案</span><h2>{script.title}</h2><p>这里只回看已经持久化的版本；重新生成必须从明确的修订动作开始。</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已确认</span></div>
-      <div className={styles.scriptSections}>{script.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p><p><strong>来源证据：</strong>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></article>)}</div>
+      <div className={styles.sectionHeading}><h2>{script.title}</h2><span className={styles.artifactStatus}>{script.selection_status === "confirmed" ? "已确认" : "待确认草稿"}</span></div>
+      <div className={styles.scriptSections}>{script.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p><details className={styles.traceDetails}><summary>来源证据</summary><p>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></details></article>)}</div>
     </section>
   );
+}
+
+function ReadonlyScriptsView({ workspace }: { workspace: WorkspaceState }) {
+  const latest = workspace.scripts[0];
+  if (!latest) return null;
+  const confirmed = workspace.scripts.find(script => script.id === workspace.task.confirmed_script_id && script.selection_status === "confirmed");
+  if (!confirmed || confirmed.id === latest.id || latest.selection_status !== "draft") return <ConfirmedScriptView script={latest} />;
+  return <Tabs.Root defaultValue="confirmed" className={styles.scriptReview}>
+    <Tabs.List className={styles.reviewTabs} aria-label="文案版本"><Tabs.Tab value="confirmed">当前确认稿</Tabs.Tab><Tabs.Tab value="draft">新草稿</Tabs.Tab></Tabs.List>
+    <Tabs.Panel value="confirmed" keepMounted><ConfirmedScriptView script={confirmed} /></Tabs.Panel>
+    <Tabs.Panel value="draft" keepMounted><ConfirmedScriptView script={latest} /></Tabs.Panel>
+  </Tabs.Root>;
 }
 
 function narrationSegmentStatus(status: CreationTaskNarrationSegment["status"]) {
@@ -485,13 +533,14 @@ function NarrationResultView({ busy, onGeneratePersonRender, onSelect, selectedS
 }) {
   const narration = workspace.narration;
   if (!narration) return null;
+  const ready = narration.segments.length > 0 && narration.segments.every(segment => segment.status === "ready");
   const selectedRender = workspace.person_renders.find(
     (render) => render.narration_segment_id === selectedSegmentId,
   ) ?? null;
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>{narration.source_kind === "recorded" ? "本人录音" : "已生成配音"}</span><h2>试听当前声音来源</h2><p>{narration.model_id ?? "本机录音"} · {narration.duration_seconds.toFixed(1)} 秒{narration.sample_rate ? ` · ${narration.sample_rate} Hz` : ""}</p></div><span className={styles.artifactStatus}><CheckCircle2 size={15} />已采用</span></div>
-      <audio className={styles.audioPreview} controls preload="metadata" src={apiUrl(`/api/creation-tasks/${workspace.task.id}/narration/audio`)} />
+      <div className={styles.sectionHeading}><div><h2>试听当前声音来源</h2><p>{narration.model_id ?? "本机录音"} · {narration.duration_seconds.toFixed(1)} 秒{narration.sample_rate ? ` · ${narration.sample_rate} Hz` : ""}</p></div><span className={styles.artifactStatus}>{ready ? "已采用" : narration.segments.some(segment => segment.status === "failed") ? "有段落未完成" : "等待配音完成"}</span></div>
+      {ready ? <audio className={styles.audioPreview} controls preload="metadata" src={apiUrl(`/api/creation-tasks/${workspace.task.id}/narration/audio`)} /> : null}
       <div className={styles.narrationSegments}>
         {narration.segments.map((segment, index) => (
           <article className={selectedSegmentId === segment.id ? styles.selectedSegment : ""} key={segment.id}>
@@ -528,7 +577,7 @@ function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, selected
   const presenterShareTarget = plan.presenter_share_target ?? montage?.presenter_share_target ?? null;
   const selectedRender = renders.find((render) => render.narration_segment_id === selectedSegmentId) ?? null;
   const summary = presenterShareTarget === 0
-    ? "本方案露脸占比为 0%，按纯素材混剪处理，本阶段明确跳过。"
+    ? "本方案的露脸目标为 0%，自动口型阶段已跳过。"
     : renders.some((render) => render.status === "ready")
       ? `已有 ${renders.filter((render) => render.status === "ready").length} 段人物口型预览。`
       : renders.some((render) => render.status === "failed")
@@ -538,20 +587,22 @@ function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, selected
           : "还没有生成任何口型；系统只为选中的露脸段生成口型。";
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>第五阶段</span><h2>人物与口型</h2><p>{summary}</p></div><span className={styles.artifactStatus}><UserRound size={15} />{presenterShareTarget === 0 ? "明确跳过" : "按露脸段生成"}</span></div>
-      <div className={styles.artifactGrid}>
-        <section><strong>露脸目标</strong><p>{presenterShareTarget === null ? "当前方案没有记录露脸占比。" : `${presenterShareTarget}% · 实际 ${montage?.presenter_share_actual ?? 0}%`}</p></section>
+      <div className={styles.sectionHeading}><div><h2>当前口型</h2><p>{summary}</p></div><span className={styles.artifactStatus}><UserRound size={15} />{presenterShareTarget === 0 ? "明确跳过" : "按露脸段生成"}</span></div>
+      <details className={styles.requirementDetails}><summary>人物与口型要求</summary><div className={styles.artifactGrid}>
+        <section><strong>露脸目标</strong><p>{presenterShareTarget === null ? "当前方案没有记录露脸占比。" : `${presenterShareTarget}% · 实际 ${montage?.presenter_share_actual == null ? "未返回" : `${montage.presenter_share_actual}%`}`}</p></section>
         <section><strong>口型档位</strong><p>{plan.lipsync_quality === "high" ? "高精度 · LatentSync" : plan.lipsync_quality === "fast" ? "低精度 · MuseTalk" : "方案未选择档位"}</p></section>
         <section><strong>人物素材</strong><p>{workspace.portrait_available === undefined ? "未返回该事实" : workspace.portrait_available ? "已就绪" : "没有可用人物素材"}</p></section>
         {presenterShareTarget !== 0 ? <section><strong>当前口型能力</strong><p>{lipsyncLabel(capability.model_id)} · {capabilityLabel(capability.available)}</p></section> : null}
       </div>
+      </details>
       {presenterShareTarget !== 0 && !capability.available ? <div className={styles.personCapabilityIssue} role="status"><strong>人物口型暂不可用</strong><p>{capability.message}</p>{capability.repair_action ? <small>处理方式：{capability.repair_action}</small> : null}</div> : null}
       {!narration ? <div className={styles.emptyAction}><UserRound size={30} /><h2>还没有配音事实</h2><p>口型由最终配音驱动。先生成配音，才能为选中的露脸段制作口型。</p><button className="modern-primary-button" disabled={busy} onClick={onOpenNarration} type="button">前往配音</button></div> : null}
       {narration && presenterShareTarget === null ? <div className={styles.emptyAction}><UserRound size={30} /><h2>未记录露脸占比</h2><p>当前方案的露脸占比没有记录，不能按 0% 当作跳过处理。请先在制作方案中确认露脸占比，再回到本阶段生成口型。</p></div> : null}
-      {narration && presenterShareTarget === 0 ? <div className={styles.emptyAction}><UserRound size={30} /><h2>本阶段明确跳过</h2><p>露脸占比为 0%，成片全部使用素材画面，不需要生成人物口型。这不是已完成，也不会被写成完成。</p></div> : null}
+      {narration && presenterShareTarget === 0 ? <div className={styles.emptyAction}><UserRound size={30} /><p>方案目标不会覆盖当前成片的实际露脸结果。{montage?.presenter_share_actual == null ? "当前未返回实际占比。" : `当前成片实际露脸 ${montage.presenter_share_actual}%。`}</p></div> : null}
       {narration && presenterShareTarget !== null && presenterShareTarget > 0 && !plan.selected_person
         ? <div className={styles.emptyAction}><UserRound size={30} /><h2>尚未选择当前人物</h2><p>声音档案中的关联人物不能替代本任务的已选人物。请先在制作方案中选择人物版本，再为配音片段生成口型。</p></div>
         : null}
+      {presenterShareTarget === 0 && renders.length ? <details className={styles.requirementDetails}><summary>已保存口型（{renders.length} 段）</summary>{renders.map(render => <article key={render.id}><p>{personRenderStageDetail(render.status)}</p>{render.status === "ready" && render.media_url ? <video controls preload="metadata" aria-label="已保存口型预览" className={styles.materialPreview} src={apiUrl(render.media_url)} /> : null}</article>)}</details> : null}
       {narration && presenterShareTarget !== null && presenterShareTarget > 0 && plan.selected_person ? <>
         <div className={styles.narrationSegments}>
           {narration.segments.map((segment, index) => (
@@ -677,7 +728,7 @@ function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: { taskId: 
   }
   return (
     <section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><span>{repairing ? "文案修订" : "文案编辑"}</span><h2>{repairing ? "压缩并重新确认文案" : "检查事实和口播表达"}</h2><p>{repairing ? "调整正文后重新确认，再生成配音。" : "编辑不会再次调用模型；只有“确认文案”会推进到真实配音。"}</p></div></div>
+      <div className={styles.sectionHeading}><div><h2>{repairing ? "修订文案" : "检查文案"}</h2><p>确认后使用这份正文和画面建议制作。</p></div></div>
       {script.reused_from_entry_id ? <p>从文案库复用的新稿，尚未确认；没有调用模型或复制旧成片。<Link href="/knowledge">查看文案来源</Link></p> : null}
       {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；来源和画面建议需要你逐段核对补充。</p> : null}
       <label className={styles.field}><span>标题</span><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
@@ -715,7 +766,8 @@ function assistantHistoryTurns(items: CreationTaskAssistantHistory["items"]): As
   return turns.slice(-8);
 }
 
-function CreationExecutionPanel({ preview, execution, busy, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
+function CreationExecutionPanel({ workspace, preview, execution, busy, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
+  workspace: WorkspaceState;
   preview: CreationExecutionPreview | null;
   execution: CreationExecutionStatus | null;
   busy: boolean;
@@ -726,6 +778,10 @@ function CreationExecutionPanel({ preview, execution, busy, compact = false, onS
   onOpenMontage: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const voice = workspace.plan.selected_voice;
+  const selectedVoice = voice && preview?.requirements.selected_voice === voice.profile_id
+    ? workspace.available_voices.find(item => item.profile_id === voice.profile_id && item.version === voice.version) : null;
+  const voiceLabel = selectedVoice?.person_display_name || (preview?.requirements.selected_voice ? "已选择声音参考" : "尚未选择");
   const job = execution?.job;
   const needsOutput = job?.status === "succeeded" && !execution?.video_ready;
   const active = job?.status === "queued" || job?.status === "running" || job?.status === "interrupted";
@@ -734,23 +790,31 @@ function CreationExecutionPanel({ preview, execution, busy, compact = false, onS
     : job?.status === "failed" ? "制作停在失败步骤" : job?.status === "cancelled" ? "已在安全边界停止"
       : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
   const content = <section aria-label="连续制作" className={styles.workSection}>
-    <div className={styles.sectionHeading}><div><span>连续制作</span><h2>{statusText}</h2><p>{needsOutput ? "这次沿用有效配音和故事板，仅重新输出当前时间线；已有产物保留。" : "制作会按后台任务处理配音、镜头和成片；继续制作会沿用有效结果。"}每一步的结果以后台任务为准。</p></div></div>
+    <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
+    {needsOutput ? <p>沿用有效配音和故事板，重新输出当前时间线。</p> : null}
     {(!job || resumable) && preview ? <>
-      <div className={styles.scriptSections}><article><header><strong>这次使用的文案：{preview.script_title}</strong></header>{preview.script_sections.map((section, index) => <p key={index}>第 {index + 1} 段 · {section.title}：{section.content}</p>)}</article></div>
-      <div className={styles.scriptSections}><article><header><strong>这次制作要求</strong></header>
+      <details className={styles.executionScript}><summary>这次使用的文案：{preview.script_title}<span>{preview.script_sections.length} 段</span></summary>{preview.script_sections.map((section, index) => <p key={index}>第 {index + 1} 段 · {section.title}：{section.content}</p>)}</details>
+      <section className={styles.executionRequirements} aria-label="这次制作要求">
         <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · 露脸目标 {preview.requirements.presenter_share_target}%</p>
         <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
           ? `配音来源：本人录音 · 已采用 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
           : preview.narration_source?.source_kind === "generated"
             ? `配音来源：已生成 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
-            : `声音：${preview.requirements.selected_voice ?? "尚未选择"}`}</p>
+            : `声音：${voiceLabel}`}</p>
+        {preview.requirements.selected_voice ? <details><summary>声音引用诊断</summary><p>声音身份：{preview.requirements.selected_voice}{voice?.profile_id === preview.requirements.selected_voice ? ` · 固定版本：${voice.version}` : ""}</p></details> : null}
         {Object.entries(preview.requirements.template_settings).length ? <details><summary>查看模板中的具体设置</summary><dl>{Object.entries(preview.requirements.template_settings).map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
-      </article></div>
+      </section>
       {!preview.requirements.can_continue && preview.requirements.continuation_blocker ? <p role="status">{preview.requirements.continuation_blocker}</p> : null}
       {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
     </> : null}
-    {job ? <div role="status"><ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null} /><p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p>
-      <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
+    {job ? <div>
+      {execution?.waiting_reason ? <p role="status">{creationTaskFailureReason(execution.waiting_reason, workspace.task.stage)}</p> : null}
+      {!workspace.task.stage_reason && job.failure_reason ? <p>{creationTaskFailureReason(job.failure_reason, workspace.task.stage)}</p> : null}
+      <details className={styles.traceDetails}><summary>步骤与后台记录</summary>
+        <ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null} />
+        {job.failure_reason ? <p>原始原因：{job.failure_reason}</p> : null}{job.repair_action ? <p>后台处理原文：{job.repair_action}</p> : null}
+        <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
+      </details>
       {execution?.video_ready ? <p>成片可检查；{execution.cover_status === "ready" ? "封面已准备好。" : execution.cover_message}</p> : null}
       {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
       {active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">停止制作</button> : null}
@@ -760,12 +824,12 @@ function CreationExecutionPanel({ preview, execution, busy, compact = false, onS
   if (!compact) return content;
   return <>
     <section aria-label="制作状态" className={editorUi.productionSummary}>
-      <div><strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</strong>
-        {execution?.waiting_reason ? <p>{execution.waiting_reason}</p> : null}
-        {job?.failure_reason || job?.repair_action ? <p>{job.failure_reason ? `原因：${job.failure_reason}` : ""}{job.repair_action ? ` 下一步：${job.repair_action}` : ""}</p> : null}
+      <div>{job && job.status !== "succeeded" ? <strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</strong> : !job ? <strong>制作要求</strong> : null}
+        {execution?.waiting_reason ? <p>{creationTaskFailureReason(execution.waiting_reason, workspace.task.stage)}</p> : null}
+        {job?.failure_reason ? <p>{creationTaskFailureReason(job.failure_reason, workspace.task.stage)}</p> : null}
         {needsOutput ? <p>原成片不再对应当前时间线，请核对文案和要求后重新输出。</p> : null}
       </div>
-      <button className={editorUi.button} type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>查看制作详情</button>
+      <button className={editorUi.button} type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>{job ? "查看制作详情" : "核对制作要求"}</button>
       {active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy} onClick={onCancel}>停止制作</button> : null}
     </section>
     <HomeCardDialog kind="detail" title="制作文案与要求" open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
@@ -893,6 +957,7 @@ function ContextCommandBar({
   preview,
   assistantState,
   onTransferReply,
+  onOpenEditProposal,
   transferDraftState,
   onAssistantSend,
   onConversationChange,
@@ -900,6 +965,8 @@ function ContextCommandBar({
   assistantTurns,
   assistantConfigured,
   selectedContextLabel,
+  materialContextLabel,
+  onClearReference,
   selectedContextPlaceholder,
 }: {
   localConfirmation?: boolean;
@@ -915,6 +982,7 @@ function ContextCommandBar({
   preview: CreationTaskEditPreviewResponse | null;
   assistantState: ReturnType<typeof useAssistantConversation>;
   onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
+  onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
   transferDraftState: "none" | "draft" | "confirmed";
   onAssistantSend: () => Promise<void>;
   onConversationChange: () => void;
@@ -922,6 +990,8 @@ function ContextCommandBar({
   assistantTurns: { command: string; reply: string; context: string; activity?: AssistantTurnActivity }[];
   assistantConfigured: boolean;
   selectedContextLabel: string | null;
+  materialContextLabel: string | null;
+  onClearReference: () => void;
   selectedContextPlaceholder: string;
 }) {
   const barRef = useRef<HTMLElement>(null);
@@ -936,11 +1006,13 @@ function ContextCommandBar({
       className={editorUi.chatCommand}
       ref={barRef}
     >
+      {selectedContextLabel ? <p className="home-composer__context">引用：{selectedContextLabel}<button type="button" aria-label="取消任务对象引用" onClick={onClearReference}>取消引用</button></p> : null}
       <AssistantConversationPanel
         busy={busy !== null}
         compact={compact}
         configured={assistantConfigured}
         onTransferReply={onTransferReply}
+        onOpenEditProposal={onOpenEditProposal}
         transferDraftState={transferDraftState}
         input={assistantState.draftText}
         inputLabel={scriptMode ? "文案要求" : "局部修改要求"}
@@ -948,332 +1020,12 @@ function ContextCommandBar({
         onSend={async () => onAssistantSend()}
         onConversationChange={onConversationChange}
         placeholder={selectedContextPlaceholder}
-        scopeLabel={scriptMode ? "当前任务 · 文案" : selectedContextLabel ? `当前任务 · ${selectedContextLabel}` : "当前任务"}
+        scopeLabel={materialContextLabel ? `当前素材 · ${materialContextLabel}` : scriptMode ? "当前任务 · 文案" : selectedContextLabel ? `当前任务 · ${selectedContextLabel}` : "当前任务"}
         state={assistantState}
-        suggestions={scriptMode ? ["为当前选题写一个简短开头", "把当前文案改得更容易理解", "缩短文案并保留事实来源"] : selectedContextLabel ? ["先解释当前选中对象", "让节奏快一点", "把字幕放大一点"] : ["先说明当前任务状态", "继续制作", "重新生成成片"]}
+        legacyHistory={assistantTurns.length ? <details className="assistant-history"><summary>旧版只读历史</summary><ol>{assistantTurns.map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : undefined}
       />
       {selectedContextLabel && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">精确预览修改</button> : null}
-      {assistantTurns.length ? <details className="assistant-history"><summary>旧版只读历史</summary><ol>{assistantTurns.map((turn, index) => <li key={index}><small>{turn.context}</small><p>{turn.command}</p><p>{turn.reply}</p></li>)}</ol></details> : null}
-      {!assistantConfigured ? <a href="/settings">连接文字模型</a> : null}
-      {assistantConfigured ? <p className="assistant-meta">本轮只提交文字和当前明确选择的上下文，不上传原视频或声音。</p> : null}
       {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={previewCommand} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview} /> : null}
-    </section>
-  );
-}
-
-function cueEmphasisTerms(cue: CreationTaskSubtitleCue) {
-  return cue.emphasis.join("、");
-}
-
-function emphasisTerms(text: string, rawTerms: string) {
-  return rawTerms
-    .split(/[、,]/)
-    .map((term) => term.trim())
-    .filter(Boolean)
-    .filter((term) => text.includes(term));
-}
-
-function lineBreakPositions(text: string) {
-  const positions: number[] = [];
-  let compactOffset = 0;
-  for (const character of text) {
-    if (character === "\n") {
-      positions.push(compactOffset);
-    } else {
-      compactOffset += 1;
-    }
-  }
-  return positions;
-}
-
-function cueTextWithLineBreaks(cue: CreationTaskSubtitleCue) {
-  if (!cue.line_breaks.length || cue.text.includes("\n")) return cue.text;
-  const positions = new Set(cue.line_breaks);
-  return Array.from(cue.text).reduce((result, character, index) => {
-    const separator = positions.has(index) ? "\n" : "";
-    return `${result}${separator}${character}`;
-  }, "") + (positions.has(Array.from(cue.text).length) ? "\n" : "");
-}
-
-function SubtitleCueEditor({
-  busy,
-  cue,
-  index,
-  onDraftChange,
-  onPreview,
-  onSelect,
-  selected,
-  style,
-  track,
-}: {
-  busy: boolean;
-  cue: CreationTaskSubtitleCue;
-  index: number;
-  onDraftChange: () => void;
-  onPreview: (input: CreationTaskExactEditInput) => void;
-  onSelect: () => void;
-  selected: boolean;
-  style: CreationTaskSubtitleTrack["style"];
-  track: CreationTaskSubtitleTrack;
-}) {
-  const storedText = cueTextWithLineBreaks(cue);
-  const [text, setText] = useState(storedText);
-  const [terms, setTerms] = useState(cueEmphasisTerms(cue));
-  const [start, setStart] = useState(String(cue.start_seconds));
-  const [end, setEnd] = useState(String(cue.end_seconds));
-  useEffect(() => {
-    setText(storedText); setTerms(cueEmphasisTerms(cue));
-    setStart(String(cue.start_seconds)); setEnd(String(cue.end_seconds));
-    setSplitOffset(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
-    setSplitTime(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
-  }, [cue.id, cue.text, cue.start_seconds, cue.end_seconds, cue.emphasis, cue.line_breaks, track.style]);
-  const [splitOffset, setSplitOffset] = useState(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
-  const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
-  const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
-  const changed = Number(start) !== cue.start_seconds || Number(end) !== cue.end_seconds || text !== storedText || terms !== cueEmphasisTerms(cue) || style.name !== track.style.name;
-  // UpdateSubtitleCue 的 text 上限 96 字（CreationTaskExactEditRequest，schemas.py）。按 Unicode 字符计数，
-  // 与后端一致；不用 text.length，那会把 emoji 等星芒平面字符算成两个字。
-  const textMaxLength = 96;
-  const textLength = Array.from(text).length;
-  const overTextLimit = textLength > textMaxLength;
-
-  const save=()=>{if(busy||!changed||!text.trim()||!validTime||overTextLimit)return;
-    onPreview({operation_type:"UpdateSubtitleCue",track_id:track.id,cue_id:cue.id,
-      start_seconds:Number(start),end_seconds:Number(end),text,
-      line_breaks:lineBreakPositions(text),emphasis:emphasisTerms(text,terms),style});
-  };
-  return (
-    <article className={[styles.subtitleCue, selected ? styles.selectedSubtitleCue : ""].filter(Boolean).join(" ")}>
-      <button aria-label={`选择${track.language === "zh-CN" ? "中文" : "英文"}字幕 ${index + 1}`} aria-pressed={selected} className={styles.cueTime} onClick={onSelect} type="button">
-        <strong>{cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)}</strong>
-      </button>
-      <div className={styles.cueFields} onFocus={onSelect} onBlur={save}>
-        <label><span>出现时间（秒）</span><input aria-label={`字幕 ${index + 1} 出现时间`} type="number" min="0" step="0.01" disabled={busy} value={start} onChange={(event) => { onDraftChange(); setStart(event.target.value); }} /></label>
-        <label><span>结束时间（秒）</span><input aria-label={`字幕 ${index + 1} 结束时间`} type="number" min="0" step="0.01" disabled={busy} value={end} onChange={(event) => { onDraftChange(); setEnd(event.target.value); }} /></label>
-        <label>
-          <span>字幕文本与断行</span>
-          <textarea aria-label={`字幕 ${index + 1} 文本`} disabled={busy} onChange={(event) => { onDraftChange(); setText(event.target.value); }} rows={2} value={text} />
-          <small aria-label={`字幕 ${index + 1} 字数`}>{textLength} / {textMaxLength} 字</small>
-          {overTextLimit ? <small role="alert">字幕文本超出 {textMaxLength} 字上限（当前 {textLength} 字），无法保存。请缩短到 {textMaxLength} 字以内，或还原草稿后用下方「拆分字幕」把它拆成两条。</small> : null}
-        </label>
-        <label>
-          <span>强调词（用顿号分隔）</span>
-          <input aria-label={`字幕 ${index + 1} 强调词`} disabled={busy} onChange={(event) => { onDraftChange(); setTerms(event.target.value); }} value={terms} />
-        </label>
-      </div>
-      <details className={editorUi.propertySection}>
-        <summary>拆分、合并与删除</summary>
-        <label className={editorUi.field}>第几个字后拆分<input aria-label="字幕拆分文字位置" type="number" min="1" max={Array.from(cue.text).length - 1} disabled={busy || changed} value={splitOffset} onChange={event => { onDraftChange(); setSplitOffset(Number(event.target.value)); }} /></label>
-        <label className={editorUi.field}>拆分时间（秒）<input aria-label="字幕拆分时间" type="number" step="0.001" min={cue.start_seconds + .04} max={cue.end_seconds - .04} disabled={busy || changed} value={splitTime} onChange={event => { onDraftChange(); setSplitTime(Number(event.target.value)); }} /></label>
-        <div className={styles.cueAction}>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed || splitOffset < 1 || splitOffset >= Array.from(cue.text).length || splitTime < cue.start_seconds + .04 || splitTime > cue.end_seconds - .04} onClick={() => onPreview({operation_type:"SplitSubtitleCue", track_id:track.id, cue_id:cue.id, split_offset:splitOffset, split_time_seconds:splitTime})}>拆分字幕</button>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed || index >= track.cues.length - 1} onClick={() => onPreview({operation_type:"MergeSubtitleCue", track_id:track.id, cue_id:cue.id})}>与下一条合并</button>
-          <button type="button" className={styles.secondaryButton} disabled={busy || changed} onClick={() => onPreview({operation_type:"DeleteSubtitleCue", track_id:track.id, cue_id:cue.id})}>删除字幕</button>
-        </div>
-        {changed ? <small>先保存或还原上方文字与时间修改，再调整结构。</small> : null}
-      </details>
-      <div className={styles.cueAction}>
-        {changed ? <small>待保存</small> : <small>已保存</small>}
-        <button className={styles.secondaryButton} disabled={busy || !changed || !text.trim() || !validTime || overTextLimit} onClick={save} type="button">保存字幕草稿</button>
-      </div>
-    </article>
-  );
-}
-
-function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
-  style: CreationTaskSubtitleTrack["style"]; busy: boolean; onDraftChange: () => void;
-  onPreview: (input: CreationTaskExactEditInput) => void;
-}) {
-  const initial = { ...style, stroke_width: style.stroke_width ?? 3, stroke_color: style.stroke_color ?? "#000000",
-    background_color: style.background_color ?? "#000000", background_opacity: style.background_opacity ?? 158 / 255 };
-  const [draft, setDraft] = useState(initial);
-  useEffect(() => { setDraft(initial); }, [style]);
-  const changed = JSON.stringify(draft) !== JSON.stringify(initial);
-  const save=(value=draft)=>{
-    if(busy||!value.font_family.trim())return;
-    const patch=Object.fromEntries(Object.entries(value).filter(([key,v])=>key!=="enabled"&&initial[key as keyof typeof initial]!==v));
-    if(Object.keys(patch).length)onPreview({operation_type:"ConfigureSubtitleTrack",style:patch});
-  };
-  const change=(patch:Partial<typeof draft>,apply=false)=>{onDraftChange();const next={...draft,...patch};setDraft(next);if(apply)save(next);};
-  return <details className={editorUi.propertySection}>
-    <summary>全部字幕样式</summary>
-    <div className={styles.cueFields} onBlur={event=>{if(event.target instanceof HTMLInputElement&&event.target.validity.valid)save();}}>
-      <label><span>本机字体</span><input aria-label="字幕字体" disabled={busy} value={draft.font_family} onChange={event => change({font_family:event.target.value})} /></label>
-      <label><span>字号</span><input aria-label="字幕字号" required type="number" min="1" max="1920" disabled={busy} value={draft.font_size} onChange={event => change({font_size:Number(event.target.value)})} /></label>
-      <label><span>位置</span><select aria-label="字幕位置" disabled={busy} value={draft.position} onChange={event => change({position:event.target.value as typeof draft.position},true)}><option value="top">顶部</option><option value="middle">居中</option><option value="bottom">底部</option></select></label>
-      <label><span>双语顺序</span><select aria-label="字幕双语顺序" disabled={busy} value={draft.bilingual_order} onChange={event => change({bilingual_order:event.target.value as typeof draft.bilingual_order},true)}><option value="source_then_translation">原文在上</option><option value="translation_then_source">译文在上</option></select></label>
-      {([["primary_color","文字颜色"],["emphasis_color","强调颜色"],["stroke_color","描边颜色"],["background_color","背景颜色"]] as const).map(([key,label]) => <label key={key}><span>{label}</span><input aria-label={`字幕${label}`} type="color" disabled={busy} value={draft[key]} onChange={event => change({[key]:event.target.value},true)} /></label>)}
-      <label><span>描边宽度</span><input aria-label="字幕描边宽度" required type="number" min="0" max="12" disabled={busy} value={draft.stroke_width} onChange={event => change({stroke_width:Number(event.target.value)})} /></label>
-      <label><span>背景不透明度 {Math.round(draft.background_opacity*100)}%</span><input aria-label="字幕背景不透明度" type="range" min="0" max="100" disabled={busy} value={Math.round(draft.background_opacity*100)} onChange={event => change({background_opacity:Number(event.target.value)/100})} onPointerUp={()=>save()} onKeyUp={()=>save()} /></label>
-    </div>
-    <button className={styles.secondaryButton} type="button" disabled={busy || !changed || !draft.font_family.trim()} onClick={()=>save()}>保存字幕样式</button>
-  </details>;
-}
-
-function SubtitleCoverView({
-  activeTrack,
-  busy,
-  onDraftChange,
-  onPreviewExact,
-  onSelectCover,
-  onSelectCue,
-  onSelectTrack,
-  onSaveCover,
-  onSaveSubtitle,
-  onUndo,
-  selectedCover,
-  selectedCueId,
-  workspace,
-}: {
-  activeTrack: CreationTaskSubtitleTrack;
-  busy: boolean;
-  onDraftChange: () => void;
-  onPreviewExact: (input: CreationTaskExactEditInput) => void;
-  onSelectCover: () => void;
-  onSelectCue: (cueId: string) => void;
-  onSelectTrack: (trackId: string) => void;
-  onSaveCover: () => void;
-  onSaveSubtitle: (mode: "zh" | "en" | "zh-en") => void;
-  onUndo: () => void;
-  selectedCover: boolean;
-  selectedCueId: string | null;
-  workspace: WorkspaceState;
-}) {
-  const { cover_asset: cover, montage, subtitle_tracks: tracks } = workspace;
-  const sourceTrack = tracks.find((track) => track.language === "zh-CN") ?? activeTrack;
-  const translationTrack = tracks.find((track) => track.language === "en-US") ?? null;
-  const [frameTime, setFrameTime] = useState(cover?.frame_time_seconds ?? 0);
-  const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
-  const [titlePosition, setTitlePosition] = useState<"center" | "bottom">(cover?.layout.title_position ?? "bottom");
-  const [findText, setFindText] = useState("");
-  const [replaceText, setReplaceText] = useState("");
-  const [saveSubtitleMode, setSaveSubtitleMode] = useState<"zh" | "en" | "zh-en">(
-    activeTrack.language === "en-US" ? "en" : "zh",
-  );
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const chineseVisible = sourceTrack.language === "zh-CN" && sourceTrack.style.enabled !== false;
-  const englishVisible = translationTrack?.status === "valid" && translationTrack.style.enabled !== false;
-  const chineseSavable = tracks.some((track) => track.language === "zh-CN" && track.status === "valid" && track.cues.length > 0);
-  const englishSavable = tracks.some((track) => track.language === "en-US" && track.status === "valid" && track.cues.length > 0);
-  const selectedSavable = saveSubtitleMode === "zh" ? chineseSavable : saveSubtitleMode === "en" ? englishSavable : chineseSavable && englishSavable;
-  const displayMode = chineseVisible ? englishVisible ? "zh-en" : "zh" : englishVisible ? "en" : "none";
-  const duration = montage?.duration_seconds ?? 0;
-  const translationCapability = workspace.subtitle_translation_capability;
-  const frameCapability = workspace.cover_frame_capability;
-  const currentCueIndex = Math.max(0, activeTrack.cues.findIndex((cue) => cue.id === selectedCueId));
-  const currentCue = activeTrack.cues[currentCueIndex];
-  const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0) || titlePosition !== (cover?.layout.title_position ?? "bottom");
-
-  useEffect(() => {
-    setFrameTime(cover?.frame_time_seconds ?? 0);
-    setCoverTitle(cover?.title ?? "");
-    setTitlePosition(cover?.layout.title_position ?? "bottom");
-  }, [cover?.id, cover?.timeline_version_id, cover?.frame_time_seconds, cover?.title, cover?.layout.title_position]);
-
-  function seekFrame(next: number) {
-    const bounded = Math.max(0, Math.min(duration, next));
-    setFrameTime(bounded);
-    if (videoRef.current) videoRef.current.currentTime = bounded;
-  }
-
-  useEffect(() => {
-    if (selectedCueId && currentCue) seekFrame(currentCue.start_seconds);
-  }, [selectedCueId, activeTrack.id, currentCue?.start_seconds]);
-
-  function enableBilingual() {
-    onSelectTrack(sourceTrack.id);
-    onPreviewExact({
-      operation_type: "ConfigureSubtitleTrack",
-      track_id: sourceTrack.id,
-      target_language: "en-US",
-    });
-  }
-
-  function toggleSubtitleTrack(language: "zh-CN" | "en-US") {
-    const nextChinese = language === "zh-CN" ? !chineseVisible : chineseVisible;
-    const nextEnglish = language === "en-US" ? !englishVisible : englishVisible;
-    const subtitle_display = nextChinese ? nextEnglish ? "zh-en" : "zh" : nextEnglish ? "en" : "none";
-    onPreviewExact({ operation_type: "ConfigureSubtitleTrack", subtitle_display });
-  }
-
-  return (
-    <section aria-label="字幕与封面工作区" className={styles.subtitleCoverWorkspace}>
-      <div className={styles.subtitleCoverToolbar}>
-        <div aria-label="字幕轨道开关" className={styles.segmentedControl} role="group">
-          <button type="button" role="switch" aria-label="中文轨开关" aria-checked={chineseVisible}
-            disabled={busy || !tracks.some(track => track.language === "zh-CN" && track.status === "valid")}
-            onClick={() => toggleSubtitleTrack("zh-CN")}>中文轨</button>
-          <button type="button" role="switch" aria-label="英文轨开关" aria-checked={englishVisible}
-            disabled={busy || translationTrack?.status !== "valid"}
-            onClick={() => toggleSubtitleTrack("en-US")}>英文轨</button>
-          <button type="button" aria-pressed={displayMode === "none"} disabled={busy || displayMode === "none"}
-            onClick={() => onPreviewExact({ operation_type: "ConfigureSubtitleTrack", subtitle_display: "none" })}>关闭字幕</button>
-          {translationTrack?.status !== "valid" ? <button type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15} />生成英文字幕</button> : null}
-        </div>
-        <button className={styles.secondaryButton} disabled={busy || !workspace.task.can_undo} onClick={onUndo} type="button">撤销</button>
-        <label>保存字幕语言
-          <select aria-label="保存字幕语言" disabled={busy} value={saveSubtitleMode} onChange={(event) => setSaveSubtitleMode(event.target.value as "zh" | "en" | "zh-en")}>
-            <option value="zh">中文 SRT</option>
-            <option value="en">英文 SRT</option>
-            <option value="zh-en">中英双语 SRT（一个文件，中文在前）</option>
-          </select>
-        </label>
-        <button className={styles.secondaryButton} disabled={busy || !selectedSavable} onClick={() => onSaveSubtitle(saveSubtitleMode)} type="button"><Save size={15} />保存字幕</button>
-      </div>
-
-      {!selectedSavable ? <p className={styles.capabilityLine}>所选语言暂无有效字幕轨，请先检查或生成字幕。</p> : null}
-      {!translationCapability.available && !translationTrack ? <p className={styles.capabilityLine} role="status"><AlertCircle size={15} />中英双语暂不可用：{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p> : null}
-      <SubtitleStyleEditor style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact} />
-
-      <div className={styles.previewGrid}>
-        <section className={styles.mediaPanel}>
-          <header><span><Play size={15} />{montage?.output_url ? "当前成片" : "草稿字幕"}</span><small>{duration.toFixed(1)} 秒</small></header>
-          {montage?.output_url ? <video aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} src={apiUrl(montage.output_url)} /> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
-        </section>
-        <div className={styles.subtitleTracks}>
-          <div className={styles.trackTabs} role="tablist" aria-label="字幕轨道">
-            {tracks.map((track) => <button aria-selected={track.id === activeTrack.id} disabled={busy} key={track.id} onClick={() => onSelectTrack(track.id)} role="tab" type="button"><Captions size={15} />{track.language === "zh-CN" ? "中文轨" : "英文轨"}<small>{track.cues.length} 条</small></button>)}
-          </div>
-          <details className={editorUi.propertySection}><summary>全文查找替换</summary><label className={editorUi.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event => { setFindText(event.target.value); onDraftChange(); }} /></label><label className={editorUi.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event => { setReplaceText(event.target.value); onDraftChange(); }} /></label><button className={editorUi.button} type="button" disabled={busy || !findText || findText === replaceText} onClick={() => onPreviewExact({ operation_type: "ReplaceSubtitleText", track_id: activeTrack.id, find_text: findText, replacement_text: replaceText })}>应用全文替换</button><p>只修改当前语言轨的草稿，可撤销；配音不变。</p></details>
-          <label className={styles.cueSelection}><span>选择字幕</span><select aria-label="选择字幕" disabled={busy} onChange={(event) => {
-            const cue = activeTrack.cues.find((item) => item.id === event.target.value);
-            if (cue) {
-              onSelectCue(cue.id);
-              if (videoRef.current) videoRef.current.currentTime = cue.start_seconds;
-            }
-          }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue, index) => <option key={cue.id} value={cue.id}>{index + 1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</option>)}</select></label>
-          <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList} role="tabpanel">
-            {currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} style={activeTrack.style} track={activeTrack} /> : null}
-          </div>
-        </div>
-      </div>
-        <section className={[styles.coverPanel, selectedCover ? styles.selectedCover : ""].filter(Boolean).join(" ")} onFocus={onSelectCover}>
-          <header><span><ImageIcon size={15} />封面</span>{cover?.status === "valid" ? <small>已生成</small> : null}</header>
-          <div className={styles.coverBody}>
-          {cover?.status === "valid" && cover.artifact_ref ? <NextImage alt={cover.title} height={1280} src={apiUrl(`/api/creation-tasks/${workspace.task.id}/covers/${cover.id}/image`)} unoptimized width={720} /> : null}
-          <div className={styles.coverControls}>
-            <label><span>成片画面时间（秒）</span><input aria-label="封面画面时间" disabled={busy} max={duration} min="0" onChange={(event) => { onDraftChange(); seekFrame(Number(event.target.value)); }} step="0.1" type="number" value={frameTime} /></label>
-            <label><span>封面标题</span><input aria-label="封面标题" disabled={busy} onChange={(event) => { onDraftChange(); setCoverTitle(event.target.value); }} value={coverTitle} /></label>
-            <div><span>标题位置</span><div className={styles.segmentedControl} role="group" aria-label="封面标题位置">
-              <button aria-pressed={titlePosition === "center"} disabled={busy} onClick={() => { onDraftChange(); setTitlePosition("center"); }} type="button">中部</button>
-              <button aria-pressed={titlePosition === "bottom"} disabled={busy} onClick={() => { onDraftChange(); setTitlePosition("bottom"); }} type="button">底部</button>
-            </div></div>
-            {coverChanged ? <small className={styles.coverDraft}>选帧、标题或构图待生成{cover?.status === "valid" ? "；保存使用已生成的封面" : ""}</small> : null}
-            <div className={styles.coverActions}>
-            {cover?.status === "valid" && cover.artifact_ref ? <button className={styles.secondaryButton} disabled={busy} onClick={onSaveCover} type="button"><Save size={15} />保存封面</button> : null}
-            <button className={styles.secondaryButton} disabled={busy || !frameCapability.available || !coverTitle.trim() || duration <= 0} onClick={() => {
-              onSelectCover();
-              onPreviewExact({
-                operation_type: "GenerateCoverFromFrame",
-                frame_time_seconds: frameTime,
-                title: coverTitle.trim(),
-                title_position: titlePosition,
-              });
-            }} type="button">从画面生成封面</button>
-            </div>
-          </div>
-          </div>
-        </section>
     </section>
   );
 }
@@ -1285,16 +1037,16 @@ function materialAnalysisLabel(status: MaterialAsset["analysis_status"]) {
   return "解析失败";
 }
 
-function materialReviewLabel(status: MaterialAsset["review_status"]) {
-  if (status === "approved") return "已通过";
-  if (status === "rejected") return "已拒绝";
-  return "未审核";
+function materialUseLabel(status: MaterialAsset["use_state"]) {
+  return { available: "可用于创作", reference_only: "仅参考", excluded: "不使用",
+    not_for_automation: "不用于自动任务", not_for_publish: "不用于发布" }[status];
 }
 
 const PREPARE_MATERIALS_PAGE_SIZE = 100;
 
 function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
   const [materials, setMaterials] = useState<MaterialAsset[] | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<MaterialAsset | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -1333,10 +1085,10 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
     return () => { activeRef.current = false; };
   }, [loadPage]);
   const matchesByAsset = useMemo(() => {
-    const map = new Map<string, MaterialSegmentMatch>();
+    const map = new Map<string, MaterialSegmentMatch[]>();
     for (const match of workspace.plan.material_matches) {
       const id = match.asset_ref.startsWith("asset:") ? match.asset_ref.slice("asset:".length) : match.asset_ref;
-      map.set(id, match);
+      map.set(id, [...(map.get(id) ?? []), match]);
     }
     return map;
   }, [workspace.plan.material_matches]);
@@ -1348,15 +1100,14 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
     <section className={styles.workSection}>
       <div className={styles.sectionHeading}>
         <div>
-          <span>资料</span>
           <h2>本次任务素材</h2>
-          <p>只读回看方案匹配到的素材，不会在这里改动素材或重新跑匹配。</p>
+          <p>回看方案检索候选与当前使用范围；候选不代表已采用镜头。补充或调整素材后需重新检查真实条件。</p>
         </div>
-        <span className={styles.artifactStatus}><CheckCircle2 size={15} />{workspace.plan.material_matches.length ? `方案已记录 ${workspace.plan.material_matches.length} 个匹配片段` : "方案尚无匹配片段"}</span>
+        <span className={styles.artifactStatus}><CheckCircle2 size={15} />{workspace.plan.material_matches.length ? `方案已记录 ${workspace.plan.material_matches.length} 个检索候选` : "方案尚无匹配片段"}</span>
       </div>
       <div className={styles.artifactGrid}>
-        <section><strong>方案匹配</strong><p>{workspace.plan.material_matches.length} 个素材片段匹配当前目标{workspace.plan.material_rule_summary ? ` · ${workspace.plan.material_rule_summary}` : ""}</p></section>
-        <section><strong>审核进度</strong><p>已审核素材 {workspace.plan.approved_asset_count} 个 · 已审核镜头 {workspace.plan.approved_clip_count} 个</p></section>
+        <section><strong>检索候选</strong><p>{workspace.plan.material_matches.length} 个片段，需核对画面内容及本次用途。</p></section>
+        <section><strong>方案可用内容</strong><p>{workspace.plan.approved_asset_count} 个素材 · {workspace.plan.approved_clip_count} 个补充镜头</p><small>这是创建方案时的可用数量；当前限制见下方素材状态。</small></section>
       </div>
       {loadError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>素材列表读取失败：{loadError}；这不改变方案匹配或资料就绪状态。</span></div> : null}
       <div className={styles.evidenceList}>
@@ -1365,15 +1116,18 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
         {materials !== null && matchedAssets.length === 0 && hasMore ? <p>当前已读 {materials.length} 条，尚未找到本方案匹配素材；可继续读取下一页。</p> : null}
         {materials !== null && matchedAssets.length === 0 && !hasMore ? <p>已读完素材列表；本方案暂无匹配素材，或素材解析状态缺失。</p> : null}
         {matchedAssets.map((asset) => {
-          const match = matchesByAsset.get(asset.id);
+          const matches = matchesByAsset.get(asset.id) ?? [];
           const tags = asset.user_tags ?? [];
           return (
             <article key={asset.id}>
-              <span>{match ? `匹配 ${Math.round(match.score * 100)}%` : "未匹配"}</span>
+              <span>{materialUseLabel(asset.use_state)}</span>
               <div>
                 <strong>{asset.file_name}</strong>
-                <small>{materialAnalysisLabel(asset.analysis_status)}{asset.duration_seconds !== null ? ` · ${asset.duration_seconds.toFixed(1)} 秒` : " · 时长未解析"} · {materialReviewLabel(asset.review_status)}</small>
+                <small>{materialAnalysisLabel(asset.analysis_status)}{asset.duration_seconds !== null ? ` · ${asset.duration_seconds.toFixed(1)} 秒` : " · 时长未解析"}</small>
                 <small>{tags.length ? tags.join(" · ") : "暂无标签"}{asset.analysis_message ? ` · ${asset.analysis_message}` : ""}</small>
+                {matches.map(match => <p key={match.segment_ref}>{match.reasons.join("；") || "结构候选，需查看内容后判断"}</p>)}
+                <button className={styles.secondaryButton} type="button" onClick={() => setPreviewAsset(asset)}>查看候选素材</button>
+                <details><summary>候选诊断</summary>{matches.map(match => <p key={match.segment_ref}>{match.segment_ref} · 启发分值 {match.score}，用于排序，不是适配概率</p>)}</details>
               </div>
             </article>
           );
@@ -1384,29 +1138,23 @@ function PrepareMaterialsView({ workspace }: { workspace: WorkspaceState }) {
           </button>
         ) : null}
       </div>
+      {previewAsset ? <HomeCardDialog kind="detail" title={previewAsset.file_name} onClose={() => setPreviewAsset(null)}>
+        <p>{materialUseLabel(previewAsset.use_state)} · {materialAnalysisLabel(previewAsset.analysis_status)}</p>
+        <p>原始素材预览；是否可采用仍由当前任务的真实媒体和使用条件检查决定。</p>
+        {previewAsset.media_type === "image" ? <NextImage alt={previewAsset.file_name} src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)} width={720} height={1280} unoptimized className={styles.materialPreview} /> : previewAsset.media_type === "audio" ? <audio aria-label="候选素材预览" controls src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)} /> : <video aria-label="候选素材预览" className={styles.materialPreview} controls preload="metadata" src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)} />}
+        <Link href="/library">在素材库检查来源与使用范围</Link>
+      </HomeCardDialog> : null}
     </section>
   );
 }
 
 function PublishStageView({ workspace, onOpenReview }: { workspace: WorkspaceState; onOpenReview: () => void }) {
   const ready = Boolean(workspace.montage?.output_url);
-  return (
-    <section className={styles.workSection}>
-      <div className={styles.sectionHeading}>
-        <div>
-          <span>发布</span>
-          <h2>发布</h2>
-          <p>真实发布依赖平台接口，尚未接入；本页不会把本地成片计为已发布。</p>
-        </div>
-      </div>
-      <div className={styles.emptyAction}>
-        <AlertCircle size={28} />
-        <h2>平台发布能力未接入</h2>
-        <p>平台发布、定时发布和发布后监控尚未接入。{ready ? "成片已生成，可以先保存到本地，再到平台上传。" : "完成“检查与输出”后，成片会出现在这里。"}</p>
-        {ready ? <button className="modern-primary-button" onClick={onOpenReview} type="button">回到检查与输出</button> : null}
-      </div>
-    </section>
-  );
+  return <section className={styles.workSection}>
+    <div className={styles.sectionHeading}><div><h2>核对发布目标</h2><p>账号、平台能力、成片版本和发布确认在发布工作区核对。本任务页不显示平台结果或发布数据。</p></div></div>
+    <p>{ready ? "已有成片；进入发布工作区后选择本任务，重新核对当前版本与账号。" : "本任务还没有可用成片；发布工作区会保留未就绪条件，不能据此称为已发布。"}</p>
+    <div className={styles.primaryAction}><Link className="modern-primary-button" href="/history">打开发布工作区</Link>{ready ? <button className={styles.secondaryButton} onClick={onOpenReview} type="button">回到检查与输出</button> : null}</div>
+  </section>;
 }
 
 export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate }: {
@@ -1487,6 +1235,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [activeView, setActiveView] = useState<WorkspaceView>(() => defaultWorkspaceView(initialWorkspace));
+  const [reviewActionsOpen, setReviewActionsOpen] = useState(false);
+  const reviewActionsTrigger = useRef<HTMLButtonElement>(null);
+  const [reviewChoice, setReviewChoice] = useState<{ taskId: string; pane: "prepare" | "result" } | null>(null);
   const [topics, setTopics] = useState(initialTopics);
   const [selectedTopicId, setSelectedTopicId] = useState(initialTopics?.selected_topic_id ?? initialTopics?.candidates[0]?.id ?? null);
   const [topicTitleDraft, setTopicTitleDraft] = useState(
@@ -1494,13 +1245,25 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   );
   const [tasks, setTasks] = useState(initialTasks);
   const [busy, setBusy] = useState<BusyAction | null>(null);
+  const currentBusy = useRef(busy);
+  currentBusy.current = busy;
   const [error, setError] = useState<ReturnType<typeof errorDetails> | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingLocalEdit, setPendingLocalEdit] = useState<PendingLocalEdit | null>(null);
   const pendingLocalEditRef = useRef(pendingLocalEdit);
   pendingLocalEditRef.current = pendingLocalEdit;
+  const [pendingMediaJob, setPendingMediaJob] = useState<{ taskId: string; value: TaskMediaJob } | null>(null);
+  const [recoveredMedia, setRecoveredMedia] = useState<{ taskId: string; job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] } | null>(null);
+  const pendingMediaJobRef = useRef(pendingMediaJob);
+  pendingMediaJobRef.current = pendingMediaJob;
+  const mediaController = useRef<AbortController | null>(null);
+  useEffect(() => () => mediaController.current?.abort(), []);
   const currentTaskId = useRef(initialWorkspace.task.id);
   currentTaskId.current = workspace.task.id;
+  const currentWorkspace = useRef(workspace);
+  currentWorkspace.current = workspace;
+  const navigationReadRevision = useRef(0);
+  const pendingNavigationRead = useRef<{ taskId: string; inputRevision: number } | null>({ taskId: initialWorkspace.task.id, inputRevision: 0 });
   // 共享/收回只用接口回读的值：保存失败就保持原样，不显示成已保存。
   async function changeTaskVisibility(next: "private" | "shared") {
     setVisibilityBusy(true);
@@ -1523,6 +1286,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
   const [inserting, setInserting] = useState(false);
   const [editorDraft, setEditorDraft] = useState(false);
+  const currentEditorDraft = useRef(editorDraft);
+  currentEditorDraft.current = editorDraft;
   const [clipDrafts, setClipDrafts] = useState<Record<string, VideoClipDraft>>({});
   const [audioPlayhead, setAudioPlayhead] = useState(0);
   const [selectedAudioId, setSelectedAudioId] = useState<string | null>(null);
@@ -1531,6 +1296,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const montageVideoRef = useRef<HTMLVideoElement>(null);
   const playheadRef = useRef<number | null>(null);
   const editContextRevision = useRef(0);
+  const previewRequestSequence = useRef(0);
+  const assistantRequestSequence = useRef(0);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [selectedCover, setSelectedCover] = useState(false);
   const [activeSubtitleTrackId, setActiveSubtitleTrackId] = useState<string | null>(
@@ -1540,6 +1307,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   );
   const [selectedNarrationSegmentId, setSelectedNarrationSegmentId] = useState<string | null>(null);
   const [editPreview, setEditPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
+  const currentEditPreview = useRef(editPreview);
+  currentEditPreview.current = editPreview;
   const [assistantPreview, setAssistantPreview] = useState(false);
   const [recordingOpen, setRecordingOpen] = useState(false);
   const [recordings, setRecordings] = useState<CreationTaskRecording[]>([]);
@@ -1578,9 +1347,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }, [workspace.task.id, workspace.task.confirmed_script_id, workspace.task.stage]);
   const task = workspace.task;
   const assistantConversation = useAssistantConversation({ scope_kind: "task", scope_id: task.id });
+  const selectedProfileReference = useAssistantProfileReference()?.reference;
+  const materialReference = useAssistantMaterialReference();
+  const selectedMaterialReference = materialReference?.reference;
+  const selectedKnowledgeReference = useAssistantKnowledgeReference()?.reference;
   const replyTransferRequests = useRef(new Map<string, string>());
   const editCommand = assistantConversation.draftText;
   const setEditCommand = assistantConversation.setDraftText;
+  const [detachedReference, setDetachedReference] = useState<string | null>(null);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
@@ -1662,8 +1436,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
   const enSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid");
   const coverValid = workspace.cover_asset?.status === "valid";
+  const zhSubtitleVisible = workspace.subtitle_tracks.some(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false);
+  const enSubtitleVisible = workspace.subtitle_tracks.some(track => track.language === "en-US" && track.status === "valid" && track.style.enabled !== false);
+  const subtitleSummary = zhSubtitleVisible ? enSubtitleVisible ? "中英双语轨已就绪" : "中文轨已就绪"
+    : enSubtitleVisible ? "英文轨已就绪" : zhSubtitleValid || enSubtitleValid ? "当前成片已关闭字幕" : "当前没有有效字幕轨";
   const reviewChecks = [
-    { title: "字幕", ready: zhSubtitleValid, detail: zhSubtitleValid ? (enSubtitleValid ? "中英双语轨已就绪" : "中文轨已就绪") : "字幕尚未生成或待确认" },
+    { title: "字幕", ready: zhSubtitleVisible || enSubtitleVisible, detail: subtitleSummary },
     { title: "讲解与音乐音量", ready: false, detail: "需人工试听确认，当前无自动音量校验" },
     { title: "封面", ready: coverValid, detail: coverValid ? "封面已生成" : "封面尚未生成或待确认" },
   ];
@@ -1721,29 +1499,127 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }
         : null;
 
+  const selectedTaskReference = selectedEditContext && selectedEditContext.ref !== detachedReference ? selectedEditContext : null;
+  useEffect(() => {
+    // A material reference restored after the editor selection must not leave two
+    // active targets. The provider owns its existing CAS and late-read protection.
+    if (selectedTaskReference && selectedMaterialReference) materialReference?.setReference(null);
+  }, [selectedTaskReference?.ref, selectedMaterialReference, materialReference?.setReference]);
+
   function invalidateEditPreview() {
+    mediaController.current?.abort();
+    mediaController.current = null;
+    setPendingMediaJob(null);
     editContextRevision.current += 1;
     setEditPreview(null);
     setAssistantPreview(false);
   }
 
-  async function refresh(preserveActiveView = false, stillCurrent?: () => boolean) {
+  async function resolveEditMedia(response: CreationTaskEditPreviewResponse | TaskMediaJob, revision: number, conversationId?: string) {
+    const baseVersionId = task.current_timeline_version_id;
+    if (currentTaskId.current !== task.id || currentWorkspace.current.task.current_timeline_version_id !== baseVersionId
+      || editContextRevision.current !== revision || (conversationId && !assistantConversation.isCurrentConversation(conversationId))) {
+      throw new DOMException("预览范围已变化", "AbortError");
+    }
+    const controller = new AbortController();
+    mediaController.current?.abort(); mediaController.current = controller;
+    const stillCurrent = () => !controller.signal.aborted && currentTaskId.current === task.id
+      && currentWorkspace.current.task.current_timeline_version_id === baseVersionId
+      && editContextRevision.current === revision
+      && (!conversationId || assistantConversation.isCurrentConversation(conversationId));
+    return resolveCreationTaskMediaResponse(task.id, response, "edit_preview", {
+      signal: controller.signal, baseVersionId,
+      onUpdate: value => { if (stillCurrent()) setPendingMediaJob({ taskId: task.id, value }); },
+    });
+  }
+
+  async function cancelMediaPreview() {
+    const pending = pendingMediaJob;
+    if (!pending || pending.taskId !== currentTaskId.current) return;
+    const controller = mediaController.current;
+    try {
+      const result = await cancelCreationTaskMediaJob(pending.taskId, pending.value.job_id);
+      if (currentTaskId.current !== pending.taskId || pendingMediaJobRef.current?.value.job_id !== pending.value.job_id || mediaController.current !== controller) return;
+      if (result.status === "cancelled") {
+        mediaController.current?.abort(); setPendingMediaJob({ taskId: pending.taskId, value: result });
+        setNotice("预览已取消，当前草稿保持不变。");
+      }
+    } catch (cause) { if (currentTaskId.current === pending.taskId) setError(errorDetails(cause)); }
+  }
+
+  async function restoreMediaPreview(candidate: TaskMediaJob) {
+    const selectedRefs = selectedTaskReference ? [selectedTaskReference.ref,
+      ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : [];
+    if (busy !== null || !taskMediaJobMatchesContext(candidate, task.current_timeline_version_id, selectedRefs)) return;
+    const revision = ++editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
+    const controller = new AbortController();
+    mediaController.current?.abort(); mediaController.current = controller;
+    const baseVersionId = task.current_timeline_version_id;
+    const conversationId = assistantConversation.conversation?.id;
+    const stillCurrent = () => !controller.signal.aborted && currentTaskId.current === task.id
+      && currentWorkspace.current.task.current_timeline_version_id === baseVersionId
+      && editContextRevision.current === revision
+      && (!conversationId || assistantConversation.isCurrentConversation(conversationId));
+    setBusy("edit-preview"); setError(null); setNotice(null);
+    try {
+      const response = await getCreationTaskMediaJob(task.id, candidate.job_id, controller.signal);
+      if (!stillCurrent()) return;
+      if (!taskMediaJobMatchesContext(response, baseVersionId, selectedRefs)) {
+        setNotice("这次预览已不符合当前输入与选择，未恢复；请重新预览。");
+        return;
+      }
+      let settledJob = response;
+      const result = await resolveCreationTaskMediaResponse(task.id, response, response.result_kind, {
+        signal: controller.signal, baseVersionId,
+        onUpdate: value => { settledJob = value; if (stillCurrent()) setPendingMediaJob({ taskId: task.id, value }); },
+      });
+      if (!stillCurrent()) return;
+      if (response.result_kind === "edit_preview") {
+        setEditPreview(result as CreationTaskEditPreviewResponse);
+        setAssistantPreview(true);
+      } else {
+        setRecoveredMedia({ taskId: task.id, job: settledJob, result });
+        if (response.result_kind === "recording") {
+          const recording = result as CreationTaskRecording;
+          setRecordings(current => [recording, ...current.filter(item => item.source_ref !== recording.source_ref)]);
+          setNotice("录音结果已读取；尚未采用，当前配音与草稿保持不变。");
+        }
+      }
+    } catch (cause) {
+      if (stillCurrent() && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause));
+    } finally {
+      if (currentTaskId.current === task.id && sequence === previewRequestSequence.current) setBusy(null);
+    }
+  }
+
+  async function refresh(preserveActiveView = false, stillCurrent?: (next: WorkspaceState) => boolean, retainProposal = false) {
+    const contextRevision = editContextRevision.current;
     const next = await getCreationTaskWorkspace(task.id);
-    if (stillCurrent && !stillCurrent()) return;
-    invalidateEditPreview();
+    if (stillCurrent && !stillCurrent(next)) return;
+    const selectionChanged = contextRevision !== editContextRevision.current;
+    pendingNavigationRead.current = null;
+    const proposal = currentEditPreview.current?.proposal;
+    const sameProposalBase = retainProposal && proposal?.status === "proposed"
+      && proposal.task_id === next.task.id && proposal.workspace_id === next.task.workspace_id
+      && proposal.operation.payload.base_version_id === next.task.current_timeline_version_id
+      && !selectionChanged;
+    if (!sameProposalBase) invalidateEditPreview();
     setReplacementClipId(null);
     setReplacementCandidates([]);
     const retainedClip = next.montage?.clips.find(clip => clip.id === selectedClipId);
     const retainedOverlay=next.montage?.graphic_overlays?.find(item=>item.id===selectedOverlayId);
-    playheadRef.current = retainedOverlay ? (retainedOverlay.start_seconds+retainedOverlay.end_seconds)/2 : selectedAudioId ? audioPlayhead : retainedClip && next.montage?.output_url
-      ? (retainedClip.timeline_start_seconds + retainedClip.timeline_end_seconds) / 2 : null;
+    if (!selectionChanged) {
+      playheadRef.current = retainedOverlay ? (retainedOverlay.start_seconds+retainedOverlay.end_seconds)/2 : selectedAudioId ? audioPlayhead : retainedClip && next.montage?.output_url
+        ? (retainedClip.timeline_start_seconds + retainedClip.timeline_end_seconds) / 2 : null;
+    }
     setEditorDraft(false);
     setSelectedOverlayId(current=>next.montage?.graphic_overlays?.some(item=>item.id===current)?current:null);
     setWorkspace(next);
     // 保留原视图只在该视图按既有门禁仍可呈现时成立。字幕确认会作废 output_url，
     // 使 subtitle_cover 不可呈现；此时保留它会让主区没有任何视图命中（空白且丢失撤销入口）。
     // 这里按既有可用/默认规则回落，不新增视图、不放开任何门禁。
-    setActiveView(preserveActiveView && canOpenStage(activeView, next) ? activeView : defaultWorkspaceView(next));
+    setActiveView(current => preserveActiveView && canOpenStage(current, next) ? current : defaultWorkspaceView(next));
     setSelectedClipId((current) => next.montage?.clips.some((clip) => clip.id === current) ? current : null);
     setSelectedAudioId(current => next.montage?.audio_timeline?.tracks.some(track => track.id === current || track.clips.some(clip => clip.id === current)) ? current : null);
     setActiveSubtitleTrackId((current) => next.subtitle_tracks.some((track) => track.id === current)
@@ -1754,11 +1630,36 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSelectedNarrationSegmentId((current) => next.narration?.segments.some((segment) => segment.id === current) ? current : null);
     setTasks((current) => [next.task, ...current.filter((item) => item.id !== next.task.id)]);
     if (next.task.stage === "topic") {
+      const appliedRevision = editContextRevision.current;
       const nextTopics = await getCreationTaskTopics(task.id);
+      if (task.id !== currentTaskId.current || appliedRevision !== editContextRevision.current) return;
       setTopics(nextTopics);
       setSelectedTopicId(nextTopics.selected_topic_id ?? nextTopics.candidates[0]?.id ?? null);
     }
   }
+
+  useEffect(() => {
+    if (pendingNavigationRead.current?.taskId !== task.id || busy !== null) return;
+    let active = true;
+    const entered = currentWorkspace.current;
+    const readRevision = pendingNavigationRead.current.inputRevision;
+    const unchanged = () => active && currentTaskId.current === task.id
+      && currentWorkspace.current === entered && readRevision === navigationReadRevision.current
+      && currentBusy.current === null && !currentEditorDraft.current;
+    void refresh(true, next => {
+      const current = unchanged() && next.task.id === task.id
+        && Date.parse(next.task.updated_at) >= Date.parse(entered.task.updated_at);
+      if (current && next === entered) pendingNavigationRead.current = null;
+      return current && next !== entered;
+    }, true).catch(cause => {
+      if (unchanged()) setError(errorDetails(cause));
+    });
+    return () => { active = false; };
+    // Selection and view changes retain their latest state while facts refresh. Unsaved
+    // input still owns its old version; a busy action either refreshes facts itself or
+    // lets this pending entry read resume when it settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id, busy]);
 
   async function run(action: BusyAction, operation: () => Promise<unknown>, success?: string) {
     setBusy(action);
@@ -1809,6 +1710,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       const result = await saver(task.id);
       if (result.error) throw new Error(result.error);
       if (result.saved) setNotice(`已保存${result.fileName ? `：${result.fileName}` : "到所选位置"}`);
+      else if (result.canceled) setNotice("已取消保存成片。");
     } catch (cause) {
       const details = errorDetails(cause);
       // 保存失败必须同时给普通人三件能判断的事：没保存成、为什么、接下来怎么做。
@@ -1867,6 +1769,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       });
       if (result.error) throw new Error(result.error);
       if (result.saved) setNotice(`字幕已保存${result.fileName ? `：${result.fileName}` : "到所选位置"}`);
+      else if (result.canceled) setNotice("已取消保存字幕。");
     } catch (cause) {
       const details = errorDetails(cause);
       setError({ ...details, message: `字幕没有保存到本地。${details.message}`, repairAction:
@@ -1910,7 +1813,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  function activateTaskSelection() {
+    if (detachedReference !== null) invalidateEditPreview();
+    setDetachedReference(null);
+    if (selectedMaterialReference) materialReference?.setReference(null);
+  }
+
   function selectOverlay(id: string|null) {
+    if (id) activateTaskSelection();
     invalidateEditPreview(); setEditorDraft(false); setSelectedOverlayId(id); setSelectedAudioId(null);
     const item=workspace.montage?.graphic_overlays?.find(value=>value.id===id);
     if(item){const time=(item.start_seconds+item.end_seconds)/2;playheadRef.current=time;
@@ -1918,6 +1828,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectClip(clipId: string) {
+    activateTaskSelection();
     if(selectedOverlayId){setEditorDraft(false);invalidateEditPreview();}
     setSelectedOverlayId(null);
     setSelectedAudioId(null);
@@ -1962,6 +1873,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCue(cueId: string) {
+    activateTaskSelection();
     setSelectedAudioId(null);
     if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId || selectedAudioId) invalidateEditPreview();
     setSelectedClipId(null);
@@ -1971,6 +1883,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectNarrationSegment(segmentId: string) {
+    activateTaskSelection();
     if (selectedNarrationSegmentId !== segmentId || selectedClipId || selectedCueId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
@@ -1979,6 +1892,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCover() {
+    activateTaskSelection();
     if (!selectedCover || selectedClipId || selectedCueId || selectedNarrationSegmentId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
@@ -2039,32 +1953,43 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
+    const ownsRequest = () => sequence === previewRequestSequence.current && currentTaskId.current === task.id;
+    const stillCurrent = () => ownsRequest() && revision === editContextRevision.current;
     setBusy("edit-preview");
     setError(null);
     setNotice(null);
     try {
-      const preview = await previewCreationTaskEdit(task.id, {
+      const response = await previewCreationTaskEdit(task.id, {
         raw_command: rawCommand,
         context_stage: activeView,
         selected_object_refs: [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])],
         playhead_ms: selectedEditContext.kind === "clip" && playheadRef.current !== null
           ? Math.round(playheadRef.current * 1000) : null,
       });
-      if (revision === editContextRevision.current) setEditPreview(preview);
+      const preview = await resolveEditMedia(response, revision);
+      if (stillCurrent()) setEditPreview(preview);
     } catch (cause) {
-      setError(errorDetails(cause));
-      await refresh(true).catch(() => undefined);
+      if (stillCurrent() && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause));
     } finally {
-      setBusy(null);
+      if (ownsRequest()) setBusy(null);
     }
   }
 
   async function askAssistant() {
     const message = editCommand.trim();
     if (!message) return;
+    const selectedReference = selectedTaskReference;
+    const materialSnapshot = selectedReference ? null : selectedMaterialReference?.selection ?? null;
+    const snapshotPlayhead = selectedReference?.kind === "clip" && playheadRef.current !== null ? Math.round(playheadRef.current * 1000) : null;
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
+    const requestSequence = ++assistantRequestSequence.current;
+    const ownsRequest = () => requestSequence === assistantRequestSequence.current && task.id === currentTaskId.current;
+    const releaseBusy = () => {
+      setBusy(current => ownsRequest() && current === "assistant" ? null : current);
+    };
     let requestConversationId: string | null = null;
     let requestLocalTurnId: string | null = null;
     setBusy("assistant");
@@ -2076,52 +2001,88 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
       const expectedDraftVersion = await turn.draftCheckpoint;
-      if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
+      if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
         await assistantConversation.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
           "编辑范围已切换；本轮没有发送，原要求已保留为草稿。");
-        setBusy(null);
+        releaseBusy();
+        return;
+      }
+      if (materialSnapshot) {
+        await sendMaterialAssistantTurn(message, turn.conversationId, materialSnapshot, turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+        if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
         return;
       }
       const result = await sendCreationTaskAssistantTurn(task.id, {
         conversation_id: turn.conversationId,
         client_request_id: turn.clientRequestId,
         expected_draft_version: expectedDraftVersion,
+        expected_timeline_version_id: task.current_timeline_version_id,
+        expected_timeline_sequence: task.timeline_sequence,
+        ...(selectedKnowledgeReference ? { selected_knowledge_reference: { knowledge_item_id: selectedKnowledgeReference.knowledge_item_id, version: selectedKnowledgeReference.version, ...(selectedKnowledgeReference.locator ? { locator: selectedKnowledgeReference.locator } : {}) } } : {}),
+        ...(selectedProfileReference ? {selected_profile_reference:{kind:selectedProfileReference.kind,profile_id:selectedProfileReference.profile_id,version:selectedProfileReference.version}} : {}),
         message,
         context_stage: activeView,
-        selected_object_refs: selectedEditContext
-          ? [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])]
+        selected_object_refs: selectedReference
+          ? [selectedReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])]
           : [],
-        playhead_ms: selectedEditContext?.kind === "clip" && playheadRef.current !== null
-          ? Math.round(playheadRef.current * 1000) : null,
+        playhead_ms: snapshotPlayhead,
       }, onStreamEvent);
-      if (revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
-      await assistantConversation.refresh();
+      if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
+      if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
       if (result.execution_status) setExecution(result.execution_status);
       pollExecutionRef.current();
-      if (result.script_draft) await refresh(true);
-      if (revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId)) {
-        setEditPreview(result.edit_preview);
-        if (result.edit_preview) setAssistantPreview(true);
+      if (result.script_draft) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
+      if (result.timeline_action) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
+      if (ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId)) {
+        const preview = result.media_job ? await resolveEditMedia(result.media_job, revision, turn.conversationId) : result.edit_preview;
+        if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
+        setEditPreview(preview);
+        if (preview) setAssistantPreview(true);
       }
     } catch (cause) {
-      if (requestConversationId && requestLocalTurnId) {
+      if (requestConversationId && requestLocalTurnId && !(cause instanceof DOMException && cause.name === "AbortError") && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) {
         const failure = errorDetails(cause);
         await assistantConversation.failUnpersistedTurn(requestConversationId, requestLocalTurnId,
           [failure.message, failure.impact, failure.repairAction].filter(Boolean).join(" "));
       }
-      if (revision === editContextRevision.current && (!requestConversationId || assistantConversation.isCurrentConversation(requestConversationId))) {
+      if (ownsRequest() && revision === editContextRevision.current && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status)) && (!requestConversationId || assistantConversation.isCurrentConversation(requestConversationId))) {
         setError(errorDetails(cause));
         if (activeView === "script") {
-          await refresh().catch(() => undefined);
+          await refresh(false, () => ownsRequest() && revision === editContextRevision.current && (!requestConversationId || assistantConversation.isCurrentConversation(requestConversationId))).catch(() => undefined);
           const history = await getCreationTaskAssistantHistory(task.id).catch(() => null);
-          if (history && revision === editContextRevision.current) {
+          if (history && ownsRequest() && revision === editContextRevision.current) {
             const turns = assistantHistoryTurns(history.items);
             setAssistantTurns(turns);
           }
         }
       }
     } finally {
-      if (revision === editContextRevision.current) setBusy(null);
+      releaseBusy();
+    }
+  }
+
+  async function openSavedEditProposal(turn: AssistantConversationTurn) {
+    const saved = turn.result?.response as CreationTaskAssistantTurnResponse | undefined;
+    const proposal = saved?.edit_preview?.proposal;
+    if (!proposal || proposal.task_id !== task.id) {
+      setError(errorDetails(new Error("这份修改属于另一个任务，请在原任务查看。")));
+      return;
+    }
+    const conversationId = assistantConversation.conversation?.id;
+    if (!conversationId) return;
+    const revision = editContextRevision.current;
+    setBusy("edit-preview");
+    setError(null);
+    try {
+      const latest = await getCreationTaskEditPreview(task.id, proposal.id);
+      if (currentTaskId.current !== task.id || editContextRevision.current !== revision
+          || !assistantConversation.isCurrentConversation(conversationId)) return;
+      setEditPreview(latest);
+      setAssistantPreview(true);
+    } catch (cause) {
+      if (currentTaskId.current === task.id && editContextRevision.current === revision) setError(errorDetails(cause));
+    } finally {
+      if (currentTaskId.current === task.id) setBusy(null);
     }
   }
 
@@ -2216,6 +2177,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectAudio(id: string, time?: number) {
+    activateTaskSelection();
     setSelectedOverlayId(null);
     invalidateEditPreview(); setEditorDraft(false); setSelectedAudioId(id);
     setAudioPlayhead(time ?? playheadRef.current ?? 0);
@@ -2232,42 +2194,64 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function previewVisual(input: VisualEditInput) {
     setBusy("edit-preview"); setError(null); setNotice(null); invalidateEditPreview();
-    const revision=editContextRevision.current;
+    const revision = editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
+    const ownsRequest = () => sequence === previewRequestSequence.current && currentTaskId.current === task.id;
+    const stillCurrent = () => ownsRequest() && revision === editContextRevision.current;
     try {
-      const preview=await previewCreationTaskVisual(task.id,input);
-      if(revision===editContextRevision.current) {
+      const response = await previewCreationTaskVisual(task.id,input);
+      const preview = await resolveEditMedia(response, revision);
+      if (stillCurrent()) {
         await confirmCreationTaskEdit(task.id, preview.proposal.id);
+        if (!stillCurrent()) return;
         setEditorDraft(false);
-        await refresh(true);
+        await refresh(true, stillCurrent);
       }
-    } catch(cause) {setError(errorDetails(cause));}
-    finally {setBusy(null);}
+    } catch (cause) { if (stillCurrent() && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause)); }
+    finally { if (ownsRequest()) setBusy(null); }
   }
 
   async function previewAudio(input: AudioEditInput) {
     setBusy("edit-preview"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
+    const ownsRequest = () => sequence === previewRequestSequence.current && currentTaskId.current === task.id;
+    const stillCurrent = () => ownsRequest() && revision === editContextRevision.current;
     try {
-      const preview = await previewCreationTaskAudio(task.id,input);
-      if (revision === editContextRevision.current) {
+      const response = await previewCreationTaskAudio(task.id,input);
+      const preview = await resolveEditMedia(response, revision);
+      if (stillCurrent()) {
         if (input.action === "delete") setEditPreview(preview);
         else {
           await confirmCreationTaskEdit(task.id, preview.proposal.id);
+          if (!stillCurrent()) return;
           setEditorDraft(false);
-          await refresh(true);
+          await refresh(true, stillCurrent);
         }
       }
-    } catch (cause) { setError(errorDetails(cause)); }
-    finally { setBusy(null); }
+    } catch (cause) { if (stillCurrent() && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause)); }
+    finally { if (ownsRequest()) setBusy(null); }
   }
 
   async function submitRecordedVoice(blob: Blob): Promise<void> {
     let recording: CreationTaskRecording;
+    const recordingRevision = editContextRevision.current;
+    const baseVersionId = task.current_timeline_version_id;
+    const controller = new AbortController();
+    mediaController.current?.abort(); mediaController.current = controller;
+    const stillCurrent = () => !controller.signal.aborted && currentTaskId.current === task.id
+      && currentWorkspace.current.task.current_timeline_version_id === baseVersionId
+      && editContextRevision.current === recordingRevision;
     try {
-      recording = await saveCreationTaskRecording(task.id, blob);
+      const response = await saveCreationTaskRecording(task.id, blob);
+      recording = await resolveCreationTaskMediaResponse(task.id, response, "recording", {
+        signal: controller.signal, baseVersionId,
+        onUpdate: value => { if (stillCurrent()) setPendingMediaJob({ taskId: task.id, value }); },
+      });
+      if (!stillCurrent()) return;
     } catch (cause) {
       const details = errorDetails(cause);
-      setError(details);
+      if (stillCurrent() && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(details);
       throw new Error(details.message);
     }
     setRecordings((current) => [recording, ...current.filter((item) => item.source_ref !== recording.source_ref)]);
@@ -2282,14 +2266,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     invalidateEditPreview();
     const revision = editContextRevision.current;
     try {
-      const preview = await previewCreationTaskAudio(task.id, {
+      const response = await previewCreationTaskAudio(task.id, {
         base_version_id: task.current_timeline_version_id,
         action: "replace_narration",
         target_id: narrationTrackId,
         values: { source_ref: recording.source_ref },
         raw_command: "用本机录音替换整条旁白",
       });
-      if (revision === editContextRevision.current) {
+      const preview = await resolveEditMedia(response, revision);
+      if (currentTaskId.current === task.id && revision === editContextRevision.current) {
         await confirmCreationTaskEdit(task.id, preview.proposal.id);
         setEditorDraft(false);
         setRecordingOpen(false);
@@ -2315,23 +2300,36 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }), "本机录音已采用为当前文案的配音来源；可以按原任务继续制作。 ");
   }
 
-  async function reviseCompoundSelection(selection:number[]|string){
-    if(!editPreview)return;
-    const proposalId=editPreview.proposal.id;
-    setBusy("edit-preview");setError(null);
-    const revision=++editContextRevision.current;
-    try{const next=await previewCompoundSelection(task.id,proposalId,selection);if(editContextRevision.current===revision){setEditPreview(next);if(!assistantPreview)setEditCommand(next.intent.raw_command);}}
-    catch(cause){setError(errorDetails(cause));}
-    finally{setBusy(null);}
+  async function reviseCompoundSelection(selection: number[] | string) {
+    if (!editPreview) return;
+    const proposalId = editPreview.proposal.id;
+    setBusy("edit-preview"); setError(null);
+    const revision = ++editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
+    const ownsRequest = () => sequence === previewRequestSequence.current && currentTaskId.current === task.id;
+    try {
+      const response = await previewCompoundSelection(task.id, proposalId, selection);
+      const next = await resolveEditMedia(response, revision);
+      if (ownsRequest() && editContextRevision.current === revision) {
+        setEditPreview(next);
+        if (!assistantPreview) setEditCommand(next.intent.raw_command);
+      }
+    } catch (cause) { if (ownsRequest() && editContextRevision.current === revision && !mediaController.current?.signal.aborted) setError(errorDetails(cause)); }
+    finally { if (ownsRequest()) setBusy(null); }
   }
 
   async function previewExactEdit(input: CreationTaskExactEditInput) {
     if (busy !== null) return false;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
+    const revision = editContextRevision.current;
+    const sequence = ++previewRequestSequence.current;
     let saved = false;
     try {
       if (input.operation_type.startsWith("Delete") || (input.operation_type === "EditGraphicOverlay" && input.overlay_action === "delete")) {
-        setEditPreview(await previewCreationTaskExactEdit(task.id, input));
+        const response = await previewCreationTaskExactEdit(task.id, input);
+        const preview = await resolveEditMedia(response, revision);
+        if (currentTaskId.current !== task.id || revision !== editContextRevision.current) return false;
+        setEditPreview(preview);
         saved = true;
       } else {
         const result = await applyCreationTaskExactEdit(task.id, input);
@@ -2353,9 +2351,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         await refresh(true);
       }
     } catch (cause) {
-      setError(errorDetails(cause));
+      if (currentTaskId.current === task.id && revision === editContextRevision.current && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause));
       return saved;
-    } finally { setBusy(null); }
+    } finally { if (currentTaskId.current === task.id && sequence === previewRequestSequence.current) setBusy(null); }
     return saved;
   }
 
@@ -2473,6 +2471,17 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     </div>
   );
 
+  const hasReviewOutput = task.output_ready && workspace.montage?.status === "rendered" && Boolean(workspace.montage.output_url);
+  const reviewPane = !hasReviewOutput ? "prepare" : reviewChoice?.taskId === task.id ? reviewChoice.pane : "result";
+  const reviewTabKey = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    if (!hasReviewOutput) return;
+    const pane = event.key === "Home" ? "prepare" : event.key === "End" ? "result" : reviewPane === "prepare" ? "result" : "prepare";
+    setReviewChoice({ taskId: task.id, pane });
+    document.getElementById(`review-${pane}-${task.id}`)?.focus();
+  };
+
   const hasContextConversation = !savingTemplate && (
     (activeView === "script" && task.stage === "script" && !task.confirmed_script_id)
     || ((activeView === "montage" || activeView === "review") && workspace.montage)
@@ -2480,53 +2489,49 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { editContextRevision.current += 1; setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} selectedContextLabel={isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={activeView === "script" ? "说说文案想怎么写" : selectedEditContext ? "说说怎么改" : "想问什么？"} />
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (
-    <AppShell inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : "已保存"} · 版本 {task.timeline_sequence}</span>
+    <AppShell inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={isEditor} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span>{busy ? "处理中" : editPreview ? "待确认" : editorDraft || quickInspector && clipDraftChanged ? "未应用" : isEditor ? "已保存" : ""}</span>
       <button aria-haspopup="dialog" aria-expanded={sharingOpen} className={editorUi.button} onClick={() => setSharingOpen(true)} type="button">共享设置</button>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog></div>} toolbarActions={isEditor ? <div className={editorUi.toolbarActions}><button className={editorUi.iconButton} aria-label="撤销" title="撤销上一次修改" disabled={busy !== null || !task.can_undo} onClick={() => void undoTimeline()} type="button"><Undo2 size={17} /></button><button className={editorUi.iconButton} aria-label="重做" title="重做刚才撤销的修改" disabled={busy !== null || !task.can_redo} onClick={() => void undoTimeline(true)} type="button"><Redo2 size={17} /></button><button className={editorUi.iconButton} aria-label="电脑录音替换旁白" title="用本机录音替换整条旁白" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={17} /></button><button className={editorUi.iconButton} aria-label="历史时间线版本" title="查看这个任务的历史时间线版本" onClick={() => setHistoryOpen((open) => !open)} type="button"><History size={17} /></button></div> : undefined} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
-      <div className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
-        <nav className={editorUi.stageRail} aria-label="制作阶段"><ol>{productStages.map((stage) => {
-          const presentation = productStageState(
-            stage.id,
-            workspace,
-            workspace.subtitle_tracks.some((track) => track.status === "valid")
-              && workspace.cover_asset?.status === "valid",
-          );
-          const view = stageView(stage.id);
-          const openable = canOpenStage(view);
-          const stageFailed = task.stage_status === "failed" && view === task.stage;
-          const detail = stageFailed ? task.stage_impact ?? task.stage_reason ?? "当前步骤失败，需要处理" : presentation.detail;
-          return <li aria-current={presentation.state === "current" ? "step" : undefined} className={styles[presentation.state]} key={stage.id} title={`${stage.title}：${detail}`}>
-            <button aria-label={`${stage.title}：${detail}`} aria-pressed={openable && activeView === view} disabled={!openable} onClick={() => view && openView(view)} type="button">
-              <span>{presentation.state === "done" ? <Check size={14} /> : null}</span>
-              <span className={styles.stageCopy}><strong>{stage.label}</strong></span>
-            </button>
-          </li>;
-        })}</ol></nav>
-        <div className={isEditor ? editorUi.editorBody : styles.workspaceBody}>
+      <Tabs.Root value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view)) openView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} className={[isEditor ? editorUi.workspace : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
+        <nav className={editorUi.stageRail} aria-label="制作阶段"><Tabs.List className={editorUi.stageList}>{productStages.map(stage => {
+          const presentation = productStageState(stage.id, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid");
+          const detail = task.stage_status === "failed" && stage.id === task.stage ? "需要处理" : presentation.detail;
+          return <Tabs.Tab value={stage.id} data-stage-state={presentation.state} title={`${stage.title}：${detail}`} aria-label={`${stage.title}：${detail}`} disabled={!canOpenStage(stage.id)} key={stage.id}>{stage.label}</Tabs.Tab>;
+        })}</Tabs.List></nav>
+        <Tabs.Panel value={activeView} className={isEditor ? editorUi.editorBody : styles.workspaceBody}>
+        <header className={styles.stageHeading} data-timeline-version={task.timeline_sequence}>
+          <div><h2>{productStages.find(stage => stage.id === activeView)?.title}</h2><span className={styles.stateBadge}>{activeView === task.stage ? creationTaskStatusPresentation(task.stage_status, task.stage).label : productStageState(activeView, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid").detail}</span></div>
+          {execution?.job && ["queued", "running"].includes(execution.job.status) ? <span className={styles.runtimeState} role="status">连续制作：{execution.job.status === "queued" ? "已排队" : "后台制作中"}{execution.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</span> : null}
+          <JobProgressPanel selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
+        </header>
         <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
           <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} />
         </HomeCardDialog>
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
-        {error && (isEditor || activeView === "subtitle_cover" || activeView === "review") ? <div className={isEditor ? editorUi.feedback : styles.blocker} role="alert"><AlertCircle size={17} /><span>{error.message}{error.repairAction ? ` ${error.repairAction}` : ""}</span>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</div> : null}
-        {executionError ? <div className={styles.blocker} role="alert"><AlertCircle size={17} /><span>{executionError.message}{executionError.repairAction ? ` ${executionError.repairAction}` : ""}</span>{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(async () => { const preview = await previewCreationExecution(task.id); setExecutionPreview(preview); return getCreationExecution(task.id); })} type="button">重新核对文案和制作要求</button> : null}</div> : null}
-        {task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <section className={styles.blocker} role="alert" aria-label={`${stageLabels[activeView]}失败`}><AlertCircle size={17} /><div><strong>{task.stage_reason ?? task.stage_impact}</strong>{task.stage_impact && task.stage_reason ? <p>{task.stage_impact}</p> : null}{task.stage_repair_action ? <p>处理方式：{task.stage_repair_action}</p> : null}</div></section> : null}
-        {!isEditor ? <JobProgressPanel key={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
-        {task.confirmed_script_id && (executionPreview || execution?.job) && (["script", "narration", "montage", "review"].includes(activeView)) ? <CreationExecutionPanel compact={isEditor && Boolean(workspace.montage)} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
-        {execution?.job && !["script", "narration", "montage", "review"].includes(activeView) ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">连续制作：{execution.job.status === "running" ? "后台制作中" : execution.job.status === "failed" ? "有步骤失败" : execution.job.status === "succeeded" ? execution.video_ready ? "成片已生成" : "成片产物需要检查" : execution.job.status === "queued" ? "已排队" : "等待继续"}。<button className={styles.secondaryButton} onClick={() => openView("script")} type="button">查看步骤</button></div> : null}
+        {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", () => initializeCreationTaskTimeline(task.id), "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
+        {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(async () => { const preview = await previewCreationExecution(task.id); setExecutionPreview(preview); return getCreationExecution(task.id); })} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
+        {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
+        {activeView === "review" ? <div className={styles.reviewTabs} role="tablist" aria-label="成片工作区">
+          {([ ["prepare", "制作准备"], ["result", "成片检查"] ] as const).map(([pane, label]) => <button key={pane} id={`review-${pane}-${task.id}`} role="tab" disabled={pane === "result" && !hasReviewOutput} aria-selected={reviewPane === pane} aria-controls={`review-panel-${pane}-${task.id}`} tabIndex={reviewPane === pane ? 0 : -1} onKeyDown={reviewTabKey} onClick={() => setReviewChoice({ taskId: task.id, pane })} type="button">{label}</button>)}
+        </div> : null}
+        <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-prepare-${task.id}`} aria-labelledby={activeView === "review" ? `review-prepare-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "prepare"}>
+        {task.confirmed_script_id && (executionPreview || execution?.job) && activeView === "review" ? <CreationExecutionPanel workspace={workspace} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
+        </div>
 
-        {activeView === "topic" && task.stage === "topic" ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>选题</span><h2>{topics?.candidates.length ? "选择一个要制作的方向" : "从授权资料生成选题"}</h2><p>模型只会看到预检中列出的文字摘录；确认后不会再次生成选题。</p></div>{!topics?.candidates.length ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。") } type="button">{busy === "topics" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成选题</button> : null}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => { setSelectedTopicId(candidate.id); setTopicTitleDraft(candidate.title); }} type="radio" /><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{selectedTopicCandidate ? <label className={styles.field}><span>编辑标题</span><input aria-label="编辑标题" disabled={busy !== null} maxLength={80} onChange={(event) => setTopicTitleDraft(event.target.value)} placeholder="输入本选题的标题" value={topicTitleDraft} /><small className={styles.eyebrow}>确认选题时带上这个标题；当前落库以生成标题为准，覆盖需后端支持。</small></label> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId || !topicTitleDraft.trim()} onClick={() => selectedTopicId && run("topic-confirm", () => confirmCreationTaskTopic(task.id, selectedTopicId), `选题「${topicTitleDraft.trim()}」已确认，下一步生成文案。`) } type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认选题</button></div> : null}</section> : null}
+
+        {activeView === "topic" && task.stage === "topic" ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><h2>{topics?.candidates.length ? "选择选题" : "生成选题"}</h2><p>{workspace.plan.knowledge_references.length} 项固定资料 · {workspace.plan.source_references.length} 条信息源</p><details className={styles.traceDetails}><summary>本次生成范围</summary><p>使用本任务预检列出的文字摘录；确认选题后不再生成新候选。</p></details></div>{!topics?.candidates.length ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。") } type="button">{busy === "topics" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成选题</button> : null}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => { setSelectedTopicId(candidate.id); setTopicTitleDraft(candidate.title); }} type="radio" /><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{selectedTopicCandidate ? <label className={styles.field}><span>编辑标题</span><input aria-label="编辑标题" disabled={busy !== null} maxLength={80} onChange={(event) => setTopicTitleDraft(event.target.value)} placeholder="输入本选题的标题" value={topicTitleDraft} /><small className={styles.eyebrow}>确认时保存这个标题；后续文案将使用已保存的选题。</small></label> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId || !topicTitleDraft.trim()} onClick={() => selectedTopicId && run("topic-confirm", async () => { const saved = await confirmCreationTaskTopic(task.id, selectedTopicId, { title: topicTitleDraft.trim() }); const confirmed = saved.candidates.find(candidate => candidate.id === saved.selected_topic_id); setNotice(confirmed ? `选题「${confirmed.title}」已确认，下一步生成文案。` : "选题已确认，下一步生成文案。"); }) } type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}确认选题</button></div> : null}</section> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView workspace={workspace} /> : null}
 
         {activeView === "script" && task.stage === "script" && !latestScript ? <>
           <PlanReplyDraftAction busy={busy !== null} task={task} onComplete={async () => { await refresh(true); setNotice("已保存对话回复为待确认文案草稿；请补充当前资料引用和画面建议。"); }} />
-          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>根据已确认选题生成中文文案</h2><p>这是本任务第二次、也是最后一次文字模型调用。生成后先编辑和确认，再进入配音。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
+          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
         </> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={latestScript.updated_at} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
-        {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ConfirmedScriptView script={latestScript} /> : null}
+        {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView workspace={workspace} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}
 
@@ -2534,9 +2539,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           <section className={styles.workSection}>
             <div className={styles.emptyAction}>
               <Volume2 size={30} />
-              <h2>为已确认文案准备配音</h2>
-              <p>可以保存本机录音，再明确采用为本任务配音；保存录音本身不会开始制作。</p>
-              {latestScript?.selection_status === "confirmed" ? <button className="modern-primary-button" disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />录一段旁白</button> : null}
+              <h2>准备配音</h2>
+              <p>可采用本人录音，或使用已选声音制作。</p>
+              {latestScript?.selection_status === "confirmed" ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />录一段旁白</button> : null}
               {task.can_revise_script ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("script")} type="button">修改文案</button> : null}
               {recordingsError ? <p role="alert">已保存录音读取失败：{recordingsError}</p> : null}
               {recordings.map((recording) => (
@@ -2553,31 +2558,32 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
               ))}
               {!task.can_revise_script ? (
                 workspace.plan.selected_voice ? <p>已选择授权声音。如需生成配音，可在连续制作中确认要求后继续；本机录音也可独立采用。</p>
-                  : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于生成配音的授权声音</span><select onChange={(event) => setSelectedVoiceId(event.target.value)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <option key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</option>)}</select></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，请确认文案和要求后开始连续制作。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用授权声音生成</button></div>
-                    : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于生成配音的授权声音</strong><p>你仍可采用这次本人录音；使用声音模型时再登记获得授权的声音。</p></div><Link className="modern-primary-button" href="/profiles">添加声音</Link></div>
+                  : runnableVoices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于生成配音的授权声音</span><AppSelect onValueChange={newValue => setSelectedVoiceId(newValue)} value={selectedVoiceId ?? ""}>{runnableVoices.map((voice) => <AppSelectOption key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id}>{voice.person_display_name} · {voice.version}</AppSelectOption>)}</AppSelect></label><button className="modern-primary-button" disabled={busy !== null || !selectedVoiceId} onClick={() => { const voice = runnableVoices.find((item) => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，请确认文案和要求后开始连续制作。"); }} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16} /> : <Check size={16} />}使用授权声音生成</button></div>
+                    : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于生成配音的授权声音</strong><p>你仍可采用这次本人录音；使用声音模型时再登记获得授权的声音。</p></div><Link className="modern-primary-button" href={`/profiles?view=voices&task=${encodeURIComponent(task.id)}`}>添加声音</Link></div>
               ) : null}
             </div>
           </section>
         ) : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
 
-        {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>故事板与连续制作</h2><p>请在连续制作中确认文案和要求，再由同一任务推进故事板和成片；排队不表示产物已生成。</p></div></section> : null}
+        {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
         {isEditor && workspace.montage ? <VideoEditingStage selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? <AudioTimelineTracks sharedTimeScale onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} workspace={workspace} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} workspace={workspace} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleCoverView activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} workspace={workspace} /> : null}
 
-        {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><span>当前成片</span><h2>检查成片</h2><p>{workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid") ? workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid") ? "中英双语轨已就绪" : "英文字幕轨已就绪" : "中文字幕轨已就绪"} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("montage")} type="button">修改镜头</button><button className={styles.secondaryButton} disabled={busy !== null} onClick={() => setRecordingOpen(true)} type="button"><Mic size={16} />电脑录音替换旁白</button>{activeSubtitleTrack ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => openView("subtitle_cover")} type="button">字幕封面</button> : null}<button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(workspace.montage.output_url)} /><div><p>成片可预览；请按上方清单逐项确认。</p></div></div></section> : null}
+        <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
+        {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <section className={styles.workSection}><div className={styles.sectionHeading}><div><h2>检查成片</h2><p>{subtitleSummary} · {workspace.cover_asset?.status === "valid" ? "封面已生成" : "封面尚待确认"}</p></div><div className={styles.reviewActions}><button ref={reviewActionsTrigger} className={styles.secondaryButton} aria-haspopup="dialog" aria-expanded={reviewActionsOpen} onClick={() => setReviewActionsOpen(true)} type="button">调整成片<ChevronDown size={14}/></button>
+        <HomeCardDialog kind="selection" title="调整成片" anchor={reviewActionsTrigger} open={reviewActionsOpen} onClose={() => setReviewActionsOpen(false)}><div className={styles.reviewMenu}><button disabled={busy !== null} onClick={() => { setReviewActionsOpen(false); openView("montage"); }} type="button">修改镜头</button><button disabled={busy !== null} onClick={() => { setReviewActionsOpen(false); setRecordingOpen(true); }} type="button"><Mic size={16}/>电脑录音替换旁白</button>{activeSubtitleTrack ? <button disabled={busy !== null} onClick={() => { setReviewActionsOpen(false); openView("subtitle_cover"); }} type="button">字幕封面</button> : null}</div></HomeCardDialog><button className="modern-primary-button" disabled={busy !== null} onClick={() => void saveVideo()} type="button">{busy === "save" ? <LoaderCircle className="is-spinning" size={16} /> : <Save size={16} />}保存到本地</button></div></div><div className={styles.evidenceList}><strong>检查清单 · {reviewReadyCount}/{reviewChecks.length} 项已就绪</strong>{reviewChecks.map((item) => <article key={item.title}><span>{item.ready ? "已就绪" : "待确认"}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div></article>)}</div><div className={styles.videoReview}><video key={task.current_timeline_version_id} aria-label="成片预览" controls preload="metadata" ref={montageVideoRef} onPause={(event) => selectPlayingClip(event.currentTarget)} onSeeked={(event) => selectPlayingClip(event.currentTarget)} onTimeUpdate={(event) => selectPlayingClip(event.currentTarget)} onLoadedMetadata={(event) => { event.currentTarget.currentTime = playheadRef.current ?? 0; }} src={apiUrl(`${workspace.montage.output_url}?version=${encodeURIComponent(task.current_timeline_version_id ?? "")}`)} /><div><p>请逐项检查字幕、声音和封面。</p></div></div></section> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
-        {isEditor ? <JobProgressPanel key={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} taskId={task.id} /> : null}
         {activeView === "review" && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
+        </div>
         {activeView === "prepare" ? <PrepareMaterialsView workspace={workspace} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} workspace={workspace} /> : null}
         {activeView === "publish" ? <PublishStageView workspace={workspace} onOpenReview={() => openView("review")} /> : null}
+        {task.confirmed_script_id && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel workspace={workspace} compact preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}
-
-
-        </div>
-      </div>
+        </Tabs.Panel>
+      </Tabs.Root>
     </AppShell>
   );
 }
@@ -2604,6 +2610,7 @@ function jobStatusLabel(status: string): string {
 /** 作业类型也用中文说明，不把内部标识直接丢给用户。 */
 function jobKindLabel(kind: string): string {
   if (kind === "creation_task_montage_render") return "成片输出";
+  if (kind === "creation_task_media") return "媒体预览与处理";
   if (kind === "creation_task_execution") return "整条制作";
   if (kind === "person_render") return "人物形象生成";
   if (kind === "creation_task_person_edit") return "局部人物修改";
@@ -2617,7 +2624,15 @@ function jobKindLabel(kind: string): string {
  * 作业还在排队或执行时按固定间隔重新读取，结束后停止；切换任务时丢弃旧结果。
  * 读不到就明说并给出重试，不静默当成没有作业。
  */
-function JobProgressPanel({ taskId, refreshToken, pendingEditJobId, onEditSettled }: {
+function JobProgressPanel({ task, taskId, refreshToken, pendingEditJobId, onEditSettled, showLiveStatus, mediaJob, onCancelMedia, selectedRefs, restoreBusy, onRestoreMedia, recoveredMedia }: {
+  selectedRefs: string[];
+  restoreBusy: boolean;
+  onRestoreMedia: (job: TaskMediaJob) => void;
+  recoveredMedia: { job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] } | null;
+  mediaJob: TaskMediaJob | null;
+  onCancelMedia: () => void;
+  showLiveStatus: boolean;
+  task: CreationTask;
   taskId: string;
   refreshToken: string;
   pendingEditJobId: string | null;
@@ -2628,6 +2643,23 @@ function JobProgressPanel({ taskId, refreshToken, pendingEditJobId, onEditSettle
   const [progress, setProgress] = useState<TaskJobProgress | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [mediaPage, setMediaPage] = useState<TaskMediaJobPage | null>(null);
+  const [mediaReadError, setMediaReadError] = useState<string | null>(null);
+  const [mediaCursor, setMediaCursor] = useState<string | null>(null);
+  const [mediaRetry, setMediaRetry] = useState(0);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const controller = new AbortController();
+    setMediaLoading(true); setMediaReadError(null);
+    void listCreationTaskMediaJobs(taskId, mediaCursor, controller.signal).then(page => {
+      if (!controller.signal.aborted) { setMediaPage(page); setMediaLoading(false); }
+    }).catch(cause => {
+      if (!controller.signal.aborted) { setMediaReadError(errorDetails(cause).message); setMediaLoading(false); }
+    });
+    return () => controller.abort();
+  }, [taskId, detailsOpen, mediaCursor, mediaRetry]);
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
@@ -2646,7 +2678,7 @@ function JobProgressPanel({ taskId, refreshToken, pendingEditJobId, onEditSettle
         }
         // 只有还在排队或执行的作业才继续读；结束或失败后停止轮询。
         const status = result.current?.status;
-        if (status === "queued" || status === "running" || edit?.status === "queued" || edit?.status === "running" || edit?.status === "interrupted") {
+        if (status === "queued" || status === "running" || status === "interrupted" || edit?.status === "queued" || edit?.status === "running" || edit?.status === "interrupted") {
           timer = window.setTimeout(() => void read(), 2500);
         }
       } catch (cause) {
@@ -2658,39 +2690,63 @@ function JobProgressPanel({ taskId, refreshToken, pendingEditJobId, onEditSettle
     return () => { active = false; window.clearTimeout(timer); };
     // 开始/重试制作后作业事实会变，重新读一次；空态不会一直轮询。
   }, [taskId, refreshToken, retryTick, pendingEditJobId]);
-  if (readError && !progress) return <div role="alert" className={styles.blocker}>
-    <AlertCircle size={17} />
-    <span>作业进度暂时读不到：{readError}</span>
-    <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button>
-  </div>;
-  if (!progress) return null;
-  const current = progress.current;
+  async function cancelCurrentMedia() {
+    if (!progress?.current) return;
+    try { await cancelCreationTaskMediaJob(taskId, progress.current.id); setRetryTick(value => value + 1); }
+    catch (cause) { setReadError(errorDetails(cause).message); }
+  }
+  const recoveryCandidates = mediaPage?.items.filter(item => taskMediaJobMatchesContext(item, task.current_timeline_version_id, selectedRefs)) ?? [];
+  const current = progress?.current ?? null;
+  const live = current?.status === "running" || current?.status === "queued";
   return <section aria-label="作业进度" className={styles.jobProgress}>
-    <strong>作业进度</strong>
-    {current ? <p>
-      {jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}
-    </p> : <p>这个任务还没有后台作业记录。</p>}
-    {current && (current.status === "queued" || current.status === "running") ? <p>
-      预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}
-      {current.estimate_basis ? `（依据：${current.estimate_basis}）`
-        : current.wait_estimate_seconds === null && current.processing_estimate_seconds === null
-          ? "（尚无可信样本，无法预计）" : ""}
-    </p> : null}
-    {current && (current.status === "failed" || current.status === "interrupted"
-      || (current.status === "cancelled" && Boolean(current.failure_reason || current.repair_action))) ? <div role="alert" className={styles.jobFailure} aria-label="当前作业失败信息">
-      <AlertCircle size={16} />
-      <div>
-        <strong>{current.status === "failed" ? "当前作业失败" : current.status === "interrupted" ? "当前作业已中断" : "当前作业未完成"}</strong>
-        {current.failure_reason ? <p>失败原因：{current.failure_reason}{current.impact ? ` · ${current.impact}` : ""}</p> : null}
-        {current.repair_action ? <p>下一步：{current.repair_action}</p> : null}
-      </div>
-    </div> : null}
-    {readError ? <p role="alert" className={styles.jobRefreshError}>最新一次刷新失败：{readError} <button onClick={() => setRetryTick((value) => value + 1)} type="button">重试</button></p> : null}
-    {progress.items.length > 1 ? <details>
-      <summary>查看历史作业（{progress.items.length} 条）</summary>
-      <ol>
-        {progress.items.map((item) => <li key={item.id}>{jobKindLabel(item.kind)} · {jobStatusLabel(item.status)} · 进度 {item.progress}% · 已耗时 {formatDuration(item.elapsed_seconds)} · 更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}{item.failure_reason ? ` · 失败原因：${item.failure_reason}${item.repair_action ? ` · 下一步：${item.repair_action}` : ""}` : ""}</li>)}
-      </ol>
-    </details> : null}
+    {mediaJob && mediaJob.status !== "succeeded" ? <span role="status">{taskMediaJobLabel(mediaJob)}{["queued", "running", "interrupted"].includes(mediaJob.status) ? <button type="button" onClick={onCancelMedia}>取消预览</button> : null}</span> : null}
+    {showLiveStatus && live ? <span>{jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}%</span> : showLiveStatus && (current?.status === "failed" || current?.status === "interrupted") ? <span>后台有步骤需要处理</span> : null}
+    {readError ? <span role="status">后台记录更新未完成</span> : null}
+    <button type="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>运行详情</button>
+    <HomeCardDialog kind="detail" title="运行详情" open={detailsOpen} onClose={() => setDetailsOpen(false)}>
+      {readError ? <p role="alert" className={styles.jobRefreshError}>最新一次刷新失败：{readError} <button onClick={() => setRetryTick(value => value + 1)} type="button">重试</button></p> : null}
+      <section aria-label="可恢复的媒体预览">
+        <h3>恢复媒体预览</h3>
+        {mediaLoading ? <p role="status">正在读取预览记录…</p> : null}
+        {mediaReadError ? <p role="alert">预览记录未读取：{mediaReadError}<button type="button" onClick={() => setMediaRetry(value => value + 1)}>重读预览记录</button></p> : null}
+        {!mediaLoading && !mediaReadError && mediaPage ? <>
+          {recoveryCandidates.length ? <ol>{recoveryCandidates.map(item => <li key={item.job_id}>
+            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
+            <button type="button" disabled={restoreBusy} onClick={() => onRestoreMedia(item)}>恢复这次预览</button>
+          </li>)}</ol> : <p>这一页没有符合当前版本与选择的预览记录。</p>}
+          {mediaPage.next_cursor ? <button type="button" onClick={() => setMediaCursor(mediaPage.next_cursor)}>查看更多预览记录</button> : null}
+          {mediaCursor ? <button type="button" onClick={() => setMediaCursor(null)}>回到最新预览记录</button> : null}
+        </> : null}
+        {recoveredMedia ? <RecoveredMediaResult job={recoveredMedia.job} result={recoveredMedia.result} /> : null}
+      </section>
+      {mediaJob ? <p>{taskMediaJobLabel(mediaJob)}{mediaJob.repair_action ? ` · ${mediaJob.repair_action}` : ""}</p> : null}
+      {current ? <p>{jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}% · 已耗时 {formatDuration(current.elapsed_seconds)} · 更新于 {new Date(current.updated_at).toLocaleString("zh-CN")}</p> : <p>{progress ? "这个任务还没有后台作业记录。" : "正在读取后台记录…"}</p>}
+      {live && current.kind === "creation_task_media" && current.id !== mediaJob?.job_id ? <button type="button" onClick={() => void cancelCurrentMedia()}>取消媒体处理</button> : null}
+      {live ? <p>预计等待：{formatDuration(current.wait_estimate_seconds)} · 预计处理：{formatDuration(current.processing_estimate_seconds)}{current.estimate_basis ? `（依据：${current.estimate_basis}）` : current.wait_estimate_seconds === null && current.processing_estimate_seconds === null ? "（尚无可信样本，无法预计）" : ""}</p> : null}
+      {current && (current.status === "failed" || current.status === "interrupted" || current.status === "cancelled" && Boolean(current.failure_reason || current.repair_action)) ? <div role="alert" className={styles.jobFailure} aria-label="当前作业失败信息"><strong>{current.status === "failed" ? "当前作业失败" : current.status === "interrupted" ? "当前作业已中断" : "当前作业未完成"}</strong>{current.failure_reason ? <p>失败原因：{creationTaskFailureReason(current.failure_reason, current.kind)}{current.impact ? ` · ${current.impact}` : ""}</p> : null}{current.repair_action ? <p>下一步：{creationTaskRepairAction(current.repair_action)}</p> : null}{current.failure_reason ? <details><summary>后台原始记录</summary><p>{current.failure_reason}</p></details> : null}</div> : null}
+      {progress && progress.items.length > 1 ? <details><summary>查看历史作业（{progress.items.length} 条）</summary><ol>{progress.items.map(item => <li key={item.id}>{jobKindLabel(item.kind)} · {jobStatusLabel(item.status)} · 进度 {item.progress}% · 已耗时 {formatDuration(item.elapsed_seconds)} · 更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}{item.failure_reason ? ` · 失败原因：${item.failure_reason}${item.repair_action ? ` · 下一步：${item.repair_action}` : ""}` : ""}</li>)}</ol></details> : null}
+      <details className={styles.traceDetails}><summary>任务版本与时间</summary><p>版本 {task.timeline_sequence}</p><p>最近更新：<time dateTime={task.updated_at}>{new Date(task.updated_at).toLocaleString("zh-CN")}</time></p><p>恢复记录：{task.recovery_point}</p></details>
+    </HomeCardDialog>
   </section>;
+}
+
+function RecoveredMediaResult({ job, result }: { job: TaskMediaJob; result: TaskMediaResultMap[keyof TaskMediaResultMap] }) {
+  if (job.result_kind === "audio_listen") return <audio aria-label="恢复的音频试听" controls preload="metadata" src={apiUrl((result as TaskMediaResultMap["audio_listen"]).audio_url)} />;
+  if (job.result_kind === "audio_source") {
+    const source = result as TaskMediaResultMap["audio_source"];
+    return <p role="status">已读取音频：{source.name} · {(source.duration_ms / 1000).toFixed(1)} 秒；尚未添加到音轨。</p>;
+  }
+  if (job.result_kind === "recording") return <p role="status">录音结果已读取；请在已有录音列表查看，尚未采用。</p>;
+  if (job.result_kind === "waveform") {
+    const wave = result as TaskMediaResultMap["waveform"];
+    const stride = Math.max(1, Math.ceil(wave.peaks.length / 240));
+    const points: string[] = [];
+    for (let i = 0; i < wave.peaks.length; i += stride) {
+      const peak = Math.max(...wave.peaks.slice(i, i + stride));
+      const x = i / Math.max(1, wave.peaks.length) * 240;
+      points.push(`M${x},${16 - peak * 15}V${16 + peak * 15}`);
+    }
+    return <div aria-label="恢复的音频波形"><svg viewBox="0 0 240 32" role="img" aria-label="实际音频波形"><path d={points.join(" ")} stroke="currentColor" /></svg><p>每个采样点覆盖 {wave.seconds_per_peak} 秒。</p></div>;
+  }
+  return null;
 }

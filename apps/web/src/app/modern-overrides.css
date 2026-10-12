@@ -341,32 +341,6 @@ h4 {
   white-space: pre-wrap;
 }
 
-.assistant-conversation-panel { display: grid; min-height: 0; min-width: 0; gap: 10px; }
-.assistant-conversation-head, .assistant-conversation-head > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.assistant-conversation-head { min-width: 0; flex-wrap: wrap; color: var(--text-2); font-size: 12px; }
-.assistant-conversation-head > span { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.assistant-conversation-head > div { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; }
-.assistant-conversation-head label { display: flex; min-width: 0; flex: 1 1 220px; align-items: center; gap: 6px; }
-.assistant-conversation-head select { box-sizing: border-box; min-width: 0; max-width: 100%; flex: 1 1 180px; }
-.assistant-conversation-head button, .assistant-conversation-head select, .assistant-conversation-actions button, .assistant-conversation-actions summary, .assistant-copy { border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-2); padding: 5px 8px; font: inherit; cursor: pointer; }
-.assistant-conversation-history { display: grid; align-content: start; gap: 10px; max-height: 280px; min-height: 48px; min-width: 0; overflow: auto; }
-.assistant-persisted-turn { display: grid; min-width: 0; gap: 6px; }
-.assistant-persisted-turn[data-turn-status="running"] { border-left: 2px solid var(--accent); padding-left: 8px; }
-.assistant-persisted-turn[data-turn-status="failed"] { border-left: 2px solid var(--danger); padding-left: 8px; }
-.assistant-conversation-entry { display: grid; min-width: 0; gap: 7px; }
-.assistant-conversation-entry textarea { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 58px; resize: vertical; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); color: var(--text-1); padding: 10px 12px; font: inherit; }
-.assistant-conversation-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
-.assistant-conversation-actions .assistant-command-help { min-width: 0; margin-right: auto; }
-.assistant-conversation-actions .assistant-command-help > p { max-width: min(520px, calc(100vw - 48px)); overflow-wrap: anywhere; color: var(--text-3); font-size: 12px; }
-.assistant-conversation-actions .assistant-diagnostics-toggle { white-space: nowrap; }
-.assistant-capability-diagnostics { min-width: 0; max-width: 100%; max-height: 240px; overflow: auto; overflow-wrap: anywhere; }
-.assistant-conversation-actions button.assistant-send { display: inline-flex; width: 28px; height: 28px; flex: 0 0 28px; align-items: center; justify-content: center; padding: 0; background: var(--accent); color: white; }
-.assistant-conversation-actions button.assistant-send:disabled { opacity: .5; cursor: not-allowed; }
-.assistant-conversation-actions button.assistant-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.assistant-send-state, .assistant-entry-hint { min-width: 0; overflow-wrap: anywhere; color: var(--text-3); font-size: 12px; }
-.assistant-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
-.assistant-suggestions p { flex-basis: 100%; margin: 0; }
-.assistant-suggestions button, .assistant-suggestions a { border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface-1); color: var(--text-2); padding: 5px 9px; font: inherit; cursor: pointer; text-decoration: none; }
 .assistant-markdown-wrap { position: relative; color: var(--text-1); }
 .assistant-markdown { line-height: var(--line-body); overflow-wrap: anywhere; }
 .assistant-markdown > :first-child { margin-top: 0; }
@@ -759,7 +733,7 @@ h4 {
 .library-segment-organizer label { display: grid; gap: 4px; color: var(--text-2); font-size: 12px; }
 .library-segment-organizer input,
 .library-segment-organizer textarea,
-.library-segment-organizer select,
+.library-segment-organizer [data-app-select-trigger],
 .library-collection-create input { min-width: 0; min-height: 32px; padding: 6px 8px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font: inherit; font-size: 12px; }
 .library-segment-organizer textarea { min-height: 64px; resize: vertical; }
 .library-speech-evidence { display: grid; gap: 5px; font-size: 12px; }
@@ -1034,7 +1008,7 @@ h4 {
 .queue-plan-create label { display: grid; gap: 3px; }
 .queue-plan-create label span { color: var(--text-3); font-size: 12px; }
 .queue-plan-create input,
-.queue-plan-create select { min-width: 0; min-height: 34px !important; font-size: 12px; }
+.queue-plan-create [data-app-select-trigger] { min-width: 0; min-height: 34px !important; font-size: 12px; }
 .queue-empty,
 .production-offline { display: flex; min-height: 100px; align-items: center; gap: 13px; padding: 18px; border: 1px solid var(--border-1); border-radius: 12px; }
 .queue-empty > div,
@@ -1121,14 +1095,14 @@ h4 {
 .source-manual-entry label > span,
 .source-save-form label > span { color: var(--text-2); font-size: 12px; }
 .source-panel--form input,
-.source-panel--form select,
+.source-panel--form [data-app-select-trigger],
 .source-manual-entry input,
-.source-manual-entry select,
+.source-manual-entry [data-app-select-trigger],
 .source-manual-entry textarea,
 .source-save-form input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-size: 13px; }
-.source-panel--form button,
+.source-panel--form button:not([data-app-select-trigger]),
 .source-manual-entry form > button,
-.source-save-form button { display: inline-flex; align-self: end; justify-self: start; width: fit-content; height: 32px; min-height: 32px; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 13px; font-weight: 500; cursor: pointer; }
+.source-save-form button:not([data-app-select-trigger]) { display: inline-flex; align-self: end; justify-self: start; width: fit-content; height: 32px; min-height: 32px; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 13px; font-weight: 500; cursor: pointer; }
 .source-panel--form button:disabled,
 .source-manual-entry button:disabled,
 .source-save-form button:disabled { opacity: .45; cursor: default; }
@@ -1470,8 +1444,8 @@ h4 {
 .source-sync-button { min-height: 36px; padding: 0 12px; font-size: 13px; }
 .source-panel--form { padding: 18px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); }
 .source-panel--form label > span, .source-manual-entry label > span, .source-save-form label > span { font-size: 12px; }
-.source-panel--form input, .source-panel--form select, .source-manual-entry input, .source-manual-entry select, .source-manual-entry textarea, .source-save-form input {min-height:32px; font-size: 13px; }
-.source-panel--form button, .source-manual-entry form > button, .source-save-form button {justify-self:start; min-height:32px; font-size: 13px; }
+.source-panel--form input, .source-panel--form [data-app-select-trigger], .source-manual-entry input, .source-manual-entry [data-app-select-trigger], .source-manual-entry textarea, .source-save-form input {min-height:32px; font-size: 13px; }
+.source-panel--form button:not([data-app-select-trigger]), .source-manual-entry form > button, .source-save-form button:not([data-app-select-trigger]) {justify-self:start; min-height:32px; font-size: 13px; }
 .source-manual-entry { margin-top: 28px; padding-top: 0; }
 .source-manual-entry form { grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr); }
 .source-items, .knowledge-items { margin-top: 28px; }
@@ -1520,7 +1494,7 @@ h4 {
 .library-tag-list small,
 .library-segment-organizer label,
 .library-segment-organizer input,
-.library-segment-organizer select,
+.library-segment-organizer [data-app-select-trigger],
 .library-collection-create input,
 .library-collection-create button,
 .library-segment-save {

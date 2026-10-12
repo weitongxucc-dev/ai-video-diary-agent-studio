@@ -130,7 +130,8 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
 
     def fake_turn(_settings, *, workspace_id, selection, **_kwargs):
         assert workspace_id == WORKSPACE
-        assert selection == {"scope": "asset", "asset_id": asset_id}
+        assert {key: selection[key] for key in ("scope", "asset_id")} == {"scope": "asset", "asset_id": asset_id}
+        assert selection["expected_updated_at"]
         before = tag_client.repository.get_asset(workspace_id, asset_id)
         updated = tag_client.repository.update_asset_tags(workspace_id, asset_id, ["新标签"])
         after = tag_client.repository.get_asset(workspace_id, asset_id)
