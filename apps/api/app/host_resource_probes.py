@@ -675,7 +675,9 @@ class HostResourceProbe:
                 checks[name] = {"actual": value, "maximum": limit, "passed": value <= limit}
                 if value > limit:
                     return decision(False, "declared_resources_exceed_budget")
-            required_memory = self.budget.min_available_memory_bytes + stage.additional_memory_bytes
+            required_memory = self.budget.min_available_memory_bytes
+            if kind != "creation_narration" or not running_io:
+                required_memory += stage.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
             if kind in {"creation_narration", "creation_person_render"}:
                 required_disk += stage.additional_disk_bytes

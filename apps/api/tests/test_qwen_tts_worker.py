@@ -128,11 +128,6 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     for name,module in {"numpy":numpy,"mlx":mlx,"mlx.core":mx,"mlx_audio":package,
                         "mlx_audio.audio_io":audio,"mlx_audio.tts":tts,"mlx_audio.tts.utils":utils}.items():
         monkeypatch.setitem(sys.modules,name,module)
-    def pace_weights(path):
-        assert cache["bytes"]==0
-        events.append("pace_weights")
-        return 0,0
-    monkeypatch.setattr(worker,"_pace_weight_reads",pace_weights)
     (tmp_path/"model").mkdir();(tmp_path/"ref.wav").write_bytes(b"reference fixture")
     payload=request("en")
     payload.update(model_path=str(tmp_path/"model"),reference_audio_path=str(tmp_path/"ref.wav"),output_path=str(tmp_path/"audio.wav"))
@@ -140,7 +135,7 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     response_path=tmp_path/"response.json"
     monkeypatch.setattr(sys,"argv",["worker","--request",str(input_path),"--response",str(response_path)])
     worker.main()
-    assert events==["disable_cache","pace_weights","load_model","generate","write_audio"]
+    assert events==["disable_cache","load_model","generate","write_audio"]
     assert json.loads(response_path.read_text())["duration_seconds"]==2.0
     assert (tmp_path/"audio.wav").read_bytes()==b"worker contract fixture"
     log=capsys.readouterr().err

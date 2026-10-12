@@ -6,6 +6,12 @@
 
 ### 当前续作：配音资源复核与启动退出诊断
 
+NARRATION-RESOURCE-20261012（C2，用户已批准）：本轮替代已 RELEASE/HOLD 包中的配音固定3GiB运行余量与完整限速预读绑定，架构规则见 system-architecture.md §3.12 新增配音启动/运行段落。范围仅 creation_narration：准入仍检查原1GiB系统底线+2GiB新增预算，真实受许可运行改用原1GiB系统底线，并继续原进程RSS/线程/交换/CPU/IO、输出、设备锁、有限超时及确证回收检查；其他能力规则不改。正式原模型和codec精度保持，旧半精度QA不进入产品。
+
+实施包已由可见线程01a12a6c-9159-70f3-aec3-10e7919a207b REBASE_ACK并RELEASE，无续写lease；交付范围仅 apps/api/app/host_resource_probes.py 的配音启动/运行内存判定、apps/api/model_workers/qwen3_tts_worker.py 的完整预读退役、apps/api/tests/test_host_resource_probes.py 与 test_voice_clone.py 的直接相关检查，以及 test_qwen_tts_worker.py 正常加载fixture中旧预读mock的必要退役。不新增供应商/参数开关/第二执行器，不改 granted_subprocess、其他资源能力、用户数据或配置。原生成方法、真实加载阶段日志、缓存限制及其他能力保护保持；root审阅后进入同源真实配音验证。
+
+root独占架构/合同、既有校准QA脚本与集成运行：源码稳定后先用原模型、固定9秒本人参考音频及原20秒输入做一次隔离真实许可试验；本次先保留90秒、1.5GiB进程RSS与16线程，其余原保护不变。完整音频、真实峰值/时长、许可与进程确证释放才算该验收通过。若新限制被实测触发，只沿具体失败证据制定下一有界包络，不无限原样重试、猜测放宽或自动切模型；未完成配音不配置正式任务预算。后续已确认script_1a6f964741c4/task_93d78477016b的真实配音和成片仍属已授权目标。代码与验证按阶段提交并推送当前GitHub工作分支。
+
 CODEC-QA C1：r6已完成权重加载并进入推理，MLX weights_loaded活跃2054050572/cache0，首因仍为原3GiB主机余量；整型主权重及BF16不变。root决定先做可撤销的隔离精度实验，不修改正式生产模式或宣称声音数值等价。可见线程01a12a6c-9159-70f3-aec3-10e7919a207b仅独占evidence/edit-chain-20261011/qwen_codec_fp16_candidate.py，以当前qwen3_tts_worker.py为固定基线，只对已安装codec的encoder神经网络与decoder浮点参数及必要输入精度作明确实验；保留encoder quantizer统计/派生_embedding/_c2的F32，量化主模型BF16/U32、完整9秒样本、原ref_text与ICL方法、正文/分段和原所有资源保护不动。须在首次解码trace前操作真正decoder模块，不猜普通set_dtype能覆盖派生/compiled对象，不修改依赖、原模型文件或生产worker/缓存身份、不加fallback。无法通过现有模块接口作小改就明确失败，不复制外部codec库。线程仅源码/轻量隔离检查，不实际模型、媒体、服务、用户库、构建或配置；RELEASE后root一次20秒原包络验收和听感检查，实验产物只作QA，不能作为正式任务配音或当前候选完成。root独占原calibrate_creation_resources.py的仅此精确实验worker路径绑定及SHA记录，默认原worker不变，不另建执行器或绕过许可；无生产写lease。
 
 QWEN-THREAD C1：用户再次退出应用后，原20秒r5起始可用约5.5GiB；最低可用3999514624高于原3GiB，实际运行检查先拒绝进程组20线程大于16。可见线程01a12a6c-9159-70f3-aec3-10e7919a207b仅续apps/api/app/voice_clone.py的Qwen3TTSSubprocessProvider._run_command受许可子进程环境及tests/test_voice_clone.py直接目标测试写权：已安装Qwen post_load_hook使用AutoTokenizer，本机tokenizers二进制及官方bench均消费RAYON_NUM_THREADS，现受许可环境只限OMP/OpenBLAS/VECLIB而遗漏Rayon。仅补RAYON_NUM_THREADS=str(grant_context.threads)，不改无许可路径或加第二开关；池在新子进程启动前受许可限制。该遗漏是否为20线程全部根因仍须一次实际验证，不能先宣称解决。原CPU、16线程、1.5GiB RSS、3GiB余量、90秒与设备锁/释放保护均不动，不改worker/模型/供应商/依赖或其它源码，不真实模型/服务/数据/构建。目标检查后RELEASE，root同候选实际校验；其它lease保持RELEASE/HOLD。

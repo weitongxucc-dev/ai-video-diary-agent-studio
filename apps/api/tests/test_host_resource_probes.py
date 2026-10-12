@@ -889,6 +889,63 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     assert reads == ["cpu"]  # Declared rejection never becomes a ready host resample.
 
 
+@pytest.mark.parametrize("kind, available, runtime_verdict", [
+    ("creation_narration", 29 * 1024**3 // 10, True),
+    ("creation_narration", 1024**3, True),
+    ("creation_narration", 1024**3 - 1, False),
+    ("creation_narration", None, None),
+    ("creation_person_render", 29 * 1024**3 // 10, False),
+])
+def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
+    tmp_path, monkeypatch, kind, available, runtime_verdict,
+):
+    from itertools import count
+    import app.host_resource_probes as probes
+    from app.host_resource_probes import PresenterBudget
+    gib = 1024**3
+    narration = NarrationBudget(128, 1, 8 * 1024**2, 20, 4 * 1024**2, 1, 90,
+                                3 * gib // 2, 16, .1, 2 * gib, 32 * 1024**2)
+    presenter = PresenterBudget(1, 8 * 1024**2, 20, 4 * 1024**2, 1, 90,
+                                3 * gib // 2, 16, .1, 2 * gib, 32 * 1024**2)
+    budget = HostBudget(91, gib, 16 * gib, gib, 10**9, 128 * 1024**2,
+                        narration=narration, presenter=presenter)
+    probe = HostResourceProbe(tmp_path / "metadata.sqlite", disk_paths=(tmp_path,), budget=budget)
+    resources = dict(kind=kind, execution_mode="isolated_qwen3_tts" if kind == "creation_narration" else "isolated_avatar_lipsync",
+                     text_chars=100, section_count=1, reference_bytes=1024, input_bytes=1024,
+                     duration_seconds=20, max_output_bytes=4 * 1024**2, threads=1, timeout_seconds=90)
+    ticks = count(0, .1)
+    monkeypatch.setattr(probes.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_kwargs:
+                        {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **_kwargs: [])
+    monkeypatch.setattr(psutil, "cpu_percent", lambda **_kwargs: 10)
+    def memory():
+        if available is None:
+            raise OSError("fixture memory unavailable")
+        return SimpleNamespace(available=available)
+    monkeypatch.setattr(psutil, "virtual_memory", memory)
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, "disk_usage", lambda _path: SimpleNamespace(free=10**12))
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)) is (None if available is None else False)
+    monkeypatch.setattr(probe, "_grant_resources", lambda _grant: resources)
+    grant = SimpleNamespace(request_id="fixture-request", generation=1)
+    if runtime_verdict is True:
+        assert probe.continue_unit(grant) is True
+    else:
+        with pytest.raises(HostResourceRefusal) as stopped:
+            probe.continue_unit(grant)
+        decision = stopped.value.decision
+        assert decision.verdict is runtime_verdict
+        expected_floor = gib if kind == "creation_narration" else 3 * gib
+        assert decision.checks["available_memory_bytes"]["minimum"] == expected_floor
+        if available is None:
+            assert "actual" not in decision.checks["available_memory_bytes"]
+    limits = probe.scene_runtime_limits(grant)
+    assert limits.min_host_available_memory_bytes == gib
+    assert limits.max_process_rss_bytes == 3 * gib // 2
+    assert limits.max_process_threads == 16
+
+
 def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(tmp_path):
     decision = HostResourceDecision(False, {"kind": "material_hash", "size_bytes": 10}, {
         "cpu_percent": {"actual": 76, "maximum": 75, "passed": False},
