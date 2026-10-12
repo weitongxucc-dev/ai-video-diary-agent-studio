@@ -46,13 +46,13 @@ from app.production import (
 )
 
 
-def wav_bytes():
+def wav_bytes(seconds=2):
     output = io.BytesIO()
     with wave.open(output, "wb") as stream:
         stream.setnchannels(1)
         stream.setsampwidth(2)
         stream.setframerate(8000)
-        stream.writeframes(b"\x01\x00" * 16000)
+        stream.writeframes(b"\x01\x00" * round(8000 * seconds))
     return output.getvalue()
 
 

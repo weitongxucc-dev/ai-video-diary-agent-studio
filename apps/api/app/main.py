@@ -10021,15 +10021,39 @@ def preview_creation_task_edit(
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="creation task narration edit target not found") from exc
-        if montage.status != "rendered":
-            raise _topic_failure_response(
-                status_code=409,
-                error="rendered_version_required",
-                reason="当前任务还没有可比较的成片版本。",
-                impact="无法准确展示分段配音修改的失效范围。",
-                repair_action="先渲染当前成片，再修改配音片段。",
-                retryable=True,
-            )
+        prerender = montage.status != "rendered"
+        if prerender:
+            try:
+                if not task.confirmed_script_id or not task.current_timeline_version_id:
+                    raise ValueError("当前任务缺少确认文案或草稿时间线")
+                script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+                current_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+                snapshot_segments = _narration_segments_from_snapshot(current_version.snapshot)
+                snapshot_montage = creation_task_montage_plan_from_payload(current_version.snapshot["montage"])
+                section = next(item for item in script.sections if item.id == segment.source_section_id)
+                if segment.status != "ready" or not segment.audio_reference or not segment.audio_reference.startswith("narration://artifact/"):
+                    raise ValueError("当前配音片段尚未生成有效音频")
+                artifact = production_repo.get_narration_artifact(workspace_id,
+                    segment.audio_reference.removeprefix("narration://artifact/"))
+                if (script.task_id != task.id or script.selection_status != "confirmed"
+                        or segment.script_id != script.id or segment.text != section.content
+                        or (snapshot_segments is not None and segment not in snapshot_segments)
+                        or not segment.duration_seconds or segment.duration_seconds <= 0
+                        or artifact is None or artifact.task_id != task.id or artifact.script_id != script.id
+                        or current_version.task_id != task.id
+                        or snapshot_montage.task_id != task.id or snapshot_montage.script_id != script.id
+                        or montage.script_id != script.id
+                        or not any(cue.narration_segment_id == segment.id for cue in snapshot_montage.cues)
+                        or not any(cue.narration_segment_id == segment.id for cue in montage.cues)):
+                    raise ValueError("所选配音与当前确认文案及草稿版本不一致")
+                original_audio = production_repo.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
+                if not original_audio.is_file() or original_audio.stat().st_size <= 0:
+                    raise ValueError("当前配音产物已不可用")
+            except (KeyError, StopIteration, ValueError, MediaAuthorityError, OSError) as exc:
+                raise _topic_failure_response(status_code=409, error="narration_version_required",
+                    reason=str(exc) or "当前草稿没有所选配音段。", impact="任务内容没有发生变化。",
+                    repair_action="先生成当前确认文案的配音并选择当前草稿中的真实配音段，再重新预览。",
+                    retryable=True) from exc
         invalidated_refs = [
             *( [segment.audio_reference] if segment.audio_reference else [] ),
             *[
@@ -10039,7 +10063,7 @@ def preview_creation_task_edit(
             ],
             *_logical_montage_output_refs(montage),
         ]
-        base_version = _ensure_montage_base_version(workspace_id, task, montage)
+        base_version = current_version if prerender else _ensure_montage_base_version(workspace_id, task, montage)
         now = utc_now()
         intent = production_repo.create_edit_intent(
             EditIntent(
@@ -10083,14 +10107,17 @@ def preview_creation_task_edit(
                         "ref": selected_ref,
                         "label": "当前配音片段",
                         "detail": f"{segment.duration_seconds or 0:.1f} 秒 · {segment.text}",
+                        **({"audio_url": f"/api/creation-tasks/{task.id}/narration/segments/{segment.id}/audio"} if prerender else {}),
                     },
                     "after": {
                         "ref": selected_ref,
                         "label": "重新生成所选片段",
-                        "detail": command,
+                        "detail": (f"{command} · 预计约 {segment.duration_seconds / delivery_tempo:.1f} 秒，以生成后实测为准。"
+                                   if prerender else command),
                     },
                 },
-                external_effects=["确认后会调用一次真实声音模型；不会重做其他配音片段。"],
+                external_effects=["确认后会调用一次真实声音模型；不会重做其他配音片段。",
+                    *(["当前版本尚未渲染，只比较配音与时间影响，没有视频对比。"] if prerender else [])],
                 created_at=now,
                 updated_at=now,
             )
