@@ -30,7 +30,7 @@
 
 - 小型代码修复：目标代码和相邻测试；出现契约疑问时才补读一份领域权威。
 - 新产品能力：`product-requirements.md` 的目标章节；涉及对象状态时补读 `domain-model.md`。
-- 0.11开发：工作包、依赖、技术候选和验收样本读 [`../.project-control/0.11-development-plan.md`](../.project-control/0.11-development-plan.md)；它不表示功能已实现，也不自动授权实施。当前是否可开始工作由活动合同及最新用户指令决定。
+- 0.11开发：工作包、依赖、技术候选和验收样本读 [`../.project-control/0.11-development-plan.md`](../.project-control/0.11-development-plan.md)；Pi 自主编程、工具扩展、细粒度编辑与外部 CLI 方案读其中[第4.2节](../.project-control/0.11-development-plan.md#42-2026-10-12pi-开放能力脚本扩展与外部-agent-接入方案)。计划不表示功能已实现，也不自动授权实施；当前是否可开始工作由活动合同及最新用户指令决定。
 - 下一阶段规划：长期优先级读 [`product-requirements.md`](product-requirements.md#151-制作质量修改效率与复用的优先级)；本轮工作包和剩余项读 [`../.project-control/active-contract.md`](../.project-control/active-contract.md)。后者是短期执行入口，不是第二份产品权威；合同结束删除时同步移除此链接。
 - UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则，并按需查看[当前参考资产入口](../DESIGN.md#510-当前视觉与交互基线)；原型只供构图与交互对照。应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
 - 跨 Web/API/Worker：`system-architecture.md` 的目标边界和直接相关代码，不读全部产品文档。
