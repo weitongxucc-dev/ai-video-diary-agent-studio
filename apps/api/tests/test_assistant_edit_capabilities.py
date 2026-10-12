@@ -119,7 +119,8 @@ def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, 
                      message="检查当前阶段", stage=stage, selected_refs=[], playhead_ms=None, turn_id=f"turn-{stage}")
     tools = envelope(calls[0]["message"])["tool_names"]
     assert expected in tools and excluded not in tools
-    assert "preview_edit" not in tools and "read_clip_candidates" not in tools
+    assert "preview_edit" not in tools
+    assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
 
 
 @pytest.mark.parametrize("scope,tool_scope", [("asset", "material"), ("segment", "task_edit")])
@@ -129,13 +130,20 @@ def test_current_cli_allowlist_has_registered_business_implementations(scope, to
         pytest.skip("Node.js is required to register the shipped TypeScript tools")
     extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
     selection = {"scope": "asset", "assetId": "asset-current"} if scope == "asset" else TOOL_SELECTION
-    script = "const {default:register}=await import(process.argv[1]);const names=[];register({registerTool:tool=>names.push(tool.name)});console.log(JSON.stringify(names));"
+    script = "const {default:register}=await import(process.argv[1]);const names=[];await register({registerTool:tool=>names.push(tool.name)});console.log(JSON.stringify(names));"
+    from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
+    capability = {"schema": CreationTaskExactEditRequest.model_json_schema(), "supported_operations": list(EXACT_EDIT_FIELDS)}
+    modules = sorted((Path.home() / ".nvm/versions/node").glob("*/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js"))
+    if not modules:
+        pytest.skip("Installed Pi is required to declare the codemode tool")
     completed = subprocess.run(
         [node, "--experimental-strip-types", "--input-type=module", "-e", script, extension.as_uri()],
         text=True, capture_output=True, check=True, timeout=10,
         env={**os.environ, "AI_VIDEO_DIARY_AGENT_STAGE": "material" if tool_scope == "material" else "montage",
              "AI_VIDEO_DIARY_AGENT_TASK_ID": "" if tool_scope == "material" else "task-current",
-             "AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION": json.dumps(selection)},
+             "AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION": json.dumps(selection),
+             "AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES": json.dumps(capability),
+             "AI_VIDEO_DIARY_AGENT_PI_MODULE": str(modules[-1])},
     )
     assert set(pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]) <= set(json.loads(completed.stdout))
 

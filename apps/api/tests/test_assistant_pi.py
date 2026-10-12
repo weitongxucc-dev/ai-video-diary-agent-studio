@@ -200,17 +200,17 @@ globalThis.fetch = async (url, init) => {
 const {default: register} = await import(input.extension);
 register({registerTool: tool => tools.set(tool.name, tool)});
 let unreadError;
-try { await tools.get('preview_edit').execute('unread', {command: '水平裁剪到40%'}); }
+try { await tools.get('preview_edit').execute('unread', {}); }
 catch (e) { unreadError = e.message; }
 const unreadPostCount = calls.length;
 await tools.get('read_current_task').execute('read', {});
 let result, error, duplicateError;
 try {
   result = await tools.get('preview_edit').execute('edit', {
-    command: '水平裁剪到0%', context_stage: 'montage', selected_refs: ['clip:clip-1'],
+
   });
 } catch (e) { error = e.message; }
-try { await tools.get('preview_edit').execute('again', {command: '垂直裁剪到60%'}); }
+try { await tools.get('preview_edit').execute('again', {}); }
 catch (e) { duplicateError = e.message; }
 console.log(JSON.stringify({calls, result, error, duplicateError, unreadError, unreadPostCount}));
 """
@@ -285,7 +285,7 @@ let duplicateError;
 try { await tools.get('cancel_creation_execution').execute('again', {}); }
 catch (e) { duplicateError = e.message; }
 let mixedEditError;
-try { await tools.get('preview_edit').execute('edit', {command: '换镜头'}); }
+try { await tools.get('preview_edit').execute('edit', {}); }
 catch (e) { mixedEditError = e.message; }
 const followUpTools = new Map();
 register({registerTool: tool => followUpTools.set(tool.name, tool)});
@@ -611,7 +611,7 @@ def test_pi_events_keep_plan_preview_separate_from_edit_preview():
     assert _last_answer_and_preview(output, "edit_preview") == ("请检查新任务预检。", None)
 
 
-def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, tmp_path):
+def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = tmp_path / "pi"
     fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
@@ -641,17 +641,17 @@ def test_script_turn_uses_task_session_and_only_script_draft_tool(monkeypatch, t
         assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one"})
     assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
     assert commands[0][commands[0].index("--session-id") + 1] != commands[2][commands[2].index("--session-id") + 1]
-    assert commands[0][commands[0].index("--tools") + 1] == "read_current_task,find_knowledge,preview_script_draft,read_preference_memory,update_preference_memory"
+    tools = commands[0][commands[0].index("--tools") + 1].split(",")
+    assert {"read_current_task", "preview_script_draft", "preview_typed_edit", "read_task_object"} <= set(tools)
+    assert "generate_creation_task_topics" not in tools
     _, edit_preview = run_task_turn(settings, workspace_id="workspace-one", task_id="task-one",
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
     assert edit_preview is None
     assert commands[3][commands[3].index("--session-id") + 1] != commands[0][commands[0].index("--session-id") + 1]
-    assert commands[3][commands[3].index("--tools") + 1] == (
-        "read_current_task,find_knowledge,find_materials,preview_edit,"
-        "read_clip_candidates,read_selected_material,suggest_selected_material_tags,update_selected_material_tags,"
-        "read_edit_control_context,preview_edit_selection,discard_edit_proposal,undo_last_edit,redo_last_edit,"
-        "start_creation_execution,resume_creation_execution,cancel_creation_execution,read_preference_memory,update_preference_memory"
-    )
+    edit_tools = set(commands[3][commands[3].index("--tools") + 1].split(","))
+    assert {"preview_typed_edit", "read_task_edit_capabilities", "read_task_object", "start_creation_execution"} <= edit_tools
+    assert "generate_creation_task_topics" not in edit_tools and "preview_script_draft" not in edit_tools
+
 
 
 def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_path):

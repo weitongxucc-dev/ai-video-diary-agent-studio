@@ -94,7 +94,7 @@ def test_task_change_after_read_prevents_material_write(tmp_path):
 def test_preview_exposes_choice_but_no_model_rewrite_of_host_instruction_or_selection(tmp_path):
     out = invoke(tmp_path, [{"tool":"preview_edit"}], instruction="那你把镜头1和镜头2的位置互换一下")
     assert out['results'][0]['ok']
-    assert set(out['preview_parameters']['properties']) == {'replacement_asset_id','replacement_segment_id'}
+    assert out['preview_parameters']['properties'] == {}
     submitted = next(call['body'] for call in out['calls'] if call['path'].endswith('/edits/preview'))
     assert submitted['raw_command'] == "那你把镜头1和镜头2的位置互换一下"
     assert submitted['selected_object_refs'] == ['clip:clip-a']
@@ -119,15 +119,10 @@ def test_task_tag_reply_comes_from_verified_write_not_model_claims(failed):
 
 
 @pytest.mark.parametrize("candidate_read", [True, False])
-def test_replacement_choice_must_be_from_this_turn_candidates(tmp_path, candidate_read):
+def test_legacy_replacement_fields_are_retired_even_with_candidates(tmp_path, candidate_read):
     steps = [{"tool":"read_clip_candidates"}] if candidate_read else []
-    steps += [{"tool":"preview_edit", "params":{"command":"换个镜头", "replacement_asset_id":"asset-b", "replacement_segment_id":"segment-b"}}]
-    out = invoke(tmp_path, steps, instruction="你决定，帮我换一个镜头")
-    assert out["results"][-1]["ok"] is candidate_read
-    submitted = [call["body"] for call in out["calls"] if call["path"].endswith('/edits/preview')]
-    if candidate_read:
-        assert submitted[0]["raw_command"] == "你决定，帮我换一个镜头"
-        assert submitted[0]["replacement_segment_id"] == "segment-b"
-        assert "空镜头" in out["results"][0]["result"]["content"][0]["text"]
-    else:
-        assert submitted == []
+    steps += [{"tool":"preview_edit", "params":{"replacement_asset_id":"asset-b", "replacement_segment_id":"segment-b"}}]
+    out = invoke(tmp_path, steps, instruction="帮我换一个镜头")
+    assert not out["results"][-1]["ok"]
+    assert "preview_typed_edit" in out["results"][-1]["error"]
+    assert not [call for call in out["calls"] if call["path"].endswith('/edits/preview')]

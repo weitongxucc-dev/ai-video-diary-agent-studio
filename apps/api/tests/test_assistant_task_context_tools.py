@@ -125,7 +125,8 @@ def test_real_node_reads_confirmed_script_and_independent_execution_without_gues
     details = output["result"]["details"]
     assert details["stage_status"] == "not_started"
     assert details["execution"]["status"] == status
-    assert details["execution"]["job"] == {"id":"job-real","status":status,"progress":0}
+    assert {key: details["execution"]["job"][key] for key in ("id", "status", "progress")} == {"id":"job-real","status":status,"progress":0}
+    assert details["execution"]["job"]["task_id"] == "task-real"
     assert details["execution"]["waiting_reason"] == waiting_reason
     assert details["execution"]["updated_at"] == execution["status_updated_at"]
     script = details["confirmed_script"]

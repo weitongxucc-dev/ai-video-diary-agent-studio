@@ -79,7 +79,7 @@ def test_media_receipt_is_not_dereferenced_as_a_proposal_or_polled(tmp_path, sta
         "raw_command":"把选中镜头调亮一点", "assistant_turn_id":"trusted-turn",
         "context_stage":"montage", "selected_object_refs":[], "playhead_ms":None,
     }
-    assert set(observed["parameters"]["properties"]) == {"replacement_asset_id","replacement_segment_id"}
+    assert observed["parameters"]["properties"] == {}
 
 
 def test_immediate_200_proposal_keeps_existing_result(tmp_path):
