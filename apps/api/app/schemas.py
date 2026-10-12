@@ -1446,7 +1446,41 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     confirmed: bool | None = None
 
 
+EXACT_EDIT_FIELDS = {
+    "ReplaceClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds"},
+    "TrimClip": {"clip_id", "source_start_seconds"},
+    "ChangeClipSpeed": {"clip_id", "playback_rate"},
+    "ChangeCrop": {"clip_id", "fit_mode", "crop_x", "crop_y"},
+    "SplitClip": {"clip_id", "split_time_seconds"},
+    "ReorderClip": {"clip_id", "position"},
+    "SetClipLock": {"clip_id", "locked"}, "ConfirmClip": {"clip_id"},
+    "DeleteClip": {"clip_id"}, "DuplicateClip": {"clip_id"},
+    "InsertClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds"},
+    "ChangeLinkedSpeed": {"clip_id", "playback_rate"},
+    "ChangeCanvas": {"aspect_ratio", "fit_mode"},
+    "SetClipTransition": {"clip_id", "transition_seconds"},
+    "EditGraphicOverlay": {"overlay_action", "graphic_overlay", "overlay_id"},
+    "UpdateSubtitleCue": {"track_id", "cue_id", "text", "start_seconds", "end_seconds", "line_breaks", "emphasis", "style"},
+    "ReplaceSubtitleText": {"track_id", "find_text", "replacement_text"},
+    "SplitSubtitleCue": {"track_id", "cue_id", "split_offset", "split_time_seconds"},
+    "MergeSubtitleCue": {"track_id", "cue_id"}, "DeleteSubtitleCue": {"track_id", "cue_id"},
+    "ConfigureSubtitleTrack": {"track_id", "style", "subtitle_display", "target_language"},
+    "GenerateCoverFromFrame": {"frame_time_seconds", "title", "title_position"},
+}
+EXACT_MONTAGE_REQUIRED_FIELDS = {
+    "ChangeCrop": {"fit_mode", "crop_x", "crop_y"}, "ReplaceClip": {"asset_id", "segment_id"},
+    "TrimClip": {"source_start_seconds"}, "SplitClip": {"split_time_seconds"},
+    "ChangeClipSpeed": {"playback_rate"}, "ReorderClip": {"position"},
+    "SetClipLock": {"locked"}, "ConfirmClip": set(),
+}
+EXACT_EDIT_ENVELOPE_FIELDS = {"assistant_turn_id", "request_id", "expected_timeline_version_id", "expected_timeline_sequence"}
+
+
 class CreationTaskExactEditRequest(BaseModel):
+    assistant_turn_id: UUID | None = None
+    request_id: UUID | None = None
+    expected_timeline_version_id: str | None = None
+    expected_timeline_sequence: int | None = Field(default=None, ge=0)
     overlay_action: Literal["add","update","delete"] | None = None
     graphic_overlay: TextOverlay | ImageOverlay | ArrowOverlay | None = None
     overlay_id: str | None = None
@@ -1456,7 +1490,7 @@ class CreationTaskExactEditRequest(BaseModel):
     crop_y: float | None = Field(default=None, ge=0, le=1)
     split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     operation_type: Literal[
         "ReplaceClip",
@@ -1510,6 +1544,30 @@ class CreationTaskExactEditRequest(BaseModel):
     source_start_seconds: float | None = Field(default=None, ge=0)
     position: int | None = Field(default=None, ge=0, le=99)
     locked: bool | None = None
+
+    @model_validator(mode="after")
+    def exact_action_fields(self):
+        allowed = EXACT_EDIT_FIELDS.get(self.operation_type)
+        if allowed is not None and self.model_fields_set - allowed - EXACT_EDIT_ENVELOPE_FIELDS - {"operation_type"}:
+            raise ValueError("精确编辑包含与当前动作无关的字段")
+        if self.operation_type == "ConfigureSubtitleTrack":
+            modes = {"style", "subtitle_display", "target_language"} & self.model_fields_set
+            if len(modes) > 1:
+                raise ValueError("字幕样式、显示和翻译是不同动作，不混合提交")
+        return self
+
+
+class CreationTaskEditApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID | None = None
+    expected_base_version_id: str | None = None
+    expected_input_digest: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def replay_identity(self):
+        if self.model_fields_set and self.request_id is None:
+            raise ValueError("应用请求绑定字段需要稳定request_id")
+        return self
 
 
 class CreationTaskTimelineUndoRequest(BaseModel):
@@ -1918,6 +1976,13 @@ class CreationTaskEditQueuedResponse(BaseModel):
     status: Literal["queued"] = "queued"
     job_id: str
     request_id: str
+
+
+class CreationTaskEditJobReplayResponse(BaseModel):
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    job_id: str
+    request_id: str | None
+    failure_reason: str | None = None
 
 
 class CreationPlanPreviewResponse(BaseModel):

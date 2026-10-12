@@ -22,6 +22,8 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ValidationError
 
@@ -164,6 +166,7 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.production import (
+    EXACT_EDIT_SOURCE,
     MaterialVersionConflict,
     ScriptLibraryEntry,
     content_readable,
@@ -320,6 +323,8 @@ from app.schemas import (
     CompoundEditSelectionRequest,
     CreationTaskEditPreviewResponse,
     CreationTaskExactEditRequest,
+    CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse,
+    EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS,
     CreationTaskSubtitleCueUpdateRequest,
     CreationTaskTimelineUndoRequest,
     CreationTaskWorkspaceResponse,
@@ -513,6 +518,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def exact_edit_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.endswith(("/edits/exact/preview", "/edits/exact")):
+        # Invalid NaN/Infinity cannot be echoed into JSON. Keep the actionable
+        # field/type/message rather than turning a rejected edit into a 500.
+        return JSONResponse(status_code=422, content={"detail": [
+            {key: value for key, value in error.items() if key not in {"input", "ctx"}}
+            for error in exc.errors()]})
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.exception_handler(HTTPException)
@@ -3553,6 +3569,126 @@ def _portrait_processor(workspace_id: str) -> LocalPortrait:
 _TASK_MEDIA_HANDLERS = {}
 
 
+def _exact_edit_access(task_id, request, *, write=False):
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    member_id = _assistant_member_id(request, workspace_id)
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="creation task not found")
+    if write and task.owner_user_id and task.owner_user_id != member_id:
+        raise HTTPException(status_code=403, detail="当前成员不能修改此任务")
+    return task, member_id
+
+
+def _prepare_exact_edit_request(task_id, request, payload):
+    envelope = payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS
+    if not envelope:
+        return payload, None  # Existing precise GUI calls keep their protocol.
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    if not {"expected_timeline_version_id", "expected_timeline_sequence"} <= payload.model_fields_set:
+        raise HTTPException(status_code=422, detail="类型化请求须绑定期望时间线版本和序号")
+    if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
+        raise HTTPException(status_code=409, detail="时间线已变化，请重新读取当前任务")
+    source = {"workspace_id": task.workspace_id, "task_id": task_id, "member_id": member_id,
+              "request_id": str(payload.request_id) if payload.request_id else None,
+              "expected_timeline_version_id": payload.expected_timeline_version_id,
+              "expected_timeline_sequence": payload.expected_timeline_sequence}
+    if payload.assistant_turn_id:
+        try:
+            origin = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        snapshot = origin["context"].get("target_snapshot", {})
+        if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
+            raise HTTPException(status_code=409, detail="助手轮次的目标版本已失效")
+        source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin["conversation_id"], raw_command=origin["raw_command"])
+    clean = CreationTaskExactEditRequest.model_validate(payload.model_dump(mode="json", exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS))
+    source["action"] = clean.model_dump(mode="json", exclude_unset=True)
+    source["source_facts"] = _exact_edit_source_facts(task, clean, request)
+    return clean, source
+
+
+def _exact_edit_source_facts(task, payload, request):
+    """Bind the actual authorized material revision without exposing host paths."""
+    if payload.clip_id is None:
+        return []
+    montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
+    clip = next((item for item in montage.clips if item.id == payload.clip_id), None)
+    if clip is None:
+        raise HTTPException(status_code=404, detail="当前任务镜头不存在")
+    pairs = [(clip.asset_id, clip.segment_id)] if not clip.person_render_id else []
+    if payload.asset_id is not None and payload.segment_id is not None:
+        pairs.append((payload.asset_id, payload.segment_id))
+    facts = []
+    for asset_id, segment_id in dict.fromkeys(pairs):
+        try:
+            asset = production_repo.get_asset(task.workspace_id, asset_id)
+            if not _content_visible(request, task.workspace_id, asset.visibility, asset.owner_user_id):
+                raise HTTPException(status_code=403, detail="当前成员不能使用该镜头素材")
+            segment = next(item for item in asset.segments if item.id == segment_id)
+            reference = production_repo.workspace_media_reference_for_asset(task.workspace_id, asset.id)
+            path = production_repo.resolve_clip_media_reference(task.workspace_id, asset.id, reference)
+            stat = path.stat()
+        except (KeyError, StopIteration, OSError, MediaAuthorityError) as exc:
+            raise HTTPException(status_code=409, detail="镜头来源或使用状态已失效") from exc
+        facts.append({"asset_id": asset_id, "segment_id": segment_id, "reference": reference,
+            "modified_at": asset.modified_at.isoformat(), "start_seconds": segment.start_seconds, "end_seconds": segment.end_seconds,
+            "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+            "inode": stat.st_ino, "device": stat.st_dev})
+    return facts
+
+
+def _claim_edit_request(task, member_id, request_id, phase, inputs):
+    identity = media_digest([task.workspace_id, member_id, str(request_id), phase])
+    event_id = f"event_edit_request_{identity}"
+    digest = media_digest([task.id, inputs])
+    with production_repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
+        if row:
+            previous = json.loads(row["payload_json"])
+            if previous["input_digest"] != digest:
+                raise HTTPException(status_code=409, detail="请求身份已绑定不同编辑输入")
+            return event_id, False
+        production_repo.append_task_event(TaskEvent(id=event_id, workspace_id=task.workspace_id,
+            task_id=task.id, job_id=None, event_type="edit_request_claimed",
+            payload={"member_id": member_id, "request_id": str(request_id), "phase": phase,
+                     "input_digest": digest, "inputs": inputs}, created_at=utc_now()), connection=conn)
+    return event_id, True
+
+
+def _save_edit_request_result(task, event_id, result):
+    status = result.status_code if isinstance(result, JSONResponse) else 200
+    content = json.loads(result.body) if isinstance(result, JSONResponse) else result.model_dump(mode="json")
+    production_repo.append_task_event(TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
+        task_id=task.id, job_id=None, event_type="edit_request_result",
+        payload={"status_code": status, "response": content}, created_at=utc_now()))
+
+
+def _read_edit_request_result(task, event_id):
+    try:
+        event = production_repo.get_task_event(task.workspace_id, event_id + "_result")
+    except KeyError:
+        return None
+    return JSONResponse(status_code=event.payload["status_code"], content=event.payload["response"])
+
+
+@app.get("/api/creation-tasks/{task_id}/assistant/edit-requests/{request_id}")
+def get_exact_edit_request_result(task_id: str, request_id: UUID, request: Request, phase: Literal["preview", "apply"] = "preview"):
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    event_id = "event_edit_request_" + media_digest([task.workspace_id, member_id, str(request_id), phase])
+    try:
+        event = production_repo.get_task_event(task.workspace_id, event_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="编辑请求不存在") from exc
+    if event.task_id != task_id:
+        raise HTTPException(status_code=404, detail="编辑请求不存在")
+    result = _read_edit_request_result(task, event_id)
+    return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
+            "status": "recorded" if result else "unknown", "result": json.loads(result.body) if result else None}
+
+
 def _task_media_grant_or_queue(kind="waveform"):
     active = TASK_MEDIA_CONTEXT.get()
     if active is None:
@@ -3578,20 +3714,47 @@ def _task_media_route(operation, result_kind):
             request = bound.arguments["request"]
             if TASK_MEDIA_CONTEXT.get() is not None or _TASK_MEDIA_SUBMISSION.get():
                 return function(*args, **kwargs)
+            typed_source, edit_request_event = None, None
+            if operation == "exact_edit_preview":
+                original = bound.arguments["payload"]
+                # Replays are resolved before comparing against today's version.
+                if original.request_id is not None:
+                    task, member_id = _exact_edit_access(bound.arguments["task_id"], request, write=True)
+                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, "preview", original.model_dump(mode="json", exclude_unset=True))
+                    if not fresh:
+                        result = _read_edit_request_result(task, edit_request_event)
+                        if result is not None:
+                            return result
+                        raise HTTPException(status_code=409, detail="原预览请求结果尚未确定，请查询原请求，不重复执行")
+                try:
+                    bound.arguments["payload"], typed_source = _prepare_exact_edit_request(bound.arguments["task_id"], request, original)
+                except HTTPException as exc:
+                    if edit_request_event:
+                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}))
+                    raise
             if operation == "command_edit_preview":
                 task = _creation_task_or_404(current_workspace_id(request), bound.arguments["task_id"])
                 bound.arguments["payload"] = _bind_assistant_edit_instruction(request, task, bound.arguments["payload"])
             scope = _TASK_MEDIA_SUBMISSION.set(True)
+            source_token = EXACT_EDIT_SOURCE.set(typed_source)
             try:
                 if operation not in {"audio_import", "recording_save"}:
                     # Pure DB proposals and external text requests finish here,
                     # without constructing a device runtime or taking a grant.
-                    return function(*bound.args, **bound.kwargs)
+                    result = function(*bound.args, **bound.kwargs)
+                    if edit_request_event:
+                        _save_edit_request_result(task, edit_request_event, result)
+                    return result
                 raise TaskMediaRequired("upload")
+            except HTTPException as exc:
+                if edit_request_event:
+                    _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}))
+                raise
             except TaskMediaRequired as required:
                 media_kind = required.kind
             finally:
                 _TASK_MEDIA_SUBMISSION.reset(scope)
+                EXACT_EDIT_SOURCE.reset(source_token)
             workspace_id = current_workspace_id(request)
             actor = _require_permit_actor(request, workspace_id)
             task_id = bound.arguments["task_id"]
@@ -3602,6 +3765,8 @@ def _task_media_route(operation, result_kind):
                 raise HTTPException(status_code=503, detail="CPU 音频处理预算尚未标定，未接收媒体作业")
             values = {"_media_kind": media_kind,
                       "_draft": request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")}
+            if typed_source is not None:
+                values["_typed_source"] = typed_source
             created_input = None
             try:
                 for name, value in bound.arguments.items():
@@ -3659,6 +3824,8 @@ def _task_media_route(operation, result_kind):
                         values["payload"]["base_version_id"] = base.id
                 job = media.submit(runtime, actor, task_id, operation, values, result_kind)
                 receipt = _task_media_job_response(media, job, actor, runtime)
+                if edit_request_event:
+                    _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=202, content=receipt))
                 receipt["result"] = None
                 return JSONResponse(status_code=202, content=receipt)
             except Exception as exc:
@@ -3682,6 +3849,12 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     from app.canvas import canvas_size
     from app.member_permits import cpu_render_budget_from_env
     task = production_repo.get_creation_task(workspace_id, task_id)
+    source = arguments.get("_typed_source")
+    if source is not None:
+        version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        if (source["workspace_id"], source["task_id"], source["member_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
+                workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
+            raise ValueError("封存的类型化编辑输入或成员已失效")
     plan_payload = production_repo.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
     plan = creation_task_montage_plan_from_payload(plan_payload) if plan_payload else None
     # Bind the whole current task input, excluding renderer progress fields.
@@ -3915,7 +4088,11 @@ def _execute_task_media_operation(job, event, actor):
                 values[name] = values[name].model_copy(update={"assistant_turn_id": None})
         else:
             values[name] = value
-    result = function(**values)
+    source_token = EXACT_EDIT_SOURCE.set(event["arguments"].get("_typed_source"))
+    try:
+        result = function(**values)
+    finally:
+        EXACT_EDIT_SOURCE.reset(source_token)
     if isinstance(result, BaseModel):
         return result.model_dump(mode="json")
     if isinstance(result, JSONResponse):
@@ -11233,11 +11410,91 @@ def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: 
         "timeline_version_id": task.current_timeline_version_id}
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm",
-    response_model=CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse,
-)
-def confirm_creation_task_edit(
+def _edit_proposal_binding(task_id, proposal_id, request):
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    try:
+        proposal = production_repo.get_edit_proposal(task.workspace_id, proposal_id)
+        intent = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="编辑提案不存在") from exc
+    if proposal.task_id != task_id:
+        raise HTTPException(status_code=404, detail="编辑提案不存在")
+    origin = intent.constraints.get("request_source")
+    if origin is not None and origin["member_id"] != member_id:
+        raise HTTPException(status_code=403, detail="提案不属于当前请求成员")
+    digest = media_digest([task.id, proposal.id, proposal.operation, proposal.target_refs,
+                           origin.get("source_facts") if origin else None])
+    return task, member_id, proposal, digest
+
+
+def _original_edit_result(task, proposal):
+    operations = [item for item in production_repo.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
+    if operations:
+        operation = operations[0]
+        version = production_repo.get_timeline_version(task.workspace_id, operation.result_version_id)
+        montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
+        return CreationTaskEditConfirmResponse(operation=asdict(operation), montage=_creation_task_montage_response(montage), narration=None)
+    with production_repo._connect() as conn:
+        row = conn.execute(
+            "SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id AND e.job_id=j.id "
+            "WHERE j.workspace_id=? AND j.task_id=? AND json_extract(e.payload_json,'$.edit_proposal_id')=? "
+            "ORDER BY j.created_at LIMIT 1", (task.workspace_id, task.id, proposal.id),
+        ).fetchone()
+        if row is None:
+            return None
+        request_row = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_id=? ORDER BY created_at LIMIT 1",
+                                   (task.workspace_id, row["id"])).fetchone()
+    result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["id"],
+        request_id=request_row["id"] if request_row else None, failure_reason=row["failure_reason"])
+    return JSONResponse(status_code=202 if row["status"] in {"queued", "running", "interrupted"} else 200, content=result.model_dump(mode="json"))
+
+
+@app.get("/api/creation-tasks/{task_id}/edits/{proposal_id}/result")
+def get_creation_task_edit_result(task_id: str, proposal_id: str, request: Request):
+    task, _member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
+    result = _original_edit_result(task, proposal)
+    return {"proposal_id": proposal.id, "base_version_id": proposal.operation.get("payload", {}).get("base_version_id"),
+            "input_digest": digest, "status": proposal.status,
+            "result": json.loads(result.body) if isinstance(result, JSONResponse) else result.model_dump(mode="json") if result else None}
+
+
+@app.post("/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm",
+          response_model=CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse | CreationTaskEditJobReplayResponse)
+def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
+                              payload: CreationTaskEditApplyRequest | None = None):
+    if payload is None or payload.request_id is None:
+        try:
+            proposal = production_repo.get_edit_proposal(current_workspace_id(request), proposal_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="creation task edit proposal not found") from exc
+        intent = production_repo.get_edit_intent(proposal.workspace_id, proposal.intent_id)
+        if intent.constraints.get("request_source") is not None:
+            _edit_proposal_binding(task_id, proposal_id, request)
+        return _confirm_creation_task_edit(task_id, proposal_id, request)
+    task, member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
+    base = proposal.operation.get("payload", {}).get("base_version_id")
+    if (("expected_base_version_id" in payload.model_fields_set and payload.expected_base_version_id != base)
+            or (payload.expected_input_digest is not None and payload.expected_input_digest != digest)):
+        raise HTTPException(status_code=409, detail="请求与原提案基础版本或输入摘要不一致")
+    event_id, fresh = _claim_edit_request(task, member_id, payload.request_id, "apply",
+        {"proposal_id": proposal.id, "base_version_id": base, "input_digest": digest,
+         "request": payload.model_dump(mode="json", exclude_unset=True)})
+    previous = _read_edit_request_result(task, event_id)
+    if previous is not None and "job_id" not in json.loads(previous.body):
+        return previous
+    previous = _original_edit_result(task, proposal)
+    if previous is not None:
+        if _read_edit_request_result(task, event_id) is None:
+            _save_edit_request_result(task, event_id, previous)
+        return previous
+    if not fresh:
+        raise HTTPException(status_code=409, detail="原应用请求结果尚未确定，请查询原提案结果，不重复执行")
+    result = _confirm_creation_task_edit(task_id, proposal_id, request)
+    _save_edit_request_result(task, event_id, result)
+    return result
+
+
+def _confirm_creation_task_edit(
     task_id: str,
     proposal_id: str,
     request: Request,
@@ -11250,6 +11507,9 @@ def confirm_creation_task_edit(
         raise HTTPException(status_code=404, detail="creation task edit proposal not found") from exc
     if proposal.task_id != task_id or proposal.status != "proposed":
         raise HTTPException(status_code=409, detail="creation task edit proposal is not confirmable")
+    source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source")
+    if source is not None and source["source_facts"] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source["action"]), request):
+        raise HTTPException(status_code=409, detail="预览后的源文件或片段修订已变化，请重新预览")
     operation_draft = proposal.operation
     operation_payload = operation_draft.get("payload")
     operation_type = operation_draft.get("operation_type")
@@ -12081,6 +12341,38 @@ def confirm_creation_task_edit(
         operation_payload=dict(operation_payload),
         edited_subtitle_tracks=edited_subtitle_tracks,
     )
+
+
+@app.get("/api/creation-tasks/{task_id}/assistant/edit-capabilities")
+def get_creation_task_edit_capabilities(task_id: str, request: Request):
+    task, _member_id = _exact_edit_access(task_id, request)
+    payload = production_repo.get_creation_task_montage_plan(task.workspace_id, task.id) if task.montage_plan_id else None
+    clips = payload.get("clips", []) if payload else []
+    tracks = production_repo.list_subtitle_tracks(task.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if task.current_timeline_version_id else []
+    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    operations = []
+    for operation, fields in EXACT_EDIT_FIELDS.items():
+        reason = None
+        if payload is None:
+            reason = "当前任务没有故事板"
+        elif version is None:
+            reason = "先保留当前故事板并建立可撤销版本"
+        elif "clip_id" in fields and not clips:
+            reason = "当前任务没有可编辑镜头"
+        elif operation in {"UpdateSubtitleCue", "ReplaceSubtitleText", "SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue", "ConfigureSubtitleTrack"} and not tracks:
+            reason = "当前版本没有字幕轨"
+        operations.append({"operation_type": operation, "available": reason is None, "reason": reason,
+            "parameter_fields": sorted(fields), "required_fields": sorted(EXACT_MONTAGE_REQUIRED_FIELDS.get(operation, set()) | ({"clip_id"} if "clip_id" in fields else set())),
+            "requires_target_validation": True})
+    return {"task_id": task.id, "timeline_version_id": task.current_timeline_version_id,
+        "timeline_sequence": version.sequence if version else 0,
+        "schema": CreationTaskExactEditRequest.model_json_schema(),
+        "supported_operations": list(EXACT_EDIT_FIELDS), "operations": operations,
+        "units": {"source_start_seconds": "源片段起点，秒；TrimClip 保留镜头时长与旁白",
+                  "start_seconds": "时间轴秒", "end_seconds": "时间轴秒", "split_time_seconds": "时间轴秒",
+                  "playback_rate": "有限无单位倍率，0.25–4；ChangeClipSpeed 保留镜头总时长、旁白和字幕",
+                  "crop_x": "0–1，裁剪窗口水平位置", "crop_y": "0–1，裁剪窗口垂直位置"},
+        "preview_modes": {"draft": "只生成参数差异，不生成媒体", "media": "需现有设备许可和标定预算，返回实际预览或异步作业"}}
 
 
 @app.post(
@@ -13126,17 +13418,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         "position": payload.position,
         "locked": payload.locked,
     }
-    required_by_type = {
-        "ChangeCrop": {"fit_mode", "crop_x", "crop_y"},
-        "ReplaceClip": {"asset_id", "segment_id"},
-        "TrimClip": {"source_start_seconds"},
-        "SplitClip": {"split_time_seconds"},
-        "ChangeClipSpeed": {"playback_rate"},
-        "ReorderClip": {"position"},
-        "SetClipLock": {"locked"},
-        "ConfirmClip": set(),
-    }
-    required = required_by_type[payload.operation_type]
+    required = EXACT_MONTAGE_REQUIRED_FIELDS[payload.operation_type]
     if any(supplied[key] is None for key in required):
         raise HTTPException(status_code=422, detail="exact edit is missing required values")
     permitted = required | (

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import wave
 from contextlib import closing, nullcontext
+from contextvars import ContextVar
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
     from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
 logger = logging.getLogger(__name__)
+EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)
 
 AssetReviewStatus = Literal["raw", "approved", "rejected"]
 ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
@@ -7592,6 +7594,12 @@ class ProductionRepository:
         return [self._cover_asset_from_row(row) for row in rows]
 
     def create_edit_intent(self, intent: EditIntent) -> EditIntent:
+        source = EXACT_EDIT_SOURCE.get()
+        if source is not None:
+            if (source["workspace_id"], source["task_id"]) != (intent.workspace_id, intent.task_id):
+                raise ValueError("类型化编辑来源不属于当前任务")
+            intent = replace(intent, raw_command=source.get("raw_command") or intent.raw_command,
+                             constraints={**intent.constraints, "request_source": source})
         _validate_edit_intent(intent)
         with self._connect() as conn:
             self._require_creation_task(conn, intent.workspace_id, intent.task_id)

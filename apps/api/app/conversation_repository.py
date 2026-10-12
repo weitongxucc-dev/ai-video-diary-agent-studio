@@ -468,6 +468,20 @@ class ConversationRepository:
             ).fetchone()
         return json.loads(row["request_context_json"]) if row else None
 
+    def task_turn_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict:
+        """Read the consumed, trusted task snapshot for an active tool call."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT t.user_message,t.status,r.request_context_json,t.conversation_id "
+                "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "WHERE t.id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (turn_id, workspace_id, member_id),
+            ).fetchone()
+        context = json.loads(row["request_context_json"]) if row else {}
+        if row is None or row["status"] != "running" or context.get("kind") != "task" or context.get("task_id") != task_id:
+            raise ValueError("类型化编辑不属于当前有效助手轮次")
+        return {"context": context, "raw_command": row["user_message"], "conversation_id": row["conversation_id"]}
+
     def get_turn(self, turn_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
