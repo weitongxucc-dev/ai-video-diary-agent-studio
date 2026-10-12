@@ -4,9 +4,13 @@
 
 用户最新明确授权按[0.11计划 §4.2](0.11-development-plan.md#42-2026-10-12pi-开放能力脚本扩展与外部-agent-接入方案)实施 Pi 接入改造，开发阶段同步教学线程并及时提交 GitHub。本绑定接续此前只读审阅；下方历史包不恢复写 lease。owner=/Volumes/Dujiangyan-VM/AI视频日记/repositories/desktop-v32；branch=codex/desktop-v32-20261010；起点16670415e41e2a4cac9ea10acec76d76d9b56153，包含已保存方案c823d3c及main的手机整合5968e9b。原original脏树与运行中的用户实例保留。
 
+用户随后因Linear容量限制选择GitHub Issues；本批总任务为[ #117](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/117)，PI-01–06对应#118–#123。Issue维护动态状态/阻断/候选与实证，不与仓库重复写进度；该管理入口变更不改变已绑定的产品接口、文件Owner或执行许可。
+
 root独占共享权威、合同、集成验证及Git保存，不写产品代码。当前第一波以“换第二镜头并保留旁白”贯通读取、类型化提案、实际预览、应用、新版本与撤销；随后依次闭合编排、事件接续、CLI、隔离媒体脚本及工具复用。中间派工或检查点不是再次征询继续的节点。稳定规则绑定架构§3.8/3.12/3.13、领域§7、产品§2.3及认证文件边界；实施线程先完成语义REBASE_ACK。
 
-文件所有权：API实施线程01a12a6c-9159-70f3-aec3-10e7919a207b独占main.py、schemas.py、production.py、conversation_repository.py及直接API/Repository测试；Pi实施线程01a12a7e-52a9-7241-a0af-db4ef06b91ff独占assistant_pi.py、agent_tools及直接宿主/工具测试；独立线程01a12ab8-212b-77e0-b261-11ff92e05fc8当前仅做脚本/codemode隔离与随包运行时只读选型，无产品写lease。Web types/API/UI、媒体执行/worker、CLI入口的后续写权按已批准方案由root在相应接口稳定后逐包绑定，不与上述writer同写。教学线程01a13039-45e5-76d0-8fbb-8ff3c02b0e6f只读授课，不参与产品写入；不派内部子代理。
+文件所有权：API实施线程01a12a6c-9159-70f3-aec3-10e7919a207b独占main.py、schemas.py、production.py、conversation_repository.py及直接API/Repository测试；Pi实施线程01a12a7e-52a9-7241-a0af-db4ef06b91ff独占assistant_pi.py、agent_tools及直接宿主/工具测试；脚本线程01a12ab8-212b-77e0-b261-11ff92e05fc8独占新增media_script.py、确需的model_workers/media_script_worker.py与test_media_script.py/test_media_script_isolation.py，交付供既有业务Owner调用的叶模块及真实短隔离机制检查，不跨写任务、资源、中央API或共享文档。Web types/API/UI、任务媒体执行/资源策略、CLI入口的后续写权按已批准方案由root在相应接口稳定后逐包绑定，不与上述writer同写。教学线程01a13039-45e5-76d0-8fbb-8ff3c02b0e6f只读授课，不参与产品写入；不派内部子代理。
+
+PI-02代码编排采用installed Pi 1.1公开createCodemodeExtension的models:false选项，保留可信扩展加载与业务子调用，禁模型直连及整机builtin Bash。PI-05当前macOS首包选择Seatbelt单进程Python/Pillow候选：可信Python -I -B -S bootstrap在任何模型代码执行前一次sandbox_init安装完整deny-default/no-exec/no-fork/no-network策略，失败退出，不退回外层sandbox-exec精确Python reexec放行；PID/session-leader及grant身份保持。可信FFmpeg仍由已有业务执行入口处理。Seatbelt接口及sandbox-exec已弃用，实证只覆盖当前平台候选，不宣称跨平台/签名分发；实际边界与随包运行时缺口明示。输出限固定literal文件，首包不开放模型可写tmp；真实必要scratch及目录quota必须由Owner验证，RLIMIT_FSIZE不作为总目录quota。允许自造canary、极小图像与本机测试监听器的低负载隔离检查，不触私库/凭据；现有资源档未知时生产函数明确不可执行，先回报精确集成接口，不冒用旧FFmpeg预算。
 
 第一波接口：新增当前任务编辑能力读取，返回来自CreationTaskExactEditRequest的真实schema、预览可执行动作与前置/原因；Pi可按需读取细粒度任务对象和作业结果。类型化预览复用/api/creation-tasks/{task_id}/edits/exact/preview，来源/基础版本由可信入口绑定并执行前重新校验；模型参数不覆盖原句、成员/空间或当前目标快照。提案应用沿现有confirm入口补稳定请求重放与真实结果查询。精确GUI既有调用保持，原句入口作为同一领域动作的消费者，不再是Pi唯一动作表达。Pi工具侧消费共同schema，读取/预览工具可跨阶段发现；已确认文案/应用决定与生成动作仍沿既有对象规则，不从代码编排推断授权。
 
