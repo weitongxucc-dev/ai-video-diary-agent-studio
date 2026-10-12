@@ -113,6 +113,20 @@ function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "
 }
 
 describe("persisted business result cards", () => {
+  it("shows a real succeeded PNG source without presenting it as an applied edit or finished video", () => {
+    const saved = projectedTaskConversation("queued");
+    const result = saved.turns[0].result!;
+    result.response = {...result.response as Record<string, unknown>, media_job: {
+      job_id: "script-job", status: "succeeded", result_kind: "graphic_source", base_version_id: "version-base",
+      result: {source_ref: "artifact:graphic-actual", artifact_id: "graphic-actual", sha256: "a".repeat(64),
+        size_bytes: 156, name: "panel.png", width: 64, height: 64, applied: false}, failure_reason: null,
+      waiting_reason: null, repair_action: null}};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} onOpenEditProposal={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText(/图片来源已生成，可以继续预览它在视频里的效果/)).toBeVisible();
+    expect(screen.getByText(/尚未应用到草稿或生成成片/)).toBeVisible();
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+  });
   it("opens the actionable proposal from the same freshly read turn", async () => {
     const saved = projectedTaskConversation("proposed");
     const open = vi.fn(), refresh = vi.fn().mockResolvedValue(saved);

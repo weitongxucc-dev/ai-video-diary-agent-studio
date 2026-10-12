@@ -188,8 +188,11 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const outcomeStatus = continuation?.status ?? job?.status;
   const unknownRequest = assistantTurnHasUnknownRequest(turn);
   const pendingResult = assistantTurnNeedsResultRefresh(turn);
+  const graphicSourceReady = job?.result_kind === "graphic_source" && job.status === "succeeded"
+    && job.result && "source_ref" in job.result && "artifact_id" in job.result;
   const businessSummary = taskResult ? unknownRequest
     ? "请求结果尚未核实；原请求定位已保留。先查询结果，不重复提交。"
+    : graphicSourceReady ? "图片来源已生成，可以继续预览它在视频里的效果；尚未应用到草稿或生成成片。"
     : outcomeStatus === "confirmed"
       ? continuation?.result_version_id ? "修改已应用并保存到草稿，可撤销；成片尚未重新生成。" : "已收到采用决定，保存结果仍待核实。"
       : outcomeStatus === "rejected" ? "修改方案已放弃，当前草稿保持不变。"
