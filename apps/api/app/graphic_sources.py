@@ -40,6 +40,8 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
         running=repository.claim_job_run(workspace_id,job.id)
         try:
             published=store.publish_file(f'artifacts/{task_id}/{job.id}/source.png',path)
+            file_stat=store.resolve_file(published.logical_ref).stat()
+            parameters['file_revision']={'size_bytes':file_stat.st_size,'mtime_ns':file_stat.st_mtime_ns,'ctime_ns':file_stat.st_ctime_ns}
             record=repository.create_artifact_record(ArtifactRecord(id=f'artifact_{identity}',workspace_id=workspace_id,task_id=task_id,
                 kind='graphic_source',logical_ref=published.logical_ref,sha256=published.sha256,size_bytes=published.size_bytes,
                 producer_job_id=job.id,input_refs=[]))
@@ -54,11 +56,31 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
             raise
 
 
-def graphic_sources(repository,workspace_id,task_id):
+def _successful_graphic_transform(repository,workspace_id,task_id,record):
+    job=repository.get_job_run(workspace_id,record.producer_job_id)
+    if job.task_id!=task_id or job.status!='succeeded' or record.logical_ref not in job.output_refs:
+        raise ValueError('图片生产作业尚未成功，不作为可编辑来源')
+    transform=next((item for item in repository.list_transform_runs(workspace_id,task_id)
+        if item.job_id==job.id and item.status=='succeeded' and item.transform_type in {'graphic_import','media_script'}
+        and record.logical_ref in item.output_refs),None)
+    if transform is None:
+        raise ValueError('图片缺少成功来源记录')
+    return transform
+
+
+def graphic_sources(repository,workspace_id,task_id,store=None):
     records={record.logical_ref:record for record in repository.list_artifact_records(workspace_id,task_id) if record.kind=='graphic_source'}
-    return [{'source_ref':ref,'artifact_id':records[ref].id,**{key:transform.parameters[key] for key in ('name','width','height')}}
-        for transform in repository.list_transform_runs(workspace_id,task_id) if transform.transform_type=='graphic_import' and transform.status=='succeeded'
-        for ref in transform.output_refs if ref in records]
+    sources=[]
+    for ref,record in records.items():
+        try:
+            transform=_successful_graphic_transform(repository,workspace_id,task_id,record)
+            if store is not None:
+                resolve_graphic_source(repository,store,workspace_id,task_id,ref)
+        except (KeyError,ValueError,FileNotFoundError):
+            continue
+        sources.append({'source_ref':ref,'artifact_id':record.id,'sha256':record.sha256,'size_bytes':record.size_bytes,
+            **{key:transform.parameters[key] for key in ('name','width','height')}})
+    return sources
 
 
 def resolve_graphic_source(repository,store,workspace_id,task_id,reference):
@@ -66,4 +88,13 @@ def resolve_graphic_source(repository,store,workspace_id,task_id,reference):
         if item.kind=='graphic_source' and item.logical_ref==reference),None)
     if record is None:
         raise ValueError('图片不是当前任务导入的来源，请重新导入或选择当前图片')
-    return store.resolve_file(record.logical_ref)
+    transform=_successful_graphic_transform(repository,workspace_id,task_id,record)
+    path=store.resolve_file(record.logical_ref)
+    file_stat=path.stat()
+    expected=transform.parameters.get('file_revision')
+    actual={'size_bytes':file_stat.st_size,'mtime_ns':file_stat.st_mtime_ns,'ctime_ns':file_stat.st_ctime_ns}
+    if path.is_symlink() or file_stat.st_size!=record.size_bytes or (expected is not None and actual!=expected):
+        raise ValueError('登记图片文件修订已变化')
+    if transform.transform_type=='media_script' and expected is None:
+        raise ValueError('脚本图片缺少实测文件修订')
+    return path

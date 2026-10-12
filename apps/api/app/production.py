@@ -6622,8 +6622,8 @@ class ProductionRepository:
             ).fetchall()
         return [self._job_run_from_row(row) for row in rows]
 
-    def claim_job_run(self, workspace_id: str, job_id: str) -> JobRun:
-        with self._connect() as conn:
+    def claim_job_run(self, workspace_id: str, job_id: str, *, connection: sqlite3.Connection | None = None) -> JobRun:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT * FROM job_runs WHERE workspace_id = ? AND id = ?",
                 (workspace_id, job_id),
@@ -6653,7 +6653,8 @@ class ProductionRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("任务运行记录已被其他执行者领取")
-        return self.get_job_run(workspace_id, job_id)
+            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
+            return self._job_run_from_row(row)
 
     def update_job_run_progress(
         self, workspace_id: str, job_id: str, progress: int
@@ -6693,6 +6694,7 @@ class ProductionRepository:
         failure_reason: str | None = None,
         impact: str | None = None,
         repair_action: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> JobRun:
         if status != "succeeded" and not all(
             value is not None and value.strip()
@@ -6702,7 +6704,7 @@ class ProductionRepository:
         refs = output_refs or []
         for reference in refs:
             _validate_logical_reference(reference, "产物输出引用")
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT status, task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
                 (workspace_id, job_id),
@@ -6755,7 +6757,8 @@ class ProductionRepository:
             ).rowcount
             if changed != 1:
                 raise ValueError("任务运行记录已被其他执行者结束")
-        return self.get_job_run(workspace_id, job_id)
+            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
+            return self._job_run_from_row(row)
 
     def interrupt_running_job_runs(self, workspace_id: str | None = None) -> int:
         now = utc_now().isoformat()
@@ -6777,9 +6780,9 @@ class ProductionRepository:
                 parameters,
             ).rowcount
 
-    def create_artifact_record(self, artifact: ArtifactRecord) -> ArtifactRecord:
+    def create_artifact_record(self, artifact: ArtifactRecord, *, connection: sqlite3.Connection | None = None) -> ArtifactRecord:
         _validate_artifact_record(artifact)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, artifact.workspace_id, artifact.task_id)
             job = conn.execute(
                 """
@@ -6830,7 +6833,8 @@ class ProductionRepository:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError("产物记录或逻辑引用已存在") from exc
-        return self.get_artifact_record(artifact.workspace_id, artifact.id)
+            row = conn.execute("SELECT * FROM artifact_records WHERE workspace_id=? AND id=?", (artifact.workspace_id, artifact.id)).fetchone()
+            return self._artifact_record_from_row(row)
 
     def get_artifact_record(
         self, workspace_id: str, artifact_id: str
@@ -6933,9 +6937,9 @@ class ProductionRepository:
             ).fetchall()
         return [self._task_event_from_row(row) for row in rows]
 
-    def create_transform_run(self, run: TransformRun) -> TransformRun:
+    def create_transform_run(self, run: TransformRun, *, connection: sqlite3.Connection | None = None) -> TransformRun:
         _validate_transform_run(run)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, run.workspace_id, run.task_id)
             job = conn.execute(
                 """
@@ -7004,7 +7008,8 @@ class ProductionRepository:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError("变换运行记录 ID 已存在") from exc
-        return self.get_transform_run(run.workspace_id, run.id)
+            row = conn.execute("SELECT * FROM transform_runs WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
+            return self._transform_run_from_row(row)
 
     def get_transform_run(self, workspace_id: str, transform_id: str) -> TransformRun:
         with self._connect() as conn:

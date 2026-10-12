@@ -1878,7 +1878,7 @@ class TaskMediaJobResponse(BaseModel):
     created_at: datetime
     job_id: str
     status: Literal["queued", "running", "interrupted", "succeeded", "failed", "cancelled", "stale"]
-    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform"]
+    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform", "graphic_source"]
     result_url: str
     device_request_id: str | None = None
     waiting_reason: str | None = None
@@ -1888,11 +1888,52 @@ class TaskMediaJobResponse(BaseModel):
     repair_action: str | None = None
 
 
+class MediaScriptInputReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+\.png$")
+    source_ref: str = Field(min_length=1, max_length=300)
+    expected_artifact_id: str = Field(min_length=1, max_length=120)
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MediaScriptPngOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+\.png$")
+    max_bytes: int = Field(gt=0, strict=True)
+    width: int = Field(gt=0, strict=True, description="PNG输出宽度上限，像素")
+    height: int = Field(gt=0, strict=True, description="PNG输出高度上限，像素")
+
+
+class MediaScriptPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    request_id: UUID
+    assistant_turn_id: UUID | None = None
+    expected_timeline_version_id: str | None
+    expected_timeline_sequence: int = Field(ge=0, strict=True)
+    script_source: str = Field(min_length=1, max_length=65536)
+    language: Literal["python"] = "python"
+    purpose: Literal["preview"] = "preview"
+    parameters: dict[str, object] = Field(default_factory=dict)
+    input_refs: list[MediaScriptInputReference] = Field(default_factory=list, max_length=8)
+    requested_outputs: list[MediaScriptPngOutput] = Field(min_length=1, max_length=1)
+
+    @model_validator(mode="after")
+    def finite_parameters(self):
+        import json
+        try:
+            encoded = json.dumps(self.parameters, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("脚本参数须为有限JSON值") from exc
+        if len(encoded.encode("utf-8")) > 65536:
+            raise ValueError("脚本参数超过有界大小")
+        return self
+
+
 class AssistantEditRequestLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: str = Field(min_length=1, max_length=120)
     request_id: UUID
-    phase: Literal["preview"] = "preview"
+    phase: Literal["preview", "script"] = "preview"
     status: Literal["recorded", "unknown", "rejected", "not_submitted"]
     query_url: str
     input_digest: str | None = None
