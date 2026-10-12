@@ -1978,7 +1978,21 @@ class AssistantEditRequestLocator(BaseModel):
     result: dict[str, object] | None = None
 
 
+class AssistantScriptToolReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["save", "query", "update", "revoke"]
+    status: Literal["recorded", "unknown", "rejected", "not_submitted"]
+    request_id: UUID | None = None
+    tool_id: str | None = None
+    tool_version: int | None = None
+    expected_version: int | None = Field(default=None, ge=1, strict=True)
+    query_url: str
+    submitted_input: dict[str, object] | None = None
+    tool: dict[str, object] | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    script_tool: AssistantScriptToolReceipt | None = None
     edit_request: AssistantEditRequestLocator | None = None
     media_job: TaskMediaJobResponse | None = None
     reply: str
