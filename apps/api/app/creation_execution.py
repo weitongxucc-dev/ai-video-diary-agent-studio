@@ -458,7 +458,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             raise ValueError("当前镜头源文件不可用")
         sources.append(source)
     source_facts = []
-    for path in sources:
+    for path in dict.fromkeys(sources):
         stat = path.stat()
         if stat.st_size <= 0:
             raise ValueError("渲染源文件为空")

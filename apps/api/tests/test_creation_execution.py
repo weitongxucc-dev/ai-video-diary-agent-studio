@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -206,6 +207,50 @@ def _render_version_fixture(tmp_path):
     persisted_plan = repo.get_creation_plan("local", plan.id)
     return (repo, task_id, script_id, revision_digest(persisted_script, persisted_plan),
             actor, execution, owner, scheduler, version, members)
+
+
+def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path, monkeypatch):
+    repo, task_id, _, _, _, _, owner, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        montage = repo.get_creation_task_montage_plan("local", task_id)
+        clip = montage["clips"][0]
+        montage["clips"] = [
+            {**clip, "id": f"clip_{index}", "timeline_start_seconds": index,
+             "timeline_end_seconds": index + 1}
+            for index in range(21)
+        ]
+        montage["duration_seconds"] = 21
+        repo.save_creation_task_montage_plan("local", task_id, "montage_1", montage)
+        repo.create_timeline_version(replace(
+            base, id="timeline_repeated_source", parent_version_id=base.id, sequence=2,
+            snapshot={"montage": montage}))
+        task = repo.get_creation_task("local", task_id)
+        plan = repo.get_creation_plan("local", task.plan_id)
+        manifests = []
+        original_dumps = json.dumps
+
+        def capture_manifest(value, *args, **kwargs):
+            if isinstance(value, dict) and "sources" in value and "plan" in value:
+                manifests.append(value)
+            return original_dumps(value, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(json, "dumps", capture_manifest)
+            with repo._connect() as conn:
+                unit_key, resources = owner.render_facts(conn, task, plan)
+        manifest, = manifests
+        audio = tmp_path / "library/audio.wav"
+        video = tmp_path / "library/source.mp4"
+        assert [fact["path"] for fact in manifest["sources"]] == [str(audio), str(video)]
+        assert resources["input_bytes"] == audio.stat().st_size + video.stat().st_size
+        assert resources["clip_count"] == len(manifest["plan"]["clips"]) == 21
+        assert manifest["plan"]["clips"] == montage["clips"]
+        legacy_manifest = {**manifest, "sources": [manifest["sources"][0]] + [manifest["sources"][1]] * 21}
+        legacy_digest = hashlib.sha256(original_dumps(
+            legacy_manifest, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        assert unit_key != f"render:{legacy_digest}"
+    finally:
+        scheduler.close()
 
 
 @pytest.mark.parametrize("mutation", ["version", "source", "revoked"])
