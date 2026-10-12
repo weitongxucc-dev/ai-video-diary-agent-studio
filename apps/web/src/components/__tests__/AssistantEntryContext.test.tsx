@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   sendWorkspace: vi.fn(), sendTask: vi.fn(), sendMaterial: vi.fn(),
 }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
-vi.mock("@/components/useAssistantConversation", () => ({ useAssistantConversation: mocks.useConversation }));
+vi.mock("@/components/useAssistantConversation", async importOriginal => ({
+  ...await importOriginal<typeof import("../useAssistantConversation")>(),
+  useAssistantConversation: mocks.useConversation,
+}));
 vi.mock("@/lib/api", () => ({
   getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "fixture", model: "fixture" } } }),
   getAssistantCapabilities: vi.fn().mockRejectedValue(new Error("controlled fixture")),

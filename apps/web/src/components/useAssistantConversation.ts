@@ -16,9 +16,34 @@ import type {
   AssistantConversationScope,
   AssistantConversationTurn,
   AssistantStreamEvent,
+  AssistantTaskTurnResult,
 } from "@/lib/types";
 
 import { AssistantConversationContext } from "./AssistantConversationContext";
+
+export function assistantTaskTurnResult(turn: AssistantConversationTurn) {
+  return turn.result?.kind === "task_turn" ? turn.result as AssistantTaskTurnResult : null;
+}
+
+const settledBusinessStatuses = new Set(["confirmed", "rejected", "cancelled", "failed", "stale", "stopped", "expired"]);
+
+export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {
+  const result = assistantTaskTurnResult(turn);
+  if (result?.continuation && settledBusinessStatuses.has(result.continuation.status)) return false;
+  return result?.continuation?.status === "unknown" || result?.response?.edit_request?.status === "unknown";
+}
+
+export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn) {
+  if (turn.status === "stopped") return false;
+  const result = assistantTaskTurnResult(turn);
+  if (!result) return false;
+  const continuation = result.continuation;
+  if (continuation && settledBusinessStatuses.has(continuation.status)) return false;
+  const response = result.response;
+  return assistantTurnHasUnknownRequest(turn) || continuation?.actionable === true
+    || Boolean(response?.media_job && ["queued", "running"].includes(response.media_job.status))
+    || (!continuation && response?.edit_preview?.proposal.status === "proposed");
+}
 
 function localTurn(message: string): AssistantConversationTurn {
   const now = new Date().toISOString();
@@ -62,6 +87,10 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const revision = useRef(0);
   const loadedScope = useRef<string | null>(null);
   const streamRevision = useRef(0);
+  const readRevision = useRef(0);
+  const loadEpoch = useRef(0);
+  const activeReads = useRef({ epoch: 0, count: 0 });
+  const [businessRefreshPaused, setBusinessRefreshPaused] = useState(false);
   const navigationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const navigationRevision = useRef(0);
   const renameRevision = useRef(0);
@@ -196,52 +225,63 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const refresh = useCallback(async () => {
     const current = conversationRef.current;
     if (!current) return null;
+    const read = ++readRevision.current;
+    const epoch = loadEpoch.current;
     const observedStreamRevision = streamRevision.current;
     const observedRevision = revision.current;
     const observedDraftRevision = draftRevisionFor(draftRevisionByConversation.current, current.id);
     const hasUnpersistedDraft = draftValue.current !== current.draft_text;
-    const fresh = await getAssistantConversation(current.id);
-    if (activeScopeKey.current === scopeKey
-      && conversationRef.current?.id === fresh.id && matchesScope(fresh)
-      && streamRevision.current === observedStreamRevision) {
-      const latestLocal = conversationRef.current;
-      const freshTurnIds = new Set(fresh.turns.map((turn) => turn.id));
-      const localPendingTurns = latestLocal?.turns.filter((turn) => {
-        return turn.id.startsWith("pending-") && !freshTurnIds.has(turn.id);
-      }) ?? [];
-      const preserveDraft = hasUnpersistedDraft || revision.current !== observedRevision
-        || draftRevisionFor(draftRevisionByConversation.current, fresh.id) !== observedDraftRevision
-        || fresh.draft_version < (draftVersionByConversation.current.get(fresh.id) ?? 0);
-      const knownDraftVersion = Math.max(
-        fresh.draft_version,
-        draftVersionByConversation.current.get(fresh.id) ?? 0,
-        latestLocal?.draft_version ?? 0,
-      );
-      draftVersionByConversation.current.set(fresh.id, knownDraftVersion);
-      const currentConversation = {
-        ...fresh,
-        draft_text: fresh.draft_version < knownDraftVersion
-          ? latestLocal?.draft_text ?? fresh.draft_text : fresh.draft_text,
-        draft_version: knownDraftVersion,
-        turns: localPendingTurns.length ? [...fresh.turns, ...localPendingTurns] : fresh.turns,
-      };
-      replace(currentConversation);
-      if (!preserveDraft && draftValue.current !== fresh.draft_text) {
-        advanceDraftRevision(draftRevisionByConversation.current, fresh.id);
-        revision.current += 1;
-        draftValue.current = fresh.draft_text;
-        setDraftTextState(fresh.draft_text);
+    if (activeReads.current.epoch !== epoch) activeReads.current = {epoch, count: 0};
+    const reads = activeReads.current;
+    reads.count += 1;
+    try {
+      const fresh = await getAssistantConversation(current.id);
+      if (activeScopeKey.current === scopeKey
+        && readRevision.current === read && loadEpoch.current === epoch
+        && conversationRef.current?.id === fresh.id && matchesScope(fresh)
+        && streamRevision.current === observedStreamRevision) {
+        const latestLocal = conversationRef.current;
+        const freshTurnIds = new Set(fresh.turns.map((turn) => turn.id));
+        const localPendingTurns = latestLocal?.turns.filter((turn) => {
+          return turn.id.startsWith("pending-") && !freshTurnIds.has(turn.id);
+        }) ?? [];
+        const preserveDraft = hasUnpersistedDraft || revision.current !== observedRevision
+          || draftRevisionFor(draftRevisionByConversation.current, fresh.id) !== observedDraftRevision
+          || fresh.draft_version < (draftVersionByConversation.current.get(fresh.id) ?? 0);
+        const knownDraftVersion = Math.max(
+          fresh.draft_version,
+          draftVersionByConversation.current.get(fresh.id) ?? 0,
+          latestLocal?.draft_version ?? 0,
+        );
+        draftVersionByConversation.current.set(fresh.id, knownDraftVersion);
+        const currentConversation = {
+          ...fresh,
+          draft_text: fresh.draft_version < knownDraftVersion
+            ? latestLocal?.draft_text ?? fresh.draft_text : fresh.draft_text,
+          draft_version: knownDraftVersion,
+          turns: localPendingTurns.length ? [...fresh.turns, ...localPendingTurns] : fresh.turns,
+        };
+        replace(currentConversation);
+        if (!preserveDraft && draftValue.current !== fresh.draft_text) {
+          advanceDraftRevision(draftRevisionByConversation.current, fresh.id);
+          revision.current += 1;
+          draftValue.current = fresh.draft_text;
+          setDraftTextState(fresh.draft_text);
+        }
+        for (const turn of fresh.turns) {
+          if ((turn.status === "failed" || turn.status === "stopped")
+            && assistantTaskTurnResult(turn)?.response?.edit_request?.status !== "unknown") restoreSubmittedDraft(fresh.id, turn.id);
+        }
+        setConversations((items) => [currentConversation, ...items.filter((item) => item.id !== currentConversation.id)]
+          .sort((left, right) => right.updated_at.localeCompare(left.updated_at)));
+        return fresh;
       }
-      for (const turn of fresh.turns) {
-        if (turn.status === "failed" || turn.status === "stopped") restoreSubmittedDraft(fresh.id, turn.id);
-      }
-      setConversations((items) => [currentConversation, ...items.filter((item) => item.id !== currentConversation.id)]
-        .sort((left, right) => right.updated_at.localeCompare(left.updated_at)));
-    }
-    return fresh;
+      return null;
+    } finally { reads.count -= 1; }
   }, [replace, matchesScope, restoreSubmittedDraft, scopeKey]);
 
   useEffect(() => {
+    loadEpoch.current += 1;
     activeScopeKey.current = scopeKey;
     let active = true;
     if (loadedScope.current !== scopeKey) {
@@ -282,6 +322,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     const draftRevisions = draftRevisionByConversation.current;
     return () => {
       active = false;
+      loadEpoch.current += 1;
       if (draftTimer.current) clearTimeout(draftTimer.current);
       const previous = conversationRef.current;
       const recoveryOwnsEmptyDraft = previous && draftValue.current === "" && [...recoveries.values()].some((turn) =>
@@ -569,17 +610,44 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     if (isCurrentConversation(current.id)) await refresh();
   }, [refresh, isCurrentConversation]);
 
+  const running = conversation?.turns.at(-1)?.status === "running";
+  const pendingResults = (conversation?.turns ?? []).filter(assistantTurnNeedsResultRefresh)
+    .map(turn => [turn.id, assistantTaskTurnResult(turn)?.continuation?.status,
+      assistantTaskTurnResult(turn)?.response?.media_job?.status, assistantTaskTurnResult(turn)?.response?.edit_request?.status]);
+  const pendingKey = JSON.stringify(pendingResults);
+  const hasPendingResults = pendingResults.length > 0;
   useEffect(() => {
-    const running = conversation?.turns.at(-1)?.status === "running";
-    if (!running || loading) return;
-    const timer = setInterval(() => { void refresh().catch(() => undefined); }, 1500);
-    return () => clearInterval(timer);
-  }, [conversation?.id, conversation?.turns.at(-1)?.status, loading, refresh]);
+    setBusinessRefreshPaused(false);
+    if ((!running && !hasPendingResults) || loading) return;
+    const id = conversation?.id;
+    let active = true, reading = false, attempts = 0;
+    const tick = async () => {
+      if (!active || reading || (activeReads.current.epoch === loadEpoch.current && activeReads.current.count > 0)) return;
+      if (!running && attempts >= 24) {
+        clearInterval(timer);
+        setBusinessRefreshPaused(true);
+        return;
+      }
+      reading = true;
+      attempts += 1;
+      try { await refresh(); }
+      catch (cause) {
+        if (active && conversationRef.current?.id === id && activeScopeKey.current === scopeKey) {
+          setError(cause instanceof Error ? cause.message : "暂时无法查询本轮结果。");
+          setBusinessRefreshPaused(true);
+          clearInterval(timer);
+        }
+      } finally { reading = false; }
+    };
+    const timer = setInterval(() => { void tick(); }, running ? 1500 : 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [conversation?.id, running, pendingKey, hasPendingResults, loading, refresh, scopeKey]);
 
   return {
     conversation, conversations, draftText, setDraftText, loading, error, setError,
     beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn,
     flushDraft, refresh, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
+    businessRefreshPaused,
   };
 }
 

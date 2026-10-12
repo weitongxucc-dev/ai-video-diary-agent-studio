@@ -11,6 +11,7 @@ import remarkGfm from "remark-gfm";
 import { getAssistantCapabilities } from "@/lib/api";
 import type { AssistantConversationTurn } from "@/lib/types";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
+import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest } from "./useAssistantConversation";
 
 const commandDescriptions: Record<string, { title: string; description: string; icon: typeof Plus }> = {
   "/new": { title: "新对话", description: "保留历史，开始新一段对话", icon: Plus },
@@ -171,13 +172,43 @@ function ReplyActions({ turn, onTransferReply, onCreatePlanFromReply, transferDr
   </div>;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null }) {
+function canOpenTurnProposal(turn: AssistantConversationTurn) {
+  const result = assistantTaskTurnResult(turn);
+  if (!result || turn.status !== "completed") return false;
+  if (result.continuation) return result.continuation.actionable;
+  return result.edit_preview === true && (!result.response?.edit_preview || result.response.edit_preview.proposal.status === "proposed");
+}
+
+function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean }) {
   const result = turn.result;
+  const taskResult = assistantTaskTurnResult(turn);
+  const continuation = taskResult?.continuation;
+  const job = taskResult?.response?.media_job;
+  const request = taskResult?.response?.edit_request;
+  const outcomeStatus = continuation?.status ?? job?.status;
+  const unknownRequest = assistantTurnHasUnknownRequest(turn);
+  const pendingResult = assistantTurnNeedsResultRefresh(turn);
+  const businessSummary = taskResult ? unknownRequest
+    ? "请求结果尚未核实；原请求定位已保留。先查询结果，不重复提交。"
+    : outcomeStatus === "confirmed"
+      ? continuation?.result_version_id ? "修改已应用并保存到草稿，可撤销；成片尚未重新生成。" : "已收到采用决定，保存结果仍待核实。"
+      : outcomeStatus === "rejected" ? "修改方案已放弃，当前草稿保持不变。"
+        : outcomeStatus === "cancelled" ? "后台处理已取消，未据此应用修改。"
+          : outcomeStatus === "stale" || outcomeStatus === "expired" ? "原修改结果已过期，仅保留为历史，不能沿旧版本应用。"
+            : outcomeStatus === "stopped" ? "本轮接续已停止，原结果仅保留为历史。"
+              : outcomeStatus === "failed" ? "后台处理未完成；请查看实际原因，当前草稿未因此改变。"
+                : outcomeStatus === "queued" ? "预览已安排，正在等待后台处理；尚未生成预览或应用修改。"
+                  : outcomeStatus === "running" ? "后台正在准备预览；当前草稿尚未改变。"
+                    : outcomeStatus === "interrupted" ? "后台处理已中断，等待明确决定；没有自动重试。"
+                      : canOpenTurnProposal(turn) ? "实际修改预览已返回，等待你查看并决定是否采用；当前草稿尚未改变。"
+                        : request?.status === "not_submitted" ? "请求没有提交；请处理具体原因后明确再试。"
+                          : request?.status === "rejected" ? "本次请求已被拒绝，没有沿该请求继续应用。"
+                            : null : null;
   const executionStatusLabels: Record<string, string> = {
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
   };
-  const resultSummary = result?.kind === "plan_preview"
+  const resultSummary = businessSummary ?? (result?.kind === "plan_preview"
     ? (result.plan_preview as Record<string, unknown> | undefined)?.confirmable === true
       ? "方案已检查，可查看页面中的方案卡后决定是否创建。"
       : "方案检查已返回阻断项；请按页面中的真实原因处理。"
@@ -193,16 +224,22 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
           result.edit_preview === true ? "已生成待确认修改提案" : null].filter(Boolean).join("；") || null
         : result?.kind === "failure" && typeof result.message === "string"
           ? result.message
-          : null;
+          : null);
   return <article className="assistant-persisted-turn" data-turn-status={turn.status}>
     <p className="assistant-user-message">{turn.user_message}</p>
     <TurnContent turn={turn} reading={reading} />
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
-    {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>{onOpenEditProposal && turn.status === "completed" && result?.kind === "task_turn" && result.edit_preview === true ? <button type="button" disabled={Boolean(continueReason)} onClick={() => onOpenEditProposal(turn)}>查看修改方案</button> : null}</div></ReadingDetails> : null}
+    {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
+      {continuation?.waiting_reason || job?.waiting_reason ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
+      {job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
+      {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
+      {onOpenEditProposal && canOpenTurnProposal(turn) ? <button type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</button> : null}
+      {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}
+    </div></ReadingDetails> : null}
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <button className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button> : null}
     {turn.status === "failed" ? <p role="status">本轮未完成；本条要求保留在记录中。</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
-    {turn.status === "failed" || turn.status === "stopped" ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
+    {(turn.status === "failed" || turn.status === "stopped") && !unknownRequest ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
     {turn.status !== "running" && turn.assistant_text.trim() ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined} onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
   </article>;
 }
@@ -248,11 +285,29 @@ export function AssistantConversationPanel({
   const entryRef = useRef<HTMLFormElement>(null);
   const [menuMaxHeight, setMenuMaxHeight] = useState(248);
   const [focus, setFocus] = useState<HTMLTextAreaElement | null>(null);
+  const [readingResultTurn, setReadingResultTurn] = useState<string | null>(null);
+  const resultReadRevision = useRef(0);
   const diagnosticsId = useId();
   useLayoutEffect(() => {
     setHeaderSlot(panelRef.current?.closest('[aria-label="创作助手"]')?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
   }, []);
   const conversation = state.conversation;
+  useEffect(() => { resultReadRevision.current += 1; setReadingResultTurn(null); }, [conversation?.id]);
+  const readTurnResult = async (turn: AssistantConversationTurn, openProposal = false) => {
+    const id = conversation?.id;
+    if (!id) return;
+    const read = ++resultReadRevision.current;
+    setReadingResultTurn(turn.id);
+    setError(null);
+    try {
+      const fresh = await state.refresh();
+      if (!fresh || fresh.id !== id || read !== resultReadRevision.current || !state.isCurrentConversation(id)) return;
+      const updated = fresh.turns.find(item => item.id === turn.id);
+      if (openProposal && updated && canOpenTurnProposal(updated)) onOpenEditProposal?.(updated);
+    } catch (cause) {
+      if (read === resultReadRevision.current && state.isCurrentConversation(id)) setError(cause instanceof Error ? cause.message : "暂时无法查询本轮结果。");
+    } finally { if (read === resultReadRevision.current) setReadingResultTurn(null); }
+  };
   const reading: ReadingState = {
     get: (key, fallback) => state.historyExpandedDetails?.current.get(conversation?.id ?? "")?.get(key) ?? fallback,
     save: (key, open) => {
@@ -265,9 +320,9 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
-  const lastTurn = turns.at(-1);
-  const historyContent = JSON.stringify([turns.length, lastTurn?.id, lastTurn?.status,
-    lastTurn?.assistant_text, lastTurn?.events.length, lastTurn?.result]);
+  const historyContent = JSON.stringify(turns.map(turn => [turn.id, turn.status, turn.updated_at, turn.assistant_text,
+    turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
+    assistantTaskTurnResult(turn)?.response?.edit_request?.status]));
   const latestHistoryContent = useRef(historyContent);
   latestHistoryContent.current = historyContent;
   const isLocalCommand = input.trim().startsWith("/");
@@ -451,7 +506,7 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} />)}
+        {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused} />)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
       {state.loading ? <p role="status">正在恢复对话…</p> : null}
     </div>

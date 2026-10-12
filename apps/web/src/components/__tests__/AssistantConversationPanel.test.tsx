@@ -92,6 +92,102 @@ function state(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
+function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "confirmed" | "rejected"): AssistantConversation {
+  const saved = conversation("task");
+  const continuation = status === "queued" ? undefined : {type: "business_result", event_id: `event-${status}`,
+    task_id: "task-one", status, actionable: status === "proposed", job_id: "job-preview", proposal_id: "proposal-preview",
+    base_version_id: "version-base", result_version_id: status === "confirmed" ? "version-saved" : null,
+    waiting_reason: status === "proposed" ? "请查看实际修改预览，再采用或拒绝。" : null};
+  saved.turns = [{...saved.turns[0], assistant_text: "原始模型回复结束，后台结果仍以回读为准。", events: [],
+    result: {kind: "task_turn", edit_preview: status === "proposed" || status === "confirmed",
+      continuation, response: {reply: "预览结果", provider: "fixture", model: "fixture", script_draft: null,
+        execution_action: null, execution_status: null, topic_candidates: null,
+        edit_preview: status === "proposed" ? {intent: {task_id: "task-one"}, proposal: {id: "proposal-preview", status: "proposed"}} : null,
+        media_job: status === "queued" ? {job_id: "job-preview", status: "queued", result_kind: "edit_preview",
+          result_url: "/api/creation-tasks/task-one/media-jobs/job-preview", base_version_id: "version-base",
+          result: null, waiting_reason: "等待本机资源可用", failure_reason: null, repair_action: null} : null,
+        edit_request: status === "unknown" ? {task_id: "task-one", request_id: "request-original", phase: "preview",
+          status: "unknown", query_url: "/api/creation-tasks/task-one/assistant/edit-requests/request-original?phase=preview",
+          input_digest: null, result: null, submitted_input: {operation_type: "ReplaceClip", clip_id: "second"}} : null}}}];
+  return saved;
+}
+
+describe("persisted business result cards", () => {
+  it("opens the actionable proposal from the same freshly read turn", async () => {
+    const saved = projectedTaskConversation("proposed");
+    const open = vi.fn(), refresh = vi.fn().mockResolvedValue(saved);
+    render(<AssistantConversationPanel state={state({conversation: saved, refresh})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} onOpenEditProposal={open} busy={false} configured scopeLabel="当前任务"/>);
+    fireEvent.click(screen.getByRole("button", {name: "查看修改方案"}));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(saved.turns[0]));
+  });
+
+  it("uses the expired projection instead of an older unknown-request flag", () => {
+    const saved = projectedTaskConversation("unknown");
+    saved.turns[0].result = {...saved.turns[0].result, continuation: {type: "business_result", event_id: "event-stale",
+      status: "stale", actionable: false, waiting_reason: "仅保留原目标的历史结果"}};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} onOpenEditProposal={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText(/原修改结果已过期/)).toBeVisible();
+    expect(screen.queryByRole("button", {name: "查询本轮结果"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+  });
+
+  it.each(["queued", "unknown"] as const)("shows actual %s after the model ends and queries without sending or changing the focused draft", async status => {
+    const saved = projectedTaskConversation(status);
+    const refresh = vi.fn().mockResolvedValue(saved), send = vi.fn(), input = vi.fn();
+    render(<AssistantConversationPanel state={state({conversation: saved, refresh})} input="正在写的新草稿"
+      onInput={input} onSend={send} busy={false} configured scopeLabel="当前任务"/>);
+    const textbox = screen.getByRole("textbox");
+    textbox.focus();
+    const query = screen.getByRole("button", {name: "查询本轮结果"});
+    expect(query).toBeVisible();
+    fireEvent.click(query);
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(send).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    expect(textbox).toHaveValue("正在写的新草稿");
+    expect(textbox).toHaveFocus();
+    expect(screen.queryByText("正在回复…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+    if (status === "unknown") expect(screen.getByText(/请求结果尚未核实/)).toBeVisible();
+    else expect(screen.getByText(/预览已安排，正在等待后台处理/)).toBeVisible();
+  });
+
+  it("opens only the freshly read actionable proposal and removes the adopted card's action", async () => {
+    const pending = projectedTaskConversation("proposed"), adopted = projectedTaskConversation("confirmed");
+    const open = vi.fn(), refresh = vi.fn().mockResolvedValue(adopted);
+    const panel = (saved: AssistantConversation) => <AssistantConversationPanel state={state({conversation: saved, refresh})}
+      input="" onInput={vi.fn()} onSend={vi.fn()} onOpenEditProposal={open} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel(pending));
+    fireEvent.click(screen.getByRole("button", {name: "查看修改方案"}));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(open).not.toHaveBeenCalled();
+    view.rerender(panel(adopted));
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+    expect(screen.getByText(/修改已应用并保存到草稿/)).toBeVisible();
+    expect(screen.queryByRole("button", {name: "查询本轮结果"})).not.toBeInTheDocument();
+  });
+
+  it("preserves scroll position when an earlier turn receives an asynchronous result", () => {
+    const saved = projectedTaskConversation("queued");
+    saved.turns.push({...conversation().turns[0], id: "later-turn", sequence: 2});
+    const positions = {current: new Map<string, number>()}, following = {current: new Map<string, boolean>()};
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved, historyScrollPositions: positions,
+      historyFollowBottom: following})} input="下一条草稿" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    const viewport = screen.getByRole("region", {name: "持久对话记录"});
+    Object.defineProperties(viewport, {scrollHeight: {configurable: true, value: 1400}, clientHeight: {configurable: true, value: 400}});
+    viewport.scrollTop = 230;
+    fireEvent.scroll(viewport);
+    saved.turns[0] = projectedTaskConversation("proposed").turns[0];
+    view.rerender(panel());
+    expect(viewport.scrollTop).toBe(230);
+    expect(following.current.get(saved.id)).toBe(false);
+    expect(screen.getByRole("textbox")).toHaveValue("下一条草稿");
+  });
+});
+
 describe("AssistantConversationPanel", () => {
   it("returns to the latest reply explicitly without enabling follow while reading earlier messages", () => {
     const saved = conversation();

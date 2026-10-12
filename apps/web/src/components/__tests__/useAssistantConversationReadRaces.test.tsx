@@ -48,6 +48,92 @@ beforeEach(() => {
 
 afterEach(() => { vi.useRealTimers(); });
 
+function businessConversation(status: "queued" | "running" | "confirmed" | "unknown" = "queued"): AssistantConversation {
+  const current = conversation();
+  const response = {
+    reply: "预览已安排，尚未应用", provider: "fixture", model: "fixture", edit_preview: null,
+    script_draft: null, execution_action: null, execution_status: null, topic_candidates: null,
+    media_job: status === "unknown" ? null : {job_id: "job-preview", status: status === "confirmed" ? "succeeded" : status,
+      operation: "preview_edit", target_refs: ["clip:second"], input_digest: "fixture-digest", created_at: current.created_at,
+      result_kind: "edit_preview", result_url: "/api/creation-tasks/task-one/media-jobs/job-preview",
+      device_request_id: null, waiting_reason: null, base_version_id: "version-base", result: null, failure_reason: null, repair_action: null},
+    edit_request: status === "unknown" ? {task_id: "task-one", request_id: "00000000-0000-5000-8000-000000000001",
+      phase: "preview", status: "unknown", query_url: "/api/creation-tasks/task-one/assistant/edit-requests/request?phase=preview",
+      input_digest: null, result: null, submitted_input: {operation_type: "ReplaceClip", clip_id: "second"}} : null,
+  };
+  return {...current, turns: [{id: "turn-business", sequence: 1, user_message: "换第二镜头并保留旁白",
+    assistant_text: response.reply, status: "completed", events: [], created_at: current.created_at, updated_at: current.updated_at,
+    result: {kind: "task_turn", response, edit_preview: false,
+      ...(status === "confirmed" ? {continuation: {type: "business_result", event_id: "event-applied", task_id: "task-one",
+        status: "confirmed", actionable: false, base_version_id: "version-base", result_version_id: "version-saved"}} : {})}}]};
+}
+
+describe("same-turn business result reads", () => {
+  it.each(["queued", "running", "unknown"] as const)("reads a completed model turn while %s still awaits an actual result", async status => {
+    const initial = businessConversation(status);
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.conversation?.turns[0].status).toBe("completed");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledWith(initial.id);
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("stops read timers when the original proposal is adopted", async () => {
+    api.getCurrentAssistantConversation.mockResolvedValue(businessConversation());
+    api.getAssistantConversation.mockResolvedValue(businessConversation("confirmed"));
+    vi.useFakeTimers();
+    const {result} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.conversation?.turns[0].result?.continuation).toMatchObject({status: "confirmed", actionable: false});
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+  });
+
+  it("bounds unattended pending reads without claiming a queued job completed", async () => {
+    const initial = businessConversation();
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(24);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    expect(result.current.conversation?.turns[0].result?.response).toMatchObject({media_job: {status: "queued"}});
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(24);
+  });
+
+  it("does not let a previous visit's pending read replace the re-entered scope or new draft", async () => {
+    const initial = {...businessConversation(), scope_kind: "task" as const, scope_id: "task-one"};
+    api.getCurrentAssistantConversation.mockImplementation(async ({scope_id}: {scope_id: string}) => ({...initial,
+      scope_id, id: scope_id === "task-one" ? initial.id : "conversation-task-two"}));
+    const late = deferred<AssistantConversation>();
+    api.getAssistantConversation.mockReturnValue(late.promise);
+    const {result, rerender} = renderHook(({id}) => useAssistantConversation({scope_kind: "task", scope_id: id}),
+      {initialProps: {id: "task-one"}});
+    await waitFor(() => expect(result.current.conversation?.id).toBe(initial.id));
+    let reading!: Promise<AssistantConversation | null>;
+    act(() => { reading = result.current.refresh(); });
+    rerender({id: "task-two"});
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    rerender({id: "task-one"});
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setDraftText("重新进入后写下的草稿"));
+    await act(async () => { late.resolve({...initial, title: "旧回包不得替换", draft_text: "旧草稿"}); await reading; });
+    expect(result.current.conversation?.title).not.toBe("旧回包不得替换");
+    expect(result.current.draftText).toBe("重新进入后写下的草稿");
+  });
+});
+
 describe("useAssistantConversation read races", () => {
   it("does not let a refresh GET replace text typed after that read started", async () => {
     const initial = conversation({ draft_text: "旧服务端草稿" });

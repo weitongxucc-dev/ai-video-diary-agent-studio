@@ -1676,12 +1676,39 @@ export type TaskMediaJob = {
 
 export type TaskMediaJobPage = { items: TaskMediaJob[]; next_cursor: string | null };
 
+export type AssistantEditRequest = {
+  task_id: string;
+  request_id: string;
+  phase: "preview" | "apply";
+  status: "recorded" | "unknown" | "rejected" | "not_submitted";
+  query_url: string;
+  input_digest?: string | null;
+  result?: CreationTaskEditPreviewResponse | TaskMediaJob | Record<string, unknown> | null;
+  submitted_input?: Record<string, unknown> | null;
+};
+
+export type AssistantBusinessContinuation = {
+  type: "business_result";
+  event_id: string;
+  status: string;
+  actionable: boolean;
+  phase?: string;
+  task_id?: string;
+  job_id?: string | null;
+  proposal_id?: string | null;
+  operation_id?: string | null;
+  base_version_id?: string | null;
+  result_version_id?: string | null;
+  waiting_reason?: string | null;
+};
+
 export type CreationTaskAssistantTurnResponse = {
   reply: string;
   provider: string;
   model: string;
   edit_preview: CreationTaskEditPreviewResponse | null;
   media_job?: TaskMediaJob | null;
+  edit_request?: AssistantEditRequest | null;
   script_draft: CreationTaskScript | null;
   execution_action: "start" | "resume" | "cancel" | null;
   execution_status: CreationExecutionStatus | null;
@@ -1690,6 +1717,13 @@ export type CreationTaskAssistantTurnResponse = {
   turn_id?: string | null;
   turn_status?: "running" | "completed" | "stopped";
   draft_version?: number | null;
+};
+
+export type AssistantTaskTurnResult = {
+  kind: "task_turn";
+  response?: CreationTaskAssistantTurnResponse;
+  continuation?: AssistantBusinessContinuation;
+  edit_preview?: boolean;
 };
 
 export type AssistantStreamEvent =
