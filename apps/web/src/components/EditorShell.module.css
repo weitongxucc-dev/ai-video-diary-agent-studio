@@ -61,6 +61,8 @@
 .workspaceCollapsed .conversation {grid-row:2;}
 
 .chatCollapsed .conversationHeader { justify-content:center; padding:0; }
+.chatCollapsed .conversationActions { gap:0; }
+.chatCollapsed .conversationActions > :global([data-assistant-header-actions]) { display:none; }
 .chatCollapsed .conversationHeader > span, .chatCollapsed .conversationHeader small, .chatCollapsed .conversationBody, .chatCollapsed .chatSeparator { display:none; }
 .workspaceCollapsed > :global(.desktop-main-scroll) { display: none; }
 .detailsButton { min-height: 32px; padding: 0 10px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-size: 13px; cursor: pointer; white-space: nowrap; }
