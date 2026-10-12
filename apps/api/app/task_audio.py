@@ -408,11 +408,12 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity):
+    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None):
         self.repository = repository
         self.facts = facts
         self.execute_operation = execute_operation
         self.validate_result = validate_result
+        self.on_settled = on_settled
         self.verify_identity = verify_identity
 
     def read(self, workspace_id, job_id, conn=None):
@@ -605,3 +606,5 @@ class TaskMediaJobs:
             reset_workspace_context(token)
             with executor._cancellation_lock:
                 executor._cancellations.pop(grant.request_id, None)
+            if self.on_settled is not None:
+                self.on_settled()

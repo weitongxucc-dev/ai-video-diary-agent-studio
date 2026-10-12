@@ -1888,7 +1888,21 @@ class TaskMediaJobResponse(BaseModel):
     repair_action: str | None = None
 
 
+class AssistantEditRequestLocator(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    task_id: str = Field(min_length=1, max_length=120)
+    request_id: UUID
+    phase: Literal["preview"] = "preview"
+    status: Literal["recorded", "unknown", "rejected", "not_submitted"]
+    query_url: str
+    input_digest: str | None = None
+    submitted_input: dict[str, object] | None = None
+    result_status_code: int | None = None
+    result: dict[str, object] | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    edit_request: AssistantEditRequestLocator | None = None
     media_job: TaskMediaJobResponse | None = None
     reply: str
     provider: str

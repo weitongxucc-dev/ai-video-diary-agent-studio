@@ -223,6 +223,34 @@ def test_apply_request_identity_is_not_reusable_for_another_proposal(material_ed
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == version
 
 
+def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(material_edit_state):
+    state = material_edit_state
+    original = state.production.get_creation_task(state.workspace_id, state.task.id)
+    original_version = state.production.get_timeline_version(state.workspace_id, original.current_timeline_version_id)
+    preview = state.client.post(state.base_url + "/edits/exact/preview", json=bound(state, **replace_action(state)))
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()["proposal"]["id"]
+    assert state.client.post(state.base_url + f"/edits/{proposal_id}/confirm", json={"request_id": str(uuid4())}).status_code == 200
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    undo = state.base_url + "/timeline/undo"
+    stale = state.client.post(undo, json={"expected_timeline_version_id": original_version.id, "expected_timeline_sequence": original_version.sequence})
+    assert stale.status_code == 409
+    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == version.id
+    assert state.client.post(undo, json={"expected_timeline_version_id": version.id}).status_code == 422
+    assert state.client.post(undo, json={"expected_timeline_sequence": version.sequence}).status_code == 422
+    _other, token = state.members.join(state.members.create_invite_code(), "other history caller")
+    expected = {"expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
+    assert state.client.post(undo, json=expected, headers={"X-Local-Member-Token": token}).status_code in {403, 404}
+    undone = state.client.post(undo, json=expected)
+    assert undone.status_code == 200, undone.text
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    undo_version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    redone = state.client.post(state.base_url + "/timeline/redo", json={
+        "expected_timeline_version_id": undo_version.id, "expected_timeline_sequence": undo_version.sequence})
+    assert redone.status_code == 200, redone.text
+
+
 def test_other_member_cannot_read_or_replay_private_typed_edit(material_edit_state):
     state = material_edit_state
     payload = bound(state, **replace_action(state))

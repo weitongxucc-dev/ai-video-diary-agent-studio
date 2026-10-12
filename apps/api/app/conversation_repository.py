@@ -482,6 +482,20 @@ class ConversationRepository:
             raise ValueError("类型化编辑不属于当前有效助手轮次")
         return {"context": context, "raw_command": row["user_message"], "conversation_id": row["conversation_id"]}
 
+    def business_turn_context(self, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT t.status,t.conversation_id,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversations c ON c.id=t.conversation_id "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.conversation_id=c.id "
+                "WHERE t.id=? AND c.workspace_id=? AND c.member_id=? AND r.workspace_id=c.workspace_id "
+                "AND r.member_id=c.member_id AND r.outcome='consumed'", (turn_id, workspace_id, member_id),
+            ).fetchone()
+        context = json.loads(row["request_context_json"]) if row else {}
+        if row is None or context.get("kind") != "task" or context.get("task_id") != task_id:
+            return None
+        return {"status": row["status"], "conversation_id": row["conversation_id"], "context": context}
+
     def get_turn(self, turn_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
@@ -529,6 +543,41 @@ class ConversationRepository:
                 "UPDATE assistant_conversation_turns SET events_json=?,assistant_text=?,updated_at=? WHERE id=? AND status='running'",
                 (json.dumps(events, ensure_ascii=False), assistant_text, _now(), turn_id),
             )
+
+    def project_business_result(self, turn_id: str, workspace_id: str, member_id: str,
+                                event: dict, *, response_patch: dict, message: str) -> bool:
+        """Project one real business receipt into its existing settled turn.
+
+        The event identity fences replay across API restarts. This neither
+        creates a user message nor resumes a stopped/failed model turn.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT t.* FROM assistant_conversation_turns t JOIN assistant_conversations c ON c.id=t.conversation_id "
+                "WHERE t.id=? AND c.workspace_id=? AND c.member_id=?",
+                (turn_id, workspace_id, member_id),
+            ).fetchone()
+            if row is None or row["status"] == "running":
+                return False
+            events = json.loads(row["events_json"])
+            if any(item.get("event_id") == event["event_id"] for item in events):
+                return True
+            events.append(event)
+            result = json.loads(row["result_json"]) if row["result_json"] else {}
+            result["continuation"] = event
+            text = row["assistant_text"]
+            if row["status"] == "completed":
+                response = {**result.get("response", {}), **response_patch}
+                text = text + ("\n\n" if text else "") + message
+                response["reply"] = text
+                result.update(kind="task_turn", response=response,
+                              edit_preview=bool(response.get("edit_preview")))
+            now = _now()
+            conn.execute("UPDATE assistant_conversation_turns SET events_json=?,result_json=?,assistant_text=?,updated_at=? WHERE id=?",
+                (json.dumps(events, ensure_ascii=False), json.dumps(result, ensure_ascii=False), text, now, turn_id))
+            conn.execute("UPDATE assistant_conversations SET updated_at=? WHERE id=?", (now, row["conversation_id"]))
+        return True
 
     def finish_turn(self, turn_id: str, status: str, assistant_text: str | None = None,
                     result: dict | None = None) -> dict | None:

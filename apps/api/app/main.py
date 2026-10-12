@@ -18,7 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 from urllib.parse import quote, urlparse
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -324,6 +324,7 @@ from app.schemas import (
     CreationTaskEditPreviewResponse,
     CreationTaskExactEditRequest,
     CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse,
+    AssistantEditRequestLocator,
     EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS,
     CreationTaskSubtitleCueUpdateRequest,
     CreationTaskTimelineUndoRequest,
@@ -3594,6 +3595,9 @@ def _prepare_exact_edit_request(task_id, request, payload):
               "request_id": str(payload.request_id) if payload.request_id else None,
               "expected_timeline_version_id": payload.expected_timeline_version_id,
               "expected_timeline_sequence": payload.expected_timeline_sequence}
+    actor = _request_permit_actor(request, task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id, member_id)
+    if actor is not None:
+        source["actor_identity"] = actor.identity_payload()
     if payload.assistant_turn_id:
         try:
             origin = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task_id)
@@ -3664,6 +3668,7 @@ def _save_edit_request_result(task, event_id, result):
     production_repo.append_task_event(TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
         task_id=task.id, job_id=None, event_type="edit_request_result",
         payload={"status_code": status, "response": content}, created_at=utc_now()))
+    _wake_assistant_continuations()
 
 
 def _read_edit_request_result(task, event_id):
@@ -3684,9 +3689,20 @@ def get_exact_edit_request_result(task_id: str, request_id: UUID, request: Reque
         raise HTTPException(status_code=404, detail="编辑请求不存在") from exc
     if event.task_id != task_id:
         raise HTTPException(status_code=404, detail="编辑请求不存在")
+    inputs = event.payload["inputs"]
+    if phase == "preview":
+        submitted_input = {key: value for key, value in inputs.items() if key in CreationTaskExactEditRequest.model_fields}
+    else:
+        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
+        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
+    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise HTTPException(status_code=409, detail="原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
     result = _read_edit_request_result(task, event_id)
     return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
-            "status": "recorded" if result else "unknown", "result": json.loads(result.body) if result else None}
+            "task_id": task_id, "status": "recorded" if result else "unknown",
+            "submitted_input": submitted_input,
+            "result_status_code": result.status_code if result else None,
+            "result": json.loads(result.body) if result else None}
 
 
 def _task_media_grant_or_queue(kind="waveform"):
@@ -4084,11 +4100,15 @@ def _execute_task_media_operation(job, event, actor):
             values[name] = SimpleNamespace(filename=value["filename"], staged_input=value["staged_input"], source_sha256=value["sha256"])
         elif isinstance(hints.get(name), type) and issubclass(hints[name], BaseModel):
             values[name] = hints[name].model_validate(value)
-            if name == "payload" and hasattr(values[name], "assistant_turn_id"):
-                values[name] = values[name].model_copy(update={"assistant_turn_id": None})
+            if name == "payload" and getattr(values[name], "assistant_turn_id", None) is not None:
+                values[name] = hints[name].model_validate(values[name].model_dump(
+                    mode="json", exclude_unset=True, exclude={"assistant_turn_id"}))
         else:
             values[name] = value
-    source_token = EXACT_EDIT_SOURCE.set(event["arguments"].get("_typed_source"))
+    source = event["arguments"].get("_typed_source")
+    if source is not None:
+        source = {**source, "media_job_id": job.id, "actor_identity": actor.identity_payload()}
+    source_token = EXACT_EDIT_SOURCE.set(source)
     try:
         result = function(**values)
     finally:
@@ -7377,6 +7397,51 @@ def creation_task_assistant_turn(
     return _creation_task_assistant_turn(task_id, request, payload, None)
 
 
+def _resolve_assistant_edit_request(task_id, request, turn_id, details):
+    try:
+        request_id = UUID(str(details["request_id"]))
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="编辑请求定位缺少有效请求身份") from exc
+    query_url = f"/api/creation-tasks/{quote(task_id, safe='')}/assistant/edit-requests/{request_id}?phase=preview"
+    if details.get("task_id", task_id) != task_id or details.get("query_url") != query_url:
+        raise HTTPException(status_code=502, detail="编辑请求定位不属于当前任务")
+    try:
+        actual = get_exact_edit_request_result(task_id, request_id, request, "preview")
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        call_id = details.get("tool_call_id")
+        if (details.get("assistant_turn_id") != turn_id or not isinstance(call_id, str)
+                or not 1 <= len(call_id) <= 128 or request_id != uuid5(NAMESPACE_URL,
+                    json.dumps([task_id, turn_id, call_id], ensure_ascii=False, separators=(",", ":")))):
+            raise HTTPException(status_code=502, detail="原请求尚无服务端记录，工具定位来源不可核验") from exc
+        status = details.get("status")
+        status = "unknown" if status in {"unknown", "result_unknown"} else status
+        if status not in {"unknown", "rejected", "not_submitted"}:
+            raise HTTPException(status_code=502, detail="未提交请求不能声称已有结果")
+        actual = {"status": status, "input_digest": None, "result_status_code": None, "result": None, "submitted_input": None}
+    if actual["status"] == "recorded" and actual["result_status_code"] >= 400:
+        actual["status"] = "rejected"
+    locator = AssistantEditRequestLocator(task_id=task_id, request_id=request_id, query_url=query_url,
+        status=actual["status"], input_digest=actual["input_digest"],
+        submitted_input=actual["submitted_input"], result_status_code=actual["result_status_code"], result=actual["result"])
+    workspace_id = current_workspace_id(request)
+    member_id = _assistant_member_id(request, workspace_id)
+    binding = conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id)
+    snapshot = binding["context"]["target_snapshot"]
+    actor = _request_permit_actor(request, workspace_id) if auth_context.enabled else CreationExecutionActor(workspace_id, member_id)
+    source = {"workspace_id": workspace_id, "task_id": task_id, "member_id": member_id,
+        "conversation_id": binding["conversation_id"], "assistant_turn_id": turn_id,
+        "expected_timeline_version_id": snapshot["timeline_version_id"], "expected_timeline_sequence": snapshot["timeline_sequence"],
+        "actor_identity": actor.identity_payload() if actor else None}
+    production_repo.append_task_event(TaskEvent(id=f"event_edit_locator_{turn_id}_{request_id}", workspace_id=workspace_id,
+        task_id=task_id, job_id=None, event_type="assistant_edit_request_located",
+        payload={"source": source, "locator": locator.model_dump(mode="json"),
+                 "request_event_id": "event_edit_request_" + media_digest([workspace_id, member_id, str(request_id), "preview"])},
+        created_at=utc_now()))
+    return locator
+
+
 def _creation_task_assistant_turn(
     task_id: str,
     request: Request,
@@ -7479,15 +7544,19 @@ def _creation_task_assistant_turn(
     execution_status = None
     topic_candidates = None
     timeline_action = None
-    media_job = None
-    if isinstance(preview, dict) and preview.get("kind") == "media_job":
+    media_job, edit_request = None, None
+    if isinstance(preview, dict) and preview.get("kind") == "edit_request_status":
+        edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
+        edit_preview = None
+        reply = "原编辑请求定位已保存；尚未确认修改完成。" if edit_request.status == "unknown" else "原编辑请求已回读，请查看实际状态；没有重复提交。"
+    elif isinstance(preview, dict) and preview.get("kind") == "media_job":
         from app.schemas import TaskMediaJobResponse
         candidate = TaskMediaJobResponse.model_validate(preview.get("media_job"))
         # Only the stable job identity is consumed from the tool receipt.
         # Re-read state, ownership and result URLs from the production owner.
         media_job = TaskMediaJobResponse.model_validate(get_task_media_job(task_id, candidate.job_id, request))
         edit_preview = None
-    elif preview is not None and trusted_stage == "script":
+    elif isinstance(preview, dict) and "script_id" in preview and "proposal" not in preview:
         script_id = preview.get("script_id") if isinstance(preview, dict) else None
         if not isinstance(script_id, str):
             raise HTTPException(status_code=502, detail="对话没有返回可核实的文案草稿。")
@@ -7529,9 +7598,18 @@ def _creation_task_assistant_turn(
         edit_preview = CreationTaskEditPreviewResponse.model_validate(preview)
         if edit_preview.proposal.task_id != task_id or edit_preview.proposal.workspace_id != workspace_id:
             raise HTTPException(status_code=502, detail="对话工具返回了不属于当前任务的编辑提案。")
+        try:
+            actual_proposal = production_repo.get_edit_proposal(workspace_id, edit_preview.proposal.id)
+            actual_intent = production_repo.get_edit_intent(workspace_id, actual_proposal.intent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=502, detail="工具提案没有真实持久结果") from exc
+        if actual_proposal.task_id != task_id:
+            raise HTTPException(status_code=502, detail="工具提案不属于当前任务")
+        edit_preview = _edit_preview_response(actual_intent, actual_proposal)
     else:
         edit_preview = None
     response = CreationTaskAssistantTurnResponse(
+        edit_request=edit_request,
         reply=reply,
         provider=_workspace_settings_for(workspace_id).effective_llm_provider,
         model=_workspace_settings_for(workspace_id).effective_llm_model,
@@ -7557,6 +7635,7 @@ def _creation_task_assistant_turn(
         "timeline_action": timeline_action,
         "response": response.model_dump(mode="json"),
     })
+    _wake_assistant_continuations()
     return response
 
 
@@ -11398,6 +11477,8 @@ def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: 
     _assistant_edit_control_instruction(task, request, payload, "reject")
     try:
         proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
+        if production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source") is not None:
+            _edit_proposal_binding(task_id, proposal_id, request)
         if proposal.task_id != task_id or proposal.operation["payload"].get("base_version_id") != task.current_timeline_version_id:
             raise HTTPException(status_code=409, detail="这份修改的任务或基础版本已变化。")
         if proposal.status != "rejected":
@@ -11406,6 +11487,7 @@ def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: 
         raise HTTPException(status_code=404, detail="没有找到这份修改方案。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _wake_assistant_continuations()
     return {"task_id": task_id, "proposal_id": proposal.id, "status": proposal.status,
         "timeline_version_id": task.current_timeline_version_id}
 
@@ -11470,7 +11552,9 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
         intent = production_repo.get_edit_intent(proposal.workspace_id, proposal.intent_id)
         if intent.constraints.get("request_source") is not None:
             _edit_proposal_binding(task_id, proposal_id, request)
-        return _confirm_creation_task_edit(task_id, proposal_id, request)
+        result = _confirm_creation_task_edit(task_id, proposal_id, request)
+        _wake_assistant_continuations()
+        return result
     task, member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
     base = proposal.operation.get("payload", {}).get("base_version_id")
     if (("expected_base_version_id" in payload.model_fields_set and payload.expected_base_version_id != base)
@@ -11491,6 +11575,7 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
         raise HTTPException(status_code=409, detail="原应用请求结果尚未确定，请查询原提案结果，不重复执行")
     result = _confirm_creation_task_edit(task_id, proposal_id, request)
     _save_edit_request_result(task, event_id, result)
+    _wake_assistant_continuations()
     return result
 
 
@@ -13625,6 +13710,13 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
     task = _creation_task_or_404(workspace_id, task_id)
     if control is not None and control.assistant_turn_id is not None:
         _assistant_edit_control_instruction(task, request, control, "redo" if redo else "undo")
+    elif control is not None and control.model_fields_set & {"expected_timeline_version_id", "expected_timeline_sequence"}:
+        if not {"expected_timeline_version_id", "expected_timeline_sequence"} <= control.model_fields_set or control.expected_timeline_sequence is None:
+            raise HTTPException(status_code=422, detail="历史恢复需要同时提交期望版本与序号")
+        task, _member_id = _exact_edit_access(task_id, request, write=True)
+        version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        if (control.expected_timeline_version_id, control.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
+            raise HTTPException(status_code=409, detail="历史恢复所依据的时间线已变化，请重新读取当前版本")
     changed_version, target_version = (_redo_target_versions if redo else _undo_target_versions)(workspace_id, task)
     operation_type = "RedoTimelineVersion" if redo else "UndoTimelineVersion"
     action_label = "重做" if redo else "撤销"
@@ -13970,11 +14062,8 @@ def update_creation_task_montage_clip(
         CreationTaskExactEditRequest(
             operation_type=categories[0],
             clip_id=clip_id,
-            asset_id=payload.asset_id,
-            segment_id=payload.segment_id,
-            source_start_seconds=payload.source_start_seconds,
-            position=payload.position,
-            locked=payload.locked,
+            **{key: value for key, value in payload.model_dump(exclude_unset=True).items()
+               if key in EXACT_EDIT_FIELDS[categories[0]]},
         ),
     )
     return result.montage
@@ -18577,7 +18666,7 @@ def _build_device_components(*, repository: ProductionRepository):
     budget = replace(budget, cpu_audio=audio_budget)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         execute_operation=_execute_task_media_operation, validate_result=_validate_task_media_result,
-        verify_identity=_verify_creation_identity)
+        verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations)
     registrations = {
         "creation_job": creation_job_registration(
             repository,
@@ -18774,6 +18863,251 @@ def recover_interrupted_assistant_turns() -> None:
     conversation_repo.fail_interrupted_turns()
 
 
+assistant_continuation_driver = None
+
+
+def _wake_assistant_continuations():
+    if assistant_continuation_driver is not None:
+        assistant_continuation_driver.wake.set()
+
+
+def _mark_assistant_projection(candidate):
+    production_repo.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
+        task_id=candidate["task_id"], job_id=candidate["id"] if candidate["kind"] == "job" else None,
+        event_type="assistant_business_projected", payload={"turn_id": candidate["source"]["assistant_turn_id"],
+            "source_kind": candidate["kind"], "source_id": candidate["id"]},
+        created_at=datetime.fromisoformat(candidate["created_at"])))
+
+
+def _project_assistant_business_candidate(candidate):
+    if candidate["kind"] == "request":
+        return _project_assistant_request_candidate(candidate)
+    source = candidate["source"]
+    workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
+    member_id, turn_id = source["member_id"], source["assistant_turn_id"]
+    binding = conversation_repo.business_turn_context(turn_id, workspace_id, member_id, task_id)
+    if binding is None or binding["conversation_id"] != source["conversation_id"]:
+        _mark_assistant_projection(candidate)
+        return True  # Foreign turns are never mutated or exposed.
+    if binding["status"] == "running":
+        return False  # The finite model reply still owns its terminal write.
+    snapshot = binding["context"].get("target_snapshot", {})
+    if (source["workspace_id"], source["task_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
+            workspace_id, task_id, snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")):
+        _mark_assistant_projection(candidate)
+        return True
+    proposal, job, media_result = None, None, None
+    if candidate["kind"] == "job":
+        if device_runtime is None or "creation_job" not in device_runtime.registrations:
+            return False
+        job = production_repo.get_job_run(workspace_id, candidate["id"])
+        start = production_repo.get_task_event(workspace_id, f"event_{job.id}_start").payload
+        if media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest:
+            _mark_assistant_projection(candidate)
+            return True
+        actor = CreationExecutionActor.from_event(workspace_id, start)
+        with production_repo._connect() as conn:
+            active = conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND state IN ('granted','yield_requested')",
+                                  (workspace_id, job.id)).fetchone()
+        if active is not None:
+            return False  # Cancellation receipts do not prove group release.
+        if job.status == "succeeded":
+            media_result = production_repo.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
+            if media_result.get("proposal"):
+                proposal = production_repo.get_edit_proposal(workspace_id, media_result["proposal"]["id"])
+    else:
+        proposal = production_repo.get_edit_proposal(workspace_id, candidate["id"])
+        if proposal.status != candidate["status"]:
+            _mark_assistant_projection(candidate)
+            return True
+        if "actor_identity" not in source:
+            _mark_assistant_projection(candidate)
+            return True
+        actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    if ((actor.user_id or actor.member_id) != member_id or _verify_creation_identity(actor) != "ready"
+            or not content_readable(user_id=member_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id)
+            or (task.owner_user_id is not None and task.owner_user_id != member_id)):
+        _mark_assistant_projection(candidate)
+        return True
+    current_version = task.current_timeline_version_id
+    base_version = source["expected_timeline_version_id"]
+    result_version, operation = None, None
+    if proposal is not None:
+        if proposal.task_id != task_id or proposal.workspace_id != workspace_id:
+            _mark_assistant_projection(candidate)
+            return True
+        if proposal.status == "confirmed":
+            operation = next((item for item in production_repo.list_edit_operations(workspace_id, task_id)
+                              if item.proposal_id == proposal.id and item.status == "applied"), None)
+            if operation is not None:
+                result_version = operation.result_version_id
+    current = current_version == (result_version or base_version)
+    inputs_current = True
+    if job is not None and current_version == base_version:
+        media = device_runtime.registrations["creation_job"].owner.task_media
+        inputs_current = media.check(job, start, actor) == "ready"
+    status = proposal.status if proposal is not None else job.status
+    if job is not None and (job.status != "succeeded" or not _task_media_outputs_current(job)):
+        status = job.status if job.status != "succeeded" else "failed"
+    if not current or not inputs_current:
+        status = "stale"
+    if binding["status"] == "stopped":
+        status = "stopped"
+    event = {"type": "business_result", "event_id": candidate["event_id"], "task_id": task_id,
+             "phase": "preview" if candidate["kind"] == "job" or candidate["status"] == "proposed" else "apply" if candidate["status"] == "confirmed" else "decision",
+             "job_id": job.id if job else source.get("media_job_id"), "proposal_id": proposal.id if proposal else None,
+             "base_version_id": base_version, "result_version_id": result_version,
+             "status": status, "actionable": status == "proposed" and binding["status"] == "completed"}
+    response_patch = {"edit_preview": None}
+    if event["actionable"]:
+        intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
+        preview = _edit_preview_response(intent, proposal).model_dump(mode="json")
+        response_patch["edit_preview"] = preview
+        event["waiting_reason"] = "请查看实际修改预览，再采用或拒绝。"
+        message = "修改预览已完成，可以查看并决定是否采用；当前草稿尚未改变。"
+    elif status == "confirmed" and operation is not None:
+        event["operation_id"] = operation.id
+        event["waiting_reason"] = "当前草稿已保存；成片尚未重新生成，等待明确生成决定。"
+        message = "修改已应用并保存到草稿，可撤销；成片尚未重新生成。"
+    elif status == "rejected":
+        event["waiting_reason"] = "修改方案已放弃；等待新的明确要求。"
+        message = "修改方案已放弃，当前草稿保持不变。"
+    elif status in {"stale", "stopped"}:
+        event["waiting_reason"] = "仅保留原目标的历史结果，不沿旧选择继续。"
+        message = "原修改结果已保留为历史；当前目标或对话已变化，没有继续应用。"
+    else:
+        event["waiting_reason"] = "媒体处理未完成；查看作业原因后再决定下一步。"
+        message = "媒体处理未完成，当前草稿保持不变；请查看作业原因。"
+    if job is not None:
+        from app.schemas import TaskMediaJobResponse
+        response_patch["media_job"] = TaskMediaJobResponse(job_id=job.id,
+            status=status if status in {"failed", "cancelled", "stale"} else job.status,
+            operation=start["operation"], input_digest=job.input_digest, created_at=job.created_at,
+            result_kind=start["result_kind"], base_version_id=base_version,
+            failure_reason=job.failure_reason, result=media_result if event["actionable"] else None,
+            result_url=f"/api/creation-tasks/{task_id}/media-jobs/{job.id}").model_dump(mode="json")
+    if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
+            response_patch=response_patch, message=message):
+        _mark_assistant_projection(candidate)
+        return True
+    return False
+
+
+def _project_assistant_request_candidate(candidate):
+    source, located = candidate["source"], candidate["request"]
+    workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
+    member_id, turn_id = source["member_id"], source["assistant_turn_id"]
+    binding = conversation_repo.business_turn_context(turn_id, workspace_id, member_id, task_id)
+    if binding is None or source.get("actor_identity") is None:
+        _mark_assistant_projection(candidate)
+        return True
+    if binding["status"] == "running":
+        return False
+    actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    if ((actor.user_id or actor.member_id) != member_id or _verify_creation_identity(actor) != "ready"
+            or not content_readable(user_id=member_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id)):
+        _mark_assistant_projection(candidate)
+        return True
+    locator = dict(located["locator"])
+    event_id = "event_edit_request_" + media_digest([workspace_id, member_id, locator["request_id"], "preview"])
+    result = _read_edit_request_result(task, event_id)
+    if result is not None:
+        claim = production_repo.get_task_event(workspace_id, event_id)
+        if claim.task_id != task_id or claim.payload["member_id"] != member_id:
+            _mark_assistant_projection(candidate)
+            return True
+        locator.update(status="rejected" if result.status_code >= 400 else "recorded",
+            result_status_code=result.status_code, result=json.loads(result.body), input_digest=claim.payload["input_digest"])
+    elif locator["status"] not in {"not_submitted", "rejected"}:
+        return False
+    patch = {"edit_request": locator}
+    current = task.current_timeline_version_id == source["expected_timeline_version_id"]
+    if result is not None and result.status_code < 400:
+        actual = json.loads(result.body)
+        if actual.get("proposal"):
+            proposal = production_repo.get_edit_proposal(workspace_id, actual["proposal"]["id"])
+            if proposal.task_id != task_id:
+                _mark_assistant_projection(candidate)
+                return True
+            if current and proposal.status == "proposed" and proposal.operation["payload"].get("base_version_id") == task.current_timeline_version_id:
+                patch["edit_preview"] = _edit_preview_response(
+                    production_repo.get_edit_intent(workspace_id, proposal.intent_id), proposal).model_dump(mode="json")
+        elif actual.get("job_id"):
+            if device_runtime is None:
+                return False
+            job = production_repo.get_job_run(workspace_id, actual["job_id"])
+            if job.task_id != task_id:
+                _mark_assistant_projection(candidate)
+                return True
+            media = device_runtime.registrations["creation_job"].owner.task_media
+            patch["media_job"] = _task_media_job_response(media, job, actor, device_runtime)
+    status = locator["status"] if current else "stale"
+    event = {"type": "business_result", "event_id": candidate["event_id"], "phase": "request",
+        "task_id": task_id, "request_id": locator["request_id"], "base_version_id": source["expected_timeline_version_id"],
+        "status": "stopped" if binding["status"] == "stopped" else status,
+        "actionable": bool(patch.get("edit_preview")) and binding["status"] == "completed",
+        "waiting_reason": "只回读原请求；排队不是完成，尚未确认的修改不会自动应用。"}
+    if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
+            response_patch=patch, message="原编辑请求的实际结果已回读，没有重复提交或改绑版本。"):
+        _mark_assistant_projection(candidate)
+        return True
+    return False
+
+
+def _reconcile_assistant_business_results():
+    return sum(_project_assistant_business_candidate(candidate)
+               for candidate in production_repo.assistant_business_candidates())
+
+
+class AssistantContinuationDriver:
+    """Low-load projection of durable business events; never a media executor."""
+    def __init__(self):
+        self.wake = threading.Event()
+        self.stop_event = threading.Event()
+        self.thread = None
+
+    def start(self):
+        _reconcile_assistant_business_results()
+        self.thread = threading.Thread(target=self._run, name="assistant-business-results", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            self.wake.wait(1)
+            self.wake.clear()
+            if self.stop_event.is_set():
+                break
+            try:
+                _reconcile_assistant_business_results()
+            except Exception:
+                logger.exception("对话业务结果回填失败；持久来源保留，未重复执行业务动作")
+
+    def stop(self):
+        self.stop_event.set()
+        self.wake.set()
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise RuntimeError("对话结果驱动尚未退出")
+
+
+def start_assistant_continuation_driver():
+    global assistant_continuation_driver
+    if assistant_continuation_driver is None:
+        driver = AssistantContinuationDriver()
+        driver.start()
+        assistant_continuation_driver = driver
+
+
+@app.on_event("shutdown")
+def stop_assistant_continuation_driver():
+    global assistant_continuation_driver
+    if assistant_continuation_driver is not None:
+        assistant_continuation_driver.stop()
+        assistant_continuation_driver = None
+
+
 @app.on_event("shutdown")
 def stop_active_assistant_turns() -> None:
     for turn_id in stop_all_assistant_turns():
@@ -18813,6 +19147,9 @@ def stop_creation_execution_worker() -> None:
     _stop_material_ingestion()
     _stop_execution_worker()
     platform_auth_service.sessions.close_all()
+
+
+app.on_event("startup")(start_assistant_continuation_driver)
 
 
 @app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)
