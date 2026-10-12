@@ -28,6 +28,10 @@ PI-05-RESOURCE交付后该七文件写权RELEASE。同一可见脚本实施线�
 
 Pi Owner的PI-01/02交付后原宿主/工具写权RELEASE，接续PI-03-WEB，唯一写useAssistantConversation.ts、AssistantConversationPanel.tsx、lib/types.ts及对应组件/读竞争测试。按DESIGN§2/4.3复用已有对话与修改入口，消费同一持久业务投影；模型轮次已结束而媒体作业/未知请求仍待结果时继续有界回读，采用/拒绝/停止/旧版以真实事件更新，清除轮询条件而不触发模型或写动作。不创建会话、重设计布局或覆盖草稿/选中对象，明确区分已安排、实际预览、待决定、已保存及未成片。API与脚本/CLI继续既有Owner，screenshot-visible普通浏览器验收由root在同候选完成。
 
+实际隔离验收的队列C1（2026-10-12）：共享锁为free，但旧库三条blocked/input_stale请求均无last_grant_generation，关联的唯一creation_task_execution已succeeded；旧镜头/配音已交付，不是当前待执行工作。脚本/CLI Owner独占device_scheduler.py及直接scheduler测试，最窄修正跨库接管的只读待办判定：仅这类已成功Owner、input_stale、从未获许可的blocked历史请求不算阻止接管的待办。其他waiting/blocked、failed或未知Owner、granted/yield_requested、未知进程及非free许可保持原拒绝，不改旧库、请求、作业、素材或用户配置，不绕过全机锁。root拥有运行和同候选QA；当前已安装旧实例保持，是否临时关闭由用户决定，不能以修改判定自动获退出/取消用户工作授权。
+
+PI-03 API交付后原模块写权RELEASE；同一API Owner接续PI-05-API，独占main.py/schema/production.py/graphic_sources.py/task_audio.py与实际需要的新media_script_jobs.py及直接测试。首包Python/Pillow单PNG短预览，真实能力schema、提交/封存沿现有TaskMediaJobs/creation_job；runtime描述只取effective_model_root_path下固定media-script-runtime.json，不接受模型路径，不在受理时扫描/全hash或自动安装。root受许可校准固定工具链与预算，缺档/非macOS则明确不可执行。模型来源沿原有效turn，CLI沿真实成员，原Task/version/请求身份绑定保留；脚本/参数/输入修订/输出及工具链共同封存。首包输入只支持当前任务已登记PNG图形来源，其他视频/音频明确未接；0输入程序也可生成图形。实际outputs经Leaf解码/尺寸/摘要检查进入ArtifactStore、ArtifactRecord/TransformRun/DependencyEdge并登记当前任务可编辑graphic_source；生产Job完成前不作为可用来源，输入和任务改变拒绝，不直接改当前版本。PIL执行与后续FFmpeg画面预览分开按既有许可单元运行，不能借脚本档渲染视频或嵌套持许可等下一许可。普通图形读取/解析与恢复认识此成功来源；当前模型、CLI/GUI预览→采用→渲染/撤销由root实证。测试隔离库/显式替代环境，禁止真实配置、模型、服务、私库、依赖/Git/内部代理操作；共享架构/具体资源实测和工具复用契约仍由root收口。
+
 ## 2026-10-12 接续与本轮文件归属
 
 本轮 PR #115 修复与合入授权（C1）：用户明确选择“授权当前线程修复并合并”。当前线程独占该 PR 合并阻断的源码、对应测试及 lint 修正；以 `d055d07` 为起点，保留已批准产品/领域/设计/安全规则，验证通过后通过 PR 合入 GitHub main 并同步本地主入口。此授权覆盖本轮主控直接修复的例外，不恢复其他实施 lease，不包含真实用户数据迁移、模型调用、平台发布、签名或分发。其余原工作树及正在运行的用户实例保持；本轮源码修复例外在 PR 合入和本地主入口同步后结束。

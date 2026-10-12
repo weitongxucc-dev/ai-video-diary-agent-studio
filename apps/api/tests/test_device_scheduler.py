@@ -204,6 +204,110 @@ def test_two_processes_share_one_host_permit_even_with_different_business_databa
             second.pick_and_grant()  # first DB's untouched request must be checked
 
 
+def _completed_stale_history(scheduler, *, state="blocked", reason="input_stale",
+                             generation=None, owner="creation_job", job_status="succeeded",
+                             job_kind="creation_task_execution", job_workspace="private-a"):
+    # Establish a genuinely free shared ledger first, then add never-granted history.
+    scheduler.submit(_intent("prior-unit"), "member-a")
+    granted = scheduler.pick_and_grant()
+    _complete(scheduler, granted)
+    request_id = scheduler.submit(_intent("historical-job", owner_type=owner), "member-a").id
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET state=?,wait_reason=?,last_grant_generation=? WHERE id=?",
+                     (state, reason, generation, request_id))
+        conn.execute("""INSERT INTO job_runs
+            (id,workspace_id,task_id,kind,idempotency_key,input_digest,status,progress,attempt,
+             output_refs_json,created_at,updated_at)
+            VALUES ('historical-job',?,'synthetic-task',?,'historical-key','original',?,100,1,'[]','2026-10-12','2026-10-12')""",
+                     (job_workspace, job_kind, job_status))
+    return request_id
+
+
+def _snapshot_old_rows(scheduler):
+    with sqlite3.connect(scheduler.database_path) as conn:
+        return (conn.execute("SELECT * FROM device_work_requests ORDER BY id").fetchall(),
+                conn.execute("SELECT * FROM device_permit ORDER BY id").fetchall(),
+                conn.execute("SELECT * FROM job_runs ORDER BY id").fetchall())
+
+
+def test_completed_never_granted_stale_history_allows_handoff_without_old_row_changes(tmp_path):
+    first = _scheduler(tmp_path)
+    _completed_stale_history(first)
+    before = _snapshot_old_rows(first)
+    second = _scheduler(tmp_path, db_name="other.sqlite")
+    second.submit(_intent("current-unit"), "member-a")
+    granted = second.pick_and_grant()
+    assert granted is not None
+    assert _snapshot_old_rows(first) == before
+    _complete(second, granted)
+    assert _snapshot_old_rows(first) == before
+
+
+@pytest.mark.parametrize("difference", [
+    {"state":"waiting"}, {"state":"granted"}, {"state":"yield_requested"},
+    {"reason":"resource_wait"}, {"reason":None}, {"generation":1}, {"generation":0},
+    {"owner":"job_run"}, {"job_status":"failed"}, {"job_status":"cancelled"},
+    {"job_status":"running"}, {"job_status":"queued"}, {"job_status":"interrupted"},
+    {"job_kind":"task_media"}, {"job_workspace":"private-b"},
+])
+def test_handoff_exemption_requires_every_canonical_history_condition(tmp_path, difference):
+    first = _scheduler(tmp_path)
+    _completed_stale_history(first, **difference)
+    before = _snapshot_old_rows(first)
+    second = _scheduler(tmp_path, db_name="other.sqlite")
+    second.submit(_intent("current-unit"), "member-a")
+    with pytest.raises(RecoveryBlocked, match="未处理"):
+        second.pick_and_grant()
+    assert _snapshot_old_rows(first) == before
+
+
+@pytest.mark.parametrize("missing", ["table", "job"])
+def test_missing_canonical_job_facts_still_protect_old_pending_work(tmp_path, missing):
+    first = _scheduler(tmp_path)
+    _completed_stale_history(first)
+    with sqlite3.connect(first.database_path) as conn:
+        conn.execute("DROP TABLE job_runs" if missing == "table" else "DELETE FROM job_runs")
+        pending_before = conn.execute("SELECT * FROM device_work_requests ORDER BY id").fetchall()
+    second = _scheduler(tmp_path, db_name="other.sqlite")
+    second.submit(_intent("current-unit"), "member-a")
+    with pytest.raises(RecoveryBlocked, match="未处理"):
+        second.pick_and_grant()
+    with sqlite3.connect(first.database_path) as conn:
+        assert conn.execute("SELECT * FROM device_work_requests ORDER BY id").fetchall() == pending_before
+
+
+def test_eligible_history_does_not_hide_another_pending_request_or_nonfree_permit(tmp_path):
+    first = _scheduler(tmp_path)
+    _completed_stale_history(first)
+    second = _scheduler(tmp_path, db_name="other.sqlite")
+    second.submit(_intent("current-unit"), "member-a")
+    waiting = first.submit(_intent("still-waiting"), "member-a")
+    before = _snapshot_old_rows(first)
+    with pytest.raises(RecoveryBlocked, match="未处理"):
+        second.pick_and_grant()
+    assert _snapshot_old_rows(first) == before
+    with sqlite3.connect(first.database_path) as conn:
+        conn.execute("UPDATE device_work_requests SET state='done' WHERE id=?", (waiting.id,))
+        conn.execute("UPDATE device_permit SET state='reconciling' WHERE id=1")
+    before = _snapshot_old_rows(first)
+    with pytest.raises(RecoveryBlocked, match="未处理"):
+        second.pick_and_grant()
+    assert _snapshot_old_rows(first) == before
+
+
+def test_empty_pending_queue_keeps_handoff_even_without_job_table(tmp_path):
+    first = _scheduler(tmp_path)
+    first.submit(_intent("prior-unit"), "member-a")
+    _complete(first, first.pick_and_grant())
+    with sqlite3.connect(first.database_path) as conn:
+        conn.execute("DROP TABLE job_runs")
+    second = _scheduler(tmp_path, db_name="other.sqlite")
+    second.submit(_intent("current-unit"), "member-a")
+    granted = second.pick_and_grant()
+    assert granted is not None
+    _complete(second, granted)
+
+
 def test_same_kind_second_request_waits_until_permit_released(tmp_path):
     # One host permit is held until a unit completes. A second request of the
     # same kind stays queued (pick_and_grant returns None) rather than gaining

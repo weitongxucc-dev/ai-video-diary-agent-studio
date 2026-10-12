@@ -644,11 +644,32 @@ class DeviceScheduler:
             raise RecoveryBlocked("前一业务库不可用，不能确认其待办已处理")
         try:
             with sqlite3.connect(f"file:{quote(str(old_path))}?mode=ro", uri=True) as old_conn:
+                old_conn.execute("BEGIN")  # All prior-dataset facts share one read snapshot.
                 pending = old_conn.execute(
                     """SELECT 1 FROM device_work_requests
                     WHERE state IN ('waiting', 'blocked', 'granted', 'yield_requested') LIMIT 1"""
                 ).fetchone()
                 old_permit = old_conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()
+                if pending and old_conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_runs'"
+                ).fetchone():
+                    pending = old_conn.execute(
+                        """SELECT 1 FROM device_work_requests AS request
+                        WHERE request.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
+                        AND NOT (
+                            request.state IS 'blocked'
+                            AND request.wait_reason IS 'input_stale'
+                            AND request.last_grant_generation IS NULL
+                            AND request.owner_type IS 'creation_job'
+                            AND EXISTS (
+                                SELECT 1 FROM job_runs AS job
+                                WHERE job.id = request.owner_id
+                                  AND job.workspace_id = request.workspace_id
+                                  AND job.kind = 'creation_task_execution'
+                                  AND job.status = 'succeeded'
+                            )
+                        ) LIMIT 1"""
+                    ).fetchone()
         except sqlite3.Error as exc:
             raise RecoveryBlocked("前一业务库的待办无法核查") from exc
         if pending or old_permit is None or old_permit[0] != "free":
