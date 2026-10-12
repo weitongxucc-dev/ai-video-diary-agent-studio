@@ -1650,6 +1650,7 @@ export type CreationTaskEditPreviewResponse = {
 };
 
 export type TaskMediaResultMap = {
+  graphic_source: {source_ref: string; artifact_id: string; sha256: string; size_bytes: number; name: string; width: number; height: number; applied: false};
   edit_preview: CreationTaskEditPreviewResponse;
   audio_source: { source_ref: string; name: string; duration_ms: number };
   recording: CreationTaskRecording;
@@ -1679,7 +1680,7 @@ export type TaskMediaJobPage = { items: TaskMediaJob[]; next_cursor: string | nu
 export type AssistantEditRequest = {
   task_id: string;
   request_id: string;
-  phase: "preview" | "apply";
+  phase: "preview" | "apply" | "script";
   status: "recorded" | "unknown" | "rejected" | "not_submitted";
   query_url: string;
   input_digest?: string | null;

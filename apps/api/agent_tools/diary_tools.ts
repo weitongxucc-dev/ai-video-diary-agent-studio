@@ -2,6 +2,7 @@ import { rankByQuery, tokenizeQuery } from "./retrieval.ts";
 import { clipFacts, subtitleFacts, narrationFacts, executionFacts, audioFacts, boundedText } from "./task_facts.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { registerControlledCodemode } from "./controlled_codemode.ts";
 
 const toolSignal = new AsyncLocalStorage<AbortSignal | undefined>();
@@ -29,6 +30,8 @@ const hostEditFields = new Set(["task_id", "workspace_id", "member_id", "user_id
   "request_id", "expected_timeline_version_id", "expected_timeline_sequence"]);
 let editCapabilities = process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES
   ? JSON.parse(process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES) : null;
+let mediaScriptCapabilities = process.env.AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES
+  ? JSON.parse(process.env.AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES) : null;
 
 class BusinessRequestError extends Error {
   httpStatus: number;
@@ -55,13 +58,27 @@ export async function readTaskEditCapabilities() {
   return value;
 }
 
-function typedEditSchema(capabilities: any) {
-  const schema = structuredClone(capabilities.schema);
+function modelParameters(apiSchema: any) {
+  const schema = structuredClone(apiSchema);
   for (const field of hostEditFields) delete schema.properties[field];
   schema.required = (schema.required || []).filter((field: string) => !hostEditFields.has(field));
-  schema.properties.operation_type = {...schema.properties.operation_type, enum: capabilities.supported_operations};
   schema.additionalProperties = false;
   return schema;
+}
+
+function typedEditSchema(capabilities: any) {
+  const schema = modelParameters(capabilities.schema);
+  schema.properties.operation_type = {...schema.properties.operation_type, enum: capabilities.supported_operations};
+  return schema;
+}
+
+export async function readMediaScriptCapabilities() {
+  if (!taskId) throw new Error("当前任务不可用");
+  const value = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/media-script-capabilities`);
+  if (value.task_id !== taskId || value.schema?.type !== "object" || !value.schema.properties || typeof value.available !== "boolean")
+    throw new Error("媒体脚本能力声明不可读");
+  mediaScriptCapabilities = value;
+  return value;
 }
 
 async function request(path: string, init?: RequestInit) {
@@ -90,7 +107,7 @@ async function request(path: string, init?: RequestInit) {
   const activeSignal = toolSignal.getStore();
   const timeout = AbortSignal.timeout(120000);
   const response = await fetch(`${apiBase}${path}`, { ...init, headers,
-    signal: activeSignal ? AbortSignal.any([timeout, activeSignal]) : timeout });
+    signal: AbortSignal.any([timeout, ...(activeSignal ? [activeSignal] : []), ...(init?.signal ? [init.signal] : [])]) });
   const body = await response.json();
   if (!response.ok) {
     const reason = typeof body.detail === "string" ? body.detail : body.detail?.reason;
@@ -861,14 +878,34 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
     });
     pi.registerTool({
       name: "read_task_media_job", label: "读取本轮预览作业结果",
-      description: "读取可信任务中的媒体作业，由服务端重新核验成员/任务归属；不从编号或聊天推测成功，也不重放预览。",
-      parameters: {type: "object", properties: {job_id: {type: "string", maxLength: 120}}, required: ["job_id"], additionalProperties: false},
-      execute: async (_id: string, params: {job_id: string}) => {
-        const media_job = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/media-jobs/${encodeURIComponent(params.job_id)}`);
-        if (media_job.job_id !== params.job_id) throw new Error("作业响应身份不一致");
+      description: "只读可信任务作业。可用wait_seconds进行至多20秒有限GET等待，每秒一次；超时仍返回最后实际pending状态，不重执行。PNG来源成功不表示已应用图层或出片。",
+      parameters: {type: "object", properties: {job_id: {type: "string", maxLength: 120},
+        wait_seconds: {type: "integer", minimum: 0, maximum: 20}}, required: ["job_id"], additionalProperties: false},
+      execute: async (_id: string, params: {job_id: string; wait_seconds?: number}) => {
+        const seconds = params.wait_seconds ?? 0;
+        if (!Number.isInteger(seconds) || seconds < 0 || seconds > 20) throw new Error("作业等待须为0–20秒整数");
+        const parentSignal = toolSignal.getStore();
+        const deadline = AbortSignal.timeout(seconds > 0 ? seconds * 1000 : 15000);
+        const signal = parentSignal ? AbortSignal.any([parentSignal, deadline]) : deadline;
+        let media_job: any = null;
+        for (;;) {
+          try {
+            const value = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/media-jobs/${encodeURIComponent(params.job_id)}`, {signal});
+            if (value.job_id !== params.job_id) throw new Error("作业响应身份不一致");
+            media_job = value;
+          } catch (error) {
+            if (parentSignal?.aborted || !deadline.aborted || !media_job) throw error;
+            break;
+          }
+          if (!seconds || !["queued", "running"].includes(media_job.status) || signal.aborted) break;
+          try { await delay(1000, undefined, {signal}); }
+          catch (error) { if (parentSignal?.aborted || !deadline.aborted) throw error; break; }
+        }
         if (media_job.status === "succeeded" && media_job.result?.proposal?.id
             && media_job.base_version_id === selectedTaskVersion?.timeline_version_id) typedPreviewBlocked = false;
-        const details = {kind: "task_media_job", media_job};
+        const details = {kind: "task_media_job", media_job,
+          wait: {seconds, deadline_reached: deadline.aborted, queried_only: true},
+          ...(media_job.result_kind === "graphic_source" ? {meaning: "这是PNG图形来源作业，未应用图层，未生成成片。"} : {})};
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });
@@ -891,6 +928,82 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });
+    pi.registerTool({
+      name: "read_media_script_capabilities", label: "读取图片程序能力",
+      description: "读取真实Python/Pillow单PNG能力、schema、工具链和预算缺口。不可用时说明实际reason，不安装或猜路径。",
+      parameters: {type: "object", properties: {}, additionalProperties: false},
+      execute: async () => {const details = await readMediaScriptCapabilities();
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};},
+    });
+    pi.registerTool({
+      name: "read_task_graphic_sources", label: "读取当前任务图片来源",
+      description: "只读取本任务已成功登记的可编辑PNG来源和输入修订；不读取图片文件，不把模型自报来源当有效数据。",
+      parameters: {type: "object", properties: {offset: {type: "integer", minimum: 0}}, additionalProperties: false},
+      execute: async (_id: string, params: {offset?: number} = {}) => {
+        const offset = params.offset ?? 0;
+        if (!Number.isInteger(offset) || offset < 0) throw new Error("图片来源读取位置须为非负整数");
+        const sources = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/graphics/sources`);
+        if (!Array.isArray(sources)) throw new Error("图片来源列表不可读");
+        const items = sources.slice(offset, offset + 24).map(source => Object.fromEntries(
+          ["source_ref", "artifact_id", "sha256", "size_bytes", "name", "width", "height"].map(key => [key, source[key]])));
+        const details = {items, total_count: sources.length, offset, truncated: offset > 0 || offset + 24 < sources.length};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      },
+    });
+    pi.registerTool({
+      name: "read_media_script_request", label: "回读原图片程序请求",
+      description: "仅GET原phase=script请求回执，不重POST、不换绑新版。recorded是已存受理回执，不表示Job成功或图层已应用。",
+      parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}}, required: ["request_id"], additionalProperties: false},
+      execute: async (_id: string, params: {request_id: string}) => {
+        const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=script`;
+        const receipt = await request(query);
+        if (receipt.request_id !== params.request_id || receipt.phase !== "script") throw new Error("程序请求回执身份不一致");
+        const details = receipt.status === "recorded" && receipt.result?.job_id
+          ? {kind: "task_media_job", media_job: {...receipt.result, request_id: params.request_id, request_query_url: query}}
+          : {kind: "edit_request_status", task_id: taskId, phase: "script", request_id: params.request_id,
+            query_url: query, status: receipt.status, input_digest: receipt.input_digest, submitted_input: receipt.submitted_input, result: receipt.result};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      },
+    });
+    if (mediaScriptCapabilities) {
+      const parameters = modelParameters(mediaScriptCapabilities.schema);
+      let submitted = false;
+      pi.registerTool({
+        name: "preview_media_script", label: "创建可编辑图片来源",
+        description: "提交API真实声明的Python/Pillow程序，只产生一个PNG来源Job；不应用、不出片。Python命名空间含parameters、inputs、outputs，使用outputs['name.png']写本次声明输出；0输入可绘图。所有文件/网络/进程及预算边界由普通API/运行时校验，不支持video/audio脚本。先读取真实能力和输入来源；参数不能覆盖宿主身份、版本或运行时路径。",
+        parameters,
+        execute: async (_id: string, params: Record<string, unknown>) => {
+          if (!currentTaskRead || !selectedTaskVersion) throw new Error("请先读取可信任务与版本");
+          if (!mediaScriptCapabilities.available) throw new Error(mediaScriptCapabilities.reason || "程序工具链或专用预算不可用");
+          if (Object.keys(params).some(key => hostEditFields.has(key) || !Object.hasOwn(parameters.properties, key)))
+            throw new Error("程序参数包含未知或可信宿主字段，未提交");
+          if (submitted || creationActionApplied || editControlWriteAttempted) throw new Error("本轮程序请求已提交或已有其他执行动作，不重复执行");
+          const turn = process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;
+          if (!turn || !_id || !process.env.AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION) throw new Error("程序请求来源未绑定");
+          submitted = true;
+          previewCreated = true;
+          const requestId = typedRequestId(turn, _id);
+          const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${requestId}?phase=script`;
+          try {
+            const job = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/media-scripts/preview`, {method: "POST",
+              body: JSON.stringify({...params, request_id: requestId, assistant_turn_id: turn,
+                expected_timeline_version_id: selectedTaskVersion.timeline_version_id, expected_timeline_sequence: selectedTaskVersion.timeline_sequence})});
+            if (!job.job_id || job.result_kind !== "graphic_source") throw new Error("程序未返回可核验来源作业，结果未知");
+            const details = {kind: "task_media_job", media_job: {...job, request_id: requestId, request_query_url: query},
+              meaning: "已提交PNG来源Job，未应用到时间线或生成成片。"};
+            return {content: [{type: "text", text: JSON.stringify(details)}], details};
+          } catch (error) {
+            const details = {kind: "edit_request_status", task_id: taskId, phase: "script", request_id: requestId,
+              assistant_turn_id: turn, tool_call_id: _id, query_url: query,
+              status: error instanceof RequestNotSubmitted ? "not_submitted" : error instanceof BusinessRequestError && error.httpStatus < 500 ? "rejected" : "result_unknown",
+              base_version_id: selectedTaskVersion.timeline_version_id, base_sequence: selectedTaskVersion.timeline_sequence,
+              failure_reason: boundedText(error instanceof Error ? error.message : String(error), 500),
+              instruction: "只查询原程序请求，不重POST或换绑最新版本。"};
+            return {isError: true, content: [{type: "text", text: JSON.stringify(details)}], details};
+          }
+        },
+      });
+    }
     if (editCapabilities) {
       const parameters = typedEditSchema(editCapabilities);
       pi.registerTool({

@@ -37,7 +37,37 @@ node scripts/yaohe.mjs material search --query "城市街景" --role b_roll --li
 
 全局能力读取 `/api/assistant/capabilities`；任务能力读取 `/api/creation-tasks/TASK/assistant/edit-capabilities`。`describe` 返回指定动作的实际可用性、参数 schema 和单位。素材读取沿 `/api/production/materials/ASSET` 和 `/api/production/materials/search`，仍受原成员与用途规则约束。
 
-脚本执行、扩展注册和导出目前没有接入完整 API，本 CLI 没有这些命令。服务端能力目录中的其他入口也不代表本 CLI 已实现对应命令。
+脚本仅接入当前API的Python/Pillow单PNG来源预览；配方/扩展注册和导出尚未接入，本CLI不猜测这些路由。服务端能力目录中的其他入口也不代表本 CLI 已实现对应命令。
+
+## Python/Pillow 图片来源程序
+
+```bash
+node scripts/yaohe.mjs script capabilities TASK
+node scripts/yaohe.mjs script sources TASK
+node scripts/yaohe.mjs script submit TASK --file script.json --request-id UUID
+node scripts/yaohe.mjs request query TASK UUID --phase script
+node scripts/yaohe.mjs job inspect TASK JOB
+node scripts/yaohe.mjs job wait TASK JOB --timeout-seconds 20
+```
+
+能力来自 `/assistant/media-script-capabilities` 的真实 `MediaScriptPreviewRequest` schema。工具链、隔离环境或专用预算缺档时，以 `available/reason` 为准，不自动安装或执行本地Python。当前只支持单PNG输出，以及本任务已登记PNG来源输入；视频/音频脚本未接入。
+
+`script.json` 使用API的 `script_source`、`language`、`purpose`、`parameters`、`input_refs`、`requested_outputs` 字段，整体读取上限256KiB。脚本命名空间是 `parameters`、`inputs`、`outputs`；通过 `outputs[声明名称]` 写输出。输入的 `source_ref/artifact_id/sha256` 须来自实际 `script sources` 回执；0输入也可绘图。脚本字段和数值契约仅由普通API校验，CLI不执行代码、不接受运行时路径。
+
+```json
+{
+  "script_source": "from PIL import Image\nImage.new('RGBA',(64,64),(40,90,180,255)).save(outputs['panel.png'])",
+  "language": "python",
+  "purpose": "preview",
+  "parameters": {},
+  "input_refs": [],
+  "requested_outputs": [{"name":"panel.png","max_bytes":65536,"width":64,"height":64}]
+}
+```
+
+程序请求复用原请求查询与幂等协议，phase固定为 `script`；编辑预览和应用仍分别用 `preview/apply`。同UUID已经recorded时，本次代码/参数仍提交给共同API比较，不复制旧程序冒充本次成功；只复用原版本绑定。未知请求仅查询，不重POST或换UUID盲重试。
+
+提交返回普通媒体Job。只有实际 `succeeded` 且返回 `graphic_source` 才取得可编辑PNG来源；这不表示当前时间线已变或成片已完成。需要使用时，另用实际 `source_ref` 创建 `EditGraphicOverlay`/`ImageOverlay` 类型化提案，沿既有预览、采用与生成流程。
 
 ## 编辑预览与原提案应用
 

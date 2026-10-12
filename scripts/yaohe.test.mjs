@@ -324,3 +324,54 @@ test('proposal without result and with unknown state remains query-only',async t
   assert.equal(result.code,4);assert.equal(result.json.submitted,false);
   assert.ok(f.calls.every(call=>call.method==='GET'));
 });
+
+const PROGRAM = {script_source:"from PIL import Image\nImage.new('RGBA',(64,64),'blue').save(outputs['panel.png'])",
+  language:'python',purpose:'preview',parameters:{color:'blue'},input_refs:[],
+  requested_outputs:[{name:'panel.png',max_bytes:65536,width:64,height:64}]};
+const scriptQuery = `${PREFIX}/assistant/edit-requests/${REQUEST}?phase=script`;
+const scriptJob = {job_id:'job_png',status:'queued',result_kind:'graphic_source',result:null,base_version_id:'version_original'};
+
+test('script capabilities and successful sources are actual authenticated GET routes',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,200,call.url.endsWith('/graphics/sources') ? [] :
+    {task_id:TASK,available:false,reason:'missing dedicated budget',schema:{type:'object',properties:{script_source:{type:'string'}}}}));
+  const result=await f.cli('script','capabilities',TASK);
+  assert.equal(result.json.data.available,false);
+  await f.cli('script','sources',TASK);
+  assert.deepEqual(f.calls.map(call=>call.url),[PREFIX+'/assistant/media-script-capabilities',PREFIX+'/graphics/sources']);
+  assert.ok(f.calls.every(call=>call.method==='GET'&&call.headers['x-local-member-token']===TOKEN));
+});
+
+test('script submit binds one current version, stable UUID and phase without fabricating assistant identity',async t=>{
+  const f=await fixture(t,(call,res)=>call.url===scriptQuery ? absent(res) : call.url===PREFIX ?
+    send(res,200,{task:{current_timeline_version_id:'version_original',timeline_sequence:7}}) : send(res,202,scriptJob));
+  const file=join(f.directory,'script.json');await writeFile(file,JSON.stringify(PROGRAM));
+  const result=await f.cli('script','submit',TASK,'--file',file,'--request-id',REQUEST);
+  assert.equal(result.code,3);
+  assert.deepEqual(f.calls.map(call=>[call.method,call.url]),[['GET',scriptQuery],['GET',PREFIX],['POST',PREFIX+'/media-scripts/preview']]);
+  const body=f.calls.at(-1).body;
+  assert.equal(body.script_source,PROGRAM.script_source);
+  assert.equal(body.request_id,REQUEST);assert.equal(body.expected_timeline_sequence,7);
+  assert.ok(!Object.hasOwn(body,'assistant_turn_id'));
+});
+
+test('recorded script never masks a changed program or replaces its original version',async t=>{
+  const original={...PROGRAM,script_source:'original source',request_id:REQUEST,expected_timeline_version_id:'original-base',expected_timeline_sequence:3};
+  const f=await fixture(t,(call,res)=>call.url===scriptQuery ? send(res,200,{status:'recorded',submitted_input:original,result:scriptJob}) :
+    send(res,409,{detail:'same UUID with different program rejected'}));
+  const file=join(f.directory,'different-script.json');await writeFile(file,JSON.stringify(PROGRAM));
+  const result=await f.cli('script','submit',TASK,'--file',file,'--request-id',REQUEST);
+  assert.equal(result.code,1);
+  assert.equal(f.calls.at(-1).body.script_source,PROGRAM.script_source);
+  assert.equal(f.calls.at(-1).body.expected_timeline_version_id,'original-base');
+  assert.ok(!f.calls.some(call=>call.url===PREFIX));
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+});
+
+test('unknown script receipt does not POST or change its request phase',async t=>{
+  const f=await fixture(t,(_call,res)=>send(res,200,{status:'unknown',result:null}));
+  const file=join(f.directory,'script.json');await writeFile(file,JSON.stringify(PROGRAM));
+  const result=await f.cli('script','submit',TASK,'--file',file,'--request-id',REQUEST);
+  assert.equal(result.code,4);assert.equal(f.calls.length,1);assert.equal(f.calls[0].url,scriptQuery);
+  const queried=await f.cli('request','query',TASK,REQUEST,'--phase','script');
+  assert.equal(queried.code,4);assert.ok(f.calls.every(call=>call.method==='GET'));
+});

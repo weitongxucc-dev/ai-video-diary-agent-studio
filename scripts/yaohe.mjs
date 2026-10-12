@@ -12,14 +12,17 @@ const HELP = `曜核 CLI — Node >=22，普通业务 API 消费者
   task inspect TASK
   material inspect ASSET
   material search --query TEXT [--role a_roll|b_roll] [--limit 20]
+  script capabilities TASK
+  script sources TASK
+  script submit TASK --file script.json --request-id UUID
   edit preview TASK --file edit.json --request-id UUID
   edit apply TASK PROPOSAL --request-id UUID
-  request query TASK UUID [--phase preview|apply]
+  request query TASK UUID [--phase preview|apply|script]
   job inspect|wait|cancel TASK JOB [--timeout-seconds 30]
   timeline undo|redo TASK [--expected-version VERSION --expected-sequence N]
 全局：--config FILE（默认 ~/.config/yaohe/config.json，POSIX mode 0600）
 预览版本可写入 edit.json；缺少时只读一次当前任务绑定。
-脚本执行、扩展注册、导出暂未接入完整 API，本 CLI 不提供这些命令。
+脚本仅消费API的Python/Pillow单PNG来源预览；不自动应用或出片。配方/扩展注册及导出尚未接入。
 退出：0 已完成；1 API/终态失败；2 参数/配置；3 尚未完成；4 结果未知。
 `;
 
@@ -60,15 +63,15 @@ function number(value, fallback, max) {
   return n;
 }
 
-async function boundedJson(file) {
-  const buffer = Buffer.alloc(65537);
+async function boundedJson(file, limit = 65536) {
+  const buffer = Buffer.alloc(limit + 1);
   let size = 0;
   while (size < buffer.length) {
     const {bytesRead} = await file.read(buffer,size,buffer.length-size,size);
     if (!bytesRead) break;
     size += bytesRead;
   }
-  if (size > 65536) throw new CliError('JSON文件超过读取上限');
+  if (size > limit) throw new CliError('JSON文件超过读取上限');
   return JSON.parse(buffer.subarray(0,size).toString('utf8'));
 }
 
@@ -182,6 +185,7 @@ async function submit(api,path,body,locator,kind) {
   try {
     const data = await api(path,{method:'POST',body});
     if (kind === 'preview' && !data?.proposal?.id && !data?.job_id) throw new CliError('预览响应缺少提案或作业回执',4);
+    if (kind === 'script' && (!data?.job_id || data.result_kind !== 'graphic_source')) throw new CliError('程序响应缺少真实图形来源作业回执',4);
     if (kind === 'apply' && !data?.operation?.id && !data?.job_id) throw new CliError('应用响应缺少操作或作业回执',4);
     return {...outcome(data),data,request_locator:locator,submitted:true};
   } catch (error) {
@@ -232,9 +236,47 @@ async function dispatch(api,args) {
       return {data:await api('/api/production/materials/search?'+query)};
     }
   }
+  if (group === 'script') {
+    if (command === 'capabilities') {
+      check(3,[]);
+      return {data:await api(`${taskPath(task)}/assistant/media-script-capabilities`)};
+    }
+    if (command === 'sources') {
+      check(3,[]);
+      return {data:await api(`${taskPath(task)}/graphics/sources`)};
+    }
+    if (command === 'submit') {
+      check(3,['file','request-id']);
+      if (!f.file) throw new CliError('程序提交需要 --file JSON');
+      const requestId = uuid(f['request-id']), locator = requestPath(task,requestId,'script');
+      let source, file;
+      try {
+        file = await open(f.file,constants.O_RDONLY | constants.O_NONBLOCK);
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > 262144) throw new CliError('程序文件须是有界普通JSON文件');
+        source = await boundedJson(file,262144);
+      } catch { throw new CliError('程序文件须是有界完整JSON'); }
+      finally { await file?.close(); }
+      if (!source || Array.isArray(source) || typeof source !== 'object' || typeof source.script_source !== 'string'
+          || ['assistant_turn_id','request_id','workspace_id','member_id','task_id','runtime_paths'].some(key => Object.hasOwn(source,key)))
+        throw new CliError('程序文件只包含API声明的代码、参数、输入/输出和期望版本，不包含身份或运行时路径');
+      const previous = await receipt(api,locator);
+      if (previous?.status === 'unknown') return {...knownReceipt(previous,locator),submitted_input:source};
+      if (previous && previous.status !== 'recorded') throw new CliError('程序请求回执无法核验',4,{request_locator:locator});
+      let body;
+      if (previous && !Object.hasOwn(source,'expected_timeline_version_id') && !Object.hasOwn(source,'expected_timeline_sequence')) {
+        const original = previous.submitted_input;
+        if (!original || !Object.hasOwn(original,'expected_timeline_version_id') || !Number.isSafeInteger(original.expected_timeline_sequence))
+          throw new CliError('原程序提交版本不可核验，不能换绑新版本',4,{request_locator:locator});
+        body = {...source,expected_timeline_version_id:original.expected_timeline_version_id,
+          expected_timeline_sequence:original.expected_timeline_sequence};
+      } else body = await version(api,task,source);
+      return submit(api,`${taskPath(task)}/media-scripts/preview`,{...body,request_id:requestId},locator,'script');
+    }
+  }
   if (group === 'request' && command === 'query') {
     check(4,['phase']); const phase = f.phase || 'preview';
-    if (!['preview','apply'].includes(phase)) throw new CliError('phase无效');
+    if (!['preview','apply','script'].includes(phase)) throw new CliError('phase无效');
     const path = requestPath(task,object,phase);
     try { return knownReceipt(await api(path),path); }
     catch (error) { throw new CliError(error.message,error.code,{...error.details,request_locator:path}); }
