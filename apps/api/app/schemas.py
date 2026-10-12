@@ -1489,7 +1489,8 @@ class CreationTaskExactEditRequest(BaseModel):
     crop_x: float | None = Field(default=None, ge=0, le=1)
     crop_y: float | None = Field(default=None, ge=0, le=1)
     split_time_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False)
+    playback_rate: float | None = Field(default=None, ge=0.25, le=4, allow_inf_nan=False,
+        description="ChangeClipSpeed：绝对画面速度，每1秒timeline消耗rate秒source，source_span=timeline_span*rate；0.7减速、2加速，2.5秒槽@0.7消耗1.75秒源片段，保留时间槽/旁白/字幕。ChangeLinkedSpeed：相对当前速度倍率，联动改变时轴，不是绝对速度。")
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     operation_type: Literal[
@@ -1927,6 +1928,41 @@ class MediaScriptPreviewRequest(BaseModel):
         if len(encoded.encode("utf-8")) > 65536:
             raise ValueError("脚本参数超过有界大小")
         return self
+
+
+class MediaScriptToolSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    assistant_turn_id: UUID | None = None
+    producer_job_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=500)
+    parameter_schema: dict[str, object]
+
+
+class MediaScriptToolUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1, strict=True)
+    producer_job_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=500)
+    parameter_schema: dict[str, object]
+
+
+class MediaScriptToolRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1, strict=True)
+
+
+class MediaScriptToolPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    request_id: UUID
+    assistant_turn_id: UUID | None = None
+    tool_version: int = Field(ge=1, strict=True)
+    expected_timeline_version_id: str | None
+    expected_timeline_sequence: int = Field(ge=0, strict=True)
+    parameters: dict[str, object] = Field(default_factory=dict)
+    input_refs: list[MediaScriptInputReference] = Field(default_factory=list, max_length=8)
 
 
 class AssistantEditRequestLocator(BaseModel):

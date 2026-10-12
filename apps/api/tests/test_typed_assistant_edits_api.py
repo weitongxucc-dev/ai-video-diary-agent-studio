@@ -38,6 +38,10 @@ def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(material_ed
     assert {"ReplaceClip", "TrimClip", "ChangeClipSpeed", "ChangeCrop", "UpdateSubtitleCue"} <= set(value["supported_operations"])
     assert not {"RegenerateNarrationSegment", "ChangePersonSegment", "RegeneratePersonRender"} & set(value["supported_operations"])
     assert "保留" in value["units"]["playback_rate"]
+    assert "source_span=timeline_span*rate" in value["units"]["playback_rate"]
+    assert "2.5*0.7=1.75" in value["units"]["playback_rate"]
+    assert "ChangeLinkedSpeed：相对当前速度倍率" in value["units"]["playback_rate"]
+    assert "source_span=timeline_span*rate" in value["schema"]["properties"]["playback_rate"]["description"]
     assert state.client.get("/api/creation-tasks/missing/assistant/edit-capabilities").status_code == 404
 
 

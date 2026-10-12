@@ -44,6 +44,12 @@ PI03-WEB交付后其六文件RELEASE；Pi Owner接续PI05消费者，只写assis
 
 PI05消费者Web窄差额：同一Pi Owner仅额外写lib/types.ts的graphic_source结果与script请求phase、AssistantConversationPanel.tsx的来源成功文案及直接Panel测试。正常kind=media_job/result_kind=graphic_source，未知kind=edit_request_status/phase=script；“图片来源已生成，尚未应用或成片”沿真实结果展示。不恢复hook、CSS或布局改写，不自动采用来源。
 
+PI05-API交付后其六文件RELEASE并保存893e9b8；API Owner接续PI06公共API，仅写main.py、schemas.py、media_script_jobs.py及新增test_media_script_tool_api.py。沿当前身份与任务写权提供成功producer保存、原创建请求v1查询、成员范围内有界发现/具体版本、显式CAS更新与停用，以及当前任务调用配方预览。handler不执行代码；配方ID/版本封存到同一TaskMediaJob，在提交与dispatch重新核当前HEAD.active和指定版本，再走原script封存/Leaf/PNG登记。新输入、任务版本和许可不能继承旧配方；本包不恢复Repository、graphic_sources、资源或Leaf写权。实际DTO/回执由此Owner先提出，root冻结后唯一Pi/CLI Owner消费，不猜未实现接口。
+
+PI06消费者绑定：Pi Owner接续assistant_pi.py、agent_tools及直接tests、CLI与docs/cli.md的配方消费；真实能力入口media-script-tools/capabilities导出schemas.save/update/revoke/invoke，CRUD/调用沿API已声明DTO，保存稳定UUID回原v1，未知只查询，不由模型提供调用代码或继承旧输入。新graphic_source触发当前工作区恢复消费者漏接的真实CI编译错误，本包窄写CreationTaskWorkspace.tsx、lib/api.ts及直接恢复tests/types差额；仅查看当前task/base的真实来源并沿原图层准备，不重设计或自动应用。API Owner窄续test_media_script_api.py的显式平台替代fixture与真实非macOS拒绝检查，不放宽产品平台或隔离规则。
+
+实测字段语义C1：冻结6d8504d源的当前M3只读程序实际完成工具读取，但把减速源时长关系理解反，并由0个配音段误推没有配音。API Owner仅补实际编辑能力的变速语义与直接回归；Pi Owner可窄写task_facts.ts与实际API形状tests，投射已有配音引用/时长及montage音轨，区分当前取用区间和全部可用范围、段数与音频存在。规范澄清见领域§7.3，既有算法、范围、授权及真实媒体验收不变。root只读模型QA禁写、禁设备协调者及生命周期，证据只覆盖实际文字模型/编排读取，不覆盖正常调度、预览或成片。
+
 ## 2026-10-12 接续与本轮文件归属
 
 本轮 PR #115 修复与合入授权（C1）：用户明确选择“授权当前线程修复并合并”。当前线程独占该 PR 合并阻断的源码、对应测试及 lint 修正；以 `d055d07` 为起点，保留已批准产品/领域/设计/安全规则，验证通过后通过 PR 合入 GitHub main 并同步本地主入口。此授权覆盖本轮主控直接修复的例外，不恢复其他实施 lease，不包含真实用户数据迁移、模型调用、平台发布、签名或分发。其余原工作树及正在运行的用户实例保持；本轮源码修复例外在 PR 合入和本地主入口同步后结束。

@@ -29,6 +29,10 @@ from _media_preview_test_fixtures import ControlledResources
 @pytest.fixture
 def state(material_edit_state, tmp_path, monkeypatch):
     state = material_edit_state
+    # The API/owner tests already substitute preparation/execution. Isolate
+    # only this adapter's platform inventory; do not mutate global sys or the
+    # real Leaf OS-isolation guard on Linux CI.
+    monkeypatch.setattr(scripts, "sys", SimpleNamespace(platform="darwin"))
     root = tmp_path / "script-runtime"
     root.mkdir()
     for name in ("python", "python_library"):
@@ -154,6 +158,16 @@ def test_unavailable_script_configuration_is_explicit_and_never_queues(state, mo
     assert submit(state).status_code == 503
     assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
     assert state.calls == []
+
+
+def test_unsupported_linux_platform_is_rejected_without_unrestricted_fallback(state, monkeypatch):
+    monkeypatch.setattr(scripts, "sys", SimpleNamespace(platform="linux"))
+    capabilities = state.client.get(state.base_url + "/assistant/media-script-capabilities")
+    assert capabilities.status_code == 200 and capabilities.json()["available"] is False
+    assert "macOS" in capabilities.json()["reason"]
+    assert submit(state).status_code == 503
+    assert state.calls == []
+    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
 
 
 def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(state):
