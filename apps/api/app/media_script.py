@@ -300,15 +300,22 @@ def verify_media_script_outputs(prepared: PreparedMediaScript) -> tuple[Measured
 def run_media_script(*, prepared: PreparedMediaScript, scheduler: DeviceScheduler,
                      grant: Grant, cancel_event: threading.Event | None = None) -> tuple[MeasuredScriptOutput, ...]:
     scheduler.assert_grant(grant)
-    if grant.input_digest != prepared.sealed.digest:
-        raise MediaScriptError("grant does not bind this sealed script")
     resources = scheduler.resources
     if not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("media script requires the existing real resource probe")
     facts = resources._grant_resources(grant)
     if not facts or facts.get("kind") != "media_script" or resources.scene_runtime_limits(grant) is None:
         raise RecoveryBlocked("media_script resource policy is not calibrated; execution unavailable")
+    if facts.get("script_digest") != prepared.sealed.digest:
+        raise MediaScriptError("durable grant resources do not bind this sealed script")
     validate_prepared_media_script(prepared)
+    if type(facts.get("threads")) is not int or facts["threads"] <= 0:
+        raise MediaScriptError("durable script thread declaration is invalid")
+    measured = media_script_resource_facts(sealed=prepared.sealed, limits=prepared.limits,
+        input_sizes={v.name: (prepared.directory / "inputs" / v.name).stat().st_size
+                     for v in prepared.sealed.input_revisions}, threads=facts["threads"])
+    if any(facts.get(name) != value for name, value in measured.items()):
+        raise MediaScriptError("prepared execution differs from durable script resources")
     limits = prepared.limits
     result = run_granted_command(scheduler, grant, prepared.argv, timeout_seconds=limits.timeout_seconds,
         max_stdout_bytes=limits.max_stdout_bytes, max_stderr_bytes=limits.max_stderr_bytes,
@@ -318,3 +325,32 @@ def run_media_script(*, prepared: PreparedMediaScript, scheduler: DeviceSchedule
     if result.returncode != 0:
         raise MediaScriptError(f"isolated script exited {result.returncode}")
     return verify_media_script_outputs(prepared)
+
+
+def media_script_resource_facts(*, sealed: SealedMediaScript, limits: ScriptExecutionLimits,
+                               input_sizes: dict[str, int], threads: int) -> dict:
+    """Pure projection of host-measured sizes; Job owner retains actor/input authorization.
+
+    Allows admission before staging/copying. The licensed runner re-measures its
+    staged files and compares this same projection with durable resources.
+    """
+    outputs = sealed.requested_outputs
+    inputs = sealed.input_revisions
+    if (set(input_sizes) != {v.name for v in inputs}
+            or any(type(v) is not int or v < 0 for v in input_sizes.values())):
+        raise MediaScriptError("measured input sizes do not match sealed input names")
+    return {
+        "kind": "media_script", "execution_mode": "isolated_python_pillow",
+        "script_digest": sealed.digest,
+        "script_bytes": len(sealed.script_source.encode("utf-8")),
+        "parameters_bytes": len(sealed.parameters_json.encode("utf-8")),
+        "input_count": len(inputs),
+        "input_bytes": sum(input_sizes.values()),
+        "output_count": len(outputs), "width_px": max(v.max_width for v in outputs),
+        "height_px": max(v.max_height for v in outputs),
+        "output_pixels": sum(v.max_width * v.max_height for v in outputs),
+        "max_output_bytes": sum(v.max_bytes for v in outputs),
+        "max_stdout_bytes": limits.max_stdout_bytes,
+        "max_stderr_bytes": limits.max_stderr_bytes,
+        "threads": threads, "timeout_seconds": limits.timeout_seconds,
+    }

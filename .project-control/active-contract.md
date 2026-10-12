@@ -24,6 +24,8 @@ PI-02代码编排采用installed Pi 1.1公开createCodemodeExtension的models:fa
 
 脚本Owner接续PI-05-RESOURCE，只写host_resource_probes.py、member_permits.py、其直接资源测试和已交付media_script.py的实际许可绑定；main.py/schema/task_audio.py暂不写。补专用media_script资源事实、预算解析和既有运行期检查，未知预算仍拒绝；不冒用旧FFmpeg或音频档。预算具体值由root真实有界校准后接入，不猜硬编码或修改用户配置。脚本摘要是封存Job输入的一部分，不要求整体Job摘要等于脚本摘要；必须从同一durable许可事实核验脚本摘要及现有actor/输入绑定，不新增许可或忽略摘要校验。无新依赖/VM/用户数据/模型/服务/Git/内部子代理。Pi Owner继续当前编排包，稳定请求身份闭合后RELEASE，再单独绑定CLI消费者。
 
+PI-05-RESOURCE交付后该七文件写权RELEASE。同一可见脚本实施线程接续PI-04 CLI独立消费者，唯一写scripts/yaohe.mjs、scripts/yaohe.test.mjs与docs/cli.md；复用已安装Node22+原生HTTP，不增依赖/数据库/模型/执行器。能力schema、任务/素材、类型化预览、原提案应用及请求/作业查询、有限等待/取消/撤销沿现有业务API；明确对象和版本，稳定身份重放，未接入脚本/扩展/导出不宣称可用。认证只读权限受保护的既有成员/会话配置，不放凭据参数或日志、不伪造助手轮次；拒绝携凭据跨源重定向。CLI检查使用自造HTTP服务/认证文件，真实API/外部Agent验收由root在同候选完成。根路由与整体集成/Git仍归root，无新服务/用户私库/Git/内部子代理写权。
+
 ## 2026-10-12 接续与本轮文件归属
 
 本轮 PR #115 修复与合入授权（C1）：用户明确选择“授权当前线程修复并合并”。当前线程独占该 PR 合并阻断的源码、对应测试及 lint 修正；以 `d055d07` 为起点，保留已批准产品/领域/设计/安全规则，验证通过后通过 PR 合入 GitHub main 并同步本地主入口。此授权覆盖本轮主控直接修复的例外，不恢复其他实施 lease，不包含真实用户数据迁移、模型调用、平台发布、签名或分发。其余原工作树及正在运行的用户实例保持；本轮源码修复例外在 PR 合入和本地主入口同步后结束。

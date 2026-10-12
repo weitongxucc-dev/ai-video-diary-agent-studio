@@ -50,13 +50,28 @@ def test_only_fixed_relative_output_filenames(name):
         seal(requested_outputs=(PngOutputContract(name, 4096, 16, 16),))
 
 
-def test_modified_input_is_rejected_before_any_launch(tmp_path):
+def test_modified_input_is_rejected_before_any_launch(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.write_bytes(b"changed")
     sealed = seal(input_revisions=(ScriptInputRevision("in.png", "r1", "a" * 64),))
-    with pytest.raises(MediaScriptError, match="sealed revision"):
-        prepare_media_script(sealed=sealed, input_paths={"in.png":source},
-            job_directory=tmp_path / "job", limits=ScriptExecutionLimits(1, 100, 100, 100))
+    # Portable contract unit: allow construction of the Darwin candidate only.
+    # Input mismatch exits before any policy/runtime launch; OS evidence belongs
+    # to test_media_script_isolation.py and remains Darwin-only.
+    with monkeypatch.context() as context:
+        context.setattr(media_script.sys, "platform", "darwin")
+        with pytest.raises(MediaScriptError, match="sealed revision"):
+            prepare_media_script(sealed=sealed, input_paths={"in.png":source},
+                job_directory=tmp_path / "job", limits=ScriptExecutionLimits(1, 100, 100, 100))
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_unsupported_platform_is_rejected_without_staging_or_launch(tmp_path, monkeypatch, platform):
+    with monkeypatch.context() as context:
+        context.setattr(media_script.sys, "platform", platform)
+        with pytest.raises(MediaScriptError, match="Seatbelt runner is unavailable"):
+            prepare_media_script(sealed=seal(), input_paths={}, job_directory=tmp_path / "job",
+                limits=ScriptExecutionLimits(1, 100, 100, 100))
+    assert not (tmp_path / "job").exists()
 
 
 def prepared(tmp_path):

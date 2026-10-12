@@ -213,6 +213,40 @@ class CpuAudioBudget:
 
 
 @dataclass(frozen=True)
+class MediaScriptBudget:
+    """Device-calibrated single-process Python/Pillow envelope; no defaults."""
+
+    max_script_bytes: int
+    max_parameters_bytes: int
+    max_input_count: int
+    max_input_bytes: int
+    max_output_count: int
+    max_width_px: int
+    max_height_px: int
+    max_output_pixels: int
+    max_output_bytes: int
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        for name, value in vars(self).items():
+            if name.endswith("seconds"):
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Media script timing limits must be explicitly positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Media script limits must be explicitly positive integers")
+        if self.additional_memory_bytes < self.max_process_rss_bytes or self.runtime_sample_seconds > .25:
+            raise ValueError("Media script needs reserved process memory and bounded sampling")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -228,6 +262,7 @@ class HostBudget:
     presenter: PresenterBudget | None = None
     presenter_cpu_render: CpuRenderBudget | None = None
     cpu_audio: CpuAudioBudget | None = None
+    media_script: MediaScriptBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -242,6 +277,10 @@ class HostBudget:
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
         ):
             raise ValueError("Scene decode requires explicit host memory and disk headroom")
+        if self.media_script is not None and (
+            self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
+        ):
+            raise ValueError("Media script requires explicit host memory and disk headroom")
 
 
 # Per-kind static caps. These are the device-calibrated upper bounds a declared
@@ -447,6 +486,9 @@ class HostResourceRefusal(RecoveryBlocked):
             "render_required_fields_zero": "成片必需的尺寸、数量或线程为零",
             "stage_budget_unavailable": "当前阶段的专属设备预算尚未标定",
             "stage_execution_mode_unavailable": "当前阶段的执行模式不受支持",
+            "media_script_budget_or_execution_mode_unavailable": "隔离脚本预算未标定或执行模式不可用",
+            "media_script_digest_invalid": "隔离脚本的封存摘要无效",
+            "media_script_resource_fields_invalid": "隔离脚本资源声明无效",
             "material_size_invalid": "素材输入大小无效",
             "scene_budget_or_source_codec_unavailable": "场景预算或源视频编码不可用",
             "scene_fields_invalid": "场景检测的输入声明无效",
@@ -621,6 +663,31 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
+        elif kind == "media_script":
+            script = self.budget.media_script
+            if script is None or resources.get("execution_mode") != "isolated_python_pillow":
+                return decision(None, "media_script_budget_or_execution_mode_unavailable")
+            digest = resources.get("script_digest")
+            if (type(digest) is not str or len(digest) != 64
+                    or any(c not in "0123456789abcdef" for c in digest)):
+                return decision(None, "media_script_digest_invalid")
+            for name in ("script_bytes", "parameters_bytes", "input_count", "input_bytes",
+                         "output_count", "width_px", "height_px", "output_pixels", "max_output_bytes",
+                         "max_stdout_bytes", "max_stderr_bytes", "threads", "timeout_seconds"):
+                value = resources.get(name)
+                if (type(value) not in ({int, float} if name == "timeout_seconds" else {int})
+                        or not math.isfinite(value) or value < 0
+                        or (value == 0 and name not in {"input_count", "input_bytes", "max_stdout_bytes", "max_stderr_bytes"})):
+                    return decision(None, "media_script_resource_fields_invalid")
+                limit = getattr(script, name if name.startswith("max_") else "max_" + name)
+                if value > limit:
+                    checks["media_script_budget"] = {"limits": asdict(script)}
+                    return decision(False, "declared_resources_exceed_budget")
+            checks["media_script_budget"] = {"limits": asdict(script)}
+            required_memory = self.budget.min_available_memory_bytes
+            if not running_io:
+                required_memory += script.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes + script.additional_disk_bytes + resources["max_output_bytes"]
         elif kind == "task_audio":
             audio = self.budget.cpu_audio
             if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
@@ -753,7 +820,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render"}
+            sustained = kind in {"creation_narration", "creation_person_render", "media_script"}
             before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
@@ -875,6 +942,12 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "media_script":
+            script = self.budget.media_script
+            if script is None or resources.get("execution_mode") != "isolated_python_pillow":
+                raise RecoveryBlocked("隔离脚本进程预算尚未标定或执行模式无效")
+            return SceneRuntimeLimits(script.max_process_rss_bytes, script.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, script.runtime_sample_seconds)
         if resources.get("kind") == "task_audio":
             audio = self.budget.cpu_audio
             if audio is None:
@@ -925,6 +998,8 @@ class HostResourceProbe:
             return True
         if resources.get("kind") == "task_audio" and resources.get("execution_mode") == "cpu_ffmpeg":
             return True
+        if resources.get("kind") == "media_script" and resources.get("execution_mode") == "isolated_python_pillow":
+            return True  # Existing scheduler first proves the registered single-process group exited.
         if resources.get("kind") == "material_scene_window":
             return True
         return None

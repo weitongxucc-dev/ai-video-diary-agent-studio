@@ -13,6 +13,9 @@ from types import SimpleNamespace
 import pytest
 import psutil
 
+from app.host_resource_probes import MediaScriptBudget
+from app.device_scheduler import RecoveryBlocked
+
 from app.granted_subprocess import (
     GrantedCommandCancelled,
     GrantedCommandOutputLimit,
@@ -1190,3 +1193,95 @@ def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeyp
             assert refusal.value.command_diagnostics["exec_ack"] is False
             assert not marker.exists()
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+
+def _script_budget():
+    # Explicit unit fixture, not device calibration or permission to run a job.
+    return MediaScriptBudget(512,256,2,1024,2,32,32,2048,4096,1024,1024,1,2,
+                             2048,4,.1,4096,8192)
+
+
+def _script_resources():
+    return dict(kind="media_script",execution_mode="isolated_python_pillow",script_digest="a"*64,
+                script_bytes=128,parameters_bytes=32,input_count=1,input_bytes=512,
+                output_count=1,width_px=16,height_px=16,output_pixels=256,
+                max_output_bytes=1024,max_stdout_bytes=100,max_stderr_bytes=100,threads=1,timeout_seconds=1)
+
+
+@pytest.mark.parametrize("change", [{"script_bytes":513},{"max_stdout_bytes":1025},
+    {"input_bytes":1025},{"width_px":33},{"output_pixels":2049},{"timeout_seconds":2.1}])
+def test_script_excess_is_refused_before_host_sampling(tmp_path, monkeypatch, change):
+    probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),
+        budget=HostBudget(50,100,100,100,1000,1000,media_script=_script_budget()))
+    monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:pytest.fail('invalid declaration sampled host'))
+    decision=probe._sample(_script_resources() | change)
+    assert decision.verdict is False and decision.reason=='declared_resources_exceed_budget'
+    assert '阶段输入超出' in str(HostResourceRefusal(decision))
+
+
+@pytest.mark.parametrize("change", [{"execution_mode":"cpu_ffmpeg"},{"script_digest":"wrong"},
+    {"script_bytes":True},{"timeout_seconds":float('nan')},{"output_count":0}])
+def test_invalid_script_contract_is_unknown_before_host_sampling(tmp_path, monkeypatch, change):
+    probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),
+        budget=HostBudget(50,100,100,100,1000,1000,media_script=_script_budget()))
+    monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:pytest.fail('invalid declaration sampled host'))
+    decision=probe._sample(_script_resources() | change)
+    assert decision.verdict is None
+    assert '隔离脚本' in str(HostResourceRefusal(decision))
+
+
+def test_missing_script_budget_is_not_an_audio_or_render_permit(tmp_path):
+    probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),budget=HostBudget(50,100,100,100,1000,1000))
+    assert probe._sample(_script_resources()).verdict is None
+    probe._grant_resources=lambda grant:_script_resources()
+    with pytest.raises(RecoveryBlocked,match='脚本进程预算尚未标定'):
+        probe.scene_runtime_limits(SimpleNamespace())
+
+
+@pytest.mark.parametrize('pressure',['none','cpu','memory','swap','disk','io'])
+def test_script_keeps_host_and_runtime_envelope(tmp_path, monkeypatch, pressure):
+    from itertools import count
+    probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),
+        budget=HostBudget(50,100,100,100,1000,1000,media_script=_script_budget()))
+    ticks=count(0,1.7)
+    monkeypatch.setattr('app.host_resource_probes.time.monotonic',lambda:next(ticks))
+    values=count(0,100000 if pressure=='io' else 0)
+    monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:
+        {'disk0':SimpleNamespace(read_bytes=next(values),write_bytes=0)})
+    monkeypatch.setattr(psutil,'disk_partitions',lambda **kwargs:[])
+    monkeypatch.setattr(psutil,'cpu_percent',lambda **kwargs:99 if pressure=='cpu' else 1)
+    monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=1 if pressure=='memory' else 100000))
+    monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=101 if pressure=='swap' else 0))
+    monkeypatch.setattr(psutil,'disk_usage',lambda path:SimpleNamespace(free=1 if pressure=='disk' else 100000))
+    decision=probe._sample(_script_resources(),running_io=True)
+    assert decision.verdict is (True if pressure=='none' else False)
+    assert decision.checks['available_memory_bytes']['minimum']==100
+    assert decision.checks[f'disk_free_bytes:{tmp_path}']['minimum']==100+8192+1024
+    probe._grant_resources=lambda grant:_script_resources()
+    limits=probe.scene_runtime_limits(SimpleNamespace())
+    assert (limits.max_process_rss_bytes,limits.max_process_threads,limits.sample_seconds)==(2048,4,.1)
+    assert probe.released(SimpleNamespace()) is True  # Scheduler's group proof remains separate.
+
+
+def test_script_reserves_peak_at_start_and_keeps_system_floor_while_running(tmp_path,monkeypatch):
+    from itertools import count
+    probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),
+        budget=HostBudget(50,100,100,100,1000,1000,media_script=_script_budget()))
+    ticks=count(0,1.7)
+    monkeypatch.setattr('app.host_resource_probes.time.monotonic',lambda:next(ticks))
+    monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:
+        {'disk0':SimpleNamespace(read_bytes=0,write_bytes=0)})
+    monkeypatch.setattr(psutil,'disk_partitions',lambda **kwargs:[])
+    monkeypatch.setattr(psutil,'cpu_percent',lambda **kwargs:1)
+    monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=200))
+    monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil,'disk_usage',lambda path:SimpleNamespace(free=100000))
+    start=probe._sample(_script_resources())
+    assert start.verdict is False
+    assert start.checks['available_memory_bytes']['minimum']==100+4096
+    running=probe._sample(_script_resources(),running_io=True)
+    assert running.verdict is True
+    assert running.checks['available_memory_bytes']['minimum']==100
+    monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=99))
+    assert probe._sample(_script_resources(),running_io=True).verdict is False

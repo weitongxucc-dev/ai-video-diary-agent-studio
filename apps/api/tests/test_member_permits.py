@@ -49,6 +49,25 @@ def test_partial_creation_stage_budget_remains_an_explicit_error(field):
     with pytest.raises(HostBudgetUncalibrated, match="阶段资源预算尚未标定"):
         creation_stage_budgets_from_env({field: "256"})
 
+
+def test_media_script_budget_requires_every_explicit_device_value():
+    from app.host_resource_probes import MediaScriptBudget
+    from app.member_permits import media_script_budget_from_env
+    from dataclasses import fields
+    assert media_script_budget_from_env({}) is None
+    with pytest.raises(HostBudgetUncalibrated, match="隔离脚本预算尚未标定"):
+        media_script_budget_from_env({"DEVICE_MEDIA_SCRIPT_MAX_INPUT_BYTES":"1024"})
+    # Values are a parser fixture, never a calibrated default or executable permit.
+    config = {"DEVICE_MEDIA_SCRIPT_"+item.name.upper(): "1" for item in fields(MediaScriptBudget)}
+    config["DEVICE_MEDIA_SCRIPT_RUNTIME_SAMPLE_SECONDS"] = "0.1"
+    result = media_script_budget_from_env(config)
+    assert result.max_input_bytes == 1 and result.runtime_sample_seconds == .1
+    assert host_budget_from_env(_HOST_ENV, media_script=result).media_script == result
+    for name, value in [("MAX_TIMEOUT_SECONDS","nan"), ("MAX_OUTPUT_BYTES","0"),
+                        ("MAX_INPUT_COUNT","bad"), ("RUNTIME_SAMPLE_SECONDS","0.3")]:
+        with pytest.raises(HostBudgetUncalibrated):
+            media_script_budget_from_env(config | {"DEVICE_MEDIA_SCRIPT_"+name:value})
+
 _HOST_ENV = {
     "DEVICE_HOST_MAX_CPU_PERCENT": "60",
     "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES": "1073741824",
