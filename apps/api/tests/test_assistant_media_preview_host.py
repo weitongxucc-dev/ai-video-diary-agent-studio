@@ -19,9 +19,9 @@ def receipt(status="queued"):
     }
 
 
-def events(details, model_reply="预览已完成，修改已应用。"):
+def events(details, model_reply="预览已完成，修改已应用。", *, failed=False):
     return "\n".join(json.dumps(event, ensure_ascii=False) for event in [
-        {"type":"tool_execution_end","toolName":"preview_edit","isError":False,
+        {"type":"tool_execution_end","toolName":"preview_typed_edit","isError":failed,
          "result":{"details":details}},
         {"type":"message_end","message":{"role":"assistant","stopReason":"stop",
          "content":[{"type":"text","text":model_reply}]}},
@@ -39,20 +39,20 @@ def test_pending_media_job_overrides_model_success_claim_and_preserves_receipt(s
     assert result == {"kind":"media_job","media_job":job}
     assert "已安排，预览尚未完成" in reply
     assert "修改已应用" not in reply and "预览已完成" not in reply
-    assert pi._safe_tool_result_summary("preview_edit", {"details":details}, False) == reply
+    assert pi._safe_tool_result_summary("preview_typed_edit", {"details":details}, False) == reply
 
 
 def test_immediate_proposal_keeps_business_preview_and_confirmation_reply():
     preview = {"proposal":{
-        "id":"proposal-current", "summary":"实际调亮镜头",
-        "operation":{"operation_type":"ChangeColor"},
-        "preview":{"before":{"detail":"原亮度"},"after":{"detail":"较亮"}},
+        "id":"proposal-current", "summary":"实际改为0.7倍速",
+        "operation":{"operation_type":"ChangeClipSpeed"},
+        "preview":{"before":{"detail":"原速度"},"after":{"detail":"0.7倍速"}},
         "invalidated_refs":[], "external_effects":[],
     }}
     reply, result = pi._last_answer_and_preview(events({"kind":"edit_preview","preview":preview}))
     assert result == preview
-    assert "实际调亮镜头" in reply and "待确认，尚未应用修改" in reply
-    assert "修改前：原亮度" in reply and "修改后：较亮" in reply
+    assert "实际改为0.7倍速" in reply and "待确认，尚未应用修改" in reply
+    assert "修改前：原速度" in reply and "修改后：0.7倍速" in reply
     assert "预览尚未完成" not in reply
 
 
@@ -79,10 +79,25 @@ def test_run_task_turn_returns_media_job_without_restarting_model(monkeypatch, t
     reply, result = pi.run_task_turn(
         Settings(model_root_path=str(tmp_path / "models")), workspace_id="workspace-current",
         task_id="task-current", conversation_id="conversation-current",
-        message="把选中镜头调亮一点", stage="montage", selected_refs=[], playhead_ms=None,
+        message="把选中镜头速度改为0.7倍，保留时间槽和旁白", stage="montage", selected_refs=[], playhead_ms=None,
         caller_user_id="member-current", turn_id="trusted-turn",
     )
     assert result == {"kind":"media_job","media_job":job}
     assert "已安排，预览尚未完成" in reply
     assert len(calls) == 1
-    assert "本轮重试或轮询" in calls[0][calls[0].index("--system-prompt") + 1]
+    prompt = calls[0][calls[0].index("--system-prompt") + 1]
+    assert "失败或未知结果不可盲重放" in prompt
+    assert "preview_edit" not in calls[0][calls[0].index("--tools") + 1].split(",")
+
+
+@pytest.mark.parametrize("status", ["result_unknown", "rejected", "not_submitted"])
+def test_request_failure_keeps_original_locator_instead_of_model_success(status):
+    locator = {"kind":"edit_request_status", "status":status, "phase":"preview", "task_id":"task-current",
+        "request_id":"11111111-1111-5111-8111-111111111111", "query_url":"/original-request?phase=preview",
+        "assistant_turn_id":"trusted-turn", "base_version_id":"version-current", "base_sequence":4,
+        "failure_reason":"实际拒绝或回执未知"}
+    reply, result = pi._last_answer_and_preview(events(locator, failed=True))
+    assert result == locator
+    assert "修改已应用" not in reply and "预览已完成" not in reply
+    expected = {"result_unknown":"不重复提交", "rejected":"请求已被拒绝", "not_submitted":"请求未提交"}
+    assert expected[status] in reply

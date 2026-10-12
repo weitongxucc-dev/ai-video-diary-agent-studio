@@ -2,6 +2,16 @@
 
 ## 2026-10-12 PI-OPEN：按已审方案实施并同步教学
 
+PI默认入口退役的四个测试消费者现已整体RELEASE给root；上述仅测试续写绑定停止，图片成片纵向API包保持独立唯一Owner。
+
+PI默认入口测试迁移交接：media_preview两文件已RELEASE。Pi Owner仅续test_assistant_clip_tools.py和test_pi_instruction_closure.py中的默认旧preview_edit调用/手写工具清单，迁至共同typed/schema/current宿主语义；保留拒绝旧入口的负向测试、片段候选及原句闭包保护，不改产品源码或其他文件。完成后该四文件包整体RELEASE给root，必要检查集中收口。
+
+PI-05事实接口核定：接受API Owner的image来源并集/去重及before-after最大图层数方案；该Owner额外仅独占member_permits.py中creation_job_registration工厂的actor/图片事实resolver参数透传，及确需的graphic_sources.py元数据事实读取与直接测试。不可事后改Owner属性、不能入队前全hash或Pillow解码；图片来源当前成员/任务/成功生产归属须按已有规则核验，grant后复核实际PNG及修订。其他资源策略仍不写，预算具体值归root。按已核接口直接实现到RELEASE，无需再问是否继续。
+
+PI默认入口退役的测试消费者接续：Pi Owner重新仅独占test_assistant_media_preview_tools.py与test_assistant_media_preview_host.py，把仍调用已删除preview_edit的旧fixture迁移到实际typed消费者或不存在断言，保留真实排队/未知/回执和原句绑定的有效保护；不恢复旧工具、不弱化业务检查或仅为绿灯跳过失败。不写产品源码或其他测试，最小相关检查后RELEASE，root接审阅/Git。
+
+PI-05图片成片纵向接续：真实PNG脚本、保存/复用及普通Web图层保存已通过；正常成片的cpu_render_facts仍拒绝graphic_overlays，图片修改预览声明还需核实候选新增来源/图层计数。API Owner 01a12a6c-9159-70f3-aec3-10e7919a207b接续独占creation_execution.py、main.py及直接资源/媒体/图形测试，先回报最窄真实事实接口并由root核定后实施。范围仅当前已登记、授权、成功PNG image图层接入既有CPU renderer/许可与前后候选声明；来源集合去重、实际文件修订/尺寸/输入字节/图层数及现有actor/task/base核验保持，未知事实不放行。不开放audio_timeline或其他未验证图层种类，不新增执行器/库/服务/资源类、默认预算或解析回退。运行时预算和真实有限校准只归root，首次明确旧max_overlay_count=0拒绝已保存，不能据此自动增大生产档。worker不访问用户私库/配置、不运行媒体/模型/服务或Git、不增代理。root继续正常API/CLI/UI预览、采用、成片、撤销及重启收口。
+
 2026-10-13 PI窄修复六文件写lease已RELEASE：root审阅后接Git保存与真实新候选验证，下方该窄包绑定只作本轮交接依据，不继续授予源码写权。
 
 PI-OPEN真实QA后续窄修复：root已在9dd74cd产品候选完成正常MiniMax类型化ChangeClipSpeed真实预览/采用/重放/撤销，并见普通Web真实PNG来源与保存工具卡。Pi Owner 01a12a7e-52a9-7241-a0af-db4ef06b91ff重新独占assistant_pi.py、diary_tools.ts及其直接宿主/工具测试，仅修已复现的codemode早期纯语法错误在后续成功后仍误报未完成，加入沿既有用户目标/素材选择的明确复用语义说明，并退役preview_edit的默认模型注册/默认消费。真实未知写入、后续未恢复错误与已提交回执仍保留，不用后续任意读取掩盖未知；GUI原句API消费者沿原领域规则保留，typed失败不fallback到旧工具。源码唯一Owner接收指定精确文件；不改API、Web、用户配置/凭据/历史，不运行服务/模型或Git，不增代理。最小相关测试后RELEASE，由root审diff、保存并在新候选重新正常实证。

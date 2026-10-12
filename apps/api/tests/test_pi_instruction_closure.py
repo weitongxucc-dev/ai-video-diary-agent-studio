@@ -175,6 +175,9 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
             "/api/creation-tasks/task-real/assistant/media-script-capabilities", "/api/media-script-tools/capabilities")]
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TASK_READ_READY"] == "1"
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
+        assert json.loads(kwargs["env"]["AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES"])["schema"] == CreationTaskExactEditRequest.model_json_schema()
+        assert "preview_typed_edit" in cmd[cmd.index("--tools") + 1].split(",")
+        assert "preview_edit" not in cmd[cmd.index("--tools") + 1].split(",")
         model_input = json.loads(kwargs["message"].split("本轮输入（JSON）：\n", 1)[1])
         assert model_input["original_user_instruction"] == ORIGINAL
         assert model_input["current_task_facts"]["task_id"] == "task-real"
@@ -187,7 +190,7 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)
     values = dict(workspace_id="qa", task_id="task-real", message=ORIGINAL, stage="montage", selected_refs=[], playhead_ms=None,
                   authorization=None,cookie=None,local_member_token="trusted-member",caller_user_id="owner",prompt="受控专项",
-                  tool_names="read_current_task,preview_edit",preview_kind="edit_preview",task_version={"timeline_version_id":None,"timeline_sequence":0},
+                  tool_names="read_current_task,preview_typed_edit",preview_kind="edit_preview",task_version={"timeline_version_id":None,"timeline_sequence":0},
                   turn_id=str(uuid4()),on_event=events.append)
     if read_result != "ok":
         with pytest.raises(pi.AssistantUnavailable, match="发送前读取当前任务失败"):
@@ -229,7 +232,7 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
         pi._run_turn(Settings(), workspace_id="qa", task_id=task_id, message=ORIGINAL,
                      stage=facts["selected_stage"], selected_refs=facts["selected_refs"], playhead_ms=facts["playhead_ms"],
                      authorization=None, cookie=None, local_member_token=None, caller_user_id="owner", prompt="受控专项",
-                     tool_names="read_current_task,preview_edit", preview_kind="edit_preview", session_key="conversation:shared",
+                     tool_names="read_current_task,preview_typed_edit", preview_kind="edit_preview", session_key="conversation:shared",
                      turn_id=str(payload.assistant_turn_id) if streaming else None, on_event=(lambda _: None) if streaming else None)
         cmd, kwargs = launches[-1]
         model_input = kwargs["message"] if streaming else kwargs["input"]
@@ -239,6 +242,8 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
         assert json.dumps(facts, ensure_ascii=False) in cmd[cmd.index("--system-prompt") + 1]
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TURN_ID"] == (str(payload.assistant_turn_id) if streaming else "")
+        assert "preview_typed_edit" in cmd[cmd.index("--tools") + 1].split(",")
+        assert "preview_edit" not in cmd[cmd.index("--tools") + 1].split(",")
         assert conversations.get_turn(str(payload.assistant_turn_id))["user_message"] == ORIGINAL
     assert len(launches) == 2
     assert launches[0][0][launches[0][0].index("--session-id") + 1] == launches[1][0][launches[1][0].index("--session-id") + 1]

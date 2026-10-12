@@ -5,8 +5,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+TURN_ID = "11111111-1111-4111-8111-111111111111"
 RUNNER = r"""
 import {createServer} from 'node:http';
 let raw='';for await(const part of process.stdin)raw+=part;
@@ -28,7 +30,7 @@ const server=createServer(async(req,res)=>{
  if(req.url==='/api/creation-tasks/task-a') reply=workspace;
  else if(req.url.includes('/candidates?for_automation=true')) reply=[{asset_id:'asset-b',segment_id:'segment-b',file_name:'候选.mp4',
   start_seconds:0,end_seconds:5,description:'产品空镜头',reasons:['时长满足']}];
- else if(req.url.endsWith('/edits/preview')) reply={proposal:{id:'proposal-a',summary:'替换镜头',target_refs:['clip:clip-a'],
+ else if(req.url.endsWith('/edits/exact/preview')) reply={proposal:{id:'proposal-a',summary:'替换镜头',target_refs:['clip:clip-a'],
   operation:{operation_type:'ReplaceClip'},preview:{before:{detail:'原镜头'},after:{detail:'候选镜头'}},invalidated_refs:[],external_effects:[],status:'proposed'}};
  else if(req.url.includes('asset-b')) reply=candidate;
  else {
@@ -42,6 +44,7 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 process.env.AI_VIDEO_DIARY_AGENT_API_BASE=`http://127.0.0.1:${server.address().port}`;
+process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES=JSON.stringify(input.capabilities);
 try{
  const {default:register}=await import(process.argv[1]);register({registerTool:tool=>tools.set(tool.name,tool)});
  const results=[];
@@ -50,7 +53,7 @@ try{
   try{results.push({ok:true,result:await tools.get(step.tool).execute('call',step.params||{})});}
   catch(error){results.push({ok:false,error:error.message});}
  }
- console.log(JSON.stringify({results,calls,asset,tools:[...tools.keys()],preview_parameters:tools.get('preview_edit').parameters}));
+ console.log(JSON.stringify({results,calls,asset,tools:[...tools.keys()],preview_parameters:tools.get('preview_typed_edit').parameters}));
 }finally{await new Promise(resolve=>server.close(resolve));}
 """
 
@@ -59,14 +62,17 @@ def invoke(tmp_path, steps, *, instruction="给当前镜头加上空镜头标签
     env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task-a", AI_VIDEO_DIARY_AGENT_STAGE="montage",
                AI_VIDEO_DIARY_AGENT_SELECTED_REFS='["clip:clip-a"]',
-               AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1", AI_VIDEO_DIARY_AGENT_TURN_ID="turn-a",
+               AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1", AI_VIDEO_DIARY_AGENT_TURN_ID=TURN_ID,
                AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION=instruction,
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
                AI_VIDEO_DIARY_AGENT_TASK_VERSION='{"timeline_version_id":"timeline-a","timeline_sequence":1}',
                AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION=json.dumps({"scope":"segment","assetId":"asset-a", "segmentId":"segment-a",
                    "expectedUpdatedAt":"2026-10-11T00:00:00Z", "expectedSegmentUpdatedAt":"2026-10-11T00:00:00Z"}))
     completed = subprocess.run(["node", "--experimental-strip-types", "--input-type=module", "-e", RUNNER, MODULE.as_uri()],
-                               input=json.dumps({"steps":steps}), text=True, capture_output=True, check=True,
+                               input=json.dumps({"steps":steps,"capabilities":{
+                                   "schema":CreationTaskExactEditRequest.model_json_schema(), "supported_operations":list(EXACT_EDIT_FIELDS),
+                                   "operations":[{"operation_type":operation,"available":True} for operation in EXACT_EDIT_FIELDS]}}),
+                               text=True, capture_output=True, check=True,
                                cwd=tmp_path, env=env, timeout=10)
     return json.loads(completed.stdout)
 
@@ -92,12 +98,42 @@ def test_task_change_after_read_prevents_material_write(tmp_path):
 
 
 def test_preview_exposes_choice_but_no_model_rewrite_of_host_instruction_or_selection(tmp_path):
-    out = invoke(tmp_path, [{"tool":"preview_edit"}], instruction="那你把镜头1和镜头2的位置互换一下")
+    params = {"operation_type":"ReplaceClip", "clip_id":"clip-a", "asset_id":"asset-b", "segment_id":"segment-b"}
+    out = invoke(tmp_path, [{"tool":"read_clip_candidates", "params":{"clip_id":"clip-a"}},
+                           {"tool":"preview_typed_edit", "params":params}], instruction="把当前镜头换成读到的候选，保持时长和旁白不变")
+    assert all(item['ok'] for item in out['results'])
+    candidate = out['results'][0]['result']['details']['matches'][0]
+    assert candidate['asset_id'] == params['asset_id'] and candidate['segment_id'] == params['segment_id']
+    assert candidate['file_name'] == '候选.mp4' and candidate['user_tags'] == ['空镜头']
+    assert any('/montage/clips/clip-a/candidates?' in call['path'] for call in out['calls'])
+    submitted = next(call['body'] for call in out['calls'] if call['path'].endswith('/edits/exact/preview'))
+    CreationTaskExactEditRequest.model_validate(submitted)
+    assert {key:submitted[key] for key in params} == params
+    assert submitted['assistant_turn_id'] == TURN_ID
+    assert submitted['expected_timeline_version_id'] == 'timeline-a' and submitted['expected_timeline_sequence'] == 1
+    assert not ({'raw_command','selected_object_refs','assistant_turn_id','request_id','expected_timeline_sequence'}
+                & out['preview_parameters']['properties'].keys())
+    assert 'preview_edit' not in out['tools']
+    assert not any(call['path'].endswith('/edits/preview') for call in out['calls'])
+
+
+@pytest.mark.parametrize('field', ['raw_command','assistant_turn_id','selected_object_refs','expected_timeline_sequence'])
+def test_typed_preview_rejects_model_rewrite_of_host_source_or_selection(tmp_path, field):
+    params = {'operation_type':'ReplaceClip','clip_id':'clip-a','asset_id':'asset-b','segment_id':'segment-b',field:'forged'}
+    out = invoke(tmp_path, [{'tool':'read_clip_candidates'}, {'tool':'preview_typed_edit','params':params}])
+    assert out['results'][0]['ok'] and not out['results'][1]['ok']
+    assert '可信宿主字段' in out['results'][1]['error']
+    assert not any(call['method'] == 'POST' for call in out['calls'])
+
+
+def test_candidate_read_does_not_allow_a_typed_write_after_task_version_changes(tmp_path):
+    params = {'operation_type':'ReplaceClip','clip_id':'clip-a','asset_id':'asset-b','segment_id':'segment-b'}
+    out = invoke(tmp_path, [{'tool':'read_clip_candidates'}, {'tool':'preview_typed_edit','params':params,'changeVersion':True}])
     assert out['results'][0]['ok']
-    assert out['preview_parameters']['properties'] == {}
-    submitted = next(call['body'] for call in out['calls'] if call['path'].endswith('/edits/preview'))
-    assert submitted['raw_command'] == "那你把镜头1和镜头2的位置互换一下"
-    assert submitted['selected_object_refs'] == ['clip:clip-a']
+    result = out['results'][1]['result']
+    assert result['isError'] and result['details']['status'] == 'not_submitted'
+    assert result['details']['base_version_id'] == 'timeline-a' and result['details']['base_sequence'] == 1
+    assert not any(call['method'] == 'POST' for call in out['calls'])
 
 
 @pytest.mark.parametrize('failed', [False, True])
@@ -122,7 +158,11 @@ def test_task_tag_reply_comes_from_verified_write_not_model_claims(failed):
 def test_legacy_replacement_fields_are_retired_even_with_candidates(tmp_path, candidate_read):
     steps = [{"tool":"read_clip_candidates"}] if candidate_read else []
     steps += [{"tool":"preview_edit", "params":{"replacement_asset_id":"asset-b", "replacement_segment_id":"segment-b"}}]
+    steps += [{"tool":"preview_typed_edit", "params":{"operation_type":"ReplaceClip", "clip_id":"clip-a",
+        "replacement_asset_id":"asset-b", "replacement_segment_id":"segment-b"}}]
     out = invoke(tmp_path, steps, instruction="帮我换一个镜头")
+    assert 'preview_edit' not in out['tools']
+    assert not out['results'][-2]['ok']
     assert not out["results"][-1]["ok"]
-    assert "preview_typed_edit" in out["results"][-1]["error"]
-    assert not [call for call in out["calls"] if call["path"].endswith('/edits/preview')]
+    assert "未知字段" in out["results"][-1]["error"]
+    assert not [call for call in out["calls"] if call["method"] == 'POST']
