@@ -48,7 +48,7 @@ def test_rejects_cut_inside_recognized_word_and_missing_schema():
             align_subtitle_track(track("hello"),result,3)
 
 
-def test_recognition_uses_local_cli_even_when_global_asr_is_cloud(tmp_path, monkeypatch):
+def test_recognition_uses_local_cli_even_when_global_asr_is_cloud(tmp_path, monkeypatch, granted_media):
     settings=SimpleNamespace(asr_provider="tencentcloud",local_whisper_backend="whisper_cpp",local_whisper_configured=True,
         local_whisper_cli_path="/local/whisper-cli",local_whisper_model_path="/external/model.bin")
     result={"transcription":[{"tokens":[token("hello",100,500)]}]}
@@ -56,18 +56,25 @@ def test_recognition_uses_local_cli_even_when_global_asr_is_cloud(tmp_path, monk
     def run(command, **kwargs):
         calls.append(command)
         Path(command[command.index('-of')+1]+'.json').write_text(json.dumps(result))
-    monkeypatch.setattr('app.subtitle_alignment.subprocess.run',run)
-    assert recognize_subtitle_timing(settings,tmp_path/'voice.wav','en-US',tmp_path)==result
-    assert calls[0][0]=='/local/whisper-cli'
-    assert calls[0][calls[0].index('-l')+1]=='en'
-    assert '--prompt' not in calls[0]
-    assert recognize_subtitle_timing(settings,tmp_path/'voice.wav','zh-CN',tmp_path)==result
-    assert calls[1][calls[1].index('-l')+1]=='zh'
-    assert calls[1][calls[1].index('--prompt')+1]=='以下使用简体中文。'
-    settings.local_whisper_configured=False
-    with pytest.raises(ValueError,match="本地"):
-        recognize_subtitle_timing(settings,tmp_path/'voice.wav','en-US',tmp_path)
-    assert len(calls)==2
+    with granted_media(kind="task_subtitle_recognition") as context:
+        def granted_run(command, **kwargs):
+            context.check()
+            run(command, **kwargs)
+            return SimpleNamespace(returncode=0, stderr="")
+        adapter = SimpleNamespace(scheduler=context.scheduler, grant=context.grant, threads=context.threads, run=granted_run)
+        assert recognize_subtitle_timing(settings, tmp_path/'voice.wav', 'en-US', tmp_path, context=adapter) == result
+        assert calls[0][0] == '/local/whisper-cli'
+        assert calls[0][calls[0].index('-l')+1] == 'en'
+        assert '--prompt' not in calls[0]
+        assert recognize_subtitle_timing(settings, tmp_path/'voice.wav', 'zh-CN', tmp_path, context=adapter) == result
+        assert calls[1][calls[1].index('-l')+1] == 'zh'
+        assert calls[1][calls[1].index('--prompt')+1] == '以下使用简体中文。'
+        settings.local_whisper_configured = False
+        with pytest.raises(ValueError, match="本地"):
+            recognize_subtitle_timing(settings, tmp_path/'voice.wav', 'en-US', tmp_path, context=adapter)
+        assert len(calls) == 2
+
+
 
 
 def test_bilingual_alignment_preserves_translation_text_and_visibility():

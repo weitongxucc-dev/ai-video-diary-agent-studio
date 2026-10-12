@@ -101,7 +101,9 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     mx.get_active_memory=lambda:64
     mx.get_cache_memory=lambda:cache["bytes"]
     mx.get_peak_memory=lambda:256
-    mlx=ModuleType("mlx");mlx.__path__=[];mlx.core=mx
+    mlx=ModuleType("mlx")
+    mlx.__path__=[]
+    mlx.core=mx
     numpy=ModuleType("numpy")
     numpy.asarray=lambda values:values
     numpy.concatenate=lambda values:SimpleNamespace(size=sum(len(item) for item in values))
@@ -123,15 +125,19 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
         events.append("load_model")
         return Model()
     utils.load_model=load_model
-    package=ModuleType("mlx_audio");package.__path__=[]
-    tts=ModuleType("mlx_audio.tts");tts.__path__=[]
+    package=ModuleType("mlx_audio")
+    package.__path__=[]
+    tts=ModuleType("mlx_audio.tts")
+    tts.__path__=[]
     for name,module in {"numpy":numpy,"mlx":mlx,"mlx.core":mx,"mlx_audio":package,
                         "mlx_audio.audio_io":audio,"mlx_audio.tts":tts,"mlx_audio.tts.utils":utils}.items():
         monkeypatch.setitem(sys.modules,name,module)
-    (tmp_path/"model").mkdir();(tmp_path/"ref.wav").write_bytes(b"reference fixture")
+    (tmp_path/"model").mkdir()
+    (tmp_path/"ref.wav").write_bytes(b"reference fixture")
     payload=request("en")
     payload.update(model_path=str(tmp_path/"model"),reference_audio_path=str(tmp_path/"ref.wav"),output_path=str(tmp_path/"audio.wav"))
-    input_path=tmp_path/"input.json";input_path.write_text(json.dumps(payload))
+    input_path=tmp_path/"input.json"
+    input_path.write_text(json.dumps(payload))
     response_path=tmp_path/"response.json"
     monkeypatch.setattr(sys,"argv",["worker","--request",str(input_path),"--response",str(response_path)])
     worker.main()

@@ -63,12 +63,12 @@ const foundation = {
 } as unknown as ProductionFoundation;
 
 describe("ProductionPage default CreationTask projection", () => {
-  it("keeps the legacy automations URL as an explicit read-only preview even when foundation is unavailable", async () => {
+  it("routes the automations URL to its workspace without implying that production has started", async () => {
     mocks.getProductionFoundation.mockResolvedValue(null);
     mocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
     render(await ProductionPage({ searchParams: Promise.resolve({ view: "automations" }) }));
     expect(screen.getByRole("region", { name: "定时任务只读预览" })).toBeInTheDocument();
-    expect(screen.getByText("定时任务仅供只读预览，尚未接通执行")).toBeInTheDocument();
+    expect(screen.getByText("定时安排到期建立运行，逐次确认后沿创作任务继续")).toBeInTheDocument();
     expect(screen.queryByText("无法打开创作任务")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "开始制作" })).not.toBeInTheDocument();
   });

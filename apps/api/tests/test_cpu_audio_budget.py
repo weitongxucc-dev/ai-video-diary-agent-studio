@@ -1,5 +1,4 @@
-from dataclasses import asdict, replace
-from types import SimpleNamespace
+from dataclasses import asdict
 
 import pytest
 

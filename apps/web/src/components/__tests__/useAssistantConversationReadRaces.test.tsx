@@ -66,7 +66,8 @@ describe("useAssistantConversation read races", () => {
     });
 
     expect(result.current.draftText).toBe("刷新期间新写的草稿");
-    expect(result.current.conversation?.draft_text).not.toBe("旧服务端草稿");
+    // conversation keeps the persisted snapshot; draftText owns newer local edits.
+    expect(result.current.conversation?.draft_text).toBe("旧服务端草稿");
   });
 
   it("preserves an unsaved local draft even when refresh starts after the edit", async () => {
@@ -80,7 +81,7 @@ describe("useAssistantConversation read races", () => {
     await act(async () => { await result.current.refresh(); });
 
     expect(result.current.draftText).toBe("尚未到自动保存时间的新草稿");
-    expect(result.current.conversation?.draft_text).toBe("尚未到自动保存时间的新草稿");
+    expect(result.current.conversation?.draft_text).toBe("旧服务端草稿");
     expect(result.current.conversation?.draft_version).toBe(2);
   });
 
@@ -129,7 +130,7 @@ describe("useAssistantConversation read races", () => {
     });
 
     expect(result.current.draftText).toBe("恢复完成前写下的新内容");
-    expect(result.current.conversation?.draft_text).toBe("恢复完成前写下的新内容");
+    expect(result.current.conversation?.draft_text).toBe("提交失败后可恢复的原句");
     expect(result.current.conversation?.draft_version).toBe(3);
     expect(result.current.conversation?.turns).toHaveLength(0);
   });
@@ -166,7 +167,7 @@ describe("useAssistantConversation read races", () => {
     });
 
     expect(result.current.draftText).toBe("二次读取期间新写的草稿");
-    expect(result.current.conversation?.draft_text).not.toBe("已持久化的原句");
+    expect(result.current.conversation?.draft_text).toBe("已持久化的原句");
     expect(result.current.conversation?.draft_version).toBe(3);
     expect(result.current.conversation?.turns.at(-1)?.assistant_text).toBe("保留的实时增量");
   });

@@ -167,7 +167,7 @@ if (!signin.includes('pattern="[A-Za-z0-9._-]{3,32}"')) {
   failures.push("sign-in must reject email-shaped identifiers and enforce account names");
 }
 
-if (!design.includes("# 智能视频日记桌面客户端设计规范") || !design.includes("status: user-approved-design-baseline") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
+if (!design.includes("# 曜核1.0桌面客户端设计规范") || !design.includes("status: user-approved-design-baseline") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
   failures.push("DESIGN.md is not the modern desktop source of truth");
 }
 

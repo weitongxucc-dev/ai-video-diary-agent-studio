@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     showQuickInspector: false,
     realShell: false,
     openQuickDetails: vi.fn(),
+    realMediaJobReads: false,
     materialReference: null as import("@/lib/assistant-reference").AssistantMaterialReference | null,
     setMaterialReference: vi.fn(),
     materialTurn: vi.fn().mockResolvedValue({ reply:"参考已读取", material_result:null }),
@@ -116,6 +117,7 @@ vi.mock("../DesktopVoiceRecorder", () => ({
 }));
 
 vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof import("@/lib/api")>()),
+  listCreationTaskMediaJobs: vi.fn(async (...args: Parameters<typeof import("@/lib/api").listCreationTaskMediaJobs>) => mocks.realMediaJobReads ? (await importOriginal<typeof import("@/lib/api")>()).listCreationTaskMediaJobs(...args) : { items: [], total_count: 0, has_more: false, limit: 50, offset: 0 }),
   getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => {
     const id = mocks.currentAssistantConversation.get(`${scope.scope_kind}:${scope.scope_id}`);
     if (id) return mocks.assistantConversations.get(id)!;
@@ -547,6 +549,7 @@ function workspaceWithCover() {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  mocks.realMediaJobReads = false;
   mocks.materialReference = null;
   mocks.realShell = false;
   mocks.showQuickInspector = false;
@@ -3913,7 +3916,7 @@ describe("作业进度读数", () => {
     const progress = await screen.findByRole("region", { name: "作业进度" });
     fireEvent.click(within(progress).getByRole("button", { name: "运行详情" }));
     const panel = await screen.findByRole("dialog", { name: "运行详情" });
-    expect(panel.querySelector("p")).toHaveTextContent(/成片输出 · 已完成 · 进度 100%/);
+    expect(within(panel).getAllByText(/成片输出 · 已完成 · 进度 100%/)[0]).toBeVisible();
     expect(within(panel).queryByText(/预计等待：|预计处理：/)).not.toBeInTheDocument();
     const history = within(panel).getByText("查看历史作业（32 条）");
     expect(history.closest("details")).not.toHaveAttribute("open");
@@ -4206,6 +4209,7 @@ it("offers bounded recovery after remount and reads only the explicitly chosen o
       ? { items: [newer, older, wrongBase], next_cursor: null }
       : savedMediaJob(initial, "older-job")));
   });
+  mocks.realMediaJobReads = true;
   vi.stubGlobal("fetch", fetch);
   const props = { initialTasks: [], initialTopics: null, initialWorkspace: initial };
   const first = render(<CreationTaskWorkspace {...props} />);
@@ -4235,6 +4239,7 @@ it("discards a recovering edit result after its trusted selection changes", asyn
   const fetch = vi.fn((url: string) => url.includes("?limit=")
     ? Promise.resolve(new Response(JSON.stringify({ items: [candidate], next_cursor: null })))
     : new Promise<Response>(resolve => { finish = resolve; }));
+  mocks.realMediaJobReads = true;
   vi.stubGlobal("fetch", fetch);
   render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
   fireEvent.click(screen.getByRole("tab", { name: /^视频剪辑：/ }));
@@ -4253,6 +4258,7 @@ it.each(["denied", "stale"])("does not expose a recovered player after an API %s
   const initial = recoveryWorkspace();
   mocks.getWorkspace.mockResolvedValue(initial);
   const candidate = savedMediaJob(initial, "member-job");
+  mocks.realMediaJobReads = true;
   vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("?limit=")
     ? new Response(JSON.stringify({ items: [candidate], next_cursor: null }))
     : reason === "denied" ? new Response(JSON.stringify({ detail: "任务媒体作业不存在" }), { status: 404 })

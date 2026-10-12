@@ -45,6 +45,78 @@ def pytest_sessionfinish(session, exitstatus):
     _test_directory.cleanup()
 
 
+@pytest.fixture
+def granted_media(tmp_path):
+    """Bound real synthetic-media tests to persisted jobs and a real device grant."""
+    from contextlib import contextmanager
+    import time
+    from app.creation_execution import CpuRenderGrantContext
+    from app.host_resource_probes import HostProcessProbe
+    from test_task_media_grants import case
+
+    sequence = 0
+
+    @contextmanager
+    def acquire(paths=(), *, kind="task_audio"):
+        nonlocal sequence
+        sequence += 1
+        root = tmp_path / f"media-grant-{sequence}"
+        root.mkdir()
+        repository, actor, _, _, build, media = case(root)
+        original = media.facts
+        sources = list(dict.fromkeys(Path(path).resolve() for path in paths))
+
+        def facts(*args):
+            identity, resources = original(*args)
+            resources.update(max_output_bytes=32 * 1024**2,
+                kind=kind,
+                input_count=len(sources), input_bytes=sum(path.stat().st_size for path in sources if path.is_file()),
+                inputs=[{"path": str(path), "duration_seconds": None, "sample_rate": None, "channels": None} for path in sources])
+            return identity, resources
+
+        media.facts = facts
+        runtime = build(media)
+        runtime.scheduler.processes = HostProcessProbe()
+        job = media.submit(runtime, actor, "task", "synthetic_media", {}, "audio_listen")
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None and grant.owner_id == job.id
+        context = CpuRenderGrantContext(runtime.scheduler, grant, time.monotonic() + 30, 32 * 1024**2, 1)
+        succeeded = False
+        try:
+            yield context
+            succeeded = True
+        finally:
+            def checkpoint(conn, current):
+                conn.execute("UPDATE job_runs SET status=? WHERE id=?", ("succeeded" if succeeded else "failed", job.id))
+                return f"synthetic-media:{job.id}"
+            if succeeded:
+                runtime.scheduler.complete_unit(grant, checkpoint_database_path=repository.database_path,
+                    checkpoint_write=checkpoint)
+            else:
+                runtime.scheduler.fail_unit(grant, reason="synthetic_media_failed", failure_write=checkpoint)
+            runtime.scheduler.assert_released(grant)
+            assert runtime.stop(1)
+
+    return acquire
+
+
+@pytest.fixture
+def granted_montage_renderer(granted_media, monkeypatch):
+    from app.montage import MontageRenderer, CreationTaskMontagePlan
+    original = MontageRenderer.render
+
+    def render(renderer, plan, audio_path, **kwargs):
+        if not isinstance(plan, CreationTaskMontagePlan) or kwargs.get("grant") is not None:
+            return original(renderer, plan, audio_path, **kwargs)
+        paths = [Path(audio_path), *(Path(clip.source_path) for clip in plan.clips if Path(clip.source_path).is_file())]
+        with granted_media(paths, kind="creation_render") as context:
+            return original(renderer, plan, audio_path, scheduler=context.scheduler, grant=context.grant,
+                max_output_bytes=context.max_output_bytes, threads=context.threads,
+                deadline_monotonic=context.deadline_monotonic, **kwargs)
+
+    monkeypatch.setattr(MontageRenderer, "render", render)
+
+
 # ── 文字服务密钥：测试期的工具替身 ──────────────────────────────────────
 # 普通用例不该碰这台机器的登录钥匙串：Linux CI 上也没有 `security`。这里统一把
 # 工作区配置根指向临时目录，并把钥匙串调用换成内存实现；需要真实系统安全存储

@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 import app.main as main
-from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from test_material_edit_qualification import material_edit_state  # noqa: F401
-from test_montage_pipeline import person_render_edit_state  # noqa: F401
+from app.montage import creation_task_montage_plan_to_payload
+from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state  # noqa: F401
 from test_linked_timeline_reorder import _build_linked_state, _cues, _plan
-from test_task_assistant_timeline_snapshot import task_client  # noqa: F401
+from test_task_assistant_timeline_snapshot import task_client as task_client  # noqa: F401
 
 
 @pytest.fixture

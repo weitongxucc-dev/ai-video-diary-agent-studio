@@ -5,7 +5,6 @@ import os
 import sqlite3
 import wave
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
@@ -165,7 +164,8 @@ def test_changed_inputs_reject_atomically(legacy, change):
             conn.execute("UPDATE material_assets SET payload=? WHERE id='asset_11'", (json.dumps(payload),))
         elif change == 'voice_excluded':
             row = conn.execute('SELECT payload FROM versioned_voice_profiles').fetchone()
-            payload = json.loads(row['payload']); payload['use_state'] = 'excluded'
+            payload = json.loads(row['payload'])
+            payload['use_state'] = 'excluded'
             conn.execute('UPDATE versioned_voice_profiles SET payload=?', (json.dumps(payload),))
         elif change == 'encoded_foreign':
             conn.execute("INSERT INTO workspace_media_references VALUES ('workspace://%31%31.mp4','foreign','now')")
@@ -173,7 +173,8 @@ def test_changed_inputs_reject_atomically(legacy, change):
             outside = repo.database_path.parent / 'outside.mp4'
             outside.write_bytes(b'not-in-authorized-root')
             row = conn.execute("SELECT payload FROM material_assets WHERE id='asset_11'").fetchone()
-            payload = json.loads(row['payload']); payload['path'] = str(outside)
+            payload = json.loads(row['payload'])
+            payload['path'] = str(outside)
             conn.execute("UPDATE material_assets SET file_path=?,payload=? WHERE id='asset_11'", (str(outside), json.dumps(payload)))
         elif change == 'visibility':
             conn.execute("UPDATE material_assets SET visibility='private' WHERE id='asset_11'")
@@ -183,20 +184,25 @@ def test_changed_inputs_reject_atomically(legacy, change):
             conn.execute("INSERT INTO workspace_media_references VALUES ('workspace://11.mp4','foreign','now')")
         elif change == 'authorization':
             row = conn.execute('SELECT payload FROM media_authorizations').fetchone()
-            payload = json.loads(row['payload']); payload['status'] = 'revoked'
+            payload = json.loads(row['payload'])
+            payload['status'] = 'revoked'
             conn.execute('UPDATE media_authorizations SET payload=?', (json.dumps(payload),))
         elif change == 'root':
             conn.execute("UPDATE material_ingestion_binding SET workspace_id='foreign'")
         elif change == 'version':
             conn.execute("INSERT INTO versioned_voice_profiles SELECT workspace_id,id,'v2',payload,'later' FROM versioned_voice_profiles")
     if change == 'mtime':
-        stat = wav_path.stat(); os.utime(wav_path, ns=(stat.st_atime_ns, stat.st_mtime_ns+1))
+        stat = wav_path.stat()
+        os.utime(wav_path, ns=(stat.st_atime_ns, stat.st_mtime_ns+1))
     elif change == 'size':
         with wav_path.open('ab') as output:
             output.write(b'x')
     elif change == 'replacement':
         path = repo.video_library_path / '11.mp4'
-        stat = path.stat(); content = path.read_bytes(); path.unlink(); path.write_bytes(content)
+        stat = path.stat()
+        content = path.read_bytes()
+        path.unlink()
+        path.write_bytes(content)
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     before = dump(repo)
     with pytest.raises(ValueError):

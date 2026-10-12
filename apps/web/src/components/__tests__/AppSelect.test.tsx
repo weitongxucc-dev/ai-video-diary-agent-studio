@@ -21,7 +21,7 @@ it("keeps empty choices, disabled items and disabled form fields truthful", asyn
  expect(screen.getByRole("combobox",{name:"版本"})).toHaveTextContent("请选择");
  expect(new FormData(container.querySelector("form")!).has("disabled")).toBe(false);
  const user=userEvent.setup();await user.click(screen.getByRole("combobox",{name:"版本"}));
- expect(screen.getByRole("option",{name:"不可用的版本"})).toHaveAttribute("aria-disabled","true");
+ expect(await screen.findByRole("option",{name:"不可用的版本"})).toHaveAttribute("aria-disabled","true");
  await user.click(screen.getByRole("option",{name:"不可用的版本"}));expect(onValueChange).not.toHaveBeenCalled();
  await user.click(screen.getByRole("option",{name:"版本一"}));expect(onValueChange).toHaveBeenCalledWith("v1");
 });
@@ -40,7 +40,7 @@ it("uses mature arrow, Home/End, typeahead and Escape focus handling",async()=>{
 it("portals within the owning card, closes Select before the card and restores trigger focus",async()=>{
  const close=vi.fn();function Card(){const[value,setValue]=useState("one");const[open,setOpen]=useState(true);return open ? <HomeCardDialog title="设置" kind="config" onClose={()=>{close();setOpen(false);}}><AppSelect aria-label="选择" value={value} onValueChange={setValue}><AppSelectOption value="one">一</AppSelectOption><AppSelectOption value="two">二</AppSelectOption></AppSelect></HomeCardDialog> : null;}
  render(<Card/>);const user=userEvent.setup();const trigger=screen.getByRole("combobox",{name:"选择"});await user.click(trigger);
- expect(within(screen.getByRole("dialog")).getByRole("listbox")).toBeVisible();await user.keyboard("{Escape}");expect(close).not.toHaveBeenCalled();await waitFor(()=>expect(trigger).toHaveFocus());
+ expect(await within(screen.getByRole("dialog")).findByRole("listbox")).toBeVisible();await user.keyboard("{Escape}");expect(close).not.toHaveBeenCalled();await waitFor(()=>expect(trigger).toHaveFocus());
  await chooseSelectValue(trigger,"two");expect(trigger).toHaveTextContent("二");expect(close).not.toHaveBeenCalled();await waitFor(()=>expect(trigger).toHaveFocus());
  await user.keyboard("{Escape}");expect(close).toHaveBeenCalledTimes(1);await waitFor(()=>expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });

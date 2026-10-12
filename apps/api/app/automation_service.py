@@ -96,7 +96,8 @@ class AutomationCreate(BaseModel):
 
     @model_validator(mode="after")
     def not_blank(self):
-        self.name = self.name.strip(); self.goal = self.goal.strip()
+        self.name = self.name.strip()
+        self.goal = self.goal.strip()
         if not self.name or not self.goal:
             raise ValueError("名称和目标不能为空")
         return self
@@ -153,13 +154,15 @@ class AutomationService:
         self.require_actor(actor)
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM automations WHERE workspace_id=? AND member_id=? AND id=?", (actor.workspace_id, actor.member_id, automation_id)).fetchone()
-        if row is None: raise KeyError(automation_id)
+        if row is None:
+            raise KeyError(automation_id)
         return self.definition(row)
 
     def create(self, actor, payload: AutomationCreate, *, now=None):
         self.require_actor(actor)
         inputs = self.read_inputs(actor, payload.model_dump(mode="json"))
-        now = now or utc_now(); identity = actor.identity_payload()
+        now = now or utc_now()
+        identity = actor.identity_payload()
         automation_id = "automation_" + uuid4().hex
         with self.connect() as conn:
             conn.execute("""INSERT INTO automations (id,workspace_id,member_id,actor_json,name,goal,template_id,template_version,template_snapshot_json,trigger_json,source_scope_json,status,next_due_at,created_at,updated_at)
@@ -168,18 +171,21 @@ class AutomationService:
 
     def revise(self, actor, automation_id, payload: AutomationCreate, revision: int, *, now=None):
         self.get(actor, automation_id)
-        inputs = self.read_inputs(actor, payload.model_dump(mode="json")); now = now or utc_now()
+        inputs = self.read_inputs(actor, payload.model_dump(mode="json"))
+        now = now or utc_now()
         with self.connect() as conn:
             updated = conn.execute("""UPDATE automations SET name=?,goal=?,template_id=?,template_version=?,template_snapshot_json=?,trigger_json=?,source_scope_json=?,revision=revision+1,next_due_at=?,updated_at=?
                 WHERE workspace_id=? AND member_id=? AND id=? AND revision=?""", (payload.name,payload.goal,payload.template_id,payload.template_version,dump(inputs["template"]),dump(payload.trigger.model_dump(mode="json")),dump(payload.source_scope.model_dump()),payload.trigger.first_due().isoformat(),now.isoformat(),actor.workspace_id,actor.member_id,automation_id,revision))
-            if updated.rowcount != 1: raise ValueError("定义已变化，请重新读取后编辑")
+            if updated.rowcount != 1:
+                raise ValueError("定义已变化，请重新读取后编辑")
         return self.get(actor, automation_id)
 
     def pause(self, actor, automation_id, paused: bool, revision: int):
         self.get(actor, automation_id)
         with self.connect() as conn:
             updated = conn.execute("UPDATE automations SET paused=?,status=?,revision=revision+1,updated_at=? WHERE workspace_id=? AND member_id=? AND id=? AND revision=?", (int(paused),"paused" if paused else "active",utc_now().isoformat(),actor.workspace_id,actor.member_id,automation_id,revision))
-            if updated.rowcount != 1: raise ValueError("定义已变化，请重新读取后操作")
+            if updated.rowcount != 1:
+                raise ValueError("定义已变化，请重新读取后操作")
         return self.get(actor, automation_id)
 
     def runs(self, actor, automation_id):
@@ -191,13 +197,15 @@ class AutomationService:
         self.require_actor(actor)
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM automation_runs WHERE workspace_id=? AND member_id=? AND id=?", (actor.workspace_id,actor.member_id,run_id)).fetchone()
-        if row is None: raise KeyError(run_id)
+        if row is None:
+            raise KeyError(run_id)
         return self.run(row)
 
     def write_run_state(self, run_id, *, state, stage, reason_code=None, reason=None, repair_action=None, snapshot=None, job_id=None, confirmation=None, execution=None, expected_revision=None):
         with self.connect() as conn:
             updated = conn.execute("UPDATE automation_runs SET state=?,stage=?,reason_code=?,reason=?,repair_action=?,input_snapshot_json=COALESCE(?,input_snapshot_json),job_id=COALESCE(?,job_id),confirmation_json=COALESCE(?,confirmation_json),execution_json=COALESCE(?,execution_json),revision=revision+1,updated_at=? WHERE id=? AND (? IS NULL OR revision=?)", (state,stage,reason_code,reason,repair_action,dump(snapshot) if snapshot is not None else None,job_id,dump(confirmation) if confirmation is not None else None,dump(execution) if execution is not None else None,utc_now().isoformat(),run_id,expected_revision,expected_revision))
-            if not updated.rowcount: return
+            if not updated.rowcount:
+                return
             row = conn.execute("SELECT automation_id FROM automation_runs WHERE id=?", (run_id,)).fetchone()
             conn.execute("UPDATE automations SET status=?,updated_at=? WHERE id=? AND paused=0", ("active" if state in {"completed", "cancelled"} else state,utc_now().isoformat(),row[0]))
 
@@ -242,29 +250,34 @@ class AutomationService:
         with self.connect() as conn:
             due_rows = conn.execute("SELECT * FROM automations WHERE paused=0 AND next_due_at IS NOT NULL AND next_due_at<=? ORDER BY next_due_at,id", (now.isoformat(),)).fetchall()
         for row in due_rows:
-            definition = self.definition(row); trigger = AutomationTrigger.model_validate(definition["trigger"])
+            definition = self.definition(row)
+            trigger = AutomationTrigger.model_validate(definition["trigger"])
             due = datetime.fromisoformat(row["next_due_at"])
             due_key = "once:" + due.isoformat() if trigger.cadence == "once" else due.astimezone(ZoneInfo(trigger.timezone)).date().isoformat()
             run_id = "automation_run_" + hashlib.sha256(f"{row['id']}:{due_key}".encode()).hexdigest()[:32]
             actor = CreationExecutionActor.from_event(row["workspace_id"],json.loads(row["actor_json"]))
             schedule_error = None
-            try: next_due = trigger.next_due(due,now)
+            try:
+                next_due = trigger.next_due(due,now)
             except ValueError as exc:
                 next_due = None
                 schedule_error = str(exc)
             with self.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 current = conn.execute("SELECT paused,next_due_at,revision FROM automations WHERE id=?", (row["id"],)).fetchone()
-                if current["paused"] or current["next_due_at"] != row["next_due_at"] or current["revision"] != row["revision"]: continue
+                if current["paused"] or current["next_due_at"] != row["next_due_at"] or current["revision"] != row["revision"]:
+                    continue
                 inserted = conn.execute("INSERT OR IGNORE INTO automation_runs (id,automation_id,workspace_id,member_id,automation_revision,due_key,due_at,definition_json,state,stage,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'running','inputs',?,?)", (run_id,row["id"],row["workspace_id"],row["member_id"],row["revision"],due_key,due.isoformat(),dump(definition),now.isoformat(),now.isoformat()))
                 conn.execute("UPDATE automations SET next_due_at=?,updated_at=? WHERE id=?", (next_due.isoformat() if next_due else None,now.isoformat(),row["id"]))
-            if not inserted.rowcount: continue
+            if not inserted.rowcount:
+                continue
             run = self.get_run_for_driver(run_id)
             if schedule_error:
                 self.write_run_state(run_id,state="blocked",stage="trigger",reason_code="schedule_timezone_ambiguity",reason=schedule_error,repair_action="重新选择没有夏令时歧义的每日时间")
             elif not trigger.allows(now):
                 self.write_run_state(run_id,state="blocked",stage="inputs",reason_code="outside_window",reason="错过本次允许窗口，未启动下一执行单元",repair_action="等待下一窗口或明确修改安排")
-            else: self.prepare(actor, run)
+            else:
+                self.prepare(actor, run)
         # A crash after the unique claim must recover the same occurrence, never make another run.
         with self.connect() as conn:
             recoveries = conn.execute("SELECT r.*,a.actor_json FROM automation_runs r JOIN automations a ON a.id=r.automation_id WHERE a.paused=0 AND r.task_id IS NULL AND r.state='running' AND r.stage='inputs'").fetchall()
@@ -280,7 +293,8 @@ class AutomationService:
         for row in rows:
             actor = CreationExecutionActor.from_event(row["workspace_id"],json.loads(row["actor_json"]))
             try:
-                self.require_actor(actor); self.project(actor, self.run({key:row[key] for key in row.keys() if key != "actor_json"}))
+                self.require_actor(actor)
+                self.project(actor, self.run({key:row[key] for key in row.keys() if key != "actor_json"}))
             except AutomationBlocked as exc:
                 self.write_run_state(row["id"],state="blocked",stage="permission",reason_code=exc.code,reason=exc.reason,repair_action=exc.repair)
 

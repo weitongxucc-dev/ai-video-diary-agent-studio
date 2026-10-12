@@ -11,9 +11,9 @@ import { loadPreflightDraft, resolvePreflightRepairContext, savePreflightDraft, 
 const scope = { memberId: "local:member-a", workspaceId: "space-a" };
 const id = "12345678-1234-4123-8123-123456789abc", nextId = "12345678-1234-4123-8123-123456789abd";
 const template: VideoTemplate = { id: "template-fixed", version: 3, name: "60秒模板", visibility: "private", origin: "user", source_task_id: "old", source_timeline_version_id: "old-version", created_at: "2026-10-09", settings: { language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 60, voice: null, style_instruction: "短句", fit_mode: "fit", subtitle_style: {} } };
-const fields: PreflightDraftFields = { goal: "原制作目标", name: "原名称", targetCount: "2", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: template.id, version: template.version } };
+const fields: PreflightDraftFields = { goal: "原制作目标", name: "原名称", targetCount: "1", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: template.id, version: template.version } };
 function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPreview {
-  return { goal: fields.goal, name: fields.name, target_count: 2, language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 30, knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 0, approved_clip_count: 0, material_rule_summary: "真实预检返回", material_matches: [], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "n".repeat(64), ...overrides };
+  return { goal: fields.goal, name: fields.name, target_count: 1, language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 30, knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 0, approved_clip_count: 0, material_rule_summary: "真实预检返回", material_matches: [], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "n".repeat(64), ...overrides };
 }
 function check() { fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!); }
 function defer<T>() { let resolve!: (value: T) => void; let reject!: (cause: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -69,9 +69,9 @@ describe("uncreated task repair return", () => {
     await screen.findByText("预检目标时长：30 秒");
     await act(async () => lateDefault.resolve({ id: "different-default", version: "v9" }));
     expect(screen.getByLabelText("制作目标")).toHaveValue(fields.goal); expect(screen.getByLabelText("任务名称（可选）")).toHaveValue(fields.name);
-    expect(screen.getByLabelText("成片数量")).toHaveValue(2); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30);
+    expect(screen.getByLabelText("成片数量")).toHaveValue(1); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30);
     expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "voice-a:v2"); expect(screen.getByLabelText("任务人物")).toHaveAttribute("data-selected-value", "person-b:p3");
-    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, target_count: 2, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
+    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, target_count: 1, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
     expect(mocks.confirm).not.toHaveBeenCalled();
     savePreflightDraft(sessionStorage, scope, nextId, fields);
     mocks.confirm.mockRejectedValueOnce(new Error("真实确认失败")); fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));

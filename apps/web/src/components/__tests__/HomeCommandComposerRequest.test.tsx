@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { AssistantConversation, CreationRequest } from "@/lib/types";
+import type { AssistantConversation, AssistantConversationTurn, CreationRequest } from "@/lib/types";
 import { HomeCommandComposer } from "../HomeCommandComposer";
 
 const mocks = vi.hoisted(() => ({ conversation: null as AssistantConversation | null, send: vi.fn(), get: vi.fn(), items: vi.fn(), checkpoint: Promise.resolve(0), refresh: vi.fn() }));
@@ -14,7 +14,7 @@ vi.mock("@/components/useAssistantConversation", () => ({ useAssistantConversati
 vi.mock("@/components/AssistantConversationProvider", () => ({ useAssistantMaterialReference: () => null, useAssistantKnowledgeReference: () => null, useAssistantProfileReference: () => null }));
 vi.mock("@/components/HomeCardDialog", () => ({ HomeCardDialog: ({ children, title, onClose }: { children: ReactNode; title: string; onClose: () => void }) => <div role="dialog" aria-label={title}><button onClick={onClose}>关闭目标</button>{children}</div> }));
 vi.mock("@/components/AssistantConversationPanel", () => ({
-  AssistantConversationPanel: ({ onSend }: { onSend: (message: string) => void }) => <button onClick={() => onSend("制作一万条视频")}>发送</button>,
+  AssistantConversationPanel: ({ onSend, state, onOpenCreationRequest }: { onSend: (message: string) => void; state: { conversation: AssistantConversation | null }; onOpenCreationRequest: (turn: AssistantConversationTurn) => void }) => <><button onClick={() => onSend("制作一万条视频")}>发送</button>{state.conversation?.turns.filter(turn => turn.result?.kind === "creation_request").map(turn => <button key={turn.id} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button>)}</>,
   AssistantFailureMessage: ({ message }: { message: string }) => <>{message}</>,
 }));
 vi.mock("@/lib/api", () => ({ apiUrl: (url: string) => url, getRuntimeSettings: async () => ({ status: { llm: { configured: true } } }), sendWorkspaceAssistantPlanTurn: mocks.send,
@@ -38,13 +38,13 @@ beforeEach(() => { vi.resetAllMocks(); mocks.conversation = conversation(); mock
 
 it("restores only the request identity and rereads actual progress on each reopening", async () => {
   render(<HomeCommandComposer />);
-  fireEvent.click(await screen.findByRole("button", { name: "查看创作目标" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看这次创作目标" }));
   expect(await screen.findByText("目标 10,000 条视频 · 已建 2 条任务")).toBeInTheDocument();
   expect(screen.queryByText("旧进度不能展示")).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "每行写一条视频的具体目标" }), { target: { value: "下一集：安装\n下一集：维护" } });
   fireEvent.click(screen.getByRole("button", { name: "关闭目标" }));
   mocks.get.mockResolvedValue(request(8));
-  fireEvent.click(screen.getByRole("button", { name: "查看创作目标" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看这次创作目标" }));
   expect(await screen.findByText("目标 10,000 条视频 · 已建 8 条任务")).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "每行写一条视频的具体目标" })).toHaveValue("下一集：安装\n下一集：维护");
   expect(mocks.get).toHaveBeenCalledTimes(2);
@@ -73,6 +73,6 @@ it("does not open a late request response on a different page or conversation", 
   view.rerender(<HomeCommandComposer pageContext={{ pathname: "/profile" }} />);
   await act(async () => resolve({ reply: "旧页返回", creation_request: request(), plan_preview: null }));
   expect(screen.queryByRole("dialog", { name: "创作目标" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "查看创作目标" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "查看这次创作目标" })).not.toBeInTheDocument();
   expect(mocks.get).not.toHaveBeenCalled();
 });

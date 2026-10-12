@@ -1793,7 +1793,7 @@ def render_granted_clip_preview(clip, source: Path, output: Path, context, *, as
         "-vf", clip_video_filters(clip, width=width, height=height, max_seconds=max_seconds),
         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-threads:v", str(context.threads), "-fs", str(context.max_output_bytes), "-movflags", "+faststart", str(output)]
-    result = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
         cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
     probe_preview_video(output, context, expected_size=(width,height), expected_duration_seconds=expected, silent=True)
     return output

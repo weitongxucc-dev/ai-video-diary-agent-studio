@@ -34,7 +34,10 @@ it("seeks original speech evidence and saves a user correction without replacing
     initialInsights={{ tags: [], recommended_gaps: [], asset_count: 1, segment_count: 1 } as unknown as MaterialLibraryInsights}
     initialCollections={{ collections: [], total_count: 0 }} />);
   const video = screen.getByLabelText("原素材预览") as HTMLVideoElement;
+  vi.spyOn(video, "readyState", "get").mockReturnValue(1);
   fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /接口/ }));
   expect(video.currentTime).toBe(5);
   fireEvent.click(screen.getByRole("button", { name: /USB port/ }));
   expect(video.currentTime).toBe(6);

@@ -236,7 +236,8 @@ def test_frozen_versions_are_sent_to_atomic_mutation(tmp_path, asset, scope, fai
 @pytest.mark.parametrize("scope", ["asset", "segment"])
 def test_own_confirmed_write_advances_only_turn_versions_for_read_and_second_write(tmp_path, asset, scope):
     selection={"scope":scope,"assetId":asset["id"],"expectedUpdatedAt":asset["updated_at"]}
-    if scope=="segment":selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
+    if scope=="segment":
+        selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
     out=call(tmp_path,asset,selection=selection,operations=[
         {"params":{"action":"add","tags":["第一次"]}},
         {"tool":"read_selected_material"},
@@ -246,7 +247,8 @@ def test_own_confirmed_write_advances_only_turn_versions_for_read_and_second_wri
     assert all(step["ok"] for step in out["steps"]),out
     puts=[item for item in out["calls"] if item["method"]=="PUT"]
     assert puts[1]["body"]["expected_asset_updated_at"]=="2026-10-10T00:00:02Z"
-    if scope=="segment":assert puts[1]["body"]["expected_segment_updated_at"]=="2026-10-10T00:00:02Z"
+    if scope=="segment":
+        assert puts[1]["body"]["expected_segment_updated_at"]=="2026-10-10T00:00:02Z"
     assert out["selection"]==selection  # Persisted/user choice is not mutated.
     assert out["steps"][-1]["result"]["details"]["user_tags"][-2:]==["第一次","第二次"]
 
@@ -254,7 +256,8 @@ def test_own_confirmed_write_advances_only_turn_versions_for_read_and_second_wri
 @pytest.mark.parametrize("scope", ["asset", "segment"])
 def test_external_revision_after_own_write_is_rejected_even_within_same_millisecond(tmp_path, asset, scope):
     selection={"scope":scope,"assetId":asset["id"],"expectedUpdatedAt":asset["updated_at"]}
-    if scope=="segment":selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
+    if scope=="segment":
+        selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
     out=call(tmp_path,asset,selection=selection,external_before_operation=1,external_segment_only=scope=="segment",operations=[
         {"params":{"action":"add","tags":["自己写入"]}},
         {"tool":"read_selected_material"},
@@ -270,7 +273,8 @@ def test_external_revision_after_own_write_is_rejected_even_within_same_millisec
 @pytest.mark.parametrize("failure", ["write", "readback", "mismatch", "concurrent_readback", "write_reply_missing_version", "write_reply_wrong_asset"])
 def test_failed_write_or_unverified_readback_never_advances_turn_expectation(tmp_path, asset, failure, scope):
     selection={"scope":scope,"assetId":asset["id"],"expectedUpdatedAt":asset["updated_at"]}
-    if scope=="segment":selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
+    if scope=="segment":
+        selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=asset["segments"][0]["updated_at"])
     out=call(tmp_path,asset,selection=selection,failure=failure,operations=[
         {"params":{"action":"add","tags":["已请求"]}},
         {"tool":"read_selected_material"},
@@ -294,7 +298,8 @@ def test_python_utc_suffix_and_api_z_preserve_exact_microsecond_versions(tmp_pat
     frozen="2026-10-10T00:00:01.123456+00:00"
     other="2026-10-10T00:00:01.123457+00:00"
     selection={"scope":scope,"assetId":asset["id"],"expectedUpdatedAt":frozen if microsecond_matches or scope=="segment" else other}
-    if scope=="segment":selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=frozen if microsecond_matches else other)
+    if scope=="segment":
+        selection.update(segmentId="segment-1",expectedSegmentUpdatedAt=frozen if microsecond_matches else other)
     out=call(tmp_path,asset,selection=selection,operations=[
         {"tool":"read_selected_material"},
         {"params":{"action":"add","tags":["第一次"]}},
@@ -306,7 +311,8 @@ def test_python_utc_suffix_and_api_z_preserve_exact_microsecond_versions(tmp_pat
         puts=[item for item in out["calls"] if item["method"]=="PUT"]
         assert puts[0]["body"]["expected_asset_updated_at"]==frozen
         assert puts[1]["body"]["expected_asset_updated_at"]=="2026-10-10T00:00:02Z"
-        if scope=="segment":assert puts[0]["body"]["expected_segment_updated_at"]==frozen
+        if scope=="segment":
+            assert puts[0]["body"]["expected_segment_updated_at"]==frozen
     else:
         assert all(not step["ok"] and "版本已变化" in step["error"] for step in out["steps"])
         assert all(item["method"]=="GET" for item in out["calls"])

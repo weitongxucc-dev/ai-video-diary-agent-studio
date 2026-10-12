@@ -444,6 +444,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
     max_output_bytes = kwargs.pop("max_output_bytes", None)
     threads = kwargs.pop("threads", None)
     normalize_voice_sources = kwargs.pop("normalize_voice_sources", False)
+    produced_source_paths = {path.resolve() for path in kwargs.pop("produced_source_paths", ())}
     if scheduler is None or grant is None:
         raise PermissionError("音轨渲染必须提供设备许可")
     if grant is not None:
@@ -453,6 +454,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
         kwargs["probe_duration"] = lambda path: probe_audio_source(
             path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
             deadline_monotonic=deadline_monotonic,
+            output=path.resolve() in produced_source_paths,
         )
     staging = (TemporaryDirectory(prefix="narration-normalized-", dir=args[3].parent)
                if normalize_voice_sources else nullcontext(None))
@@ -463,6 +465,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
                 scheduler=scheduler, grant=grant, cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
                 threads=threads, solo_track_ids=kwargs.get("solo_track_ids"))
+            produced_source_paths.update(path.resolve() for path in kwargs["normalized_narration"].values())
         command = build_audio_mix_command(*args, **kwargs)
         if grant is not None:
             bounded = []

@@ -41,7 +41,7 @@ from app.conversation_repository import (
     ConversationTurnRequestConflict,
 )
 
-from app.subtitle_alignment import align_subtitle_track, apply_aligned_timings, recognize_subtitle_timing, synchronize_translated_subtitles
+from app.subtitle_alignment import apply_aligned_timings, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
 from app.graphic_overlays import validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
@@ -49,7 +49,6 @@ from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.speech_timing import estimate_speech_seconds
 from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, insert_clip, reorder_linked_group
-from app.audio_timeline import render_stretched_audio
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command
 from app.subtitle_edits import merge_linked_subtitle_tracks, replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
@@ -498,6 +497,10 @@ from app.visual_semantics import visual_semantic_provider_from_catalog
 from app.voice import transcribe_audio_bytes
 from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
+from app.automation_routes import build_automation_guarded_publish_router
+from contextvars import ContextVar
+from app.automation_routes import build_automation_router
+from app.automation_runtime import AutomationRuntime
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
 CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v20"
@@ -1081,7 +1084,6 @@ app.include_router(knowledge_grant_router(
     content_reader=_content_reader,
     target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth_context.enabled),
 ))
-from app.automation_routes import build_automation_guarded_publish_router
 
 app.include_router(build_automation_guarded_publish_router(build_platform_publish_router(
     production_repo,
@@ -3560,7 +3562,6 @@ def _task_media_grant_or_queue(kind="waveform"):
 
 # Nested public helpers bubble the media boundary to the original operation,
 # preserving its accepted assistant instruction and selection.
-from contextvars import ContextVar
 _TASK_MEDIA_SUBMISSION = ContextVar("task_media_submission", default=False)
 
 
@@ -3794,7 +3795,11 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         references = {clip.source_ref for clip in clips}
         audio_uses.update(Counter(clip.source_ref for clip in clips))
         if operation == "audio_edit_preview":
-            candidate = apply_audio_edit(graph, AudioEditRequest.model_validate(payload), round(plan.duration_seconds * 1000))
+            edit = AudioEditRequest.model_validate(payload)
+            duration_ms = round(plan.duration_seconds * 1000)
+            if edit.action == "replace_narration":
+                edit = edit.model_copy(update={"values": {**edit.values, "source_end_ms": duration_ms}})
+            candidate = apply_audio_edit(graph, edit, duration_ms)
             after_clips = [clip for track in candidate.tracks if not track.muted for clip in track.clips if not clip.muted]
             references.update(clip.source_ref for clip in after_clips)
             for reference, count in Counter(clip.source_ref for clip in after_clips).items():
@@ -4167,8 +4172,9 @@ def list_creation_task_recordings(task_id: str, request: Request):
         try:
             _, duration_ms = service.recording(
                 workspace_id, task_id, record.logical_ref,
-                verify_digest=record.logical_ref in current_narration_refs,
             )
+            if not _task_media_outputs_current(production_repo.get_job_run(workspace_id, record.producer_job_id)):
+                continue
         except (KeyError, ValueError, FileNotFoundError):
             continue  # Failed or obsolete uploads are never offered as current narration.
         items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
@@ -4244,8 +4250,10 @@ def adopt_creation_task_recording(
         raise HTTPException(status_code=409, detail="当前文案未确认或已经变化，不能采用录音")
     try:
         source, duration_ms = _task_audio().recording(
-            workspace_id, task.id, payload.source_ref, verify_digest=True,
+            workspace_id, task.id, payload.source_ref,
         )
+        if not _task_media_outputs_current(production_repo.get_job_run(workspace_id, source.producer_job_id)):
+            raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
         audio_path = _task_audio().source(workspace_id, task.id, source.logical_ref)
         cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
         cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
@@ -4393,7 +4401,7 @@ def _preview_clip_original_audio(task_id: str, request: Request, payload: Creati
         raise HTTPException(status_code=409, detail="该范围已有原声，请编辑现有音频片段，避免重复叠加。")
     service = _task_audio()
     try:
-        source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
         reference = production_repo.workspace_media_reference_for_asset(workspace_id, clip.asset_id)
         source_start, source_end = round(clip.source_start_seconds * 1000), round(clip.source_end_seconds * 1000)
         rate = (source_end-source_start)/(end-start)
@@ -4431,6 +4439,8 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
             if not isinstance(source_ref, str):
                 raise ValueError("请选择当前任务已保存的电脑录音")
             recording, measured_ms = service.recording(workspace_id, task_id, source_ref, verify_digest=True)
+            recording_stat = artifact_store.resolve_file(recording.logical_ref).stat()
+            recording_file_signature = [recording_stat.st_size, recording_stat.st_mtime_ns, recording_stat.st_ctime_ns]
             duration_ms = round(plan.duration_seconds * 1000)
             if not duration_ms - 20 <= measured_ms <= duration_ms + 250:
                 raise ValueError("录音时长与当前画面不符，请重录到接近整片时长")
@@ -4488,7 +4498,8 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
         task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
         operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
             "edit": edit.model_dump(), "expected_audio_timeline": before.model_dump(),
-            **({"recording_duration_ms": measured_ms, "recording_sha256": recording.sha256}
+            **({"recording_duration_ms": measured_ms, "recording_sha256": recording.sha256,
+                "recording_file_signature": recording_file_signature}
                if payload.action == "replace_narration" else {})}},
         invalidated_refs=_logical_montage_output_refs(plan),
         preview=preview_media,
@@ -4540,7 +4551,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
         path=artifact_store.resolve_file(record.logical_ref)
     except (KeyError,ValueError,FileNotFoundError) as exc:
         raise HTTPException(status_code=404,detail="当前任务的画面预览不存在") from exc
-    return FileResponse(path,media_type="image/png" if record.kind == "subtitle_style_preview" else "video/mp4")
+    return FileResponse(path,media_type="image/png" if path.suffix == ".png" else "video/mp4")
 
 
 @app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
@@ -9883,8 +9894,15 @@ def preview_creation_task_edit(
     task = _creation_task_or_404(workspace_id, task_id)
     payload = _bind_assistant_edit_instruction(request, task, payload)
     command = payload.raw_command.strip()
+    parsed_overlay = None
     if "/" in command or "\\" in command:
-        raise _topic_failure_response(
+        try:
+            overlay_plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+            parsed_overlay = compile_overlay_command(command, overlay_plan.graphic_overlays, (), payload.selected_object_refs)
+        except (KeyError, ValueError):
+            parsed_overlay = None
+        if not (parsed_overlay and isinstance(parsed_overlay[1], dict) and parsed_overlay[1].get("kind") in {"text", "arrow"}):
+            raise _topic_failure_response(
             status_code=409,
             error="edit_path_input_forbidden",
             reason="修改要求中不能指定本机或网络文件路径。",
@@ -9947,7 +9965,7 @@ def preview_creation_task_edit(
     if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识","箭头")):
         try:
             overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            edit=compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else (),payload.selected_object_refs)
+            edit=parsed_overlay or compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else (),payload.selected_object_refs)
         except (ValueError,KeyError) as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from exc
         if edit:
@@ -11361,9 +11379,11 @@ def confirm_creation_task_edit(
                 if not isinstance(source_ref, str):
                     raise ValueError("录音引用无效")
                 recording, measured_ms = _task_audio().recording(
-                    workspace_id, task_id, source_ref, verify_digest=True)
+                    workspace_id, task_id, source_ref)
+                stat = artifact_store.resolve_file(recording.logical_ref).stat()
                 duration_ms = round(montage.duration_seconds * 1000)
                 if (recording.sha256 != operation_payload.get("recording_sha256")
+                        or [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns] != operation_payload.get("recording_file_signature")
                         or measured_ms != operation_payload.get("recording_duration_ms")
                         or not duration_ms - 20 <= measured_ms <= duration_ms + 250
                         or apply_audio_edit(current_audio, edit, duration_ms).model_dump() != updated_audio.model_dump()):
@@ -12639,7 +12659,7 @@ def _preview_canvas(task_id: str, request: Request, payload: CreationTaskExactEd
         raise HTTPException(status_code=409, detail="画幅与适配方式没有变化")
     clip = montage.clips[0]
     try:
-        source = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+        production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
         records=[]
         if not draft_only:
             from copy import deepcopy
@@ -12693,12 +12713,11 @@ def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTas
     defaults = asdict(SubtitleExecutionStyle())
     if all(all(track.style.get(key, defaults[key]) == value for key, value in patch.items()) for track in tracks):
         raise HTTPException(status_code=409, detail="字幕样式没有变化")
-    refs = [track.artifact_ref or f"subtitle-track:{track.id}" for track in tracks]
     try:
         before = subtitle_schedule([replace(track, style={**track.style, "enabled":True}) for track in tracks], montage.duration_seconds)
         after = subtitle_schedule([replace(track, style={**track.style, **patch, "enabled":True}) for track in tracks], montage.duration_seconds)
         sample = max(before, key=lambda item:len(item.text))
-        updated_sample = next(item for item in after if item.start_seconds <= sample.start_seconds < item.end_seconds)
+        next(item for item in after if item.start_seconds <= sample.start_seconds < item.end_seconds)
         # Validate every cue's layout before accepting the style, not just the preview sample.
         from app.montage import _subtitle_font_and_lines
         for caption in after:
@@ -13044,7 +13063,6 @@ def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip, cu
             production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
         if not (synthetic_source or legacy_source):
             raise ValueError("人物口型镜头来源不匹配")
-        _require_task_media_artifact(record, request)
         path = _person_render_media_path(render)
         if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + .001:
             raise ValueError("人物口型源片段不可用")
@@ -15645,6 +15663,9 @@ def _render_montage_with_resolved_clip_sources(
             )
             render_audio_mix(plan.audio_timeline, plan.duration_seconds,
                 lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio,
+                produced_source_paths={artifact_store.resolve_file(record.logical_ref)
+                    for record in production_repo.list_artifact_records(workspace_id, plan.task_id)
+                    if render_context is not None and record.producer_job_id == render_context.grant.owner_id},
                 normalize_voice_sources=plan.narration_linkage_created_audio_timeline, **audio_options)
             narration_audio_path = mixed_audio
         render_options = (
@@ -18422,8 +18443,6 @@ def _stop_device_runtime() -> None:
 
 
 # Automation only scans due local facts; media work remains with DeviceRuntime.
-from app.automation_routes import build_automation_router
-from app.automation_runtime import AutomationRuntime
 
 automation_runtime: AutomationRuntime | None = None
 

@@ -561,7 +561,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert renders == [request_id]
         validations = 2 if publication_state == "crash" else 1
         assert media_checks == [request_id] * validations
-        assert quality_requests == [("local", task_id)] * validations
+        assert quality_requests == [("local", task_id)]  # reuse the persisted quality request on replay
         execution.render_is_valid = lambda w, t: main_module._creation_render_is_valid(w, t, verify_media=False)
         assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
         assert submit_creation_stage(execution, scheduler, repo.get_job_run("local", job.id), actor) is None
@@ -1300,7 +1300,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1341,7 +1341,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1374,7 +1374,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": owner}, last_error=None,
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)}, last_error=None,
         wake=lambda: wake_calls.append(True),
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1547,7 +1547,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "execution_worker", worker)
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None, start=lambda: runtime_starts.append("start"),
         stop=lambda **_kwargs: True,
     ))

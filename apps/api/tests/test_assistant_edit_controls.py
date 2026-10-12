@@ -5,7 +5,7 @@ import pytest
 
 import app.main as main
 from app.conversation_repository import ConversationRepository
-from test_assistant_edit_chain import storyboard, preview, current  # noqa: F401
+from test_assistant_edit_chain import current, preview, storyboard as storyboard
 from test_montage_pipeline import person_render_edit_state  # noqa: F401
 
 

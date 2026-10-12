@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.artifact_store import ArtifactStore
-from app.host_resource_probes import CpuRenderBudget, HostProcessProbe, HostCapacity, HostBudget, HostResourceProbe
+from app.host_resource_probes import CpuRenderBudget, HostProcessProbe, HostBudget, HostResourceProbe
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.production import MaterialAsset, MaterialSegment, TimelineVersion
 from test_task_media_grants import case
@@ -20,7 +20,8 @@ from test_task_media_grants import case
 @pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'),reason='FFmpeg required for bounded clip verification')
 def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,monkeypatch):
     repo,actor,state,factory,build,media=case(tmp_path)
-    library=tmp_path/'library';library.mkdir(exist_ok=True)
+    library=tmp_path/'library'
+    library.mkdir(exist_ok=True)
     source=library/'source.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=blue:s=64x64:r=30:d=6',
         '-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p',str(source)],check=True,capture_output=True,timeout=5)
@@ -31,14 +32,16 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
             description='synthetic frame',review_status='approved',usage_role='b_roll')])
     repo._save_asset(asset)
     reference=repo.workspace_media_reference_for_asset('local','asset')
-    with repo._connect() as conn:repo._claim_workspace_media_reference(conn,workspace_id='local',reference=reference)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn,workspace_id='local',reference=reference)
     clips=[MontageClip('clip','cue','asset','segment',reference,0,6,0,6,1,[],False),
            MontageClip('other','othercue','asset','segment',reference,0,6,6,27,1,[],False)]
     plan=CreationTaskMontagePlan(id='montage',workspace_id='local',task_id='task',script_id='script',script_title='long fixture',
         status='ready',cues=[NarrationCue('cue','section','first',6),NarrationCue('othercue','section2','other',21)],
         clips=clips,duration_seconds=27,low_confidence_clip_count=0)
     with repo._connect() as conn:
-        task=repo.get_creation_task('local','task');task.montage_plan_id='montage'
+        task=repo.get_creation_task('local','task')
+        task.montage_plan_id='montage'
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
             ('montage','local','task',json.dumps(creation_task_montage_plan_to_payload(plan)),task.updated_at.isoformat()))
@@ -54,9 +57,11 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     monkeypatch.setattr(main,'settings',SimpleNamespace(effective_temporary_root_path=tmp_path/'temp'))
     monkeypatch.setattr(main,'_require_permit_actor',lambda *args:actor)
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
-    media.facts=main._task_media_facts;media.execute_operation=main._execute_task_media_operation
+    media.facts=main._task_media_facts
+    media.execute_operation=main._execute_task_media_operation
     media.validate_result=main._validate_task_media_result
-    runtime=build(media);runtime.scheduler.processes=HostProcessProbe()
+    runtime=build(media)
+    runtime.scheduler.processes=HostProcessProbe()
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     client=TestClient(main.app)
     payload={'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':.5,'crop_y':.5}

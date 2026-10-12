@@ -3073,12 +3073,12 @@ class ProductionRepository:
                 return False
             try:
                 job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
-                transform = self.get_transform_run(
-                    artifact.workspace_id,
-                    source.producer_job_id.replace("job_", "transform_", 1),
-                )
+                transform = next((item for item in self.list_transform_runs(artifact.workspace_id, artifact.task_id)
+                    if item.job_id == source.producer_job_id and item.output_refs == [source.logical_ref]), None)
             except KeyError:
                 return False
+        if transform is None:
+            return False
         if (job.task_id != artifact.task_id or job.status != "succeeded"
                 or transform.task_id != artifact.task_id or transform.status != "succeeded"
                 or transform.job_id != job.id or transform.output_refs != [source.logical_ref]

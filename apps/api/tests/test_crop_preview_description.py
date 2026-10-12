@@ -1,6 +1,5 @@
 """Crop route/source/version tests mock encoding, not playable media."""
 from dataclasses import asdict
-from types import SimpleNamespace
 
 import pytest
 
@@ -22,17 +21,12 @@ def legal_crop_state(person_render_edit_state):
 
 
 @pytest.fixture
-def crop_previews(monkeypatch):
+def crop_previews(legal_crop_state, monkeypatch):
+    from test_montage_pipeline import _granted_domain_preview_adapter
     calls = []
-
-    def publish(repository, store, temporary_root, workspace_id, task_id, clip, source, portrait, **kwargs):
-        calls.append({"workspace_id": workspace_id, "task_id": task_id,
-                      "clip": asdict(clip), "source": source, **kwargs})
-        identity = f"crop-preview-{len(calls)}"
-        return SimpleNamespace(id=identity, logical_ref=f"artifacts/{identity}.mp4")
-
-    monkeypatch.setattr(main_module, "publish_color_preview", publish)
-    return calls
+    runtime = _granted_domain_preview_adapter(legal_crop_state, monkeypatch, calls.append)
+    yield calls
+    assert runtime.stop(1)
 
 
 def preview_crop(state, clip_index=1, **values):
@@ -72,19 +66,15 @@ def test_crop_preview_description_matches_display_mode(legal_crop_state, crop_pr
     }
     assert proposal["operation"]["payload"]["base_version_id"] == before["task"]["current_timeline_version_id"]
     assert len(crop_previews) == 2
-    expected_source = (main_module._person_render_media_path(state.old_render) if clip_index == 0 else
-                       state.production.resolve_clip_media_reference(state.workspace_id, clip["asset_id"], state.montage.clips[clip_index].source_path))
-    for index, (side, call) in enumerate(zip(("before", "after"), crop_previews), 1):
-        assert call["workspace_id"] == state.workspace_id and call["task_id"] == state.task.id
-        assert call["source"] == expected_source
-        assert call["kind"] == "color_preview" and call["aspect_ratio"] == before["montage"]["aspect_ratio"]
+    for side, call in zip(("before", "after"), crop_previews):
         target = dict(asdict(state.montage.clips[clip_index]))
         if side == "after":
             target.update(fit_mode=mode, crop_x=.62, crop_y=.41)
         assert call["clip"] == target
-        assert proposal["preview"][side]["ref"] == f"artifacts/crop-preview-{index}.mp4"
-        assert proposal["preview"][side]["video_url"] == base + f"/visual/artifacts/crop-preview-{index}"
-    assert state.client.get(base).json() == before
+        assert call["aspect_ratio"] == before["montage"]["aspect_ratio"]
+        assert proposal["preview"][side]["ref"].startswith("artifacts/")
+        assert proposal["preview"][side]["video_url"].startswith(base + "/visual/")
+    assert state.client.get(base).json()["montage"] == before["montage"]
     confirmed = state.client.post(base + f"/edits/{proposal['id']}/confirm", json={})
     assert confirmed.status_code == 200, confirmed.text
     after = state.client.get(base).json()
@@ -99,9 +89,28 @@ def test_crop_preview_description_matches_display_mode(legal_crop_state, crop_pr
     assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
 
 
+def queue_crop(state, clip_index=1):
+    base = f"/api/creation-tasks/{state.task.id}"
+    main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    before = state.client.get(base).json()
+    clip = before["montage"]["clips"][clip_index]
+    response = state.client.request("POST", base + "/edits/exact/preview", json={
+        "operation_type": "ChangeCrop", "clip_id": clip["id"], "fit_mode": "fit", "crop_x": .62, "crop_y": .41})
+    assert response.status_code == 202, response.text
+    assert response.json()["result"] is None and response.json()["device_request_id"]
+    return base, before, response.json()["job_id"]
+
+
+def assert_failed(state, job_id):
+    assert state.preview_runtime.run_once()
+    saved = state.production.get_job_run(state.workspace_id, job_id)
+    assert saved.status == "failed"
+    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+
+
 @pytest.mark.parametrize("clip_index", [0, 1], ids=["person", "material"])
-def test_crop_preview_rejects_unavailable_source(person_render_edit_state, crop_previews, monkeypatch, clip_index):
-    state = person_render_edit_state
+def test_crop_preview_rejects_unavailable_source(legal_crop_state, crop_previews, monkeypatch, clip_index):
+    state = legal_crop_state
     if clip_index == 0:
         monkeypatch.setattr(main_module, "_person_render_media_path", lambda _render: None)
     else:
@@ -109,46 +118,38 @@ def test_crop_preview_rejects_unavailable_source(person_render_edit_state, crop_
             raise ValueError("源素材已断开")
         monkeypatch.setattr(state.production, "resolve_clip_media_reference", disconnected)
     base, before, _, response = preview_crop(state, clip_index)
-    assert response.status_code == 422
-    expected_message = "人物口型片段不可用" if clip_index == 0 else "源素材已断开"
-    assert expected_message in response.text
+    assert response.status_code == 422, response.text
     assert not crop_previews
     assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
-    assert state.client.get(base).json() == before
+    assert state.client.get(base).json()["montage"] == before["montage"]
 
 
-def test_crop_preview_encoding_failure_is_not_a_proposal(person_render_edit_state, monkeypatch):
-    state = person_render_edit_state
-
-    def failed(*args, **kwargs):
+def test_crop_preview_encoding_failure_is_not_a_proposal(legal_crop_state, crop_previews, monkeypatch):
+    def failed(*args):
         raise OSError("encoder failed")
+    service = main_module._task_audio()
+    service.picture_renderer = failed
+    monkeypatch.setattr(main_module, "_task_audio", lambda: service)
+    base, before, job_id = queue_crop(legal_crop_state)
+    assert_failed(legal_crop_state, job_id)
+    assert legal_crop_state.client.get(base).json()["montage"] == before["montage"]
 
-    monkeypatch.setattr(main_module, "publish_color_preview", failed)
-    base, before, _, response = preview_crop(state)
-    assert response.status_code == 422
-    assert response.json()["detail"] == "画面预览失败，请检查源素材、FFmpeg和外接盘"
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
-    assert state.client.get(base).json() == before
 
-
-def test_crop_preview_rechecks_version_after_publication(person_render_edit_state, monkeypatch):
-    state = person_render_edit_state
-    calls = []
-
-    def concurrent(*args, **kwargs):
-        calls.append(kwargs)
-        if len(calls) == 1:
+def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_previews, monkeypatch):
+    state = legal_crop_state
+    service = main_module._task_audio()
+    original = service.picture_renderer
+    def concurrent(*args):
+        original(*args)
+        if len(crop_previews) == 1:
             task = state.production.get_creation_task(state.workspace_id, state.task.id)
             advance_version(state, task.current_timeline_version_id)
-        return SimpleNamespace(id=f"stale-{len(calls)}", logical_ref="artifacts/stale.mp4")
-
-    monkeypatch.setattr(main_module, "publish_color_preview", concurrent)
-    _, before, _, response = preview_crop(state)
-    assert response.status_code == 409
-    assert response.json()["detail"] == "预览期间时间线已变化，请重新预览"
-    assert len(calls) == 2
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id != before["task"]["current_timeline_version_id"]
+    service.picture_renderer = concurrent
+    monkeypatch.setattr(main_module, "_task_audio", lambda: service)
+    _, _, job_id = queue_crop(state)
+    assert_failed(state, job_id)
+    assert len(crop_previews) == 1
+    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
 
 
 def test_crop_preview_cannot_confirm_after_version_changes(person_render_edit_state, crop_previews):

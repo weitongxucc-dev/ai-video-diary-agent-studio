@@ -231,8 +231,8 @@ def test_unselected_material_turn_binds_browse_session_and_only_read_capabilitie
     result = run_material_turn(Settings(model_root_path=str(tmp_path)), workspace_id="trusted-space", conversation_id="trusted-conversation", message="库里有什么",
                                local_member_token="trusted-member", cookie="trusted-cookie", authorization="trusted-auth", caller_user_id="trusted-user")
     assert result == ("库状态", None)
-    assert seen["material_selection"] is None and seen["session_key"] == "material:trusted-conversation:browse"
-    assert seen["tool_names"] == "read_material_library_status,search_material_library"
+    assert seen["material_selection"] is None and seen["session_key"] == "conversation:trusted-conversation"
+    assert set(seen["tool_names"].split(",")) == {"read_material_library_status", "search_material_library", "read_preference_memory", "update_preference_memory"}
     assert seen["local_member_token"] == "trusted-member" and seen["caller_user_id"] == "trusted-user"
     assert seen["authorization"] == "trusted-auth" and seen["cookie"] == "trusted-cookie"
 

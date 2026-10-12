@@ -125,29 +125,20 @@ class TestChineseRetrieval:
 class TestPreferenceMemory:
     """B10：agent 能读到用户偏好记忆。"""
 
-    ROUTES = {
-        "/api/preferences": {
-            "total_feedback_count": 5,
-            "preferences": [
-                {"label": "偏好", "signal": "节奏快", "evidence_count": 3, "confidence": 0.8, "enabled": True},
-                {"label": "避开", "signal": "拖沓开头", "evidence_count": 2, "confidence": 0.65, "enabled": True},
-            ],
-        }
-    }
+    ROUTES = {"/api/assistant/memory": {"id": "profile-synthetic", "revision": 3,
+        "common_expressions": ["节奏快"], "banned_words": ["拖沓开头"], "style_preferences": {"叙事": "第一人称"}}}
 
     def test_reads_preference_memory(self):
         result = call("read_preference_memory", {}, self.ROUTES)
-        # 问答例子：「这个用户以前说过什么偏好？」→ prefer/avoid 两栏
-        assert "prefer" in result, f"记忆结果缺少 prefer，result={result}"
-        assert "avoid" in result, f"记忆结果缺少 avoid，result={result}"
-        assert any(p["signal"] == "节奏快" for p in result["prefer"]), result
-        assert any(a["signal"] == "拖沓开头" for a in result["avoid"]), result
+        assert result["common_expressions"] == ["节奏快"]
+        assert result["banned_words"] == ["拖沓开头"]
+        assert result["style_preferences"] == {"叙事": "第一人称"}
+        assert result["instruction"]
 
-    def test_preference_evidence_counts_present(self):
+    def test_preference_memory_does_not_invent_inferred_evidence_counts(self):
         result = call("read_preference_memory", {}, self.ROUTES)
-        for item in result["prefer"] + result["avoid"]:
-            assert "evidence_count" in item, f"记忆项缺依据字段：{item}"
-            assert "confidence" in item, f"记忆项缺置信度：{item}"
+        assert result["truncated"] is False
+        assert "confidence" not in result and "evidence_count" not in result
 
 
 @pytest.mark.skipif(
@@ -519,7 +510,8 @@ class TestCrossWorkspaceIsolation:
 def test_tools_send_the_verified_local_member_token_to_the_backend():
     """助手工具的读取请求必须带上已验证的成员令牌，否则会退化成匿名 local 诊断读取。"""
     routes = {
-        "/api/creation-tasks/": {"id": "task-one", "name": "任务", "stage": "montage"},
+        "/api/creation-tasks/task-one/execution": {"task_id": "task-one", "job": None},
+        "/api/creation-tasks/": {"task": {"id": "task-one", "name": "任务", "stage": "montage"}},
     }
     env = {
         "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",

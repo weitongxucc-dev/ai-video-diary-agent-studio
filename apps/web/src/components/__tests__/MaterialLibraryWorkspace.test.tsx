@@ -1531,8 +1531,8 @@ it("shows what used the selected segment and keeps the current version labelled"
   await waitFor(() => expect(getAssetSegmentUsageRecords).toHaveBeenCalledWith("asset","segment"));
   const taskLink = await screen.findByRole("link", { name: /打开任务：第一条成片/ });
   expect(taskLink).toHaveAttribute("href", "/tasks/task-1");
-  expect(screen.getByText(/当前计划用途：人物主镜头/)).toBeInTheDocument();
-  expect(screen.getByText(/时间线版本：当前版本 timeline-current（使用记录本身未记录当次版本/)).toBeInTheDocument();
+  expect(screen.getByText(/第一条成片 · 人物主镜头/)).toBeInTheDocument();
+  expect(screen.getByText(/关联任务当前时间线（当次使用版本未记录）/)).toBeInTheDocument();
   expect(screen.getByText("时间线版本未记录")).toBeInTheDocument();
   expect(screen.getByText(/关联任务未记录/)).toBeInTheDocument();
 });

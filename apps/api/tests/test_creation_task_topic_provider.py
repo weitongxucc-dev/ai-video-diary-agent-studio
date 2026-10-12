@@ -456,7 +456,8 @@ def test_creation_task_generation_accepts_only_one_complete_inert_report(kind, i
 def test_topic_candidate_report_schema_preserves_all_existing_constraints():
     calls = []
     def handler(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         return _response({"topics": [_topic()]})
     generated = OpenAICompatibleCreationTaskTopicGenerator("https://models.invalid/v1", "MiniMax-M3",
         transport=httpx.MockTransport(handler)).generate(_input())
@@ -529,7 +530,8 @@ def test_topic_score_rejection_has_bounded_metadata_and_never_logs_model_text(ki
 def test_topic_request_prioritizes_one_complete_candidate_without_changing_allowed_count():
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         return _response({"topics": [_topic()]})
     result = OpenAICompatibleCreationTaskTopicGenerator("https://models.invalid/v1", "same-model",
         transport=httpx.MockTransport(respond)).generate(_input())
@@ -568,7 +570,8 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
 
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         model_input = json.loads(payload["messages"][1]["content"])
         if payload["tools"][0]["function"]["name"] == "submit_script_review":
             return _review_tool_response(_script_review(model_input["script"], model_input["sources"][0]["text"]))
@@ -598,7 +601,8 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
 def test_script_report_deadline_is_120_seconds_by_default_and_honors_explicit_override(override, expected):
     requests = []
     def respond(request):
-        payload = json.loads(request.content); requests.append(request)
+        payload = json.loads(request.content)
+        requests.append(request)
         if payload["tools"][0]["function"]["name"] == "submit_script_draft":
             return _response(_script_document(evidence_ids=["evidence_1"]))
         model_input = json.loads(payload["messages"][1]["content"])
@@ -616,7 +620,8 @@ def test_script_report_deadline_is_120_seconds_by_default_and_honors_explicit_ov
 def test_only_exact_m3_disables_thinking_for_script_generation_and_review(model):
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append((request, payload))
+        payload = json.loads(request.content)
+        calls.append((request, payload))
         if payload["tools"][0]["function"]["name"] == "submit_script_draft":
             return _response(_script_document(evidence_ids=["evidence_1"]))
         data = json.loads(payload["messages"][1]["content"])
@@ -641,7 +646,8 @@ def test_only_exact_m3_disables_thinking_for_script_generation_and_review(model)
 def test_m3_topic_request_is_not_changed_by_script_thinking_control():
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         return _response({"topics": [_topic()]})
     OpenAICompatibleCreationTaskTopicGenerator("https://models.invalid/v1", "MiniMax-M3",
         transport=httpx.MockTransport(respond)).generate(_input())
@@ -657,11 +663,13 @@ def test_chinese_generation_schema_allocates_only_existing_total_duration_budget
     seen = []
     source = replace(_script_input(), language=language, duration_target_seconds=120, script_section_count=section_count)
     def respond(request):
-        payload = json.loads(request.content); seen.append(payload)
+        payload = json.loads(request.content)
+        seen.append(payload)
         data = json.loads(payload["messages"][1]["content"])
         if payload["tools"][0]["function"]["name"] == "submit_script_review":
             return _review_tool_response(_script_review(data["script"], data["sources"][0]["text"]))
-        doc = _script_document(evidence_ids=["evidence_1"]); doc["script"]["language"] = language
+        doc = _script_document(evidence_ids=["evidence_1"])
+        doc["script"]["language"] = language
         doc["script"]["sections"] *= section_count or 1
         return _response(doc)
     OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "same-model",
@@ -695,7 +703,8 @@ def test_chinese_output_exceeding_section_request_suggestion_still_uses_existing
     document["script"]["sections"] *= returned_sections
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         if len(calls) == 1:
             return _response(document)
         data = json.loads(payload["messages"][1]["content"])

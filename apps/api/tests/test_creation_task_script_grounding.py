@@ -939,7 +939,8 @@ def test_m3_disabled_thinking_keeps_fact_and_complete_report_gate(outcome):
     document = draft(FACT + ("每天自动备份。" if outcome == "unsupported" else ""))
     calls = []
     def respond(request):
-        payload = json.loads(request.content); calls.append(payload)
+        payload = json.loads(request.content)
+        calls.append(payload)
         assert payload["thinking"] == {"type": "disabled"} and payload["reasoning_split"] is True
         if len(calls) == 1:
             return _response(document)

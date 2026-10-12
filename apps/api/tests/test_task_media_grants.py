@@ -1,6 +1,5 @@
 """Persistent task-media work uses the sole device grant and isolated stores."""
 from dataclasses import replace
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -150,7 +149,9 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     source = tmp_path/'temporary'/'uploaded.wav'
     source.parent.mkdir()
     with wave.open(str(source), 'wb') as wav:
-        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(48000)
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(48000)
         wav.writeframes(b'\0\0'*4800)
     repo, actor, state, factory, build, media = case(tmp_path)
     store = ArtifactStore(tmp_path/'output')
@@ -193,12 +194,18 @@ def test_all_media_helpers_refuse_missing_grant_before_starting_subprocess(tmp_p
     with pytest.raises(TaskMediaRequired):
         TaskAudio(repo, ArtifactStore(tmp_path/'out'), tmp_path/'temp').publish('local','task',kind='audio_preview',
             parameters={},input_refs=[],operation='audio_mix',media_input={})
-    with pytest.raises(PermissionError): render_audio_mix(None, 1, None, tmp_path/'out.wav')
-    with pytest.raises(PermissionError): render_stretched_audio(tmp_path/'none',0,1000,1,1000,tmp_path/'out.wav')
-    with pytest.raises(TaskMediaRequired): probe_audio_source(tmp_path/'none')
-    with pytest.raises(PermissionError): audio_waveform(tmp_path/'none',tmp_path/'cache')
-    with pytest.raises(PermissionError): detect_silence_cuts(tmp_path/'none',1)
-    with pytest.raises(PermissionError): recognize_subtitle_timing(None,tmp_path/'none','zh-CN',tmp_path)
+    with pytest.raises(PermissionError):
+        render_audio_mix(None, 1, None, tmp_path/'out.wav')
+    with pytest.raises(PermissionError):
+        render_stretched_audio(tmp_path/'none',0,1000,1,1000,tmp_path/'out.wav')
+    with pytest.raises(TaskMediaRequired):
+        probe_audio_source(tmp_path/'none')
+    with pytest.raises(PermissionError):
+        audio_waveform(tmp_path/'none',tmp_path/'cache')
+    with pytest.raises(PermissionError):
+        detect_silence_cuts(tmp_path/'none',1)
+    with pytest.raises(PermissionError):
+        recognize_subtitle_timing(None,tmp_path/'none','zh-CN',tmp_path)
 
 
 @pytest.mark.parametrize('dimension', ['sample_rate', 'channels', 'duration_seconds', 'saved_metadata'])
@@ -211,13 +218,17 @@ def test_unknown_and_known_source_probe_rejects_before_dsp(tmp_path, monkeypatch
         pytest.skip('FFprobe required for synthetic bounded probe')
     source=tmp_path/'source.wav'
     with wave.open(str(source),'wb') as wav:
-        wav.setnchannels(2); wav.setsampwidth(2); wav.setframerate(48000); wav.writeframes(b'\0\0'*2*4800)
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(48000)
+        wav.writeframes(b'\0\0'*2*4800)
     repo, actor, state, factory, build, media = case(tmp_path)
     original_facts=media.facts
     def facts(*args):
         data, resources=original_facts(*args)
         spec={'path':str(source),'duration_seconds':None,'sample_rate':None,'channels':None}
-        if dimension == 'saved_metadata': spec['sample_rate']=24000
+        if dimension == 'saved_metadata':
+            spec['sample_rate']=24000
         else:
             key={'sample_rate':'source_sample_rate_limit','channels':'source_channels_limit','duration_seconds':'source_duration_limit_seconds'}[dimension]
             resources[key]={'sample_rate':16000,'channels':1,'duration_seconds':.05}[dimension]
@@ -263,7 +274,10 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
                    capture_output=True,check=True,timeout=5)
     voice=tmp_path/'voice.wav'
     with wave.open(str(voice),'wb') as wav:
-        wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(24000);wav.writeframes(b'\0\0'*24000)
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b'\0\0'*24000)
     plan=CreationTaskMontagePlan(id='montage',workspace_id='local',task_id='task',script_id='script',script_title='fixture',
         status='ready',cues=[NarrationCue('cue','section','',1)],
         clips=[MontageClip('clip','cue','asset','segment',str(source),0,1,0,1,1,[],False)],
@@ -293,7 +307,8 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
             operation='picture_preview',media_input={'plan':creation_task_montage_plan_to_payload(plan),'subtitle_tracks':[]})
         return {'video_url':'/synthetic-preview','artifact_id':record.id}
     media.execute_operation=operation
-    runtime=build(media);runtime.scheduler.processes=HostProcessProbe()
+    runtime=build(media)
+    runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     saved=repo.get_job_run('local',job.id)
@@ -328,7 +343,6 @@ def test_explicit_failed_retry_reuses_job_and_original_request(tmp_path):
 
 
 def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(tmp_path, monkeypatch):
-    import wave
     import shutil
     from app.artifact_store import ArtifactStore
     from app.host_resource_probes import HostProcessProbe
@@ -365,7 +379,8 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
         return original_transform(value)
     monkeypatch.setattr(repo,'create_transform_run',transform)
     media.execute_operation=operation
-    runtime=build(media);runtime.scheduler.processes=HostProcessProbe()
+    runtime=build(media)
+    runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1

@@ -107,14 +107,17 @@ def loopback_task():
         def do_GET(self):
             state["calls"].append((self.path, self.headers.get("X-Local-Member-Token")))
             if state["block"]:
-                state["entered"].set(); state["release"].wait(timeout=5)
+                state["entered"].set()
+                state["release"].wait(timeout=5)
             body = ({"task_id":"task-real", "job":None, "current_stage":None, "waiting_reason":None, "status_updated_at":None}
                     if self.path.endswith("/execution") else task_workspace())
             if state["wrong_task"] and "task" in body:
                 body["task"]["id"] = "other-task"
             if state["status"] != 200:
                 body = {"detail":"controlled permission revoked"}
-            self.send_response(state["status"]); self.send_header("Content-Type","application/json"); self.end_headers()
+            self.send_response(state["status"])
+            self.send_header("Content-Type","application/json")
+            self.end_headers()
             try:
                 self.wfile.write(json.dumps(body).encode())
             except BrokenPipeError:
@@ -122,16 +125,20 @@ def loopback_task():
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer(("127.0.0.1",0), Handler)
-    worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
     state["port"] = server.server_port
     yield state
     state["release"].set()
-    server.shutdown(); server.server_close(); worker.join(timeout=2)
+    server.shutdown()
+    server.server_close()
+    worker.join(timeout=2)
 
 
 @pytest.mark.parametrize("read_result", ["ok", "permission_denied", "wrong_task"])
 def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_path, monkeypatch, loopback_task, read_result):
-    state = loopback_task; state["status"] = 403 if read_result == "permission_denied" else 200
+    state = loopback_task
+    state["status"] = 403 if read_result == "permission_denied" else 200
     state["wrong_task"] = read_result == "wrong_task"
     monkeypatch.setenv("API_PORT", str(state["port"]))
     extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
@@ -254,7 +261,8 @@ def test_render_configuration_tool_record_keeps_only_actual_diagnostic_names():
 
 
 def test_actual_node_preflight_can_be_stopped_before_model_launch(tmp_path, loopback_task):
-    state = loopback_task; state["block"] = True
+    state = loopback_task
+    state["block"] = True
     turn_id = str(uuid4())
     env = {**os.environ, "AI_VIDEO_DIARY_AGENT_TASK_ID":"task-real", "AI_VIDEO_DIARY_AGENT_STAGE":"montage",
            "AI_VIDEO_DIARY_AGENT_TURN_ID":turn_id, "AI_VIDEO_DIARY_AGENT_API_BASE":f"http://127.0.0.1:{state['port']}",
@@ -266,14 +274,17 @@ def test_actual_node_preflight_can_be_stopped_before_model_launch(tmp_path, loop
             pi._read_task_before_pi(Path(__file__).parents[1]/"agent_tools"/"diary_tools.ts", env, tmp_path)
         except BaseException as exc:
             failures.append(exc)
-    worker = threading.Thread(target=read); worker.start()
+    worker = threading.Thread(target=read)
+    worker.start()
     try:
         assert state["entered"].wait(timeout=3)
         assert pi.request_stop_turn(turn_id)
         worker.join(timeout=3)
         assert not worker.is_alive() and len(failures) == 1 and isinstance(failures[0], pi.AssistantStopped)
     finally:
-        state["release"].set(); pi.forget_turn_control(turn_id); worker.join(timeout=3)
+        state["release"].set()
+        pi.forget_turn_control(turn_id)
+        worker.join(timeout=3)
 
 
 def test_server_rejects_another_real_member(bound_turn):

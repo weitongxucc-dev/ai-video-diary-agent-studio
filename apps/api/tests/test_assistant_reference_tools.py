@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import subprocess
 
-import pytest
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 RUNNER = r"""

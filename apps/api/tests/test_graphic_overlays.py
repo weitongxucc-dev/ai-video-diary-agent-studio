@@ -4,6 +4,9 @@ from app.graphic_overlays import TextOverlay, validate_overlays, write_text_over
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, _resolve_subtitle_font
 
 
+pytestmark = pytest.mark.usefixtures("granted_montage_renderer")
+
+
 def _available_cjk_font() -> str:
     # CI installs fonts-noto-cjk on Linux; local dev usually runs macOS with PingFang SC.
     for family in ('PingFang SC', 'Noto Sans CJK SC'):

@@ -22,10 +22,13 @@ def automation_job_gate(request, conn):
     row = conn.execute("""SELECT a.paused,r.definition_json,r.member_id FROM automation_runs r
         JOIN automations a ON a.id=r.automation_id JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.task_id=r.task_id
         WHERE j.id=? AND r.workspace_id=?""", (request.owner_id,request.workspace_id)).fetchone()
-    if row is None: return "ready"
-    if request.member_id != row["member_id"]: return "unauthorized"
+    if row is None:
+        return "ready"
+    if request.member_id != row["member_id"]:
+        return "unauthorized"
     # An admitted unit may finish under its original still-valid grant; future units wait.
-    if request.state in {"granted","yield_requested"}: return "ready"
+    if request.state in {"granted","yield_requested"}:
+        return "ready"
     trigger = AutomationTrigger.model_validate(json.loads(row["definition_json"])["trigger"])
     return "dependency" if row["paused"] or not trigger.allows(utc_now()) else "ready"
 
@@ -39,13 +42,15 @@ class AutomationCreationOwner(CreationJobOwnerVerifier):
 class AutomationPlatformPublishOwner(PlatformPublishOwnerVerifier):
     def check_current(self, request, conn):
         verdict = super().check_current(request, conn)
-        if verdict != "ready": return verdict
+        if verdict != "ready":
+            return verdict
         associated = conn.execute("SELECT 1 FROM automation_runs r JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.task_id=r.task_id WHERE j.id=? AND r.workspace_id=?",(request.owner_id,request.workspace_id)).fetchone()
         if associated is not None and self.verify_identity is not None:
             _job,event = self._facts(conn,request.workspace_id,request.owner_id)
             actor = self.actor_from_event(event["identity"])
             identity = self.verify_identity(actor)
-            if identity != "ready": return identity
+            if identity != "ready":
+                return identity
         return automation_job_gate(request,conn)
 
 
@@ -114,10 +119,12 @@ class AutomationRuntime:
     def require_task_open(self, workspace_id, task_id, actor_for):
         with self.service.connect() as conn:
             row = conn.execute("SELECT id FROM automation_runs WHERE workspace_id=? AND task_id=?",(workspace_id,task_id)).fetchone()
-        if row is None: return
+        if row is None:
+            return
         actor = actor_for()
         run = self.service.get_run(actor,row["id"])
-        try: self.service.require_open(run)
+        try:
+            self.service.require_open(run)
         except AutomationBlocked as exc:
             self.service.write_run_state(run["id"],state="blocked",stage=run["stage"],reason_code=exc.code,reason=exc.reason,repair_action=exc.repair,expected_revision=run["revision"])
             raise
@@ -136,7 +143,8 @@ class AutomationRuntime:
     def sync_sources(self, actor, run_id):
         run = self.service.get_run(actor,run_id)
         self.service.require_open(run)
-        if run["task_id"]: raise ValueError("本次任务已固定输入，来源同步请用于后续运行")
+        if run["task_id"]:
+            raise ValueError("本次任务已固定输入，来源同步请用于后续运行")
         self.read_inputs(actor,run["definition"])
         try:
             for connector_id in run["definition"]["source_scope"]["connector_ids"]:
@@ -189,7 +197,8 @@ class AutomationRuntime:
         with self.production._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             bound = conn.execute("SELECT * FROM automation_runs WHERE id=? AND workspace_id=? AND member_id=?",(run_id,actor.workspace_id,actor.member_id)).fetchone()
-            if bound is None: raise KeyError(run_id)
+            if bound is None:
+                raise KeyError(run_id)
             bound = self.service.run(bound)
             if bound["task_id"]:
                 if bound["confirmation"].get("plan",{}).get("fingerprint") != fingerprint:
@@ -212,12 +221,16 @@ class AutomationRuntime:
         events = self.production.list_task_events(actor.workspace_id,run["task_id"])
         confirmation = dict(run["confirmation"])
         task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
-        if task.selected_topic_id: confirmation["topic"] = {"topic_id":task.selected_topic_id}
-        if task.confirmed_script_id: confirmation["script"] = {"script_id":task.confirmed_script_id}
+        if task.selected_topic_id:
+            confirmation["topic"] = {"topic_id":task.selected_topic_id}
+        if task.confirmed_script_id:
+            confirmation["script"] = {"script_id":task.confirmed_script_id}
         starts = [event for event in events if event.event_type == "creation_execution_started"]
-        if starts: confirmation["make"] = {"event_id":starts[-1].id,"confirmed_at":starts[-1].created_at.isoformat(),"identity":starts[-1].payload}
+        if starts:
+            confirmation["make"] = {"event_id":starts[-1].id,"confirmed_at":starts[-1].created_at.isoformat(),"identity":starts[-1].payload}
         publishes = [event for event in events if event.event_type == "platform_publish_prepared" and event.payload.get("confirmed") is True and event.payload.get("identity",{}).get("member_id") == actor.member_id]
-        if publishes: confirmation["publish"] = {"event_id":publishes[-1].id,"confirmed_at":publishes[-1].created_at.isoformat(),"job_id":publishes[-1].job_id}
+        if publishes:
+            confirmation["publish"] = {"event_id":publishes[-1].id,"confirmed_at":publishes[-1].created_at.isoformat(),"job_id":publishes[-1].job_id}
         jobs = self.production.list_job_runs(actor.workspace_id,task.id)
         with self.production._connect() as conn:
             requests = [row[0] for row in conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' AND owner_id IN (SELECT id FROM job_runs WHERE workspace_id=? AND task_id=?)",(actor.workspace_id,actor.workspace_id,task.id))]
@@ -238,7 +251,8 @@ class AutomationRuntime:
             if published.status == "running":
                 return dict(state="running",stage="publish",reason="本次经明确确认的发布作业正在执行",job_id=published.id)
             if published.status in {"queued","interrupted"}:
-                try: self.service.require_open(run)
+                try:
+                    self.service.require_open(run)
                 except AutomationBlocked as exc:
                     return dict(state="blocked",stage="publish",job_id=published.id,reason_code=exc.code,reason=exc.reason,repair_action=exc.repair)
                 return dict(state="blocked",stage="publish",job_id=published.id,reason_code="device_wait",reason="发布作业已入队，尚未取得原平台与设备许可",repair_action="打开任务核对发布与资源许可")
@@ -253,16 +267,19 @@ class AutomationRuntime:
                 return dict(state="cancelled",stage="make",job_id=job["id"],reason_code="job_cancelled",reason="实际制作作业已取消",repair_action="通过原任务核对恢复动作")
             if status["video_ready"]:
                 return dict(state="waiting_review",stage="publish",job_id=job["id"],reason_code="publish_confirmation_required",reason="真实成片已就绪，发布仍需本次明确确认",repair_action="打开创作任务核对成片与发布")
-            try: self.service.require_open(run)
+            try:
+                self.service.require_open(run)
             except AutomationBlocked as exc:
                 return dict(state="blocked",stage=status["current_stage"] or "make",job_id=job["id"],reason_code=exc.code,reason=exc.reason,repair_action=exc.repair)
             return dict(state="blocked",stage=status["current_stage"] or "make",job_id=job["id"],reason_code="device_wait",reason=status["waiting_reason"] or "真实作业已入队，尚未取得下一单元的设备许可",repair_action="打开任务核对资源许可与继续制作")
         stage = "make" if task.confirmed_script_id else "script" if task.selected_topic_id else "topic"
-        try: self.service.require_open(run)
+        try:
+            self.service.require_open(run)
         except AutomationBlocked as exc:
             return dict(state="blocked",stage=stage,reason_code=exc.code,reason=exc.reason,repair_action=exc.repair)
         if stage in {"topic","script"}:
-            try: self.check_capabilities(actor)
+            try:
+                self.check_capabilities(actor)
             except AutomationBlocked as exc:
                 return dict(state="blocked",stage=stage,reason_code=exc.code,reason=exc.reason,repair_action=exc.repair)
         elif not self.execution_available():
@@ -270,7 +287,8 @@ class AutomationRuntime:
         return dict(state="waiting_review",stage=stage,reason_code=stage+"_confirmation_required",reason="本次"+{"make":"制作要求","script":"文案","topic":"选题"}[stage]+"等待明确确认",repair_action="打开创作任务继续")
 
     def start(self):
-        if self.thread and self.thread.is_alive(): return
+        if self.thread and self.thread.is_alive():
+            return
         self.stop_event.clear()
         self.thread = threading.Thread(target=self.drive,name="automation-due-driver",daemon=True)
         self.thread.start()
@@ -287,4 +305,5 @@ class AutomationRuntime:
 
     def stop(self):
         self.stop_event.set()
-        if self.thread: self.thread.join(timeout=10)
+        if self.thread:
+            self.thread.join(timeout=10)

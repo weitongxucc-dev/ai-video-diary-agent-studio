@@ -7,6 +7,10 @@ from tempfile import TemporaryDirectory
 from app.audio_timeline import AudioTimeline, probe_audio_source, probe_audio_metadata
 from app.models import utc_now
 from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun, TaskEvent
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
+import threading
+import time
 
 
 class TaskMediaRequired(RuntimeError):
@@ -133,7 +137,11 @@ class TaskAudio:
                 if clip.source_ref not in durations:
                     path = self.source(workspace_id, task_id, clip.source_ref)
                     if not draft_only:
-                        durations[clip.source_ref] = self.probe(path, output=False)
+                        active = TASK_MEDIA_CONTEXT.get()
+                        produced_here = active is not None and any(
+                            record.logical_ref == clip.source_ref and record.producer_job_id == active[1].id
+                            for record in self.repository.list_artifact_records(workspace_id, task_id))
+                        durations[clip.source_ref] = self.probe(path, output=produced_here)
                     elif clip.source_ref.startswith("narration://artifact/"):
                         artifact = self.repository.get_narration_artifact(
                             workspace_id, clip.source_ref.removeprefix("narration://artifact/"))
@@ -266,8 +274,11 @@ class TaskAudio:
                     "max_output_bytes": context.max_output_bytes - consumed, "threads": context.threads}
                 if operation == "audio_mix":
                     graph = AudioTimeline.model_validate(media_input["audio_timeline"])
+                    produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
+                                if record.producer_job_id == job.id}
                     render_audio_mix(graph, media_input["duration_seconds"],
                         lambda ref: self.source(workspace_id, task_id, ref), path,
+                        produced_source_paths={self.source(workspace_id, task_id, reference) for reference in input_refs if reference in produced},
                         start_seconds=media_input.get("start_seconds", 0),
                         end_seconds=media_input.get("end_seconds"),
                         solo_track_ids=set(media_input.get("solo_track_ids", [])) or None, **options)
@@ -350,10 +361,6 @@ class TaskAudio:
 
 # The context exists only while the sole device driver executes a persisted job.
 # It is never supplied by HTTP headers or a model tool.
-from contextvars import ContextVar
-from datetime import datetime, timedelta, timezone
-import threading
-import time
 
 TASK_MEDIA_KIND = "creation_task_media"
 TASK_MEDIA_CONTEXT = ContextVar("task_media_grant", default=None)
@@ -589,8 +596,9 @@ class TaskMediaJobs:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:
+                failure_reason = type(exc).__name__
                 scheduler.fail_unit(grant, reason="task_media_failed",
-                    failure_write=lambda conn, current: checkpoint(conn, current, "failed", type(exc).__name__))
+                    failure_write=lambda conn, current: checkpoint(conn, current, "failed", failure_reason))
         finally:
             if context_token is not None:
                 TASK_MEDIA_CONTEXT.reset(context_token)

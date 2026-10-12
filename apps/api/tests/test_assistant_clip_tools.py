@@ -110,7 +110,8 @@ def test_task_tag_reply_comes_from_verified_write_not_model_claims(failed):
               {'type':'agent_settled'}]
     output = '\n'.join(json.dumps(event) for event in events)
     if failed:
-        with pytest.raises(AssistantUnavailable): _last_answer_and_preview(output)
+        with pytest.raises(AssistantUnavailable):
+            _last_answer_and_preview(output)
     else:
         reply,preview = _last_answer_and_preview(output)
         assert '空镜头' in reply and '已保存并回读' in reply

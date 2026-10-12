@@ -9,7 +9,7 @@ import pytest
 
 import app.assistant_pi as pi
 from app.config import Settings
-from test_assistant_memory_api import memory_client, write
+from test_assistant_memory_api import memory_client as memory_client, write
 
 
 @pytest.fixture

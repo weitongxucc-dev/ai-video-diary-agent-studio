@@ -28,15 +28,22 @@ describe("shared compact assistant send control", () => {
     ["要求", true, false, false, true, "正在处理", "本轮正在处理，请稍后再发送"],
   ])("exposes the actual disabled state for %s / %s / %s / %s / %s", (input, configured, loading, running, busy, label, reason) => {
     render(<AssistantConversationPanel state={state(running, loading)} input={input} onInput={vi.fn()} onSend={vi.fn()} configured={configured} busy={busy} scopeLabel="fixture" />);
+    if (running) {
+      expect(screen.getByRole("button", { name: "停止本轮" })).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "对话要求" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+      return;
+    }
     const button = screen.getByRole("button", { name: label });
     expect(button).toBeDisabled(); expect(button).toHaveAttribute("title", reason);
-    expect(screen.getByText(reason)).toHaveAttribute("role", "status");
+    expect(screen.getByRole("textbox", { name: "对话要求" })).toHaveAccessibleDescription(expect.stringContaining(reason));
   });
   it("preserves application commands and the existing real stop callback while running", () => {
     const current = state(true) as unknown as { stop: ReturnType<typeof vi.fn> };
     const onSend = vi.fn();
     render(<AssistantConversationPanel state={current as never} input="/help" onInput={vi.fn()} onSend={onSend} configured busy scopeLabel="fixture" />);
-    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "对话要求" })).toHaveValue("/help");
     fireEvent.click(screen.getByRole("button", { name: "停止本轮" }));
     expect(current.stop).toHaveBeenCalledOnce(); expect(onSend).not.toHaveBeenCalled();
   });

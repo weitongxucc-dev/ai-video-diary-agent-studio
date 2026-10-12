@@ -218,3 +218,21 @@ def build_preview_runtime(
         resources=resources, processes=ControlledProcesses(), activity_source_reliable=True,
     )
     return PreviewRuntimeHarness(repository, runtime, resources, actor, member_id)
+
+
+def configure_synthetic_media_budgets(monkeypatch, main):
+    """Finite envelopes for short synthetic tests; these never configure the host app."""
+    from app import member_permits
+    from app.host_resource_probes import CpuAudioBudget, CpuRenderBudget
+    audio = CpuAudioBudget(max_input_count=8, max_input_bytes=32*1024**2, max_source_duration_seconds=120,
+        max_output_duration_seconds=120, max_sample_rate=48000, max_channels=8, max_output_bytes=32*1024**2,
+        max_threads=1, max_timeout_seconds=30, max_process_rss_bytes=512*1024**2, max_process_threads=16,
+        runtime_sample_seconds=.1, additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2)
+    render = CpuRenderBudget(max_duration_seconds=12, max_pixel_seconds=25_000_000, max_width_px=1920,
+        max_height_px=1920, max_input_bytes=32*1024**2, max_clip_count=16, max_overlay_count=8, max_output_bytes=32*1024**2,
+        max_threads=1, max_timeout_seconds=30, additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2)
+    monkeypatch.setattr(member_permits, 'cpu_audio_budget_from_env', lambda: audio)
+    monkeypatch.setattr(main, 'cpu_audio_budget_from_env', lambda: audio)
+    monkeypatch.setattr(member_permits, 'cpu_render_budget_from_env', lambda **kwargs: render)
+    monkeypatch.setattr(main, 'cpu_render_budget_from_env', lambda **kwargs: render)
+    monkeypatch.setattr(main, 'presenter_budgets_from_env', lambda: (None, render))

@@ -1,6 +1,5 @@
 """Exact-group release after birth-metadata short reads; no media/DB/lock."""
 import errno
-import json
 import os
 import signal
 import subprocess
@@ -35,12 +34,14 @@ def test_same_boot_birth_error_releases_only_when_registered_group_is_absent(mon
 
 @pytest.mark.parametrize('group_failure',[None,PermissionError(errno.EPERM,'denied'),OSError(errno.EIO,'IO error'),OSError(errno.EINVAL,'invalid')])
 def test_birth_error_with_existing_or_uncertain_group_remains_unknown(monkeypatch,group_failure):
-    probe=HostProcessProbe();child=ProcessIdentity(123,'exact-start','same-boot')
+    probe=HostProcessProbe()
+    child=ProcessIdentity(123,'exact-start','same-boot')
     monkeypatch.setattr(probe,'_boot_id',lambda:'same-boot')
     def identity(pid):raise OSError(errno.ESRCH,'birth race')
     def group(pgid,sig):
         assert (pgid,sig)==(child.pid,0)
-        if group_failure is not None:raise group_failure
+        if group_failure is not None:
+            raise group_failure
     monkeypatch.setattr(probe,'identity',identity)
     monkeypatch.setattr('app.host_resource_probes.os.killpg',group)
     assert probe.children_released((child,)) is None
@@ -48,9 +49,11 @@ def test_birth_error_with_existing_or_uncertain_group_remains_unknown(monkeypatc
 
 @pytest.mark.parametrize('boot_failure',[None,OSError(errno.EIO,'boot unavailable')])
 def test_unconfirmed_boot_never_uses_group_absence(monkeypatch,boot_failure):
-    probe=HostProcessProbe();child=ProcessIdentity(123,'exact-start','same-boot')
+    probe=HostProcessProbe()
+    child=ProcessIdentity(123,'exact-start','same-boot')
     def boot():
-        if boot_failure is not None:raise boot_failure
+        if boot_failure is not None:
+            raise boot_failure
         return ''
     monkeypatch.setattr(probe,'_boot_id',boot)
     monkeypatch.setattr('app.host_resource_probes.os.killpg',lambda *args:pytest.fail('boot must be confirmed first'))
@@ -58,7 +61,8 @@ def test_unconfirmed_boot_never_uses_group_absence(monkeypatch,boot_failure):
 
 
 def test_known_pid_reuse_keeps_original_group_and_holder_rules(monkeypatch):
-    probe=HostProcessProbe();child=ProcessIdentity(123,'old-start','same-boot')
+    probe=HostProcessProbe()
+    child=ProcessIdentity(123,'old-start','same-boot')
     monkeypatch.setattr(probe,'_boot_id',lambda:'same-boot')
     monkeypatch.setattr(probe,'identity',lambda pid:ProcessIdentity(pid,'new-start','same-boot'))
     monkeypatch.setattr('app.host_resource_probes.os.killpg',lambda *args:pytest.fail('known PID reuse rule unchanged'))
@@ -67,7 +71,8 @@ def test_known_pid_reuse_keeps_original_group_and_holder_rules(monkeypatch):
 
 
 def test_holder_metadata_error_does_not_probe_a_group(monkeypatch):
-    probe=HostProcessProbe();holder=ProcessIdentity(123,'exact-start','same-boot')
+    probe=HostProcessProbe()
+    holder=ProcessIdentity(123,'exact-start','same-boot')
     monkeypatch.setattr(probe,'_boot_id',lambda:'same-boot')
     def identity(pid):raise psutil.AccessDenied(pid)
     monkeypatch.setattr(probe,'identity',identity)
@@ -76,7 +81,8 @@ def test_holder_metadata_error_does_not_probe_a_group(monkeypatch):
 
 
 def test_unrelated_runtime_error_still_propagates(monkeypatch):
-    probe=HostProcessProbe();child=ProcessIdentity(123,'exact-start','same-boot')
+    probe=HostProcessProbe()
+    child=ProcessIdentity(123,'exact-start','same-boot')
     monkeypatch.setattr(probe,'_boot_id',lambda:'same-boot')
     def identity(pid):raise RuntimeError('unrelated implementation error')
     monkeypatch.setattr(probe,'identity',identity)
@@ -99,7 +105,8 @@ def test_real_python_group_reaped_after_short_read_is_released(monkeypatch):
         assert probe.children_released((child,)) is True
     finally:
         if process.poll() is None:
-            process.terminate();process.wait(timeout=2)
+            process.terminate()
+            process.wait(timeout=2)
 
 
 def test_real_surviving_grandchild_group_blocks_release(monkeypatch):
@@ -123,16 +130,21 @@ def test_real_surviving_grandchild_group_blocks_release(monkeypatch):
             time.sleep(.01)
         assert probe.children_released((child,)) is True
     finally:
-        if leader.stdout is not None:leader.stdout.close()
+        if leader.stdout is not None:
+            leader.stdout.close()
         if leader.poll() is None:
-            leader.terminate();leader.wait(timeout=2)
-        try:os.killpg(leader.pid,signal.SIGTERM)
-        except ProcessLookupError:pass
+            leader.terminate()
+            leader.wait(timeout=2)
+        try:
+            os.killpg(leader.pid,signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 @pytest.mark.parametrize('group,platform',[(False,'darwin'),(True,'linux')])
 def test_short_read_runtime_error_outside_mac_child_group_rule_is_unchanged(monkeypatch,group,platform):
-    probe=HostProcessProbe();child=ProcessIdentity(123,'exact-start','same-boot')
+    probe=HostProcessProbe()
+    child=ProcessIdentity(123,'exact-start','same-boot')
     monkeypatch.setattr(probe,'_boot_id',lambda:'same-boot')
     monkeypatch.setattr('app.host_resource_probes.sys.platform',platform)
     def identity(pid):raise RuntimeError('sysctl() size mismatch')

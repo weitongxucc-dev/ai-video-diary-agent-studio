@@ -841,7 +841,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             {"title": section.title, "content": section.content, "visual_prompt": section.visual_prompt,
              "evidence_reference_ids": [reverse[ref] for ref in section.evidence_reference_ids]}
             for section in script.sections]}}
-        validated = self._validated_output(document, aliases, input)
+        self._validated_output(document, aliases, input)
         self._check_script(input, script, sources, aliases)
 
     def _validated_output(self, document: object, source_aliases: dict[str, str],

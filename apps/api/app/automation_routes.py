@@ -26,11 +26,14 @@ def build_automation_router(runtime_for, *, actor_for):
     router = APIRouter(prefix="/api/automations",tags=["automations"])
 
     def invoke(operation):
-        try: return operation()
+        try:
+            return operation()
         except AutomationBlocked as exc:
             raise HTTPException(409,detail={"error":exc.code,"message":exc.reason,"repair_action":exc.repair}) from exc
-        except KeyError as exc: raise HTTPException(404,detail="当前成员下未找到该自动化对象") from exc
-        except ValueError as exc: raise HTTPException(409,detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404,detail="当前成员下未找到该自动化对象") from exc
+        except ValueError as exc:
+            raise HTTPException(409,detail=str(exc)) from exc
 
     def context(request):
         return runtime_for(),actor_for(request)
@@ -92,10 +95,12 @@ def build_automation_router(runtime_for, *, actor_for):
 
 
 def guard_automation_task(runtime, workspace_id, task_id, actor_for):
-    try: runtime.require_task_open(workspace_id,task_id,actor_for)
+    try:
+        runtime.require_task_open(workspace_id,task_id,actor_for)
     except AutomationBlocked as exc:
         raise HTTPException(409,detail={"error":exc.code,"message":exc.reason,"repair_action":exc.repair}) from exc
-    except KeyError as exc: raise HTTPException(403,detail="当前成员不是本次自动化运行的原成员") from exc
+    except KeyError as exc:
+        raise HTTPException(403,detail="当前成员不是本次自动化运行的原成员") from exc
 
 
 def build_automation_guarded_publish_router(router, *, guard):
