@@ -402,9 +402,11 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
         replace(plan, audio_timeline=timeline, narration_linkage_created_audio_timeline=True))
 
 
-def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_state):
+def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_state, monkeypatch):
     """A crop on a material shot keeps its own label; it must not be described as a reorder."""
     state = _build_linked_state(person_render_edit_state, material=True)
+    from test_montage_pipeline import _granted_domain_preview_adapter
+    runtime = _granted_domain_preview_adapter(state, monkeypatch)
     preview = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview", json={
         "operation_type": "ChangeCrop", "clip_id": "clip-link-b",
         "fit_mode": "fit", "crop_x": 0.4, "crop_y": 0.6})
@@ -412,6 +414,7 @@ def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_stat
     summary = preview.json()["proposal"]["summary"]
     assert "本次移动的是纯素材镜头" not in summary
     assert "调整镜头顺序" not in summary
+    assert runtime.stop(1)
 
 
 needs_ffmpeg = pytest.mark.skipif(
@@ -464,7 +467,7 @@ def _per_second_rms_db(path):
 
 
 @needs_ffmpeg
-def test_a_reordered_narration_mix_renders_and_keeps_each_source_at_its_own_level(tmp_path):
+def test_a_reordered_narration_mix_renders_and_keeps_each_source_at_its_own_level(tmp_path, granted_media):
     """The reorder that used to segfault has to render, and moving segments may not change level.
 
     Both orders come out of one source measured once, so the same source interval has to reach the
@@ -479,8 +482,10 @@ def test_a_reordered_narration_mix_renders_and_keeps_each_source_at_its_own_leve
 
     rendered = {}
     for name, timeline in (("before", in_order), ("after", swapped)):
-        rendered[name] = render_audio_mix(
-            timeline, 8, lambda _ref: source, tmp_path / f"{name}.wav", normalize_voice_sources=True)
+        with granted_media([source]) as context:
+            rendered[name] = render_audio_mix(timeline, 8, lambda _ref: source, tmp_path / f"{name}.wav", normalize_voice_sources=True,
+                scheduler=context.scheduler, grant=context.grant, deadline_monotonic=context.deadline_monotonic,
+                max_output_bytes=context.max_output_bytes, threads=context.threads)
         assert rendered[name].stat().st_size > 0
         assert _wav_seconds(rendered[name]) == pytest.approx(8, abs=0.05)
 

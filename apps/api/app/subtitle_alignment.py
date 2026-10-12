@@ -86,7 +86,13 @@ def synchronize_translated_subtitles(tracks, source, duration_seconds):
     return [source if item.id == source.id else changed if item.id == translation.id else item for item in tracks]
 
 
-def recognize_subtitle_timing(settings, audio_path, language, output_root):
+def recognize_subtitle_timing(settings, audio_path, language, output_root, *, context=None):
+    if context is None:
+        raise PermissionError("字幕识别必须提供独立模型资源许可")
+    with context.scheduler._connect() as conn:
+        row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (context.grant.request_id,)).fetchone()
+    if row is None or json.loads(row["resources_json"]).get("kind") != "task_subtitle_recognition":
+        raise ValueError("字幕识别的模型资源预算尚未标定，未启动识别")
     # This path intentionally never dispatches to the cloud ASR provider.
     if settings.local_whisper_backend != "whisper_cpp" or not settings.local_whisper_configured:
         raise ValueError("字幕校准需要已安装的本地 whisper.cpp 和模型，请在设置中配置")
@@ -99,7 +105,10 @@ def recognize_subtitle_timing(settings, audio_path, language, output_root):
         # into recognition as evidence that it was actually spoken.
         command.extend(["--prompt", "以下使用简体中文。"])
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=1800)
+        command.extend(["-t", str(context.threads)])
+        completed = context.run(command, output_paths=(target.with_suffix(".json"),))
+        if completed.returncode:
+            raise subprocess.CalledProcessError(completed.returncode, command, stderr=completed.stderr)
         result = json.loads(target.with_suffix(".json").read_text())
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
         raise ValueError("本地字幕识别失败，请检查 whisper.cpp 程序与模型；未修改字幕") from exc

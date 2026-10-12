@@ -1,5 +1,6 @@
 "use client";
 
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { useState } from "react";
 import styles from "./SettingsFields.module.css";
 import { DirectoryPickerButton } from "./DirectoryPickerButton";
@@ -29,16 +30,16 @@ function statusLabel(configured: boolean): string {
 
 export function FieldRow({ field }: { field: FieldDef }) {
   if (field.kind === "select") {
-    return <label className="settings-field"><span>{field.label}</span>
-      <select aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
-        {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      {field.helper ? <small className="settings-field-helper">{field.helper}</small> : null}
+    return <label className={`settings-field ${styles.row}`}><span>{field.label}</span>
+      <AppSelect aria-label={field.label} name={field.name} defaultValue={field.defaultValue}>
+        {field.options?.map(option => <AppSelectOption key={option.value} value={option.value}>{option.label}</AppSelectOption>)}
+      </AppSelect>
+      {field.helper ? <details className={styles.help}><summary>说明</summary><p>{field.helper}</p></details> : null}
     </label>;
   }
   if (field.kind === "secret") {
     return (
-      <label className="settings-field">
+      <label className={`settings-field ${styles.row}`}>
         <span>
           {field.label}
           <span
@@ -75,7 +76,7 @@ export function FieldRow({ field }: { field: FieldDef }) {
 
   if (field.kind === "directory" || field.kind === "file") {
     return (
-      <label className="settings-field">
+      <label className={`settings-field ${styles.row}`}>
         <span>{field.label}</span>
         <div className="settings-field-row">
           <input
@@ -90,7 +91,7 @@ export function FieldRow({ field }: { field: FieldDef }) {
           <DirectoryPickerButton kind={field.kind} targetName={field.name} />
         </div>
         {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
+          field.name === "database_path" ? <small className="settings-field-helper">{field.helper}</small> : <details className={styles.help}><summary>说明</summary><p>{field.helper}</p></details>
         ) : null}
       </label>
     );
@@ -98,7 +99,7 @@ export function FieldRow({ field }: { field: FieldDef }) {
 
   if (field.kind === "textarea") {
     return (
-      <label className="settings-field wide">
+      <label className={`settings-field wide ${styles.row}`}>
         <span>{field.label}</span>
         <textarea
           aria-label={field.label}
@@ -109,14 +110,14 @@ export function FieldRow({ field }: { field: FieldDef }) {
           defaultValue={field.defaultValue ?? ""}
         />
         {field.helper ? (
-          <small className="settings-field-helper">{field.helper}</small>
+          <details className={styles.help}><summary>说明</summary><p>{field.helper}</p></details>
         ) : null}
       </label>
     );
   }
 
   return (
-    <label className="settings-field">
+    <label className={`settings-field ${styles.row}`}>
       <span>{field.label}</span>
       <input
         aria-label={field.label}
@@ -129,7 +130,7 @@ export function FieldRow({ field }: { field: FieldDef }) {
         defaultValue={field.defaultValue ?? ""}
       />
       {field.helper ? (
-        <small className="settings-field-helper">{field.helper}</small>
+        <details className={styles.help}><summary>说明</summary><p>{field.helper}</p></details>
       ) : null}
     </label>
   );
@@ -144,19 +145,19 @@ export function AsrFields({ fields }: { fields: FieldDef[] }) {
   const local = provider === "local_whisper";
   const cpp = backend === "whisper_cpp";
   return <>
-    <label className="settings-field">
+    <label className={`settings-field ${styles.row}`}>
       <span>{providerField.label}</span>
-      <select aria-label={providerField.label} name={providerField.name} value={provider} onChange={event => setProvider(event.target.value)}>
-        {providerField.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
+      <AppSelect aria-label={providerField.label} name={providerField.name} value={provider} onValueChange={newValue => setProvider(newValue)}>
+        {providerField.options?.map(option => <AppSelectOption key={option.value} value={option.value}>{option.label}</AppSelectOption>)}
+      </AppSelect>
     </label>
     <fieldset className={`settings-grid ${styles.group}`} hidden={!local} style={!local ? { display: "none" } : undefined} disabled={!local}>
       <legend>本地听写</legend>
-      <label className="settings-field">
+      <label className={`settings-field ${styles.row}`}>
         <span>{backendField.label}</span>
-        <select aria-label={backendField.label} name={backendField.name} value={backend} onChange={event => setBackend(event.target.value)}>
-          {backendField.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
+        <AppSelect aria-label={backendField.label} name={backendField.name} value={backend} onValueChange={newValue => setBackend(newValue)}>
+          {backendField.options?.map(option => <AppSelectOption key={option.value} value={option.value}>{option.label}</AppSelectOption>)}
+        </AppSelect>
       </label>
       <fieldset className={styles.group} aria-label="Python 听写运行环境" hidden={cpp} disabled={cpp}>
         {fields.filter(field => field.name === "local_whisper_python_path").map(field => <FieldRow field={field} key={field.name} />)}

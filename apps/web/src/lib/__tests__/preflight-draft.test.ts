@@ -12,6 +12,13 @@ const member = { memberId: "local:member", workspaceId: "space-a" };
 const draft: PreflightDraftFields = { goal: "原目标", name: "原任务", targetCount: "2", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: "fixed-template", version: 4 } };
 beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear(); mocks.local.mockReturnValue(true); mocks.identity.mockResolvedValue({ member_id: "owner", role: "owner" }); mocks.foundation.mockResolvedValue({ profile: { workspace_id: "space-a" } }); });
 describe("bounded member/workspace session drafts", () => {
+  it("retains the selected knowledge version through repair without copying source text or access credentials", () => {
+    const pinned = { ...draft, knowledgePin: { knowledge_item_id: "ki-device", version: "2" } };
+    savePreflightDraft(sessionStorage, owner, id, pinned);
+    expect(loadPreflightDraft(sessionStorage, owner, id)).toEqual(pinned);
+    expect(loadPreflightDraft(sessionStorage, member, id)).toBeNull();
+    expect(() => savePreflightDraft(sessionStorage, owner, id, { ...draft, knowledgePin: { ...pinned.knowledgePin, body: "源正文" } } as PreflightDraftFields)).toThrow("输入超出");
+  });
   it("uses verified local roles or Supabase user and actual foundation workspace, never a body identity", async () => {
     expect(await readPreflightDraftScope()).toEqual(owner);
     mocks.identity.mockResolvedValue({ member_id: "member", role: "member" }); mocks.foundation.mockResolvedValue({ profile: { workspace_id: "space-b" } });

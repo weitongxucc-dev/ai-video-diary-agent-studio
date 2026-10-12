@@ -1,0 +1,88 @@
+"""Pi event parsing and task-turn receipts with isolated runtime doubles."""
+import json
+import subprocess
+import sys
+
+import pytest
+
+import app.assistant_pi as pi
+from app.config import Settings
+
+
+def receipt(status="queued"):
+    return {
+        "job_id":"job-current", "status":status, "result_kind":"edit_preview",
+        "result_url":"/api/creation-tasks/task-current/media-jobs/job-current",
+        "device_request_id":None, "waiting_reason":"resource_pressure",
+        "base_version_id":"version-current", "result":None,
+        "failure_reason":None, "repair_action":None,
+    }
+
+
+def events(details, model_reply="预览已完成，修改已应用。"):
+    return "\n".join(json.dumps(event, ensure_ascii=False) for event in [
+        {"type":"tool_execution_end","toolName":"preview_edit","isError":False,
+         "result":{"details":details}},
+        {"type":"message_end","message":{"role":"assistant","stopReason":"stop",
+         "content":[{"type":"text","text":model_reply}]}},
+        {"type":"agent_settled"},
+    ])
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "interrupted", "succeeded"])
+def test_pending_media_job_overrides_model_success_claim_and_preserves_receipt(status):
+    job = receipt(status)
+    if status == "succeeded":
+        job["result"] = {"proposal":{"id":"stored-result"}}
+    details = {"kind":"task_media_job","media_job":job}
+    reply, result = pi._last_answer_and_preview(events(details))
+    assert result == {"kind":"media_job","media_job":job}
+    assert "已安排，预览尚未完成" in reply
+    assert "修改已应用" not in reply and "预览已完成" not in reply
+    assert pi._safe_tool_result_summary("preview_edit", {"details":details}, False) == reply
+
+
+def test_immediate_proposal_keeps_business_preview_and_confirmation_reply():
+    preview = {"proposal":{
+        "id":"proposal-current", "summary":"实际调亮镜头",
+        "operation":{"operation_type":"ChangeColor"},
+        "preview":{"before":{"detail":"原亮度"},"after":{"detail":"较亮"}},
+        "invalidated_refs":[], "external_effects":[],
+    }}
+    reply, result = pi._last_answer_and_preview(events({"kind":"edit_preview","preview":preview}))
+    assert result == preview
+    assert "实际调亮镜头" in reply and "待确认，尚未应用修改" in reply
+    assert "修改前：原亮度" in reply and "修改后：较亮" in reply
+    assert "预览尚未完成" not in reply
+
+
+def test_run_task_turn_returns_media_job_without_restarting_model(monkeypatch, tmp_path):
+    calls = []
+    job = receipt()
+    monkeypatch.setattr(pi, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr(pi, "_pi_executable", lambda: sys.executable)
+    monkeypatch.setattr(pi, "_configured_model", lambda _: ("https://synthetic.invalid", "fixture", ""))
+    monkeypatch.setattr(pi, "_agent_root", lambda *_: tmp_path / "agent")
+    monkeypatch.setattr(pi, "_record_service", lambda *_, **__: None)
+    monkeypatch.setattr(pi, "_read_task_before_pi", lambda _extension, env, _cwd: {
+        "task_id":env["AI_VIDEO_DIARY_AGENT_TASK_ID"], "selected_refs":[],
+    })
+    monkeypatch.setattr(pi, "_read_memory_before_pi", lambda *_: {
+        "revision":0,"common_expressions":[],"banned_words":[],"style_preferences":{},
+    })
+
+    def fake_stream(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=events({"kind":"task_media_job","media_job":job}), stderr="")
+
+    monkeypatch.setattr(pi, "_run_pi_streaming", fake_stream)
+    reply, result = pi.run_task_turn(
+        Settings(model_root_path=str(tmp_path / "models")), workspace_id="workspace-current",
+        task_id="task-current", conversation_id="conversation-current",
+        message="把选中镜头调亮一点", stage="montage", selected_refs=[], playhead_ms=None,
+        caller_user_id="member-current", turn_id="trusted-turn",
+    )
+    assert result == {"kind":"media_job","media_job":job}
+    assert "已安排，预览尚未完成" in reply
+    assert len(calls) == 1
+    assert "本轮重试或轮询" in calls[0][calls[0].index("--system-prompt") + 1]

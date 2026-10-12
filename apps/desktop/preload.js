@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+// A navigation/reload must not retain the previous document's focused card.
+ipcRenderer.send('set-card-media-escape', null);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // App info
@@ -23,6 +25,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Help
   onOpenHelp: (callback) => ipcRenderer.on('open-help', callback),
+  setCardMediaEscape: (cardId) => ipcRenderer.send('set-card-media-escape', cardId),
+  onCardMediaEscape: (callback) => {
+    const listener = (_event, cardId) => callback(cardId);
+    ipcRenderer.on('card-media-escape', listener);
+    return () => ipcRenderer.removeListener('card-media-escape', listener);
+  },
 
   // App lifecycle
   getVersion: () => ipcRenderer.invoke('get-version'),

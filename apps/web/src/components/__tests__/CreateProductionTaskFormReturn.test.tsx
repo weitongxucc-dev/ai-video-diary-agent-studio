@@ -1,3 +1,4 @@
+import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationPlanPreview, VideoTemplate } from "@/lib/types";
@@ -10,9 +11,9 @@ import { loadPreflightDraft, resolvePreflightRepairContext, savePreflightDraft, 
 const scope = { memberId: "local:member-a", workspaceId: "space-a" };
 const id = "12345678-1234-4123-8123-123456789abc", nextId = "12345678-1234-4123-8123-123456789abd";
 const template: VideoTemplate = { id: "template-fixed", version: 3, name: "60秒模板", visibility: "private", origin: "user", source_task_id: "old", source_timeline_version_id: "old-version", created_at: "2026-10-09", settings: { language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 60, voice: null, style_instruction: "短句", fit_mode: "fit", subtitle_style: {} } };
-const fields: PreflightDraftFields = { goal: "原制作目标", name: "原名称", targetCount: "2", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: template.id, version: template.version } };
+const fields: PreflightDraftFields = { goal: "原制作目标", name: "原名称", targetCount: "1", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: template.id, version: template.version } };
 function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPreview {
-  return { goal: fields.goal, name: fields.name, target_count: 2, language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 30, knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 0, approved_clip_count: 0, material_rule_summary: "真实预检返回", material_matches: [], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "n".repeat(64), ...overrides };
+  return { goal: fields.goal, name: fields.name, target_count: 1, language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 30, knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 0, approved_clip_count: 0, material_rule_summary: "真实预检返回", material_matches: [], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "n".repeat(64), ...overrides };
 }
 function check() { fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!); }
 function defer<T>() { let resolve!: (value: T) => void; let reject!: (cause: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -46,12 +47,12 @@ describe("uncreated task repair return", () => {
   it("saves before the real resource navigation, restores every input and checks fresh facts without auto-creation", async () => {
     mocks.preview.mockResolvedValueOnce(preview({ confirmable: false, preflight_fingerprint: "o".repeat(64), blockers: [{ reason: "content_sources_missing", stage: "topic", impact: "缺少资料", repair_action: "补充资料", blocks_confirmation: true }] }));
     const first = render(<CreateProductionTaskForm template={template} initialGoal={fields.goal} assignLocation={mocks.assign} />);
-    await screen.findByRole("option", { name: "所选声音 · v2" });
+    await inspectSelectOptions(screen.getByLabelText("任务声音"),()=>screen.findByRole("option", { name: "所选声音" }));
     fireEvent.change(screen.getByLabelText("任务名称（可选）"), { target: { value: fields.name } });
     fireEvent.change(screen.getByLabelText("成片数量"), { target: { value: fields.targetCount } });
     fireEvent.change(screen.getByLabelText("目标时长（秒）"), { target: { value: fields.duration } });
-    fireEvent.change(screen.getByLabelText("任务声音"), { target: { value: "voice-a:v2" } });
-    fireEvent.change(screen.getByLabelText("任务人物"), { target: { value: "person-b:p3" } });
+    await chooseSelectValue(screen.getByLabelText("任务声音"), "voice-a:v2");
+    await chooseSelectValue(screen.getByLabelText("任务人物"), "person-b:p3");
     check(); await screen.findByText("缺少资料"); fireEvent.click(screen.getByRole("button", { name: "补充知识资料" }));
     await waitFor(() => expect(mocks.assign).toHaveBeenCalledTimes(1));
     const resource = new URL(mocks.assign.mock.calls[0][0], window.location.origin);
@@ -59,7 +60,7 @@ describe("uncreated task repair return", () => {
     const target = new URL(resource.searchParams.get("return_to")!, window.location.origin); const draftId = target.searchParams.get("draft_id")!;
     expect(target.searchParams.get("template_version")).toBe("3"); expect(target.searchParams.has("goal")).toBe(false);
     const saved = loadPreflightDraft(sessionStorage, scope, draftId)!;
-    expect(saved).toEqual({ ...fields, presenterShare: 20, replyOrigin: null });
+    expect(saved).toEqual({ ...fields, presenterShare: 20, replyOrigin: null, knowledgePin: null });
     expect(resolvePreflightRepairContext(sessionStorage, scope, null, window.location.origin)?.target.draftId).toBe(draftId);
     expect(JSON.stringify(saved)).not.toContain("fingerprint");
     first.unmount(); expect(loadPreflightDraft(sessionStorage, scope, draftId)).toEqual(saved);
@@ -68,9 +69,9 @@ describe("uncreated task repair return", () => {
     await screen.findByText("预检目标时长：30 秒");
     await act(async () => lateDefault.resolve({ id: "different-default", version: "v9" }));
     expect(screen.getByLabelText("制作目标")).toHaveValue(fields.goal); expect(screen.getByLabelText("任务名称（可选）")).toHaveValue(fields.name);
-    expect(screen.getByLabelText("成片数量")).toHaveValue(2); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30);
-    expect(screen.getByLabelText("任务声音")).toHaveValue("voice-a:v2"); expect(screen.getByLabelText("任务人物")).toHaveValue("person-b:p3");
-    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, target_count: 2, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
+    expect(screen.getByLabelText("成片数量")).toHaveValue(1); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30);
+    expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "voice-a:v2"); expect(screen.getByLabelText("任务人物")).toHaveAttribute("data-selected-value", "person-b:p3");
+    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, target_count: 1, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
     expect(mocks.confirm).not.toHaveBeenCalled();
     savePreflightDraft(sessionStorage, scope, nextId, fields);
     mocks.confirm.mockRejectedValueOnce(new Error("真实确认失败")); fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
@@ -143,7 +144,7 @@ describe("uncreated task repair return", () => {
     await waitFor(() => expect(mocks.voices).toHaveBeenCalled());
     mocks.scope.mockResolvedValue({ memberId: "local:member-b", workspaceId: "space-b" });
     await act(async () => oldProfiles.resolve({ items: [{ id: "old-voice", version: "v1", display_name: "前成员声音" }] }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("成员或工作区"); expect(screen.queryByRole("option", { name: /前成员声音/ })).toBeNull();
+    expect(await screen.findByRole("alert")).toHaveTextContent("成员或工作区"); await inspectSelectOptions(screen.getByLabelText("任务声音"),()=>expect(screen.queryByRole("option", { name: /前成员声音/ })).toBeNull());
   });
   it("discards a preflight when the workspace changes while the actual request is in flight", async () => {
     const late = defer<CreationPlanPreview>(); mocks.preview.mockReturnValueOnce(late.promise);
@@ -177,7 +178,7 @@ describe("uncreated task repair return", () => {
     await screen.findByRole("button", { name: "确认并创建任务" });
     const late = defer<typeof scope>(); mocks.scope.mockReturnValueOnce(late.promise);
     view.rerender(<CreateProductionTaskForm draftId={nextId} template={template} />);
-    expect(screen.getByLabelText("制作目标")).toHaveValue(""); expect(screen.getByLabelText("任务声音")).toHaveValue("");
+    expect(screen.getByLabelText("制作目标")).toHaveValue(""); expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "");
     expect(screen.getByRole("button", { name: "检查可用内容" })).toBeDisabled(); check(); expect(mocks.preview).toHaveBeenCalledTimes(1);
     await act(async () => late.resolve({ memberId: "local:member-b", workspaceId: "space-b" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("没有这份临时草稿");

@@ -11,6 +11,15 @@ from fastapi.testclient import TestClient
 from app.audio_waveform import AudioWaveformError, audio_waveform
 
 
+@pytest.fixture(autouse=True)
+def permitted_waveform(granted_media, monkeypatch):
+    original = audio_waveform
+    def decode(path, cache, **kwargs):
+        with granted_media([path]) as context:
+            return original(path, cache, context=context, **kwargs)
+    monkeypatch.setitem(globals(), "audio_waveform", decode)
+
+
 def write_audio(path: Path, amplitude: int) -> None:
     with wave.open(str(path), "wb") as output:
         output.setparams((2, 2, 8000, 0, "NONE", "not compressed"))
@@ -55,7 +64,7 @@ def test_waveform_api_rejects_another_tasks_artifact(monkeypatch):
     assert response.status_code == 404
 
 
-def test_timeline_waveform_uses_default_cache_directory_when_not_configured(monkeypatch, tmp_path):
+def test_granted_timeline_waveform_uses_default_cache_directory_when_not_configured(monkeypatch, tmp_path, granted_media):
     import app.main as main
 
     source = tmp_path / "voice.wav"
@@ -67,7 +76,11 @@ def test_timeline_waveform_uses_default_cache_directory_when_not_configured(monk
     monkeypatch.setattr(main, "_effective_audio_timeline", lambda plan: SimpleNamespace(
         tracks=[SimpleNamespace(clips=[SimpleNamespace(id="voice", source_ref="voice-source")])]))
     monkeypatch.setattr(main, "_task_audio", lambda: SimpleNamespace(source=lambda *args: source))
-    response = TestClient(main.app).get("/api/creation-tasks/this-task/audio/waveform/voice")
-    assert response.status_code == 200
-    assert max(response.json()["peaks"]) == pytest.approx(0.5)
+    from starlette.requests import Request
+    with granted_media([source]) as context:
+        monkeypatch.setattr(main, "_task_media_grant_or_queue", lambda: context)
+        # Exercise the post-admission route; public queue/identity checks have separate tests.
+        result = main.get_creation_task_audio_waveform.__wrapped__("task", "voice",
+            Request({"type": "http", "headers": [], "path": "/api/creation-tasks/task/audio/waveform/voice"}))
+    assert max(result["peaks"]) == pytest.approx(0.5)
     assert list((tmp_path / "temporary" / "audio-waveforms").rglob("*.json"))

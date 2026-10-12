@@ -1,3 +1,4 @@
+import { chooseSelectValue } from "./select-interaction";
 import { useState } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -347,7 +348,9 @@ describe("CreationTaskWorkspace 字幕保存", () => {
     const workspace = subtitleWorkspace();
     mocks.getWorkspace.mockResolvedValue(workspace);
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspace} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "保存字幕语言" }), { target: { value: "zh-en" } });
+    fireEvent.click(screen.getByRole("button",{name:"字幕导出设置"}));
+    await chooseSelectValue(screen.getByRole("combobox", { name: "保存字幕语言" }), "zh-en");
+    fireEvent.keyDown(document.activeElement!,{key:"Escape"});
     const save = screen.getByRole("button", { name: "保存字幕" });
     fireEvent.click(save);
     await waitFor(() => expect(saveSubtitleFile).toHaveBeenCalledWith({

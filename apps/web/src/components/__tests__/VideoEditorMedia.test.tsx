@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
-import { ClipThumbnail, VideoEditingStage } from "../VideoEditor";
+import { ClipThumbnail, VideoClipInspector, VideoEditingStage } from "../VideoEditor";
 
 vi.mock("../NarrationWaveformTrack", () => ({ NarrationWaveformTrack: () => <div>配音</div> }));
 
@@ -24,6 +24,12 @@ function workspace(selected = clip, output: string | null = null, version = "tim
 function stage(data = workspace(), ref = createRef<HTMLVideoElement>()) {
   return <VideoEditingStage workspace={data} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} />;
 }
+
+it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
+  const data=workspace();data.montage!.aspect_ratio=undefined;data.plan={aspect_ratio:"16:9"} as CreationTaskWorkspace["plan"];
+  const view=render(stage(data));
+  expect(view.container.querySelector('[data-editor-player]')).toHaveAttribute("data-editor-aspect-ratio","16:9");
+});
 
 describe("clip thumbnail media facts", () => {
   it("waits for a decoded frame at the actual source start rather than metadata alone", () => {
@@ -164,5 +170,62 @@ describe("source and output playback identity", () => {
     await act(async () => reject(new Error("controlled media rejection")));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText("正在读取成片…")).toBeInTheDocument();
+  });
+});
+
+describe("complete source in clip details and replacement", () => {
+  function inspector(selected = clip, onPreview = vi.fn()) {
+    const data = workspace(selected, null, "timeline-1", "9:16");
+    data.person_renders = [];
+    data.person_render_capability = { available: false } as CreationTaskWorkspace["person_render_capability"];
+    return <VideoClipInspector clip={selected} index={0} count={1} workspace={data} busy={false}
+      onPreview={onPreview} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing onPerson={vi.fn()} />;
+  }
+  function dimensions(video: HTMLVideoElement, width: number, height: number) {
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: width });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: height });
+    fireEvent.loadedMetadata(video);
+  }
+
+  it.each([[1920, 1080], [1080, 1920], [1080, 1080]])("uses the actual %sx%s source independently of the output canvas and crop settings", (width, height) => {
+    const onPreview = vi.fn();
+    const selected = { ...clip, fit_mode: "fill" as const, crop_x: .1, crop_y: .9 };
+    render(inspector(selected, onPreview));
+    const video = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    expect(video.style.aspectRatio).toBe("");
+    dimensions(video, width, height);
+    expect(video.style.aspectRatio).toBe(`${width} / ${height}`);
+    expect(video.currentTime).toBe(selected.source_start_seconds);
+    expect(video).toHaveAttribute("controls");
+    mediaState(video, 2);
+    fireEvent.seeked(video);
+    expect(screen.queryByText("正在读取原片…")).not.toBeInTheDocument();
+    expect(screen.getByText("源素材 · 原始画面，非成片")).toBeInTheDocument();
+    expect(screen.getByText("没有满足时长的其他可用镜头，请补充素材。")).toBeInTheDocument();
+    expect(onPreview).not.toHaveBeenCalled();
+    expect(selected).toMatchObject({ fit_mode: "fill", crop_x: .1, crop_y: .9 });
+  });
+
+  it("resets dimensions on failed retry and changed source, ignoring metadata from the previous video", () => {
+    const view = render(inspector());
+    const oldVideo = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    dimensions(oldVideo, 1080, 1920);
+    fireEvent.error(oldVideo);
+    expect(screen.getByRole("alert")).toHaveTextContent("原片暂时无法读取");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取原片" }));
+    const retried = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    expect(retried.style.aspectRatio).toBe("");
+    dimensions(oldVideo, 4000, 1000);
+    expect(retried.style.aspectRatio).toBe("");
+    dimensions(retried, 1920, 1080);
+    expect(retried.style.aspectRatio).toBe("1920 / 1080");
+    view.rerender(inspector({ ...clip, asset_id: "asset-2" }));
+    const changed = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    expect(changed.style.aspectRatio).toBe("");
+    dimensions(retried, 1080, 1920);
+    expect(changed.style.aspectRatio).toBe("");
+    dimensions(changed, 1080, 1080);
+    expect(changed.style.aspectRatio).toBe("1080 / 1080");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

@@ -118,6 +118,8 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     state.generated_calls = []
     state.generated_failure = None
     state.generated_oversize = False
+    state.generated_duration = 2
+    state.combined_duration = 4
     state.commit_failure = False
     def generated(**kwargs):
         context = kwargs["grant_context"]
@@ -130,11 +132,11 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         if state.generated_failure:
             raise state.generated_failure
         path = tmp_path / "generated.wav"
-        path.write_bytes(b"x" * (context.max_output_bytes+1) if state.generated_oversize else wav_bytes())
+        path.write_bytes(b"x" * (context.max_output_bytes+1) if state.generated_oversize else wav_bytes(state.generated_duration))
         unchanged_task = state.repo.get_creation_task("local", state.task.id)
         assert unchanged_task.current_timeline_version_id == state.base.id
         assert state.repo.get_narration_artifact("local", "1" * 64) is None
-        return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=2,
+        return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.generated_duration,
             sample_rate=8000, model_id="synthetic-provider", voice_profile_id=state.plan.selected_voice.profile_id,
             cache_key="1" * 64, language="zh", pronunciation_version="rules-v1")
     def combined(**kwargs):
@@ -144,8 +146,8 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         assert [item.cache_key for item in kwargs["segments"]] == ["1" * 64, "old"]
         assert state.repo.get_narration_artifact("local", "1" * 64) is None
         path = tmp_path / "combined.wav"
-        path.write_bytes(wav_bytes())
-        return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=4,
+        path.write_bytes(wav_bytes(state.combined_duration))
+        return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.combined_duration,
             sample_rate=8000, model_id="synthetic-provider", voice_profile_id=state.plan.selected_voice.profile_id,
             cache_key="2" * 64, language="zh", pronunciation_version="rules-v1")
     monkeypatch.setattr(main_module.narration_generator, "generate_for_creation_task", generated)
@@ -159,6 +161,140 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         return result
     monkeypatch.setattr(state.executor, "_narration_edit_checkpoint", checkpoint)
     return state
+
+
+@pytest.mark.parametrize("with_narration_snapshot", [False, True])
+def test_draft_narration_preview_does_not_require_a_rendered_video(generator_api, with_narration_snapshot):
+    from app.production import TimelineVersion
+    state = generator_api
+    if with_narration_snapshot:
+        state.base = state.repo.create_timeline_version(TimelineVersion("with-audio-snapshot", "local", state.task.id,
+            state.base.id, 3, {**state.base.snapshot, **main_module._current_narration_snapshot("local", state.task)}, None))
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",
+        "selected_object_refs": ["narration:n-1"],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["operation"]["payload"]["base_version_id"] == state.base.id
+    assert proposal["preview"]["before"]["audio_url"]
+    assert state.client.get(proposal["preview"]["before"]["audio_url"]).status_code == 200
+    assert proposal["preview"]["before"]["video_url"] is None
+    assert proposal["preview"]["after"]["video_url"] is None
+    assert proposal["preview"]["after"]["audio_url"] is None
+    assert any("没有视频对比" in effect for effect in proposal["external_effects"])
+    assert not state.generated_calls
+    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+
+
+def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence_clips(generator_api):
+    state = generator_api
+    payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
+    payload["status"] = "waiting_for_user"
+    payload["clips"][0]["needs_confirmation"] = True
+    payload["low_confidence_clip_count"] = 1
+    state.repo.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
+    state.generated_duration = 3
+    state.combined_duration = 5
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",
+        "selected_object_refs": ["narration:n-1"],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    receipt = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal['id']}/confirm", json={})
+    assert receipt.status_code == 202, receipt.text
+    assert not state.runtime.run_once()  # no generation before the existing grant
+    assert not state.generated_calls
+    state.resources.allowed = True
+    assert state.runtime.run_once()
+    assert state.repo.get_job_run("local", receipt.json()["job_id"]).status == "succeeded"
+    assert len(state.generated_calls) == 1
+    assert state.generated_calls[0]["delivery_instruction"] == "这句以0.7倍速重新配音"
+    updated = state.repo.get_creation_task_montage_plan("local", state.task.id)
+    assert updated["duration_seconds"] == 5
+    assert updated["clips"][0]["timeline_end_seconds"] == 3
+    assert updated["clips"][1]["timeline_start_seconds"] == 3
+    assert updated["clips"][0]["needs_confirmation"] is True
+    assert updated["low_confidence_clip_count"] == 1 and updated["status"] == "waiting_for_user"
+    current = state.repo.get_creation_task("local", state.task.id)
+    assert current.current_timeline_version_id != state.base.id and not current.output_ready
+    assert state.repo.get_edit_proposal("local", proposal["id"]).status == "confirmed"
+    assert state.runtime.scheduler._get(receipt.json()["request_id"]).state == "done"
+
+
+def test_draft_narration_retime_still_rejects_insufficient_source_footage(generator_api):
+    state = generator_api
+    payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
+    asset = state.repo.get_asset("local", payload["clips"][0]["asset_id"])
+    asset.segments[0].end_seconds = 2
+    state.repo._save_asset(asset)
+    state.generated_duration = 3
+    state.combined_duration = 5
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",
+        "selected_object_refs": ["narration:n-1"],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    queued = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal['id']}/confirm", json={})
+    assert queued.status_code == 202, queued.text
+    state.resources.allowed = True
+    assert state.runtime.run_once()
+    assert state.repo.get_job_run("local", queued.json()["job_id"]).status == "failed"
+    current = state.repo.get_creation_task("local", state.task.id)
+    assert current.current_timeline_version_id == state.base.id
+    assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
+    assert state.repo.get_narration_artifact("local", "1" * 64) is None
+
+
+def test_rendered_narration_preview_keeps_existing_comparison_contract(generator_api):
+    state = generator_api
+    payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
+    payload["status"] = "rendered"
+    state.repo.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这句重新配音", "context_stage": "review", "selected_object_refs": ["narration:n-1"],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["preview"]["after"]["detail"] == "这句重新配音"
+    assert proposal["preview"]["before"]["audio_url"] is None
+    assert len(proposal["external_effects"]) == 1
+
+
+@pytest.mark.parametrize("mutation", ["missing_version", "unconfirmed_script", "missing_artifact", "unbound_segment", "missing_file"])
+def test_draft_narration_requires_current_version_script_and_persisted_audio(generator_api, monkeypatch, mutation):
+    from app.production import TimelineVersion
+    state = generator_api
+    if mutation == "missing_version":
+        import json
+        from dataclasses import asdict
+        task = replace(state.repo.get_creation_task("local", state.task.id), current_timeline_version_id=None)
+        with state.repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                         (json.dumps(asdict(task), default=str), "local", state.task.id))
+    elif mutation == "unconfirmed_script":
+        script = state.repo.get_creation_task_script("local", "script")
+        monkeypatch.setattr(state.repo, "get_creation_task_script", lambda *_: replace(script, selection_status="draft"))
+    elif mutation == "missing_artifact":
+        monkeypatch.setattr(state.repo, "get_narration_artifact", lambda *_: None)
+    elif mutation == "missing_file":
+        monkeypatch.setattr(state.repo, "resolve_authorized_narration_audio_reference", lambda *_: state.repo.database_path.parent / "missing.wav")
+    else:
+        payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
+        payload["cues"][0]["narration_segment_id"] = "another-segment"
+        state.repo.create_timeline_version(TimelineVersion("unbound-version", "local", state.task.id,
+            state.base.id, 3, {"montage": payload}, None))
+    response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
+        "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",
+        "selected_object_refs": ["narration:n-1"],
+    })
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["error"] == "narration_version_required"
+    assert not state.generated_calls
+    with state.repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 0
 
 
 def test_actual_main_generator_callback_commits_audio_version_and_job_atomically(generator_api):

@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.canvas import canvas_size
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity
-from app.montage import creation_task_montage_plan_from_payload, select_presenter_sections
+from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
 from app.repository import reset_workspace_context, set_workspace_context
@@ -360,6 +360,9 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         raise ValueError("当前故事板不存在")
     payload = json.loads(row["payload"])
     montage = creation_task_montage_plan_from_payload(payload)
+    # Bind the same domain defaults used by the renderer. Saving its running
+    # state materializes omitted legacy defaults without changing the edit.
+    payload = creation_task_montage_plan_to_payload(montage)
     if (montage.workspace_id != task.workspace_id or montage.task_id != task.id
             or montage.script_id != task.confirmed_script_id
             or montage.status not in {"ready", "rendering", "rendered", "failed"}
@@ -429,6 +432,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         previous_montage = version.snapshot.get("montage")
         if not isinstance(previous_montage, dict):
             raise ValueError("当前时间线缺少可信故事板快照")
+        previous_montage = creation_task_montage_plan_to_payload(
+            creation_task_montage_plan_from_payload(previous_montage))
         transient = {"status", "message", "output_path", "subtitle_path", "updated_at"}
         if ({key: item for key, item in previous_montage.items() if key not in transient}
                 != {key: item for key, item in payload.items() if key not in transient}):
@@ -453,7 +458,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             raise ValueError("当前镜头源文件不可用")
         sources.append(source)
     source_facts = []
-    for path in sources:
+    for path in dict.fromkeys(sources):
         stat = path.stat()
         if stat.st_size <= 0:
             raise ValueError("渲染源文件为空")
@@ -548,7 +553,7 @@ class CreationJobOwnerVerifier:
                  montage_budget: MontageBudget | None = None,
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
-                 presenter_models: dict | None = None, resolve_presenter_output=None) -> None:
+                 presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -558,6 +563,7 @@ class CreationJobOwnerVerifier:
         self.presenter_cpu_render_limits = presenter_cpu_render_limits
         self.presenter_models = presenter_models or {}
         self.resolve_presenter_output = resolve_presenter_output
+        self.task_media = task_media
 
     def render_facts(self, conn, task, plan, *, request=None):
         # Person composition never inherits the pure-material caps.
@@ -627,16 +633,20 @@ class CreationJobOwnerVerifier:
             (workspace_id, event.get("script_id"), job.task_id),
         ).fetchone()
         plan_row = conn.execute(
-            "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+            "SELECT payload, visibility FROM creation_plans WHERE workspace_id=? AND id=?",
             (workspace_id, task.plan_id),
         ).fetchone()
         if script_row is None or plan_row is None:
             raise KeyError("已确认文案或方案不存在")
         script = self.repository._creation_task_script_from_payload(json.loads(script_row["payload"]))
-        plan = self.repository._creation_plan_from_payload(json.loads(plan_row["payload"]))
+        plan_payload = json.loads(plan_row["payload"])
+        plan_payload["visibility"] = str(plan_row["visibility"])
+        plan = self.repository._creation_plan_from_payload(plan_payload)
         return job, task, event, script, plan
 
     def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
+        if intent.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.verify_submission(intent, actor)
         if (not isinstance(actor, CreationExecutionActor) or not actor.member_id
                 or actor.workspace_id != intent.workspace_id or intent.owner_type != DEVICE_OWNER_TYPE):
             raise PermissionError("制作执行身份未知或工作区不匹配")
@@ -723,6 +733,8 @@ class CreationJobOwnerVerifier:
         return "ready"
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
+        if request.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.check_current(request, conn)
         if (request.owner_type != DEVICE_OWNER_TYPE
                 or request.source_refs or not request.member_id):
             return "unauthorized"
@@ -773,6 +785,8 @@ class CreationJobOwnerVerifier:
             self.verify_identity is None or self.verify_identity(actor) == "ready")
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection) -> str:
+        if request.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.verify_retry(request, actor, reason, conn)
         raise PermissionError("请通过已确认任务的继续制作入口重试")
 
 
@@ -846,11 +860,12 @@ class CreationJobUnitExecutor:
 
     def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object],
                  render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool],
-                 stage_actions: dict | None = None) -> None:
+                 stage_actions: dict | None = None, task_media=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
         self.stage_actions = stage_actions or {}
+        self.task_media = task_media
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
         self.last_resource_refusal: HostResourceRefusal | None = None
@@ -1239,6 +1254,8 @@ class CreationJobUnitExecutor:
                 self._cancellations.pop(grant.request_id, None)
 
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.execute(grant, scheduler, self)
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
 
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("narration_edit:"):
@@ -1311,12 +1328,48 @@ class CreationJobUnitExecutor:
                     "cpu_threads": int(resources["threads"]),
                     "wall_clock_s": deadline - time.monotonic(),
                 }, capacity=sample_host_capacity())
-                self.render_action(job.workspace_id, job.task_id, context)
-                if not cancellation.is_set() and self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                version = (self.repository.get_timeline_version(job.workspace_id, task.current_timeline_version_id)
+                           if task.current_timeline_version_id else None)
+                # A prior attempt may have published this request's output before
+                # pressure interrupted validation. Revalidate it under the new
+                # grant; unrelated/older output never skips the requested render.
+                own_output = (version is not None
+                              and version.snapshot.get("creation_render_request_id") == grant.request_id)
+                if own_output:
                     if not self.render_is_valid(job.workspace_id, job.task_id, context):
-                        raise ValueError("成片产物未通过当前许可内的完整性与媒体校验")
+                        raise ValueError("本次已提交成片未通过当前许可内校验，未重复渲染")
+                else:
+                    self.render_action(job.workspace_id, job.task_id, context)
+                    if not cancellation.is_set() and self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                        if not self.render_is_valid(job.workspace_id, job.task_id, context):
+                            raise ValueError("成片产物未通过当前许可内的完整性与媒体校验")
             except GrantedCommandCancelled:
                 cancellation.set()
+            except HostResourceRefusal as exc:
+                self.last_resource_refusal = exc
+                if not exc.recoverable_pressure:
+                    raise
+                diagnostics = getattr(exc, "command_diagnostics", None)
+                natural_exit = diagnostics.get("before_termination_returncode") if diagnostics else None
+                if natural_exit is not None and natural_exit != 0:
+                    raise  # A worker error is not a recoverable-pressure retry.
+                if cancellation.is_set() or self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+                    cancellation.set()
+                else:
+                    # This existing gate proves process/resource release before
+                    # freeing the permit. Keep the published version untouched.
+                    scheduler.defer_unit(grant, reason="resource_pressure",
+                        retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
+                    with self.repository._connect() as conn:
+                        conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
+                                     (job.workspace_id, job.id))
+                        self.repository.append_task_event(TaskEvent(
+                            id=f"event_{job.id}_pressure_{grant.generation}", workspace_id=job.workspace_id,
+                            task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
+                            payload={"stage": "render", "status": "interrupted", "reason": "resource_pressure",
+                                     "decision": asdict(exc.decision)}), connection=conn)
+                    return
             except RecoveryBlocked:
                 raise
             except Exception as exc:

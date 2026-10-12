@@ -6,6 +6,7 @@ is deliberately unsupported until an owner can measure and release it.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import math
@@ -184,6 +185,34 @@ class MontageBudget:
 
 
 @dataclass(frozen=True)
+class CpuAudioBudget:
+    max_input_count: int
+    max_input_bytes: int
+    max_source_duration_seconds: float
+    max_output_duration_seconds: float
+    max_sample_rate: int
+    max_channels: int
+    max_output_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        for name, value in vars(self).items():
+            if name.endswith("seconds"):
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("CPU audio timing limits must be explicitly positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("CPU audio limits must be explicitly positive integers")
+        if self.additional_memory_bytes < self.max_process_rss_bytes or self.runtime_sample_seconds > .25:
+            raise ValueError("CPU audio needs reserved process memory and bounded sampling")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -198,6 +227,7 @@ class HostBudget:
     montage: MontageBudget | None = None
     presenter: PresenterBudget | None = None
     presenter_cpu_render: CpuRenderBudget | None = None
+    cpu_audio: CpuAudioBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -591,6 +621,31 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
+        elif kind == "task_audio":
+            audio = self.budget.cpu_audio
+            if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
+                return decision(None, "audio_budget_or_execution_mode_unavailable")
+            fields = {"input_count": "max_input_count", "input_bytes": "max_input_bytes",
+                      "source_duration_limit_seconds": "max_source_duration_seconds",
+                      "output_duration_limit_seconds": "max_output_duration_seconds",
+                      "source_sample_rate_limit": "max_sample_rate", "source_channels_limit": "max_channels",
+                      "output_sample_rate_limit": "max_sample_rate", "output_channels_limit": "max_channels",
+                      "max_output_bytes": "max_output_bytes", "threads": "max_threads",
+                      "timeout_seconds": "max_timeout_seconds"}
+            for name, limit in fields.items():
+                value = resources.get(name)
+                numeric = name.endswith("seconds")
+                if (type(value) not in ({int, float} if numeric else {int})
+                        or not math.isfinite(value) or value < 0
+                        or (value == 0 and name not in {"input_count", "input_bytes"})):
+                    return decision(None, "audio_resource_fields_invalid")
+                if value > getattr(audio, limit):
+                    return decision(False, "declared_resources_exceed_budget")
+            if resources.get("input_policy") != "probe_then_bounded_decode" or not isinstance(resources.get("inputs"), list):
+                return decision(None, "audio_probe_contract_missing")
+            checks["audio_budget"] = {"limits": asdict(audio)}
+            required_memory = self.budget.min_available_memory_bytes + audio.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes + audio.additional_disk_bytes + resources["max_output_bytes"]
         elif kind in {"creation_narration", "creation_person_render", "creation_montage_plan"}:
             stage = (self.budget.presenter if kind == "creation_person_render" else
                      self.budget.narration if kind == "creation_narration" else self.budget.montage)
@@ -620,7 +675,9 @@ class HostResourceProbe:
                 checks[name] = {"actual": value, "maximum": limit, "passed": value <= limit}
                 if value > limit:
                     return decision(False, "declared_resources_exceed_budget")
-            required_memory = self.budget.min_available_memory_bytes + stage.additional_memory_bytes
+            required_memory = self.budget.min_available_memory_bytes
+            if kind != "creation_narration" or not running_io:
+                required_memory += stage.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + stage.max_output_bytes
             if kind in {"creation_narration", "creation_person_render"}:
                 required_disk += stage.additional_disk_bytes
@@ -818,6 +875,12 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "task_audio":
+            audio = self.budget.cpu_audio
+            if audio is None:
+                raise RecoveryBlocked("CPU 音频进程预算尚未标定")
+            return SceneRuntimeLimits(audio.max_process_rss_bytes, audio.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds)
         if resources.get("kind") in {"creation_narration", "creation_person_render"}:
             narration = (self.budget.presenter if resources["kind"] == "creation_person_render"
                          else self.budget.narration)
@@ -860,6 +923,8 @@ class HostResourceProbe:
         if (resources.get("kind") in {"creation_render", "creation_presenter_render"}
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
+        if resources.get("kind") == "task_audio" and resources.get("execution_mode") == "cpu_ffmpeg":
+            return True
         if resources.get("kind") == "material_scene_window":
             return True
         return None
@@ -895,6 +960,25 @@ class HostProcessProbe:
                 observed = self.identity(child.pid)
             except psutil.NoSuchProcess:
                 observed = None
+            except (OSError, psutil.Error, RuntimeError) as exc:
+                # macOS create_time reads kinfo_proc through sysctl. Its exact
+                # short-read error can race exit; unrelated RuntimeError still
+                # propagates, and holder handling retains the original rule.
+                if isinstance(exc, RuntimeError) and (
+                    not group or sys.platform != "darwin" or str(exc) != "sysctl() size mismatch"
+                ):
+                    raise
+                if not group:
+                    return "unknown"
+                # Only the already registered PGID's definite absence proves
+                # release. A surviving descendant, EPERM or any other error
+                # keeps the metadata failure unknown.
+                try:
+                    os.killpg(child.pid, 0)
+                except OSError as group_error:
+                    if group_error.errno == errno.ESRCH:
+                        return "released"
+                return "unknown"
             if observed is not None and observed.start_token != child.start_token:
                 return "unknown" if group else "released"
             if group:

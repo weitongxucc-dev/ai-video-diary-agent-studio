@@ -1,0 +1,60 @@
+.page { display:grid;width:min(800px,100%);min-width:0;margin:0;padding:16px;gap:12px;grid-template-columns:minmax(0,1fr);container-type:inline-size; }
+.categoryPanel { gap:4px; }
+.main { min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;align-content:start; }
+.main :global(.settings-form), .main :global(.settings-product-block), .main :global(.llm-settings-stack) { display:grid;gap:8px; }
+.main :global(.settings-grid) { grid-template-columns:minmax(0,1fr);gap:0; }
+.main :global(.settings-field) { display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;column-gap:12px;row-gap:4px;min-width:0;padding:6px 0;border-bottom:1px solid var(--border-1); }
+.main :global(.settings-field > span) { display:flex;flex-wrap:wrap;gap:4px;color:var(--text-2);font-size:13px;line-height:21px;font-weight:400; }
+.main :global(.settings-field > input), .main :global(.settings-field > textarea), .main :global(.settings-field > [data-app-select-trigger]), .main :global(.settings-field > button), .main :global(.settings-field-row), .main :global(.settings-field > div), .main :global(.settings-field-helper), .main :global(.settings-field > details) { grid-column:2;min-width:0; }
+.main :global(.settings-field input), .main :global(.settings-field [data-app-select-trigger]) { min-height:32px;height:32px;padding:4px 8px;font:inherit; }
+.main :global(.settings-field [data-app-select-trigger]), .main :global(.settings-field > button) { width:min(240px,100%); }
+.main :global(.settings-field textarea) { min-height:64px;padding:6px 8px;resize:vertical;font:inherit; }
+.main :global(.settings-field-helper) { font-size:12px;line-height:18px;color:var(--text-3); }
+.main :global(.settings-section-header) { display:flex;align-items:flex-start;justify-content:space-between;gap:12px; }
+.main :global(.settings-section-header h2), .main :global(.settings-product-heading h2) { margin:0;font-size:14px;font-weight:500;line-height:20px; }
+.main :global(.settings-section-header p), .main :global(.settings-product-heading p) { margin:4px 0 0;font-size:12px;line-height:18px;color:var(--text-2); }
+.main .section { padding:0;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none;gap:6px; }
+.main :global(.settings-section-legend) { padding:0;border:0;background:transparent;box-shadow:none;font-size:14px;line-height:20px; }
+.main :global(.settings-section-legend strong) { font-family:inherit;font-weight:500; }
+.main :global(.settings-section-light) { display:none; }
+.main :global(.settings-actions) { display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:4px 0 0;padding:8px 0 0;border:0;background:transparent;backdrop-filter:none; }
+.main :global(.settings-actions span) { color:var(--text-2);font-size:12px;line-height:18px; }
+.help { margin:0;color:var(--text-2);font-size:12px;line-height:18px; }
+.help > summary { min-height:28px;cursor:pointer; }
+.help p { margin:4px 0 8px;overflow-wrap:anywhere; }
+.missing, .unknown { color:var(--text-2);border-color:var(--border-2); }
+.unverified { color:var(--warning);border-color:var(--border-2); }
+.failed { color:var(--red);border-color:var(--border-2); }
+.available { color:var(--success); }
+
+.main :global(.settings-field:has(> details)) { grid-template-columns:110px minmax(0,1fr)32px; }
+.main :global(.settings-field > details) { grid-column:3;grid-row:1; }
+.main :global(.settings-field > details[open]) { grid-column:2/span 2;grid-row:2; }
+.main :global(.settings-secret-badge.green), .main :global(.settings-secret-badge.red) { padding:0;border:0;background:transparent;box-shadow:none;color:var(--text-3);font-family:inherit;font-size:12px;font-weight:400; }
+.main :global(.settings-connection-state) { padding:0;border:0;border-radius:0;line-height:21px; }
+@container (max-width:420px) { .main :global(.settings-field) { grid-template-columns:88px minmax(0,1fr);column-gap:8px; }.main :global(.settings-field:has(> details)) { grid-template-columns:88px minmax(0,1fr)32px; } }
+
+.auxiliary { display:grid;gap:12px;min-width:0; }
+.auxiliary h2 { font-size:14px;font-weight:500;margin:0; }
+.auxiliary nav { display:flex;flex-wrap:wrap;gap:12px; }
+.auxiliary label { display:grid;grid-template-columns:110px minmax(0,240px);align-items:center;gap:12px;min-height:32px; }
+.auxiliary [data-app-select-trigger] { min-height:32px;max-width:240px; }
+
+.subnav { display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px; }
+.subnav a { padding:6px 10px;min-height:32px;line-height:20px;color:var(--text-2);border-radius:6px;text-decoration:none;font-size:13px; }
+.subnav a[aria-current="page"] { color:var(--text-1);background:var(--surface-2); }
+
+.auxiliary button,
+.main :global(section[aria-label="创作者资料"]) button { display:inline-flex;align-items:center;justify-content:center;justify-self:start;width:fit-content;max-width:100%;min-height:32px;padding:5px 10px;border:1px solid var(--border-1);border-radius:8px;background:var(--surface-2);color:var(--text-2);font:inherit;font-size:13px;line-height:20px;font-weight:400;cursor:pointer; }
+.auxiliary a,
+.main :global(section[aria-label="创作者资料"]) a { display:inline-flex;align-items:center;justify-self:start;width:fit-content;max-width:100%;min-height:32px;padding:4px 6px;border-radius:6px;color:var(--text-2);font-size:13px;line-height:20px;text-decoration:none; }
+.auxiliary summary,
+.main :global(section[aria-label="创作者资料"]) summary { min-height:32px;padding:5px 0;border-radius:6px;color:var(--text-2);font-size:13px;line-height:20px;cursor:pointer; }
+.auxiliary :is(a,button,summary):hover,
+.main :global(section[aria-label="创作者资料"]) :is(a,button,summary):hover { color:var(--text-1);background:var(--surface-3); }
+.auxiliary :is(a,button,summary):focus-visible,
+.main :global(section[aria-label="创作者资料"]) :is(a,button,summary):focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+.main :global(section[aria-label="创作者资料"]) { min-width:0;color:var(--text-2);font-size:13px;line-height:21px; }
+.main :global(section[aria-label="创作者资料"]) p { margin:0 0 8px; }
+.main :global(section[aria-label="创作者资料"]) ul { margin:0 0 8px;padding:0;list-style:none; }
+.main :global(section[aria-label="创作者资料"]) li { min-height:32px;padding:5px 0;border-bottom:1px solid var(--border-1); }

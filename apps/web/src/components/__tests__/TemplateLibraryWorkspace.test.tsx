@@ -1,15 +1,17 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoTemplate } from "@/lib/types";
 const setVisibility = vi.fn();
+const createVersion = vi.fn();
+vi.mock("@/lib/video-template-api", () => ({ createVideoTemplateVersion: (...args: unknown[]) => createVersion(...args) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: vi.fn().mockResolvedValue({ memberId: "local:member", workspaceId: "space" }) }));
-beforeEach(() => { sessionStorage.clear(); });
+beforeEach(() => { sessionStorage.clear(); createVersion.mockReset(); });
 vi.mock("@/lib/api", () => ({ setVideoTemplateVisibility: (...args: unknown[]) => setVisibility(...args) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
 const template: VideoTemplate = {
-  visibility: "private",
+  visibility: "private", can_edit: true,
   id: "template_1", version: 1, name: "视频日记", origin: "user", source_task_id: "task_1", source_timeline_version_id: "timeline_1", created_at: "2026-09-12",
   settings: { language: "zh-CN", aspect_ratio: "9:16", duration_target_seconds: 30, voice: null, style_instruction: "先讲结论", script_section_count: 3, fit_mode: "fit", subtitle_style: {} },
 };
@@ -180,4 +182,59 @@ it.each(["product_intro", "customer_faq", "customer_case"])("uses real catalog i
   const details = screen.getByRole("dialog", { name: "模板详情" });
   expect(within(details).getByRole("region", { name: "必要输入" })).toHaveTextContent("已核实资料与出处");
   (await within(details).findAllByRole("link", { name: "使用此制作结构" })).forEach(link => expect(link).toHaveAttribute("href", `/production?new=1&template_id=builtin_${id}&template_version=1`));
+});
+
+describe("template version editing", () => {
+  it("saves the exact old version, retains a failed draft, then selects the returned new version", async () => {
+    createVersion.mockRejectedValueOnce(new Error("本地服务没有保存成功。"));
+    createVersion.mockResolvedValueOnce({ ...template, can_edit: true, version: 2, name: "新名称", settings: { ...template.settings, style_instruction: "短句" } });
+    renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, can_edit: true }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
+    fireEvent.click(screen.getByRole("button", { name: /视频日记 · 第1版/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑名称与文案风格" }));
+    const child = screen.getByRole("dialog", { name: "编辑模板" });
+    expect(Number.parseFloat(child.style.left)).toBe(Number.parseFloat(screen.getByRole("dialog", { name: "模板详情" }).style.left) - 12);
+    fireEvent.change(within(child).getByLabelText("模板名称"), { target: { value: " 新名称 " } });
+    fireEvent.change(within(child).getByLabelText("新文案的风格要求"), { target: { value: " 短句 " } });
+    fireEvent.click(within(child).getByRole("button", { name: "保存新版本" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("本地服务没有保存成功");
+    expect(within(child).getByLabelText("模板名称")).toHaveValue(" 新名称 ");
+    expect(createVersion).toHaveBeenLastCalledWith("template_1", { expected_version: 1, name: "新名称", style_instruction: "短句" });
+    fireEvent.click(within(child).getByRole("button", { name: "保存新版本" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("已保存「新名称」第2版");
+    expect(screen.queryByRole("dialog", { name: "编辑模板" })).toBeNull();
+    expect(within(screen.getByRole("dialog", { name: "模板详情" })).getByRole("link", { name: "使用此模板" })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2");
+    expect(screen.getByRole("button", { name: /视频日记 · 第1版/ })).toBeInTheDocument();
+  });
+  it("pins open details through search and returns from cancel with the original version intact", () => {
+    renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, can_edit: true }, { ...template, id: "other", name: "其他模板" }]} />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索模板名称" }), { target: { value: "其他" } });
+    expect(within(screen.getByRole("dialog", { name: "模板详情" })).getByRole("heading", { name: "视频日记 · 第1版" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "编辑名称与文案风格" }));
+    fireEvent.change(screen.getByLabelText("模板名称"), { target: { value: "未保存" } });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(createVersion).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "编辑模板" })).toBeNull();
+    expect(screen.getByRole("searchbox")).toHaveValue("其他");
+    expect(within(screen.getByRole("dialog", { name: "模板详情" })).getByRole("heading", { name: "视频日记 · 第1版" })).toBeInTheDocument();
+  });
+  it("does not retarget another detail after cancelling an in-flight save", async () => {
+    let finish!: (saved: VideoTemplate) => void;
+    createVersion.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, can_edit: true }, { ...template, id: "other", name: "其他模板" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "编辑名称与文案风格" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存新版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: /其他模板 · 第1版/ }));
+    await act(async () => finish({ ...template, version: 2, can_edit: true, name: "已保存版本" }));
+    expect(screen.queryByRole("dialog", { name: "编辑模板" })).toBeNull();
+    expect(within(screen.getByRole("dialog", { name: "模板详情" })).getByRole("heading", { name: "其他模板 · 第1版" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /已保存版本 · 第2版/ })).toBeInTheDocument();
+  });
+  it("offers no version editor for a shared reader or builtin", () => {
+    renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, visibility: "shared", can_edit: false }]} />);
+    expect(screen.queryByRole("button", { name: "编辑名称与文案风格" })).toBeNull();
+    expect(screen.getByText("此模板只读；可用固定版本创作。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "收回为仅自己可见" })).toBeNull();
+  });
 });

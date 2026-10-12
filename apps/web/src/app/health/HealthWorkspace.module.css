@@ -1,0 +1,29 @@
+.page { min-width:0;padding:16px; }
+.header { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px; }
+.header h2 { margin:0;font-size:14px;line-height:20px;font-weight:500; }
+.header a, .repair { display:inline-flex;min-height:32px;align-items:center;color:var(--text-2);font-size:12px;text-decoration:none; }
+.scope { margin:4px 0 12px;font-size:12px;line-height:18px;color:var(--text-2); }
+.list { list-style:none;margin:0;padding:0; }
+.row { display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid var(--border-1); }
+.item { flex:1;min-width:0; }
+.item > summary { display:flex;align-items:center;gap:12px;min-height:56px;list-style:none;cursor:pointer; }
+.item > summary::-webkit-details-marker { display:none; }
+.item > summary:focus-visible, .repair:focus-visible { outline:2px solid var(--accent);outline-offset:-2px; }
+.label { display:flex;align-items:center;gap:8px;flex:1;min-width:0; }
+.label > svg { flex-shrink:0;color:var(--text-2); }
+.label > span { display:grid;min-width:0;gap:2px; }
+.label strong { font-size:13px;line-height:21px;font-weight:400;overflow-wrap:anywhere; }
+.label small { font-size:12px;line-height:18px;color:var(--text-3); }
+.status { flex-shrink:0;font-size:12px;line-height:18px;color:var(--text-2); }
+.expand { font-size:12px;color:var(--text-3); }
+.repair { flex-shrink:0;margin-top:12px; }
+.detail { padding:0 0 12px 24px;min-width:0;font-size:12px;line-height:18px; }
+.detail dl { display:grid;gap:8px;margin:0; }
+.detail dl > div { display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px; }
+.detail dt { color:var(--text-3); }
+.detail dd { margin:0;color:var(--text-2);overflow-wrap:anywhere; }
+.diagnostic { margin-top:8px;color:var(--text-3); }
+.diagnostic summary { min-height:28px;cursor:pointer; }
+.diagnostic p { margin:4px 0;overflow-wrap:anywhere; }
+.offline { display:flex;align-items:center;gap:8px;font-size:13px;line-height:21px; }
+@media (max-width:600px) { .item > summary { gap:8px; }.expand { display:none; }.row { gap:8px; } }

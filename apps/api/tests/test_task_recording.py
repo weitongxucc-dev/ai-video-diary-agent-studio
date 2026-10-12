@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app import task_audio as task_audio_module
 from app.artifact_store import ArtifactStore
 from app.creation_execution import (CpuRenderLimits, CreationExecution,
                                     CreationExecutionActor, CreationJobOwnerVerifier,
@@ -55,8 +54,10 @@ def _synthetic_audio_duration(path):
 
 @pytest.fixture
 def recording_task(tmp_path, monkeypatch):
-    monkeypatch.setattr(task_audio_module, "probe_audio_source", _synthetic_audio_duration)
     repo = ProductionRepository(database_path=tmp_path / "production.sqlite3", video_library_path=tmp_path / "library")
+    from app.local_members import LocalMemberService
+    members = LocalMemberService(repo.database_path)
+    member, token = members.whoami(None)
     workspace_id, task_id, script_id = "local", "task_recording", "script_recording"
     plan = CreationPlan(
         id="plan_recording", workspace_id=workspace_id, goal="一条视频", name="录音测试", target_count=1,
@@ -72,7 +73,13 @@ def recording_task(tmp_path, monkeypatch):
     )
     task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id,
                         name="录音测试", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(plan, task)
+    task.owner_user_id = member.member_id
+    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    from _media_preview_test_fixtures import register_synthetic_video_asset
+    asset, source_reference = register_synthetic_video_asset(repo, workspace_id=workspace_id, member_id=member.member_id,
+        path=repo.video_library_path / "source.mp4", asset_id="asset_1", seconds=1)
+    asset.segments[0].id = "segment_1"
+    repo._save_asset(asset)
     now = datetime.now(timezone.utc).isoformat()
     script = {"id": script_id, "workspace_id": workspace_id, "task_id": task_id,
               "run_id": "run_recording", "topic_id": "topic_recording", "title": "录音文案",
@@ -95,7 +102,7 @@ def recording_task(tmp_path, monkeypatch):
         id=task.montage_plan_id, workspace_id=workspace_id, task_id=task_id,
         script_id=script_id, script_title="录音文案", status="rendered",
         cues=[NarrationCue("cue_1", "section_1", "真实待制作文案", 1.0)],
-        clips=[MontageClip("clip_1", "cue_1", "asset_1", "segment_1", "workspace://source.mp4",
+        clips=[MontageClip("clip_1", "cue_1", "asset_1", "segment_1", source_reference,
                            0, 1, 0, 1, 1, ["已确认镜头"], False)],
         duration_seconds=1, low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/old_voice",
@@ -117,9 +124,22 @@ def recording_task(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", main_module._new_creation_execution())
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
-    monkeypatch.setattr(main_module, "settings", SimpleNamespace(effective_temporary_root_path=tmp_path / "temp"))
-    monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
-    return repo, task_id, version.id, TestClient(main_module.app)
+    from dataclasses import replace
+    monkeypatch.setattr(main_module, "settings", replace(main_module.settings, temporary_root_path=str(tmp_path / "temp"),
+        video_inbox_path=str(repo.video_library_path), video_output_path=str(tmp_path / "artifacts")))
+    monkeypatch.setattr(main_module, "creation_execution_mode", "controlled")
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets
+    configure_synthetic_media_budgets(monkeypatch, main_module)
+    from test_montage_pipeline import _granted_domain_preview_adapter
+    client = TestClient(main_module.app, headers={"x-local-member-token": token})
+    state = SimpleNamespace(production=repo, member=member, members=members, task=task, workspace_id=workspace_id, client=client)
+    runtime = _granted_domain_preview_adapter(state, monkeypatch, facts_override=main_module._task_media_facts,
+        validate_override=main_module._validate_task_media_result)
+    client.media_runtime = runtime
+    yield repo, task_id, version.id, client
+    assert runtime.stop(1)
+
 
 
 def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) -> None:
@@ -388,16 +408,20 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
 def test_recording_rejects_wrong_version_duration_and_container(recording_task):
     repo, task_id, version_id, client = recording_task
     route = f"/api/creation-tasks/{task_id}"
-    bad = client.post(route + "/audio/recordings",
-                      files={"audio": ("voice.webm", wav_bytes(), "audio/webm")})
-    assert bad.status_code == 422
+    bad = client.request("POST", route + "/audio/recordings", files={"audio": ("voice.webm", wav_bytes(), "audio/webm")})
+    assert bad.status_code == 202, bad.text
+    assert client.media_runtime.run_once()
+    assert repo.get_job_run("local", bad.json()["job_id"]).status == "failed"
     uploaded = client.post(route + "/audio/recordings",
                            files={"audio": ("short.wav", wav_bytes(.5), "audio/wav")})
     assert uploaded.status_code == 200, uploaded.text
     source_ref = uploaded.json()["source_ref"]
     payload = {"base_version_id": version_id, "action": "replace_narration",
                "target_id": "audio-narration-main", "values": {"source_ref": source_ref}}
-    assert client.post(route + "/audio/preview", json=payload).status_code == 422
+    invalid = client.request("POST", route + "/audio/preview", json=payload)
+    assert invalid.status_code == 202
+    assert client.media_runtime.run_once()
+    assert repo.get_job_run("local", invalid.json()["job_id"]).status == "failed"
     assert client.post(route + "/audio/preview", json={**payload, "base_version_id": "old"}).status_code == 409
     assert repo.get_creation_task_montage_plan("local", task_id)["audio_timeline"] is None
 
@@ -412,9 +436,11 @@ def test_recording_stays_blocked_in_scheduled_mode(recording_task, monkeypatch):
     assert preview.status_code == 200, preview.text
     proposal_id = preview.json()["proposal"]["id"]
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
-    response = client.post(f"/api/creation-tasks/{task_id}/audio/recordings",
-                           files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
-    assert response.status_code == 503
+    response = client.request("POST", f"/api/creation-tasks/{task_id}/audio/recordings", files={"audio": ("scheduled.wav", wav_bytes(.8), "audio/wav")})
+    assert response.status_code == 202
+    assert repo.get_job_run("local", response.json()["job_id"]).status == "queued"
+    assert client.media_runtime.run_once()
+    assert repo.get_job_run("local", response.json()["job_id"]).status == "succeeded"
     assert client.post(f"/api/creation-tasks/{task_id}/audio/preview", json={
         "base_version_id": version_id, "action": "replace_narration",
         "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}}).status_code == 503
@@ -489,7 +515,7 @@ def test_recordings_list_excludes_incomplete_and_other_workspace(recording_task,
     second = client.post(route, files={"audio": ("second.wav", wav_bytes(), "audio/wav")}).json()
     assert [item["source_ref"] for item in client.get(route).json()["items"]] == [
         second["source_ref"], first["source_ref"]]
-    transform_id = second["source_ref"].split("/")[-2].replace("job_", "transform_", 1)
+    transform_id = next(run.id for run in repo.list_transform_runs("local", task_id) if second["source_ref"] in run.output_refs)
     with repo._connect() as conn:
         conn.execute("UPDATE transform_runs SET status='failed' WHERE workspace_id=? AND id=?",
                      ("local", transform_id))
@@ -516,7 +542,10 @@ def test_equal_size_recording_change_rejects_old_proposal(recording_task):
     path.write_bytes(changed)
     assert path.stat().st_size == len(wav_bytes())
     assert client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={}).status_code == 409
-    assert client.post(route + "/audio/preview", json=edit).status_code == 422
+    changed_preview = client.request("POST", route + "/audio/preview", json=edit)
+    assert changed_preview.status_code == 202
+    assert client.media_runtime.run_once()
+    assert repo.get_job_run("local", changed_preview.json()["job_id"]).status == "failed"
     assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
     assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == "artifacts/task_recording/old.mp4"
 

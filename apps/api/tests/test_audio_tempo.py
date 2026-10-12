@@ -8,12 +8,15 @@ from app.audio_timeline import render_stretched_audio
 
 
 @pytest.mark.parametrize("rate", [.5, 2, 4])
-def test_local_tempo_preserves_pitch_and_exact_duration(tmp_path, rate):
+def test_local_tempo_preserves_pitch_and_exact_duration(tmp_path, rate, granted_media):
     source = tmp_path / "tone.wav"
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=48000",
         "-c:a", "pcm_s16le", str(source)], check=True)
     duration = round(2000 / rate)
-    output = render_stretched_audio(source, 0, 2000, rate, duration, tmp_path / "tempo.wav")
+    with granted_media([source]) as context:
+        output = render_stretched_audio(source, 0, 2000, rate, duration, tmp_path / "tempo.wav",
+            scheduler=context.scheduler, grant=context.grant, deadline_monotonic=context.deadline_monotonic,
+            max_output_bytes=context.max_output_bytes, threads=context.threads)
     with wave.open(str(output)) as wav:
         assert wav.getnframes() / wav.getframerate() == pytest.approx(duration / 1000, abs=.001)
         wav.setpos(round(wav.getframerate() * .1))

@@ -43,6 +43,30 @@ def _create_connector(client: TestClient, platform: str = "not_implemented") -> 
     return response.json()
 
 
+def test_knowledge_correction_is_owned_versioned_and_does_not_modify_source(client):
+    source = client.post("/api/source-items/manual", json={
+        "title": "验证资料", "content_type": "text", "body": "原始内容", "use_state": "available",
+    }).json()
+    saved = client.post(f"/api/source-items/{source['id']}/save-to-knowledge", json={}).json()
+    route = f"/api/knowledge-items/{saved['id']}/content"
+    payload = {"expected_version": "1", "title": "修订资料", "body": "# 修订\n- 重量: 20 kg"}
+    changed = client.put(route, json=payload)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["version"] == "2"
+    versions = {item["version"]: item for item in changed.json()["versions"]}
+    assert versions["1"]["body"] == "原始内容"
+    assert versions["2"]["parameters"][0]["value"] == "20 kg"
+    assert main_module.source_repository.get_source_item("workspace-a", source["id"]).body == "原始内容"
+    assert client.put(route, json=payload).status_code == 409
+    assert client.put(route, json={**payload, "expected_version": "2", "body": " "}).status_code == 422
+    assert client.put(route, json={**payload, "workspace_id": "forged"}).status_code == 422
+    assert client.put(route, json=payload, headers={"x-test-workspace": "workspace-b"}).status_code == 404
+    service = main_module.local_members_service
+    _, token = service.join(service.create_invite_code(), "另一成员")
+    assert client.put(route, json=payload, headers={"X-Local-Member-Token": token}).status_code == 403
+    assert client.get(f"/api/knowledge-items/{saved['id']}").json()["version"] == "2"
+
+
 def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client):
     rejected_workspace = client.post(
         "/api/source-items/manual",

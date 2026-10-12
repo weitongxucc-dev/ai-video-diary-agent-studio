@@ -265,6 +265,12 @@ export function getKnowledgeItem(id: string) {
   return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}`);
 }
 
+export function editKnowledgeItem(id: string, input: { expected_version: string; title: string; body: string }) {
+  return request<KnowledgeItemDetail>(`/api/knowledge-items/${encodeURIComponent(id)}/content`, {
+    method: "PUT", body: JSON.stringify(input),
+  });
+}
+
 export function setKnowledgeItemVisibility(id: string, visibility: "shared" | "private") {
   return request<KnowledgeItem>(`/api/knowledge-items/${encodeURIComponent(id)}/visibility`, {
     method: "PUT",

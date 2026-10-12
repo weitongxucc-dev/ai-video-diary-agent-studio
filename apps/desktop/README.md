@@ -37,12 +37,14 @@ corepack pnpm --dir apps/desktop build:mac
 
 ```text
 Electron main
-├── Next.js standalone
+├── Next.js standalone（Electron utility process）
 ├── FastAPI api-server
 └── BrowserWindow
 ```
 
-主进程必须等待 API 和 Web 健康后再加载工作台；退出时关闭其拥有的子进程。打包后健康检查失败应显示可恢复错误，不能留下后台孤儿进程。
+Web通过Electron utilityProcess运行，使用后台Helper身份和管道输出，不使用主GUI binary的ELECTRON_RUN_AS_NODE启动。生命周期按utility pid/exit/kill语义回收它，API仍使用既有进程组管理；后台服务不生成独立Dock图标，主应用正常显示。主进程必须等待 API 和 Web 健康后再加载工作台；退出时关闭其拥有的子进程。打包后健康检查失败应显示可恢复错误，不能留下后台孤儿进程。
+
+生命周期 JSONL 使用同一路径的单一异步追加写流。首条日志真实写入完成后才请求单实例锁并启动服务；日志写入或关闭失败、超过60秒未响应时显示明确错误并结束当前实例，不自动修改目录权限、身份或用户数据。正常退出等待日志关闭，迟到的写入回调不能重新放行已失败的启动。
 
 本机独立验收实例可在明确的 local auth 安装包使用绝对 `--user-data-dir`，同时指定 `--local-web-port=<1..65535>`。同一独立数据目录每次沿用同一显式端口，Web 子进程和窗口使用该固定 origin；端口占用会报错，不自动改端口或连接已有服务。默认端口仍为3000；development、Supabase、缺少明确local构建配置或未指定独立绝对数据目录时拒绝覆盖，Supabase登录回调origin保持不变。数据目录隔离不提供复制原用户数据库、密钥或账号的授权。
 
@@ -50,7 +52,9 @@ Electron main
 
 桌面主进程首次启动会在 userData 下生成并持久化设备身份 `device-identity.generated.json`（`device_id` 为随机 UUID、`proof` 为 64 位小写 hex），并在启动本地 API 子进程时以 `DEVICE_ID`/`DEVICE_PROOF` 环境变量注入（与 Supabase 凭据同源，渲染进程不可观测）。文件缺失视为首次启动而生成；文件存在但畸形则视为运维故障、拒绝启动（对应 API 侧 503 unavailable），不伪造、不降级、不静默重生成。
 
-自动任务当前尚未接入桌面启动链。未来自动化必须以持久化的 `Automation` 和 `AutomationRun` 为事实源，并由可见、可暂停、失败可追溯的运行契约驱动；客户端不得启动旧的内存 Episode 循环。
+自动化启动链遵循[系统架构§3.12](../../docs/system-architecture.md#312-整机资源调度)：Electron随本地API启动与关闭到期扫描器，媒体执行接入该API已有设备协调者。
+
+macOS包内主程序、Helper可执行名及`CFBundleName`保持ASCII（`Yaohe Studio`），避免系统截断进程名时切断UTF-8字符；`CFBundleDisplayName`和安装包文件名保留中文。Helper寻址依赖同一内部名，不能仅改主程序或显示名。此构建字段不改变顶层包名`ai-video-diary-studio`；隔离验收继续显式指定`--user-data-dir`。
 
 ## 图标和权限
 
@@ -60,6 +64,8 @@ Electron main
 - `assets/entitlements.plist`：Hardened Runtime/JIT 权限。
 
 中间尺寸 PNG 不进入仓库；需要时由生成脚本在内存中构造。
+
+Web 中的已预缩放品牌图标直接读取包内图片，不经过 Next 图片优化缓存；运行时不能写入已签名的应用资源目录。打包后需在启动及实际展示图片后再次校验签名。
 
 ## 发布
 

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantConversation, CreationTask } from "@/lib/types";
@@ -33,51 +33,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("assistant empty conversation entry context", () => {
-  it.each([
-    ["/settings", "查看运行情况", "/health"], ["/profiles", "查看参考素材", "/library"],
-    ["/members", "查看工作区首页", "/"], ["/knowledge", "管理资料来源", "/sources"],
-    ["/sources", "查看知识库", "/knowledge"], ["/library", "进入新建视频", "/?new=1"],
-    ["/templates", "进入新建视频", "/?new=1"], ["/history", "查看工作区任务", "/"],
-    ["/health", "查看服务设置", "/settings"], ["/production", "进入新建视频", "/?new=1"],
-  ])("offers a real navigation entry on %s without sending a request", (pathname, label, href) => {
+  it.each(["/", "/settings", "/profiles", "/members", "/knowledge", "/sources", "/library", "/templates", "/history", "/health", "/production", "/unknown"])("keeps a concise empty conversation on %s without navigation or business actions", (pathname) => {
     render(<HomeCommandComposer pageContext={{ pathname }} />);
-    expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
-    expect(screen.getByRole("navigation", { name: "当前页面建议入口" })).toHaveTextContent("只跳转页面");
-    expect(screen.queryByRole("button", { name: "用我的素材，做一条产品介绍" })).not.toBeInTheDocument();
-    expect(mocks.createNew).not.toHaveBeenCalled(); expect(mocks.beginTurn).not.toHaveBeenCalled();
-    expect(mocks.sendWorkspace).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["topic", "帮我梳理选题方向"], ["script", "把文案写得更简洁"],
-    ["narration", "先解释当前配音进度"], ["montage", "字幕放大一点"], ["review", "先解释当前成片检查结果"],
-  ])("fills a draft appropriate to task stage %s without an operation", (stage, suggestion) => {
-    render(<HomeCommandComposer task={{ id: "task-fixture", stage, name: "fixture" } as CreationTask} />);
-    fireEvent.click(screen.getByRole("button", { name: suggestion }));
-    expect(mocks.setDraftText).toHaveBeenCalledWith(suggestion);
-    expect(mocks.beginTurn).not.toHaveBeenCalled(); expect(mocks.sendTask).not.toHaveBeenCalled();
-    if (stage !== "montage") expect(screen.queryByRole("button", { name: "字幕放大一点" })).not.toBeInTheDocument();
-    expect(screen.getByText("点击建议只填入草稿，发送后才处理。")).toBeInTheDocument();
-  });
-
-  it("keeps the home entry as draft suggestions and avoids inventing queries on unknown pages", () => {
-    const view = render(<HomeCommandComposer pageContext={{ pathname: "/" }} />);
-    fireEvent.click(screen.getByRole("button", { name: "用我的素材，做一条产品介绍" }));
-    expect(mocks.setDraftText).toHaveBeenCalledWith("用我的素材，做一条产品介绍");
-    view.rerender(<HomeCommandComposer pageContext={{ pathname: "/unknown" }} />);
+    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "当前页面建议入口" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "用我的素材，做一条产品介绍" })).not.toBeInTheDocument();
-    expect(mocks.sendWorkspace).not.toHaveBeenCalled();
+    expect(mocks.createNew).not.toHaveBeenCalled(); expect(mocks.beginTurn).not.toHaveBeenCalled();
+    expect(mocks.sendWorkspace).not.toHaveBeenCalled(); expect(mocks.setDraftText).not.toHaveBeenCalled();
   });
 
-  it("shows material label drafts only for an actual selection, without changing the N06 submission route", () => {
+  it.each(["topic", "script", "narration", "montage", "review"])("retains the task target at stage %s without inserting an unsolicited draft", (stage) => {
+    render(<HomeCommandComposer task={{ id: "task-fixture", stage, name: "fixture" } as CreationTask} />);
+    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
+    expect(mocks.setDraftText).not.toHaveBeenCalled(); expect(mocks.beginTurn).not.toHaveBeenCalled();
+    expect(mocks.sendTask).not.toHaveBeenCalled();
+  });
+
+  it("keeps a selected material as context without changing its labels or sending a turn", () => {
     const onResult = vi.fn();
-    const view = render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
+    render(<HomeCommandComposer materialContext={{ selection: { scope: "asset", asset_id: "fixture-asset" }, label: "整条素材", onResult }} />);
     expect(screen.queryByRole("button", { name: "把我的标签改成产品演示" })).not.toBeInTheDocument();
-    view.rerender(<HomeCommandComposer materialContext={{ selection: { scope: "asset", asset_id: "fixture-asset" }, label: "整条素材", onResult }} />);
-    fireEvent.click(screen.getByRole("button", { name: "把我的标签改成产品演示" }));
-    expect(mocks.setDraftText).toHaveBeenCalledWith("把我的标签改成产品演示");
-    expect(mocks.sendMaterial).not.toHaveBeenCalled(); expect(onResult).not.toHaveBeenCalled();
+    expect(mocks.setDraftText).not.toHaveBeenCalled(); expect(mocks.sendMaterial).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
   });
 
   it("keeps the same home conversation binding and draft across page navigation", () => {

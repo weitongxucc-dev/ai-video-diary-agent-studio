@@ -1,116 +1,19 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { chooseSelectValue } from "./select-interaction";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ScheduledTasksWorkspace } from "../ScheduledTasksWorkspace";
-import type { ScheduledTask } from "@/lib/api";
-
-const imports = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), enable: vi.fn(), remove: vi.fn() }));
-vi.mock("@/lib/api", () => ({
-  listScheduledTasks: imports.list,
-  createScheduledTask: imports.create,
-  setScheduledTaskEnabled: imports.enable,
-  deleteScheduledTask: imports.remove,
-}));
-afterEach(() => { vi.clearAllMocks(); });
-
-function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
-  return { id: "st-1", workspace_id: "ws", task_type: "material_analysis", trigger_mode: "scheduled",
-    target_ref: "asset:abc123", not_before_utc: "2026-03-01T00:30:00Z", window: { hours: [2, 3] }, enabled: true,
-    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", ...overrides };
-}
-
-function expectReadOnly() {
-  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(document.querySelector("form, input, textarea, select")).toBeNull();
-  for (const action of ["创建任务定义", "启动", "暂停", "删除"]) {
-    expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
-  }
-  expect(imports.create).not.toHaveBeenCalled();
-  expect(imports.enable).not.toHaveBeenCalled();
-  expect(imports.remove).not.toHaveBeenCalled();
-}
-
-it("previews saved definitions without treating their enabled flags as execution states", async () => {
-  const definitions = [task(), task({ id: "st-2", task_type: "creation_render", target_ref: "creation-task:render-9", trigger_mode: "idle", not_before_utc: null, enabled: false })];
-  imports.list.mockResolvedValue({ tasks: definitions, total_count: 2 });
-  render(<ScheduledTasksWorkspace />);
-  expect(await screen.findByText("2 项已保存定义")).toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "定时任务只读预览" })).toBeInTheDocument();
-  expect(screen.getByText("只读预览 · 尚未接通执行")).toBeInTheDocument();
-  expect(screen.getByText("这里只查看已保存的任务定义，不会在指定时间或设备空闲时自动运行。")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "素材解析" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "成片制作" })).toBeInTheDocument();
-  expect(screen.getByText("2026-03-01 00:30 UTC")).toBeInTheDocument();
-  expect(screen.getByText("设备空闲")).toBeInTheDocument();
-  expect(screen.getByText("未设置")).toBeInTheDocument();
-  expect(screen.queryByText("已启用")).not.toBeInTheDocument();
-  expect(screen.queryByText("暂停中")).not.toBeInTheDocument();
-  expect(screen.queryByText(/上次[：:]|下次[：:]/)).not.toBeInTheDocument();
-  expectReadOnly();
-  expect(definitions).toEqual([task(), task({ id: "st-2", task_type: "creation_render", target_ref: "creation-task:render-9", trigger_mode: "idle", not_before_utc: null, enabled: false })]);
-});
-
-it("keeps raw target references and JSON windows inside optional read-only diagnostics", async () => {
-  const definition = task();
-  imports.list.mockResolvedValue({ tasks: [definition], total_count: 1 });
-  render(<ScheduledTasksWorkspace />);
-  await screen.findByText("1 项已保存定义");
-  const details = document.querySelector("details")!;
-  const raw = details.querySelector("pre")!;
-  expect(JSON.parse(raw.textContent!)).toEqual(definition);
-  expect(raw).not.toBeVisible();
-  expect(details).not.toHaveAttribute("open");
-  // jsdom does not implement a browser's native summary toggle.
-  details.open = true;
-  expect(raw).toBeVisible();
-  expect(details).toHaveTextContent("asset:abc123");
-  expect(details).toHaveTextContent('"hours"');
-  expect(details).toHaveTextContent('"enabled": true');
-  expect(details).toHaveTextContent("不代表已调度或已执行");
-  expectReadOnly();
-});
-
-it("distinguishes an empty saved collection without offering definition creation", async () => {
-  imports.list.mockResolvedValue({ tasks: [], total_count: 0 });
-  render(<ScheduledTasksWorkspace />);
-  expect(await screen.findByText("还没有已保存的定时任务定义")).toBeInTheDocument();
-  expect(screen.queryByText(/项已保存定义/)).not.toBeInTheDocument();
-  expectReadOnly();
-});
-
-it("keeps loading distinct from empty and failure", async () => {
-  let finish!: (value: { tasks: ScheduledTask[]; total_count: number }) => void;
-  imports.list.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-  render(<ScheduledTasksWorkspace />);
-  expect(screen.getByRole("status")).toHaveTextContent("正在读取已保存定义…");
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(screen.queryByText("还没有已保存的定时任务定义")).not.toBeInTheDocument();
-  expectReadOnly();
-  await act(async () => finish({ tasks: [task()], total_count: 1 }));
-  expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  expect(screen.getByText("1 项已保存定义")).toBeInTheDocument();
-});
-
-it("shows a read failure without an invented empty count, and retries only the read API", async () => {
-  imports.list.mockRejectedValueOnce(new Error("本地服务未接通。"));
-  render(<ScheduledTasksWorkspace />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("定时任务定义读取失败：本地服务未接通。");
-  expect(screen.queryByText("还没有已保存的定时任务定义")).not.toBeInTheDocument();
-  expect(screen.queryByText(/项已保存定义/)).not.toBeInTheDocument();
-  imports.list.mockResolvedValue({ tasks: [task()], total_count: 1 });
-  fireEvent.click(screen.getByRole("button", { name: "重试" }));
-  expect(await screen.findByText("1 项已保存定义")).toBeInTheDocument();
-  expect(imports.list).toHaveBeenCalledTimes(2);
-  expectReadOnly();
-});
-
-it("preserves unknown stored fields in diagnostics without inventing a supported schedule", async () => {
-  const definition = task({ task_type: "unknown_type", trigger_mode: "unknown_trigger", not_before_utc: "invalid-time" });
-  imports.list.mockResolvedValue({ tasks: [definition], total_count: 1 });
-  render(<ScheduledTasksWorkspace />);
-  await screen.findByText("1 项已保存定义");
-  expect(screen.getByRole("heading", { name: "任务定义" })).toBeInTheDocument();
-  expect(screen.getByText("无法识别，详见诊断")).toBeInTheDocument();
-  expect(screen.getByText("时间格式无法识别")).toBeInTheDocument();
-  expect(document.querySelector("pre")).toHaveTextContent('"task_type": "unknown_type"');
-  expectReadOnly();
-});
+import type { Automation,AutomationRun } from "@/lib/automation-api";
+import * as api from "@/lib/automation-api";
+import { listScheduledTasks } from "@/lib/api";
+vi.mock("@/lib/api",()=>({listScheduledTasks:vi.fn()}));
+vi.mock("@/lib/automation-api",()=>({getAutomationOptions:vi.fn(),listAutomations:vi.fn(),createAutomation:vi.fn(),reviseAutomation:vi.fn(),pauseAutomation:vi.fn(),listAutomationRuns:vi.fn(),retryAutomationRun:vi.fn(),previewAutomationRun:vi.fn(),confirmAutomationRun:vi.fn(),syncAutomationRunSources:vi.fn()}));
+const automation=(overrides:Partial<Automation>={}):Automation=>({id:"a",workspace_id:"ws",member_id:"member",name:"夜间记录",goal:"梳理真实知识",template_id:"template",template_version:2,trigger:{cadence:"daily",timezone:"Asia/Shanghai",start_local:"2026-10-10T22:00:00",window_start:"22:00",window_end:"07:00"},source_scope:{connector_ids:[],knowledge_ids:["knowledge"],material_asset_ids:[]},revision:3,paused:false,status:"waiting_review",next_due_at:"2026-10-11T14:00:00Z",created_at:"2026-10-10T14:00:00Z",updated_at:"2026-10-10T14:00:00Z",confirmation_policy:{topic:"required",plan:"required",script:"required",make:"required",publish:"required"},...overrides});
+const run=(overrides:Partial<AutomationRun>={}):AutomationRun=>({id:"run",automation_id:"a",automation_revision:2,due_at:"2026-10-10T14:00:00Z",due_key:"2026-10-10",definition:automation({revision:2}),input_snapshot:{source_run_ids:["sync-real"]},state:"waiting_review",stage:"plan",reason_code:"plan_confirmation_required",reason:"本次方案等待确认",repair_action:"核对本次来源",plan_id:null,task_id:null,job_id:null,confirmation:{},execution:{},revision:1,updated_at:"2026-10-10T14:00:00Z",...overrides});
+beforeEach(()=>{vi.clearAllMocks();vi.mocked(api.listAutomations).mockResolvedValue({items:[automation()],total_count:1});vi.mocked(api.getAutomationOptions).mockResolvedValue({templates:[{id:"template",version:2,name:"真实模板"}],connectors:[{id:"connector",label:"RSS",status:"configured"}],knowledge:[{id:"knowledge",label:"已授权知识",version:"v1"}],materials:[{id:"asset",label:"原片.mp4",version:"2026-10-10T10:00:00Z"}],driver:{running:true,error:null}});vi.mocked(api.listAutomationRuns).mockResolvedValue({items:[run()],total_count:1});vi.mocked(listScheduledTasks).mockResolvedValue({tasks:[],total_count:0});});
+async function open(){render(<ScheduledTasksWorkspace/>);fireEvent.click(await screen.findByRole("button",{name:/夜间记录/}));await screen.findByRole("button",{name:/修订 2/});}
+it("reads real automation entry and filters name and status without executing legacy flags",async()=>{render(<ScheduledTasksWorkspace/>);await screen.findByText("1 项安排 · 当前显示 1 项");expect(screen.queryByText("只读预览 · 尚未接通执行")).not.toBeInTheDocument();fireEvent.change(screen.getByRole("textbox",{name:"搜索自动化"}),{target:{value:"不存在"}});expect(screen.getByText("没有匹配的安排")).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"清除搜索"}));await chooseSelectValue(screen.getByRole("combobox",{name:"自动化状态筛选"}), "paused");expect(screen.getByText("没有匹配的安排")).toBeInTheDocument();expect(listScheduledTasks).not.toHaveBeenCalled();});
+it("creates a fixed template and explicit selected scope, keeping unchecked categories empty",async()=>{vi.mocked(api.createAutomation).mockResolvedValue(automation());render(<ScheduledTasksWorkspace/>);fireEvent.click(await screen.findByRole("button",{name:"新建安排"}));fireEvent.change(screen.getByRole("textbox",{name:"名称"}),{target:{value:"每日制作"}});fireEvent.change(screen.getByRole("textbox",{name:"创作目标"}),{target:{value:"根据知识制作视频"}});await chooseSelectValue(screen.getByRole("combobox",{name:"固定模板版本"}), "template|2");fireEvent.click(screen.getByRole("checkbox",{name:"已授权知识"}));fireEvent.click(screen.getByRole("button",{name:"保存安排"}));await waitFor(()=>expect(api.createAutomation).toHaveBeenCalledWith(expect.objectContaining({template_id:"template",template_version:2,source_scope:{connector_ids:[],knowledge_ids:["knowledge"],material_asset_ids:[]}})));expect(api.confirmAutomationRun).not.toHaveBeenCalled();});
+it("pauses and reopens with the actual current definition revision",async()=>{vi.mocked(api.pauseAutomation).mockResolvedValue(automation({paused:true,status:"paused",revision:4}));await open();fireEvent.click(screen.getByRole("button",{name:"暂停安排"}));await waitFor(()=>expect(api.pauseAutomation).toHaveBeenCalledWith("a",true,3));vi.mocked(api.listAutomations).mockResolvedValue({items:[automation({paused:true,status:"paused",revision:4})],total_count:1});fireEvent.click(screen.getByRole("button",{name:"刷新自动化"}));fireEvent.click(await screen.findByRole("button",{name:"重新开启"}));await waitFor(()=>expect(api.pauseAutomation).toHaveBeenLastCalledWith("a",false,4));expect(screen.getByText(/正在执行的媒体单元到既有检查点结束/)).toBeInTheDocument();});
+it("confirms only the selected occurrence's actual preflight fingerprint and opens persisted task",async()=>{const preview={goal:"真实目标",knowledge_references:[],source_references:[],approved_asset_count:0,blockers:[],confirmable:true,preflight_fingerprint:"f".repeat(64)} as never;vi.mocked(api.previewAutomationRun).mockResolvedValue(preview);vi.mocked(api.confirmAutomationRun).mockImplementation(async()=>{vi.mocked(api.listAutomationRuns).mockResolvedValue({items:[run({task_id:"task-real",plan_id:"plan-real",stage:"topic"})],total_count:1});return {} as never;});await open();fireEvent.click(screen.getByRole("button",{name:/修订 2/}));fireEvent.click(screen.getByRole("button",{name:"预检本次方案"}));fireEvent.click(await screen.findByRole("button",{name:"确认方案并创建任务"}));await waitFor(()=>expect(api.confirmAutomationRun).toHaveBeenCalledWith("run","f".repeat(64)));expect(await screen.findByRole("link",{name:"打开创作任务"})).toHaveAttribute("href","/tasks/task-real");});
+it("shows real blocked reason and refuses confirmation for non-confirmable preflight",async()=>{vi.mocked(api.listAutomationRuns).mockResolvedValue({items:[run({state:"blocked",reason:"当前没有模型",repair_action:"配置文字模型"})],total_count:1});vi.mocked(api.previewAutomationRun).mockResolvedValue({goal:"目标",knowledge_references:[],source_references:[],approved_asset_count:0,blockers:[{impact:"资料不足",repair_action:"补充授权资料"}],confirmable:false,preflight_fingerprint:"f".repeat(64)} as never);await open();fireEvent.click(screen.getByRole("button",{name:/修订 2/}));expect(screen.getByText("当前没有模型")).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"预检本次方案"}));expect(await screen.findByRole("button",{name:"确认方案并创建任务"})).toBeDisabled();expect(api.confirmAutomationRun).not.toHaveBeenCalled();});
+it("keeps prior rows when refresh fails and reads legacy definitions only when explicitly expanded",async()=>{render(<ScheduledTasksWorkspace/>);await screen.findByRole("button",{name:/夜间记录/});vi.mocked(api.listAutomations).mockRejectedValueOnce(new Error("成员许可已变化"));fireEvent.click(screen.getByRole("button",{name:"刷新自动化"}));expect(await screen.findByRole("alert")).toHaveTextContent("成员许可已变化");expect(screen.getByRole("button",{name:/夜间记录/})).toBeInTheDocument();fireEvent.click(screen.getByText("旧版已保存定义"));await waitFor(()=>expect(listScheduledTasks).toHaveBeenCalledTimes(1));expect(screen.getByText(/保留原定义与数据，不自动执行/)).toBeInTheDocument();});

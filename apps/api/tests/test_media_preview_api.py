@@ -167,6 +167,8 @@ def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview
 
     assert first.status_code == 200
     assert first.json()["status"] == "queued"
+    assert first.json()["preview_text"] == "声音预览"
+    assert "preview_input" not in first.json()
     assert first.json()["attempt"] == 1
     assert first.json()["output_url"] is None
     assert provider.calls == 0
@@ -295,3 +297,19 @@ def test_cancelled_voice_preview_never_calls_provider(preview_client):
     assert identity.runtime.run_once() is False
     persisted = repository.get_media_preview_run("workspace-a", "voice", queued.json()["identity"])
     assert persisted.status == "cancelled" and provider.calls == 0
+
+
+def test_assistant_profile_reference_returns_fixed_authorized_facts_without_paths(preview_client):
+    client, repository, _provider, person, voice, _authorization, _reference, _output, identity = preview_client
+    for kind, profile in (("person",person),("voice",voice)):
+        path = f"/api/assistant/profile-references/{kind}/{profile.id}?version={profile.version}"
+        response = client.get(path, headers=identity.headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["profile_id"] == profile.id
+        assert response.json()["version"] == profile.version
+        assert response.json()["kind"] == kind
+        assert "path" not in response.text and "avatar_reference" not in response.text
+        denied = client.get(path, headers={**identity.headers,"x-test-workspace":"workspace-other"})
+        assert denied.status_code == 404
+        missing = client.get(f"/api/assistant/profile-references/{kind}/{profile.id}?version=missing-version", headers=identity.headers)
+        assert missing.status_code == 404

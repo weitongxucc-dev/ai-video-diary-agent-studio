@@ -175,3 +175,30 @@ def test_system_visual_tags_do_not_promote_audio_or_filename_to_actions(descript
     segment = MaterialSegment(id="s", asset_id="a", start_seconds=0, end_seconds=4,
         description=description, transcript=transcript)
     assert _infer_system_tags(asset, segment) == ["用途:b_roll", *expected]
+
+
+def test_short_observation_label_preserves_full_fact_and_real_sample_times():
+    from app.visual_understanding import observed_system_tags, understanding_schema
+    payload = {"summary": "人走过街道", "facts": [{"kind": "action", "label": "人物走路",
+        "text": "戴眼镜的人从画面左侧走向街道右侧", "frames": [0, 2]}], "unknowns": ["身份不可确认"]}
+    result = parse_understanding(payload, [1.5, 2.0, 2.5])
+    assert result["facts"][0] == {"kind": "action", "label": "人物走路",
+        "text": "戴眼镜的人从画面左侧走向街道右侧", "sample_times": [1.5, 2.5]}
+    observation = SegmentUnderstanding("ready", **result)
+    assert observed_system_tags(observation) == ["动作:人物走路"]
+    assert "label" in understanding_schema(3)["properties"]["facts"]["items"]["required"]
+    assert "start_ms" not in result["facts"][0]
+    payload["facts"][0]["label"] = "长" * 33
+    with pytest.raises(ValueError, match="32字"):
+        parse_understanding(payload, [1.5, 2.0, 2.5])
+
+
+def test_legacy_observation_is_not_rewritten_into_a_model_label():
+    from app.visual_understanding import observed_system_tags
+    payload = {"summary": "办公画面", "facts": [{"kind": "object", "text": "电脑", "frames": [0]}], "unknowns": []}
+    parsed = parse_understanding(payload, [2.0])
+    assert "label" not in parsed["facts"][0]
+    observation = SegmentUnderstanding("ready", **parsed)
+    assert observed_system_tags(observation) == ["主体:电脑"]
+    observation.facts[0]["text"] = "长" * 33
+    assert observed_system_tags(observation) == []

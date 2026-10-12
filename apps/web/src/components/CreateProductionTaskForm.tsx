@@ -1,5 +1,6 @@
 "use client";
 
+import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, CheckCircle2, ChevronRight, LoaderCircle, SearchCheck, ShieldCheck } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import {
@@ -11,8 +12,11 @@ import { getDefaultVoice, listVoiceProfiles, listPersonProfiles, type VoiceProfi
 import type { CreationPlanInput, CreationPlanPreview, VideoTemplate } from "@/lib/types";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
+import { getKnowledgeItem } from "@/lib/source-api";
+import { createCreationRequest } from "@/lib/creation-request-api";
+import { CreationRequestPanel } from "./CreationRequestPanel";
 import ui from "./CreateProductionTaskForm.module.css";
-import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields, type PreflightReplyOrigin } from "@/lib/preflight-draft";
+import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields, type PreflightReplyOrigin, type PreflightKnowledgePin } from "@/lib/preflight-draft";
 
 // These fields are returned by MaterialSegmentMatchResponse; the shared Web type omits them.
 type PreflightMatch = CreationPlanPreview["material_matches"][number] & { match_tier?: string; asset_file_name?: string };
@@ -33,6 +37,7 @@ type CreateProductionTaskFormProps = {
   assignLocation?: (url: string) => void;
   draftId?: string;
   replyOrigin?: PreflightReplyOrigin | null;
+  initialKnowledgePin?: PreflightKnowledgePin | null;
 };
 
 type FormError = {
@@ -56,8 +61,10 @@ function messageForError(cause: unknown): FormError {
   };
 }
 
+const languageLabels: Record<string, string> = { zh: "中文", en: "英文", "zh-en": "中英混读" };
+
 function materialSummary(value: string) {
-  return value.replace(/\bb-?roll\b/gi, "补充画面");
+  return value.replace(/\ba[-_]?roll\b/gi, "主镜头").replace(/\bb[-_]?roll\b/gi, "补充画面");
 }
 
 function scopeLabel(scope: string) {
@@ -73,8 +80,12 @@ function capabilityLabel(capability: string) {
   return "模型能力";
 }
 
+function profileOptionLabel(profile: VoiceProfile | PersonProfile) {
+  return /^\d{1,4}$/.test(profile.version) ? `${profile.display_name} · ${profile.version}` : profile.display_name;
+}
+
 function stateLabel(ready: boolean) {
-  return ready ? "已就绪" : "不可用";
+  return ready ? "安装检查通过" : "不可用";
 }
 
 export function PreflightFacts({ preview, voices = [], people = [], onRepair, disabled = false }: { preview: CreationPlanPreview; voices?: VoiceProfile[]; people?: PersonProfile[]; onRepair?: (href: string) => void; disabled?: boolean }) {
@@ -90,16 +101,17 @@ export function PreflightFacts({ preview, voices = [], people = [], onRepair, di
       <section>
         <header><ShieldCheck size={16} /><div><span>素材候选</span><strong>{matches.length} 个检索候选</strong></div></header>
         <p>候选按主题、词语或结构条件检索，需在选片时核对内容与使用范围。</p>
-        {matches.length ? <ul>{matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`}><strong>{matchTierLabel(item.match_tier)}</strong><span>{item.reasons.join("；")}</span><details className={ui.diagnostics}><summary>候选诊断</summary><p>引用：{item.asset_ref} · {item.segment_ref}</p><p>层级：{item.match_tier ?? "未返回"} · 启发分值：{item.score}（用于排序，不是适配概率）</p>{item.asset_file_name ? <p>文件：{item.asset_file_name}</p> : null}</details></li>)}</ul> : <p>当前目标没有返回检索候选。{onRepair ? <button type="button" disabled={disabled} onClick={() => onRepair("/library")}>前往素材库补充内容</button> : <a href="/library">前往素材库补充内容</a>}</p>}
+        {matches.length ? <ul>{matches.slice(0, 4).map((item) => <li key={`${item.asset_ref}-${item.segment_ref}`}><strong>{matchTierLabel(item.match_tier)}</strong><span>{item.reasons.map(materialSummary).join("；")}</span><details className={ui.diagnostics}><summary>候选诊断</summary><p>原始理由：{item.reasons.join("；")}</p><p>引用：{item.asset_ref} · {item.segment_ref}</p><p>层级：{item.match_tier ?? "未返回"} · 启发分值：{item.score}（用于排序，不是适配概率）</p>{item.asset_file_name ? <p>文件：{item.asset_file_name}</p> : null}</details></li>)}</ul> : <p>当前目标没有返回检索候选。{onRepair ? <button type="button" disabled={disabled} onClick={() => onRepair("/library")}>前往素材库补充内容</button> : <a href="/library">前往素材库补充内容</a>}</p>}
         {matches.length > 4 ? <p>当前展示前 4 个，检查共返回 {matches.length} 个候选。</p> : null}
         <details className={ui.diagnostics}><summary>素材计数与筛选口径</summary><p>本次可自动选用：{preview.approved_asset_count} 个素材 · {preview.approved_clip_count} 个补充片段；检索候选与可用计数分别核验。</p><p>{materialSummary(preview.material_rule_summary)}</p></details>
-        {preview.selected_voice ? <><p>本次声音：{voices.find(item => item.id === preview.selected_voice?.profile_id && item.version === preview.selected_voice?.version)?.display_name ?? "已固定声音版本"}，适用语言：{preview.selected_voice.language}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>模型：{preview.selected_voice.model_id}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
+        {preview.selected_voice ? <><p>本次声音：{voices.find(item => item.id === preview.selected_voice?.profile_id && item.version === preview.selected_voice?.version)?.display_name ?? "已固定声音版本"}，适用语言：{languageLabels[preview.selected_voice.language]}。配音及人物阶段是否可进入，见待处理事项。</p><details className={ui.diagnostics}><summary>声音引用诊断</summary><p>声音：{preview.selected_voice.profile_id} · {preview.selected_voice.version}</p><p>模型：{preview.selected_voice.model_id}</p><p>语言：{preview.selected_voice.language}</p></details></> : <p>本次检查未选定声音，配音阶段的影响见待处理事项。</p>}
         {preview.selected_person ? <><p>本次人物：{people.find(item => item.id === preview.selected_person?.profile_id && item.version === preview.selected_person?.version)?.display_name ?? "已固定人物版本"}（与声音独立选择）</p><details className={ui.diagnostics}><summary>人物引用诊断</summary><p>{preview.selected_person.profile_id} · {preview.selected_person.version}</p></details></> : null}
-        {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {item.language}</span></li>)}</ul> : null}
+        {preview.pronunciation_references.length ? <ul>{preview.pronunciation_references.map((item) => <li key={`${item.id}-${item.version}`}><strong>发音词典</strong><span>{scopeLabel(item.scope)} · {languageLabels[item.language]}</span></li>)}</ul> : null}
       </section>
       <section>
-        <header><CheckCircle2 size={16} /><div><span>模型与人工确认</span><strong>{preview.model_snapshot.length} 项能力已检查</strong></div></header>
-        {preview.model_snapshot.length ? <ul>{preview.model_snapshot.map((item) => <li key={item.id}><strong>{capabilityLabel(item.capability)} · {stateLabel(item.ready)}</strong><span>{item.message}</span><details className={ui.diagnostics}><summary>模型诊断</summary><p>{item.id} · {item.capability} · {item.state}</p></details></li>)}</ul> : <p>本地服务没有返回模型状态。</p>}
+        <header><CheckCircle2 size={16} /><div><span>模型与人工确认</span><strong>{preview.model_snapshot.length} 项安装状态已检查</strong></div></header>
+        <p>安装检查核对运行程序与模型文件，不代表生成实测通过或设备资源许可。</p>
+        {preview.model_snapshot.length ? <ul>{preview.model_snapshot.map((item) => <li key={item.id}><strong>{capabilityLabel(item.capability)} · {stateLabel(item.ready)}</strong><details className={ui.diagnostics}><summary>模型诊断</summary><p>{item.message}</p><p>{item.id} · {item.capability} · {item.state}</p></details></li>)}</ul> : <p>本地服务没有返回模型状态。</p>}
         {preview.confirmation_points.length ? <ul>{preview.confirmation_points.map((item) => <li key={item}><strong>需要你确认</strong><span>{item}</span></li>)}</ul> : null}
       </section>
     </div>
@@ -126,9 +138,23 @@ export function CreateProductionTaskForm({
   assignLocation = assignDocumentLocation,
   draftId,
   replyOrigin: initialReplyOrigin = null,
+  initialKnowledgePin = null,
 }: CreateProductionTaskFormProps) {
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [people, setPeople] = useState<PersonProfile[]>([]);
+  const [knowledgePin, setKnowledgePin] = useState<PreflightKnowledgePin | null>(initialKnowledgePin);
+  const [knowledgeName, setKnowledgeName] = useState<string | null>(null);
+  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true; setKnowledgeName(null); setKnowledgeError(null);
+    if (knowledgePin) void getKnowledgeItem(knowledgePin.knowledge_item_id).then(item => {
+      if (!active) return;
+      const selected = item.version === knowledgePin.version ? item : item.versions.find(version => version.version === knowledgePin.version);
+      if (!selected) { setKnowledgeError("所选资料的固定版本无法读取，请返回知识库重新选择，或取消本次引用。"); return; }
+      setKnowledgeName(selected.title);
+    }).catch(cause => { if (active) setKnowledgeError(cause instanceof Error ? cause.message : "所选资料无法读取。"); });
+    return () => { active = false; };
+  }, [knowledgePin?.knowledge_item_id, knowledgePin?.version]);
   const [voicePin, setVoicePin] = useState<CreationPlanInput["selected_voice"]>(undefined);
   const [personPin, setPersonPin] = useState<CreationPlanInput["selected_person"]>(undefined);
   const voiceSelectionEdited = useRef(false);
@@ -165,6 +191,8 @@ export function CreateProductionTaskForm({
   const [presenterShare, setPresenterShare] = useState<PresenterShare>(template?.settings.presenter_share_target ?? 20);
   const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
+  const [creationRequestId, setCreationRequestId] = useState<string | null>(null);
+  const creationRequestKey = useRef<string | null>(null);
   const [created, setCreated] = useState(false);
   const [pending, setPending] = useState<"preview" | "confirm" | null>(null);
   const [error, setError] = useState<FormError | null>(null);
@@ -175,6 +203,8 @@ export function CreateProductionTaskForm({
   useEffect(() => {
     ++inputRevision.current;
     setPreview(null);
+    setCreationRequestId(null);
+    creationRequestKey.current = null;
     setError(null);
     setDuration(String(template?.settings.duration_target_seconds ?? 60));
     setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
@@ -183,6 +213,7 @@ export function CreateProductionTaskForm({
   useEffect(() => {
     let active = true; alive.current = true;
     ++inputRevision.current; ++operation.current; submittingRef.current = false; setPending(null); setCreated(false); setPreview(null);
+    setCreationRequestId(null); creationRequestKey.current = null;
     userEdited.current = false; setDraftReady(false); setRestored(false); setDraftError(null); draftScope.current = null;
     draftUuid.current = draftId ?? crypto.randomUUID();
     const hasInitialOrigin = initialReplyOrigin !== null;
@@ -195,7 +226,7 @@ export function CreateProductionTaskForm({
       setDuration(String(template?.settings.duration_target_seconds ?? 60));
       setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
       setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
-      voiceSelectionEdited.current = false; setVoicePin(undefined); setPersonPin(undefined);
+      voiceSelectionEdited.current = false; setVoicePin(undefined); setPersonPin(undefined); setKnowledgePin(initialKnowledgePin);
     }
     previousDraftId.current = draftId;
     void readPreflightDraftScope().then(scope => {
@@ -209,7 +240,7 @@ export function CreateProductionTaskForm({
         setGoal(saved.goal); setName(saved.name); setTargetCount(saved.targetCount); setDuration(saved.duration);
         setLanguage(saved.language); setAspectRatio(saved.aspectRatio); setPresenterShare(saved.presenterShare); setLipsyncQuality(saved.lipsyncQuality);
         voiceSelectionEdited.current = saved.voiceEdited || saved.voicePin !== null;
-        setVoicePin(saved.voicePin ?? undefined); setPersonPin(saved.personPin ?? undefined); setRestored(true);
+        setVoicePin(saved.voicePin ?? undefined); setPersonPin(saved.personPin ?? undefined); setKnowledgePin(saved.knowledgePin ?? null); setRestored(true);
         replyOriginRef.current = saved.replyOrigin ?? null;
         setReplyOrigin(replyOriginRef.current);
         ++inputRevision.current;
@@ -218,13 +249,13 @@ export function CreateProductionTaskForm({
       setDraftReady(true);
     }).catch(cause => { if (active) setDraftError(`临时草稿未恢复：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
     return () => { active = false; alive.current = false; ++inputRevision.current; ++operation.current; };
-  }, [draftId, template?.id, template?.version, initialReplyOrigin?.conversation_id, initialReplyOrigin?.turn_id, initialReplyOrigin?.request_id]);
+  }, [draftId, template?.id, template?.version, initialReplyOrigin?.conversation_id, initialReplyOrigin?.turn_id, initialReplyOrigin?.request_id, initialKnowledgePin?.knowledge_item_id, initialKnowledgePin?.version]);
 
   function draftFields(): PreflightDraftFields {
     return { goal, name, targetCount, duration, language, aspectRatio, presenterShare, lipsyncQuality,
       voicePin: voicePin ?? null, personPin: personPin ?? null, voiceEdited: voiceSelectionEdited.current,
       template: template ? { id: template.id, version: template.version } : null,
-      replyOrigin: replyOriginRef.current };
+      replyOrigin: replyOriginRef.current, knowledgePin };
   }
   async function verifiedScope(): Promise<DraftScope> {
     const scope = await readPreflightDraftScope();
@@ -262,6 +293,7 @@ export function CreateProductionTaskForm({
       goal: value.goal.trim(), ...(value.name.trim() ? { name: value.name.trim() } : {}), target_count: Number(value.targetCount),
       language: value.language, aspect_ratio: value.aspectRatio, duration_target_seconds: Number(value.duration),
       presenter_share_target: value.presenterShare, lipsync_quality: value.lipsyncQuality,
+      ...(value.knowledgePin ? { selected_knowledge: value.knowledgePin } : {}),
       ...(value.voicePin ? {selected_voice: value.voicePin} : {}), ...(value.personPin ? {selected_person: value.personPin} : {}),
     };
   }
@@ -274,6 +306,8 @@ export function CreateProductionTaskForm({
       setReplyOrigin(replyOriginRef.current);
     }
     setPreview(null);
+    setCreationRequestId(null);
+    creationRequestKey.current = null;
     setError(null);
   }
 
@@ -287,7 +321,16 @@ export function CreateProductionTaskForm({
     try {
       await verifiedScope();
       if (!alive.current || revision !== inputRevision.current) return;
-      const result = await previewCreationPlan(input(saved));
+      const values = input(saved);
+      if (values.target_count > 1) {
+        if (replyOriginRef.current) throw new Error("当前选中的回复只绑定一条文案来源。请先为这条回复创建单条任务，再分别准备其他视频的具体目标。");
+        creationRequestKey.current ??= crypto.randomUUID();
+        const result = await createCreationRequest({ ...values, request_key: creationRequestKey.current });
+        await verifiedScope();
+        if (alive.current && revision === inputRevision.current) { setCreationRequestId(result.id); setPreview(null); }
+        return;
+      }
+      const result = await previewCreationPlan(values);
       await verifiedScope();
       if (alive.current && revision === inputRevision.current) setPreview(result);
     } catch (cause) {
@@ -341,6 +384,7 @@ export function CreateProductionTaskForm({
   return (
     <div className={`creation-plan-form ${ui.form}`}>
       {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/templates")}>重新选择模板</button></section> : null}
+      {knowledgePin ? <section aria-label="所选知识资料"><strong>{knowledgeName ?? "所选知识资料"} · 固定版本 {knowledgePin.version}</strong><p>本次制作方案将核验并引用这个固定版本；修改制作目标不会更换资料版本。</p>{knowledgeError ? <p role="alert">{knowledgeError}</p> : null}<button type="button" disabled={isPending} onClick={() => { setKnowledgePin(null); invalidatePreview(); }}>取消本次资料引用</button><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/knowledge")}>查看资料或重新选择</button></section> : null}
       {replyOrigin ? <p role="status">已选择一条首页完成回复作为文案来源。这里仍需确认制作方案和选题；页面只保存会话与轮次定位，服务端会重新读取回复正文。</p> : null}
       <p className={ui.draftNotice}>{restored ? (pending === "preview" ? "已恢复本次输入，正在重新检查当前资格。" : preview ? "已恢复本次输入并取得新预检结果。" : "已恢复本次输入，请重新检查当前资格。") : "前往补充资源前会保存当前输入为本成员、本工作区的临时草稿。"}关闭或返回列表不会创建任务；已保存的临时草稿仅保留在本次浏览会话，创建成功后清理。</p>
       <button type="button" disabled={!draftReady || isPending} onClick={() => void abandonDraft()}>放弃本次草稿并返回列表</button>
@@ -349,19 +393,21 @@ export function CreateProductionTaskForm({
         <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周可用素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
         <div className="creation-plan-form__settings">
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
-          <label><span>成片数量</span><input disabled={isPending} max="50" min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
-          <label><span>语言</span><select disabled name="language" value={language}><option value="zh-CN">中文（当前版本）</option></select></label>
+          <label><span>成片数量</span><input disabled={isPending} max={Number.MAX_SAFE_INTEGER} min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
+          <label><span>语言</span><AppSelect disabled name="language" value={language}><AppSelectOption value="zh-CN">中文（当前版本）</AppSelectOption></AppSelect></label>
           <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板默认 {template.settings.duration_target_seconds ?? 60} 秒，可调整本次时长。</small> : null}</label>
         </div>
         <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
         {profilesError ? <p role="alert">{profilesError}</p> : null}
-        <label>声音固定版本<select aria-label="任务声音" disabled={isPending} value={voicePin ? `${voicePin.profile_id}:${voicePin.version}` : ""} onChange={event=>{voiceSelectionEdited.current=true;const selected=voices.find(item=>`${item.id}:${item.version}`===event.target.value);setVoicePin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">使用已保存默认版本</option>{voicePin && !voices.some(v=>v.id===voicePin.profile_id && v.version===voicePin.version) ? <option value={`${voicePin.profile_id}:${voicePin.version}`}>已固定声音版本 · {voicePin.version}（当前列表未返回）</option> : null}{voices.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
-        <label>人物固定版本<select aria-label="任务人物" disabled={isPending || presenterShare===0} value={personPin ? `${personPin.profile_id}:${personPin.version}` : ""} onChange={event=>{const selected=people.find(item=>`${item.id}:${item.version}`===event.target.value);setPersonPin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><option value="">选择独立人物</option>{personPin && !people.some(p=>p.id===personPin.profile_id && p.version===personPin.version) ? <option value={`${personPin.profile_id}:${personPin.version}`}>已固定人物版本 · {personPin.version}（当前列表未返回）</option> : null}{people.map(item=><option key={item.id} value={`${item.id}:${item.version}`}>{item.display_name} · {item.version}</option>)}</select></label>
+        <label>声音固定版本<AppSelect aria-label="任务声音" disabled={isPending} value={voicePin ? `${voicePin.profile_id}:${voicePin.version}` : ""} onValueChange={newValue =>{voiceSelectionEdited.current=true;const selected=voices.find(item=>`${item.id}:${item.version}`===newValue);setVoicePin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><AppSelectOption value="">使用已保存默认版本</AppSelectOption>{voicePin && !voices.some(v=>v.id===voicePin.profile_id && v.version===voicePin.version) ? <AppSelectOption value={`${voicePin.profile_id}:${voicePin.version}`} title={voicePin.version}>声音固定版本未返回</AppSelectOption> : null}{voices.map(item=><AppSelectOption key={item.id} value={`${item.id}:${item.version}`} title={item.version}>{profileOptionLabel(item)}</AppSelectOption>)}</AppSelect></label>
+        <label>人物固定版本<AppSelect aria-label="任务人物" disabled={isPending || presenterShare===0} value={personPin ? `${personPin.profile_id}:${personPin.version}` : ""} onValueChange={newValue =>{const selected=people.find(item=>`${item.id}:${item.version}`===newValue);setPersonPin(selected ? {profile_id:selected.id,version:selected.version}:undefined);invalidatePreview();}}><AppSelectOption value="">选择独立人物</AppSelectOption>{personPin && !people.some(p=>p.id===personPin.profile_id && p.version===personPin.version) ? <AppSelectOption value={`${personPin.profile_id}:${personPin.version}`} title={personPin.version}>人物固定版本未返回</AppSelectOption> : null}{people.map(item=><AppSelectOption key={item.id} value={`${item.id}:${item.version}`} title={item.version}>{profileOptionLabel(item)}</AppSelectOption>)}</AppSelect></label>
         <PresenterShareSlider disabled={isPending} onChange={(value) => { setPresenterShare(value); invalidatePreview(); }} value={presenterShare} />
         <LipSyncQualitySelect disabled={isPending || presenterShare === 0} onChange={(value) => { setLipsyncQuality(value); invalidatePreview(); }} value={lipsyncQuality} />
         {presenterShare === 0 ? <p>露脸占比为 0%，本次无需人物口型，口型档位暂不可调整。</p> : null}
         <div className="creation-plan-form__actions"><button className="modern-primary-button" aria-describedby={`${formId}-preview-scope`} disabled={isPending || !draftReady || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button><span id={`${formId}-preview-scope`}>{!goal.trim() ? "先填写制作目标，再检查。" : !draftReady ? "当前成员与工作区尚未确认，暂不能检查。" : preview ? (preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有创建阻断需要处理。") : "检查不会创建任务，也不会生成选题、文案或成片。"}</span></div>
       </form>
+
+      {creationRequestId ? <CreationRequestPanel key={creationRequestId} requestId={creationRequestId} scopeKey={draftScope.current ? `${draftScope.current.memberId}:${draftScope.current.workspaceId}` : ""} isCurrentScope={() => alive.current && creationRequestKey.current !== null} /> : null}
 
       {error ? <section className="creation-plan-error" role="alert"><AlertCircle size={17} /><div><strong>操作未完成：{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div>{error.repairAction ? <button disabled={isPending || !goal.trim()} onClick={() => void runPreview()} type="button">重新检查可用内容</button> : null}</section> : null}
 

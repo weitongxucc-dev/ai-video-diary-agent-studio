@@ -7,6 +7,7 @@
 
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
@@ -96,13 +97,16 @@ async function startExternalFixture(port) {
   return child;
 }
 
-function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', { localWebPort, autoStart = true } = {}) {
+function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', { localWebPort, autoStart = true, singleInstanceLock = () => true } = {}) {
   const events = new Map();
   const handlers = new Map();
   const dialogs = [];
   const windows = [];
   let saveDialogResult = { canceled: true };
   const paths = { logs: logsPath, userData: path.join(path.dirname(logsPath), 'user-data') };
+  let resolveReady;
+  const readyPromise = new Promise(resolve => { resolveReady = resolve; });
+  if (autoStart) resolveReady();
   const app = {
     isPackaged: packaged,
     commandLine: {
@@ -111,10 +115,10 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
     },
     setPath: (name, value) => { paths[name] = value; },
     setAppLogsPath: (value) => { paths.logs = value; },
-    whenReady: () => autoStart ? Promise.resolve() : new Promise(() => {}),
+    whenReady: () => readyPromise,
     getPath: (name) => paths[name] || os.tmpdir(),
     getVersion: () => 'test',
-    requestSingleInstanceLock: () => true,
+    requestSingleInstanceLock: singleInstanceLock,
     on(event, callback) {
       const callbacks = events.get(event) || [];
       callbacks.push(callback);
@@ -128,7 +132,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
       for (const callback of events.get('before-quit') || []) callback(event);
       if (!event.prevented) this.exit();
     },
-    exit() {},
+    exit(code = 0) { this.exited = true; this.exitCode = code; },
   };
   class BrowserWindow {
     constructor(options) {
@@ -136,6 +140,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
       this.options = options;
       this.visible = Boolean(options.show);
       this.webContents = {
+        on() {},
         openDevTools() {},
         setWindowOpenHandler() {},
         send() {},
@@ -203,7 +208,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
         async showOpenDialog() { return { canceled: true, filePaths: [] }; },
         async showSaveDialog() { return saveDialogResult; },
       },
-      ipcMain: { handle(name, callback) { handlers.set(name, callback); } },
+      ipcMain: { handle(name, callback) { handlers.set(name, callback); }, on() {}, removeListener() {} },
       shell: { openExternal() {}, openPath() { return ''; } },
     },
     updater: { autoUpdater: { on() {}, checkForUpdates() { return Promise.resolve(); } } },
@@ -211,20 +216,42 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
     windows,
     handlers,
     app,
+    markReady() { resolveReady(); },
     setSaveDialogResult(value) { saveDialogResult = value; },
   };
 }
 
-async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', localWebPort, autoStart = true }) {
+async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', localWebPort, autoStart = true, singleInstanceLock, lifecycleStreamFactory }) {
   const mainPath = fs.realpathSync(path.join(resourcesPath, 'app', 'main.js'));
   const originalLoad = Module._load;
   const originalResourcesPath = process.resourcesPath;
   const originalNodeEnv = process.env.NODE_ENV;
   const stdoutErrorListeners = new Set(process.stdout.listeners('error'));
   const stderrErrorListeners = new Set(process.stderr.listeners('error'));
-  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode, userDataPath, { localWebPort, autoStart });
+  const mock = createElectronMock(path.join(resourcesPath, 'logs'), packaged, windowLoadMode, userDataPath, { localWebPort, autoStart, singleInstanceLock });
   let mainExports;
   const children = [];
+  mock.electron.utilityProcess = {
+    fork(modulePath, args, options) {
+      assert.equal(options.serviceName, 'Yaohe Web');
+      assert.equal(options.stdio, 'pipe');
+      assert.equal(options.env.ELECTRON_RUN_AS_NODE, undefined);
+      const child = spawn(process.execPath, [modulePath, ...args], { env: options.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      children.push(child);
+      let pid = child.pid;
+      const service = new EventEmitter();
+      Object.defineProperties(service, {
+        pid: { get: () => pid },
+        stdout: { get: () => pid === undefined ? null : child.stdout },
+        stderr: { get: () => pid === undefined ? null : child.stderr },
+      });
+      service.kill = () => child.kill('SIGTERM');
+      child.on('spawn', () => service.emit('spawn'));
+      child.on('error', () => service.emit('error', { type: 'FatalError' }));
+      child.on('exit', (code) => { pid = undefined; service.emit('exit', code); });
+      return service;
+    },
+  };
   const restoreProcessErrorListeners = () => {
     for (const listener of process.stdout.listeners('error')) {
       if (!stdoutErrorListeners.has(listener)) process.stdout.removeListener('error', listener);
@@ -240,6 +267,7 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return mock.electron;
     if (request === 'electron-updater') return mock.updater;
+    if (request === 'fs' && parent.filename === mainPath && lifecycleStreamFactory) return { ...fs, createWriteStream: lifecycleStreamFactory };
     if (request === 'child_process' && parent.filename === mainPath) {
       const childProcess = originalLoad.call(this, request, parent, isMain);
       return { ...childProcess, spawn(...args) { const child = childProcess.spawn(...args); children.push(child); return child; } };
@@ -343,7 +371,7 @@ async function assertVisibleWindowLifecycleBoundary() {
   }
 }
 
-function createResources({ api = true, web = true, legacyWorker = false, buildIdentity = 'valid', identityRecords = null, distributionConfig, portProbe = false } = {}) {
+function createResources({ api = true, web = true, legacyWorker = false, buildIdentity = 'valid', identityRecords = null, distributionConfig, portProbe = false, logProbe = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-video-diary-lifecycle-'));
   const appRoot = path.join(root, 'app');
   fs.mkdirSync(appRoot, { recursive: true });
@@ -352,6 +380,7 @@ function createResources({ api = true, web = true, legacyWorker = false, buildId
   // Test-only access to the actual selected constants; readiness is held so
   // default/Supabase origin probes never start services or bind real 3000.
   if (portProbe) fs.appendFileSync(mainPath, '\nmodule.exports = { webPort, webOrigin };\n');
+  if (logProbe) fs.appendFileSync(mainPath, '\nmodule.exports = { recordLifecycle, closeLifecycleLog };\n');
   if (distributionConfig !== undefined) {
     fs.mkdirSync(path.join(appRoot, 'assets'), { recursive: true });
     writeFixture(path.join(appRoot, 'assets', 'distribution-config.generated.json'), JSON.stringify(distributionConfig));
@@ -655,6 +684,221 @@ async function assertNativeRenderedVideoSaveBoundary() {
   }
 }
 
+async function assertSingleInstanceLockCheckpoints() {
+  for (const outcome of [true, false, 'throw']) {
+    const resources = createResources({ api: false, web: false });
+    const logPath = path.join(resources, 'logs', 'desktop-runtime.jsonl');
+    const metadata = JSON.parse(fs.readFileSync(path.join(resources, 'app', 'build-identity.generated.json'), 'utf8'));
+    const readLog = () => fs.readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    let runtime;
+    let lockCalls = 0;
+    const checkpoints = [];
+    const originalStderrWrite = process.stderr.write;
+    process.stderr.write = function captureStartupCheckpoint(chunk, ...args) {
+      if (typeof chunk === 'string' && chunk.startsWith('[desktop-startup] ')) {
+        const checkpoint = JSON.parse(chunk.slice('[desktop-startup] '.length));
+        assert.deepEqual(Object.keys(checkpoint).sort(), ['buildIdentity', 'pid', 'ppid', 'stage']);
+        assert.equal(checkpoint.pid, process.pid);
+        assert.equal(checkpoint.ppid, process.ppid);
+        if (checkpoint.stage === 'main-entry') assert.equal(fs.existsSync(path.join(resources, 'logs')), false, 'the entry probe must not depend on a log directory');
+        if (checkpoint.stage === 'lifecycle-log-append-start') assert.equal(fs.existsSync(logPath), false, 'stderr must mark the first append before its file is opened');
+        checkpoints.push(checkpoint);
+        return true;
+      }
+      return originalStderrWrite.call(this, chunk, ...args);
+    };
+    try {
+      const load = () => loadMain({ resourcesPath: resources, development: false, autoStart: outcome === 'throw',
+        singleInstanceLock() {
+          lockCalls++;
+          assert.deepEqual(checkpoints.map(item => item.stage), [
+            'main-entry', 'electron-require-start', 'electron-require-end',
+            'updater-require-start', 'updater-require-end',
+            'device-identity-module-require-start', 'device-identity-module-require-end',
+            'path-initialization-start', 'path-initialization-end',
+            'web-port-resolve-start', 'web-port-resolve-end',
+            'build-identity-load-start', 'build-identity-load-end',
+            'lifecycle-log-path-start', 'lifecycle-log-path-end',
+            'lifecycle-log-directory-start', 'lifecycle-log-directory-end',
+            'lifecycle-log-append-start', 'lifecycle-log-append-end', 'single-instance-lock-call-start',
+          ]);
+          const identityEnd = checkpoints.findIndex(item => item.stage === 'build-identity-load-end');
+          assert.equal(checkpoints.slice(0, identityEnd).every(item => item.buildIdentity === null), true, 'unread build metadata must not be presented as a verified candidate');
+          assert.equal(checkpoints.slice(identityEnd).every(item => item.buildIdentity === metadata.candidateInputDigest), true);
+          assert.doesNotThrow(() => process.stderr.emit('error', Object.assign(new Error('fixture closed sink'), { code: 'EPIPE' })));
+          const unknownSinkError = Object.assign(new Error('fixture stderr IO failure'), { code: 'EIO' });
+          assert.throws(() => process.stderr.emit('error', unknownSinkError), error => error === unknownSinkError, 'the early diagnostic must not swallow unknown sink errors');
+          const rows = readLog();
+          assert.equal(rows.length, 1, 'the start checkpoint must persist before entering the native lock');
+          assert.deepEqual(Object.keys(rows[0]).sort(), ['buildIdentity', 'event', 'pid', 'ppid', 'timestamp']);
+          assert.equal(rows[0].event, 'single-instance-lock-start');
+          assert.equal(rows[0].buildIdentity, metadata.candidateInputDigest);
+          assert.equal(rows[0].pid, process.pid);
+          assert.equal(rows[0].ppid, process.ppid);
+          if (outcome === 'throw') throw new Error('fixture lock did not return');
+          return outcome;
+        },
+      });
+      runtime = await load();
+      await waitFor(() => lockCalls === 1, 'first completed write before lock');
+      if (outcome === 'throw') {
+        await waitFor(() => runtime.app.exited, 'lock exception ending its instance');
+        assert.equal(readLog().length, 1, 'a lock exception must not receive a fabricated end checkpoint');
+      } else {
+        await waitFor(() => readLog().length === 2, 'lock result persisted');
+        if (outcome) runtime.app.quit();
+        await waitFor(() => runtime.app.exited, 'checkpoint log closed before exit');
+        const rows = readLog();
+        assert.deepEqual(rows.map(row => row.event), ['single-instance-lock-start', 'single-instance-lock-end']);
+        assert.deepEqual(Object.keys(rows[1]).sort(), ['buildIdentity', 'elapsedMs', 'event', 'gotLock', 'pid', 'ppid', 'timestamp']);
+        assert.equal(rows[1].buildIdentity, metadata.candidateInputDigest);
+        assert.equal(rows[1].pid, process.pid);
+        assert.equal(rows[1].ppid, process.ppid);
+        assert.equal(rows[1].gotLock, outcome);
+        assert.equal(Number.isFinite(rows[1].elapsedMs) && rows[1].elapsedMs >= 0, true);
+        assert.equal(runtime.app.exited, true, 'quit must finish after the ordered log closes');
+        assert.equal(runtime.children.length, 0, 'checkpoint probes must not start services');
+        assert.equal(runtime.windows.length, 0, 'checkpoint probes must not open windows');
+      }
+      assert.equal(lockCalls, 1, 'instrumentation must not retry or bypass the lock');
+      assert.equal(fs.existsSync(path.join(resources, 'user-data')), false, 'checkpoint probes must not create a profile or identity');
+      assert.equal(fs.existsSync(path.join(resources, 'api-server')), false);
+      assert.equal(fs.existsSync(path.join(resources, 'web')), false);
+    } finally {
+      process.stderr.write = originalStderrWrite;
+      runtime?.restore();
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+  console.log('desktop single-instance checkpoints: PASS (3 isolated cases; stderr stages/privacy/closed sink; no app/services/profile)');
+}
+
+async function assertAsyncLifecycleLogGate() {
+  for (const outcome of ['delayed', 'failed', 'stalled', 'close-failed']) {
+    const resources = createResources({ api: false, web: false, logProbe: true });
+    const writes = [];
+    const stages = [];
+    let lockCalls = 0;
+    let streamCount = 0;
+    let runtime;
+    const stream = new EventEmitter();
+    stream.writableFinished = false;
+    stream.write = (line, callback) => { writes.push({ line, callback, completed: false }); return true; };
+    stream.destroy = () => {
+      stream.destroyed = true;
+      for (const write of writes) {
+        if (!write.completed) { write.completed = true; write.callback(Object.assign(new Error('fixture destroyed'), { code: 'ERR_STREAM_DESTROYED' })); }
+      }
+      setImmediate(() => stream.emit('close'));
+    };
+    stream.end = () => {
+      if (outcome === 'close-failed') stream.emit('error', Object.assign(new Error('fixture close failure'), { code: 'EIO' }));
+      else { stream.writableFinished = true; setImmediate(() => stream.emit('close')); }
+    };
+    const complete = index => { const write = writes[index]; write.completed = true; write.callback(); };
+    const timers = [];
+    const originalSetTimeout = global.setTimeout;
+    const originalStderrWrite = process.stderr.write;
+    global.setTimeout = (callback, milliseconds, ...args) => {
+      const timer = originalSetTimeout(callback, milliseconds, ...args);
+      if (milliseconds === 60_000) timers.push({ timer, callback });
+      return timer;
+    };
+    process.stderr.write = function capture(chunk, ...args) {
+      if (typeof chunk === 'string' && chunk.startsWith('[desktop-startup] ')) { stages.push(JSON.parse(chunk.slice('[desktop-startup] '.length)).stage); return true; }
+      return originalStderrWrite.call(this, chunk, ...args);
+    };
+    try {
+      runtime = await loadMain({ resourcesPath: resources, development: false,
+        autoStart: outcome === 'failed' || outcome === 'stalled',
+        singleInstanceLock() { lockCalls++; assert.equal(writes[0].completed, true, 'the native lock must wait for the actual write callback'); return true; },
+        lifecycleStreamFactory(logFile, options) {
+          streamCount++;
+          assert.equal(logFile, path.join(resources, 'logs', 'desktop-runtime.jsonl'));
+          assert.deepEqual(options, { flags: 'a', encoding: 'utf8' });
+          return stream;
+        },
+      });
+      assert.equal(lockCalls, 0);
+      assert.equal(writes.length, 1);
+      assert.equal(stages.includes('lifecycle-log-append-end'), false, 'opening or queueing the stream is not a completed write');
+      assert.equal(runtime.children.length, 0);
+      assert.equal(runtime.handlers.size, 0);
+      assert.equal(runtime.windows.length, 0);
+      if (outcome === 'failed' || outcome === 'stalled') {
+        const lateCallback = writes[0].callback;
+        if (outcome === 'failed') { writes[0].completed = true; writes[0].callback(Object.assign(new Error('fixture append denied'), { code: 'EACCES' })); }
+        else { assert.equal(timers.length, 1); clearTimeout(timers[0].timer); timers[0].callback(); }
+        await waitFor(() => runtime.app.exited, 'explicit log failure ending the instance');
+        lateCallback();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(lockCalls, 0, 'failure or a late success must never bypass the startup gate');
+        assert.equal(runtime.app.exitCode, 1);
+        assert.equal(runtime.dialogs.length, 1);
+        assert.equal(runtime.dialogs[0].title, '日志写入失败');
+        assert.match(runtime.dialogs[0].message, /恢复后重新打开/);
+        assert.equal(writes.length, 1, 'fault reporting must not write recursively into the failed logger');
+        assert.equal(stages.filter(stage => stage === 'lifecycle-log-failed').length, 1);
+        assert.deepEqual(stages.filter(stage => [
+          'lifecycle-log-dialog-returned', 'lifecycle-log-services-stopped', 'lifecycle-log-exit-call-start',
+        ].includes(stage)), [
+          'lifecycle-log-dialog-returned', 'lifecycle-log-services-stopped', 'lifecycle-log-exit-call-start',
+        ], 'diagnostics distinguish dialog return, completed service cleanup and exit invocation; they do not prove native process death');
+      } else {
+        complete(0);
+        await waitFor(() => lockCalls === 1 && writes.length === 2, 'completed first write admitting the original lock');
+        complete(1);
+        if (outcome === 'delayed') {
+          const before = runtime.mainExports.recordLifecycle('fixture-before');
+          const after = runtime.mainExports.recordLifecycle('fixture-after');
+          assert.deepEqual(writes.map(write => JSON.parse(write.line).event), ['single-instance-lock-start', 'single-instance-lock-end', 'fixture-before', 'fixture-after']);
+          complete(2); complete(3); await Promise.all([before, after]);
+          runtime.app.quit();
+          await waitFor(() => runtime.app.exited, 'ordered log close before normal exit');
+          assert.equal(runtime.app.exitCode, 0);
+        } else {
+          runtime.app.quit();
+          runtime.markReady();
+          await waitFor(() => runtime.app.exited, 'close failure ending the instance');
+          assert.equal(runtime.app.exitCode, 1);
+          assert.equal(runtime.dialogs.length, 1);
+          assert.equal(writes.length, 2, 'a close failure must not recursively enqueue a fault log');
+          assert.equal(stages.filter(stage => stage === 'lifecycle-log-failed').length, 1);
+        }
+      }
+      assert.equal(streamCount, 1, 'all records must use one ordered append stream');
+      assert.equal(runtime.children.length, 0);
+      assert.equal(runtime.handlers.size, 0);
+      assert.equal(runtime.windows.length, 0);
+      assert.equal(fs.existsSync(path.join(resources, 'user-data')), false);
+    } finally {
+      for (const { timer } of timers) clearTimeout(timer);
+      global.setTimeout = originalSetTimeout;
+      process.stderr.write = originalStderrWrite;
+      runtime?.restore();
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+  // Verify actual on-disk append order and preservation of an existing log.
+  const resources = createResources({ api: false, web: false, logProbe: true });
+  const logFile = path.join(resources, 'logs', 'desktop-runtime.jsonl');
+  fs.mkdirSync(path.dirname(logFile)); fs.writeFileSync(logFile, '{"event":"existing-record"}\n');
+  let runtime;
+  let lockCalls = 0;
+  try {
+    runtime = await loadMain({ resourcesPath: resources, development: false, autoStart: false, singleInstanceLock: () => { lockCalls++; return true; } });
+    await waitFor(() => lockCalls === 1, 'real append callback admitting the lock');
+    await Promise.all([runtime.mainExports.recordLifecycle('fixture-one'), runtime.mainExports.recordLifecycle('fixture-two')]);
+    runtime.app.quit(); await waitFor(() => runtime.app.exited, 'real log closed');
+    const rows = fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(rows.map(row => row.event), ['existing-record', 'single-instance-lock-start', 'single-instance-lock-end', 'fixture-one', 'fixture-two']);
+    assert.equal(runtime.children.length, 0); assert.equal(runtime.windows.length, 0);
+    assert.equal(runtime.app.exitCode, 0);
+    assert.equal(fs.existsSync(path.join(resources, 'user-data')), false);
+  } finally { runtime?.restore(); fs.rmSync(resources, { recursive: true, force: true }); }
+  console.log('desktop async lifecycle log: PASS (5 isolated cases; callback gate/failure/deadline/FIFO/close; no app/services/profile)');
+}
+
 async function assertLocalWebPort() {
   let checks = 0;
   const configLocal = { authMode: 'local' };
@@ -808,6 +1052,8 @@ async function assertLocalWebPort() {
 }
 
 async function main() {
+  await assertAsyncLifecycleLogGate();
+  await assertSingleInstanceLockCheckpoints();
   await assertIsolatedUserData();
   await assertBuildIdentityMetadataFailure('missing', 'build identity metadata is missing or unreadable');
   await assertBuildIdentityMetadataFailure('invalid', 'build identity metadata is invalid');
@@ -826,7 +1072,9 @@ async function main() {
   console.log('desktop lifecycle smoke: PASS');
 }
 
-const runner = process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
+const runner = process.argv.includes('--async-lifecycle-log') ? assertAsyncLifecycleLogGate
+  : process.argv.includes('--single-instance-checkpoints') ? assertSingleInstanceLockCheckpoints
+  : process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
   : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary
     : process.argv.includes('--local-web-port') ? assertLocalWebPort
       : process.argv.includes('--isolated-user-data') ? assertIsolatedUserData : main;

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -36,13 +37,13 @@ def test_rejected_material_result_fails_turn_and_allows_a_new_draft(
         effective_llm_api_key=None,
     ))
     monkeypatch.setattr(main_module, "get_production_material", lambda _asset_id, _request: SimpleNamespace(
-        id=asset_id,
-        segments=[SimpleNamespace(id=segment_id, asset_id=asset_id)],
+        id=asset_id, updated_at=datetime(2026,10,10,tzinfo=timezone.utc),
+        segments=[SimpleNamespace(id=segment_id, asset_id=asset_id, updated_at=datetime(2026,10,10,tzinfo=timezone.utc), start_seconds=0.0, end_seconds=2.0)],
     ))
 
     def controlled_material_turn(_settings, *, turn_id, **kwargs):
         tool_calls.append(turn_id)
-        assert kwargs["selection"] == {
+        assert {key: kwargs["selection"][key] for key in ("scope", "asset_id", "segment_id")} == {
             "scope": "segment", "asset_id": asset_id, "segment_id": segment_id,
         }
         if len(tool_calls) > 1:

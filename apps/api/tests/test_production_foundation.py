@@ -2830,13 +2830,20 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
 
     first_topic_id = generated_body["candidates"][0]["id"]
     second_topic_id = generated_body["candidates"][1]["id"]
+    for invalid_title in ("  ", "字" * 81):
+        with pytest.raises(ValueError, match="1–80"):
+            production.confirm_topic_candidate("workspace_a", task_id, first_topic_id, title=invalid_title)
+    assert production.get_creation_task("workspace_a", task_id).selected_topic_id is None
     confirmed = client.post(
-        f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={}
+        f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={"title": "  用户编辑的真实标题  "}
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["task"]["stage"] == "script"
     assert confirmed.json()["task"]["stage_status"] == "not_started"
     assert confirmed.json()["selected_topic_id"] == first_topic_id
+    assert next(item for item in confirmed.json()["candidates"] if item["id"] == first_topic_id)["title"] == "用户编辑的真实标题"
+    assert client.post(f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={"title":"用户编辑的真实标题"}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={"title":"重复确认不得改写"}).status_code == 409
     assert client.post(
         f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={}
     ).status_code == 200
@@ -2867,6 +2874,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     saved_task = reloaded.get_creation_task("workspace_a", task_id)
     assert saved_task.selected_topic_id == first_topic_id
     assert saved_task.stage == "script"
+    assert next(item for item in reloaded.list_topic_candidates("workspace_a", task_id) if item.id == first_topic_id).title == "用户编辑的真实标题"
     assert saved_task.stage_status == "not_started"
     assert len(reloaded.list_topic_candidates("workspace_a", task_id)) == 2
     reloaded_evidence = reloaded.list_topic_evidence_references("workspace_a", task_id)

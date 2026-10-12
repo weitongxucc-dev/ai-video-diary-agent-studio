@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,6 @@ from app.production import (
     ProductionRepository,
     material_allows_automation,
     material_allows_footage,
-    utc_now,
 )
 from fastapi.testclient import TestClient
 
@@ -33,14 +33,13 @@ def _asset(library: Path, name: str, *, use_state: ContentUseState = "available"
     """一条已审核、已分析的 B-roll 素材，带两个可用镜头。"""
     path = library / name
     path.write_bytes(b"video")
-    now = utc_now()
     return MaterialAsset(
         id=f"asset_{name}",
         workspace_id=WORKSPACE,
         file_name=name,
         path=str(path),
         size_bytes=path.stat().st_size,
-        modified_at=now,
+        modified_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
         duration_seconds=24,
         usage_role="b_roll",
         review_status="approved",
@@ -64,7 +63,7 @@ def _asset(library: Path, name: str, *, use_state: ContentUseState = "available"
 
 def _task_plan(assets: list[MaterialAsset]):
     """走真实计划构建：机器从候选池里自己挑镜头。"""
-    return MontagePlanner().build_for_creation_task(
+    return MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id=WORKSPACE,
         task_id="task-gate",
         script=_script(),

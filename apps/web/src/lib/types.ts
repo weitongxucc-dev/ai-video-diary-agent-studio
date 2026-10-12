@@ -309,6 +309,7 @@ export type VideoTemplateSettings = {
 };
 
 export type VideoTemplate = {
+  can_edit?: boolean;
   id: string;
   version: number;
   visibility: ContentVisibility;
@@ -793,6 +794,7 @@ export type VoiceTranscribeResult = {
 
 export type CreatorProfile = {
   id: string;
+  revision: number;
   common_expressions: string[];
   banned_words: string[];
   style_preferences: Record<string, string>;
@@ -801,6 +803,7 @@ export type CreatorProfile = {
 };
 
 export type CreatorProfileUpdate = {
+  expected_revision: number;
   common_expressions?: string[];
   banned_words?: string[];
   style_preferences?: Record<string, string>;
@@ -985,6 +988,7 @@ export type CreationPlanInput = {
 
   selected_voice?: { profile_id: string; version: string } | null;
   selected_person?: { profile_id: string; version: string } | null;
+  selected_knowledge?: { knowledge_item_id: string; version: string } | null;
 };
 
 export type CreationPlanKnowledgeReference = {
@@ -1625,7 +1629,7 @@ export type CreationTaskEditProposal = {
   summary: string;
   target_refs: string[];
   operation: {
-    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
+    operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "ReorderTimelineItems" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
     payload: Record<string, unknown>;
   };
   invalidated_refs: string[];
@@ -1645,15 +1649,44 @@ export type CreationTaskEditPreviewResponse = {
   proposal: CreationTaskEditProposal;
 };
 
+export type TaskMediaResultMap = {
+  edit_preview: CreationTaskEditPreviewResponse;
+  audio_source: { source_ref: string; name: string; duration_ms: number };
+  recording: CreationTaskRecording;
+  audio_listen: { audio_url: string };
+  waveform: { peaks: number[]; seconds_per_peak: number };
+};
+
+export type TaskMediaJob = {
+  operation: string;
+  target_refs: string[];
+  input_digest: string;
+  created_at: string;
+  job_id: string;
+  status: "queued" | "running" | "interrupted" | "succeeded" | "failed" | "cancelled" | "stale";
+  result_kind: keyof TaskMediaResultMap;
+  result_url: string;
+  device_request_id: string | null;
+  waiting_reason: string | null;
+  base_version_id: string | null;
+  result: TaskMediaResultMap[keyof TaskMediaResultMap] | null;
+  failure_reason: string | null;
+  repair_action: string | null;
+};
+
+export type TaskMediaJobPage = { items: TaskMediaJob[]; next_cursor: string | null };
+
 export type CreationTaskAssistantTurnResponse = {
   reply: string;
   provider: string;
   model: string;
   edit_preview: CreationTaskEditPreviewResponse | null;
+  media_job?: TaskMediaJob | null;
   script_draft: CreationTaskScript | null;
   execution_action: "start" | "resume" | "cancel" | null;
   execution_status: CreationExecutionStatus | null;
   topic_candidates: CreationTaskTopicsResponse | null;
+  timeline_action?: "undo" | "redo" | "reject" | null;
   turn_id?: string | null;
   turn_status?: "running" | "completed" | "stopped";
   draft_version?: number | null;
@@ -1691,7 +1724,15 @@ export type AssistantConversationTurn = {
   updated_at: string;
 };
 
+export type AssistantSavedReference =
+  | {kind:"material";selection:MaterialAssistantSelection;label:string}
+  | {kind:"person"|"voice";profile_id:string;version:string;label:string}
+  | {kind:"knowledge";knowledge_item_id:string;version:string;locator?:string;label:string};
+export type AssistantConversationReferenceState = {selected_reference:AssistantSavedReference|null;reference_version:number;status:"ready"|"unavailable";reason:string|null};
+
 export type AssistantConversation = {
+  selected_reference?: AssistantSavedReference | null;
+  reference_version?: number;
   id: string;
   workspace_id: string;
   scope_kind: "home" | "material" | "task";
@@ -1741,7 +1782,7 @@ export type CreationTaskEditOperation = {
   workspace_id: string;
   task_id: string;
   proposal_id: string;
-  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
+  operation_type: CreationTaskExactEditInput["operation_type"] | "EditAudioTimeline" | "EditCompoundTimeline" | "ReorderTimelineItems" | "RemoveSilence" | "AdjustVisualEffects" | "AlignSubtitleTiming" | "ChangePresenterShare";
   payload: CreationTaskExactEditPayload;
   base_version_id: string | null;
   result_version_id: string | null;
@@ -1784,19 +1825,55 @@ export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
   selected_person?: { profile_id: string; version: string } | null;
 };
 
+export type CreationRequestOutputRelation = "single" | "different_topics" | "variants" | "series";
+export type CreationRequestItem = {
+  ordinal: number;
+  window_id?: string | null;
+  plan_id: string;
+  task_id: string;
+  plan: CreationPlanPreview | null;
+  task: CreationTask | null;
+};
+export type CreationRequest = {
+  id: string;
+  goal: string;
+  target_count: number;
+  output_relation: CreationRequestOutputRelation | null;
+  requirements: CreationPlanInput;
+  material_scope: { kind: "workspace_library" | "today_received"; [key: string]: unknown };
+  clarification_questions: string[];
+  revision: number;
+  status: "awaiting_clarification" | "awaiting_plan" | "awaiting_confirmation" | "active";
+  expanded_count: number;
+  confirmed_count: number;
+  task_status_counts: Record<string, number>;
+  current_window: {
+    id: string;
+    request_id: string;
+    ordinal_start: number;
+    status: "proposed" | "confirmed";
+    input_fingerprint: string;
+    entries: CreationRequestItem[];
+    created_at: string;
+    confirmed_at: string | null;
+  } | null;
+};
+
 export type WorkspaceAssistantPlanTurnResponse = {
   reply: string;
   provider: string;
   model: string;
   plan_preview: CreationPlanPreview | null;
+  creation_request?: CreationRequest | null;
   turn_id?: string | null;
   turn_status?: "running" | "completed" | "stopped";
   draft_version?: number | null;
 };
 
-export type MaterialAssistantSelection =
+export type MaterialAssistantSelection = (
   | { scope: "asset"; asset_id: string }
-  | { scope: "segment"; asset_id: string; segment_id: string };
+  | { scope: "segment"; asset_id: string; segment_id: string }
+) & { expected_updated_at?: string; expected_segment_updated_at?: string };
 
 export type MaterialAssistantResult = {
   scope: "asset" | "segment";
@@ -1901,7 +1978,7 @@ export type MaterialSegment = {
   understanding?: {
     status: "ready" | "blocked" | "failed"; fingerprint: string; model_id: string;
     sample_times: number[]; summary: string;
-    facts: { kind: "object" | "action" | "scene"; text: string; sample_times: number[] }[];
+    facts: { kind: "object" | "action" | "scene"; text: string; label?: string | null; sample_times: number[] }[];
     unknowns: string[];
     ocr_status: "ready" | "blocked" | "failed"; ocr_model_id: string;
     ocr_frames: { id: string; timestamp_seconds: number; width: number; height: number;

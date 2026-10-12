@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -94,6 +95,29 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
     return repo, task_id, script_id, revision_digest(script, persisted_plan)
 
 
+def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
+    repo, task_id, script_id, _digest = _seed(tmp_path)
+    task = repo.get_creation_task("workspace_a", task_id)
+    with repo._connect() as conn:
+        row = conn.execute("SELECT payload FROM creation_plans WHERE id=?", (task.plan_id,)).fetchone()
+        payload = json.loads(row["payload"])
+        payload.pop("visibility")
+        conn.execute("UPDATE creation_plans SET payload=?, visibility='shared' WHERE id=?",
+                     (json.dumps(payload), task.plan_id))
+    script = repo.get_creation_task_script("workspace_a", script_id)
+    plan = repo.get_creation_plan("workspace_a", task.plan_id)
+    actor = CreationExecutionActor("workspace_a", "member-a")
+    job = _execution(repo).start("workspace_a", task_id, script_id, revision_digest(script, plan), actor=actor)
+    owner = CreationJobOwnerVerifier(repo)
+    with repo._connect() as conn:
+        facts = owner._facts(conn, "workspace_a", job.id)
+        assert facts[-1].visibility == plan.visibility == "shared"
+        assert owner._check_facts(*facts, "narration", actor.member_id) == "ready"
+        conn.execute("UPDATE creation_plans SET visibility='private' WHERE id=?", (task.plan_id,))
+        changed = owner._facts(conn, "workspace_a", job.id)
+        assert owner._check_facts(*changed, "narration", actor.member_id) == "stale"
+
+
 def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
     actions = actions or {}
     return CreationExecution(
@@ -183,6 +207,50 @@ def _render_version_fixture(tmp_path):
     persisted_plan = repo.get_creation_plan("local", plan.id)
     return (repo, task_id, script_id, revision_digest(persisted_script, persisted_plan),
             actor, execution, owner, scheduler, version, members)
+
+
+def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path, monkeypatch):
+    repo, task_id, _, _, _, _, owner, scheduler, base, _ = _render_version_fixture(tmp_path)
+    try:
+        montage = repo.get_creation_task_montage_plan("local", task_id)
+        clip = montage["clips"][0]
+        montage["clips"] = [
+            {**clip, "id": f"clip_{index}", "timeline_start_seconds": index,
+             "timeline_end_seconds": index + 1}
+            for index in range(21)
+        ]
+        montage["duration_seconds"] = 21
+        repo.save_creation_task_montage_plan("local", task_id, "montage_1", montage)
+        repo.create_timeline_version(replace(
+            base, id="timeline_repeated_source", parent_version_id=base.id, sequence=2,
+            snapshot={"montage": montage}))
+        task = repo.get_creation_task("local", task_id)
+        plan = repo.get_creation_plan("local", task.plan_id)
+        manifests = []
+        original_dumps = json.dumps
+
+        def capture_manifest(value, *args, **kwargs):
+            if isinstance(value, dict) and "sources" in value and "plan" in value:
+                manifests.append(value)
+            return original_dumps(value, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(json, "dumps", capture_manifest)
+            with repo._connect() as conn:
+                unit_key, resources = owner.render_facts(conn, task, plan)
+        manifest, = manifests
+        audio = tmp_path / "library/audio.wav"
+        video = tmp_path / "library/source.mp4"
+        assert [fact["path"] for fact in manifest["sources"]] == [str(audio), str(video)]
+        assert resources["input_bytes"] == audio.stat().st_size + video.stat().st_size
+        assert resources["clip_count"] == len(manifest["plan"]["clips"]) == 21
+        assert manifest["plan"]["clips"] == montage["clips"]
+        legacy_manifest = {**manifest, "sources": [manifest["sources"][0]] + [manifest["sources"][1]] * 21}
+        legacy_digest = hashlib.sha256(original_dumps(
+            legacy_manifest, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        assert unit_key != f"render:{legacy_digest}"
+    finally:
+        scheduler.close()
 
 
 @pytest.mark.parametrize("mutation", ["version", "source", "revoked"])
@@ -395,10 +463,28 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
         scheduler.close()
 
 
-@pytest.mark.parametrize("publication_state", ["normal", "crash", "missing_input_version"])
+@pytest.mark.parametrize("publication_state", ["normal", "crash", "missing_input_version", "legacy_defaults"])
 def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_path, monkeypatch, publication_state):
     """Real main/repository/permit completion; explicit media/quality substitutes."""
     repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    if publication_state == "legacy_defaults":
+        legacy = repo.get_creation_task_montage_plan("local", task_id)
+        for key in ("aspect_ratio", "presenter_share_target", "graphic_overlays", "audio_timeline",
+                    "narration_linkage_created_audio_timeline"):
+            legacy.pop(key)
+        for clip in legacy["clips"]:
+            for key in ("person_render_id", "fit_mode", "crop_x", "crop_y", "visual_effects",
+                        "transition_in_seconds", "fade_envelope_rate", "fade_envelope_offset_frames",
+                        "fade_envelope_duration_frames"):
+                clip.pop(key)
+        for cue in legacy["cues"]:
+            for key in ("narration_segment_id", "subtitle_emphasis", "subtitle_style", "subtitle_emphasis_ranges"):
+                cue.pop(key)
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE task_id=?",
+                         (json.dumps(legacy), task_id))
+        base = repo.create_timeline_version(replace(base, id="timeline_legacy", parent_version_id=base.id,
+            sequence=2, snapshot=dict(base.snapshot, montage=legacy)))
     try:
         monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
             cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5))
@@ -475,7 +561,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert renders == [request_id]
         validations = 2 if publication_state == "crash" else 1
         assert media_checks == [request_id] * validations
-        assert quality_requests == [("local", task_id)] * validations
+        assert quality_requests == [("local", task_id)]  # reuse the persisted quality request on replay
         execution.render_is_valid = lambda w, t: main_module._creation_render_is_valid(w, t, verify_media=False)
         assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
         assert submit_creation_stage(execution, scheduler, repo.get_job_run("local", job.id), actor) is None
@@ -708,6 +794,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert repo.get_job_run(workspace, job_id).status == "queued"
             with repo._connect() as conn:
                 assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone()[0] == "resource_busy"
+            assert main_module._creation_execution_status(workspace, task_id)["waiting_reason"] == "本机资源余量不足，正在等待满足制作条件。"
             return
         assert grant is not None
         assert grant.request_id == request_id and grant.unit_key.startswith("narration:")
@@ -1213,7 +1300,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1254,7 +1341,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1287,7 +1374,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": owner}, last_error=None,
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)}, last_error=None,
         wake=lambda: wake_calls.append(True),
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
@@ -1460,7 +1547,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "execution_worker", worker)
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": CreationJobOwnerVerifier(repo)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None, start=lambda: runtime_starts.append("start"),
         stop=lambda **_kwargs: True,
     ))

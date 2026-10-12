@@ -77,6 +77,9 @@ from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import register_synthetic_profiles, synthetic_wav_bytes, write_synthetic_video
 
 
+pytestmark = pytest.mark.usefixtures("granted_montage_renderer")
+
+
 def _assert_retired_montage_endpoint(client, production, workspace_id, task_id, stage):
     """Public retirement must reject before any job/version/artifact mutation."""
     with production._connect() as conn:
@@ -152,7 +155,7 @@ def test_matching_preserves_english_words_and_chinese_phrase_boundaries() -> Non
         id="cue-port", source_section_id="section-port", narration_segment_id="voice-port",
         text="Show the USB port", duration_seconds=4.0,
     )
-    asset = SimpleNamespace(file_name="001.mp4", speech_analysis=None)
+    asset = SimpleNamespace(file_name="001.mp4", speech_analysis=None, user_tags=[])
     relevant = MaterialSegment(
         id="port", asset_id="asset", start_seconds=0, end_seconds=4,
         description="A close-up of a USB port",
@@ -466,8 +469,6 @@ def _profile() -> ProductionProfile:
 def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     from app.local_members import LocalMemberService
 
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="fixture-visual-preview", logical_ref="artifacts/fixture-visual-preview.mp4"))
     output_root = tmp_path / "output"
     production = ProductionRepository(
         database_path=tmp_path / "studio.sqlite3",
@@ -613,7 +614,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         text=script.sections[0].content,
         audio_reference=narration_reference,
         duration_seconds=4,
-        sample_rate=24_000,
+        sample_rate=8000,
         model_id="qwen3-tts",
         voice_profile_id=voice.id,
         voice_version=voice.version,
@@ -631,7 +632,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
             cache_key=narration_cache_key,
             audio_path=str(narration_path),
             duration_seconds=4,
-            sample_rate=24_000,
+            sample_rate=8000,
             model_id="qwen3-tts",
         ),
         segments=[segment],
@@ -802,6 +803,99 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     )
 
 
+def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_override=None, validate_override=None):
+    """Use real membership/version/JobRun/permit/checkpoint for domain assertions.
+
+    This fixture's old-person file is an intentionally non-decodable lineage
+    receipt. Only media measurement/rendering is a seam here. Real decoding,
+    silence/size/duration checks remain in the separate real-media regressions.
+    """
+    from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.device_runtime import OwnerRegistration, build_device_runtime
+    from app.member_permits import MemberDeviceAccess
+    from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT
+    from app.host_resource_probes import HostProcessProbe
+    from _media_preview_test_fixtures import ControlledResources
+    actor = CreationExecutionActor(state.workspace_id,state.member.member_id)
+    def live_identity(candidate):
+        return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
+    access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
+    def facts(workspace,task_id,operation,arguments,original):
+        assert original==actor
+        current=state.production.get_creation_task(workspace,task_id)
+        assert current.owner_user_id==state.member.member_id
+        payload=state.production.get_creation_task_montage_plan(workspace,task_id)
+        stable={key:value for key,value in payload.items() if key not in {'status','message','updated_at','output_path','subtitle_path'}}
+        return {'base_version_id':current.current_timeline_version_id,'montage':stable}, {
+            'kind':'creation_render','execution_mode':'cpu_ffmpeg','threads':1,'timeout_seconds':10,'max_output_bytes':1024**2}
+    def render(workspace,task_id,inputs,path,context):
+        assert TASK_MEDIA_CONTEXT.get()[0].grant == context.grant
+        assert TASK_MEDIA_CONTEXT.get()[0].scheduler is context.scheduler
+        assert context.grant.workspace_id==state.workspace_id and context.grant.owner_type=='creation_job'
+        context.check()
+        state.preview_inputs.append(inputs)
+        if capture is not None:
+            capture(inputs)
+        if facts_override is not None:
+            main_module._render_task_picture_input(workspace, task_id, inputs, path, context)
+        else:
+            path.write_bytes(b'domain-render-receipt')
+    original_measure = TaskAudio._measure_publication
+    def measure(self,path,operation,inputs,context):
+        if facts_override is not None or operation not in {"clip_preview", "picture_preview"}:
+            return original_measure(self, path, operation, inputs, context)
+        context.check()
+        duration=(min(5,inputs['clip']['timeline_end_seconds']-inputs['clip']['timeline_start_seconds'])
+                  if 'clip' in inputs else inputs['plan']['duration_seconds'])
+        return {'duration_seconds':duration,'sample_rate':None,'channels':None}
+    def validate(job,event,result,context):
+        context.check()
+        assert state.production.get_job_run(job.workspace_id,job.id).status=='running'
+    state.preview_inputs=[]
+    def execute(job,event,original):
+        try:
+            return main_module._execute_task_media_operation(job,event,original)
+        except Exception as exc:
+            state.preview_error=repr(exc)+' CAUSE='+repr(exc.__cause__)
+            raise
+    media=TaskMediaJobs(state.production,facts=facts_override or facts,execute_operation=execute,
+        validate_result=validate_override or validate,verify_identity=access.verify_identity)
+    runtime=build_device_runtime(database_path=state.production.database_path,
+        device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
+        registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
+            verify_identity=access.verify_identity,task_media=media),CreationJobUnitExecutor(state.production,
+            render_action=None,render_is_valid=None,task_media=media))},resources=ControlledResources(),
+        processes=HostProcessProbe())
+    state.preview_runtime=runtime
+    monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
+    def permit(request,workspace):
+        member=state.members.resolve_member(request.headers.get('x-local-member-token'))
+        assert member.member_id==actor.member_id and workspace==actor.workspace_id
+        return actor
+    monkeypatch.setattr(main_module,'_require_permit_actor',permit)
+    monkeypatch.setattr(main_module,'_task_audio',lambda:TaskAudio(state.production,main_module.artifact_store,
+        main_module.settings.effective_temporary_root_path,picture_renderer=render))
+    monkeypatch.setattr(TaskAudio,'_measure_publication',measure)
+    # The domain tests use persisted receipts, not claims of playable video.
+    if facts_override is None:
+        monkeypatch.setattr(main_module,'_task_media_outputs_current',lambda job:True)
+    original_post=state.client.post
+    def post(*args,**kwargs):
+        response=original_post(*args,**kwargs)
+        if response.status_code!=202:
+            return response
+        receipt=response.json()
+        assert receipt['result'] is None and receipt['device_request_id']
+        assert runtime.run_once()
+        completed=state.client.get(receipt['result_url'])
+        assert completed.status_code==200 and completed.json()['status']=='succeeded',(completed.text,getattr(state,'preview_error',None))
+        response.status_code=200
+        response._content=json.dumps(completed.json()['result']).encode()
+        return response
+    state.client.post=post
+    return runtime
+
+
 @pytest.fixture
 def person_render_edit_state(tmp_path, monkeypatch):
     return _person_render_edit_state(tmp_path, monkeypatch, "workspace_a")
@@ -916,6 +1010,58 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     (tmp_path / "release-evidence.json").write_text(json.dumps(state.releases, indent=2))
 
 
+@pytest.fixture
+def permitted_media_state(person_render_edit_state, monkeypatch):
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets
+    state = person_render_edit_state
+    from _media_preview_test_fixtures import synthetic_wav_bytes
+    state.original_person_clip = replace(state.montage.clips[0])
+    narration = state.production.resolve_authorized_narration_audio_reference(state.workspace_id, state.montage.narration_audio_path)
+    narration.write_bytes(synthetic_wav_bytes(state.montage.duration_seconds))
+    _save_fixture_narration_duration(state, state.montage.duration_seconds)
+    # Real decoding tests use a synthetic four-second presenter source.
+    path = main_module._person_render_media_path(state.old_render)
+    write_synthetic_video(path, seconds=4)
+    from app.creation_execution import presenter_inputs, presenter_input_facts
+    from app.production import ArtifactRecord, JobRun, TransformRun
+    from app.avatar_lipsync import avatar_lipsync_cache_key
+    monkeypatch.setattr(main_module, "_presenter_model_ids", lambda: {"high": state.provider.model_id, "fast": state.provider.model_id})
+    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    script = state.production.get_creation_task_script(state.workspace_id, task.confirmed_script_id)
+    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.presenter_share_target = 100
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    segment, request = presenter_inputs(state.production, task, script, plan, main_module._presenter_model_ids())[0]
+    inputs = presenter_input_facts(request)
+    key = avatar_lipsync_cache_key(request, input_facts=inputs)
+    render = state.production.create_person_render(replace(state.old_render, id="synthetic-current-presenter", cache_key=key,
+        status="pending", output_path=None, artifact_ref=None, duration_seconds=None, alignment_evidence=None))
+    state.production.claim_person_render(state.workspace_id, task.id, render.id)
+    published = main_module.artifact_store.publish_file(f"artifacts/{task.id}/synthetic-presenter.mp4", path)
+    job = state.production.create_job_run(JobRun(id="synthetic-presenter-job", workspace_id=state.workspace_id,
+        task_id=task.id, kind="person_render", idempotency_key=key, input_digest=key))
+    state.production.create_artifact_record(ArtifactRecord(id="synthetic-presenter-artifact", workspace_id=state.workspace_id,
+        task_id=task.id, kind="person_render", logical_ref=published.logical_ref, sha256=published.sha256,
+        size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=[segment.audio_reference]))
+    state.production.create_transform_run(TransformRun(id="synthetic-presenter-transform", workspace_id=state.workspace_id,
+        task_id=task.id, job_id=job.id, transform_type="person_render", input_digest=key, input_refs=[segment.audio_reference],
+        output_refs=[published.logical_ref], engine="synthetic-presenter", parameters={"language":segment.language,
+        "presenter_input_facts":inputs}, status="succeeded", started_at=job.created_at, finished_at=job.created_at))
+    state.old_render = state.production.finish_person_render(state.workspace_id, task.id, render.id, status="ready",
+        output_path=str(path), duration_seconds=4, alignment_evidence='{"engine":"synthetic-presenter"}')
+    state.old_render = state.production.bind_person_render_artifact(state.workspace_id, task.id, render.id, published.logical_ref)
+    state.montage = replace(state.montage, clips=[replace(clip, person_render_id=render.id,
+        asset_id=f"person:{render.id}", source_path=f"person-render://{render.id}") if clip.person_render_id else clip for clip in state.montage.clips])
+    state.production.save_creation_task_montage_plan(state.workspace_id, task.id, state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    configure_synthetic_media_budgets(monkeypatch, main_module)
+    runtime = _granted_domain_preview_adapter(state, monkeypatch,
+        facts_override=main_module._task_media_facts, validate_override=main_module._validate_task_media_result)
+    yield state
+    assert runtime.stop(1)
+
+
 def _assert_unpermitted_person_confirm(state, proposal):
     with state.production._connect() as conn:
         before = tuple(conn.iterdump())
@@ -950,19 +1096,21 @@ def test_trim_person_preview_accepts_legacy_and_synthetic_sources_but_checks_ren
 
 
 def test_planner_matches_approved_segments_with_traceable_reasons(tmp_path):
+    episode = _episode()
+    episode.script.sections[0].content = "先识别重复工作，再看火箭发射，最后保留人工审核。"
     plan = MontagePlanner().build(
         workspace_id="workspace_a",
         batch=_batch(),
-        episode=_episode(),
+        episode=episode,
         profile=_profile(),
         assets=[_asset(tmp_path)],
     )
 
     assert plan.status == "waiting_for_user"
     assert plan.clips
-    assert plan.low_confidence_clip_count == 1
-    pending = next(clip for clip in plan.clips if clip.needs_confirmation)
-    assert next(cue.text for cue in plan.cues if cue.id == pending.cue_id) == "工具处理，"
+    pending = [clip for clip in plan.clips if clip.needs_confirmation]
+    assert plan.low_confidence_clip_count == len(pending)
+    assert any("火箭发射" in next(cue.text for cue in plan.cues if cue.id == clip.cue_id) for clip in pending)
     assert all(clip.match_reasons for clip in plan.clips)
     assert 30 <= plan.duration_seconds <= 90
 
@@ -1140,7 +1288,7 @@ def test_planner_uses_cached_visual_vectors_but_keeps_uncalibrated_matches_gated
     )
 
     assert plan.clips[0].segment_id == "segment_0"
-    assert any("画面向量相似度" in reason for reason in plan.clips[0].match_reasons)
+    assert any("画面语义排序分" in reason for reason in plan.clips[0].match_reasons)
     assert plan.status == "waiting_for_user"
 
 
@@ -1384,7 +1532,7 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
         ],
     )
     asset = _asset(tmp_path)
-    plan = MontagePlanner().build_for_creation_task(
+    plan = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a",
         task_id="task_1",
         script=script,
@@ -1423,7 +1571,7 @@ def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
         ) for index, (section_id, _) in enumerate(sections)],
     )
     chosen = select_presenter_sections(sections, 20)
-    plan = MontagePlanner().build_for_creation_task(
+    plan = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a", task_id="task_mix", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"),
         assets=[_asset(tmp_path)],
@@ -1444,7 +1592,7 @@ def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
     assert plan.duration_seconds == pytest.approx(20.0)
     assert plan.presenter_share_target == 20
 
-    all_face = MontagePlanner().build_for_creation_task(
+    all_face = MontagePlanner().build_for_creation_task(duration_target_seconds=90,
         workspace_id="workspace_a", task_id="task_mix", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"), assets=[],
         media_reference_for_asset=lambda asset_id: f"workspace://{asset_id}.mp4",
@@ -1534,12 +1682,27 @@ def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path, monk
             self.assert_grant(grant)
             self.children.append(child)
 
+    commands = []
+    import app.montage as montage_module
+    actual_runner = montage_module._run_granted_media_command
+    def record_runner(scheduler, grant, command, **kwargs):
+        commands.append(command.copy())
+        return actual_runner(scheduler, grant, command, **kwargs)
+    monkeypatch.setattr(montage_module, "_run_granted_media_command", record_runner)
     scheduler = RecordingGrant()
     rendered = MontageRenderer(tmp_path).render(
         plan, audio, job_staging_path=tmp_path / "job", scheduler=scheduler,
         grant="one-render-grant", deadline_monotonic=time.monotonic() + 90,
-        max_output_bytes=8 * 1024 * 1024, threads=1,
+        max_output_bytes=8 * 1024 * 1024, threads=2,
     )
+    encode = next(command for command in commands if command[0] == "ffmpeg")
+    inputs = [index for index, value in enumerate(encode) if value == "-i"]
+    assert len(inputs) == 3  # video, authorized narration, current subtitle image
+    assert all(encode[index - 2:index] == ["-threads", "2"] for index in inputs)
+    assert encode[encode.index("-threads:v") + 1] == "2"
+    assert encode[encode.index("-filter_threads") + 1] == "2"
+    assert encode[encode.index("-filter_complex_threads") + 1] == "2"
+    assert encode[encode.index("-fs") + 1] == str(8 * 1024 * 1024)
     assert rendered.status == "rendered"
     assert (tmp_path / "job" / "preview.mp4").stat().st_size <= 8 * 1024 * 1024
     assert len(scheduler.children) == 3  # duration probe, encoder, output probe
@@ -2015,7 +2178,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         recovery_point="montage",
         owner_user_id=member.member_id,
     )
-    production.confirm_creation_plan(creation_plan, task)
+    production.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
     plan = CreationTaskMontagePlan(
         id="montage-render-route",
         workspace_id=workspace_id,
@@ -2428,8 +2591,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert current_tracks[0].transform_id is not None
 
     before_crop = client.get(f"/api/creation-tasks/{task.id}").json()
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="fixture-crop-preview", logical_ref="artifacts/fixture-crop-preview.mp4"))
+    crop_state=SimpleNamespace(workspace_id=workspace_id,production=production,members=members,
+        member=member,client=client)
+    crop_runtime=_granted_domain_preview_adapter(crop_state,monkeypatch)
     crop_payload = {"operation_type": "ChangeCrop", "clip_id": "clip-route", "fit_mode": "fit", "crop_x": 0, "crop_y": 1}
     crop_preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=crop_payload)
     assert crop_preview.status_code == 200, crop_preview.text
@@ -2488,8 +2652,11 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
     assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
 
+    assert crop_runtime.stop(1)
 
 @pytest.mark.parametrize("visual_only", [False, True])
+
+
 def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     tmp_path, monkeypatch, visual_only
 ):
@@ -3404,7 +3571,7 @@ def test_creation_task_retrieval_uses_visual_requirement_without_changing_narrat
         embed_texts=lambda texts: observed_queries.extend(texts) or [[1.0, 0.0] for _ in texts])
     planner = MontagePlanner(semantic_provider=provider,
         visual_feature_loader=lambda _workspace, segment_id, _model: [1.0, 0.0] if segment_id == "relevant" else [0.0, 1.0])
-    plan = planner.build_for_creation_task(workspace_id="workspace_a", task_id="task", script=script,
+    plan = planner.build_for_creation_task(duration_target_seconds=90, workspace_id="workspace_a", task_id="task", script=script,
         profile=ProductionProfile(workspace_id="workspace_a"), assets=[replace(asset, segments=[spoken_only, relevant])],
         media_reference_for_asset=lambda _: "workspace://source.mp4",
         narration_audio_path="narration://artifact/test", narration_duration_seconds=4)
@@ -3565,8 +3732,8 @@ def test_regenerated_narration_cannot_exceed_existing_person_render(person_rende
         main_module._retime_montage_for_narration_segments(state.workspace_id, plan, [segment], "narration://artifact/new")
 
 
-def test_person_clip_crop_and_replacement_keep_editable_timeline(person_render_edit_state):
-    state = person_render_edit_state
+def test_person_clip_crop_and_replacement_keep_editable_timeline(permitted_media_state):
+    state = permitted_media_state
     base = f"/api/creation-tasks/{state.task.id}"
     face = state.montage.clips[0]
     crop = state.client.post(base + "/edits/exact/preview", json={
@@ -3589,6 +3756,7 @@ def test_person_clip_crop_and_replacement_keep_editable_timeline(person_render_e
     assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] is None
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
+
 
 
 def test_natural_language_presenter_share_previews_confirms_and_undoes(person_render_edit_state):
@@ -3790,15 +3958,14 @@ def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_rende
     base = f"/api/creation-tasks/{state.task.id}"
     clip = state.montage.clips[1]
     seen_rates = []
-    def publish(*args, **kwargs):
-        seen_rates.append(main_module.clip_playback_rate(args[5]))
-        return SimpleNamespace(id=f"preview-{len(seen_rates)}", logical_ref=f"artifacts/preview-{len(seen_rates)}.mp4")
-    monkeypatch.setattr(main_module, "publish_color_preview", publish)
+    def capture(inputs):
+        seen_rates.append(main_module.clip_playback_rate(MontageClip(**inputs['clip'])))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,capture)
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为0.5倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert preview.status_code == 200, preview.text
     assert seen_rates == [1, .5]
-    assert preview.json()["proposal"]["preview"]["after"]["video_url"].endswith("preview-2")
+    assert preview.json()["proposal"]["preview"]["after"]["video_url"].startswith(base+"/visual/artifacts/")
     response = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert response.status_code == 200, response.text
     after = state.client.get(base).json()
@@ -3819,6 +3986,7 @@ def test_picture_speed_preserves_voice_and_clock_and_survives_split(person_rende
     assert response.status_code == 409 and "口型" in response.text
     response = state.client.post(base + "/edits/preview", json={"raw_command":"当前镜头改为9倍速，保留配音", "context_stage":"montage", "selected_object_refs":[f"clip:{clip.id}"]})
     assert response.status_code == 422
+    assert runtime.stop(1)
 
 
 def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(person_render_edit_state, monkeypatch):
@@ -3830,7 +3998,6 @@ def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(
         return SimpleNamespace(id=f"preview-{len(published)}", logical_ref=f"artifacts/audio-{len(published)}.wav")
     service = SimpleNamespace(source=lambda *args: main_module.Path("fixture.wav"), publish=publish, validate=lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs: SimpleNamespace(id="visual-preview", logical_ref="artifacts/preview.mp4"))
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/exact/preview", json={"operation_type":"ChangeLinkedSpeed", "clip_id":state.montage.clips[1].id,"playback_rate":2})
     assert preview.status_code == 200, preview.text
@@ -3940,8 +4107,8 @@ def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_
     assert state.client.get(base).json()["task"]["can_redo"] is False
 
 
-def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(person_render_edit_state):
-    state=person_render_edit_state
+def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(permitted_media_state):
+    state=permitted_media_state
     base=f"/api/creation-tasks/{state.task.id}"
     version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     track=SubtitleTrack(id="style-english",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
@@ -3955,10 +4122,10 @@ def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibili
     preview=state.client.post(base+'/edits/preview',json={"context_stage":"subtitle_cover","raw_command":"字幕字号改成64","selected_object_refs":[]})
     assert preview.status_code==200,preview.text
     assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
-    image_url=preview.json()['proposal']['preview']['after']['image_url']
+    image_url=preview.json()['proposal']['preview']['after']['video_url']
     image=state.client.get(image_url)
-    assert image.status_code==200 and image.headers['content-type']=='image/png'
-    assert image.content.startswith(b'\x89PNG')
+    assert image.status_code==200 and image.headers['content-type']=='video/mp4'
+    assert b'ftyp' in image.content[:32]
     confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
     assert confirmed.status_code==200,confirmed.text
     after=state.client.get(base).json()
@@ -3970,6 +4137,7 @@ def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibili
     assert state.client.get(base).json()['subtitle_tracks'][0]['style']==track.style
 
 
+
 @pytest.mark.parametrize('ratio', ['16:9','1:1'])
 def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_edit_state,monkeypatch,ratio):
     state=person_render_edit_state
@@ -3977,10 +4145,7 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     seen=[]
-    def local_preview(*args,**kwargs):
-        seen.append(kwargs['aspect_ratio'])
-        return SimpleNamespace(id='canvas-preview',logical_ref='artifacts/canvas.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',local_preview)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:seen.append(inputs['plan']['aspect_ratio']))
     from copy import deepcopy
     locked=deepcopy(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
     locked['clips'][0]['locked']=True
@@ -3991,6 +4156,14 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
         assert seen==[]
     preview=state.client.post(base+'/edits/exact/preview',json={'operation_type':'ChangeCanvas','aspect_ratio':ratio,'fit_mode':'fit'})
     assert preview.status_code==200,preview.text
+    with state.production._connect() as conn:
+        saved = conn.execute("SELECT e.payload_json FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id AND j.id=e.job_id "
+            "WHERE e.event_type='task_media_submitted' AND j.workspace_id=? AND j.task_id=? ORDER BY j.created_at DESC LIMIT 1",
+            (state.workspace_id,state.task.id)).fetchone()
+    saved_payload=json.loads(saved['payload_json'])['arguments']['payload']
+    assert set(saved_payload)=={'operation_type','aspect_ratio','fit_mode'}
+    restored=main_module.CreationTaskExactEditRequest.model_validate(saved_payload)
+    assert restored.model_fields_set=={'operation_type','aspect_ratio','fit_mode'}
     assert seen==['9:16',ratio]
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
     confirmed=state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm')
@@ -4004,6 +4177,7 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
+    assert runtime.stop(1)
 
 
 @pytest.mark.parametrize("status", ["unavailable", "failed"])
@@ -4041,8 +4215,8 @@ def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history
                 (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
                 ("valid", None, None, None),
             ]
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *args, **kwargs:
-        SimpleNamespace(id="canvas-preview", logical_ref="artifacts/canvas.mp4"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
+        pytest.fail("ordinary canvas draft must not encode media"))
 
     changed = state.client.post(base + "/edits/exact", json={"operation_type": "ChangeCanvas", "aspect_ratio": "1:1"})
     assert changed.status_code == 200, changed.text
@@ -4088,7 +4262,7 @@ def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_e
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     selected=before['montage']['clips'][0]
-    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(id='geometry',logical_ref='artifacts/geometry.mp4'))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch)
     preview=state.client.post(base+'/edits/preview',json={'context_stage':'montage','raw_command':'当前镜头缩小到0.8倍','selected_object_refs':[f"clip:{selected['id']}"]})
     assert preview.status_code==200,preview.text
     assert preview.json()['proposal']['operation']['payload']['effects']['zoom']==.8
@@ -4102,6 +4276,7 @@ def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_e
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_state,monkeypatch):
@@ -4113,15 +4288,15 @@ def test_visual_preview_keeps_trimmed_person_source_interval(person_render_edit_
     plan['clips'][0]['source_end_seconds']=3
     monkeypatch.setattr(state.production,'get_creation_task_montage_plan',lambda *args:plan)
     ranges=[]
-    def capture(*args,**kwargs):
-        target=args[5]
-        ranges.append((target.source_start_seconds,target.source_end_seconds))
-        return SimpleNamespace(id='geometry-person',logical_ref='artifacts/geometry-person.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',capture)
+    def capture(inputs):
+        target=inputs['plan']['clips'][0]
+        ranges.append((target['source_start_seconds'],target['source_end_seconds']))
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,capture)
     response=state.client.post(f'/api/creation-tasks/{state.task.id}/visual/preview',json={
         'base_version_id':version.id,'clip_ids':[plan['clips'][0]['id']],'effects':{'zoom':.8}})
     assert response.status_code==200,response.text
     assert ranges==[(1,3),(1,3)]
+    assert runtime.stop(1)
 
 
 def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_state,monkeypatch):
@@ -4131,10 +4306,7 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
     limits=[]
-    def publish(*args,**kwargs):
-        limits.append(kwargs['max_seconds'])
-        return SimpleNamespace(id='fade',logical_ref='artifacts/fade.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:limits.append(None))
     invalid=state.client.post(base+'/visual/preview',json={'base_version_id':before['task']['current_timeline_version_id'],
         'clip_ids':[c['id'] for c in before['montage']['clips']],'effects':{'fade_in_seconds':5,'fade_out_seconds':5}})
     assert invalid.status_code==422 and not limits
@@ -4153,6 +4325,7 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_split_inside_fade_preserves_envelope_clock(person_render_edit_state):
@@ -4211,8 +4384,8 @@ def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_re
     assert result.status_code==409 and len(calls)==count
 
 
-def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice(person_render_edit_state,monkeypatch):
-    state=person_render_edit_state
+def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice(permitted_media_state,monkeypatch):
+    state=permitted_media_state
     base=f'/api/creation-tasks/{state.task.id}'
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
@@ -4234,6 +4407,7 @@ def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice
     assert preview.status_code==200,preview.text
     assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
+
 
 
 def test_pure_arrow_nl_command_reaches_overlay_compiler(person_render_edit_state,monkeypatch):
@@ -4331,10 +4505,7 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     before=state.client.get(base).json()
     clip_id=before['montage']['clips'][0]['id']
     calls=[]
-    def publish(*args,**kwargs):
-        calls.append(True)
-        return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
-    monkeypatch.setattr(main_module,'publish_color_preview',publish)
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:calls.append(True))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f'clip:{clip_id}']})
     assert preview('亮一点，加上闪电特效').status_code==422
     assert calls==[] and state.client.get(base).json()['task']['current_timeline_version_id']==before['task']['current_timeline_version_id']
@@ -4350,6 +4521,7 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
+    assert runtime.stop(1)
 
 
 def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state,monkeypatch):
@@ -4445,59 +4617,18 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
 
 
 @pytest.mark.parametrize("bilingual", [False, True])
-def test_local_subtitle_alignment_preview_confirm_undo(person_render_edit_state, monkeypatch, bilingual):
-    state=person_render_edit_state
-    base=f'/api/creation-tasks/{state.task.id}'
-    version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
-    state.production.create_subtitle_track(SubtitleTrack(id="alignment-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
-        language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="alignment-cue",source_cue_id=None,text="Local video.",start_seconds=0,end_seconds=4)],
-        generation_method="timeline",model_id=None,artifact_ref="artifacts/old.srt",transform_id="old",status="valid"))
-    if bilingual:
-        source=state.production.list_subtitle_tracks(state.workspace_id,state.task.id,timeline_version_id=version.id)[0]
-        state.production.create_subtitle_track(replace(source,id="alignment-translation",language="zh-CN",source_language="en-US",generation_method="translation",
-            cues=[ProductionSubtitleCue(id="translated-cue",source_cue_id="alignment-cue",text="本地视频。",start_seconds=0,end_seconds=4)]))
-    command='按配音校准双语字幕' if bilingual else '按配音校准英文字幕'
-    before=state.client.get(base).json()
-    captured=[]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(publish=lambda *a,**k:SimpleNamespace(logical_ref='artifacts/analysis.wav')))
-    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[{"tokens":[
-        {"text":"Local", "offsets":{"from":400,"to":900},"p":.9},
-        {"text":" video", "offsets":{"from":1000,"to":2000},"p":.9}]}]})
-    def publish(workspace,task,version,plan,tracks,**kwargs):
-        captured.append(tracks)
-        return SimpleNamespace(id='alignment-preview',logical_ref='artifacts/preview.mp4')
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
-    main_module.settings.effective_temporary_root_path.mkdir(exist_ok=True)
-    monkeypatch.setattr(main_module.artifact_store, 'resolve_file', lambda ref: Path('/unused-analysis.wav'))
-    result=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]})
-    assert result.status_code==200,result.text
-    proposal=result.json()['proposal']
-    assert proposal['operation']['operation_type']=='AlignSubtitleTiming'
-    assert captured[-1][0].cues[0].start_seconds==.4
-    assert state.client.get(base).json()['subtitle_tracks']==before['subtitle_tracks']
-    stale=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]}).json()['proposal']
-    confirm=state.client.post(base+'/edits/'+proposal['id']+'/confirm',json={})
-    assert confirm.status_code==200,confirm.text
-    assert state.client.post(base+'/edits/'+stale['id']+'/confirm',json={}).status_code==409
-    after=state.client.get(base).json()
-    assert after['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
-    assert after['subtitle_tracks'][0]['cues'][0]['text']=='Local video.'
-    if bilingual:
-        translation=next(track for track in after['subtitle_tracks'] if track['source_language']=='en-US')
-        assert translation['cues'][0]['text']=='本地视频。'
-        assert translation['cues'][0]['start_seconds']==.4
-        assert len(proposal['target_refs'])==2
-    assert after['montage']['clips']==before['montage']['clips']
-    assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
-    assert all(track['cues'][0]['start_seconds']==0 for track in state.client.get(base).json()['subtitle_tracks'])
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
-    assert state.client.get(base).json()['subtitle_tracks'][0]['cues'][0]['start_seconds']==.4
-    current=state.client.get(base).json()
-    monkeypatch.setattr(main_module,'recognize_subtitle_timing',lambda *a:{"transcription":[]})
-    failed=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[]})
-    assert failed.status_code==422
-    assert state.client.get(base).json()['task']['current_timeline_version_id']==current['task']['current_timeline_version_id']
+def test_local_subtitle_alignment_preview_confirm_undo(person_render_edit_state, bilingual):
+    state = person_render_edit_state
+    base = f"/api/creation-tasks/{state.task.id}"
+    main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    before = state.client.get(base).json()
+    command = "按配音校准双语字幕" if bilingual else "按配音校准中文字幕"
+    response = state.client.post(base + "/edits/preview", json={"raw_command": command,
+        "context_stage": "subtitle_cover", "selected_object_refs": []})
+    assert response.status_code == 503
+    assert "独立模型资源预算" in response.text
+    assert state.client.get(base).json() == before
+    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
 
 
 def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_edit_state,monkeypatch):
@@ -4824,7 +4955,10 @@ def _save_fixture_narration_duration(state, duration_seconds):
     reference = state.montage.narration_audio_path
     record = state.production.get_narration_artifact(
         state.workspace_id, reference.removeprefix("narration://artifact/"))
-    state.production.save_narration_artifact(replace(record, duration_seconds=duration_seconds))
+    import wave
+    with wave.open(record.audio_path) as audio:
+        sample_rate = audio.getframerate()
+    state.production.save_narration_artifact(replace(record, duration_seconds=duration_seconds, sample_rate=sample_rate))
 
 
 def test_audio_draft_uses_registered_duration_without_probe(person_render_edit_state, monkeypatch):
@@ -4842,13 +4976,15 @@ def test_audio_draft_uses_registered_duration_without_probe(person_render_edit_s
 
 
 @pytest.mark.parametrize("source_end", [4, 6])
-def test_extract_original_audio_real_media_preview_confirm_undo(person_render_edit_state, source_end):
+def test_extract_original_audio_real_media_preview_confirm_undo(permitted_media_state, source_end):
     import subprocess
     import io
     import wave
     import array
-    state=person_render_edit_state
+    state=permitted_media_state
     clip=state.montage.clips[0]
+    clip.asset_id=state.original_person_clip.asset_id
+    clip.source_path=state.original_person_clip.source_path
     clip.person_render_id=None
     clip.role='b_roll'
     clip.source_start_seconds=2
@@ -4857,6 +4993,11 @@ def test_extract_original_audio_real_media_preview_confirm_undo(person_render_ed
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
         '-f','lavfi','-i','aevalsrc=if(lt(t\\,2)\\,0\\,0.2*sin(2*PI*660*t)):s=48000:d=8',
         '-c:v','libx264','-c:a','aac','-shortest',str(source)],check=True)
+    asset=state.production.get_asset(state.workspace_id,clip.asset_id)
+    asset.duration_seconds=8
+    asset.size_bytes=source.stat().st_size
+    asset.modified_at=datetime.fromtimestamp(source.stat().st_mtime,timezone.utc)
+    state.production._save_asset(asset)
     narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
     _save_fixture_narration_duration(state, 8)
@@ -4890,10 +5031,13 @@ def test_extract_original_audio_real_media_preview_confirm_undo(person_render_ed
     assert not any(t.clips for t in main_module._effective_audio_timeline(restored).tracks if t.role=='original')
 
 
-def test_extract_original_audio_rejects_silent_video_without_timeline_change(person_render_edit_state):
+
+def test_extract_original_audio_rejects_silent_video_without_timeline_change(permitted_media_state):
     import subprocess
-    state=person_render_edit_state
+    state=permitted_media_state
     clip=state.montage.clips[0]
+    clip.asset_id=state.original_person_clip.asset_id
+    clip.source_path=state.original_person_clip.source_path
     clip.person_render_id=None
     source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
@@ -4902,11 +5046,14 @@ def test_extract_original_audio_rejects_silent_video_without_timeline_change(per
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
     before=state.client.get(base).json()
-    response=state.client.post(base+'/edits/preview',json={'raw_command':'提取原声',
+    response=state.client.request('POST',base+'/edits/preview',json={'raw_command':'提取原声',
         'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
-    assert response.status_code==422 and '没有可用音轨' in response.text
+    assert response.status_code==202
+    assert state.preview_runtime.run_once()
+    assert state.production.get_job_run(state.workspace_id,response.json()['job_id']).status=='failed'
     assert state.client.get(base).json()['montage']==before['montage']
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+
 
 
 @pytest.mark.parametrize('person,locked', [(True,False),(False,True)])
@@ -4925,15 +5072,22 @@ def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_e
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
 
-def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
+def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state, granted_media):
     import subprocess
-    state=person_render_edit_state
+    state=permitted_media_state
     clip=state.montage.clips[0]
+    clip.asset_id=state.original_person_clip.asset_id
+    clip.source_path=state.original_person_clip.source_path
     clip.person_render_id=None
     clip.role='b_roll'
     source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=blue:size=64x64:rate=30:duration=8',
         '-an','-c:v','libx264',str(source)],check=True)
+    asset=state.production.get_asset(state.workspace_id,clip.asset_id)
+    asset.duration_seconds=8
+    asset.size_bytes=source.stat().st_size
+    asset.modified_at=datetime.fromtimestamp(source.stat().st_mtime,timezone.utc)
+    state.production._save_asset(asset)
     narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
         'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
@@ -4965,7 +5119,8 @@ def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
     assert after['subtitle_tracks']==before['subtitle_tracks']==[]
     _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, state.task.id, "render")
     # Preserve this pre-existing real-media diagnostic, never restore the public fallback.
-    rendered=main_module._render_creation_task_montage_for_workspace(state.workspace_id,state.task.id)
+    with granted_media([source,narration],kind="creation_render") as context:
+        rendered=main_module._render_creation_task_montage_for_workspace(state.workspace_id,state.task.id,render_context=context)
     assert rendered.status=="rendered"
     media=state.client.get(base+'/output')
     assert media.status_code==200 and len(media.content)>1000
@@ -4986,6 +5141,7 @@ def test_silence_edit_real_preview_confirm_and_undo(person_render_edit_state):
     assert state.client.post(base+'/timeline/redo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['duration_seconds']==expected
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+
 
 
 @pytest.mark.parametrize('command,expected', [('这句字幕提前0.2秒', (.8,2.8)), ('当前字幕延后300毫秒', (1.3,3.3))])
@@ -5130,7 +5286,7 @@ def test_creation_task_explains_visual_retrieval_degradation(tmp_path,mode,notic
         return [] if mode=='invalid_count' else [[1.0,0.0] for _ in texts]
     provider=SimpleNamespace(ready=mode!='unavailable',model_id='test-local',embed_texts=embed)
     planner=MontagePlanner(semantic_provider=provider,visual_feature_loader=lambda *_:None if mode=='missing_index' else [1.0,0.0])
-    plan=planner.build_for_creation_task(workspace_id='workspace_a',task_id='diagnostic-task',script=script,
+    plan=planner.build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id='diagnostic-task',script=script,
         profile=ProductionProfile(workspace_id='workspace_a'),assets=[replace(asset,segments=[segment])],
         media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
     assert plan.clips[0].needs_confirmation is True
@@ -5149,14 +5305,14 @@ def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,r
     asset=_asset(tmp_path)
     asset=replace(asset,segments=[replace(asset.segments[0],end_seconds=20)])
     asset=ProductionRepository._asset_from_payload({**asdict(asset),"rights_confirmed":rights,"brand_safe":brand})
-    plan=MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+    plan=MontagePlanner().build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id=script.task_id,script=script,
         profile=ProductionProfile(workspace_id='workspace_a'),assets=[asset],
         media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
     assert plan.clips[0].asset_id==asset.id
     # Removing obsolete proof flags must not remove explicit exclusion or review.
     for excluded in [replace(asset,review_status='rejected'),replace(asset,usage_role='exclude',segments=[replace(asset.segments[0],usage_role='exclude')])]:
         with pytest.raises(ValueError,match='可用素材库'):
-            MontagePlanner().build_for_creation_task(workspace_id='workspace_a',task_id=script.task_id,script=script,
+            MontagePlanner().build_for_creation_task(duration_target_seconds=90, workspace_id='workspace_a',task_id=script.task_id,script=script,
                 profile=ProductionProfile(workspace_id='workspace_a'),assets=[excluded],
                 media_reference_for_asset=lambda _:'workspace://source.mp4',narration_audio_path='narration://artifact/test',narration_duration_seconds=4)
 
@@ -5193,11 +5349,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     target=before['montage']['clips'][1]
     original_fit,original_y=target['fit_mode'],target['crop_y']
     publishes=[]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(
-        publish=lambda *args,**kwargs:publishes.append(kwargs.get('kind')) or
-        SimpleNamespace(id='crop-preview',logical_ref='artifacts/crop-preview.mp4'),
-        validate_material_use=lambda *args:None))
-
+    runtime=_granted_domain_preview_adapter(state,monkeypatch,lambda inputs:publishes.append(inputs))
     # 明确单轴指令：画面预览不写时轴、不派生声音、不动另一轴和原 fit_mode
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 20%','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
@@ -5208,7 +5360,8 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert proposal['operation']['payload']['crop_y']==original_y
     assert proposal['operation']['payload']['fit_mode']==original_fit
     assert '水平 20%' in proposal['preview']['after']['detail']
-    assert publishes==[]
+    assert len(publishes)==2
+    assert [item["clip"]["crop_x"] for item in publishes]==[before["montage"]["clips"][1]["crop_x"],.2]
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
 
     confirmed=state.client.post(base+'/edits/'+proposal['id']+'/confirm')
@@ -5241,11 +5394,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert vague.status_code==422,vague.text
     assert '缺少可执行参数' in vague.json()['detail']
 
-    # 改画幅仍走 ChangeCanvas 既有链路，不被编成裁剪。画幅预览直调 publish_color_preview（不经过
-    # _task_audio），必须单独替换，否则这里会真调 ffmpeg。夹具本身就是 9:16，先切到 16:9，
-    # 「改成竖版」才是真的改画幅而不是撞上「画幅与适配方式没有变化」的 409。
-    monkeypatch.setattr(main_module,'publish_color_preview',lambda *args,**kwargs:SimpleNamespace(
-        id='canvas-preview',logical_ref='artifacts/canvas-preview.mp4'))
+    # 改画幅沿当前持久 Job/grant 回读，不被编成单轴裁剪。
     wide=state.client.post(base+'/edits/preview',json={'raw_command':'改成横版','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
     assert wide.status_code==200,wide.text
@@ -5263,6 +5412,9 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
 
+    assert len(publishes)==8
+    publishes.clear()
+
     # 时间线在预览后变化：旧提案确认被拒
     stale=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 40%','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
@@ -5277,11 +5429,13 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     # 锁定镜头仍要求先解锁
     assert state.client.post(base+'/edits/exact',json={'operation_type':'SetClipLock',
         'clip_id':target['id'],'locked':True}).status_code==200
+    publishes.clear()
     locked=state.client.post(base+'/edits/preview',json={'raw_command':'水平裁剪到 30%','context_stage':'montage',
         'selected_object_refs':[f"clip:{target['id']}"]})
     assert locked.status_code==409,locked.text
     assert '请先解锁' in locked.json()['detail']
     assert publishes==[]
+    assert runtime.stop(1)
 
 
 def test_v3_exact_draft_persists_and_restores_only_registered_output(person_render_edit_state, monkeypatch, tmp_path):
@@ -5410,7 +5564,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert not main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=unsealed,
     )
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
     jobs_before = state.production.list_job_runs(state.workspace_id, state.task.id)
     changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"1:1"})
     assert changed.status_code == 200, changed.text
@@ -5440,7 +5594,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
 def test_v3_natural_proposal_applies_once_without_media(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
-    monkeypatch.setattr(main_module, "publish_color_preview", lambda *a, **kw: pytest.fail("draft proposal must not encode media"))
+    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("draft proposal must not encode media"))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     proposal = state.client.post(base + "/edits/preview?draft=true", json={
         "raw_command":"露脸占比调到0%", "context_stage":"montage", "selected_object_refs":[]})
@@ -5654,3 +5808,23 @@ def test_failed_person_edit_requires_new_preview_and_reuses_concurrent_active_re
     assert len(_person_edit_versions(state)) == 2
     assert len(state.provider.output_cache_keys) == 1
     assert not state.runtime.run_once()
+
+
+def test_tag_and_observation_relevance_precedes_semantic_similarity_and_repeat_preference(tmp_path):
+    from app.visual_understanding import SegmentUnderstanding
+    asset = _asset(tmp_path)
+    cue = NarrationCue(id="cue", source_section_id="section", text="人物走路", duration_seconds=2)
+    irrelevant = replace(asset.segments[0], description="电脑键盘特写", user_tags=[], system_tags=[], usage_count=0)
+    tagged = replace(irrelevant, description="街道画面", user_tags=["人物走路"], usage_count=100)
+    observed = replace(irrelevant, description="", understanding=SegmentUnderstanding("ready", summary="街道",
+        facts=[{"kind": "action", "label": "人物走路", "text": "人物走路穿过街道", "sample_times": [.3, 1.7]}]))
+    unrelated = _score_candidate(cue, asset, irrelevant, 0, 0, visual_score=1.0, visual_only=True)
+    by_tag = _score_candidate(cue, asset, tagged, 10, 10, visual_score=0.0, visual_only=True)
+    by_observation = _score_candidate(cue, asset, observed, 0, 0, visual_score=0.0, visual_only=True)
+    assert by_tag[0] > unrelated[0]
+    assert by_observation[0] > unrelated[0]
+    assert "标签依据：人物走路" in by_tag[-1]
+    assert any("主体、动作或场景命中" in reason for reason in by_observation[-1])
+    # A manual correction continues to shadow contradictory model observations.
+    corrected = replace(observed, description="这是电脑键盘特写", system_tags=[])
+    assert _score_candidate(cue, asset, corrected, 0, 0, visual_only=True)[0] < by_observation[0]

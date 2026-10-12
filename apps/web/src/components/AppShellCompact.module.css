@@ -1,0 +1,19 @@
+.creatorControls { display:flex;align-items:center;justify-content:space-between;gap:4px;min-width:0;margin-top:auto;padding:10px 4px 14px; }
+.creatorControls[hidden] { display:none; }
+.avatarGroup { display:flex;align-items:center;flex:0 0 auto;min-height:28px;padding:2px 0;color:var(--text-2);text-decoration:none;border-radius:14px; }
+.avatar, .avatarCount { display:grid;place-items:center;flex:0 0 24px;width:24px;height:24px;box-sizing:border-box;border:2px solid var(--sidebar-bg);border-radius:50%;background:var(--surface-1);font-size:12px;line-height:20px; }
+.avatar + .avatar, .avatarCount { margin-left:-6px; }
+.avatarCount { background:var(--surface-2); }
+.quickControls { display:flex;align-items:center;flex:0 0 auto;gap:4px; }
+.quickButton { display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--text-2);cursor:pointer;text-decoration:none; }
+.memberStatus { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-3);font-size:12px;line-height:20px;text-decoration:none; }
+.avatarGroup:hover, .quickButton:hover, .memberStatus:hover { color:var(--text-1);background:var(--surface-2); }
+.avatarGroup:focus-visible, .quickButton:focus-visible, .memberStatus:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+.task { min-height:44px!important;height:44px;padding-top:4px!important;padding-bottom:4px!important;align-items:center; }
+.task > :global(.desktop-creation-task__copy) { display:block;min-width:0; }
+.task strong { display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;line-height:20px; }
+.stageIcon { flex:0 0 16px;color:var(--text-2); }
+.task small.taskState { display:flex;align-items:center;gap:4px;margin-top:0;color:var(--text-2);font-size:12px;line-height:16px;white-space:nowrap; }
+.taskState[data-status="failed"] { color:var(--danger)!important; }
+.taskState[data-status="running"] { color:var(--focus-text)!important; }
+.taskState svg { flex:0 0 12px; }

@@ -14,6 +14,7 @@ let search = "";
 const apiMocks = vi.hoisted(() => ({
   getHomeDashboard: vi.fn(),
   getMaterialLibraryInsights: vi.fn(),
+  getProductionMaterials: vi.fn().mockResolvedValue({ assets: [], total_count: 0, has_more: false, limit: 6, offset: 0 }),
   getProductionFoundation: vi.fn(),
   listCreationTasks: vi.fn(),
   getCurrentAssistantConversation: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("@/lib/api", () => ({
   apiUrl: (path: string) => path,
   getHomeDashboard: apiMocks.getHomeDashboard,
   getMaterialLibraryInsights: apiMocks.getMaterialLibraryInsights,
+  getProductionMaterials: apiMocks.getProductionMaterials,
   getProductionFoundation: apiMocks.getProductionFoundation,
   getCurrentAssistantConversation: apiMocks.getCurrentAssistantConversation,
   listAssistantConversations: apiMocks.listAssistantConversations,
@@ -144,9 +146,10 @@ describe("HomePage workspace overview", () => {
 
     // Real AppShell provides the assistant region; real composer is inside it.
     const assistant = await screen.findByRole("region", { name: "创作助手" });
-    expect(within(assistant).getByRole("textbox", { name: "制作要求" })).toHaveAttribute("placeholder", "写下下一条要求；Enter 发送，Shift+Enter 换行");
+    expect(within(assistant).getByRole("textbox", { name: "制作要求" })).toHaveAttribute("placeholder", "想做什么，或想怎么改？");
 
     // 概览读服务端聚合：七项都是真实数值，不是占位横线。
+    fireEvent.click(await screen.findByRole("button", { name: "查看内容统计范围" }));
     const metrics = await screen.findByRole("region", { name: "工作空间七项概览" });
     for (const label of ["可见素材", "分析可用", "待分析", "知识来源", "声音", "任务", "作品"]) {
       expect(within(metrics).getByText(label)).toBeInTheDocument();
@@ -167,8 +170,9 @@ describe("HomePage workspace overview", () => {
     await waitFor(() => expect(document.activeElement).toBe(input));
 
     // 首页队列按真实 task_id 进入既有任务路由，不用依赖另一份任务列表。
-    const queue = (await screen.findByRole("heading", { name: "我的任务" })).closest("section") as HTMLElement;
+    const queue = (await screen.findByRole("heading", { name: "创作任务" })).closest("section") as HTMLElement;
     fireEvent.click(within(queue).getByRole("button", { name: /waiting_for_user 任务/ }));
-    expect(routerPush).toHaveBeenCalledWith("/tasks/task-waiting_for_user");
+    const detail = await screen.findByRole("dialog", { name: /waiting_for_user 任务/ });
+    expect(detail.querySelector('a[href="/tasks/task-waiting_for_user"]')).toBeInTheDocument();
   });
 });

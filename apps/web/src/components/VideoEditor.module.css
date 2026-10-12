@@ -12,15 +12,15 @@
 .primary:hover:not(:disabled) { filter: brightness(.96); }
 .button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.stageRail { flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; container-type: inline-size; }
+.stageRail { min-width: 0; max-width: 100%; flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; container-type: inline-size; }
 .stageRail li { flex: 0 0 auto; }
-.stageRail ol { overflow-x: auto; display: flex; justify-content: space-between; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.stageRail button { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
-.stageRail button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.stageRail .stageList { overflow-x: auto; display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.stageRail button { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
+.stageRail button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
 .stageRail button:disabled { color: var(--text-3); cursor: default; }
-.stageRail button > span:first-child:empty { display: none; }
+
 @container (max-width: 680px) {
-  .stageRail ol { gap: 2px; }
+  .stageRail .stageList { gap: 2px; }
   .stageRail button { gap: 4px; padding-inline: 6px; }
 }
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 20px; overflow: auto; }
@@ -74,7 +74,7 @@
 .waveformClip svg { display: block; width: 100%; height: 24px; }
 .waveformClip path { stroke: currentColor; stroke-width: 1; fill: none; }
 .inspector { font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
-.inspectorImage { width: 100%; height: 150px; display: block; object-fit: cover; border-radius: 7px; background: var(--surface-2); }
+.inspectorImage { width: 100%; min-width: 0; border-radius: 7px; background: var(--surface-2); }
 .inspectorTabs { display: flex; border-bottom: 1px solid var(--border-1); margin: 12px 0 16px; }
 .inspectorTabs button { flex: 1; height: 36px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--font-size-body); cursor: pointer; }
 .inspectorTabs button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
@@ -88,7 +88,7 @@
 .propertySection > button { justify-self: start; }
 .twoFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .twoFields label, .field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; }
-.twoFields input, .twoFields output, .field select { width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: var(--font-size-body); font-weight: 400; line-height: 1.4; }
+.twoFields input, .twoFields output, .field [data-app-select-trigger] { width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: var(--font-size-body); font-weight: 400; line-height: 1.4; }
 .twoFields output { background: var(--surface-2); }
 .cropFields { display: grid; gap: 8px; }
 .cropFields label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px; font-size: 12px; color: var(--text-2); }
@@ -115,10 +115,10 @@
 .commandInput { flex: 1; min-width: 0; }
 .commandInput textarea { width: 100%; min-width: 0; min-height:64px;resize:none;padding:0; border: 0; outline: 0; background: transparent; color: var(--text-1); font: 400 var(--font-size-body)/var(--line-body) var(--font-ui); }
 .commandInput textarea:focus-visible { box-shadow: inset 0 -1px var(--accent); }
-.previewDiff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.previewDiff section { display: grid; align-content: start; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); }
+.previewDiff { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.previewDiff section { display: grid; min-width: 0; align-content: start; gap: 6px; padding: 10px; border-radius: 6px; background: var(--surface-2); }
 .previewDiff small { color: var(--text-3); font-size: 12px; }
-.previewDiff strong { font-weight: 500; font-size: 13px; }
+.previewDiff strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; font-size: 13px; }
 .previewDiff span { font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
 .previewEffects { display: grid; gap: 6px; padding: 10px 0; font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
 .previewEffects strong { margin-right: 8px; font-weight: 500; }
@@ -132,7 +132,7 @@
 .audioToolbar label { display: flex; align-items: center; gap: 6px; }
 .audioToolbar input[type=number] { width: 70px; }
 .audioToolbar input[type=range] { width: 80px; }
-.audioToolbar select, .audioToolbar input[type=number] { min-height: 30px; padding: 3px 6px; border: 1px solid var(--border-2); border-radius: 5px; background: var(--surface-1); color: var(--text-1); font: inherit; }
+.audioToolbar [data-app-select-trigger], .audioToolbar input[type=number] { min-height: 30px; padding: 3px 6px; border: 1px solid var(--border-2); border-radius: 5px; background: var(--surface-1); color: var(--text-1); font: inherit; }
 .audioScroll { overflow-x: auto; max-height: 230px; overflow-y: auto; }
 .audioTrack { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 8px; min-height: 48px; margin-bottom: 4px; }
 .audioTrackLabel { display: flex; align-items: center; gap: 4px; position: sticky; left: 0; z-index: 1; background: var(--surface-1); }
@@ -146,7 +146,7 @@
 .audioTimeline audio, .previewDiff audio { width: 100%; min-width: 0; height: 32px; }
 .audioPlayhead { position: absolute; inset-block: 0; width: 1px; background: var(--text-1); pointer-events: none; }
 
-.effectPreview { width: 100%; max-height: 220px; display: block; background: #000; border-radius: var(--radius-sm); }
+.effectPreview { width: auto; max-width: 100%; height: auto; max-height: min(220px, 35dvh); object-fit: contain; display: block; margin-inline: auto; background: #000; border-radius: var(--radius-sm); }
 
 .textChanges { margin-top: 12px; font-size: 13px; }
 .textChanges summary { cursor: pointer; font-weight: 500; }
@@ -171,9 +171,9 @@
 .composerPreview {min-height:32px;padding:0 5px;border:0;background:transparent;color:var(--text-2);font:inherit;font-size:12px;cursor:pointer;}
 .composerPreview:disabled {opacity:.4;cursor:default;}
 .chatCommand :global(.assistant-meta) {order:4;font-size:12px;color:var(--text-3);}
-.dialogPreview { display: grid; gap: 14px; }
-.dialogPreview header { display: flex; justify-content: space-between; gap: 12px; }
-.dialogPreview header strong { font-size: var(--font-size-body); font-weight: 500; }
+.dialogPreview { display: grid; min-width: 0; gap: 14px; }
+.dialogPreview header { display: flex; min-width: 0; justify-content: space-between; gap: 12px; }
+.dialogPreview header strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-size-body); font-weight: 500; }
 .dialogPreview header span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) { .chatEntry { transition: none; } }

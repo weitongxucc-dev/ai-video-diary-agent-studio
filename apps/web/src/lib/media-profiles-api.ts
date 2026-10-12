@@ -46,6 +46,7 @@ export type MediaPreview = {
   person_profile_id: string | null; person_version: string | null;
   voice_profile_id: string | null; voice_version: string | null;
   authorization_id: string | null; authorization_version: string | null;
+  preview_text?: string | null;
   output_url: string | null; reason: string | null; impact: string | null;
   repair_action: string | null; started_at: string; finished_at: string | null;
 };
@@ -93,9 +94,16 @@ export const importVoiceReference = (file: File) => {
 export const listPronunciationEntries = () => request<{ items: PronunciationEntry[]; total_count: number }>("/api/media/pronunciation-entries");
 export const savePronunciationEntry = (input: PronunciationInput) => request<PronunciationEntry>("/api/media/pronunciation-entries", { method: "POST", body: JSON.stringify(input) });
 export const listAuthorizations = () => request<{ items: MediaAuthorization[]; total_count: number }>("/api/media/authorizations");
-export const getMediaCapability = (name: "voice-clone" | "avatar-lipsync") => request<MediaCapability>(`/api/media/capabilities/${name}`);
-export type ReferenceMaterial = { id: string; file_name: string; media_type: "video" | "audio" | "image"; duration_seconds: number | null; workspace_reference: string | null; use_state: string; segments: Array<{ id: string; start_seconds: number; end_seconds: number }> };
+export const getMediaCapability = async (name: "voice-clone" | "avatar-lipsync"): Promise<MediaCapability> => {
+  try { return await request<MediaCapability>(`/api/media/capabilities/${name}`); }
+  catch (error) {
+    if (!(error instanceof MediaProfilesApiError) || error.status !== 501 || error.code !== "capability_unavailable") throw error;
+    return { capability_id: name === "voice-clone" ? "voice_clone" : "avatar_lipsync", available: false, model_id: null, message: error.message, impact: error.impact, repair_action: error.repairAction };
+  }
+};
+export type ReferenceMaterial = { path?: string; id: string; file_name: string; media_type: "video" | "audio" | "image"; duration_seconds: number | null; workspace_reference: string | null; use_state: string; segments: Array<{ id: string; start_seconds: number; end_seconds: number }> };
 export const listReferenceMaterials = (offset = 0) => request<{ assets: ReferenceMaterial[]; total_count: number }>(`/api/production/materials?limit=100&offset=${offset}`);
+export const scanReferenceMaterials = () => request<{ assets: ReferenceMaterial[]; total_count: number }>("/api/production/materials/intake/scan", { method: "POST" });
 export const getReferenceMaterial = (assetId: string) => request<ReferenceMaterial>(`/api/production/materials/${encodeURIComponent(assetId)}`);
 export const getPersonProfile = (id: string, version: string) => request<PersonProfile>(`/api/media/person-profiles/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`);
 export const getVoiceProfile = (id: string, version: string) => request<VoiceProfile>(`/api/media/voice-profiles/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`);

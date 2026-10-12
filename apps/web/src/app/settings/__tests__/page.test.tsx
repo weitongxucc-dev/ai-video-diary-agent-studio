@@ -224,3 +224,52 @@ it("routes SQLite, executable and model paths to file pickers while retaining di
     expect(asr.container.querySelector(`[data-target="${name}"]`)).toHaveAttribute("data-picker-kind", "file");
   }
 });
+
+it("keeps first-use sending and credential explanations while folding repeated status diagnostics", async () => {
+  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("已填写，未验证"));
+  await renderSettings();
+  expect(screen.getByText(/仅发送相关文字，不发送原视频/)).toBeVisible();
+  expect(screen.getByText("仅保存在这台电脑，不会显示完整内容。")).toBeVisible();
+  const detail = screen.getByTestId("llm-service-detail");
+  expect(detail).not.toBeVisible();
+  expect(detail.closest("details")).not.toHaveAttribute("open");
+});
+it("folds optional model installation diagnostics without changing actual file values", async () => {
+  const runtime = runtimeWithServiceState("已填写，未验证");
+  runtime.settings.push({ name: "DATABASE_PATH", value: "/fixture/current.sqlite3", secret: false, configured: true });
+  api.getRuntimeSettings.mockResolvedValue(runtime);
+  render(await SettingsPage({ searchParams: Promise.resolve({ section: "paths" }) }));
+  expect(screen.getByLabelText("数据库文件")).toHaveValue("/fixture/current.sqlite3");
+  expect(screen.getByText(/保存只更改使用位置，不会搬迁现有数据/)).toBeVisible();
+  expect(screen.getByText("本地模型安装与诊断").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByRole("button", { name: "保存配置" })).toBeEnabled();
+});
+
+it("keeps failed settings reads distinct from missing programs or databases", async () => {
+  api.getRuntimeSettings.mockRejectedValue(new Error("fixture offline"));
+  await renderSettings();
+  expect(screen.getByRole("alert")).toHaveTextContent("暂时无法连接本地服务");
+  expect(screen.getByRole("button", { name: "保存连接" })).toBeDisabled();
+  const status = screen.getByRole("complementary", { name: "设置状态" });
+  expect(within(status).queryByText("未创建")).toBeNull();
+  expect(within(status).queryByText("未找到程序")).toBeNull();
+  expect(within(status).getAllByText("暂时无法读取配置")).toHaveLength(3);
+});
+
+it("shows six primary settings groups and puts public legal links in About",async()=>{
+ api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);
+ render(await SettingsPage({searchParams:Promise.resolve({section:"about"})}));
+ const nav=screen.getByRole("navigation",{name:"设置分类"});
+ expect(within(nav).getAllByRole("link")).toHaveLength(6);
+ for(const label of ["我的","外观","创作","文件与资料","运行","关于"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
+ expect(screen.getByRole("link",{name:"隐私政策"})).toHaveAttribute("href","/privacy");expect(screen.getByRole("link",{name:"使用条款"})).toHaveAttribute("href","/terms");expect(screen.getByRole("button",{name:"打开使用帮助"})).toBeInTheDocument();
+});
+
+
+it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep link %s in its four-item subgroup",async section=>{
+ api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);
+ render(await SettingsPage({searchParams:Promise.resolve({section})}));
+ expect(screen.getByRole("link",{name:"创作"})).toHaveAttribute("aria-current","page");
+ const nav=screen.getByRole("navigation",{name:"设置项目"});expect(within(nav).getAllByRole("link")).toHaveLength(4);
+ expect(within(nav).getByRole("link",{name:{model:"对话服务",production:"制作习惯",voices:"声音库",asr:"听写设置"}[section]!})).toHaveAttribute("href",`/settings?section=${section}`);
+});

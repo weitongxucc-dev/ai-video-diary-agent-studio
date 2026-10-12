@@ -40,6 +40,8 @@
 .scriptList.list .cover > * { min-width:0; }
 .cover { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 190px; padding: 7px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
 .cover:hover, .cover:focus-visible { border-color: var(--accent); outline: 0; }
+.cover[aria-pressed="true"] { border-color: var(--selection-line); background: var(--hover); }
+.cover:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .coverArt { display: flex; min-height: 100px; flex-direction: column; align-items: flex-start; justify-content: space-between; padding: 10px; border-radius: 5px; background: var(--surface-2); color: var(--accent); }
 .coverArt small { color: var(--text-2); font-size:12px; }
 .cover strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -57,7 +59,12 @@
 .compare { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
 .compare section, .detailSection { min-width: 0; padding: 11px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); }
 .inspector h3 { margin: 0 0 7px; font-size: 13px; font-weight: 500; }
-.inspector p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.inspector p { margin: 0; color: var(--text-2); font-size: 13px; line-height: 21px; white-space: pre-wrap; }
+.editForm { display:grid; gap:14px; }
+.editForm label { display:grid; gap:6px; }
+.editForm input, .editForm textarea { box-sizing:border-box; width:100%; min-width:0; padding:9px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); font:inherit; }
+.editForm textarea { min-height:200px; resize:vertical; line-height:1.65; }
+.editForm p { margin:0; color:var(--text-2); font-size:12px; line-height:1.6; }
 .detailSection dl { display: grid; gap: 7px; margin: 10px 0 0; }
 .detailSection dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 9px; font-size: 12px; }
 .detailSection dt { color: var(--text-2); }
@@ -96,7 +103,7 @@
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
 
 .grantTarget { display: grid; gap: 6px; margin-bottom: 8px; }
-.grantTarget select { max-width: 100%; padding: 6px 8px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: inherit; }
+.grantTarget [data-app-select-trigger] { max-width: 100%; padding: 6px 8px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--surface-1); color: inherit; }
 .grantList { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .grantList li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
@@ -106,3 +113,13 @@
 .inspector pre { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
 .inspector table { display:block; max-width:100%; overflow:auto; font-size:12px; }
 .inspector :is(small,.notWired) { font-size:12px; }
+
+.searchBar { margin:0 0 12px; gap:8px; }
+.searchBar label { min-height:32px; }
+.searchBar input { height:30px; }
+.searchBar button, .searchBar [data-app-select-trigger], .addContent { height:32px; min-height:32px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-1); color:var(--text-1); font:inherit; font-size:13px; }
+.searchBar [data-app-select-trigger] { max-width:140px; padding:0 8px; }
+.addContent { display:inline-flex; align-items:center; gap:6px; padding:0 10px; text-decoration:none; white-space:nowrap; }
+.card { padding:0; border:0; border-radius:0; background:transparent; }
+.cardHeading { padding:0 0 8px; }
+.compare section, .detailSection { padding:0 0 12px; border:0; border-bottom:1px solid var(--border-1); border-radius:0; background:transparent; }

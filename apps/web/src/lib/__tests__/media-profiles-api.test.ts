@@ -37,7 +37,7 @@ describe("media profiles API client", () => {
     expect(mediaProfilesErrorMessage(new MediaProfilesApiError(501, "人物口型能力尚未配置。", "capability_unavailable"))).toBe("人物口型能力尚未配置。");
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { error: "capability_unavailable", detail: "声音复制运行环境未配置。" } }), { status: 501 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(getMediaCapability("voice-clone")).rejects.toBeInstanceOf(MediaProfilesApiError);
+    await expect(getMediaCapability("voice-clone")).resolves.toMatchObject({available:false,model_id:null,message:"声音复制运行环境未配置。"});
   });
 
   it("sends the VoicePreviewRequest body exactly", async () => {

@@ -10,7 +10,7 @@ import re
 import sqlite3
 import subprocess
 import wave
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -32,6 +32,7 @@ from app.avatar_lipsync import (
 )
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
+    LOCAL_ADOPTION_RECEIPTS_DDL,
     apply_production_migrations,
     ensure_content_visibility_columns,
 )
@@ -1211,6 +1212,7 @@ EditOperationType = Literal[
         "DuplicateClip",
     "InsertClip",
     "ReorderClip",
+    "ReorderTimelineItems",
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
@@ -1246,6 +1248,7 @@ SUPPORTED_EDIT_OPERATION_TYPES = {
         "DuplicateClip",
     "InsertClip",
     "ReorderClip",
+    "ReorderTimelineItems",
     "SetClipLock",
     "ConfirmClip",
     "UndoTimelineVersion",
@@ -1280,6 +1283,14 @@ class EditOperation:
     applied_at: datetime | None = None
 
 
+class MaterialVersionConflict(ValueError):
+    """A frozen material revision changed before the atomic mutation."""
+
+
+class CreationRequestConflict(ValueError):
+    """A request/window identity or revision no longer matches its frozen input."""
+
+
 class ProductionRepository:
     """Workspace-scoped persistence for the CreationTask production foundation.
 
@@ -1307,6 +1318,109 @@ class ProductionRepository:
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
+
+    @classmethod
+    def plan_local_adoption(
+        cls, database_path: str | Path, video_library_path: str | Path, *,
+        member_id: str, operation_id: str, asset_ids: list[str],
+        voice_id: str, voice_version: str, new_voice_version: str,
+        authorization_basis: str,
+    ) -> dict:
+        """Explicit read-only maintenance plan, with no startup provisioning."""
+        repository = _local_adoption_repository(cls, database_path, video_library_path)
+        with closing(sqlite3.connect(repository.database_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")
+            manifest, _ = _local_adoption_plan(repository, conn,
+                member_id=member_id, operation_id=operation_id, asset_ids=asset_ids,
+                voice_id=voice_id, voice_version=voice_version,
+                new_voice_version=new_voice_version, authorization_basis=authorization_basis)
+            return manifest
+
+    @classmethod
+    def apply_local_adoption(
+        cls, database_path: str | Path, video_library_path: str | Path, *,
+        member_id: str, manifest: dict, manifest_sha256: str,
+    ) -> dict:
+        """CAS all selected inputs; receipt and content commit as one transaction."""
+        if _local_adoption_digest(manifest) != manifest_sha256:
+            raise ValueError("local_adoption_manifest_digest_mismatch")
+        if manifest.get("workspace_id") != "local" or manifest.get("member_id") != member_id:
+            raise ValueError("local_adoption_target_mismatch")
+        repository = _local_adoption_repository(cls, database_path, video_library_path)
+        with closing(sqlite3.connect(repository.database_path.resolve().as_uri() + "?mode=rw", uri=True)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            _local_adoption_target(repository, conn, member_id)
+            if manifest.get("database_identity") != _local_adoption_database_identity(repository):
+                raise ValueError("local_adoption_database_changed")
+            if manifest.get("media_root") != str(repository.video_library_path.resolve()):
+                raise ValueError("local_adoption_root_changed")
+            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_adoption_receipts'").fetchone()
+            if exists:
+                receipt = conn.execute("SELECT manifest_sha256, result_json FROM local_adoption_receipts WHERE operation_id=?",
+                                       (manifest["operation_id"],)).fetchone()
+                if receipt is not None:
+                    if receipt["manifest_sha256"] != manifest_sha256:
+                        raise ValueError("local_adoption_operation_conflict")
+                    return json.loads(receipt["result_json"])
+            current, originals = _local_adoption_plan(repository, conn,
+                member_id=member_id, operation_id=manifest["operation_id"],
+                asset_ids=[item["id"] for item in manifest["assets"]],
+                voice_id=manifest["voice"]["id"], voice_version=manifest["voice"]["version"],
+                new_voice_version=manifest["voice"]["new_version"],
+                authorization_basis=manifest["authorization_basis"])
+            if current != manifest:
+                raise ValueError("local_adoption_inputs_changed")
+            now = utc_now().isoformat()
+            conn.execute(LOCAL_ADOPTION_RECEIPTS_DDL)
+            after = []
+            for row in originals["assets"]:
+                payload = json.loads(row["payload"])
+                payload.update(owner_user_id=member_id, visibility="private")
+                serialized = json.dumps(payload, ensure_ascii=False)
+                conn.execute("UPDATE material_assets SET payload=?, visibility='private' WHERE id=? AND workspace_id='local'",
+                             (serialized, row["id"]))
+                after.append({**row, "payload": serialized, "visibility": "private"})
+            for reference in current["references"]:
+                if reference["before_sha256"] is None:
+                    conn.execute("INSERT INTO workspace_media_references(reference,workspace_id,updated_at) VALUES (?,'local',?)",
+                                 (reference["reference"], now))
+            source = current["voice"]["source"]
+            # The new source is generated from the verified WAV facts, never an external body.
+            source_asset = MaterialAsset(id=source["id"], workspace_id="local",
+                file_name=Path(originals["voice_path"]).name, path=originals["voice_path"],
+                size_bytes=source["file_revision"]["size_bytes"],
+                modified_at=datetime.fromtimestamp(source["file_revision"]["mtime_ns"] / 1e9),
+                media_type="audio", duration_seconds=source["duration_seconds"],
+                owner_user_id=member_id, visibility="private", created_at=utc_now(), updated_at=utc_now())
+            source_payload = _json_payload(source_asset)
+            conn.execute("INSERT INTO material_assets(id,workspace_id,file_path,payload,visibility,updated_at) VALUES (?,'local',?,?,'private',?)",
+                         (source_asset.id, source_asset.path, source_payload, now))
+            after.append({"id": source_asset.id, "workspace_id": "local", "file_path": source_asset.path,
+                          "payload": source_payload, "visibility": "private", "updated_at": now})
+            # Preserve every historical field; v1 stays byte-for-byte in its original row.
+            voice_payload = json.loads(originals["voice"]["payload"])
+            voice_payload.update(version=current["voice"]["new_version"], owner_user_id=member_id,
+                                 visibility="private", reference=asdict(ProfileReference(asset_id=source_asset.id)))
+            serialized_voice = json.dumps(voice_payload, ensure_ascii=False)
+            conn.execute("INSERT INTO versioned_voice_profiles(workspace_id,id,version,payload,created_at) VALUES ('local',?,?,?,?)",
+                         (current["voice"]["id"], current["voice"]["new_version"], serialized_voice, now))
+            # Files are outside SQLite. Recheck after all writes, immediately before the commit.
+            for item in [*current["assets"], source]:
+                path = repository.resolve_workspace_media_reference("local", item["reference"])
+                if _local_adoption_file_revision(path) != item["file_revision"]:
+                    raise ValueError("local_adoption_file_changed")
+            result = {"operation_id": current["operation_id"], "workspace_id": "local", "member_id": member_id,
+                      "manifest_sha256": manifest_sha256, "asset_ids": [item["id"] for item in current["assets"]],
+                      "voice_id": current["voice"]["id"], "voice_version": current["voice"]["new_version"],
+                      "voice_source_asset_id": source_asset.id, "applied_at": now}
+            private_snapshot = {"before": originals, "after_assets": after,
+                                "after_voice_payload": serialized_voice, "approved_manifest": current}
+            conn.execute("INSERT INTO local_adoption_receipts VALUES (?,'local',?,?,?,?,?)",
+                         (current["operation_id"], member_id, manifest_sha256,
+                          json.dumps(private_snapshot, ensure_ascii=False), json.dumps(result, ensure_ascii=False), now))
+            return result
 
     def resolve_workspace_media_reference(
         self,
@@ -2959,12 +3073,12 @@ class ProductionRepository:
                 return False
             try:
                 job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
-                transform = self.get_transform_run(
-                    artifact.workspace_id,
-                    source.producer_job_id.replace("job_", "transform_", 1),
-                )
+                transform = next((item for item in self.list_transform_runs(artifact.workspace_id, artifact.task_id)
+                    if item.job_id == source.producer_job_id and item.output_refs == [source.logical_ref]), None)
             except KeyError:
                 return False
+        if transform is None:
+            return False
         if (job.task_id != artifact.task_id or job.status != "succeeded"
                 or transform.task_id != artifact.task_id or transform.status != "succeeded"
                 or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
@@ -4633,13 +4747,15 @@ class ProductionRepository:
         asset.analysis_message = "已请求重试，将按已确认的文件修订重新分析。"
         self._save_asset(asset)
 
-    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str]) -> MaterialAsset:
+    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str], *, expected_asset_updated_at: datetime | None = None) -> MaterialAsset:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
             if row is None:
                 raise KeyError(asset_id)
             asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
+                raise MaterialVersionConflict("素材版本已变化，未提交标签修改；请重新查看后发送。")
             asset.user_tags = _normalized_labels(user_tags)
             asset.updated_at = utc_now()
             conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id))
@@ -5008,6 +5124,8 @@ class ProductionRepository:
         workspace_id: str,
         *,
         query: str = "",
+        asset_ids: list[str] | None = None,
+        eligible_segment_refs: set[tuple[str, str]] | None = None,
         usage_roles: list[AssetUsageRole] | None = None,
         tags: list[str] | None = None,
         min_duration_seconds: float | None = None,
@@ -5047,15 +5165,20 @@ class ProductionRepository:
             min_duration_seconds is not None or max_duration_seconds is not None
         )
         matches: list[MaterialSegmentMatch] = []
+        selected_assets = set(asset_ids) if asset_ids is not None else None
         for asset in self.list_assets(
             workspace_id,
             include_private=viewer_user_id is not None or local_diagnostic,
             viewer_user_id=viewer_user_id,
             local_diagnostic=local_diagnostic,
         ):
+            if selected_assets is not None and asset.id not in selected_assets:
+                continue
             if asset.analysis_status != "ready" or asset.review_status == "rejected" or not material_allows_footage(asset):
                 continue
             for segment in asset.segments:
+                if eligible_segment_refs is not None and (asset.id, segment.id) not in eligible_segment_refs:
+                    continue
                 if segment.review_status == "rejected":
                     continue
                 duration = max(0.0, segment.end_seconds - segment.start_seconds)
@@ -5435,40 +5558,52 @@ class ProductionRepository:
         usage_role: AssetUsageRole | None = None,
         user_tags: list[str] | None = None,
         collection_ids: list[str] | None = None,
+        expected_asset_updated_at: datetime | None = None,
+        expected_segment_updated_at: datetime | None = None,
     ) -> MaterialAsset:
-        asset = self.get_asset(workspace_id, asset_id)
-        segment = next((item for item in asset.segments if item.id == segment_id), None)
-        if segment is None:
-            raise KeyError(segment_id)
-        if review_status == "approved" and asset.review_status != "approved":
-            raise ValueError("素材文件尚未进入可用库")
-        segment.description = description.strip()
-        segment.transcript = transcript.strip()
-        if usage_role is not None:
-            previous_usage_role = segment.usage_role
-            segment.usage_role = usage_role
-            if usage_role == "exclude":
-                review_status = "rejected"
-            if usage_role != previous_usage_role:
-                segment.system_tags = [
-                    tag for tag in segment.system_tags if not tag.startswith("用途:")
-                ]
-                if usage_role != "unassigned":
-                    segment.system_tags.append(f"用途:{usage_role}")
-        if user_tags is not None:
-            segment.user_tags = _normalized_labels(user_tags)
-        if collection_ids is not None:
-            known_collections = {
-                item.id for item in self.list_collections(workspace_id)
-            }
-            if not set(collection_ids) <= known_collections:
-                raise ValueError("标签夹不存在或不属于当前工作区")
-            segment.collection_ids = list(dict.fromkeys(collection_ids))
-        segment.review_status = review_status
-        # Editing member text does not replace recognition facts. Analysis owns
-        # system_tags and still refreshes them through its existing save path.
-        segment.updated_at = utc_now()
-        return self._save_asset(asset)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+            if row is None:
+                raise KeyError(asset_id)
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
+                raise MaterialVersionConflict("素材版本已变化，未提交片段修改；请重新查看后发送。")
+            segment = next((item for item in asset.segments if item.id == segment_id), None)
+            if segment is None:
+                raise KeyError(segment_id)
+            if expected_segment_updated_at is not None and segment.updated_at != expected_segment_updated_at:
+                raise MaterialVersionConflict("片段版本已变化，未提交修改；请重新查看后发送。")
+            if review_status == "approved" and asset.review_status != "approved":
+                raise ValueError("素材文件尚未进入可用库")
+            segment.description = description.strip()
+            segment.transcript = transcript.strip()
+            if usage_role is not None:
+                previous_usage_role = segment.usage_role
+                segment.usage_role = usage_role
+                if usage_role == "exclude":
+                    review_status = "rejected"
+                if usage_role != previous_usage_role:
+                    segment.system_tags = [
+                        tag for tag in segment.system_tags if not tag.startswith("用途:")
+                    ]
+                    if usage_role != "unassigned":
+                        segment.system_tags.append(f"用途:{usage_role}")
+            if user_tags is not None:
+                segment.user_tags = _normalized_labels(user_tags)
+            if collection_ids is not None:
+                known_collections = {row["id"] for row in conn.execute("SELECT id FROM material_collections WHERE workspace_id=?", (workspace_id,))}
+                if not set(collection_ids) <= known_collections:
+                    raise ValueError("标签夹不存在或不属于当前工作区")
+                segment.collection_ids = list(dict.fromkeys(collection_ids))
+            segment.review_status = review_status
+            # Editing member text does not replace recognition facts. Analysis owns
+            # system_tags and still refreshes them through its existing save path.
+            segment.updated_at = utc_now()
+            asset.updated_at = utc_now()
+            conn.execute("UPDATE material_assets SET payload=?,updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset),asset.updated_at.isoformat(),workspace_id,asset_id))
+
+        return asset
 
     def record_segment_usage(
         self,
@@ -5771,6 +5906,242 @@ class ProductionRepository:
                 (template.workspace_id, template.id, template.version, _json_payload(template), visibility),
             )
         return template
+
+    @staticmethod
+    def _creation_request_requirements(output_relation, requirements, material_scope, clarification_questions):
+        if output_relation is not None and (not isinstance(output_relation, str) or not output_relation.strip()):
+            raise ValueError("创作请求的成片关系需要明确填写")
+        if not isinstance(requirements, dict) or not isinstance(material_scope, dict):
+            raise ValueError("创作要求和素材范围必须是结构化对象")
+        if not isinstance(clarification_questions, list) or any(not isinstance(item, str) or not item.strip() for item in clarification_questions):
+            raise ValueError("澄清问题必须包含可读的问题正文")
+        return (_json_object(requirements), _json_object(material_scope), json.dumps(clarification_questions, ensure_ascii=False))
+
+    @staticmethod
+    def _creation_request_row(conn, workspace_id, request_id, user_id, local_diagnostic):
+        row = conn.execute("SELECT * FROM creation_requests WHERE workspace_id=? AND id=?", (workspace_id, request_id)).fetchone()
+        if row is None or (not local_diagnostic and (not user_id or row["owner_user_id"] != user_id)):
+            raise KeyError(request_id)
+        return row
+
+    @staticmethod
+    def _creation_request_revision(row, expected_revision):
+        if type(expected_revision) is not int or row["revision"] != expected_revision:
+            raise CreationRequestConflict("创作请求已变化，请重新查看当前要求和规划窗口")
+
+    def _creation_request_window(self, conn, workspace_id, window):
+        if window is None:
+            return None
+        entries = []
+        for item in conn.execute(
+            """SELECT i.*, p.payload AS actual_plan, t.payload AS actual_task
+               FROM creation_request_items i
+               LEFT JOIN creation_plans p ON p.id=i.plan_id AND p.workspace_id=?
+               LEFT JOIN creation_tasks t ON t.id=i.task_id AND t.workspace_id=?
+               WHERE i.window_id=? ORDER BY i.ordinal LIMIT 8""",
+            (workspace_id, workspace_id, window["id"]),
+        ):
+            entries.append({"ordinal": item["ordinal"], "plan_id": item["plan_id"], "task_id": item["task_id"],
+                "plan": json.loads(item["actual_plan"] if window["status"] == "confirmed" else item["plan_payload"]),
+                "task": json.loads(item["actual_task"] if window["status"] == "confirmed" else item["task_payload"])})
+        return {"id": window["id"], "request_id": window["request_id"], "ordinal_start": window["ordinal_start"],
+            "status": window["status"], "input_fingerprint": window["input_fingerprint"],
+            "created_at": window["created_at"], "confirmed_at": window["confirmed_at"], "entries": entries}
+
+    def _creation_request_header(self, conn, row):
+        counts = conn.execute(
+            """SELECT COUNT(*) AS expanded_count, COALESCE(SUM(w.status='confirmed'),0) AS confirmed_count
+               FROM creation_request_items i JOIN creation_request_windows w ON w.id=i.window_id
+               WHERE w.request_id=? AND w.status IN ('proposed','confirmed')""", (row["id"],),
+        ).fetchone()
+        statuses = conn.execute(
+            """SELECT json_extract(t.payload,'$.status') AS status, COUNT(*) AS count
+               FROM creation_request_items i JOIN creation_request_windows w ON w.id=i.window_id
+               JOIN creation_tasks t ON t.id=i.task_id AND t.workspace_id=?
+               WHERE w.request_id=? AND w.status='confirmed' GROUP BY json_extract(t.payload,'$.status')""",
+            (row["workspace_id"], row["id"]),
+        ).fetchall()
+        window = (conn.execute("SELECT * FROM creation_request_windows WHERE request_id=? AND id=?", (row["id"], row["current_window_id"])).fetchone()
+                  if row["current_window_id"] else None)
+        return {"id": row["id"], "workspace_id": row["workspace_id"], "owner_user_id": row["owner_user_id"] or None,
+            "request_key": row["request_key"], "goal": row["goal"], "target_count": row["target_count"],
+            "output_relation": row["output_relation"], "requirements": json.loads(row["requirements_json"]),
+            "material_scope": json.loads(row["material_scope_json"]), "clarification_questions": json.loads(row["clarification_questions_json"]),
+            "revision": row["revision"], "status": row["status"], "expanded_count": counts["expanded_count"],
+            "confirmed_count": counts["confirmed_count"], "remaining_count": row["target_count"] - counts["expanded_count"],
+            "task_status_counts": {item["status"]: item["count"] for item in statuses},
+            "current_window": self._creation_request_window(conn, row["workspace_id"], window),
+            "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+    def create_creation_request(self, workspace_id: str, *, request_key: str, input_fingerprint: str,
+                                goal: str, target_count: int, output_relation: str | None,
+                                requirements: dict, material_scope: dict, clarification_questions: list[str],
+                                verified_owner_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+        owner = content_owner(verified_owner_user_id)
+        if not owner and not local_diagnostic:
+            raise PermissionError("创作请求需要当前可信成员身份")
+        if not workspace_id.strip() or not request_key.strip() or not input_fingerprint.strip() or not goal.strip():
+            raise ValueError("创作请求缺少工作区、稳定身份、输入摘要或目标")
+        if type(target_count) is not int or not 1 <= target_count <= 9007199254740991:
+            raise ValueError("总目标数量必须为正安全整数")
+        requirements_json, scope_json, questions_json = self._creation_request_requirements(output_relation, requirements, material_scope, clarification_questions)
+        digest = hashlib.sha256(json.dumps({"goal": goal, "target_count": target_count, "output_relation": output_relation,
+            "requirements": requirements, "material_scope": material_scope, "clarification_questions": clarification_questions},
+            ensure_ascii=False, sort_keys=True, default=_json_default).encode()).hexdigest()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute("SELECT * FROM creation_requests WHERE workspace_id=? AND owner_user_id=? AND request_key=?",
+                (workspace_id, owner or "", request_key)).fetchone()
+            if prior is not None:
+                if prior["input_fingerprint"] != input_fingerprint or prior["creation_input_digest"] != digest:
+                    raise CreationRequestConflict("同一创作请求身份已绑定不同的目标或要求")
+                return self._creation_request_header(conn, prior)
+            request_id = f"request_{uuid4().hex}"
+            now = utc_now().isoformat()
+            status = "awaiting_clarification" if clarification_questions or (target_count > 1 and output_relation is None) else "awaiting_plan"
+            conn.execute("""INSERT INTO creation_requests
+                (id,workspace_id,owner_user_id,request_key,input_fingerprint,creation_input_digest,goal,target_count,
+                 output_relation,requirements_json,material_scope_json,clarification_questions_json,revision,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)""",
+                (request_id,workspace_id,owner or "",request_key,input_fingerprint,digest,goal,target_count,output_relation,
+                 requirements_json,scope_json,questions_json,status,now,now))
+            return self._creation_request_header(conn, self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic))
+
+    def get_creation_request(self, workspace_id: str, request_id: str, *, viewer_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            return self._creation_request_header(conn, self._creation_request_row(conn, workspace_id, request_id, content_owner(viewer_user_id), local_diagnostic))
+
+    def revise_creation_request(self, workspace_id: str, request_id: str, *, expected_revision: int,
+                                output_relation: str | None, requirements: dict, material_scope: dict, clarification_questions: list[str],
+                                verified_owner_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+        values = self._creation_request_requirements(output_relation, requirements, material_scope, clarification_questions)
+        owner = content_owner(verified_owner_user_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._creation_request_row(conn, workspace_id, request_id, owner, local_diagnostic)
+            self._creation_request_revision(row, expected_revision)
+            if conn.execute("SELECT 1 FROM creation_request_windows WHERE request_id=? AND status='confirmed' LIMIT 1", (request_id,)).fetchone():
+                raise CreationRequestConflict("已有确认窗口，不能改写其共同要求；请建立新的创作请求")
+            conn.execute("UPDATE creation_request_windows SET status='superseded' WHERE request_id=? AND status='proposed'", (request_id,))
+            status = "awaiting_clarification" if clarification_questions or (row["target_count"] > 1 and output_relation is None) else "awaiting_plan"
+            conn.execute("""UPDATE creation_requests SET output_relation=?,requirements_json=?,material_scope_json=?,clarification_questions_json=?,
+                revision=revision+1,status=?,current_window_id=NULL,updated_at=? WHERE id=?""",
+                (output_relation,*values,status,utc_now().isoformat(),request_id))
+            return self._creation_request_header(conn, self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic))
+
+    def save_creation_request_window(self, workspace_id: str, request_id: str, *, expected_revision: int,
+                                    input_fingerprint: str, entries: list[tuple[CreationPlan, CreationTask]],
+                                    verified_owner_user_id: str | None = None, local_diagnostic: bool = False,
+                                    replace_window_id: str | None = None) -> dict:
+        if not input_fingerprint.strip() or not 1 <= len(entries) <= 8:
+            raise ValueError("规划窗口需要输入摘要且只能包含1至8项")
+        owner = content_owner(verified_owner_user_id)
+        for plan, task in entries:
+            if (plan.workspace_id != workspace_id or task.workspace_id != workspace_id or task.plan_id != plan.id
+                    or type(plan.target_count) is not int or plan.target_count != 1):
+                raise ValueError("每项必须关联当前工作区的独立单片方案和任务")
+        if len({plan.id for plan,_ in entries}) != len(entries) or len({task.id for _,task in entries}) != len(entries):
+            raise ValueError("规划窗口不能重复使用方案或任务身份")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic)
+            current = conn.execute("SELECT * FROM creation_request_windows WHERE id=?", (row["current_window_id"],)).fetchone()
+            if replace_window_id is not None:
+                self._creation_request_revision(row,expected_revision)
+                if current is None or current["id"] != replace_window_id or current["status"] != "proposed":
+                    raise CreationRequestConflict("待重新核对的窗口已变化或已确认，请重新查看当前窗口")
+                if current["input_fingerprint"] == input_fingerprint:
+                    return self._creation_request_header(conn,row)
+            else:
+                if current is not None:
+                    if current["input_fingerprint"] == input_fingerprint:
+                        return self._creation_request_header(conn,row)
+                    if current["status"] == "proposed":
+                        raise CreationRequestConflict("当前规划窗口尚未确认，请先审阅或修订要求")
+                self._creation_request_revision(row,expected_revision)
+            if row["status"] == "awaiting_clarification":
+                raise CreationRequestConflict("当前创作请求仍有重要决定待澄清，不能生成生产窗口")
+            ordinal_start = conn.execute("""SELECT COALESCE(MAX(i.ordinal),0)+1 FROM creation_request_items i
+                JOIN creation_request_windows w ON w.id=i.window_id WHERE w.request_id=? AND w.status='confirmed'""", (request_id,)).fetchone()[0]
+            if ordinal_start + len(entries) - 1 > row["target_count"]:
+                raise CreationRequestConflict("规划窗口超过该请求的总目标数量")
+            for plan,task in entries:
+                if (conn.execute("SELECT 1 FROM creation_plans WHERE id=?", (plan.id,)).fetchone()
+                        or conn.execute("SELECT 1 FROM creation_tasks WHERE id=?", (task.id,)).fetchone()):
+                    raise CreationRequestConflict("窗口方案或任务身份已用于现有对象，不能重新关联")
+            window_id = f"window_{uuid4().hex}"
+            now = utc_now().isoformat()
+            if replace_window_id is not None:
+                conn.execute("UPDATE creation_request_windows SET status='superseded' WHERE id=?", (replace_window_id,))
+            conn.execute("INSERT INTO creation_request_windows(id,request_id,ordinal_start,input_fingerprint,request_revision,status,created_at) VALUES(?,?,?,?,?,'proposed',?)",
+                (window_id,request_id,ordinal_start,input_fingerprint,row["revision"],now))
+            for offset,(plan,task) in enumerate(entries):
+                frozen_plan = replace(plan,owner_user_id=owner)
+                frozen_task = replace(task,owner_user_id=owner)
+                conn.execute("INSERT INTO creation_request_items(window_id,ordinal,plan_id,task_id,plan_payload,task_payload) VALUES(?,?,?,?,?,?)",
+                    (window_id,ordinal_start+offset,plan.id,task.id,_json_payload(frozen_plan),_json_payload(frozen_task)))
+            conn.execute("UPDATE creation_requests SET current_window_id=?,status='awaiting_confirmation',revision=revision+1,updated_at=? WHERE id=?", (window_id,now,request_id))
+            return self._creation_request_header(conn,self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic))
+
+    def confirm_creation_request_window(self, workspace_id: str, request_id: str, window_id: str, *,
+                                       expected_revision: int, input_fingerprint: str,
+                                       verified_owner_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+        owner = content_owner(verified_owner_user_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic)
+            window = conn.execute("SELECT * FROM creation_request_windows WHERE request_id=? AND id=?", (request_id,window_id)).fetchone()
+            if window is None:
+                raise KeyError(window_id)
+            if window["input_fingerprint"] != input_fingerprint:
+                raise CreationRequestConflict("规划窗口输入摘要已变化，未确认任务")
+            if window["status"] == "confirmed":
+                return self._creation_request_header(conn,row)
+            self._creation_request_revision(row,expected_revision)
+            if window["status"] != "proposed" or row["current_window_id"] != window_id:
+                raise CreationRequestConflict("该规划窗口已失效，请审阅当前窗口")
+            for item in conn.execute("SELECT * FROM creation_request_items WHERE window_id=? ORDER BY ordinal", (window_id,)).fetchall():
+                plan = self._creation_plan_from_payload(json.loads(item["plan_payload"]))
+                task = self._creation_task_from_payload(json.loads(item["task_payload"]))
+                plan,task = self._prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=owner,local_diagnostic=local_diagnostic)
+                for match in plan.material_matches:
+                    asset_row = conn.execute("SELECT payload,visibility FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id,match.asset_ref.removeprefix("asset:"))).fetchone()
+                    if asset_row is None:
+                        raise ValueError("规划窗口引用的素材已不存在")
+                    asset = self._asset_from_payload(json.loads(asset_row["payload"]))
+                    segment = next((part for part in asset.segments if part.id == match.segment_ref.removeprefix("segment:")),None)
+                    if not content_readable(user_id=owner,local_diagnostic=local_diagnostic,visibility=asset_row["visibility"],owner_user_id=asset.owner_user_id):
+                        raise PermissionError("当前成员已无权使用规划窗口的素材")
+                    if segment is None or not material_segment_eligible(asset,segment,workspace_id,automation_only=True):
+                        raise ValueError("规划窗口引用的素材文件或使用资格已变化")
+                if plan.selected_voice:
+                    self.creation_plan_voice_reference(workspace_id,plan.selected_voice.profile_id,plan.selected_voice.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
+                if plan.selected_person:
+                    self.creation_plan_person_reference(workspace_id,plan.selected_person.profile_id,plan.selected_person.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
+                self._insert_confirmed_creation_plan(conn,plan,task)
+            now = utc_now().isoformat()
+            conn.execute("UPDATE creation_request_windows SET status='confirmed',confirmed_at=? WHERE id=?", (now,window_id))
+            conn.execute("UPDATE creation_requests SET status='active',revision=revision+1,updated_at=? WHERE id=?", (now,request_id))
+            return self._creation_request_header(conn,self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic))
+
+    def list_creation_request_items(self, workspace_id: str, request_id: str, *, after_ordinal: int = 0, limit: int = 20,
+                                   viewer_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+        if type(after_ordinal) is not int or after_ordinal < 0 or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("请求条目分页需要非负序号和1至100项页面")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            self._creation_request_row(conn,workspace_id,request_id,content_owner(viewer_user_id),local_diagnostic)
+            rows = conn.execute("""SELECT i.ordinal,i.window_id,i.plan_id,i.task_id,p.payload AS plan,t.payload AS task
+                FROM creation_request_items i JOIN creation_request_windows w ON w.id=i.window_id
+                LEFT JOIN creation_plans p ON p.id=i.plan_id AND p.workspace_id=? AND w.status='confirmed'
+                LEFT JOIN creation_tasks t ON t.id=i.task_id AND t.workspace_id=? AND w.status='confirmed'
+                WHERE w.request_id=? AND w.status IN ('proposed','confirmed') AND i.ordinal>?
+                ORDER BY i.ordinal LIMIT ?""",(workspace_id,workspace_id,request_id,after_ordinal,limit+1)).fetchall()
+            items = [{"ordinal": item["ordinal"], "window_id": item["window_id"], "plan_id": item["plan_id"], "task_id": item["task_id"],
+                "plan": json.loads(item["plan"]) if item["plan"] is not None else None,
+                "task": json.loads(item["task"]) if item["task"] is not None else None} for item in rows[:limit]]
+            return {"items": items, "has_more": len(rows)>limit, "next_after_ordinal": items[-1]["ordinal"] if len(rows)>limit else None}
 
     def confirm_creation_plan(
         self,
@@ -7349,16 +7720,21 @@ class ProductionRepository:
         return self._edit_proposal_from_row(row)
 
     def list_edit_proposals(
-        self, workspace_id: str, task_id: str
+        self, workspace_id: str, task_id: str, *,
+        base_version_id: str | None | Literal[False] = False, limit: int | None = None,
     ) -> list[EditProposal]:
+        if limit is not None and not 1 <= limit <= 100:
+            raise ValueError("编辑提案读取数量需为1至100")
         with self._connect() as conn:
             self._require_creation_task(conn, workspace_id, task_id)
+            current_clause = " AND status='proposed' AND json_extract(operation_json,'$.payload.base_version_id') IS ?" if base_version_id is not False else ""
+            order = "DESC" if limit is not None else "ASC"
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM edit_proposals
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
+                WHERE workspace_id = ? AND task_id = ?{current_clause} ORDER BY created_at {order}, id {order}{' LIMIT ?' if limit is not None else ''}
                 """,
-                (workspace_id, task_id),
+                (workspace_id, task_id, *([base_version_id] if base_version_id is not False else []), *([limit] if limit is not None else [])),
             ).fetchall()
         return [self._edit_proposal_from_row(row) for row in rows]
 
@@ -8194,7 +8570,6 @@ class ProductionRepository:
                     or reference.task_id != run.task_id
                     or not reference.reference_id.strip()
                     or not reference.version_or_identity.strip()
-                    or not reference.authorization_or_license.strip()
                 ):
                     raise ValueError("选题证据不符合当前任务的持久化契约")
 
@@ -8412,8 +8787,12 @@ class ProductionRepository:
         ]
 
     def confirm_topic_candidate(
-        self, workspace_id: str, task_id: str, candidate_id: str
+        self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None
     ) -> tuple[CreationTask, TopicCandidate]:
+        if title is not None:
+            title = title.strip()
+            if not 1 <= len(title) <= 80:
+                raise ValueError("选题标题需要填写 1–80 个字符")
         with self._connect() as conn:
             task_row = conn.execute(
                 """
@@ -8441,6 +8820,8 @@ class ProductionRepository:
                 task.selected_topic_id == candidate_id
                 and candidate.selection_status == "confirmed"
             ):
+                if title is not None and title != candidate.title:
+                    raise ValueError("选题已经确认，不能通过重复确认改写标题")
                 return task, candidate
             if task.selected_topic_id is not None:
                 raise ValueError("当前创作任务已经确认了另一个选题")
@@ -8448,6 +8829,8 @@ class ProductionRepository:
                 raise ValueError("当前创作任务不在等待确认选题状态")
             now = utc_now()
             candidate.selection_status = "confirmed"
+            if title is not None:
+                candidate.title = title
             task.selected_topic_id = candidate.id
             task.stage = "script"
             task.stage_status = "not_started"
@@ -8959,6 +9342,7 @@ class ProductionRepository:
         repair_action: str,
         retryable: bool,
         provider_attempted: bool = False,
+        provider_failed: bool = True,
     ) -> tuple[CreationTask, ScriptGenerationRun]:
         if not all(value.strip() for value in (reason, impact, repair_action)):
             raise ValueError("文案失败必须包含原因、影响和修复动作")
@@ -8988,7 +9372,7 @@ class ProductionRepository:
             if provider_attempted:
                 run.route_snapshot = {
                     **run.route_snapshot,
-                    "availability": "failed",
+                    "availability": "failed" if provider_failed else "succeeded",
                     "checked_at": now,
                 }
             task.stage_status = "failed"
@@ -11056,6 +11440,162 @@ class MaterialLinkProvenanceSink:
             local_diagnostic=self._local_diagnostic,
         )
         return asset.id
+
+
+
+def _local_adoption_digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def _local_adoption_repository(cls, database_path, media_root):
+    # Maintenance deliberately bypasses __init__: even dry-run must not provision.
+    repository = cls.__new__(cls)
+    repository.database_path = Path(database_path).expanduser()
+    repository.video_library_path = Path(media_root).expanduser()
+    return repository
+
+
+def _local_adoption_database_identity(repository) -> dict:
+    stat = repository.database_path.stat()
+    return {"device": stat.st_dev, "inode": stat.st_ino}
+
+
+def _local_adoption_target(repository, conn, member_id):
+    member = conn.execute("SELECT member_id,name,role,created_at FROM local_members WHERE member_id=?",
+                          (member_id,)).fetchone()
+    if member is None or member["role"] != "owner":
+        raise ValueError("local_adoption_existing_owner_required")
+    binding = conn.execute("SELECT * FROM material_ingestion_binding WHERE id=1").fetchone()
+    if (binding is None or binding["workspace_id"] != "local" or
+            Path(binding["library_path"]).resolve() != repository.video_library_path.resolve()):
+        raise ValueError("local_adoption_existing_local_root_required")
+    return dict(member), dict(binding)
+
+
+def _local_adoption_file_revision(path: Path) -> dict:
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("local_adoption_regular_source_required")
+    stat = path.stat()
+    if stat.st_size <= 0:
+        raise ValueError("local_adoption_empty_source")
+    return {"size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns, "inode": stat.st_ino, "device": stat.st_dev}
+
+
+def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids,
+                         voice_id, voice_version, new_voice_version, authorization_basis):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", operation_id):
+        raise ValueError("local_adoption_operation_id_invalid")
+    if not authorization_basis.strip() or not asset_ids or len(asset_ids) != len(set(asset_ids)):
+        raise ValueError("local_adoption_explicit_selection_and_consent_required")
+    if not voice_id or not voice_version or not new_voice_version or voice_version == new_voice_version:
+        raise ValueError("local_adoption_new_voice_version_required")
+    member, binding = _local_adoption_target(repository, conn, member_id)
+    root = repository.video_library_path.resolve()
+    assets, references = [], {}
+    originals = {"assets": [], "references": [], "member": member, "binding": binding}
+
+    def source(reference, *, must_be_registered=False):
+        path = repository.resolve_workspace_media_reference("local", reference)
+        canonical = "workspace://" + path.relative_to(root).as_posix()
+        if reference != canonical:
+            raise ValueError("local_adoption_canonical_reference_required")
+        row = conn.execute("SELECT * FROM workspace_media_references WHERE reference=?", (reference,)).fetchone()
+        if row is not None and row["workspace_id"] != "local":
+            raise ValueError("local_adoption_reference_other_workspace")
+        if must_be_registered and row is None:
+            raise ValueError("local_adoption_existing_voice_reference_required")
+        # A differently encoded logical spelling cannot conceal another space's claim.
+        for other in conn.execute("SELECT reference FROM workspace_media_references WHERE workspace_id!='local'"):
+            if repository.resolve_workspace_media_reference("local", other["reference"]) == path:
+                raise ValueError("local_adoption_reference_other_workspace")
+        for other in conn.execute("SELECT file_path FROM material_assets WHERE workspace_id!='local'"):
+            if Path(other["file_path"]).resolve() == path:
+                raise ValueError("local_adoption_source_other_workspace")
+        if reference not in references:
+            references[reference] = {"reference": reference,
+                "before_sha256": _local_adoption_digest(dict(row)) if row else None}
+            originals["references"].append(dict(row) if row else {"reference": reference, "absent": True})
+        return path, _local_adoption_file_revision(path)
+
+    for asset_id in sorted(asset_ids):
+        row = conn.execute("SELECT * FROM material_assets WHERE id=? AND workspace_id='local'", (asset_id,)).fetchone()
+        if row is None:
+            raise ValueError("local_adoption_selected_local_asset_missing")
+        data = json.loads(row["payload"])
+        if data.get("owner_user_id") is not None:
+            raise ValueError("local_adoption_asset_already_owned")
+        if data["id"] != asset_id or data["workspace_id"] != "local" or data["path"] != row["file_path"]:
+            raise ValueError("local_adoption_asset_record_mismatch")
+        path = Path(row["file_path"])
+        if path != path.resolve():
+            raise ValueError("local_adoption_canonical_path_required")
+        try:
+            reference = "workspace://" + path.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ValueError("local_adoption_source_outside_root") from exc
+        path, revision = source(reference)
+        if (data["size_bytes"] != revision["size_bytes"] or
+                abs(datetime.fromisoformat(data["modified_at"]).timestamp() - path.stat().st_mtime) > .00001):
+            raise ValueError("local_adoption_asset_file_revision_mismatch")
+        assets.append({"id": asset_id, "row_sha256": _local_adoption_digest(dict(row)),
+            "payload_sha256": hashlib.sha256(row["payload"].encode()).hexdigest(),
+            "visibility": row["visibility"], "updated_at": row["updated_at"],
+            "reference": reference, "file_revision": revision,
+            "target_owner_user_id": member_id, "target_visibility": "private"})
+        originals["assets"].append(dict(row))
+
+    voice_row = conn.execute("SELECT * FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? AND version=?",
+                             (voice_id, voice_version)).fetchone()
+    latest = conn.execute("SELECT version FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                          (voice_id,)).fetchone()
+    if voice_row is None or latest["version"] != voice_version:
+        raise ValueError("local_adoption_selected_current_voice_missing")
+    if conn.execute("SELECT 1 FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? AND version=?",
+                    (voice_id, new_voice_version)).fetchone():
+        raise ValueError("local_adoption_voice_version_exists")
+    data = json.loads(voice_row["payload"])
+    if data.get("owner_user_id") is not None or data.get("reference") is not None:
+        raise ValueError("local_adoption_voice_not_unowned_legacy")
+    if data["id"] != voice_id or data["workspace_id"] != "local" or data["version"] != voice_version:
+        raise ValueError("local_adoption_voice_record_mismatch")
+    voice = repository._versioned_voice_profile_from_payload(conn, "local", data)
+    current_authorization = repository._current_authorization(conn, "local", voice.authorization)
+    if voice.authorization is None or current_authorization is None:
+        raise ValueError("local_adoption_existing_voice_authorization_required")
+    for authorization in (voice.authorization, current_authorization):
+        failure = profile_use_failure(replace(voice, authorization=authorization),
+                                      content_type="voice", usage_scope="narration")
+        if failure:
+            raise ValueError("local_adoption_voice_" + failure)
+    path, revision = source(voice.reference_audio_path, must_be_registered=True)
+    if conn.execute("SELECT 1 FROM material_assets WHERE file_path=?", (str(path),)).fetchone():
+        raise ValueError("local_adoption_voice_source_already_registered")
+    duration = _profile_wav_duration(path)
+    if _local_adoption_file_revision(path) != revision:
+        raise ValueError("local_adoption_voice_file_changed")
+    authorization_rows = [dict(row) for row in conn.execute(
+        "SELECT * FROM media_authorizations WHERE workspace_id='local' AND id=? ORDER BY created_at,rowid",
+        (voice.authorization.id,))]
+    source_id = "voice_source_" + hashlib.sha256((operation_id + ":" + voice_id).encode()).hexdigest()[:32]
+    if conn.execute("SELECT 1 FROM material_assets WHERE id=?", (source_id,)).fetchone():
+        raise ValueError("local_adoption_voice_source_id_exists")
+    originals.update(voice=dict(voice_row), voice_path=str(path), authorizations=authorization_rows)
+    manifest = {"format": "local-adoption/v1", "operation_id": operation_id, "workspace_id": "local",
+        "member_id": member_id, "member_sha256": _local_adoption_digest(member),
+        "database_identity": _local_adoption_database_identity(repository),
+        "media_root": str(root), "root_binding_sha256": _local_adoption_digest(binding),
+        "authorization_basis": authorization_basis, "assets": assets,
+        "references": [references[key] for key in sorted(references)],
+        "voice": {"id": voice_id, "version": voice_version, "new_version": new_voice_version,
+            "row_sha256": _local_adoption_digest(dict(voice_row)),
+            "payload_sha256": hashlib.sha256(voice_row["payload"].encode()).hexdigest(),
+            "created_at": voice_row["created_at"], "authorization_sha256": _local_adoption_digest(authorization_rows),
+            "target_owner_user_id": member_id, "target_visibility": "private",
+            "source": {"id": source_id, "reference": voice.reference_audio_path,
+                       "file_revision": revision, "duration_seconds": duration}}}
+    return manifest, originals
 
 
 def _json_payload(value: object) -> str:

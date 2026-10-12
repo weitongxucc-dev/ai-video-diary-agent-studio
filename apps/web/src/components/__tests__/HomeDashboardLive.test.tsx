@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   listCreationTasks: vi.fn(),
   getProductionFoundation: vi.fn(),
   getMaterialLibraryInsights: vi.fn(),
+  getProductionMaterials: vi.fn(),
 }));
 const identity = vi.hoisted(() => ({ state: { token: "tok-a" as string | null, ready: true } }));
 const rerenderRef = vi.hoisted(() => ({ current: null as null | (() => void) }));
@@ -61,6 +62,7 @@ beforeEach(() => {
   api.listCreationTasks.mockReset().mockResolvedValue({ items: [], total_count: 0 });
   api.getProductionFoundation.mockReset().mockResolvedValue(null);
   api.getMaterialLibraryInsights.mockReset().mockResolvedValue(null);
+  api.getProductionMaterials.mockReset().mockResolvedValue({ assets: [], total_count: 0 });
   identity.state = { token: "tok-a", ready: true };
   window.localStorage.clear();
   // 页面会读真实的 localStorage 令牌与钩子身份比对，令牌保持一致。
@@ -84,14 +86,19 @@ describe("首页真实数据容器", () => {
     });
     render(<HomeDashboardLive />);
     expect(await screen.findByRole("region", { name: "开始创作" })).toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name:"素材接收趋势" }).querySelectorAll("circle")).toHaveLength(7);
     expect(screen.queryByRole("region", { name: "工作空间七项概览" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /素材接收趋势/ }));
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     const chart = await screen.findByRole("img", { name: "素材接收趋势" });
     expect(api.getHomeDashboard).toHaveBeenLastCalledWith(30);
+    expect(api.getProductionMaterials).toHaveBeenCalledOnce();
+    expect(api.listCreationTasks).toHaveBeenCalledOnce();
     expect(chart.querySelectorAll("circle")).toHaveLength(30);
     expect(within(chart).getByLabelText("2026-10-09 接收 2 条")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "创作任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看内容统计范围" }));
     expect(screen.getByRole("region", { name: "工作空间七项概览" })).toHaveTextContent("2可见素材");
   });
 
@@ -105,6 +112,26 @@ describe("首页真实数据容器", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     expect(await screen.findByRole("button", { name: /重读任务/ })).toBeInTheDocument();
     expect(api.getHomeDashboard).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps real recent materials when their refresh fails and clears them when identity changes", async () => {
+    const material = { id: "private-a", file_name: "A 的素材.wav", media_type: "audio", updated_at: "2026-10-09T08:00:00Z", user_tags: [] };
+    api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => payload(days, "任务"));
+    api.getProductionMaterials.mockResolvedValueOnce({ assets: [material], total_count: 1 });
+    const { rerender } = render(<HomeDashboardLive />);
+    expect(await screen.findByRole("button", { name: /A 的素材/ })).toBeInTheDocument();
+    api.getProductionMaterials.mockRejectedValueOnce(new Error("素材接口 503"));
+    fireEvent.click(screen.getByRole("tab", { name: /内容标签与行业/ }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    fireEvent.click(screen.getByRole("button", { name: "最近素材" }));
+    expect(await screen.findByText("最近素材暂未更新")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /A 的素材/ })).toBeInTheDocument();
+    api.getProductionMaterials.mockResolvedValue({ assets: [], total_count: 0 });
+    identity.state = { token: "tok-b", ready: true };
+    window.localStorage.setItem("ai-video-diary-local-member-token", "tok-b");
+    rerender(<HomeDashboardLive />);
+    await waitFor(() => expect(screen.queryByText("A 的素材.wav")).not.toBeInTheDocument());
+    expect(await screen.findByText("还没有素材，可以去素材库导入")).toBeInTheDocument();
   });
 
   it("does not send any request before the identity has converged", async () => {
@@ -164,6 +191,7 @@ describe("首页真实数据容器", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /7 天任务/ })).toBeInTheDocument());
     // 切到 30 天后读取失败：重试必须用 30 天，不能退回首次的 7 天。
     api.getHomeDashboard.mockRejectedValueOnce(new Error("读取失败：503"));
+    fireEvent.click(screen.getByRole("tab", { name: /素材接收趋势/ }));
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     await screen.findByText("部分首页数据读取失败");
     const alert = screen.getByText("部分首页数据读取失败").closest('[role="alert"]') as HTMLElement;
@@ -175,6 +203,7 @@ describe("首页真实数据容器", () => {
     api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => payload(days, `${days} 天任务`));
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     await waitFor(() => expect(api.getHomeDashboard).toHaveBeenLastCalledWith(30));
+    fireEvent.click(screen.getByRole("button", { name: "创作任务" }));
     expect(await screen.findByRole("button", { name: /30 天任务/ })).toBeInTheDocument();
   });
 });

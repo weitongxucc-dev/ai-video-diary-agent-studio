@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
+
 import { AppShell } from "../AppShell";
 
 const fixtures = vi.hoisted(() => ({ pathname: "/settings", listTasks: vi.fn(), composer: vi.fn() }));
@@ -11,7 +12,8 @@ vi.mock("next/image", () => ({ default: ({ alt, ...props }: ImgHTMLAttributes<HT
 vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: (props: unknown) => { fixtures.composer(props); return <p>controlled assistant</p>; } }));
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
-vi.mock("@/lib/api", () => ({ listCreationTasks: fixtures.listTasks }));
+vi.mock("@/lib/api", () => ({ listLocalMembers: vi.fn().mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]}),
+  listCreationTasks: fixtures.listTasks }));
 beforeEach(() => {
   vi.clearAllMocks(); fixtures.pathname = "/settings";
   fixtures.listTasks.mockResolvedValue({ items: [], total_count: 0 });

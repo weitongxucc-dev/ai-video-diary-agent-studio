@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -843,7 +844,7 @@ def _estimated_narration_seconds(episode: Episode) -> float:
 
 def compile_narration_command(instruction: str) -> float:
     """Compile only delivery changes the local generation pipeline can execute."""
-    clauses = re.split(r"[,，;；。.!！]|同时|并且|然后|\band\b|\bthen\b", instruction.casefold())
+    clauses = re.split(r"[,，;；。!！]|(?<![0-9])\.|\.(?![0-9])|同时|并且|然后|\band\b|\bthen\b", instruction.casefold())
     tempos: set[float] = set()
     matched = False
     for clause in clauses:
@@ -856,15 +857,23 @@ def compile_narration_command(instruction: str) -> float:
         if re.fullmatch(r"重新配音|重新读(?:一遍)?|重读(?:一遍)?|regenerate(?: (?:this |the )?(?:narration|sentence|segment))?", value):
             matched = True
             continue
-        if re.fullmatch(r"(?:读|说|语速)?慢(?:一点|一些|些)|(?:read |speak )?(?:a little )?slower", value):
+        multiplier = re.fullmatch(
+            r"(?:以|按)?\s*([0-9]+(?:\.[0-9]+)?)\s*倍速(?:\s*(?:重新配音|重新读(?:一遍)?|重读(?:一遍)?))?", value,
+        )
+        if multiplier:
+            tempo = float(multiplier.group(1))
+            if not math.isfinite(tempo) or not 0.5 <= tempo <= 2.0:
+                raise ValueError("配音要求的倍率必须是0.5–2.0之间的有限倍速。")
+            tempos.add(tempo)
+        elif re.fullmatch(r"(?:读|说|语速)?慢(?:一点|一些|些)|(?:read |speak )?(?:a little )?slower", value):
             tempos.add(0.9)
         elif re.fullmatch(r"(?:读|说|语速)?快(?:一点|一些|些)|(?:read |speak )?(?:a little )?faster", value):
             tempos.add(1.1)
         else:
-            raise ValueError("配音要求尚不支持或含有歧义，请使用“这句重新配音”“这句读慢一点”或“这句读快一点”；其他修改请单独预览。")
+            raise ValueError("配音要求尚不支持或含有歧义，请使用“这句重新配音”“这句读慢一点”“这句读快一点”或“这句以0.7倍速重新配音”；其他修改请单独预览。")
         matched = True
     if not matched or len(tempos) > 1:
-        raise ValueError("请指定一种配音操作，不能同时要求读快和读慢。")
+        raise ValueError("请指定一种配音操作，不能同时要求不同语速。")
     return next(iter(tempos), 1.0)
 
 

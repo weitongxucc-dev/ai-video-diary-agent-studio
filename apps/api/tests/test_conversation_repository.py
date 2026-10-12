@@ -6,6 +6,7 @@ import pytest
 
 from app.conversation_repository import (
     ConversationDraftVersionConflict,
+    ConversationReferenceVersionConflict,
     ConversationRepository,
     ConversationTurnAlreadyRunning,
     ConversationTurnRequestConflict,
@@ -348,3 +349,52 @@ def test_failure_recovery_restores_when_the_checkpoint_never_committed(tmp_path)
     current = repository.get(conversation["id"], "workspace-one", "member-one")
     assert current is not None
     assert current["draft_text"] == "较新的输入"
+
+
+def test_workspace_pointer_restores_history_without_changing_scope_or_other_members(tmp_path):
+    repository = ConversationRepository(tmp_path / "persistent.sqlite3")
+    home = repository.current_or_create("workspace", "member", "home", "home")
+    history = repository.create("workspace", "member", "task", "task-old", "旧任务会话")
+    other = repository.create("workspace", "other", "task", "task-old", "其他成员")
+    assert repository.select_current(history["id"], "workspace", "member", workspace_session=True)["scope_kind"] == "task"
+    assert repository.current_or_create("workspace", "member", "home", "home")["id"] == history["id"]
+    assert {row["id"] for row in repository.list_for_scope("workspace", "member", "home", "home")} == {home["id"], history["id"]}
+    assert repository.select_current(other["id"], "workspace", "member", workspace_session=True) is None
+    assert repository.get(history["id"], "workspace", "member")["scope_id"] == "task-old"
+
+
+def test_turn_replay_retains_original_trusted_snapshot_and_checks_client_identity(tmp_path):
+    repository = ConversationRepository(tmp_path / "snapshots.sqlite3")
+    conversation = repository.current_or_create("workspace", "member", "home", "home")
+    saved = repository.save_draft(conversation["id"], "workspace", "member", "读取当前素材", 0)
+    context = {"kind":"material", "selection":{"scope":"asset","asset_id":"one"}, "target_snapshot":{"version":"before"}}
+    turn, created = repository.create_turn_idempotent(conversation["id"], "workspace", "member", "读取当前素材", "one-request", saved["draft_version"], context)
+    assert created
+    replay, created = repository.create_turn_idempotent(conversation["id"], "workspace", "member", "读取当前素材", "one-request", saved["draft_version"], {**context,"target_snapshot":{"version":"after"}})
+    assert not created and replay["id"] == turn["id"]
+    assert repository.request_context("one-request",conversation["id"],"workspace","member")["target_snapshot"] == {"version":"before"}
+    with pytest.raises(ConversationTurnRequestConflict):
+        repository.create_turn_idempotent(conversation["id"], "workspace", "member", "读取当前素材", "one-request", saved["draft_version"], {**context,"selection":{"scope":"asset","asset_id":"two"}})
+
+
+def test_reference_metadata_restart_cancel_cas_and_owner_isolation(tmp_path):
+    path=tmp_path / "refs.sqlite3"
+    repo=ConversationRepository(path)
+    a=repo.current_or_create("workspace-a","member-a","home","home")
+    reference={"kind":"voice","profile_id":"voice-real","version":"fixed-v1","label":"授权声音"}
+    saved=repo.save_reference(a["id"],"workspace-a","member-a",reference,0)
+    assert saved["reference_version"]==1 and saved["draft_version"]==0
+    restarted=ConversationRepository(path)
+    assert restarted.get(a["id"],"workspace-a","member-a")["selected_reference"]==reference
+    assert restarted.save_reference(a["id"],"workspace-a","other-member",None,1) is None
+    assert restarted.save_reference(a["id"],"other-workspace","member-a",None,1) is None
+    cleared=restarted.save_reference(a["id"],"workspace-a","member-a",None,1)
+    assert cleared["reference_version"]==2 and cleared["selected_reference"] is None
+    with pytest.raises(ConversationReferenceVersionConflict):
+        restarted.save_reference(a["id"],"workspace-a","member-a",reference,1)
+    assert ConversationRepository(path).get(a["id"],"workspace-a","member-a")["selected_reference"] is None
+    b=restarted.create("workspace-a","member-a","home","home")
+    assert b["selected_reference"] is None and b["reference_version"]==0
+    restarted.save_reference(a["id"],"workspace-a","member-a",reference,2)
+    assert restarted.select_current(b["id"],"workspace-a","member-a",workspace_session=True)["selected_reference"] is None
+    assert restarted.select_current(a["id"],"workspace-a","member-a",workspace_session=True)["selected_reference"]==reference

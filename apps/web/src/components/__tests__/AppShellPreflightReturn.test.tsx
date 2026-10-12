@@ -7,8 +7,10 @@ vi.mock("next/image", () => ({ default: ({ alt, ...props }: React.ImgHTMLAttribu
 vi.mock("@/components/HomeCommandComposer", () => ({ HomeCommandComposer: () => <div>已有助手消费者</div> }));
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
-vi.mock("@/lib/api", () => ({ listCreationTasks: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
+vi.mock("@/lib/api", () => ({ listLocalMembers: vi.fn().mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]}),
+  listCreationTasks: vi.fn().mockResolvedValue({ items: [], total_count: 0 }) }));
 vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: mocks.scope }));
+
 import { AppShell } from "@/components/AppShell";
 import { preflightReturnUrl, savePreflightDraft, type PreflightDraftFields } from "@/lib/preflight-draft";
 const id = "12345678-1234-4123-8123-123456789abc";

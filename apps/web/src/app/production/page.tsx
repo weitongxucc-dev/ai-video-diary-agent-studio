@@ -85,7 +85,7 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; knowledge_item_id?: string; knowledge_version?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const [foundation, persistedTasks] = await Promise.all([
@@ -96,7 +96,7 @@ export default async function ProductionPage({
 
   if (params.view === "automations") {
     return (
-      <AppShell creationTasks={creationTasks} workspaceStatus={{ kind: "attention", label: "定时任务仅供只读预览，尚未接通执行" }}>
+      <AppShell creationTasks={creationTasks} workspaceStatus={{ kind: "attention", label: "定时安排到期建立运行，逐次确认后沿创作任务继续" }}>
         <ScheduledTasksWorkspace />
       </AppShell>
     );
@@ -125,6 +125,7 @@ export default async function ProductionPage({
             <CreateProductionTaskForm
               autoFocus={!initialGoal}
               initialGoal={initialGoal}
+              initialKnowledgePin={params.knowledge_item_id && params.knowledge_version ? { knowledge_item_id: params.knowledge_item_id, version: params.knowledge_version } : null}
               draftId={params.draft_id}
               replyOrigin={replyOrigin}
               template={template}

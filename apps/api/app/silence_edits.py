@@ -4,13 +4,18 @@ import re
 import subprocess
 
 
-def detect_silence_cuts(path, duration_seconds, offset_seconds=0):
-    result = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
-        "-af", "silencedetect=noise=-40dB:d=0.45", "-f", "null", "-"],
-        capture_output=True, text=True, check=True, timeout=180)
+def detect_silence_cuts(path, duration_seconds, offset_seconds=0, *, context=None):
+    if context is None:
+        raise PermissionError("静音检测必须提供设备许可")
+    command = ["ffmpeg", "-hide_banner", "-nostats", "-filter_threads", str(context.threads),
+        "-threads", str(context.threads), "-i", str(path), "-af", "silencedetect=noise=-40dB:d=0.45", "-f", "null", "-"]
+    result = context.run(command)
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, command, stderr=result.stderr)
+    stderr = result.stderr.decode() if isinstance(result.stderr, bytes) else result.stderr
     spans = []
     start = None
-    for kind, value in re.findall(r"silence_(start|end):\s*([0-9.]+)", result.stderr):
+    for kind, value in re.findall(r"silence_(start|end):\s*([0-9.]+)", stderr):
         if kind == "start":
             start = float(value)
         elif start is not None:

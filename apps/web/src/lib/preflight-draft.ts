@@ -6,6 +6,7 @@ import type { CreationPlanInput } from "@/lib/types";
 
 export type DraftScope = { memberId: string; workspaceId: string };
 export type PreflightReplyOrigin = { conversation_id: string; turn_id: string; request_id: string };
+export type PreflightKnowledgePin = { knowledge_item_id: string; version: string };
 export type PreflightDraftFields = {
   goal: string; name: string; targetCount: string; duration: string;
   language: CreationPlanInput["language"]; aspectRatio: CreationPlanInput["aspect_ratio"];
@@ -14,6 +15,7 @@ export type PreflightDraftFields = {
   personPin: NonNullable<CreationPlanInput["selected_person"]> | null;
   voiceEdited: boolean; template: { id: string; version: number } | null;
   replyOrigin?: PreflightReplyOrigin | null;
+  knowledgePin?: PreflightKnowledgePin | null;
 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export function validDraftId(value: string): boolean { return UUID.test(value); }
@@ -52,7 +54,7 @@ function replyOrigin(value: unknown): value is PreflightReplyOrigin | null {
 }
 function fields(value: unknown): value is PreflightDraftFields {
   if (!record(value)) return false;
-  const keys = Object.keys(value).sort().join();
+  const keys = Object.keys(value).filter(key => key !== "knowledgePin").sort().join();
   if (keys !== "aspectRatio,duration,goal,language,lipsyncQuality,name,personPin,presenterShare,targetCount,template,voiceEdited,voicePin"
     && keys !== "aspectRatio,duration,goal,language,lipsyncQuality,name,personPin,presenterShare,replyOrigin,targetCount,template,voiceEdited,voicePin") return false;
   const template = value.template;
@@ -62,6 +64,7 @@ function fields(value: unknown): value is PreflightDraftFields {
     && [0, 20, 40, 60, 80, 100].includes(value.presenterShare as number) && ["high", "fast"].includes(value.lipsyncQuality as string)
     && pin(value.voicePin) && pin(value.personPin) && typeof value.voiceEdited === "boolean"
     && (value.replyOrigin === undefined || replyOrigin(value.replyOrigin))
+    && (value.knowledgePin === undefined || value.knowledgePin === null || (record(value.knowledgePin) && Object.keys(value.knowledgePin).sort().join() === "knowledge_item_id,version" && typeof value.knowledgePin.knowledge_item_id === "string" && value.knowledgePin.knowledge_item_id.length > 0 && value.knowledgePin.knowledge_item_id.length <= 120 && typeof value.knowledgePin.version === "string" && value.knowledgePin.version.length > 0 && value.knowledgePin.version.length <= 100))
     && (template === null || (record(template) && Object.keys(template).length === 2 && typeof template.id === "string" && template.id.length > 0 && template.id.length <= 120 && Number.isSafeInteger(template.version) && Number(template.version) > 0));
 }
 export function savePreflightDraft(storage: Storage, scope: DraftScope, id: string, value: PreflightDraftFields): void {

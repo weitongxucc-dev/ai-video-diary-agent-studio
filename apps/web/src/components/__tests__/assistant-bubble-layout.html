@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN" data-theme="light"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>用户消息气泡布局检查</title>
+<script type="module">import "/src/app/globals.css";import "/src/components/AssistantConversation.css";</script>
+<body style="margin:0;padding:16px;background:var(--surface-1);color:var(--text-1)"><header style="display:flex;gap:12px;align-items:center;font-size:13px"><strong>隔离布局样例 · 无业务请求</strong><button onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'">切换主题</button></header>
+<main class="assistant-conversation-panel" style="width:320px;max-width:100%;margin:24px auto;background:var(--surface-2);padding:16px;box-sizing:border-box"><div class="assistant-transcript">
+<article class="assistant-persisted-turn"><p class="assistant-user-message">你好</p><div class="assistant-markdown">短消息按内容宽度，靠右显示。</div></article>
+<article class="assistant-persisted-turn"><p class="assistant-user-message">请帮我把这段长文分为三部分，先保留每一条要点，再把内容组织得更清楚。这里检查长段落在最窄的对话栏中是否完整换行，是否会把边框或文字撑出区域。</p><div class="assistant-markdown">长文完整显示。</div></article>
+<article class="assistant-persisted-turn"><p class="assistant-user-message">第一行要求
+第二行补充
+
+第四行，保留空行。</p><div class="assistant-markdown">用户换行保留。</div></article>
+<article class="assistant-persisted-turn"><p class="assistant-user-message">https://example.invalid/abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz</p><div class="assistant-markdown">长连续字符可折行，不会跳转或请求。</div></article>
+</div></main></body></html>

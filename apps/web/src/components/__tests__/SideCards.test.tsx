@@ -26,6 +26,80 @@ function Cards() {
 }
 
 describe("v5.3 object card stack", () => {
+  it("closes the armed media card through the desktop bridge and ignores stale focus or fullscreen", () => {
+    const callbacks = new Set<(id: string) => void>();
+    const unsubscribe = vi.fn();
+    const arm = vi.fn();
+    window.electronAPI = {
+      setCardMediaEscape: arm,
+      onCardMediaEscape: callback => { callbacks.add(callback); return () => { callbacks.delete(callback); unsubscribe(); }; },
+    };
+    function MediaCard() {
+      const [open, setOpen] = useState(false);
+      return <><button onClick={() => setOpen(true)}>打开原素材</button><HomeCardDialog open={open} kind="detail" title="媒体卡" onClose={() => setOpen(false)}><video aria-label="原素材" tabIndex={0} /><input aria-label="媒体说明" /></HomeCardDialog></>;
+    }
+    const view = render(<MediaCard />);
+    const fullscreenDescriptor = Object.getOwnPropertyDescriptor(document, "fullscreenElement");
+    try {
+      const trigger = screen.getByRole("button", { name: "打开原素材" });
+      trigger.focus(); fireEvent.click(trigger);
+      const media = screen.getByLabelText("原素材");
+      media.focus();
+      const id = arm.mock.calls.at(-1)?.[0];
+      expect(typeof id).toBe("string");
+      screen.getByLabelText("媒体说明").focus();
+      expect(arm).toHaveBeenLastCalledWith(null);
+      act(() => callbacks.forEach(callback => callback(id)));
+      expect(screen.getByRole("dialog", { name: "媒体卡" })).toBeInTheDocument();
+      media.focus();
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: media });
+      fireEvent(document, new Event("fullscreenchange"));
+      expect(arm).toHaveBeenLastCalledWith(null);
+      act(() => callbacks.forEach(callback => callback(id)));
+      expect(screen.getByRole("dialog", { name: "媒体卡" })).toBeInTheDocument();
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+      fireEvent(document, new Event("fullscreenchange"));
+      act(() => callbacks.forEach(callback => callback(id)));
+      expect(screen.queryByRole("dialog", { name: "媒体卡" })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+      expect(unsubscribe).toHaveBeenCalled();
+      expect(arm).toHaveBeenLastCalledWith(null);
+    } finally {
+      view.unmount();
+      delete window.electronAPI;
+      if (fullscreenDescriptor) Object.defineProperty(document, "fullscreenElement", fullscreenDescriptor);
+      else Reflect.deleteProperty(document, "fullscreenElement");
+    }
+  });
+
+  it("routes a media Escape only to the current child and retains its parent draft", () => {
+    const callbacks = new Set<(id: string) => void>();
+    const arm = vi.fn();
+    window.electronAPI = { setCardMediaEscape: arm, onCardMediaEscape: callback => { callbacks.add(callback); return () => { callbacks.delete(callback); }; } };
+    function MediaStack() {
+      const [child, setChild] = useState(false);
+      return <HomeCardDialog kind="detail" title="媒体父卡" onClose={vi.fn()}><input aria-label="父卡草稿" defaultValue="已编辑正文" /><video aria-label="父卡原片" tabIndex={0} /><button onClick={() => setChild(true)}>查看子卡</button>{child ? <HomeCardDialog kind="config" title="媒体子卡" onClose={() => setChild(false)}><audio aria-label="子卡声音" tabIndex={0} /></HomeCardDialog> : null}</HomeCardDialog>;
+    }
+    const view = render(<MediaStack />);
+    try {
+      screen.getByLabelText("父卡原片").focus();
+      const parentId = arm.mock.calls.at(-1)?.[0];
+      fireEvent.click(screen.getByRole("button", { name: "查看子卡" }));
+      screen.getByLabelText("子卡声音").focus();
+      const childId = arm.mock.calls.at(-1)?.[0];
+      expect(childId).not.toBe(parentId);
+      act(() => callbacks.forEach(callback => callback(parentId)));
+      expect(screen.getByRole("dialog", { name: "媒体子卡" })).toBeInTheDocument();
+      act(() => callbacks.forEach(callback => callback(childId)));
+      expect(screen.queryByRole("dialog", { name: "媒体子卡" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "媒体父卡" })).toBeInTheDocument();
+      expect(screen.getByLabelText("父卡草稿")).toHaveValue("已编辑正文");
+    } finally {
+      view.unmount();
+      delete window.electronAPI;
+    }
+  });
+
   it("omits unused footers and leaves the last reading item in the scrolling body", () => {
     const view = render(<HomeCardDialog kind="detail" title="长阅读" onClose={vi.fn()}><p>正文末尾</p></HomeCardDialog>);
     const card = screen.getByRole("dialog", { name: "长阅读" });

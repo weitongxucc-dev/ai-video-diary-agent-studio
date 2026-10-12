@@ -1,13 +1,42 @@
 import array
 import math
 import subprocess
-import time
 import wave
 
 import pytest
 
 from app.audio_timeline import AudioEditRequest, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, apply_audio_edit, compile_audio_command, render_audio_mix
-from app.host_resource_probes import HostProcessProbe
+
+
+
+@pytest.fixture(autouse=True)
+def permitted_audio_rendering(granted_media, monkeypatch):
+    original = render_audio_mix
+    def render(timeline, duration, resolver, output, **kwargs):
+        if kwargs.get("grant") is not None:
+            return original(timeline, duration, resolver, output, **kwargs)
+        paths = [resolver(clip.source_ref) for track in timeline.tracks for clip in track.clips]
+        with granted_media(paths) as context:
+            return original(timeline, duration, resolver, output, scheduler=context.scheduler,
+                grant=context.grant, deadline_monotonic=context.deadline_monotonic,
+                max_output_bytes=context.max_output_bytes, threads=context.threads, **kwargs)
+    monkeypatch.setitem(globals(), "render_audio_mix", render)
+
+
+def registered_audio(repository, service, workspace, task_id, logical_ref, input_refs=()):
+    """Synthetic stored lineage for source-isolation tests, without a media executor."""
+    from app.production import ArtifactRecord, JobRun
+    source = repository.database_path.parent / (logical_ref.rsplit('/', 1)[-1])
+    tone(source, 440)
+    published = service.artifact_store.publish_file(logical_ref, source)
+    job_id = "synthetic-lineage:" + logical_ref
+    repository.create_job_run(JobRun(id=job_id, workspace_id=workspace, task_id=task_id, kind="synthetic_lineage",
+        idempotency_key=job_id, input_digest=published.sha256))
+    record = ArtifactRecord(id=logical_ref, workspace_id=workspace, task_id=task_id,
+        kind="audio_source", logical_ref=logical_ref, sha256=published.sha256,
+        size_bytes=published.size_bytes, producer_job_id=job_id, input_refs=list(input_refs))
+    repository.create_artifact_record(record)
+    return record
 
 
 def tone(path, frequency):
@@ -55,37 +84,25 @@ def test_actual_mix_preserves_both_tracks_and_solo_does_not_change_export(tmp_pa
     assert samples(export, 1.2, 1.7) == both
 
 
-def test_audio_mix_probe_and_export_share_granted_process_runner(tmp_path):
+def test_audio_mix_probe_and_export_share_granted_process_runner(tmp_path, granted_media, monkeypatch):
+    import app.audio_timeline as audio
     source = tmp_path / "voice.wav"
     tone(source, 440)
-    timeline = AudioTimeline(tracks=[TimelineAudioTrack(
-        id="voice", name="配音", role="narration", clips=[TimelineAudioClip(
-            id="clip", name="人声", source_ref="artifacts/voice", source_start_ms=0,
-            source_end_ms=1000, timeline_start_ms=0,
-        )],
-    )])
-
-    class RecordingGrant:
-        processes = HostProcessProbe()
-
-        def __init__(self):
-            self.children = []
-
-        def assert_grant(self, grant):
-            assert grant == "one-audio-grant"
-
-        def register_child(self, grant, child):
-            self.assert_grant(grant)
-            self.children.append(child)
-
-    scheduler = RecordingGrant()
-    output = render_audio_mix(
-        timeline, 1, lambda _ref: source, tmp_path / "mix.wav", scheduler=scheduler,
-        grant="one-audio-grant", deadline_monotonic=time.monotonic() + 30,
-        max_output_bytes=1024 * 1024, threads=1,
-    )
+    timeline = AudioTimeline(tracks=[TimelineAudioTrack(id="voice", name="配音", role="narration", clips=[TimelineAudioClip(
+        id="clip", name="人声", source_ref="artifacts/voice", source_start_ms=0, source_end_ms=1000, timeline_start_ms=0)])])
+    commands = []
+    original = audio._run_granted_audio_command
+    def run(scheduler, grant, command, **kwargs):
+        commands.append((grant.request_id, command[0]))
+        return original(scheduler, grant, command, **kwargs)
+    monkeypatch.setattr(audio, "_run_granted_audio_command", run)
+    with granted_media([source]) as context:
+        output = render_audio_mix(timeline, 1, lambda _ref: source, tmp_path / "mix.wav", scheduler=context.scheduler,
+            grant=context.grant, deadline_monotonic=context.deadline_monotonic,
+            max_output_bytes=context.max_output_bytes, threads=context.threads)
     assert output.is_file()
-    assert len(scheduler.children) == 2  # source ffprobe and bounded FFmpeg mix
+    assert {request for request, _ in commands} == {context.grant.request_id}
+    assert [command for _, command in commands] == ["ffprobe", "ffmpeg"]
 
 
 def test_all_muted_tracks_produce_explicit_silence_with_requested_duration(tmp_path):
@@ -162,7 +179,7 @@ def test_audio_artifact_cannot_cross_workspace_or_task_boundaries(tmp_path):
         with repo._connect() as conn:
             conn.execute("INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, updated_at) VALUES (?,?,?,?,?)",(task.id,workspace,task.plan_id,json.dumps(asdict(task),default=str),str(task.updated_at)))
     service=TaskAudio(repo,ArtifactStore(tmp_path/"output"),tmp_path/"temp")
-    artifact=service.publish("a","task-a",kind="audio_source",parameters={},input_refs=[],produce=lambda path:tone(path,440))
+    artifact=registered_audio(repo, service, "a", "task-a", "artifacts/owned.wav")
     assert service.source("a","task-a",artifact.logical_ref).is_file()
     with pytest.raises(ValueError,match="不属于当前任务"):
         service.source("a","task-other",artifact.logical_ref)
@@ -313,10 +330,8 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     with repo._connect() as conn:
         repo._claim_workspace_media_reference(conn, workspace_id=task.workspace_id, reference=reference)
     service = TaskAudio(repo, ArtifactStore(tmp_path/'output'), tmp_path/'temp')
-    extracted = service.publish(task.workspace_id, task.id, kind='audio_source', parameters={},
-        input_refs=[reference], produce=lambda path: tone(path, 440))
-    processed = service.publish(task.workspace_id, task.id, kind='audio_source', parameters={},
-        input_refs=[extracted.logical_ref], produce=lambda path: tone(path, 440))
+    extracted = registered_audio(repo, service, task.workspace_id, task.id, 'artifacts/extracted.wav', [reference])
+    processed = registered_audio(repo, service, task.workspace_id, task.id, 'artifacts/processed.wav', [extracted.logical_ref])
     assert service.source(task.workspace_id, task.id, processed.logical_ref).is_file()
     repo.update_asset_use_state(task.workspace_id, asset.id, use_state)
     for ref in (reference, extracted.logical_ref, processed.logical_ref):

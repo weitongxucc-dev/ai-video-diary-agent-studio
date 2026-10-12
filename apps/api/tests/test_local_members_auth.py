@@ -307,7 +307,7 @@ def _chain_base_database(database_path) -> None:
         )
         conn.executemany(
             "INSERT INTO production_schema_migrations (version) VALUES (?)",
-            [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION)],
+            [(version,) for version in range(1, 13)],
         )
 
 

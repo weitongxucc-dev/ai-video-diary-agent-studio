@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
+import { AssistantConversationProvider } from "@/components/AssistantConversationProvider";
 import { ToastProvider } from "@/components/PixelToast";
 import "./globals.css";
 import "./modern-overrides.css";
 
 export const metadata: Metadata = {
-  title: "智能视频日记",
+  title: "曜核1.0",
   description: "从素材到成片的本机视频创作工具",
   icons: {
-    icon: "/favicon.svg"
+    icon: { url: "/favicon.png", type: "image/png", sizes: "32x32" }
   }
 };
 
@@ -22,7 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider><AssistantConversationProvider>{children}</AssistantConversationProvider></ToastProvider>
       </body>
     </html>
   );

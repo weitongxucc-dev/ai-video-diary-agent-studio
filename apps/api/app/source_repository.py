@@ -24,8 +24,12 @@ from app.database_migrations import (
     CONTENT_VISIBILITY_LEGACY,
     ensure_content_visibility_columns,
 )
-from app.knowledge_files import KnowledgeParameter, KnowledgeSection
+from app.knowledge_files import KnowledgeParameter, KnowledgeSection, parse_knowledge_file
 from app.knowledge_grants import KNOWLEDGE_GRANTS_DDL
+
+
+class KnowledgeVersionConflict(ValueError):
+    pass
 
 
 class SourceRepository:
@@ -216,6 +220,62 @@ class SourceRepository:
     def _validate_use_state(use_state: str) -> None:
         if use_state not in CONTENT_USE_STATES:
             raise ValueError(f"unknown content use state: {use_state}")
+
+    def edit_knowledge_item(
+        self, workspace_id: str, item_id: str, *, expected_version: str,
+        title: str, body: str, verified_user_id: str | None,
+        local_diagnostic: bool = False,
+    ) -> KnowledgeItem:
+        """Owned, version-checked correction; original source and snapshots survive."""
+        self._require_workspace(workspace_id)
+        title = title.strip()
+        if not title or not body.strip():
+            raise ValueError("资料标题和正文不能为空")
+        parsed = parse_knowledge_file("资料修订.md", body.encode("utf-8"))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                (item_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(item_id)
+            previous = self._knowledge_item_from_row(row)
+            if previous.owner_user_id != verified_user_id or (
+                verified_user_id is None and not local_diagnostic
+            ):
+                raise PermissionError("只能修改自己在当前工作区保存的资料")
+            if previous.version != expected_version:
+                raise KnowledgeVersionConflict("资料版本已变化，请重新读取后再保存；本次修改未写入")
+            if previous.title == title and previous.body == parsed.full_text:
+                return previous
+            next_version = str(int(previous.version) + 1)
+            if conn.execute(
+                "SELECT 1 FROM knowledge_item_versions WHERE workspace_id = ? AND knowledge_item_id = ? AND version = ?",
+                (workspace_id, item_id, previous.version),
+            ).fetchone() is None:
+                self._insert_knowledge_version(
+                    conn, workspace_id=workspace_id, knowledge_item_id=item_id,
+                    version=previous.version, title=previous.title, body=previous.body,
+                    file_reference=previous.file_reference, content_hash=previous.content_hash,
+                    source_item_id=previous.source_item_id, sections=previous.sections,
+                    parameters=previous.parameters, saved_at=previous.created_at,
+                    fetched_at=previous.fetched_at, source_url=previous.source_url,
+                )
+            conn.execute(
+                "UPDATE knowledge_items SET title = ?, body = ?, version = ?, content_hash = ?, sections = ?, parameters = ? WHERE id = ? AND workspace_id = ?",
+                (title, parsed.full_text, next_version, parsed.content_hash,
+                 _sections_json(parsed.sections), _parameters_json(parsed.parameters), item_id, workspace_id),
+            )
+            self._insert_knowledge_version(
+                conn, workspace_id=workspace_id, knowledge_item_id=item_id,
+                version=next_version, title=title, body=parsed.full_text,
+                file_reference=previous.file_reference, content_hash=parsed.content_hash,
+                source_item_id=previous.source_item_id, sections=parsed.sections,
+                parameters=parsed.parameters, saved_at=_utc_now(),
+                fetched_at=previous.fetched_at, source_url=previous.source_url,
+            )
+        return self.get_knowledge_item(workspace_id, item_id)
 
     def set_knowledge_item_use_state(
         self, workspace_id: str, item_id: str, use_state: str
