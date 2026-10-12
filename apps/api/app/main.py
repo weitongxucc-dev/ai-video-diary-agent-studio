@@ -46,7 +46,7 @@ from app.conversation_repository import (
 from app.subtitle_alignment import apply_aligned_timings, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
 from app.graphic_overlays import validate_overlays, compile_overlay_command
-from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source
+from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source, graphic_source_facts
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.speech_timing import estimate_speech_seconds
@@ -3930,6 +3930,10 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     snapshot = {key: value for key, value in creation_task_montage_plan_to_payload(plan).items()
                 if key not in transient} if plan else None
     payload = arguments.get("payload", {})
+    picture_candidates = [plan] if plan is not None else []
+    if operation == "exact_edit_preview" and payload.get("operation_type") == "EditGraphicOverlay":
+        overlay_payload = CreationTaskExactEditRequest.model_validate(payload)
+        picture_candidates.append(_graphic_overlay_candidate(plan, overlay_payload))
     expected = payload.get("base_version_id")
     if "base_version_id" in payload and expected != task.current_timeline_version_id:
         raise ValueError("时间线已变化，请重新安排当前要求")
@@ -3978,7 +3982,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     audio_operations = {"audio_import", "recording_save", "audio_listen", "audio_extract", "audio_edit_preview", "audio_waveform", "narration_waveform"}
     if operation == "command_edit_preview" and arguments.get("_media_kind") in {"audio_mix", "audio_probe", "audio_stretch"} and not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip()):
         audio_operations.add(operation)
-    files, audio_inputs, audio_uses = [], [], {}
+    files, audio_inputs, audio_uses, graphics = [], [], {}, []
     service = _task_audio()
     def remember(reference, path, *, audio=False, metadata=None):
         stat = path.stat()
@@ -4015,9 +4019,11 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
                 if path is None:
                     raise ValueError("当前人物片段没有有效媒体")
                 remember(clip.source_path, path)
-            for item in plan.graphic_overlays:
-                if item.get("kind") == "image":
-                    remember(item["source_ref"], resolve_graphic_source(production_repo, artifact_store, workspace_id, task_id, item["source_ref"]))
+            for reference in dict.fromkeys(item["source_ref"] for candidate in picture_candidates
+                    for item in candidate.graphic_overlays if item.get("kind") == "image"):
+                item = graphic_source_facts(production_repo, artifact_store, workspace_id, task_id, reference, actor=actor)
+                graphics.append(item)
+                remember(reference, Path(item["path"]))
         graph = _effective_audio_timeline(plan)
         solo = set(payload.get("solo_track_ids", []))
         clips = [clip for track in graph.tracks if not track.muted and (not solo or track.id in solo)
@@ -4065,6 +4071,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
              "narration_cache_key": task.narration_cache_key}
     if operation == "audio_import":
         facts = {"base_version_id": None, "files": files}
+    if graphics:
+        facts["graphic_sources"] = graphics
     if operation in audio_operations:
         budget = cpu_audio_budget_from_env()
         if budget is None:
@@ -4125,7 +4133,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         width, height = max(width, changed_width), max(height, changed_height)
         resources = {"kind": "creation_presenter_render" if any(clip.person_render_id for clip in plan.clips) else "creation_render", "execution_mode": "cpu_ffmpeg", "duration_seconds": plan.duration_seconds,
             "width_px": width, "height_px": height, "input_bytes": sum(item[1] for item in files),
-            "clip_count": len(plan.clips), "overlay_count": len(plan.graphic_overlays),
+            "clip_count": len(plan.clips), "overlay_count": max(len(candidate.graphic_overlays) for candidate in picture_candidates),
             "threads": budget.max_threads, "timeout_seconds": budget.max_timeout_seconds,
             "max_output_bytes": budget.max_output_bytes}
         # Local recognition has model memory requirements beyond FFmpeg budgets.
@@ -13327,9 +13335,33 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
     return _edit_preview_response(intent,proposal)
 
 
+def _graphic_overlay_candidate(plan, payload):
+    from copy import deepcopy
+    edited=deepcopy(plan)
+    action=payload.overlay_action
+    value=payload.graphic_overlay
+    if action=='add' and value is not None and payload.overlay_id is None:
+        edited.graphic_overlays.append(value.model_dump())
+    elif action in {'update','delete'} and payload.overlay_id:
+        index=next((i for i,item in enumerate(edited.graphic_overlays) if item['id']==payload.overlay_id),-1)
+        if index<0:
+            raise KeyError("图文叠加层不存在，请刷新列表")
+        if action=='delete' and value is None:
+            edited.graphic_overlays.pop(index)
+        elif action=='update' and value is not None and value.id==payload.overlay_id:
+            edited.graphic_overlays[index]=value.model_dump()
+        else:
+            raise ValueError("图文叠加层操作的对象或参数不匹配")
+    else:
+        raise ValueError("请选择添加、修改或删除图文叠加层，并提供对应参数")
+    if edited.graphic_overlays==plan.graphic_overlays:
+        raise ValueError("图文叠加层没有变化")
+    validate_overlays(edited.graphic_overlays, edited.duration_seconds)
+    return edited
+
+
 def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
     draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    from copy import deepcopy
     if payload.model_fields_set-{"operation_type","overlay_action","graphic_overlay","overlay_id"}:
         raise HTTPException(status_code=422,detail="图文叠加层编辑不能混入其他操作")
     workspace_id=current_workspace_id(request)
@@ -13337,31 +13369,17 @@ def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTa
     plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
     if plan.status=="rendering":
         raise HTTPException(status_code=409,detail="正在渲染，请完成后修改图文叠加层")
-    edited=deepcopy(plan)
-    action=payload.overlay_action
-    value=payload.graphic_overlay
-    if action=='add' and value is not None and payload.overlay_id is None:
-        edited.graphic_overlays.append(value.model_dump())
-        identity=value.id
-    elif action in {'update','delete'} and payload.overlay_id:
-        index=next((i for i,item in enumerate(edited.graphic_overlays) if item['id']==payload.overlay_id),-1)
-        if index<0:
-            raise HTTPException(status_code=404,detail="图文叠加层不存在，请刷新列表")
-        identity=payload.overlay_id
-        if action=='delete' and value is None:
-            edited.graphic_overlays.pop(index)
-        elif action=='update' and value is not None and value.id==identity:
-            edited.graphic_overlays[index]=value.model_dump()
-        else:
-            raise HTTPException(status_code=422,detail="图文叠加层操作的对象或参数不匹配")
-    else:
-        raise HTTPException(status_code=422,detail="请选择添加、修改或删除图文叠加层，并提供对应参数")
-    if edited.graphic_overlays==plan.graphic_overlays:
-        raise HTTPException(status_code=422,detail="图文叠加层没有变化")
+    try:
+        edited = _graphic_overlay_candidate(plan, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    action = payload.overlay_action
+    identity = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
     base=_ensure_montage_base_version(workspace_id,task,plan)
     tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
     try:
-        validate_overlays(edited.graphic_overlays,edited.duration_seconds)
         for item in edited.graphic_overlays:
             if item.get('kind')=='image':
                 resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,item['source_ref'])
@@ -14538,6 +14556,7 @@ def _creation_task_montage_render_input_refs(task: CreationTask, plan) -> list[s
         *(clip.source_path for clip in plan.clips),
         *((clip.source_ref for track in plan.audio_timeline.tracks for clip in track.clips) if plan.audio_timeline else ()),
         *(f"person-render://{clip.person_render_id}" for clip in plan.clips if clip.person_render_id),
+        *(item["source_ref"] for item in plan.graphic_overlays if item.get("kind") == "image"),
     ]))
 
 
@@ -14559,6 +14578,8 @@ def _render_creation_task_montage_for_workspace(
         raise HTTPException(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
     if not plan.narration_audio_path:
         raise HTTPException(status_code=409, detail="creation task narration missing")
+    if render_context is not None:
+        _granted_graphic_source_paths(workspace_id, task_id, plan.graphic_overlays, render_context)
     if render_context is not None and any(
         clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
         for clip in plan.clips
@@ -16362,6 +16383,38 @@ def _record_montage_usage(workspace_id: str, plan) -> None:
 
 
 
+def _granted_graphic_source_paths(workspace_id, task_id, overlays, context):
+    references = dict.fromkeys(item["source_ref"] for item in overlays if item.get("kind") == "image")
+    if not references:
+        return {}
+    if context is None:
+        raise ValueError("图片渲染必须持有当前设备许可")
+    context.check()
+    actor = CreationExecutionActor.from_event(workspace_id,
+        production_repo.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
+    if _verify_creation_identity(actor) != "ready":
+        raise PermissionError("当前图片渲染成员许可不可核验")
+    from PIL import Image
+    paths = {}
+    for reference in references:
+        facts = graphic_source_facts(production_repo, artifact_store, workspace_id, task_id, reference, actor=actor)
+        context.check()
+        publication = artifact_store.describe(reference)
+        if (publication.sha256, publication.size_bytes) != (facts["sha256"], facts["size_bytes"]):
+            raise ValueError("登记PNG内容摘要已变化")
+        path = Path(facts["path"])
+        with Image.open(path) as image:
+            if (image.format != "PNG" or getattr(image, "n_frames", 1) != 1
+                    or image.size != (facts["width"], facts["height"])):
+                raise ValueError("实际PNG格式或尺寸与登记事实不一致")
+            image.load()
+        context.check()
+        if graphic_source_facts(production_repo, artifact_store, workspace_id, task_id, reference, actor=actor) != facts:
+            raise ValueError("PNG核验期间来源发生变化")
+        paths[reference] = path
+    return paths
+
+
 def _render_montage_with_resolved_clip_sources(
     workspace_id: str,
     plan,
@@ -16382,7 +16435,8 @@ def _render_montage_with_resolved_clip_sources(
     cues_by_id = {cue.id: cue for cue in plan.cues}
     try:
         if original_graphics is not None:
-            plan.graphic_overlays=[{**item,'source_ref':str(resolve_graphic_source(production_repo,artifact_store,workspace_id,plan.task_id,item['source_ref']))}
+            graphic_paths = _granted_graphic_source_paths(workspace_id, plan.task_id, original_graphics, render_context)
+            plan.graphic_overlays=[{**item,'source_ref':str(graphic_paths[item['source_ref']])}
                 if item.get('kind')=='image' else item for item in original_graphics]
         for clip in plan.clips:
             if clip.person_render_id:
@@ -19046,7 +19100,11 @@ def _montage_stage_with_grant(workspace_id: str, task_id: str, context: Creation
 
 
 def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
-    return _creation_render_is_valid(workspace_id, task_id, render_context=grant)
+    valid = _creation_render_is_valid(workspace_id, task_id, render_context=grant)
+    if valid:
+        plan = production_repo.get_creation_task_montage_plan(workspace_id, task_id)
+        _granted_graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
+    return valid
 
 
 def _device_lock_path() -> Path:
@@ -19082,6 +19140,8 @@ def _build_device_components(*, repository: ProductionRepository):
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
+            graphic_source_facts=lambda workspace_id, task_id, reference, *, actor: graphic_source_facts(
+                repository, artifact_store, workspace_id, task_id, reference, actor=actor),
             render_action=_render_creation_stage_with_grant,
             render_is_valid=_creation_stage_valid_with_grant,
             cpu_render_budget=cpu_render_budget,

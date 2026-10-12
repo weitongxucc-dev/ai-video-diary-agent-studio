@@ -173,7 +173,7 @@ def creation_job_registration(
     presenter_budget: PresenterBudget | None = None,
     presenter_cpu_render_budget: CpuRenderBudget | None = None,
     presenter_models: dict | None = None, resolve_presenter_output=None,
-    task_media=None,
+    task_media=None, graphic_source_facts=None,
 ) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
@@ -188,6 +188,7 @@ def creation_job_registration(
             presenter_budget=presenter_budget,
             presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget),
             presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media,
+            graphic_source_facts=graphic_source_facts,
         ),
         CreationJobUnitExecutor(
             repository, render_action=render_action, render_is_valid=render_is_valid,

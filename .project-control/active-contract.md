@@ -2,6 +2,8 @@
 
 ## 2026-10-12 PI-OPEN：按已审方案实施并同步教学
 
+PI-05图片成片五文件包已RELEASE给root审核、Git保存和同候选真实验收；API Owner上述图片facts/工厂透传写lease停止。正式生产预算和应用替换仍不由此获新许可。
+
 PI默认入口退役的四个测试消费者现已整体RELEASE给root；上述仅测试续写绑定停止，图片成片纵向API包保持独立唯一Owner。
 
 PI默认入口测试迁移交接：media_preview两文件已RELEASE。Pi Owner仅续test_assistant_clip_tools.py和test_pi_instruction_closure.py中的默认旧preview_edit调用/手写工具清单，迁至共同typed/schema/current宿主语义；保留拒绝旧入口的负向测试、片段候选及原句闭包保护，不改产品源码或其他文件。完成后该四文件包整体RELEASE给root，必要检查集中收口。

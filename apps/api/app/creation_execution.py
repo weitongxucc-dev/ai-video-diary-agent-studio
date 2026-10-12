@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.canvas import canvas_size
+from app.graphic_overlays import validate_overlays
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
@@ -348,7 +349,8 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
 def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      creation_plan: CreationPlan, limits: CpuRenderLimits,
                      *, request: WorkRequest | None = None, presenter_limits=None,
-                     presenter_models=None, resolve_presenter_output=None) -> tuple[str, dict[str, object]]:
+                     presenter_models=None, resolve_presenter_output=None,
+                     actor=None, graphic_source_facts=None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
         raise ValueError("当前任务缺少已确认故事板或配音")
@@ -380,8 +382,15 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                          presenter_inputs(repository, task, script, creation_plan, presenter_models or {})}
     if montage.audio_timeline is not None:
         raise ValueError("当前有效音轨组合尚未接入 CPU 成片预算")
+    if any(item.get("kind") != "image" for item in montage.graphic_overlays):
+        raise ValueError("CPU 成片当前仅支持已登记PNG图片图层")
+    validate_overlays(montage.graphic_overlays, montage.duration_seconds)
+    graphics = []
     if montage.graphic_overlays:
-        raise ValueError("图层组合尚未接入 CPU 成片预算")
+        if not isinstance(actor, CreationExecutionActor) or graphic_source_facts is None:
+            raise PermissionError("图片成片缺少当前成员或已登记来源解析器")
+        graphics = [graphic_source_facts(task.workspace_id, task.id, ref, actor=actor)
+                    for ref in dict.fromkeys(item["source_ref"] for item in montage.graphic_overlays)]
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
            for clip in montage.clips):
         raise ValueError("本机人像效果尚无受许可执行路径")
@@ -439,7 +448,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                 != {key: item for key, item in payload.items() if key not in transient}):
             raise ValueError("当前时间线与已确认故事板不一致")
     audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, narration_reference)
-    sources = [audio]
+    sources = [audio, *(Path(item["path"]) for item in graphics)]
     for clip in montage.clips:
         if clip.person_render_id:
             cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
@@ -481,6 +490,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                  if key not in {"status", "message", "output_path", "subtitle_path", "updated_at"}},
         "sources": source_facts,
     }
+    if graphics:
+        manifest["graphic_sources"] = graphics
     digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
                                        default=str).encode("utf-8")).hexdigest()
     # These are the exact fields HostResourceProbe reads back to budget the unit.
@@ -553,7 +564,8 @@ class CreationJobOwnerVerifier:
                  montage_budget: MontageBudget | None = None,
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
-                 presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None) -> None:
+                 presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
+                 graphic_source_facts=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -564,15 +576,17 @@ class CreationJobOwnerVerifier:
         self.presenter_models = presenter_models or {}
         self.resolve_presenter_output = resolve_presenter_output
         self.task_media = task_media
+        self.graphic_source_facts = graphic_source_facts
 
-    def render_facts(self, conn, task, plan, *, request=None):
+    def render_facts(self, conn, task, plan, *, request=None, actor=None):
         # Person composition never inherits the pure-material caps.
         limits = self.presenter_cpu_render_limits if plan.presenter_share_target else self.cpu_render_limits
         if limits is None:
             raise ValueError("人物组合 CPU 成片专属预算尚未标定" if plan.presenter_share_target else "CPU 成片资源预算尚未配置")
         return cpu_render_facts(self.repository, conn, task, plan, limits, request=request,
             presenter_limits=self.presenter_cpu_render_limits, presenter_models=self.presenter_models,
-            resolve_presenter_output=self.resolve_presenter_output)
+            resolve_presenter_output=self.resolve_presenter_output,
+            actor=actor, graphic_source_facts=self.graphic_source_facts)
 
     def stage_facts(self, task, script, plan, stage):
         if stage == "person_render":
@@ -671,7 +685,7 @@ class CreationJobOwnerVerifier:
                 if intent.unit_key != key:
                     raise PermissionError("人物编辑输入已变化，请重新安排")
             elif verdict == "ready" and stage == "render":
-                key, resources = self.render_facts(conn, task, plan)
+                key, resources = self.render_facts(conn, task, plan, actor=original)
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
             elif verdict == "ready" and (
@@ -765,7 +779,7 @@ class CreationJobOwnerVerifier:
             elif job.kind == PERSON_EDIT_KIND:
                 key, resources = self.edit_facts(job, task, event, plan)
             elif stage == "render":
-                key, resources = self.render_facts(conn, task, plan, request=request)
+                key, resources = self.render_facts(conn, task, plan, request=request, actor=original)
             else:
                 key, resources = self.stage_facts(task, script, plan, stage)
         except PermissionError:
@@ -847,8 +861,10 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
     else:
         stage = "render"
     if stage == "render":
+        event = repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        actor = CreationExecutionActor.from_event(job.workspace_id, event.payload) if event.payload.get("member_id") else None
         with repository._connect() as conn:
-            stage, _resources = owner.render_facts(conn, task, plan)
+            stage, _resources = owner.render_facts(conn, task, plan, actor=actor)
     elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
         stage, _resources = owner.stage_facts(task, script, plan, stage)
     return SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
