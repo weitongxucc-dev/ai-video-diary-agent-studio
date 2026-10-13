@@ -51,6 +51,8 @@
 
 真实验收入口：只使用本批明确创建的独立测试目录/数据库/端口，fixture先通过后才进入授权素材用例；不复制原用户数据库、账号或密钥。需要现有真实任务/来源时先报告精确对象和读取方式，由主控绑定；本批验证不发到外部平台。
 
+独立Electron原生壳执行已绑定：QA只写test-runs/refactor-20261014/electron-native-shell/**，按其native-shell-plan.md的新fixture项目复制已冻结Desktop源与锁定依赖，输出未签名QA专用dir包；profile、samples、saved与stub全部在该新目录。Web origin固定http://localhost:47329，CDP调试固定47331，API由自建stub独立端口且不使用原8000/3000。只用自建合成输入和fake成员，正常原生选择/保存对话框、真实窗口、退出/重启及本批设备身份稳定分项验证。fixture身份与产品安装隔离，不覆盖原应用、读其profile、访问签名keychain、修改Gatekeeper/TCC/系统权限或请求真实账号/模型；不执行更新/签名/发布。具体builder id/version/digest与实际资源沿上述准备方案并留证；静态API/Web stub必须明确标为壳证据，不能算同候选产品制作闭环。只有身份确认的本批PID/进程组可清理，实测失败留具体验收阻断，其他独立工作继续。
+
 资源采样：先证明受许可进程组、RSS/线程/IO和退出识别可靠，再给API负责人实测建议；不直接执行旧未验证QA脚本，不改全机swap/内存门以放行。配置变更必须绑定样本、候选和测量证据。
 
 ## 主控与协作
