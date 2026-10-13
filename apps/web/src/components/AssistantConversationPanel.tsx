@@ -189,7 +189,7 @@ function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; readi
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
   return <div className="assistant-markdown-wrap">
     {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running"}>
-      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含未完成操作" : "调用已结束"}</summary>
+      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含失败记录" : "调用已结束"}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>

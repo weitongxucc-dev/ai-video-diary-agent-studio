@@ -740,7 +740,7 @@ describe("AssistantConversationPanel", () => {
     expect(screen.getByText("真实方案").tagName).toBe("STRONG");
     expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
     const tools = container.querySelector(".assistant-turn-tools summary")!;
-    expect(tools.textContent).toContain("工具记录 · 2 项 · 含未完成操作");
+    expect(tools.textContent).toContain("工具记录 · 2 项 · 含失败记录");
     const assistantText = screen.getByText("真实方案");
     expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
