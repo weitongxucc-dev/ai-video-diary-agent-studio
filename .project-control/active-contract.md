@@ -26,6 +26,8 @@ Web 六源集成并归还后，依据 `fresh-web-consumers/REPORT.md` 的三个�
 
 R4 资产组租约已归还，当前接续独立的版本化授权仓储模块：独占实际新增 `apps/api/app/profiles/authorizations.py`、`profiles/versioned_payloads.py`、`tests/test_media_authorization_store.py`，并仅在既有 `app/persistence_json.py` 原样迁入授权 decoder 实际使用的 `_required_text`、`_optional_string_tuple`、`_required_datetime`、`_optional_datetime` 四纯函数。`MediaAuthorizationStore` 只收有限 SQLite 连接 factory，迁入 save/get/list/list_versions 四公开方法、三个现 conn 授权方法、原 payload/decoder/validator；调用方提供 conn 时不得另开或提交。原 `_save_versioned_payload`、`_list_versioned_payloads`、`_versioned_row` 三 helper 原样归 `versioned_payloads`，供授权/人物/声音/发音词典现消费者消费同一实现，不新增表、授权政策、版本排序或 production 回调。`_as_utc` 直接消费现 profiles/contracts 唯一对象。production 组装、四公开/三个 conn 薄委托、其他版本 helper 消费者接线、旧 helper/decoder/validator body 删除仍归 API；R4 不改 production/main/schema/原 API 档案测试。文件/媒体归属声明、人物/声音保存用例、DDL 与模型执行不迁入 store。未接线模块不集成或接受；模块释放后由 API 接线，联合门验证不可变版本/幂等、工作区隔离、revoked/expired 历史不升级、固定版本缺失拒绝、调用方未提交可读及同事务回滚和实际 HTTP/档案消费者。本组不替代完整人物/声音仓储与 R4。
 
+API bootstrap 已定位 config 的必要接线依赖，R6 本批追加产品写权：整文件独占 `apps/api/app/config.py`，仅修改 `Settings.from_env` 及其实际直接环境解析 helper，使同一现规则可消费显式 Mapping（显式输入不读取 dotenv、不改 os.environ）；无参入口仍沿唯一 env_files IO 和原字段/默认/秘密/六路径规则。拆开现临时目录的可失败准备与进程 TMPDIR/tempfile 发布，供 API 在配置持久化和旧驱动停止之前准备；原 `configure_process_temporary_directory` 沿同一实现，外盘挂载/严格目录边界与未配置开发行为保持。不用临时改全局环境解析候选、不复制第二套 Settings 规则、不改其他配置/IO/状态/模型政策。独占 `test_config_atomic.py`、`test_runtime_settings.py` 的最小边界测试及实际新增 `test_config_candidate_preparation.py`；API 对本组三源测试/config 整文件只读，main/bootstrap 消费者接线仍唯一 API。R6 先交精确公共 Python 入口及 SOURCE_RELEASE，API 接线后联合验证候选拒绝不落 env/secret/运行绑定、冷启动与候选同解析、原 IO/安装 guard 保持；不把 config 小片当整体 bootstrap 接受。
+
 ## 用户决定、入口与范围
 
 用户已批准“按这个方案执行”，要求记住高内聚、低耦合；随后明确允许新建合适的可见实施线程或由主控直接执行。此前整体暂停由本次批准取代，旧线程和旧工作树租约不自动恢复。
