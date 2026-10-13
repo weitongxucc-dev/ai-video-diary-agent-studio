@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 from unittest import mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app import env_files, local_runtime_status, preflight
 from app.config import Settings
 from app.preflight import setup_preflight
 
@@ -319,7 +321,60 @@ def test_preflight_ffmpeg_missing(tmp_path):
 # ── Degraded: partial Whisper, encrypted Jianying ───────────────────────
 
 
-def test_preflight_asr_degraded_partial_whisper(tmp_path):
+def _whisper_settings(tmp_path, **values):
+    paths = {
+        "obsidian_vault_path": str(tmp_path / "vault"),
+        "hermes_radar_path": str(tmp_path / "hermes"),
+        "video_inbox_path": str(tmp_path / "inbox"),
+        "video_output_path": str(tmp_path / "output"),
+        "draft_output_path": str(tmp_path / "drafts"),
+        "jianying_draft_root_path": str(tmp_path / "jianying"),
+        "database_path": str(tmp_path / "db.sqlite"),
+        "model_root_path": str(tmp_path / "models"),
+        "model_runtime_python_path": str(tmp_path / "python-runtime"),
+        "temporary_root_path": str(tmp_path / "temporary"),
+    }
+    return Settings(**(paths | values))
+
+
+@pytest.fixture
+def whisper_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "controlled-bin"))
+    monkeypatch.setenv("AI_VIDEO_DIARY_DOTENV", str(tmp_path / "primary.env"))
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(tmp_path / "missing-pi"))
+    monkeypatch.setattr(env_files, "_repo_root", lambda: tmp_path / "env-repo")
+
+
+@pytest.mark.parametrize("backend", ["openai_whisper", "whisper_cpp"])
+@pytest.mark.parametrize(
+    ("runtime_present", "model_present", "expected_status"),
+    [(False, False, "missing"), (True, False, "degraded"),
+     (False, True, "degraded"), (True, True, "ready")],
+)
+def test_whisper_preflight_uses_shared_path_probe_and_preserves_partial_states(
+    tmp_path, whisper_env, backend, runtime_present, model_present, expected_status,
+):
+    python, cli, model = (tmp_path / name for name in ("python", "whisper-cli", "model"))
+    selected = cli if backend == "whisper_cpp" else python
+    unused = python if backend == "whisper_cpp" else cli
+    (selected if runtime_present else unused).write_bytes(b"")
+    if model_present:
+        model.write_bytes(b"")
+    settings = _whisper_settings(
+        tmp_path, local_whisper_backend=backend, local_whisper_python_path=str(python),
+        local_whisper_cli_path=str(cli), local_whisper_model_path=str(model),
+    )
+    result = preflight._asr_check(settings)
+    assert result["status"] == expected_status
+    assert settings.local_whisper_configured is (runtime_present and model_present)
+    assert preflight.whisper_file_present is local_runtime_status.whisper_file_present
+    if expected_status == "ready":
+        assert result["summary"] == "本地 Whisper 路径可访问，模型运行尚需实际转写验证"
+    elif expected_status == "degraded":
+        assert result["summary"] == "本地 Whisper 配置不完整，无法使用转写功能"
+
+
+def test_preflight_asr_degraded_partial_whisper(tmp_path, whisper_env):
     """ASR is optional: partial Whisper is visible without blocking text use."""
     whisper_python = tmp_path / "python"
     whisper_python.write_text("fake")
@@ -328,7 +383,8 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
     inbox.mkdir()
     output.mkdir()
 
-    settings = Settings(
+    settings = _whisper_settings(
+        tmp_path,
         deepseek_api_key="sk-test",
         local_whisper_python_path=str(whisper_python),
         local_whisper_model_path=None,
@@ -339,7 +395,8 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
         database_path=str(tmp_path / "db.sqlite"),
     )
 
-    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+    with mock.patch("app.preflight.shutil.which", side_effect=lambda name, **kwargs:
+                    str(tmp_path / "synthetic-ffmpeg") if name == "ffmpeg" else None):
         result = setup_preflight(settings)
 
     asr = next(c for c in result["checks"] if c["id"] == "asr")
@@ -348,10 +405,11 @@ def test_preflight_asr_degraded_partial_whisper(tmp_path):
     assert result["overall"] == "ready"
 
 
-def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):
+def test_preflight_asr_ready_is_honest_about_local_only(tmp_path, whisper_env):
     """ASR ready must say config is provided / local conditions met, not
     verified, and defer Tencent remote availability to /api/runtime/health."""
-    settings = Settings(
+    settings = _whisper_settings(
+        tmp_path,
         deepseek_api_key="sk-test",
         asr_provider="tencentcloud",
         tencentcloud_secret_id="test-id",
@@ -359,7 +417,8 @@ def test_preflight_asr_ready_is_honest_about_local_only(tmp_path):
         database_path=str(tmp_path / "db.sqlite"),
     )
 
-    with mock.patch("app.preflight.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+    with mock.patch("app.preflight.shutil.which", side_effect=lambda name, **kwargs:
+                    str(tmp_path / "synthetic-ffmpeg") if name == "ffmpeg" else None):
         result = setup_preflight(settings)
 
     asr = next(c for c in result["checks"] if c["id"] == "asr")
@@ -567,12 +626,24 @@ def test_preflight_settings_target_present_on_relevant_checks(tmp_path):
         assert check["settings_target"] is not None, f"{cid} missing settings_target"
 
 
-def test_default_local_preflight_does_not_report_ready_from_cloud_credentials():
+def test_default_local_preflight_does_not_report_ready_from_cloud_credentials(tmp_path, whisper_env):
     from app.preflight import _asr_check
-    settings = Settings(tencentcloud_secret_id="saved", tencentcloud_secret_key="saved")
+    settings = _whisper_settings(tmp_path, tencentcloud_secret_id="saved", tencentcloud_secret_key="saved")
     check = _asr_check(settings)
     assert check["status"] == "missing"
     assert check["settings_target"] == "local_whisper_backend"
+
+
+def test_cloud_credentials_do_not_change_the_default_factory(tmp_path, whisper_env):
+    from dataclasses import replace
+    from app.asr import asr_transcriber_from_settings, LocalWhisperTranscriber, TencentCloudASRTranscriber
+
+    settings = _whisper_settings(tmp_path, tencentcloud_secret_id="synthetic-id", tencentcloud_secret_key="synthetic-key")
+    assert isinstance(asr_transcriber_from_settings(settings), LocalWhisperTranscriber)
+    assert settings.asr_configured is False
+    selected_cloud = replace(settings, asr_provider="tencentcloud")
+    assert isinstance(asr_transcriber_from_settings(selected_cloud), TencentCloudASRTranscriber)
+    assert selected_cloud.asr_configured is True
 
 
 

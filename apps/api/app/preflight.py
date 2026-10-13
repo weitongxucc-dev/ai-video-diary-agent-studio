@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
+from app.local_runtime_status import whisper_file_present
 from app.models import utc_now
 from app.production import directory_accepts_writes
 
@@ -302,14 +303,8 @@ def _python_check() -> dict:
 
 
 def _asr_check(settings: Settings) -> dict:
-    whisper_python = bool(
-        settings.local_whisper_runtime_path
-        and Path(settings.local_whisper_runtime_path).expanduser().is_file()
-    )
-    whisper_model = bool(
-        settings.local_whisper_model_path
-        and Path(settings.local_whisper_model_path).expanduser().is_file()
-    )
+    whisper_python = whisper_file_present(settings.local_whisper_runtime_path)
+    whisper_model = whisper_file_present(settings.local_whisper_model_path)
     whisper_ok = whisper_python and whisper_model
     whisper_partial = whisper_python or whisper_model
 

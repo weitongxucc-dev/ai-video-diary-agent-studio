@@ -6,6 +6,7 @@ from typing import Any
 from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
 from app.local_runtime_status import ffmpeg_available as probe_ffmpeg_available
+from app.local_runtime_status import whisper_file_present
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
     QWEN3_VL_4B_4BIT,
@@ -244,14 +245,8 @@ def _ffmpeg_item(checked_at) -> dict[str, Any]:
 
 
 def _local_whisper_item(settings: Settings, checked_at) -> dict[str, Any]:
-    python_ok = bool(
-        settings.local_whisper_runtime_path
-        and Path(settings.local_whisper_runtime_path).expanduser().is_file()
-    )
-    model_ok = bool(
-        settings.local_whisper_model_path
-        and Path(settings.local_whisper_model_path).expanduser().is_file()
-    )
+    python_ok = whisper_file_present(settings.local_whisper_runtime_path)
+    model_ok = whisper_file_present(settings.local_whisper_model_path)
     fix_command = None
     if python_ok and model_ok:
         status = "ready"

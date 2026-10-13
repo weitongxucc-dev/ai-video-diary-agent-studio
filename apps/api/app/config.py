@@ -20,7 +20,7 @@ from app.env_files import (
     write_dotenv_values as write_dotenv_values,
 )
 
-from app.local_runtime_status import observe_local_runtime_status
+from app.local_runtime_status import observe_local_runtime_status, whisper_file_present
 from app.service_status_projection import (
     LLM_SERVICE_AVAILABLE as LLM_SERVICE_AVAILABLE,
     LLM_SERVICE_FAILED as LLM_SERVICE_FAILED,
@@ -268,9 +268,10 @@ class Settings:
 
     @property
     def local_whisper_configured(self) -> bool:
-        runtime = self.local_whisper_runtime_path
-        return bool(runtime and Path(runtime).expanduser().is_file()
-                    and self.local_whisper_model_path and Path(self.local_whisper_model_path).expanduser().is_file())
+        return (
+            whisper_file_present(self.local_whisper_runtime_path)
+            and whisper_file_present(self.local_whisper_model_path)
+        )
 
     @property
     def asr_configured(self) -> bool:

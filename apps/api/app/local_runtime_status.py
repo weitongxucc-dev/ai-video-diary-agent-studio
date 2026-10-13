@@ -10,6 +10,11 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def whisper_file_present(path: str | None) -> bool:
+    """Report the configured file's presence, without running or loading it."""
+    return bool(path and Path(path).expanduser().is_file())
+
+
 def _pending_video_count(path: str | None) -> int:
     if not path:
         return 0

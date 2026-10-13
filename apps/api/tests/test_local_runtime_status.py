@@ -23,6 +23,52 @@ def local_paths(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.parametrize("kind", ["none", "empty", "missing", "directory", "file"])
+def test_whisper_probe_reports_only_file_presence(tmp_path, kind):
+    path = tmp_path / "configured-whisper-path"
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "file":
+        path.write_bytes(b"")
+        path.chmod(0o600)
+    value = None if kind == "none" else "" if kind == "empty" else str(path)
+    assert local_runtime_status.whisper_file_present(value) is (kind == "file")
+
+
+def test_whisper_probe_expands_the_supplied_path(tmp_path, monkeypatch):
+    file = tmp_path / "synthetic-whisper"
+    file.write_bytes(b"")
+    calls = []
+    original_expanduser = Path.expanduser
+
+    def synthetic_expanduser(path):
+        calls.append(str(path))
+        return file if str(path) == "~/synthetic-whisper" else original_expanduser(path)
+
+    monkeypatch.setattr(Path, "expanduser", synthetic_expanduser)
+    assert local_runtime_status.whisper_file_present("~/synthetic-whisper") is True
+    assert calls == ["~/synthetic-whisper"]
+
+
+def test_config_keeps_short_circuit_before_model_probe(local_paths, tmp_path, monkeypatch):
+    settings = Settings(
+        **local_paths, local_whisper_python_path=str(tmp_path / "missing-runtime"),
+        local_whisper_model_path=str(tmp_path / "must-not-probe-model"),
+        model_root_path=str(tmp_path / "models"),
+        temporary_root_path=str(tmp_path / "temporary"),
+    )
+    calls = []
+
+    def first_probe_only(path):
+        calls.append(path)
+        assert path == settings.local_whisper_runtime_path
+        return False
+
+    monkeypatch.setattr(config, "whisper_file_present", first_probe_only)
+    assert settings.local_whisper_configured is False
+    assert calls == [settings.local_whisper_runtime_path]
+
+
 def test_missing_paths_preserve_the_four_existing_partitions(local_paths):
     status = local_runtime_status.observe_local_runtime_status(**local_paths)
     assert set(status) == {"obsidian", "hermes_radar", "video", "storage"}
