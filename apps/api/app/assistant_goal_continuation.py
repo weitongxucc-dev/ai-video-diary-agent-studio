@@ -45,8 +45,20 @@ class GoalContinuationService:
             # A rejected user decision is final. A rejected/not-submitted
             # *request* is different: the host may prove no effect and permit
             # one of the finite new turns to correct its input.
-            if status in {"stale", "cancelled", "stopped"} or (status == "rejected" and event.get("phase") != "request"):
+            stale_observation_awaiting_adoption = (status == "stale" and event.get("phase") == "observation"
+                                                    and goal["status"] == "waiting_adoption")
+            if (status in {"stale", "cancelled", "stopped"} and not stale_observation_awaiting_adoption
+                    or status == "rejected" and event.get("phase") != "request"):
                 self.invalidate(root["id"], f"business_result_{status}")
+                continue
+            if goal["status"] == "waiting_adoption" and status != "confirmed":
+                # Observation/program results can arrive out of order, even
+                # after a human adoption changed the live version. Consume the
+                # old result without treating it as adoption or making the
+                # pending confirmed event stale before it can be verified.
+                if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
+                        waiting_reason="await_real_adoption", event_id=event["event_id"]):
+                    advanced += 1
                 continue
             if status == "proposed" or (event.get("phase") == "request" and event.get("actionable")):
                 if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
@@ -62,6 +74,15 @@ class GoalContinuationService:
             if readiness == "invalidated":
                 self.invalidate(root["id"], fresh.get("reason", "current_goal_invalidated"))
                 continue
+            if readiness in {"ready", "waiting_adoption"} and "completed_source_slots" in fresh:
+                self.repo.record_goal_completed_sources(root["id"], fresh["completed_source_slots"])
+            if readiness == "waiting_adoption":
+                # A completed observation must never authorize execution while
+                # another actual proposal is awaiting the real user's adoption.
+                if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
+                        waiting_reason=fresh.get("reason", "await_real_adoption"), event_id=event["event_id"]):
+                    advanced += 1
+                continue
             if readiness in {"waiting_identity", "waiting_result", "waiting_unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status=readiness,
                     waiting_reason=fresh.get("reason", readiness))
@@ -71,6 +92,12 @@ class GoalContinuationService:
             if event.get("phase") == "request" and status in {"rejected", "not_submitted"} and fresh.get("no_side_effect") is not True:
                 self.repo.update_goal_checkpoint(root["id"], status="waiting_unknown", waiting_reason="request_effect_not_verified")
                 continue
+            checkpoint = ("continue_after_real_adoption" if status == "confirmed" else
+                "read_completed_source_and_continue" if event.get("result_kind") == "graphic_source" else
+                "read_observed_result_and_continue" if event.get("result_kind") == "observation" else
+                "read_actual_output_and_continue" if event.get("phase") == "execution" else "evaluate_actual_result")
+            self.repo.update_goal_checkpoint(root["id"], status="waiting_result", waiting_reason=checkpoint,
+                next_checkpoint=checkpoint)
             claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds)
             if claim is None:
                 continue

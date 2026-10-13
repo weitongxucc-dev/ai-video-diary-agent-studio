@@ -691,6 +691,26 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     assert definition == {"id": "MiniMax-M3", "samplingParams": {"reasoning_split": True}}
 
 
+def test_continuation_input_preserves_authorization_without_replaying_its_first_step(controlled_pi_runtime, monkeypatch):
+    settings, _ = controlled_pi_runtime
+    captured = {}
+    def completed(_cmd, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(_cmd, 0, stdout="\n".join([
+            json.dumps({"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+                "content": [{"type": "text", "text": "依据实际完成来源继续。"}]}}), '{"type":"agent_settled"}']), stderr="")
+    monkeypatch.setattr(pi_module.subprocess, "run", completed)
+    raw = "先创建图片，提交后本轮结束；成功后观察并准备修改，等我采用。"
+    context = {"next_checkpoint": "read_completed_source_and_continue", "unfinished_steps": ["read_completed_source_and_continue"],
+               "completed_source_slots": [{"name": "title.png", "source_ref": "artifacts/actual/title.png"}]}
+    run_task_turn(settings, workspace_id="local", task_id="task", message=raw, stage="montage", selected_refs=[],
+        playhead_ms=None, continuation_context=context)
+    payload = json.loads(captured["input"].split("本轮输入（JSON）：\n", 1)[1])
+    assert payload["original_authorization_context"] == raw and "original_user_instruction" not in payload
+    assert payload["trusted_continuation_checkpoint"] == context
+    assert captured["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == raw
+
+
 def test_pi_events_keep_thinking_outside_answer_without_rewriting_text():
     text = "说明中保留 <think> 示例，不改写正常正文。"
     output = "\n".join(json.dumps(event) for event in [

@@ -300,3 +300,83 @@ def test_late_shutdown_proposal_does_not_patch_an_old_source_after_goal_moved_to
     assert repo.project_business_result(old["turn_id"], "workspace", "member", event,
         response_patch={"edit_preview": {"proposal": {"id": "proposal:old", "status": "proposed"}}}, message="旧结果已保留。")
     assert not repo.get_turn(old["turn_id"])["result"].get("response", {}).get("edit_preview")
+
+
+def completed_source(*, name="title.png", inputs=None, job_id="png:one", sha256="a" * 64):
+    return {"name": name, "requested_output": {"name": name, "width": 48, "height": 48, "max_bytes": 65536},
+        "input_refs": inputs or [], "job_id": job_id, "source_ref": f"artifacts/{job_id}/{name}",
+        "artifact_id": f"artifact:{job_id}", "sha256": sha256, "size_bytes": 174,
+        "width": 48, "height": 48, "base_version_id": "version:one"}
+
+
+def test_completed_source_slot_is_durable_and_scoped_to_the_active_automatic_child(repo):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    slot = completed_source()
+    duplicate = completed_source(job_id="png:duplicate", sha256="b" * 64)
+    assert repo.record_goal_completed_sources(turn["id"], [slot, duplicate])
+    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    matched = repo.completed_goal_source(claim["turn_id"], requested_outputs=[slot["requested_output"]], input_refs=[])
+    assert matched["job_id"] == "png:one" and matched["sha256"] == "a" * 64
+    assert len(repo.get_task_goal(turn["id"])["completed_source_slots"]) == 1
+    restarted = ConversationRepository(repo.database_path)
+    assert restarted.completed_goal_source(claim["turn_id"], requested_outputs=[slot["requested_output"]], input_refs=[]) == matched
+    assert repo.completed_goal_source(turn["id"], requested_outputs=[slot["requested_output"]], input_refs=[]) is None
+    assert repo.completed_goal_source(claim["turn_id"], requested_outputs=[{"name": "second-source.png"}], input_refs=[]) is None
+    assert repo.completed_goal_source(claim["turn_id"], requested_outputs=[slot["requested_output"]],
+        input_refs=[{"name": "input.png", "source_ref": "other", "expected_artifact_id": "input:one", "expected_sha256": "c" * 64}]) is None
+    repo.invalidate_task_goal(turn["id"], "new_user_instruction_or_revoked")
+    assert not repo.record_goal_completed_sources(turn["id"], [slot])
+    assert repo.completed_goal_source(claim["turn_id"], requested_outputs=[slot["requested_output"]], input_refs=[]) is None
+
+
+def test_real_source_facts_and_event_checkpoint_are_given_to_the_new_turn(repo):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    slot = completed_source()
+    svc, calls = service(repo, readiness={"status": "ready", "task_version": {}, "facts": {},
+                                        "completed_source_slots": [slot]})
+    assert svc.reconcile() == 1
+    assert calls[0][0]["goal"]["completed_source_slots"][0]["artifact_id"] == slot["artifact_id"]
+    assert calls[0][0]["goal"]["next_checkpoint"] == "read_completed_source_and_continue"
+    assert calls[0][0]["goal"]["unfinished_steps"][0] == "read_completed_source_and_continue"
+
+
+@pytest.mark.parametrize("readiness", ["ready", "waiting_adoption"])
+@pytest.mark.parametrize("observed_status", ["succeeded", "stale"])
+def test_observation_event_cannot_start_execution_while_actual_proposal_waits_for_adoption(repo, readiness, observed_status):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    svc, initial = service(repo)
+    assert svc.reconcile() == 1
+    child = {"id": initial[0][0]["turn_id"]}
+    observed = emit(repo, child, status=observed_status, phase="observation", job_id="observation:one", result_kind="observation")
+    blocked, calls = service(repo, readiness={"status": readiness, "task_version": {}, "reason": "actual_proposal_is_proposed",
+                                             "completed_source_slots": [completed_source()]})
+    assert blocked.reconcile() == 1 and calls == []
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == "waiting_adoption" and observed["event_id"] in goal["handled_event_ids"]
+    assert goal["next_checkpoint"] == "await_real_adoption"
+    assert blocked.reconcile() == 0
+    emit(repo, child, status="confirmed", phase="apply", proposal_id="proposal:one", result_version_id="version:two")
+    adopted, after = service(repo, response={}, readiness={"status": "ready",
+        "task_version": {"timeline_version_id": "version:two", "timeline_sequence": 2},
+        "facts": {"adopted_operation": {"operation_id": "actual:one", "result_version_id": "version:two"}}})
+    assert adopted.reconcile() == 1 and len(after) == 1
+    assert after[0][0]["event"]["status"] == "confirmed"
+    assert after[0][0]["goal"]["next_checkpoint"] == "continue_after_real_adoption"
+
+
+def test_host_pending_proposal_gate_can_stop_a_goal_still_waiting_for_preview_result(repo):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    preview, first = service(repo, response={"media_job": {"job_id": "preview:one", "status": "queued", "result_kind": "edit_preview"}})
+    assert preview.reconcile() == 1
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
+    observed = emit(repo, {"id": first[0][0]["turn_id"]}, phase="observation", result_kind="observation", job_id="observation:one")
+    blocked, calls = service(repo, readiness={"status": "waiting_adoption", "reason": "actual_pending_preview_or_proposal",
+                                            "completed_source_slots": [completed_source()]})
+    assert blocked.reconcile() == 1 and calls == []
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == "waiting_adoption" and observed["event_id"] in goal["handled_event_ids"]
+    assert goal["completed_source_slots"][0]["job_id"] == "png:one"

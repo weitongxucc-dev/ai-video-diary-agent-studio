@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -570,6 +571,54 @@ class ConversationRepository:
             root = self._goal_root(conn, turn_id)
         return root["goal"] if root else None
 
+    @staticmethod
+    def _source_slot_key(name: str, input_refs: list[dict]) -> str:
+        # Source identity is its named output and fixed input revisions. Code
+        # formatting, call IDs and job digests do not create a new output slot.
+        inputs = sorted(input_refs, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+        return hashlib.sha256(json.dumps([name, inputs], sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode()).hexdigest()
+
+    def record_goal_completed_sources(self, turn_id: str, slots: list[dict]) -> bool:
+        """Store only source facts verified by the host's actual job/artifact reader."""
+        completed = {}
+        required = {"name", "requested_output", "input_refs", "job_id", "source_ref", "artifact_id", "sha256",
+                    "size_bytes", "width", "height", "base_version_id"}
+        for slot in slots:
+            if not required.issubset(slot) or slot["name"] != slot["requested_output"]["name"]:
+                raise ValueError("已完成来源缺少实际输出声明与登记事实")
+            key = self._source_slot_key(slot["name"], slot["input_refs"])
+            # The earliest actual success remains the canonical result of a
+            # fulfilled slot; duplicate later programs cannot replace it.
+            completed.setdefault(key, {**slot, "slot_key": key})
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            root = self._goal_root(conn, turn_id)
+            if root is None or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
+                return False
+            self._write_goal(conn, root, {**root["goal"], "completed_source_slots": list(completed.values())})
+        return True
+
+    def completed_goal_source(self, turn_id: str, *, requested_outputs: list[dict], input_refs: list[dict]) -> dict | None:
+        """Find an already fulfilled slot for this bound automatic child only.
+
+        The API must still verify current source access and actual artifact hash
+        before returning the original receipt. This is not a synthetic success.
+        """
+        if len(requested_outputs) != 1:
+            return None  # Existing media-script contract produces one PNG.
+        with self._connect() as conn:
+            root = self._goal_root(conn, turn_id)
+            receipt = conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts WHERE turn_id=?",
+                                   (turn_id,)).fetchone()
+            turn = conn.execute("SELECT status FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
+            if (root is None or receipt is None or turn["status"] != "running"
+                    or json.loads(receipt["request_context_json"]).get("source_kind") != "business_event"
+                    or root["goal"]["status"] != "running" or root["goal"]["current_turn_id"] != turn_id):
+                return None
+            key = self._source_slot_key(requested_outputs[0]["name"], input_refs)
+            return next((slot for slot in root["goal"].get("completed_source_slots", []) if slot["slot_key"] == key), None)
+
     def goal_event_candidates(self, *, limit: int = 8) -> list[dict]:
         """Read unconsumed trusted results already projected into existing turns."""
         candidates = []
@@ -601,7 +650,7 @@ class ConversationRepository:
         return candidates
 
     def update_goal_checkpoint(self, root_id: str, *, status: str, waiting_reason: str,
-                               event_id: str | None = None) -> bool:
+                               event_id: str | None = None, next_checkpoint: str | None = None) -> bool:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             root = self._goal_root(conn, root_id)
@@ -612,6 +661,10 @@ class ConversationRepository:
                 goal["handled_event_ids"] = [*goal["handled_event_ids"], event_id]
             if status == "waiting_adoption":
                 goal["unfinished_steps"] = ["await_real_adoption", "complete_original_instruction"]
+                goal["next_checkpoint"] = "await_real_adoption"
+            elif next_checkpoint is not None:
+                goal["next_checkpoint"] = next_checkpoint
+                goal["unfinished_steps"] = [next_checkpoint, "complete_original_instruction"]
             self._write_goal(conn, root, goal)
         return True
 
@@ -679,7 +732,7 @@ class ConversationRepository:
             goal = {**goal, "status": "running", "round_count": goal["round_count"] + 1,
                     "target_snapshot": {**goal["target_snapshot"], **task_version}, "current_turn_id": turn_id,
                     "handled_event_ids": [*goal["handled_event_ids"], event["event_id"]],
-                    "unfinished_steps": ["evaluate_actual_result", "complete_original_instruction"]}
+                    "unfinished_steps": [goal.get("next_checkpoint", "evaluate_actual_result"), "complete_original_instruction"]}
             self._write_goal(conn, root, goal)
         return {"turn_id": turn_id, "conversation_id": root["conversation_id"], "goal": goal,
                 "request_context": context, "event": event, "source_turn_id": candidate["source_turn_id"]}
@@ -736,6 +789,7 @@ class ConversationRepository:
             else:
                 status, steps = "no_progress", []
             goal = {**root["goal"], "status": status, "unfinished_steps": steps,
+                    "next_checkpoint": steps[0] if steps else None,
                     "waiting_reason": "no_new_business_action" if status == "no_progress" else status}
             self._write_goal(conn, root, goal)
         return goal
