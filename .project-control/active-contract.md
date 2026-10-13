@@ -22,6 +22,8 @@
 
 R6 已在 `fresh-runtime-reload/REPORT.json` 给出实际服务读写与临时目录失败反例，API 下一组显式组装/安全重载独占 `apps/api/app/main.py`、本次实际需要的 `apps/api/app/bootstrap.py`、`apps/api/tests/test_host_model_installation.py` 及直接对应新增最小回归。当前这两个后续文件无其他 WIP/owner；不得跨写 R6 的 config/IO/installer 或 workspace_settings。先完成当前字幕与使用记录候选的释放/集成，再在 main 写权归还后接此组；冷启动/重载沿同一实际依赖组装，五 DB 服务及捕获它们的消费者同绑定，真实失败在配置持久写入、rebind、停止旧驱动和发布新绑定之前拒绝，保留可用旧运行。权限、存储格式、单 installer owner、scheduled 重载拒绝和 startup 恢复规则保持。R6 对明确稳定新候选独立复验，不以旧失败报告或模型静态配置算修复成功。
 
+Web 六源集成并归还后，依据 `fresh-web-consumers/REPORT.md` 的三个实际反例，R5 追加独占 `apps/web/src/components/creation-task/useCreationExecution.ts`、`apps/web/src/components/SubtitleWorkspace.tsx`、既有 `__tests__/useCreationExecution.test.tsx` 与 `__tests__/SubtitleWorkspace.test.tsx` 的最小修复。成功接受完整回读后才更新轮询快照；失败允许原终态重读，poll/changeExecution 共用有限读取归属，旧回包不覆盖后来请求，恢复后清除对应旧错误。同对象、同版本、相同持久值的新 JSON 引用不能重置正在输入的字幕文字/时间/样式草稿，真实提交、换对象与版本变化保留原规则。不新增后端字段/通用状态层，不改变 API、类型、样式或共享权威。当前四文件无他人 WIP；必要接线仍限原 R5 已归还文件并须明列候选。以原三门、最小产品回归和同候选保持焦点的真实浏览器回读差额验证；未执行 GUI 不算可见通过。
+
 ## 用户决定、入口与范围
 
 用户已批准“按这个方案执行”，要求记住高内聚、低耦合；随后明确允许新建合适的可见实施线程或由主控直接执行。此前整体暂停由本次批准取代，旧线程和旧工作树租约不自动恢复。
