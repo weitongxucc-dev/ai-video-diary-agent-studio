@@ -349,48 +349,66 @@ class SourceRepository:
         上传者归属只认 ``verified_owner_user_id``（由调用方从已验证身份或成员
         令牌解析出）；不采信任何调用方自填的 owner_user_id。
         """
+        self._require_workspace(workspace_id)
         owner = str(verified_owner_user_id or "").strip() or None
-        source = self.get_source_item(workspace_id, source_item_id)
-        if source.content_hash is None:
-            # 重试同一来源只返回本成员首次保存的知识对象，并同步用户当前限制状态。
-            with self._connect() as conn:
+        with self._connect() as conn:
+            # 来源读取、去重和父版本决策与提交属于同一写事务。
+            conn.execute("BEGIN IMMEDIATE")
+            source_row = conn.execute(
+                "SELECT * FROM source_items WHERE id = ? AND workspace_id = ?",
+                (source_item_id, workspace_id),
+            ).fetchone()
+            if source_row is None:
+                raise KeyError(source_item_id)
+            source = self._source_item_from_row(source_row)
+            if source.content_hash is None:
+                # 手动来源重试只返回本成员首次保存的对象，不改用户限制。
                 existing = conn.execute(
                     "SELECT * FROM knowledge_items WHERE workspace_id = ? AND source_item_id = ? AND owner_user_id IS ? ORDER BY created_at LIMIT 1",
                     (workspace_id, source.id, owner),
                 ).fetchone()
                 if existing is not None:
-                    return self._knowledge_item_from_row(existing)
-            return self.create_knowledge_item_owned(
-                KnowledgeItem(
-                    id=f"ki_{uuid4().hex}",
-                    workspace_id=workspace_id,
-                    content_type=source.content_type,
-                    title=source.title,
-                    body=source.body,
-                    file_reference=source.file_reference,
-                    authorization=authorization,
-                    ownership=ownership,
-                    source_item_id=source.id,
-                    version="1",
-                    use_state=source.use_state,
-                ),
-                verified_user_id=owner,
-            )
-        return self._save_parsed_source_to_knowledge(
-            workspace_id, source, ownership=ownership, authorization=authorization,
-            verified_owner_user_id=owner,
-        )
+                    item_id = existing["id"]
+                else:
+                    item = KnowledgeItem(
+                        id=f"ki_{uuid4().hex}",
+                        workspace_id=workspace_id,
+                        content_type=source.content_type,
+                        title=source.title,
+                        body=source.body,
+                        file_reference=source.file_reference,
+                        authorization=authorization,
+                        ownership=ownership,
+                        source_item_id=source.id,
+                        version="1",
+                        owner_user_id=owner,
+                        use_state=source.use_state,
+                    )
+                    self._validate_knowledge_item(item)
+                    self._insert_knowledge_item(conn, item)
+                    item_id = item.id
+            else:
+                item_id = self._save_parsed_source_to_knowledge(
+                    conn, workspace_id, source, ownership=ownership, authorization=authorization,
+                    verified_owner_user_id=owner,
+                )
+            saved = conn.execute(
+                "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                (item_id, workspace_id),
+            ).fetchone()
+        return self._knowledge_item_from_row(saved)
 
     def _save_parsed_source_to_knowledge(
         self,
+        conn: sqlite3.Connection,
         workspace_id: str,
         source: SourceItem,
         *,
         ownership: str,
         authorization: str,
         verified_owner_user_id: str | None = None,
-    ) -> KnowledgeItem:
-        """同内容不新增版本、不回滚旧版；原内容变化时保留旧版并追加新版本。
+    ) -> str:
+        """在调用方持有的写事务中去重、选父版本并保存，返回实际资料ID。
 
         文件来源：重复判断按内容指纹，不按随机 source_item_id；同一文件被导入两次、
         不同文件名下同一内容、以及重新导入某个历史版本的内容，都命中已有指纹。
@@ -398,64 +416,63 @@ class SourceRepository:
         网页快照：按原网址分组。两个不同网址即使正文完全一样，也是两条独立出处，
         不能把后来的网址存进前一个网址的版本链丢掉它自己的原网址。
         """
-        with self._connect() as conn:
-            is_web_snapshot = source.source_label == "web_snapshot"
-            scope_sql = "AND file_reference = ?" if is_web_snapshot else ""
-            scope = (source.file_reference,) if is_web_snapshot else ()
-            same_head = conn.execute(
-                f"""
+        is_web_snapshot = source.source_label == "web_snapshot"
+        scope_sql = "AND file_reference = ?" if is_web_snapshot else ""
+        scope = (source.file_reference,) if is_web_snapshot else ()
+        same_head = conn.execute(
+            f"""
+            SELECT * FROM knowledge_items
+            WHERE workspace_id = ? AND owner_user_id IS ? AND content_hash = ? {scope_sql}
+            ORDER BY created_at LIMIT 1
+            """,
+            (workspace_id, verified_owner_user_id, source.content_hash, *scope),
+        ).fetchone()
+        if same_head is not None:
+            return same_head["id"]
+        # 指纹已存在于历史版本：不新建、不改写旧快照，也不把当前版本回滚到旧内容。
+        stored_version = conn.execute(
+            f"""
+            SELECT v.knowledge_item_id AS knowledge_item_id, v.version AS version
+            FROM knowledge_item_versions v
+            JOIN knowledge_items k ON k.id = v.knowledge_item_id
+            WHERE v.workspace_id = ? AND v.content_hash = ?
+              AND k.workspace_id = ? AND k.owner_user_id IS ? AND k.content_hash <> v.content_hash
+              {"AND k.file_reference = ?" if is_web_snapshot else ""}
+            ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
+            """,
+            (workspace_id, source.content_hash, workspace_id, verified_owner_user_id, *scope),
+        ).fetchone()
+        if stored_version is not None:
+            head = conn.execute(
+                "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
+                (stored_version["knowledge_item_id"], workspace_id),
+            ).fetchone()
+            return head["id"]
+        # 原内容更新沿用同一知识条目：链按文件引用（网页即原网址）串，不按每次导入的
+        # source_item_id。
+        parent = (
+            conn.execute(
+                """
                 SELECT * FROM knowledge_items
-                WHERE workspace_id = ? AND owner_user_id IS ? AND content_hash = ? {scope_sql}
-                ORDER BY created_at LIMIT 1
+                WHERE workspace_id = ? AND file_reference = ?
+                  AND owner_user_id IS ? AND content_hash IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
                 """,
-                (workspace_id, verified_owner_user_id, source.content_hash, *scope),
+                (workspace_id, source.file_reference, verified_owner_user_id),
             ).fetchone()
-            if same_head is not None:
-                return self._knowledge_item_from_row(same_head)
-            # 指纹已存在于历史版本：不新建、不改写旧快照，也不把当前版本回滚到旧内容。
-            stored_version = conn.execute(
-                f"""
-                SELECT v.knowledge_item_id AS knowledge_item_id, v.version AS version
-                FROM knowledge_item_versions v
-                JOIN knowledge_items k ON k.id = v.knowledge_item_id
-                WHERE v.workspace_id = ? AND v.content_hash = ?
-                  AND k.workspace_id = ? AND k.owner_user_id IS ? AND k.content_hash <> v.content_hash
-                  {"AND k.file_reference = ?" if is_web_snapshot else ""}
-                ORDER BY CAST(v.version AS INTEGER) DESC LIMIT 1
+            if source.file_reference
+            else None
+        )
+        if parent is None:
+            parent = conn.execute(
+                """
+                SELECT * FROM knowledge_items
+                WHERE workspace_id = ? AND source_item_id = ?
+                  AND owner_user_id IS ? AND content_hash IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
                 """,
-                (workspace_id, source.content_hash, workspace_id, verified_owner_user_id, *scope),
+                (workspace_id, source.id, verified_owner_user_id),
             ).fetchone()
-            if stored_version is not None:
-                head = conn.execute(
-                    "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
-                    (stored_version["knowledge_item_id"], workspace_id),
-                ).fetchone()
-                return self._knowledge_item_from_row(head)
-            # 原内容更新沿用同一知识条目：链按文件引用（网页即原网址）串，不按每次导入的
-            # source_item_id。
-            parent = (
-                conn.execute(
-                    """
-                    SELECT * FROM knowledge_items
-                    WHERE workspace_id = ? AND file_reference = ?
-                      AND owner_user_id IS ? AND content_hash IS NOT NULL
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (workspace_id, source.file_reference, verified_owner_user_id),
-                ).fetchone()
-                if source.file_reference
-                else None
-            )
-            if parent is None:
-                parent = conn.execute(
-                    """
-                    SELECT * FROM knowledge_items
-                    WHERE workspace_id = ? AND source_item_id = ?
-                      AND owner_user_id IS ? AND content_hash IS NOT NULL
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (workspace_id, source.id, verified_owner_user_id),
-                ).fetchone()
         if parent is None:
             item = KnowledgeItem(
                 owner_user_id=str(verified_owner_user_id or "").strip() or None,
@@ -478,25 +495,24 @@ class SourceRepository:
             )
             self._validate_knowledge_item(item)
             # 知识条目头与它的第一版快照在同一事务写入，回查不会看到没有版本的条目。
-            with self._connect() as conn:
-                self._insert_knowledge_item(conn, item)
-                self._insert_knowledge_version(
-                    conn,
-                    workspace_id=workspace_id,
-                    knowledge_item_id=item.id,
-                    version=item.version,
-                    title=item.title,
-                    body=item.body,
-                    file_reference=item.file_reference,
-                    content_hash=item.content_hash,
-                    source_item_id=source.id,
-                    sections=item.sections,
-                    parameters=item.parameters,
-                    saved_at=item.created_at,
-                    fetched_at=source.fetched_at,
-                    source_url=source.source_url,
-                )
-            return self.get_knowledge_item(workspace_id, item.id)
+            self._insert_knowledge_item(conn, item)
+            self._insert_knowledge_version(
+                conn,
+                workspace_id=workspace_id,
+                knowledge_item_id=item.id,
+                version=item.version,
+                title=item.title,
+                body=item.body,
+                file_reference=item.file_reference,
+                content_hash=item.content_hash,
+                source_item_id=source.id,
+                sections=item.sections,
+                parameters=item.parameters,
+                saved_at=item.created_at,
+                fetched_at=source.fetched_at,
+                source_url=source.source_url,
+            )
+            return item.id
         previous = self._knowledge_item_from_row(parent)
         next_version = str(int(previous.version) + 1)
         # 新版本沿用已保存的归属和授权；校验与手工保存入口走同一条现有规则。
@@ -519,49 +535,48 @@ class SourceRepository:
             )
         )
         # 当前版本头与新版本快照在同一个事务里写入，回查不会看到半套状态。
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE knowledge_items SET
-                    content_type = ?, title = ?, body = ?, file_reference = ?,
-                    version = ?, content_hash = ?, sections = ?, parameters = ?,
-                    source_item_id = ?, fetched_at = ?, source_url = ?, use_state = ?
-                WHERE id = ? AND workspace_id = ?
-                """,
-                (
-                    source.content_type,
-                    source.title,
-                    source.body,
-                    source.file_reference,
-                    next_version,
-                    source.content_hash,
-                    _sections_json(source.sections),
-                    _parameters_json(source.parameters),
-                    source.id,
-                    source.fetched_at.isoformat() if source.fetched_at else None,
-                    source.source_url,
-                    previous.use_state,
-                    previous.id,
-                    workspace_id,
-                ),
-            )
-            self._insert_knowledge_version(
-                conn,
-                workspace_id=workspace_id,
-                knowledge_item_id=previous.id,
-                version=next_version,
-                title=source.title,
-                body=source.body,
-                file_reference=source.file_reference,
-                content_hash=source.content_hash,
-                source_item_id=source.id,
-                sections=source.sections,
-                parameters=source.parameters,
-                saved_at=_utc_now(),
-                fetched_at=source.fetched_at,
-                source_url=source.source_url,
-            )
-        return self.get_knowledge_item(workspace_id, previous.id)
+        conn.execute(
+            """
+            UPDATE knowledge_items SET
+                content_type = ?, title = ?, body = ?, file_reference = ?,
+                version = ?, content_hash = ?, sections = ?, parameters = ?,
+                source_item_id = ?, fetched_at = ?, source_url = ?, use_state = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (
+                source.content_type,
+                source.title,
+                source.body,
+                source.file_reference,
+                next_version,
+                source.content_hash,
+                _sections_json(source.sections),
+                _parameters_json(source.parameters),
+                source.id,
+                source.fetched_at.isoformat() if source.fetched_at else None,
+                source.source_url,
+                previous.use_state,
+                previous.id,
+                workspace_id,
+            ),
+        )
+        self._insert_knowledge_version(
+            conn,
+            workspace_id=workspace_id,
+            knowledge_item_id=previous.id,
+            version=next_version,
+            title=source.title,
+            body=source.body,
+            file_reference=source.file_reference,
+            content_hash=source.content_hash,
+            source_item_id=source.id,
+            sections=source.sections,
+            parameters=source.parameters,
+            saved_at=_utc_now(),
+            fetched_at=source.fetched_at,
+            source_url=source.source_url,
+        )
+        return previous.id
 
     def find_version_by_content_hash(
         self,
