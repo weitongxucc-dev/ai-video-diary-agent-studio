@@ -33,8 +33,8 @@ from app.database_migrations import (
 from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
-from app.materials.collections import MaterialCollectionStore, collection_ids_for_workspace
-from app.materials.assets import MaterialAssetStore, _normalized_labels, _infer_system_tags
+from app.materials.collections import MaterialCollectionStore
+from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags
 from app.persistence_json import _json_payload, _json_object, _json_default, _with_datetime
 from app.materials.contracts import (
     AssetReviewStatus,
@@ -876,10 +876,6 @@ from app.creation.contracts import (
     SUPPORTED_EDIT_OPERATION_TYPES,
     EditOperation
 )
-
-
-class MaterialVersionConflict(ValueError):
-    """A frozen material revision changed before the atomic mutation."""
 
 
 class TimelineVersionConflict(ValueError):
@@ -4313,77 +4309,17 @@ class ProductionRepository:
         self._save_asset(asset)
 
     def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str], *, expected_asset_updated_at: datetime | None = None) -> MaterialAsset:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
-            if row is None:
-                raise KeyError(asset_id)
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
-            if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
-                raise MaterialVersionConflict("素材版本已变化，未提交标签修改；请重新查看后发送。")
-            asset.user_tags = _normalized_labels(user_tags)
-            asset.updated_at = utc_now()
-            conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id))
-        return asset
+        return self._material_assets.update_asset_tags(workspace_id, asset_id, user_tags, expected_asset_updated_at=expected_asset_updated_at)
 
     def update_assets_tags_batch(
         self, workspace_id: str, asset_ids: list[str], *, add: list[str], remove: list[str]
     ) -> list[MaterialAsset]:
-        if not asset_ids:
-            raise ValueError("请选择至少一条素材")
-        normalized_add = _normalized_labels(add)
-        normalized_remove = {value.casefold() for value in _normalized_labels(remove)}
-        updated: list[MaterialAsset] = []
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            for asset_id in dict.fromkeys(asset_ids):
-                row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
-                if row is None:
-                    raise KeyError(asset_id)
-                asset = self._asset_from_payload(json.loads(str(row["payload"])))
-                kept = [tag for tag in asset.user_tags if tag.casefold() not in normalized_remove]
-                asset.user_tags = _normalized_labels([*kept, *normalized_add])
-                asset.updated_at = utc_now()
-                updated.append(asset)
-            for asset in updated:
-                conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id))
-        return updated
+        return self._material_assets.update_assets_tags_batch(workspace_id, asset_ids, add=add, remove=remove)
 
     def update_asset_notes(
         self, workspace_id: str, notes: list[MaterialAssetNote]
     ) -> list[MaterialAsset]:
-        """Save the user's own text for exactly the materials named in `notes`.
-
-        Each note carries that material's whole text, so this replaces rather
-        than merges, and an empty string clears an earlier note instead of being
-        rejected. Nothing is written until every named material is confirmed to
-        exist in this workspace: a batch naming one missing or foreign asset is
-        refused whole, because a half-saved batch would leave the user believing
-        a note is stored that is not.
-        """
-        if not notes:
-            raise ValueError("请选择至少一条素材")
-        updated: list[MaterialAsset] = []
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            for note in dict.fromkeys(notes):
-                row = conn.execute(
-                    "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
-                    (workspace_id, note.asset_id),
-                ).fetchone()
-                if row is None:
-                    raise KeyError(note.asset_id)
-                asset = self._asset_from_payload(json.loads(str(row["payload"])))
-                asset.user_description = note.user_description.strip()
-                asset.upload_context = note.upload_context.strip()
-                asset.updated_at = utc_now()
-                updated.append(asset)
-            for asset in updated:
-                conn.execute(
-                    "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-                    (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id),
-                )
-        return updated
+        return self._material_assets.update_asset_notes(workspace_id, notes)
 
     def list_business_objects(self, workspace_id: str) -> list[MaterialBusinessObject]:
         return self._material_business_objects.list_business_objects(workspace_id)
@@ -4768,23 +4704,7 @@ class ProductionRepository:
     def set_asset_visibility(
         self, workspace_id: str, asset_id: str, visibility: ContentVisibility
     ) -> MaterialAsset:
-        """明确共享或收回一条素材的可见性，列与载荷一起改，回读一致。"""
-        if visibility not in ("private", "shared"):
-            raise ValueError("可见性只能是 private 或 shared。")
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND id=?",
-                (workspace_id, asset_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(asset_id)
-            asset = self._asset_from_row(row)
-            asset = replace(asset, visibility=visibility, updated_at=utc_now())
-            conn.execute(
-                "UPDATE material_assets SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
-                (_json_payload(asset), visibility, asset.updated_at.isoformat(), workspace_id, asset_id),
-            )
-        return asset
+        return self._material_assets.set_asset_visibility(workspace_id, asset_id, visibility)
 
     def set_creation_task_visibility(
         self, workspace_id: str, task_id: str, visibility: ContentVisibility
@@ -4899,49 +4819,7 @@ class ProductionRepository:
         expected_asset_updated_at: datetime | None = None,
         expected_segment_updated_at: datetime | None = None,
     ) -> MaterialAsset:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
-            if row is None:
-                raise KeyError(asset_id)
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
-            if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
-                raise MaterialVersionConflict("素材版本已变化，未提交片段修改；请重新查看后发送。")
-            segment = next((item for item in asset.segments if item.id == segment_id), None)
-            if segment is None:
-                raise KeyError(segment_id)
-            if expected_segment_updated_at is not None and segment.updated_at != expected_segment_updated_at:
-                raise MaterialVersionConflict("片段版本已变化，未提交修改；请重新查看后发送。")
-            if review_status == "approved" and asset.review_status != "approved":
-                raise ValueError("素材文件尚未进入可用库")
-            segment.description = description.strip()
-            segment.transcript = transcript.strip()
-            if usage_role is not None:
-                previous_usage_role = segment.usage_role
-                segment.usage_role = usage_role
-                if usage_role == "exclude":
-                    review_status = "rejected"
-                if usage_role != previous_usage_role:
-                    segment.system_tags = [
-                        tag for tag in segment.system_tags if not tag.startswith("用途:")
-                    ]
-                    if usage_role != "unassigned":
-                        segment.system_tags.append(f"用途:{usage_role}")
-            if user_tags is not None:
-                segment.user_tags = _normalized_labels(user_tags)
-            if collection_ids is not None:
-                known_collections = collection_ids_for_workspace(conn, workspace_id)
-                if not set(collection_ids) <= known_collections:
-                    raise ValueError("标签夹不存在或不属于当前工作区")
-                segment.collection_ids = list(dict.fromkeys(collection_ids))
-            segment.review_status = review_status
-            # Editing member text does not replace recognition facts. Analysis owns
-            # system_tags and still refreshes them through its existing save path.
-            segment.updated_at = utc_now()
-            asset.updated_at = utc_now()
-            conn.execute("UPDATE material_assets SET payload=?,updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset),asset.updated_at.isoformat(),workspace_id,asset_id))
-
-        return asset
+        return self._material_assets.update_segment(workspace_id, asset_id, segment_id, description=description, transcript=transcript, review_status=review_status, usage_role=usage_role, user_tags=user_tags, collection_ids=collection_ids, expected_asset_updated_at=expected_asset_updated_at, expected_segment_updated_at=expected_segment_updated_at)
 
     def record_segment_usage(
         self,
