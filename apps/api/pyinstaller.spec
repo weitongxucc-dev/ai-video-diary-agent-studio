@@ -34,12 +34,19 @@ _ENTRY = _SPEC_DIR / "server.py"
 _ASSET_DIRS: list[tuple[str, str]] = []
 
 # ── Hidden imports ───────────────────────────────────────────────────────────
-# Every app.* module so the FastAPI router collection works
-_APP_MODULES = [
-    f"app.{p.stem}"
-    for p in (_SPEC_DIR / "app").glob("*.py")
-    if p.stem not in {"__init__"}
-]
+# Include nested packages used by runtime registrations as well as HTTP imports.
+def _application_modules(application_directory: Path) -> list[str]:
+    modules = []
+    for source in sorted(application_directory.rglob("*.py")):
+        parts = source.relative_to(application_directory).with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        if parts:
+            modules.append("app." + ".".join(parts))
+    return sorted(set(modules))
+
+
+_APP_MODULES = _application_modules(_SPEC_DIR / "app")
 
 # uvicorn dynamic imports (auto protocol / loop / ws selection at runtime)
 _UVICORN_HIDDEN = [
