@@ -32,8 +32,34 @@ from app.database_migrations import (
 )
 from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
+from app.materials.contracts import (
+    AssetReviewStatus,
+    ContentVisibility,
+    AssetUsageRole,
+    SuggestedUsageRole,
+    AnalysisStatus,
+    MaterialMediaType,
+    MATERIAL_MEDIA_LABEL,
+    MATERIAL_MEDIA_BY_SUFFIX,
+    BUSINESS_OBJECT_KINDS,
+    ContentUseState,
+    MaterialSegment,
+    MaterialAsset,
+    MaterialAssetNote,
+    MaterialBusinessObject,
+    MaterialCollection,
+    MaterialSegmentMatch,
+    material_media_type_for,
+    material_media_type_label,
+    material_allows_footage,
+    material_allows_automation,
+    effective_segment_usage_role,
+    selectable_segment_usage_role,
+)
 from app.asr import SubtitleSegment as SpeechObservation
 from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis, speech_text_for_range
+# Only direct-link import admits non-video media. The directory scan whitelist
+# (SUPPORTED_VIDEO_EXTENSIONS) is unchanged: nothing else starts watching these.
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
     SegmentWindow,
@@ -54,10 +80,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)
-
-AssetReviewStatus = Literal["raw", "approved", "rejected"]
-ContentUseState = Literal["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"]
-ContentVisibility = Literal["private", "shared"]
 
 
 def content_owner(verified_user_id: str | None) -> str | None:
@@ -92,27 +114,7 @@ def content_readable(
         owner_user_id=owner_user_id,
     )
 
-AssetUsageRole = Literal["unassigned", "a_roll", "b_roll", "exclude"]
-SuggestedUsageRole = Literal["unassigned", "a_roll", "b_roll"]
-AnalysisStatus = Literal["pending", "ready", "blocked", "failed"]
-MaterialMediaType = Literal["video", "audio", "image"]
-MATERIAL_MEDIA_LABEL = {"video": "视频", "audio": "音频", "image": "图片"}
-# Only direct-link import admits non-video media. The directory scan whitelist
-# (SUPPORTED_VIDEO_EXTENSIONS) is unchanged: nothing else starts watching these.
-MATERIAL_MEDIA_BY_SUFFIX: dict[str, MaterialMediaType] = {
-    ".mp4": "video", ".mov": "video", ".m4v": "video", ".webm": "video",
-    ".mp3": "audio", ".m4a": "audio", ".aac": "audio", ".wav": "audio",
-    ".jpg": "image", ".jpeg": "image", ".png": "image", ".webp": "image",
-    ".gif": "image",
-}
 
-
-def material_media_type_for(path: Path) -> MaterialMediaType | None:
-    return MATERIAL_MEDIA_BY_SUFFIX.get(path.suffix.lower())
-
-
-def material_media_type_label(media_type: MaterialMediaType) -> str:
-    return MATERIAL_MEDIA_LABEL[media_type]
 BatchStatus = Literal[
     "created",
     "blocked",
@@ -173,102 +175,6 @@ def directory_accepts_writes(root: Path) -> bool:
     except OSError:
         return False
     return True
-
-
-@dataclass
-class MaterialSegment:
-    id: str
-    asset_id: str
-    start_seconds: float
-    end_seconds: float
-    description: str = ""
-    transcript: str = ""
-    visual_status: AnalysisStatus = "pending"
-    visual_model_id: str = ""
-    visual_sample_count: int = 0
-    understanding: SegmentUnderstanding | None = None
-    usage_role: AssetUsageRole = "unassigned"
-    suggested_usage_role: SuggestedUsageRole = "unassigned"
-    usage_role_confidence: float = 0.0
-    usage_role_reason: str = ""
-    review_status: AssetReviewStatus = "raw"
-    system_tags: list[str] = field(default_factory=list)
-    user_tags: list[str] = field(default_factory=list)
-    collection_ids: list[str] = field(default_factory=list)
-    usage_count: int = 0
-    last_used_at: datetime | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass
-class MaterialAsset:
-    id: str
-    workspace_id: str
-    file_name: str
-    path: str
-    size_bytes: int
-    modified_at: datetime
-    # Assets stored before direct-link import carry no media type and no provenance:
-    # they default to the only type the scan whitelist ever admitted.
-    media_type: MaterialMediaType = "video"
-    source_url: str = ""
-    duration_seconds: float | None = None
-    usage_role: AssetUsageRole = "unassigned"
-    suggested_usage_role: SuggestedUsageRole = "unassigned"
-    usage_role_confidence: float = 0.0
-    usage_role_reason: str = ""
-    review_status: AssetReviewStatus = "raw"
-    use_state: ContentUseState = "available"
-    user_tags: list[str] = field(default_factory=list)
-    # What the user typed about this one material, and the batch background it
-    # arrived with. Both are the user's own words, so they ride the JSON payload
-    # untouched: a later scan or re-analysis must not rewrite them, and a note
-    # saved for one material must never become a fact about its neighbours.
-    user_description: str = ""
-    upload_context: str = ""
-    analysis_status: AnalysisStatus = "pending"
-    analysis_message: str = "待分析镜头和画面内容。"
-    speech_analysis: MaterialSpeechAnalysis | None = None
-    segments: list[MaterialSegment] = field(default_factory=list)
-    # 新建素材默认私有：只有本人显式共享才对成员可见。存量行迁移时回填 shared。
-    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
-    # 上传者：来源是已验证身份（Bearer user_id 或本地成员 member_id），不采信客户端自报。
-    owner_user_id: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class MaterialAssetNote:
-    """One material's own text and the batch background it was uploaded with.
-
-    An empty string is a real value: it means the user left that box blank, and
-    saving it must clear an earlier note rather than be rejected or ignored.
-    """
-
-    asset_id: str
-    user_description: str = ""
-    upload_context: str = ""
-
-
-BUSINESS_OBJECT_KINDS = ("product", "dish", "person")
-
-
-@dataclass(frozen=True)
-class MaterialBusinessObject:
-    """一条工作区自有的名称条目，按类型标注素材。
-
-    名称只是用户自己维护的条目：它记录用户怎么称呼这个东西，不是系统识别出
-    的画面事实。它与出镜形象／声音档案（PersonProfile）没有关系，关联到素材
-    也不会创建形象或声音档案。
-    """
-
-    id: str
-    workspace_id: str
-    kind: str
-    name: str
-    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True)
@@ -364,22 +270,6 @@ def _material_hash_candidate(
         workspace_id, asset_id, str(path), provisional, stage_input,
         f"hash:v1:{stage_input}",
     )
-
-
-def material_allows_footage(asset: MaterialAsset) -> bool:
-    return asset.use_state in {"available", "not_for_automation", "not_for_publish"}
-
-
-def material_allows_automation(asset: MaterialAsset) -> bool:
-    """Can a machine pick this material on its own?
-
-    Stricter than `material_allows_footage` in exactly one way: a material the
-    user marked "不要自动选用" stays usable by hand — searchable, insertable,
-    replaceable — but must never reach a candidate pool the machine itself draws
-    from, including scheduled runs. Everything the manual rule allows stays
-    allowed, so restoring `available` needs no second edit anywhere else.
-    """
-    return asset.use_state in {"available", "not_for_publish"}
 
 
 _MATERIAL_COVERAGE_TERMS = {
@@ -609,40 +499,6 @@ class MediaPreviewRunRecord:
     input_digest: str = ""
     device_request_id: str | None = None
 
-
-
-@dataclass
-class MaterialCollection:
-    id: str
-    workspace_id: str
-    name: str
-    parent_id: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class MaterialSegmentMatch:
-    """一条候选素材及其可核对的依据。
-
-    前四个字段是既有响应形状（schemas.MaterialSegmentMatchResponse）；
-    其余字段是证据，必须能让人不打开代码就判断这条对不对。
-    """
-
-    asset_ref: str
-    segment_ref: str
-    score: float
-    reasons: list[str]
-    rank: int = 0
-    match_tier: str = "structural"
-    matched_terms: list[str] = field(default_factory=list)
-    matched_conditions: list[str] = field(default_factory=list)
-    asset_file_name: str = ""
-    start_seconds: float = 0.0
-    end_seconds: float = 0.0
-    duration_seconds: float = 0.0
-    time_range: str = ""
-    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -12484,22 +12340,6 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True)) / (
         left_norm * right_norm
     )
-
-
-def effective_segment_usage_role(
-    asset: MaterialAsset,
-    segment: MaterialSegment,
-) -> AssetUsageRole:
-    return segment.usage_role if segment.usage_role != "unassigned" else asset.usage_role
-
-
-def selectable_segment_usage_role(asset: MaterialAsset, segment: MaterialSegment) -> AssetUsageRole:
-    explicit = effective_segment_usage_role(asset, segment)
-    if explicit != "unassigned":
-        return explicit
-    if segment.usage_role_confidence >= 0.7:
-        return segment.suggested_usage_role
-    return "unassigned"
 
 
 def _json_default(value: object) -> str:
