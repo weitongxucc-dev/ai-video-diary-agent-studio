@@ -1,0 +1,130 @@
+import type {BusinessRequest, ToolRegistrar} from './contracts.ts';
+import {registerMaterialTools} from '../material_tools.ts';
+
+export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge, isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection}: {
+  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any;
+}) {
+  const materialSelection = readMaterialSelection();
+  if (stage === "material" || taskId || materialSelection) registerMaterialTools(pi, {
+    selection: materialSelection,
+    request: async (path, init) => {
+      if (taskId && materialSelection) {
+        const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`);
+        verifyTaskVersion(current);
+        const clip = selectedRefs.length === 1 && selectedRefs[0].startsWith("clip:")
+          ? current.montage?.clips?.find((item: { id: string }) => item.id === selectedRefs[0].slice(5)) : null;
+        if (!clip || clip.person_render_id || clip.asset_id !== materialSelection.assetId
+            || clip.segment_id !== materialSelection.segmentId) {
+          throw new Error("选中镜头的素材来源已变化，未读写其他素材；请重新查看后发送");
+        }
+      }
+      return request(path, init);
+    },
+  });
+  pi.registerTool({
+    name: "read_clip_candidates",
+    label: "查找替换镜头",
+    description: "为当前任务事实中的clip_id读取候选；未指定时才用真实界面选择，不修改selected_refs：使用范围、当前文件修订及时间槽由服务端校验，自动选择排除不要自动选用的素材。用户让助手决定时可按任务内容与已存标签选择一个候选，再调用preview_typed_edit提交待确认替换；不需要用户先手选素材。候选不是画质评分或已修改结果。无可用候选须明确说明实际条件，不把零候选说成空库。",
+    parameters: {type: "object", properties: getEditCapabilities() ? {clip_id: structuredClone(getEditCapabilities().schema.properties.clip_id)} : {}, additionalProperties: false},
+    execute: async (_id: string, params: {clip_id?: string} = {}) => {
+      if (!taskId || !isTaskRead()) throw new Error("请先读取当前任务镜头");
+      const clipId = params.clip_id ?? (selectedRefs.length === 1 && selectedRefs[0].startsWith("clip:") ? selectedRefs[0].slice(5) : null);
+      if (!clipId) throw new Error("请从当前任务事实选择实际镜头，再查找候选");
+      const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`);
+      verifyTaskVersion(current);
+      const clip = current.montage?.clips?.find((item: { id: string }) => item.id === clipId);
+      if (!clip) throw new Error("所选镜头已不存在，未查找其他镜头的候选");
+      const candidates = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}/candidates?for_automation=true`);
+      const assets = new Map<string, Record<string, any>>();
+      const matches = [];
+      for (const candidate of candidates.slice(0, 24)) {
+        if (candidate.asset_id === clip.asset_id && candidate.segment_id === clip.segment_id) continue;
+        if (!assets.has(candidate.asset_id)) assets.set(candidate.asset_id,
+          await request(`/api/production/materials/${encodeURIComponent(candidate.asset_id)}`));
+        const asset = assets.get(candidate.asset_id)!;
+        if (asset.use_state === "not_for_automation" || asset.use_state === "excluded") continue;
+        const segment = asset.segments.find((item: { id: string }) => item.id === candidate.segment_id);
+        if (!segment) throw new Error("候选来源已变化，请重新查找；未生成替换提案");
+        matches.push({ asset_id: candidate.asset_id, segment_id: candidate.segment_id,
+          file_name: String(candidate.file_name).split(/[\\/]/).at(-1),
+          description: candidate.description, start_seconds: candidate.start_seconds, end_seconds: candidate.end_seconds,
+          user_tags: [...asset.user_tags, ...segment.user_tags], system_tags: segment.system_tags,
+          reasons: candidate.reasons });
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ matches, candidate_count: candidates.length, truncated: candidates.length > 24,
+        instruction: "这是其他可用片段的有限候选，尚未替换；依据当前任务表达与标签选择后生成提案。不要向用户展示编号、字段名或把匹配分数当画质概率。" }) }], details: { matches, candidate_count: candidates.length, truncated: candidates.length > 24 } };
+    },
+  });
+  pi.registerTool({
+    name: "read_selected_profile", label: "读取所引用档案",
+    description: "只读发送时明确引用的人物或声音档案固定版本。由当前成员身份重新核验可见性；不读原文件或路径，不接受模型指定ID，不授权编辑或用于任务。",
+    parameters: {type:"object", properties:{}, additionalProperties:false},
+    execute: async () => {
+      if (!selectedProfile) throw new Error("请先明确引用人物或声音档案版本，不能猜测对象");
+      const data = await request(`/api/assistant/profile-references/${selectedProfile.kind}/${encodeURIComponent(selectedProfile.profile_id)}?version=${encodeURIComponent(selectedProfile.version)}`);
+      return {content:[{type:"text",text:JSON.stringify(data)}],details:data};
+    },
+  });
+  pi.registerTool({
+    name: "read_selected_knowledge", label: "读取所引用知识",
+    description: "只读发送时明确引用的知识固定版本与真实定位，按当前成员权限重新核验。不可换ID或版本，不授权编辑或用于任务。",
+    parameters: {type:"object",properties:{},additionalProperties:false},
+    execute: async () => {
+      if (!selectedKnowledge) throw new Error("请先明确引用知识版本，不能猜测对象");
+      const query = new URLSearchParams({version:selectedKnowledge.version});
+      if (selectedKnowledge.locator) query.set("locator",selectedKnowledge.locator);
+      const data = await request(`/api/assistant/knowledge-references/${encodeURIComponent(selectedKnowledge.knowledge_item_id)}?${query}`);
+      return {content:[{type:"text",text:JSON.stringify(data)}],details:data};
+    },
+  });
+  pi.registerTool({
+    name: "read_workspace_context",
+    label: "读取当前工作区",
+    description: "读取当前工作区最近的创作任务摘要，了解已有任务；不可把历史任务当成新任务结果。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      const data = await request("/api/creation-tasks");
+      const tasks = (data.items || []).slice(0, 8).map((item: Record<string, unknown>) => ({
+        id: item.id, name: item.name, stage: item.stage, status: item.status,
+      }));
+      return { content: [{ type: "text", text: JSON.stringify({ tasks }) }], details: { tasks } };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_video_templates",
+    label: "读取我的模板",
+    description: "用户要求使用已有模板时，读取当前工作区真实模板名称、ID和版本。",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async () => {
+      const data = await request("/api/video-templates");
+      const allTemplates = (data.items || []) as Record<string, unknown>[];
+      const templates = [...allTemplates.filter((item) => item.origin === "user"), ...allTemplates.filter((item) => item.origin !== "user")]
+        .slice(0, 50).map((item: Record<string, unknown>) => ({
+        id: item.id, name: item.name, version: item.version, origin: item.origin,
+      }));
+      const truncated = allTemplates.length > templates.length;
+      return { content: [{ type: "text", text: JSON.stringify({ templates, truncated }) }], details: { templates, truncated } };
+    },
+  });
+
+  pi.registerTool({
+    name: "find_materials",
+    label: "检索可用素材",
+    description: "按文字检索当前工作区已分析且允许直接用片的镜头，遵守真实使用限制，不要求统一逐条审核。只返回引用和匹配依据，不读取媒体文件；score是检索分数，不是适配概率或使用确认。",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string", minLength: 1, maxLength: 120 } },
+      required: ["query"], additionalProperties: false,
+    },
+    execute: async (_id: string, params: { query: string }) => {
+      const matches = await request(`/api/production/materials/search?q=${encodeURIComponent(params.query)}&limit=8`);
+      const excerpts = matches.map((item: {asset_ref: string; segment_ref: string; score: number; reasons: string[]}) => ({
+        asset_ref: item.asset_ref, segment_ref: item.segment_ref, score: item.score,
+        reasons: item.reasons.slice(0, 3).map((reason) => reason.slice(0, 160)),
+      }));
+      return { content: [{ type: "text", text: JSON.stringify(excerpts) }], details: { matches: excerpts } };
+    },
+  });
+
+}

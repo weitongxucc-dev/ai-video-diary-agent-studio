@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp,writeFile,chmod,symlink,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,chmod,symlink,rm,readFile,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {runCli,readConfig} from './yaohe.mjs';
+import * as publicCli from './yaohe.mjs';
 
 const REQUEST = '12345678-1234-4321-8123-123456789abc';
 const TOKEN = 'FAKE-LOCAL-TOKEN-only-synthetic';
@@ -19,6 +20,20 @@ const executionStatus = (status,jobId='execution_original',videoReady=false) => 
   job:{id:jobId,task_id:TASK,kind:'creation_task_execution',input_digest:executionInput.input_digest,status},video_ready:videoReady});
 const absent = response => send(response,404,{detail:'not found'});
 const send = (response,status,data) => { response.writeHead(status,{'Content-Type':'application/json'}); response.end(JSON.stringify(data)); };
+
+test('CLI retains public exports while command groups depend only on shared boundaries',async()=>{
+  assert.deepEqual(Object.keys(publicCli).sort(),['outcome','readConfig','runCli']);
+  assert.equal(readConfig,(await import('./yaohe/configuration.mjs')).readConfig);
+  assert.equal(publicCli.outcome,(await import('./yaohe/receipts.mjs')).outcome);
+  for(const name of await readdir(new URL('./yaohe/',import.meta.url))) {
+    if(!name.endsWith('.mjs'))continue;
+    const source=await readFile(new URL(`./yaohe/${name}`,import.meta.url),'utf8');
+    assert.doesNotMatch(source,/from ['"].*yaohe\.mjs['"]|process\.env/);
+    if(name!=='transport.mjs')assert.doesNotMatch(source,/\bfetch\(/);
+  }
+  const entry=await readFile(new URL('./yaohe.mjs',import.meta.url),'utf8');
+  assert.doesNotMatch(entry,/function (?:client|receipt|submitExecution|executionResult)\(/);
+});
 
 async function fixture(t,handler) {
   const directory = await mkdtemp(join(tmpdir(),'yaohe-cli-'));
