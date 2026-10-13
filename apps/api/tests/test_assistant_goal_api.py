@@ -14,7 +14,9 @@ from app.quality_inspection import QualityCheckRepository
 from test_assistant_business_continuation import state as state  # noqa: F401
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state  # noqa: F401
-from test_media_script_api import state as script_state  # noqa: F401
+import test_media_script_api
+
+script_state = test_media_script_api.state
 
 
 @pytest.fixture(autouse=True)

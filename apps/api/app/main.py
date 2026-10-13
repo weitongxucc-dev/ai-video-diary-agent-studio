@@ -19871,7 +19871,7 @@ def _verify_current_goal(goal, event):
         return {"status": "invalidated", "reason": "unrelated_timeline_change"}
     try:
         completed_sources = _goal_completed_sources(goal, actor)
-    except (KeyError, ValueError, PermissionError, OSError) as exc:
+    except (KeyError, ValueError, PermissionError, OSError):
         return {"status": "invalidated", "reason": "completed_source_no_longer_authorized_or_current"}
     pending = _goal_pending_preview(goal, task.current_timeline_version_id)
     if pending is not None:
