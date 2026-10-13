@@ -20,6 +20,8 @@
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
+R6 已在 `fresh-runtime-reload/REPORT.json` 给出实际服务读写与临时目录失败反例，API 下一组显式组装/安全重载独占 `apps/api/app/main.py`、本次实际需要的 `apps/api/app/bootstrap.py`、`apps/api/tests/test_host_model_installation.py` 及直接对应新增最小回归。当前这两个后续文件无其他 WIP/owner；不得跨写 R6 的 config/IO/installer 或 workspace_settings。先完成当前字幕与使用记录候选的释放/集成，再在 main 写权归还后接此组；冷启动/重载沿同一实际依赖组装，五 DB 服务及捕获它们的消费者同绑定，真实失败在配置持久写入、rebind、停止旧驱动和发布新绑定之前拒绝，保留可用旧运行。权限、存储格式、单 installer owner、scheduled 重载拒绝和 startup 恢复规则保持。R6 对明确稳定新候选独立复验，不以旧失败报告或模型静态配置算修复成功。
+
 ## 用户决定、入口与范围
 
 用户已批准“按这个方案执行”，要求记住高内聚、低耦合；随后明确允许新建合适的可见实施线程或由主控直接执行。此前整体暂停由本次批准取代，旧线程和旧工作树租约不自动恢复。
