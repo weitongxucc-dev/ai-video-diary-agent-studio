@@ -55,3 +55,12 @@ root核准 Web Owner 必要调色预览范围修复：独占main.py及test_creat
 及时提交/push已有分支，维护PR#124及#117/#120/#130真实进度；未验收不关Issue。教学既有thread=01a13039-45e5-76d0-8fbb-8ff3c02b0e6f；发送失败则留本课材料并如实报告，不新建重复教学线程。结束按workflow将剩余工作交回Issue/PR并删除本合同，Git保留历史。
 
 不实现全部#128字段、#129中文OCR/字形、#132–#135通用多轨/监听/变速/关键帧、#136–#140偏好/批量/手机/待定设计/平台外发，不新增广泛研究。已有能力仅为当前真实链路必要故障做窄修，新增范围先报root。全项目状态来自代码、Issue、Git、CI、Release和真实证据，开发计划只维护范围/归属，不记录第二份实时完成率。
+
+
+## 已发生资源阻断后的独立收尾租约（2026-10-13）
+
+真实候选2dfa9f2的单镜头声明已为1.652秒/360×640/静音，实际admission仍沿既有整片新增2GiB与全机swap上限而拒绝；未产生clip媒体/提案，未通过整片正向。QA已正常取消自己的排队cal，经最新版本和原提案证据以正常CAS仅undo本轮−3dB到v29 ready；旧MP4/SRT实际字节保持及v27/v28历史完整。自有API/Web/进程租约已释放，原0.11test4 app已恢复。未修改原private.env/门限，未打包。资源复核为只读报告，不能凭空给preview更小RSS/线程/timeout数值，当前策略仍有效。
+
+总控确认独立审核所见#130具体可见缺陷，授可见编码线程01a13533-b38c-7430-a2de-cb419e2340d6新窄租约：只写apps/web/src/components/AssistantConversationPanel.tsx、apps/web/src/lib/api.ts及现有直接components/__tests__/AssistantConversationPanel.test.tsx。复用已有taskMediaJobLabel的同一语义，将默认本轮结果中的resource_busy/user_cancelled译为用户可理解状态，取消不伪装处理失败/成功；保留真实Job/步骤/采用/草稿/范围。无CSS/layout/DTO/backend或资源门改动，不用全局其他Job指标/QA日志/猜字段补memory/swap原因。DESIGN/design-md相关要求遵守，最小检查后RELEASE，root审核提交/push；必要真实可见验收由原QA线程在新SHA及新租约后执行，编码线程不得构建/运行服务/改用户数据。
+
+可见审核线程01a13533-cec4-70d2-aa5d-ab5bb6c6aefd仅写原visible-review.md/json，读取新run真实排队/取消截图与当前消费者，明确API尚未保存/返回同request实际资源拒绝细节。短preview资源profile与同request安全原因投影记录在Issue，不扩大到任意默认、更改整片预算或省略当前检查。后续原Job真正成功自动观察及新试用包仍须实际证明；本轮不得以旧输出恢复、波形成功、scope声明或单测替代。

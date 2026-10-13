@@ -9,7 +9,7 @@ import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
-import { getAssistantCapabilities } from "@/lib/api";
+import { getAssistantCapabilities, taskMediaJobLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure } from "@/lib/types";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
@@ -313,7 +313,10 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
   const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
-  const outcomeStatus = continuation?.status ?? job?.status;
+  const outcomeStatus = continuation?.status === "failed" && job?.status === "cancelled"
+    ? job.status : continuation?.status ?? job?.status;
+  const mediaJobLabel = job && (job.status === "queued" || job.status === "cancelled")
+    ? taskMediaJobLabel(job) : null;
   const unknownRequest = assistantTurnHasUnknownRequest(turn);
   const pendingResult = assistantTurnNeedsResultRefresh(turn);
   const graphicSourceReady = job?.result_kind === "graphic_source" && job.status === "succeeded"
@@ -365,8 +368,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {unknownRequest && graphicSourceReady ? <p>{graphicSourceSummary}</p> : null}
-      {continuation?.waiting_reason || job?.waiting_reason ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
-      {job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
+      {mediaJobLabel ? <p>{mediaJobLabel}</p> : continuation?.waiting_reason || job?.waiting_reason
+        ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
+      {job?.status !== "cancelled" && job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <button type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</button> : null}
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}

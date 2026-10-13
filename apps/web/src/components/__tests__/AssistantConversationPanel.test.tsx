@@ -20,8 +20,9 @@ const api = vi.hoisted(() => ({
   saveAssistantConversationReference: vi.fn(),
   referenceSaved:new Map<string, import("@/lib/types").AssistantConversationReferenceState>(),
 }));
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async importOriginal => ({
   ...api,
+  taskMediaJobLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaJobLabel,
   getAssistantCapabilities: api.getAssistantCapabilities.mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
     pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0",
@@ -296,6 +297,60 @@ describe("actual goal progress", () => {
 });
 
 describe("persisted business result cards", () => {
+  it.each([
+    ["resource_busy", "本机资源余量不足，正在等待满足制作条件。"],
+    ["resource_unknown", "暂不能确认设备资源是否足够。"],
+  ])("shows the actual %s wait in the default-open result without inventing resource measurements", (reason, label) => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, waiting_reason: reason};
+    saved.turns[0].result!.continuation = {status: "queued", actionable: false, waiting_reason: reason};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getByText(`等待处理：${label}`)).toBeVisible();
+    expect(within(details).queryByText(reason)).not.toBeInTheDocument();
+    expect(details).not.toHaveTextContent(/处理未完成|交换空间|GiB|CPU|已生成预览/);
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    expect(response.media_job).toMatchObject({job_id: "job-preview", waiting_reason: reason});
+  });
+
+  it.each(["cancelled", "failed"])("shows a real user cancellation even when the continuation is %s", continuationStatus => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, status: "cancelled",
+      waiting_reason: "user_cancelled", failure_reason: "user_cancelled", repair_action: "原时间线和产物保持不变。"};
+    saved.turns[0].result!.continuation = {status: continuationStatus, actionable: false, waiting_reason: "user_cancelled"};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getByText("预览已取消")).toBeVisible();
+    expect(within(details).getByText("后台处理已取消，未据此应用修改。")).toBeVisible();
+    expect(within(details).getByText("原时间线和产物保持不变。")).toBeVisible();
+    expect(details).not.toHaveTextContent(/user_cancelled|处理未完成|这次操作没有完成|预览已生成|修改已应用/);
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    expect(response.media_job).toMatchObject({job_id: "job-preview", status: "cancelled", failure_reason: "user_cancelled"});
+    expect(saved.turns[0].result!.continuation).toMatchObject({status: continuationStatus});
+  });
+
+  it("retains an actual failed media job's reason and repair action", () => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, status: "failed", waiting_reason: null,
+      failure_reason: "当前镜头源文件不可读取。", repair_action: "请重新定位镜头源素材。"};
+    saved.turns[0].result!.continuation = {status: "failed", actionable: false, waiting_reason: null};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getByText("后台处理未完成；请查看实际原因，当前草稿未因此改变。")).toBeVisible();
+    expect(within(details).getByText("当前镜头源文件不可读取。")).toBeVisible();
+    expect(within(details).getByText("请重新定位镜头源素材。")).toBeVisible();
+    expect(within(details).queryByText("预览已取消")).not.toBeInTheDocument();
+  });
+
   it("allows a failed model turn's host-verified actionable preview to be read, while stopped and unverified failures remain closed", async () => {
     const saved = projectedTaskConversation("proposed");
     saved.turns[0].status = "failed";
