@@ -75,6 +75,8 @@
 
 素材合同和实际消费者交出SOURCE_RELEASE后，API已确认新增materials/business_objects.py不存在且无WIP并FILE_RELEASE_ACK。现由资料线程独占该文件和新增test_material_business_object_store.py，实际提取业务名称及素材关联存储；只接收有限的SQLite连接factory，消费中立契约，不反向依赖production、模型或路由。四个现有business_object方法及只用于本组的asset存在校验/row解码迁入该模块，替换关联的校验、删除、顺序保存和回读保留同一BEGIN IMMEDIATE事务；不创建第二套DDL/数据库、双写或新字段。production.py的初始化组装、公开方法薄委托及原SQL/私有实现删除仍由API独占，原test_material_business_objects.py也归API。资料先交真实模块候选，API接线后联合验证事务拒绝/失败回滚、工作区隔离、顺序/空选择及重开回读；未接线不算接受。集合与整体资产分析/权限存储仍按既有API顺序范围接续，不自动追加本线程写权。
 
+业务名称存储集成后，依据R4-collection-serde-review-26和API无WIP/FILE_RELEASE_ACK，将新增app/persistence_json.py、app/materials/collections.py、tests/test_persistence_json.py、tests/test_material_collection_store.py转交资料线程独占。persistence_json原样迁入现有_json_payload/_json_object/_json_default/_with_datetime四个纯函数，只有一个日期/JSON规则归属，不新建codec或注册框架。MaterialCollectionStore只收有限SQLite连接factory，保留list_collections/save_collection公共参数、返回对象、排序、存储及报错；同连接BEGIN IMMEDIATE包含原父级列表读取/解码/选择、更新时间与UPSERT。集合ID查询允许提供显式现有连接的有限函数，供资产事务消费，不嵌套事务/另开连接、不新加环或ID冲突策略。生产DDL和数据库初始化不迁。production初始化、两个薄委托、旧SQL/decoder及四helper body删除仍归API；profile_preview_execution.py原_json_payload导入由API直接接续中立owner，原导出引用同一对象，不保留双实现。main/schema/原测试及整体资产仓储仍API独占。资料先交模块候选，API接线后联合验证纯导入无运行副作用、JSON/日期原规则、父级隔离、实际SQL/序列化失败回滚、重开回读和公开HTTP消费者；未接线不得算接受。
+
 ### R6工具与CLI首批负责人
 
 R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d481接续R6。独占apps/api/agent_tools/diary_tools.ts、material_tools.ts、其直接需要的实际分组模块和定向测试，以及scripts/yaohe.mjs、yaohe.test.mjs和实际CLI分组模块。首批只拆现有工具注册、可信上下文、HTTP传输与回执、CLI命令职责，保留工具名字/共同schema/公共导出和现有HTTP协议；不开放新动作，不重试未知副作用。assistant_pi.py和后端制作/编辑编排仍不在此写权中，待R2/R3稳定后另行接续。Desktop候选已冻结，不与QA审核同时改动。
@@ -86,6 +88,8 @@ R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d
 资源子批集成后接续R9安装器：独占model_installer.py、其实际需要的安装作业存储/执行模块及test_model_installer.py。已在隔离线程复现构造新实例把仍运行的原作业误写interrupted；先将恢复写入移出构造，显式启动恢复与活跃作业责任分开，安装状态只有一个写负责人，保存格式与原协议保持。API主控实例构造/重载接线仍由API负责人修改，须协调该必要consumer后才算集成完成。下载/pip执行可按真实边界拆分，但不下载/启动用户模型、不读取私人配置、不删除模型或新建状态事实库。新配置/格式或公共能力改变先报主控；纯值规格与配置模块此时只读，不能因首个缺陷自动扩大为重写所有配置。
 
 安装器及主入口v2集成后，API已FILE_RELEASE_ACK确认config.py/runtime_settings.py及对应最小测试无WIP、env_files.py不存在。R6现独占config.py（仅dotenv IO闭包迁出/同对象导出）、新增app/env_files.py、runtime_settings.py（仅IO owner直接导入），及test_config_atomic.py/test_env_shadow.py/test_runtime_settings.py的最小边界接续。五个IO函数、覆盖路径常量与SETTINGS_OWNED_ENV_KEYS唯一归env_files；保留路径、覆盖优先级、原子替换、异常和保存后环境更新。不得新增不存在的dotenv锁，服务观测锁仍原位；六路径纯解析、Settings默认/身份/秘密投影及workspace_settings存储本批只读。API对上述整个文件只读，不同时改六路径章节；main/bootstrap接续仍API负责。config公共IO导出沿同对象保留，实际runtime_settings writer直接消费新owner；不新建兼容层或第二份IO实现。所有验证只读写合成env文件，并提前将IO owner次级repo路径绑定隔离目录；不读取私人主/次级dotenv或账号/模型配置。若共享conftest/验证runner须接续先报确切符号，由主控绑定，不自行改共享夹具或放宽隔离检查。
+
+IO六源集成后，R6接续已定位的服务状态解释小片：独占新增app/service_status_projection.py、test_llm_service_state.py，以及config.py中四档状态常量/文案、Settings.llm_service_state和llm_service_status的迁出与薄委托。新模块只接收字段齐全布尔值和该工作区已有观测，唯一维护既有四档判定、标签、原因及八字段结果；config同对象导出公共常量，旧规则/文案body删除。registry、锁、记录函数、配置指纹、public_status本地探测、safe_runtime_settings脱敏投影、六路径规则和IO实现保持，不把可变全局搬进新文件，也不新增状态框架或默认可用。API继续对config整文件只读，main无需接线。验证涵盖四档、密钥/模型变化失效、工作区隔离、未知原因、字段兼容及秘密不外露；Settings测试输入绑定合成路径，不探测用户默认目录、私人dotenv或真实模型。此片不代替显式启动组装和整体配置职责收敛。
 
 ### R5 Web负责人
 
@@ -123,7 +127,7 @@ Web首批SOURCE_RELEASE并集成后，主控接手其lib/api/transport.ts、crea
 
 ### API后续写权：R2、R3及R4资产/档案
 
-R1版本修复源码经主控/QA解除BLOCK后，原API线程继续独占原范围和新增apps/api/app/creation/editing/**、creation/contracts.py、creation/transactions.py、creation/projection.py、media/contracts.py、media/jobs.py、media/rendering.py、materials/**（排除已转交R4的contracts.py、business_objects.py）、profiles/**（排除已转交R4的contracts.py）、api/**及bootstrap.py中的实际模块；不先建空目录。新增现有文件写权为audio_timeline.py、linked_timeline.py、compound_edits.py、subtitle_edits.py、subtitle_alignment.py、subtitle_tracks.py、subtitle_style.py、graphic_overlays.py、graphic_sources.py、transitions.py、silence_edits.py、device_runtime.py、device_scheduler.py、task_runtime.py、granted_subprocess.py、artifact_store.py、media_script_jobs.py、assistant_goal_continuation.py和conversation_repository.py中与本次目标回执直接有关的部分。对应既有动作/事务/执行/接续测试允许最小相关调整。R4资料/档案契约独占文件、Pi/CLI适配及Web/Desktop/Mobile保持互斥。
+R1版本修复源码经主控/QA解除BLOCK后，原API线程继续独占原范围和新增apps/api/app/creation/editing/**、creation/contracts.py、creation/transactions.py、creation/projection.py、media/contracts.py、media/jobs.py、media/rendering.py、materials/**（排除已转交R4的contracts.py、business_objects.py、collections.py）、profiles/**（排除已转交R4的contracts.py）、api/**及bootstrap.py中的实际模块；不先建空目录。新增现有文件写权为audio_timeline.py、linked_timeline.py、compound_edits.py、subtitle_edits.py、subtitle_alignment.py、subtitle_tracks.py、subtitle_style.py、graphic_overlays.py、graphic_sources.py、transitions.py、silence_edits.py、device_runtime.py、device_scheduler.py、task_runtime.py、granted_subprocess.py、artifact_store.py、media_script_jobs.py、profile_preview_execution.py（仅本次持久化helper直接导入接续）、assistant_goal_continuation.py和conversation_repository.py中与本次目标回执直接有关的部分。对应既有动作/事务/执行/接续测试允许最小相关调整。R4资料/档案契约独占文件、Pi/CLI适配及Web/Desktop/Mobile保持互斥。
 
 R2按活跃动作形成具体输入、计算与联合变更集，保留一个版本/提案/跨轨保存事务。R3按媒体用途接续持久执行，显式携带原身份/版本/许可/取消/回执，逐组退役伪造HTTP、反射与路由重入；任务/设备检查点原子边界保持。R4素材/人物的中立类型、写入负责人和存储计算逐项迁出production，不让仓储依赖模型执行。R7后端bootstrap最后移出导入期运行组装。每个稳定子批先交源码、定向测试、退役证明及精确摘要供集成；同候选真实媒体门禁缺口单列，不能因此停止其他独立的已授权结构工作。对外协议、权限、存储格式和用户数据均保持。变更公共共享契约先报主控，不能以此授权签名发布或平台外发。
 
