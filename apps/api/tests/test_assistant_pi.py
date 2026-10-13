@@ -386,6 +386,29 @@ def test_controlled_parameter_rejection_projects_only_bounded_failure_reason(nam
     assert "raw_payload" not in json.dumps(projected) and "private" not in json.dumps(projected)
 
 
+def test_sdk_parameter_validation_projects_concrete_reason_without_received_arguments():
+    raw = ('Validation failed for tool "preview_typed_edit":\n'
+        '  - audio_edit.values.gain_db: must be number\n'
+        '  - audio_edit: must be null\n'
+        '  - audio_edit: must match a schema in anyOf\n\nReceived arguments:\n'
+        '{"audio_edit":{"values":{"gain_db":"-3"}},"private":"/Volumes/private/key.json","key":"secret"}')
+    projected = _PiStreamProjector().project(json.dumps({"type":"tool_execution_end",
+        "toolName":"preview_typed_edit", "isError":True,
+        "result":{"details":None,"content":[{"type":"text","text":raw}]}}))
+    assert projected["failure"] == {"reason":"参数校验未通过，工具未执行。audio_edit.values.gain_db 必须使用数字。"}
+    assert projected["ok"] is False
+    assert not any(value in json.dumps(projected) for value in ("Received arguments", "must be null", "anyOf", "secret", "/Volumes"))
+
+
+@pytest.mark.parametrize("tool,prefix", [("preview_typed_edit","ordinary model error"),
+    ("preview_typed_edit",'Validation failed for tool "other_tool":\n - gain_db: must be number'),
+    ("unknown_tool",'Validation failed for tool "unknown_tool":\n - gain_db: must be number')])
+def test_sdk_failure_projection_requires_known_tool_and_matching_validation_prefix(tool, prefix):
+    projected = _PiStreamProjector().project(json.dumps({"type":"tool_execution_end", "toolName":tool,
+        "isError":True,"result":{"details":None,"content":[{"type":"text","text":prefix}]}}))
+    assert projected is None or "failure" not in projected
+
+
 def test_script_save_summary_does_not_invent_zero_sections_from_identity_only_result():
     result = {"details": {"kind": "script_draft", "preview": {"script_id": "draft-one"}},
               "content": [{"type": "text", "text": '{"title":"真实草稿","section_count":3}'}]}

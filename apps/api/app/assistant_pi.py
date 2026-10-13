@@ -387,6 +387,21 @@ class _PiStreamProjector:
                 reason = details.get("failure_reason")
                 if isinstance(reason, dict) and isinstance(reason.get("text"), str):
                     failure = {"reason": reason["text"]}
+            if failed and failure is None and (event.get("result") or {}).get("details") is None:
+                prefix = f'Validation failed for tool "{name}":\n'
+                for item in (event.get("result") or {}).get("content", []):
+                    raw = item.get("text") if item.get("type") == "text" else None
+                    if not isinstance(raw, str) or not raw.startswith(prefix):
+                        continue
+                    validation = raw[len(prefix):].split("\n\nReceived arguments:", 1)[0]
+                    errors = [match.groups() for line in validation.splitlines()
+                        if (match := re.fullmatch(r"\s*-\s+([A-Za-z0-9_.\[\]-]+):\s*(.+)", line))]
+                    concrete = [(field, reason) for field, reason in errors
+                        if reason not in {"must be null", "must match a schema in anyOf"}]
+                    reason = "；".join(f"{field} 必须使用数字" if problem == "must be number" else f"{field}: {problem}"
+                        for field, problem in concrete)
+                    failure = {"reason": "参数校验未通过，工具未执行。" + (reason + "。" if reason else "")}
+                    break
             return {
                 "type": "tool_end", "tool_id": tool_id, "label": label,
                 "ok": not failed,

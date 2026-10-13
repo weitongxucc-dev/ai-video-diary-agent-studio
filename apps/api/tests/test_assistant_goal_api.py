@@ -253,6 +253,9 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
             assert kwargs["task_version"]["timeline_version_id"] != state.version.id
             event = kwargs["continuation_context"]["business_event"]
             assert event["status"] == ("succeeded" if operation == "DeleteClip" and len(calls) == 3 else "confirmed")
+            if event["status"] == "confirmed":
+                assert event["waiting_reason"] == "当前草稿已保存；这次修改尚未反映到成片。"
+                assert "等待明确生成决定" not in event["waiting_reason"]
             assert kwargs["selected_refs"] == ([] if operation == "DeleteClip" else [f"clip:{state.clip.id}"])
             if operation == "DeleteClip":
                 assert kwargs["task_version"]["removed_selected_refs"] == [f"clip:{state.clip.id}"]

@@ -20668,7 +20668,7 @@ def _project_assistant_business_candidate(candidate):
         message = "修改预览已完成，可以查看并决定是否采用；当前草稿尚未改变。"
     elif status == "confirmed" and operation is not None:
         event["operation_id"] = operation.id
-        event["waiting_reason"] = "当前草稿已保存；成片尚未重新生成，等待明确生成决定。"
+        event["waiting_reason"] = "当前草稿已保存；这次修改尚未反映到成片。"
         message = "修改已应用并保存到草稿，可撤销；成片尚未重新生成。"
     elif status == "rejected":
         event["waiting_reason"] = "修改方案已放弃；等待新的明确要求。"
