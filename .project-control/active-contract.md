@@ -121,6 +121,8 @@ R2按活跃动作形成具体输入、计算与联合变更集，保留一个版
 
 R2首子批集成后，API负责人接续其余镜头替换/分割/排序、关联和复合编辑、字幕结构/时间/样式的具体用例及撤销/恢复；追加narration.py的中立档案契约直接导入接线，以及test_crop_preview_description.py/test_montage_pipeline.py/test_assistant_goal_api.py这三个实际共享夹具的最小契约接续写权（R6的test_pi_instruction_closure.py保持只读）。提案测试不伪称媒体已生成；媒体测试用同一合法人物/声音产物和显式合成用途预算，不改生产默认、实际资源门或授权规则。对应R2稳定一组交源码后继续R3执行及bootstrap，不以单组结束或文档ACK停止施工。
 
+镜头实际影响范围子批集成后，API负责人下一小批接续main安装器的显式startup恢复/同owner重载/落盘前guard，及creation/projection.py的列表与详情共同任务版本事实。config.py仅追加ModelCatalog所消费六项路径的唯一纯解析函数与prospective参数读取，不读取/修改私人dotenv，不重写身份/secret投影；Settings.from_env和写前候选复用同一规则，现runtime_health.model_catalog_from_settings保持既有组装归属。对应test_config_atomic.py/test_runtime_settings.py/test_timeline_history.py和最小主入口集成测试可写；R9四个安装器源保持冻结，不与其原负责人并写，必须连同主消费者验收才收口。runtime_settings.py/workspace_settings.py的存储/钥匙串此时只读，用既有写接口在明确保护范围内提交。后续materials/contracts.py与其已准备测试按既有API/R4独占分工一次接续。
+
 R1旧目标：仅该路径的伪造HTTP执行、路由反射/重入、隐含业务上下文和重复写入口；其他尚未迁移动作逐项分类，不能因一个动作通过就删除整套执行协议。R7旧目标：main中迁出的具体实现及其重复状态/全局依赖。
 
 同一事实只有一个写方向；短期导入映射在本批消费者全部切换时退役。源码回滚保留所有用户数据和新历史，不reset用户脏树，也不重放未知作业。
