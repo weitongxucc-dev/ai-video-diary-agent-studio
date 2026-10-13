@@ -503,6 +503,32 @@ def test_task_turn_exposes_only_stage_tools_and_named_actions(monkeypatch):
     ))
 
 
+def test_business_event_turn_keeps_original_instruction_and_actual_task_tools(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pi_module, "_run_turn", lambda _settings, **kwargs: calls.append(kwargs) or ("ok", None))
+    context = {"original_turn_id": "human:one", "event": {"status": "confirmed"},
+               "unfinished_steps": ["complete_original_instruction"]}
+    run_task_turn(None, workspace_id="local", task_id="task-one", message="改好后生成成片",
+        stage="script", selected_refs=[], playhead_ms=None, continuation_context=context)
+    assert calls[0]["message"] == "改好后生成成片"
+    assert calls[0]["continuation_context"] == context
+    assert calls[0]["prompt"] == pi_module.SYSTEM_PROMPT
+    assert {"start_creation_execution", "read_task_observations", "observe_task_output", "read_task_observation_request"} <= set(calls[0]["tool_names"].split(","))
+
+
+def test_observation_job_is_an_actual_receipt_and_never_a_completed_visual_judgment():
+    job = {"job_id": "check:one", "status": "queued", "result_kind": "observation"}
+    output = "\n".join(json.dumps(item) for item in [
+        {"type": "tool_execution_end", "toolName": "observe_task_output", "isError": False,
+         "result": {"details": {"kind": "task_media_job", "media_job": job}}},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+         "content": [{"type": "text", "text": "画面完全正确。"}]}}, {"type": "agent_settled"},
+    ])
+    answer, preview = _last_answer_and_preview(output, "edit_preview")
+    assert preview == {"kind": "media_job", "media_job": job}
+    assert "尚未取得成功检查结果" in answer and "画面完全正确" not in answer
+
+
 def test_pi_events_keep_plan_preview_separate_from_edit_preview():
     output = "\n".join(json.dumps(item) for item in [
         {"type": "tool_execution_end", "toolName": "preview_creation_plan", "isError": False,

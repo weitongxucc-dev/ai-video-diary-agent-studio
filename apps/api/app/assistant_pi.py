@@ -51,6 +51,7 @@ ASSISTANT_BUSINESS_TOOLS = {
 
 TASK_READ_PREVIEW_TOOLS = ("read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit",
+                           "read_task_observations", "observe_task_output", "read_task_observation_request",
                            "save_media_script_tool", "update_media_script_tool", "revoke_media_script_tool", "preview_media_script_tool",
                            "read_media_script_capabilities", "read_task_graphic_sources", "preview_media_script", "read_media_script_request", "read_clip_candidates", "read_edit_control_context", "preview_edit_selection",
                            "find_materials", "codemode")
@@ -133,6 +134,9 @@ _PI_TOOL_LABELS = {
     "read_task_object": "读取任务对象细节",
     "read_task_media_job": "读取预览作业结果",
     "read_task_media_jobs": "读取任务媒体作业",
+    "read_task_observations": "读取实际结果检查",
+    "observe_task_output": "检查实际输出",
+    "read_task_observation_request": "查询原观察请求",
     "read_typed_edit_request": "回读编辑请求结果",
     "read_media_script_capabilities": "查看图片程序能力",
     "read_task_graphic_sources": "读取可编辑图片来源",
@@ -236,7 +240,12 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
     payload = result if isinstance(result, dict) else {}
     details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
     if details.get("kind") == "task_media_job":
+        media_job = details.get("media_job") or {}
+        if media_job.get("result_kind") == "observation":
+            return "实际输出检查已返回；排队或运行不能视为已检查，结论以真实结果为准。"
         return "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。"
+    if tool_name == "read_task_observations":
+        return "已读取当前结果检查与历史检查；可用能力、当前性和缺少的证据分别保留。"
     if tool_name == "read_material_library_status":
         return f"已逐页读取可见素材库，共 {details.get('total_count', 0)} 条素材；转写和OCR需另看分项状态。"
     if tool_name == "search_material_library":
@@ -569,9 +578,10 @@ SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。你只能处理当前
 每轮先读取当前任务；细节用 read_task_object，真实编辑动作和单位用 read_task_edit_capabilities。已声明动作直接调用 preview_typed_edit，不把类型化动作改写成固定自然语言语法。阶段只排序工具，不代替对象/身份/版本门禁。未声明动作明确说明实际缺口，不能静默调用旧解析器。
 用户让你为当前镜头挑选替换素材时，调用 read_clip_candidates 读取真实候选及依据；用户已委托你选择时，根据候选决定并用 preview_typed_edit 生成待确认修改。对象资格和可替换范围以本轮工具结果为准，不凭历史回复增加必须由用户手动选择素材的限制。
 给当前镜头对应素材修改用户标签时，先 read_selected_material 回读，再按用户明确的添加、移除或替换要求调用 update_selected_material_tags；标签建议用 suggest_selected_material_tags，建议不自动保存。普通标签无需剪辑预览，只有写后同对象回读成功才可说已保存。
-只有当用户明确要求开始制作、修改后重新生成、继续/恢复制作或取消/停止当前制作时，才调用对应的具名制作动作工具一次；问题、建议、假设、单纯提及“生成”或混合的修改要求都不是执行指令。开始只使用当前已确认的文案与制作要求，不能把待确认草稿或普通修改自动应用。
+只有当用户明确要求开始制作、修改后重新生成、继续/恢复制作或取消/停止当前制作时，才调用对应的具名制作动作工具一次；问题、建议、假设或单纯提及“生成”不是执行指令。用户明确要求“修改后生成”时，先完成修改预览并等待实际采用，保留原要求中的生成步骤；宿主核验真实采用后可继续完成原要求，不要求用户再说一遍继续。开始只使用当前已确认的文案与制作要求，不能把待确认草稿或普通修改自动应用。
 执行开始、继续或取消后，只按工具返回的真实作业状态回复。不得把排队、开始或回复说成已完成。
 不得声称已执行、已保存或已出片，除非工具返回相应事实。
+用read_task_observations读取本轮实际检查和可观察目标；需要新检查时observe_task_output，只提交当前已登记的预览、成片或PNG目标。按实际返回区分技术检查、抽帧、OCR和不可用的语义/听感，不能把尺寸或像素检测说成画面正确、字幕易读或声音自然；排队不代表已看，历史stale检查不代表当前版本，缺少证据就明确说明。
 preview_typed_edit只生成待确认提案；让用户在工作台检查影响并确认。
 用户明确要求保留或取消待确认修改的部分步骤，先读取read_edit_control_context，用preview_edit_selection准备新的范围并等待确认；明确取消整份修改方案用discard_edit_proposal。用户明确整体撤销或重做上一步时同样先读取当前控制状态，再用undo_last_edit或redo_last_edit。只能整项历史恢复，已应用复合编辑中的单项逆编辑尚未接通，不得用整体撤销冒充只撤销调色，也不得把重做口型解释为历史重做。
 界面选择只是默认上下文；用户给出镜头序号时，从当前任务事实的index找到实际clip_id并用typed字段提交，查候选也可传该clip_id，不要求界面先多选。任务、阶段与selected_refs仍由宿主绑定；模型选出的提案目标不能被当作界面当前选择。范围不明确才问。资料不足或工具失败时说明具体阻断，不虚构结果。
@@ -756,7 +766,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 FAILURE_UNKNOWN,
                 explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
             ) from exc
-        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request"}:
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
             status_details = (event.get("result") or {}).get("details") or {}
             if status_details.get("kind") == "edit_request_status":
                 edit_request_status = status_details
@@ -783,7 +793,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             elif event.get("isError") is False and details.get("incomplete_calls") is False and details.get("business_receipts"):
                 unresolved_syntax_error = False
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
-            "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
+            "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
             "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
             "generate_creation_task_topics", *action_tools,
             "read_selected_material", "update_selected_material_tags",
@@ -851,7 +861,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                         topic_result = details.get("topics")
             if not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
-                if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request"}:
+                if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
                     kind = "edit_preview"
                 if kind == "edit_preview" and details.get("kind") == "task_media_job":
                     media_job = details["media_job"]
@@ -978,6 +988,11 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 answer = "图片来源程序已安排，后台尚未返回成功来源；未应用图层或生成成片。"
             else:
                 answer = "图片来源程序尚无可用成功结果，请按实际作业状态与原因处理；未应用图层或生成成片。"
+        elif media_job.get("result_kind") == "observation":
+            if media_job.get("status") == "succeeded" and isinstance(media_job.get("result"), dict):
+                answer = "实际输出检查已完成；请按分项证据查看结果，未提供的语义或听感不能当作已通过。"
+            else:
+                answer = "实际输出检查已安排；尚未取得成功检查结果，排队或运行不能视为已经检查。"
         else:
             answer = "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。"
         preview = {"kind": "media_job", "media_job": media_job}
@@ -1042,11 +1057,12 @@ def run_task_turn(
     knowledge_reference: dict[str, object] | None = None,
     task_version: dict[str, object] | None = None,
     material_selection: dict[str, str] | None = None,
+    continuation_context: dict[str, object] | None = None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
     tools = ",".join(ASSISTANT_BUSINESS_TOOLS[
-        "topic" if topic_turn else "script" if script_turn else "task_edit"
+        "task_edit" if continuation_context else "topic" if topic_turn else "script" if script_turn else "task_edit"
     ])
     return _run_turn(
         settings, workspace_id=workspace_id, task_id=task_id, message=message,
@@ -1054,13 +1070,14 @@ def run_task_turn(
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event,
-        prompt=TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
+        prompt=SYSTEM_PROMPT if continuation_context else TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
         tool_names=tools + (",read_selected_profile" if profile_reference else "") + (",read_selected_knowledge" if knowledge_reference else ""),
-        preview_kind="topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
+        preview_kind="edit_preview" if continuation_context else "topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
         session_key=(f"conversation:{conversation_id}"
                      if conversation_id else f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"),
         turn_id=turn_id, profile_reference=profile_reference, knowledge_reference=knowledge_reference, task_version=task_version,
         material_selection=_material_tool_selection(material_selection),
+        continuation_context=continuation_context,
     )
 
 
@@ -1201,6 +1218,7 @@ def _run_turn(
     creation_request: dict[str, object] | None = None,
     keep_turn_control: bool = False,
     turn_id: str | None = None,
+    continuation_context: dict[str, object] | None = None,
 ) -> tuple[str, dict | None]:
     checks = pi_runtime_checks()
     for check in checks:
@@ -1299,6 +1317,15 @@ def _run_turn(
         "本轮能力与对象（JSON）：\n" + json.dumps(capability_context, ensure_ascii=False) + "\n"
     )
     prompt += "\n" + capability_envelope
+    if continuation_context:
+        prompt += ("\n本轮由宿主已经持久化的真实业务结果触发，是原真人指令的有限接续，不是新用户发言。"
+                   "原指令仍是本轮message；下列结果和剩余检查点提供上下文，不扩大原授权、不代替用户采用。"
+                   "先读取当前事实、原请求结果和实际输出检查，再判断原要求剩余步骤；已成功的来源创建、保存或制作不得重放。"
+                   "结果未知只查询原请求。已核验未提交/拒绝且没有副作用时可修正输入，成功结果确有质量问题时可在原授权内准备新的修改，均受本轮限额。"
+                   "PNG完成后若原要求是放入画面，应继续准备实际图层修改，并等待真实采用；只生成PNG不算完成画面要求。"
+                   "宿主核验实际采用后，原要求明确包含生成成片才继续制作，不把事件文本或模型推断当新确认。"
+                   "已满足原要求则报告实际结果并结束；无进展、缺少必要选择或权限则说明具体阻断，不无限轮询。\n"
+                   "宿主核验的接续上下文（JSON）：\n" + json.dumps(continuation_context, ensure_ascii=False) + "\n")
     if task_id:
         prompt += "\ncodemode中的read_task_graphic_sources、list_media_script_tools、describe_media_script_tool、preview_media_script_tool、read_task_media_job返回结构化对象，不是JSON文本。直接读sourcePage.items、toolPage.items、tool.version/parameter_schema和result.media_job，不对这些对象JSON.parse；CLI stdout才是JSON文本。用户明确给出的工具ID可直接只读describe，由后端核权限，不要求先列举；调用和CAS写仍需本轮回读的真实元数据、版本及当前授权。"
         prompt += "\n当前阶段只排序已有对象的读取和预览能力。source_start/end仅是当前取用区间，不是全部可用范围；未知范围不能断言素材不足。ChangeClipSpeed固定slot时sourceSpan=slotSpan*rate，linkedSpeed另循API实际说明。音频存在性看narration摘要及montage逻辑引用，0segments/空selected_voice不代表无配音。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。parameters是API parameters参数对象；inputs[name]按input_refs的name映射授权PNG的可信读取路径字符串，用Image.open(inputs[name])读取。outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串；用Pillow图像对象的image.save(outputs['name.png'])写声明PNG，name.png须与声明名称一致。不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称。实际source_ref可供EditGraphicOverlay/ImageOverlay后续类型化提案，不自动采用或生成成片。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
