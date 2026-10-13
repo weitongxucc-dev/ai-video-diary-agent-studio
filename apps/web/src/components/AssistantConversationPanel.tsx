@@ -313,8 +313,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
   const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
-  const outcomeStatus = continuation?.status === "failed" && job?.status === "cancelled"
-    ? job.status : continuation?.status ?? job?.status;
+  const outcomeStatus = continuation?.status ?? job?.status;
   const mediaJobLabel = job && (job.status === "queued" || job.status === "cancelled")
     ? taskMediaJobLabel(job) : null;
   const unknownRequest = assistantTurnHasUnknownRequest(turn);

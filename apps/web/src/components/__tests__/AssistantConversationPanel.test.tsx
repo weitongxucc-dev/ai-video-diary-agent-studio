@@ -316,23 +316,25 @@ describe("persisted business result cards", () => {
     expect(response.media_job).toMatchObject({job_id: "job-preview", waiting_reason: reason});
   });
 
-  it.each(["cancelled", "failed"])("shows a real user cancellation even when the continuation is %s", continuationStatus => {
+  it("shows the actual cancelled conversation receipt without its generic unfinished-processing reason", () => {
     const saved = projectedTaskConversation("queued");
     const response = saved.turns[0].result!.response as Record<string, unknown>;
     response.media_job = {...response.media_job as Record<string, unknown>, status: "cancelled",
-      waiting_reason: "user_cancelled", failure_reason: "user_cancelled", repair_action: "原时间线和产物保持不变。"};
-    saved.turns[0].result!.continuation = {status: continuationStatus, actionable: false, waiting_reason: "user_cancelled"};
+      waiting_reason: null, failure_reason: "user_cancelled", repair_action: null};
+    saved.turns[0].result!.continuation = {status: "cancelled", actionable: false,
+      waiting_reason: "媒体处理未完成；查看作业原因后再决定下一步。"};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
     const details = screen.getByText("本轮结果").closest("details")!;
     expect(details).toHaveAttribute("open");
     expect(within(details).getByText("预览已取消")).toBeVisible();
     expect(within(details).getByText("后台处理已取消，未据此应用修改。")).toBeVisible();
-    expect(within(details).getByText("原时间线和产物保持不变。")).toBeVisible();
     expect(details).not.toHaveTextContent(/user_cancelled|处理未完成|这次操作没有完成|预览已生成|修改已应用/);
     expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
-    expect(response.media_job).toMatchObject({job_id: "job-preview", status: "cancelled", failure_reason: "user_cancelled"});
-    expect(saved.turns[0].result!.continuation).toMatchObject({status: continuationStatus});
+    expect(response.media_job).toMatchObject({job_id: "job-preview", status: "cancelled",
+      waiting_reason: null, failure_reason: "user_cancelled", repair_action: null});
+    expect(saved.turns[0].result!.continuation).toMatchObject({status: "cancelled",
+      waiting_reason: "媒体处理未完成；查看作业原因后再决定下一步。"});
   });
 
   it("retains an actual failed media job's reason and repair action", () => {
