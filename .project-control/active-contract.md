@@ -67,11 +67,15 @@
 
 资料事务修复集成后，API负责人已FILE_RELEASE_ACK且无WIP：将avatar_lipsync.py及实际新建profiles/contracts.py从API独占范围转交本线程。只迁出人物/声音/授权的已有值契约和纯规则，保留字段、默认、日期/使用限制、公共导出与原模型执行；不修改compile_person_edit_command、实际文件/模型处理或运行协议。对应test_avatar_lipsync.py、test_profile_reference_media.py中最小边界测试及新增纯契约测试允许；production/main/schema与其他活跃消费者的直接导入由API负责人接续。迁出的定义在avatar中删除，原导出引用同一对象；仓储从中立契约取类型、模型模块仅消费它。当前源码与旧固定授权/档案版本保持，存储格式/权限均不改。
 
+素材六实体/六純规则按R4-material-type-edge-review-14已验证消费者方案，由API负责人独占materials/contracts.py及production原定义退役/导入接线，一次落地唯一实现；本线程另独占新增test_material_contracts.py，等待实际合同存在后验证构造、asdict/JSON、Pydantic响应、解码及分析模块不加载的纯值边界。实际观察对象仍由生产解码边界构造，字段注解只作TYPE_CHECKING；当前没有裸get_type_hints消费者，不新增动态反射兜底或强行拆分析器。source中旧asset模块的消费者直导入接续按确切文件再绑定，不能越过main/production/schema或API的其它独占写权。
+
 ### R6工具与CLI首批负责人
 
 R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d481接续R6。独占apps/api/agent_tools/diary_tools.ts、material_tools.ts、其直接需要的实际分组模块和定向测试，以及scripts/yaohe.mjs、yaohe.test.mjs和实际CLI分组模块。首批只拆现有工具注册、可信上下文、HTTP传输与回执、CLI命令职责，保留工具名字/共同schema/公共导出和现有HTTP协议；不开放新动作，不重试未知副作用。assistant_pi.py和后端制作/编辑编排仍不在此写权中，待R2/R3稳定后另行接续。Desktop候选已冻结，不与QA审核同时改动。
 
 2026-10-14恢复时追加R6宿主适配写权：独占assistant_pi.py、其实际提取的assistant/**模块，以及test_assistant_pi_failures.py、test_pi_instruction_closure.py和直接相关宿主预读取/运行时体检测试。先修复新工具子目录缺失仍被体检报告ready的已复现缺口，再拆进程运行、轮次停止、业务事件投影与可信上下文组装；保持公开函数、env/会话/工具白名单、真实错误与停止语义，不改变后端编辑/制作用例、认证或模型协议，不调用真实账号模型。原工具首批先提供SOURCE_RELEASE与摘要，不与新宿主改动混淆候选。新协议/共享契约变化仍先报主控。
+
+宿主集成后接续已复现R9资源闭包：独占app/media_timing.py、model_workers/musetalk_worker.py、latentsync_worker.py、实际共享计时模块及其包入口，相关test_musetalk_worker.py中的最小计时边界测试及新增独立资源测试（test_avatar_lipsync.py保持只读，不与R4测试租约交叉）。PyInstaller spec与test_packaging_modules.py从主控交回本线程，允许添加图片脚本实际worker与可信source摘要文件的必要data输入；若实际资源布局需改Desktop package.json/generate-build-identity.js，先给准确接线由主控绑定。计时实现只有一处，API与独立worker实际加载它，不复制完整API、不注入仓库sys.path；同候选资源进入已有候选摘要。不改模型参数、许可、权重、工具链配置、source摘要算法、签名或发布，不调用用户模型。优先隔离复制布局+真实worker --help、同候选封存资源输入检查，完整冻结二进制未跑时单列。
 
 ### R5 Web负责人
 
@@ -81,13 +85,15 @@ R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d
 
 首批已集成后，隔离GUI复现音轨导入/试听控制把字幕轨推到首屏外，违反DESIGN既有剪辑三轨同时可见要求。追加VideoEditor.tsx、AudioTimelineEditor.tsx、VideoEditor.module.css及相应定向测试的独占最小布局/职责修复：同一控制器拥有音频交互，三轨沿同一时间尺，控制工具不能挤掉必要轨道；播放器真实比例、选择/播放/草稿、导入/试听/取消保持。只修既有可见契约，不重设计三栏或新增设置开关；1024×700及两个已失败尺寸和桌面代表截图分项复核，新源码摘要与首批分开。
 
+布局集成后的只读探针已复现成功完整任务回读仍保留旧缓存入口、同任务can_undo=false回读后首页撤销仍可点击。追加AppShell.tsx、HomeCommandComposer.tsx、其直接必要的有限只读任务事实/事件模块，以及对应AppShell/HomeCommandComposer定向测试独占修复权。完整成功快照更新当前可读集合，失败保留最后确认记录，局部任务事件不得冒充完整快照；命令状态以当前服务器版本/事实为准，草稿、对话与导航保持。复用已有任务/版本协议，不改认证/权限、持久格式或首启业务规则，不新增通用状态库。源和截图接受后继续核对剩余外围消费者。
+
 主控独占AGENTS.md、docs中的活动权威、.project-control中的合同/计划；可直接实现尚未分配的模块，但必须先登记文件。可见实施线程身份在创建回执后补入本合同，只有当前角色独占范围有效。
 
 主控接续apps/desktop/README.md与docs/cli.md的当前源码职责/调用索引，沿既有权限及分发说明，只登记已存在入口与资源目录，不维护完成度副本。
 
 本波主控另独占R8手机结构：apps/mobile/lib/ui/companion_app.dart及实际提取的页面/控制器文件、apps/mobile/lib/data/local_media_draft.dart、local_media_draft_controller.dart、voice_sample_io.dart、voice_sample_controller.dart，以及对应test中的最小必要调整和apps/mobile/README.md的职责索引。保持host_api/mobile_store既有公共协议、包名和安全存储键；不改主机接入、不实现假上传/登录、不启动真实账号会话。先完成纯结构与现有定向验证，原生/GUI证据未执行时单列。
 
-主控另独占R9打包闭包：apps/api/pyinstaller.spec及test_packaging_modules.py，修正当前只枚举app顶层模块的构建清单，使实际拆出的Python包及动态消费者进入同一候选；不改应用标识、签名、发布、依赖排除策略或安装用户应用。打包清单检查不冒充二进制真实启动。
+R9打包闭包中PyInstaller嵌套模块清单首批已由主控集成，后续spec及test_packaging_modules.py写权转交上述R6/R9资源负责人；主控只审核集成，不同时改写。应用标识、签名、发布、依赖排除策略和用户安装保持原界限；打包清单检查不冒充二进制真实启动。
 
 Web首批SOURCE_RELEASE并集成后，主控接手其lib/api/transport.ts、creation-transport.ts、materials.ts、task-media.ts和新增定向请求边界测试；Web实施线程在这些文件只读，继续独占剪辑布局子批。将JSON、流式、FormData和Blob请求复用同一既有身份注入入口，保留各调用的原URL、请求体/取消信号、响应及错误语义；FormData不得写JSON Content-Type，不新增身份/空间或兼容分支。该API内部收敛不改R5的产品布局或服务端协议，新摘要分项记录。
 
@@ -104,6 +110,8 @@ Web首批SOURCE_RELEASE并集成后，主控接手其lib/api/transport.ts、crea
 R1版本修复源码经主控/QA解除BLOCK后，原API线程继续独占原范围和新增apps/api/app/creation/editing/**、creation/contracts.py、creation/transactions.py、creation/projection.py、media/contracts.py、media/jobs.py、media/rendering.py、materials/**、profiles/**（排除已转交R4的contracts.py）、api/**及bootstrap.py中的实际模块；不先建空目录。新增现有文件写权为audio_timeline.py、linked_timeline.py、compound_edits.py、subtitle_edits.py、subtitle_alignment.py、subtitle_tracks.py、subtitle_style.py、graphic_overlays.py、graphic_sources.py、transitions.py、silence_edits.py、device_runtime.py、device_scheduler.py、task_runtime.py、granted_subprocess.py、artifact_store.py、media_script_jobs.py、assistant_goal_continuation.py和conversation_repository.py中与本次目标回执直接有关的部分。对应既有动作/事务/执行/接续测试允许最小相关调整。R4资料/档案契约独占文件、Pi/CLI适配及Web/Desktop/Mobile保持互斥。
 
 R2按活跃动作形成具体输入、计算与联合变更集，保留一个版本/提案/跨轨保存事务。R3按媒体用途接续持久执行，显式携带原身份/版本/许可/取消/回执，逐组退役伪造HTTP、反射与路由重入；任务/设备检查点原子边界保持。R4素材/人物的中立类型、写入负责人和存储计算逐项迁出production，不让仓储依赖模型执行。R7后端bootstrap最后移出导入期运行组装。每个稳定子批先交源码、定向测试、退役证明及精确摘要供集成；同候选真实媒体门禁缺口单列，不能因此停止其他独立的已授权结构工作。对外协议、权限、存储格式和用户数据均保持。变更公共共享契约先报主控，不能以此授权签名发布或平台外发。
+
+R2首子批集成后，API负责人接续其余镜头替换/分割/排序、关联和复合编辑、字幕结构/时间/样式的具体用例及撤销/恢复；追加narration.py的中立档案契约直接导入接线，以及test_crop_preview_description.py/test_montage_pipeline.py/test_assistant_goal_api.py这三个实际共享夹具的最小契约接续写权（R6的test_pi_instruction_closure.py保持只读）。提案测试不伪称媒体已生成；媒体测试用同一合法人物/声音产物和显式合成用途预算，不改生产默认、实际资源门或授权规则。对应R2稳定一组交源码后继续R3执行及bootstrap，不以单组结束或文档ACK停止施工。
 
 R1旧目标：仅该路径的伪造HTTP执行、路由反射/重入、隐含业务上下文和重复写入口；其他尚未迁移动作逐项分类，不能因一个动作通过就删除整套执行协议。R7旧目标：main中迁出的具体实现及其重复状态/全局依赖。
 
