@@ -819,7 +819,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
             "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
             "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
-            "generate_creation_task_topics", *action_tools,
+            "generate_creation_task_topics", "read_creation_execution", *action_tools,
             "read_selected_material", "update_selected_material_tags",
             "read_material_library_status", "search_material_library",
         }:
@@ -880,7 +880,13 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             if event.get("toolName") == "read_creation_execution" and not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
                 if details.get("kind") == "execution_result":
-                    action_result = details
+                    if action_result is None or action_result.get("action") is None:
+                        action_result = details
+                    else:
+                        submitted_job_id = ((action_result.get("status") or {}).get("job") or {}).get("id")
+                        read_job_id = ((details.get("status") or {}).get("job") or {}).get("id")
+                        if submitted_job_id and submitted_job_id == read_job_id:
+                            action_result = {**action_result, "status": details["status"]}
             if event.get("toolName") == "generate_creation_task_topics":
                 topic_failed = bool(event.get("isError"))
                 if not topic_failed:
@@ -971,7 +977,14 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
         job = status.get("job") if isinstance(status, dict) else None
         job_status = job.get("status") if isinstance(job, dict) else None
         action = action_result.get("action")
-        if action == "cancel":
+        if action is None:
+            state = {"queued":"排队中", "running":"运行中", "succeeded":"成功", "failed":"失败",
+                "interrupted":"已中断", "cancelled":"已取消"}.get(job_status, job_status or "未知")
+            answer = f"已查询原制作作业；当前作业状态：{state}。"
+            if job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
+                answer += "当前成片产物可用。"
+            answer += "本轮未提交新的开始或恢复请求。"
+        elif action == "cancel":
             answer = f"取消操作已返回；当前作业状态：{job_status or '未知'}。"
         elif job_status == "queued":
             answer = "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。"

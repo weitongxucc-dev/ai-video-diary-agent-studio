@@ -1,7 +1,7 @@
 .thumbnail { position: relative; display: block; width: 100%; overflow: hidden; }
 .thumbnailFill { height: 100%; }
-.thumbnail > video { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-.thumbnail:not([data-media-state="ready"]) > video { visibility: hidden; }
+.thumbnail > canvas { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.thumbnail:not([data-media-state="ready"]) > canvas { visibility: hidden; }
 .thumbnailState { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 6px; color: var(--text-2); font-size: 11px; background: var(--surface-2); }
 .playerState { position: absolute; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px; background: rgb(0 0 0 / 75%); color: white; font-size: var(--font-size-body); }
 .sourcePreview { display: grid; min-width: 0; gap: 6px; padding: 6px; }

@@ -590,7 +590,9 @@ class ConversationRepository:
         if result.get("goal_continuation"):
             return result["goal_continuation"]
         response = result.get("response", {})
-        if not any(response.get(key) for key in ("media_job", "edit_preview", "edit_request", "execution_status")):
+        execution = ((response.get("execution_status") or {}).get("job") or {}).get("id")
+        submitted_execution = bool(execution and {"kind":"execution_status", "id":execution} in result.get("goal_business_actions", []))
+        if not any(response.get(key) for key in ("media_job", "edit_preview", "edit_request")) and not submitted_execution:
             return None
         waiting = "waiting_adoption" if response.get("edit_preview") else "waiting_unknown" if (response.get("edit_request") or {}).get("status") == "result_unknown" else "waiting_result"
         goal = {"original_turn_id": turn_id, "original_instruction": row["user_message"],

@@ -506,6 +506,43 @@ def test_pi_execution_action_reply_uses_returned_job_state_not_model_claim():
     )
 
 
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("state", ["failed", "queued"])
+def test_creation_execution_read_canonical_rejects_model_claim_of_new_submission(nested, state):
+    details = {"kind":"execution_result", "status":{"task_id":"task", "job":{"id":"old-job", "status":state},
+        "video_ready":False}, "wait":{"queried_only":True}}
+    if nested:
+        result = {"details":{"business_receipts":[{"tool_name":"read_creation_execution",
+            "tool_call_id":"nested-read", "is_error":False, "result":details}], "incomplete_calls":False}}
+        name = "codemode"
+    else:
+        result, name = {"details":details}, "read_creation_execution"
+    output = "\n".join(json.dumps(item) for item in [{"type":"tool_execution_end", "toolName":name,
+        "isError":False,"result":result}, {"type":"message_end", "message":{"role":"assistant", "stopReason":"stop",
+        "content":[{"type":"text", "text":"已按指令提交了恢复，渲染再次失败。"}]}}, {"type":"agent_settled"}])
+    answer, preview = _last_answer_and_preview(output)
+    assert preview == {"kind":"execution_result", "action":None, "status":details["status"]}
+    assert "已查询原制作作业" in answer and "本轮未提交新的开始或恢复请求" in answer
+    assert "已按指令提交" not in answer and "已提交并排队" not in answer
+
+
+@pytest.mark.parametrize("read_id", ["submitted-job", "other-job"])
+def test_creation_execution_read_after_submission_preserves_write_action_and_original_job(read_id):
+    written = {"task_id":"task", "job":{"id":"submitted-job", "status":"queued"}, "video_ready":False}
+    observed = {"task_id":"task", "job":{"id":read_id, "status":"running"}, "video_ready":False}
+    output = "\n".join(json.dumps(item) for item in [
+        {"type":"tool_execution_end", "toolName":"resume_creation_execution", "isError":False,
+            "result":{"details":{"kind":"execution_action", "action":"resume", "status":written}}},
+        {"type":"tool_execution_end", "toolName":"codemode", "isError":False,
+            "result":{"details":{"incomplete_calls":False, "business_receipts":[{"tool_name":"read_creation_execution",
+                "tool_call_id":"nested-read", "is_error":False, "result":{"kind":"execution_result", "status":observed}}]}}},
+        {"type":"message_end", "message":{"role":"assistant", "stopReason":"stop", "content":[{"type":"text","text":"仅查询了旧作业。"}]}},
+        {"type":"agent_settled"}])
+    answer, preview = _last_answer_and_preview(output)
+    assert preview == {"kind":"execution_action", "action":"resume", "status":observed if read_id=="submitted-job" else written}
+    assert "本轮未提交" not in answer
+
+
 def test_pi_topic_generation_reply_preserves_real_candidates_and_unconfirmed_state():
     topics = {"task": {"id": "task-one"}, "candidates": [{"id": "topic-one"}],
               "evidence_references": [], "selected_topic_id": None, "latest_run": None,

@@ -480,6 +480,76 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
     assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
 
 
+@pytest.mark.parametrize("submitted", [False, True])
+def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, monkeypatch, submitted):
+    state.finish()
+    monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _:SimpleNamespace(
+        effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
+    execution = CreationExecution(state.production, run_narration=lambda *_:None, run_montage_plan=lambda *_:None,
+        run_render=lambda *_:None, render_is_valid=lambda *_:True)
+    monkeypatch.setattr(main, "creation_execution", execution)
+    monkeypatch.setattr(main, "submit_creation_stage", lambda *_:"receipt test; no media")
+    preview = state.client.get(state.base_url + "/execution/preview").json()
+    body = {"script_id":preview["script_id"], "input_digest":preview["input_digest"], "requirements_confirmed":True}
+    job_ids, calls = [], []
+    if not submitted:
+        old = state.raw_post(state.base_url+"/execution/start", json=body)
+        assert old.status_code == 202, old.text
+        job_ids.append(old.json()["job"]["id"])
+        state.production.claim_job_run(state.workspace_id,job_ids[0])
+        state.production.finish_job_run(state.workspace_id,job_ids[0],status="failed",failure_reason="isolated old failed job",
+            impact="No output from this isolated fixture",repair_action="Read the original job")
+    def model(_settings, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("continuation_context"):
+            assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["id"] == job_ids[0]
+            return "已读取原作业终态。", None
+        events = []
+        if submitted:
+            accepted = state.raw_post(state.base_url+"/execution/start?assistant_turn_id="+kwargs["turn_id"],json=body)
+            assert accepted.status_code == 202, accepted.text
+            job_ids.append(accepted.json()["job"]["id"])
+            events.append({"type":"tool_execution_end", "toolName":"start_creation_execution", "isError":False,
+                "result":{"details":{"kind":"execution_action", "action":"start", "status":accepted.json()}}})
+        read = state.client.get(state.base_url+"/execution",params={"job_id":job_ids[0]})
+        assert read.status_code == 200, read.text
+        events += [{"type":"tool_execution_end", "toolName":"codemode", "isError":False,
+            "result":{"details":{"incomplete_calls":False,"business_receipts":[{"tool_name":"read_creation_execution",
+                "tool_call_id":"nested-read", "is_error":False,"result":{"kind":"execution_result", "status":read.json()}}]}}},
+            {"type":"message_end","message":{"role":"assistant", "stopReason":"stop",
+                "content":[{"type":"text","text":"已提交恢复，已经完成。"}]}}, {"type":"agent_settled"}]
+        return pi._last_answer_and_preview("\n".join(json.dumps(item) for item in events))
+    monkeypatch.setattr(main, "run_task_turn", model)
+    chat = state.conversations.get(state.conversation["id"],state.workspace_id,state.member.member_id)
+    chat = state.conversations.save_draft(chat["id"],state.workspace_id,state.member.member_id,"继续生成并检查输出",chat["draft_version"])
+    response = state.raw_post(state.base_url+"/assistant/turn",json={"conversation_id":chat["id"],"message":chat["draft_text"],
+        "client_request_id":str(uuid4()),"expected_draft_version":chat["draft_version"],"context_stage":"review",
+        "selected_object_refs":[],"expected_timeline_version_id":state.version.id,"expected_timeline_sequence":state.version.sequence})
+    assert response.status_code == 200,response.text
+    result = response.json()
+    turn = state.conversations.get_turn(result["turn_id"])
+    assert result["execution_status"]["job"]["id"] == job_ids[0]
+    if not submitted:
+        assert result["execution_action"] is None and "本轮未提交新的开始或恢复请求" in result["reply"]
+        assert turn["result"]["goal_business_actions"] == []
+        assert state.conversations.get_task_goal(turn["id"]) is None
+        with pytest.raises(KeyError):
+            state.production.get_task_event(state.workspace_id,"event_assistant_execution_locator_"+turn["id"])
+        assert main._project_assistant_execution_results() == 0
+    else:
+        assert result["execution_action"] == "start" and "本轮未提交" not in result["reply"]
+        assert turn["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":job_ids[0]}]
+        assert state.conversations.get_task_goal(turn["id"])["status"] == "waiting_result"
+        state.production.claim_job_run(state.workspace_id,job_ids[0])
+        state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
+        assert main._project_assistant_execution_results() == 1
+        assert main._goal_service().reconcile() == 1 and len(calls)==2
+        assert state.conversations.get_task_goal(turn["id"])["status"] == "no_progress"
+    assert len([job for job in state.production.list_job_runs(state.workspace_id,state.task.id)
+        if job.kind=="creation_task_execution"]) == 1
+
+
 @pytest.mark.parametrize("mutation", ["none", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
 def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation):
     # Real SQL selection with host/media-reader seams; this is not media acceptance.

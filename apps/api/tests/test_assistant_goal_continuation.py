@@ -86,6 +86,22 @@ def test_old_completed_history_and_media_events_do_not_infer_a_goal(repo):
     assert len(repo.list_turns(chat["id"])) == 1
 
 
+@pytest.mark.parametrize("status", ["failed", "queued"])
+@pytest.mark.parametrize("proofs", [[], [{"kind":"execution_status", "id":"different-job"}]])
+def test_pure_execution_read_or_other_job_proof_does_not_register_waiting_goal(repo, status, proofs):
+    chat = repo.create("workspace", "member", "task", "task")
+    chat = repo.save_draft(chat["id"], "workspace", "member", "查询原制作作业", chat["draft_version"])
+    turn, _ = repo.create_turn_idempotent(chat["id"], "workspace", "member", chat["draft_text"], str(uuid4()),
+        chat["draft_version"], request_context={"kind":"task", "task_id":"task", "stage":"review",
+            "target_snapshot":{"timeline_version_id":"version:one", "timeline_sequence":1}})
+    repo.finish_turn(turn["id"], "completed", "仅查询原作业。", result={"kind":"task_turn",
+        "response":{"execution_status":{"task_id":"task", "job":{"id":"old-job", "status":status}}},
+        "goal_business_actions":proofs})
+    assert repo.register_task_goal(turn["id"]) is None
+    assert repo.get_task_goal(turn["id"]) is None
+    assert repo.get_turn(turn["id"])["result"]["response"]["execution_status"]["job"]["id"] == "old-job"
+
+
 @pytest.mark.parametrize("terminal", ["failed", "restarted"])
 def test_running_host_execution_survives_model_failure_and_restart(repo, terminal):
     chat = repo.create("workspace", "member", "task", "task")

@@ -1,10 +1,28 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
 import { ClipThumbnail, VideoClipInspector, VideoEditingStage } from "../VideoEditor";
 
 vi.mock("../NarrationWaveformTrack", () => ({ NarrationWaveformTrack: () => <div>配音</div> }));
+
+let createdVideos: HTMLVideoElement[];
+const drawImage = vi.fn();
+beforeEach(() => {
+  createdVideos = [];
+  drawImage.mockReset();
+  const create = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag, options) => {
+    const element = create(tag, options);
+    if (tag === "video") createdVideos.push(element as HTMLVideoElement);
+    return element;
+  });
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({drawImage} as unknown as CanvasRenderingContext2D);
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const thumbnailVideo = () => createdVideos.filter(video => !video.isConnected).at(-1)!;
 
 const clip: CreationTaskMontageClip = {
   id: "clip-1", asset_id: "asset-1", source_reference: "workspace://synthetic.mp4",
@@ -15,6 +33,10 @@ const clip: CreationTaskMontageClip = {
 function mediaState(video: HTMLVideoElement, readyState: number, seeking = false) {
   Object.defineProperty(video, "readyState", { configurable: true, value: readyState });
   Object.defineProperty(video, "seeking", { configurable: true, value: seeking });
+  if (!video.videoWidth) {
+    Object.defineProperty(video, "videoWidth", {configurable: true, value: 1920});
+    Object.defineProperty(video, "videoHeight", {configurable: true, value: 1080});
+  }
 }
 function workspace(selected = clip, output: string | null = null, version = "timeline-1", ratio = "9:16"): CreationTaskWorkspace {
   return { task: { id: "task-1", current_timeline_version_id: version },
@@ -34,7 +56,7 @@ it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
 describe("clip thumbnail media facts", () => {
   it("waits for a decoded frame at the actual source start rather than metadata alone", () => {
     const view = render(<ClipThumbnail clip={clip} taskId="task-1" />);
-    const video = view.container.querySelector("video")!;
+    const video = thumbnailVideo();
     expect(screen.getByText("读取缩略图…")).toBeInTheDocument();
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(2);
@@ -51,37 +73,106 @@ describe("clip thumbnail media facts", () => {
     video.currentTime = 2;
     fireEvent.seeked(video);
     expect(view.container.querySelector('[data-media-state="ready"]')).toBeInTheDocument();
-    expect(video).toHaveAttribute("aria-hidden", "true");
+    const canvas = view.container.querySelector("canvas")!;
+    expect(canvas).toHaveAttribute("aria-hidden", "true");
+    expect(canvas).toHaveAttribute("width", "256");
+    expect(canvas).toHaveAttribute("height", "144");
+    expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 256, 144);
+    expect(video).not.toHaveAttribute("src");
+    expect(video.pause).toHaveBeenCalledOnce();
+    expect(video.load).toHaveBeenCalledTimes(2); // Load source, then clear the native decoder.
+    expect(view.container.querySelector("video")).toBeNull();
     expect(video).not.toHaveAttribute("autoplay");
   });
 
   it("shows an event-backed failure without guessing missing files, keys or permissions", () => {
     const view = render(<ClipThumbnail clip={clip} taskId="task-1" />);
-    fireEvent.error(view.container.querySelector("video")!);
+    const video = thumbnailVideo();
+    fireEvent.error(video);
     expect(view.container.querySelector('[data-media-state="error"]')).toBeInTheDocument();
     expect(screen.getByText("缩略图读取失败")).toBeInTheDocument();
     expect(screen.queryByText(/缺素材|丢失|权限|密钥|Key/)).not.toBeInTheDocument();
     expect(view.container.querySelector("button")).toBeNull();
+    expect(video).not.toHaveAttribute("src");
   });
 
   it.each(["start", "end", "reference", "asset", "person", "task"])("resets on %s identity changes and ignores old media events", change => {
     const view = render(<ClipThumbnail clip={clip} taskId="task-1" />);
-    const oldVideo = view.container.querySelector("video")!;
+    const oldVideo = thumbnailVideo();
+    const oldFrameCallback = oldVideo.onseeked!;
     fireEvent.error(oldVideo);
     const updated = { ...clip, ...(change === "start" ? { source_start_seconds: 3 } : change === "end" ? { source_end_seconds: 6 } : change === "reference" ? { source_reference: "workspace://updated.mp4" } : change === "asset" ? { asset_id: "asset-2" } : change === "person" ? { person_render_id: "person-render-2" } : {}) };
     view.rerender(<ClipThumbnail clip={updated} taskId={change === "task" ? "task-2" : "task-1"} />);
-    const video = view.container.querySelector("video")!;
+    const video = thumbnailVideo();
     expect(video).not.toBe(oldVideo);
     expect(screen.getByText("读取缩略图…")).toBeInTheDocument();
     fireEvent.error(oldVideo);
     fireEvent.loadedMetadata(oldVideo);
+    oldFrameCallback.call(oldVideo, new Event("seeked"));
+    expect(drawImage).not.toHaveBeenCalled();
     expect(screen.queryByText("缩略图读取失败")).not.toBeInTheDocument();
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(updated.source_start_seconds);
+    if (change === "person") expect(video.getAttribute("src")).toContain("person-renders/person-render-2/media");
     mediaState(video, 2);
     fireEvent.seeked(video);
     expect(view.container.querySelector('[data-media-state="ready"]')).toBeInTheDocument();
-    if (change === "person") expect(video.getAttribute("src")).toContain("person-renders/person-render-2/media");
+    expect(video).not.toHaveAttribute("src");
+  });
+
+  it("reads a 21-shot storyboard with one active decoder and keeps only bounded static frames", async () => {
+    const clips = Array.from({length: 21}, (_, index) => ({...clip, id: `shot-${index}`, source_start_seconds: index,
+      source_end_seconds: index + 1}));
+    const view = render(<>{clips.map(item => <ClipThumbnail key={item.id} clip={item} taskId="task-1"/>)}</>);
+    expect(createdVideos).toHaveLength(1);
+    expect(view.container.querySelectorAll("video")).toHaveLength(0);
+    for (let index = 0; index < clips.length; index += 1) {
+      const active = createdVideos.filter(video => video.hasAttribute("src"));
+      expect(active).toHaveLength(1);
+      const video = active[0];
+      expect(createdVideos).toHaveLength(index + 1);
+      fireEvent.loadedMetadata(video);
+      expect(video.currentTime).toBe(index);
+      mediaState(video, 2);
+      fireEvent.seeked(video);
+      expect(video).not.toHaveAttribute("src");
+      await act(async () => { await Promise.resolve(); });
+    }
+    expect(createdVideos.filter(video => video.hasAttribute("src"))).toHaveLength(0);
+    expect(view.container.querySelectorAll('[data-media-state="ready"]')).toHaveLength(21);
+    expect(drawImage).toHaveBeenCalledTimes(21);
+    expect([...view.container.querySelectorAll("canvas")].every(canvas => Math.max(canvas.width, canvas.height) <= 256)).toBe(true);
+  });
+
+  it("releases the loading decoder and cancels queued reads when the storyboard unmounts", async () => {
+    const view = render(<>{[1, 2, 3].map(index => <ClipThumbnail key={index} clip={{...clip, id: `shot-${index}`}} taskId="task-1"/>)}</>);
+    const video = thumbnailVideo();
+    expect(createdVideos).toHaveLength(1);
+    view.unmount();
+    await act(async () => { await Promise.resolve(); });
+    expect(video).not.toHaveAttribute("src");
+    expect(video.pause).toHaveBeenCalledOnce();
+    expect(video.load).toHaveBeenCalledTimes(2);
+    expect(createdVideos).toHaveLength(1);
+    fireEvent.loadedData(video);
+    expect(drawImage).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing_canvas_context", "frame_capture_failed"])("releases an actual %s boundary failure and starts the next read without live-video fallback", async failure => {
+    const view = render(<><ClipThumbnail clip={clip} taskId="task-1"/>
+      <ClipThumbnail clip={{...clip, id: "next-shot"}} taskId="task-1"/></>);
+    if (failure === "missing_canvas_context") vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValueOnce(null);
+    else drawImage.mockImplementationOnce(() => { throw new Error("frame capture unavailable"); });
+    const first = thumbnailVideo();
+    fireEvent.loadedMetadata(first);
+    mediaState(first, 2);
+    fireEvent.seeked(first);
+    expect(screen.getByText("缩略图读取失败")).toBeInTheDocument();
+    expect(first).not.toHaveAttribute("src");
+    await act(async () => { await Promise.resolve(); });
+    expect(createdVideos).toHaveLength(2);
+    expect(thumbnailVideo()).toHaveAttribute("src");
+    expect(view.container.querySelector("video")).toBeNull();
   });
 
   it("only calls the reference missing when neither material nor person render is referenced", () => {

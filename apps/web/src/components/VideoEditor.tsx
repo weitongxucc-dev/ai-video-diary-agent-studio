@@ -24,8 +24,94 @@ const sourceUrl = (clip: CreationTaskMontageClip, taskId: string) => apiUrl(clip
   : `/api/production/materials/${encodeURIComponent(clip.asset_id)}/media`);
 const clipMediaKey = (clip: CreationTaskMontageClip, taskId: string) => JSON.stringify([taskId, clip.id, sourceUrl(clip, taskId), clip.source_reference, clip.source_start_seconds, clip.source_end_seconds]);
 
+type ThumbnailRead = { start: () => void; queued: boolean };
+const thumbnailReads: ThumbnailRead[] = [];
+let activeThumbnailRead: ThumbnailRead | null = null;
+function advanceThumbnailRead() {
+  if (activeThumbnailRead) return;
+  const next = thumbnailReads.shift();
+  if (!next) return;
+  next.queued = false;
+  activeThumbnailRead = next;
+  next.start();
+}
+function scheduleThumbnailRead(start: () => void) {
+  const read: ThumbnailRead = {start, queued: true};
+  thumbnailReads.push(read);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    if (read.queued) thumbnailReads.splice(thumbnailReads.indexOf(read), 1);
+    else if (activeThumbnailRead === read) activeThumbnailRead = null;
+    queueMicrotask(advanceThumbnailRead);
+  };
+  return {start: advanceThumbnailRead, release};
+}
+
 export function ClipThumbnail({ clip, taskId, className, statusId }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string }) {
-  return <ClipMedia key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} className={className} statusId={statusId} />;
+  return <StaticClipThumbnail key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} className={className} statusId={statusId} />;
+}
+
+function StaticClipThumbnail({ clip, taskId, className, statusId }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const missing = !clip.person_render_id && !clip.asset_id;
+  const url = sourceUrl(clip, taskId);
+  useEffect(() => {
+    if (missing) return;
+    let video: HTMLVideoElement | null = null;
+    let disposed = false;
+    const destroyVideo = () => {
+      if (!video) return;
+      video.onloadedmetadata = null; video.onloadeddata = null; video.onseeked = null; video.oncanplay = null; video.onerror = null;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video = null;
+    };
+    const finish = (next: "ready" | "error") => {
+      if (disposed) return;
+      disposed = true;
+      destroyVideo();
+      setState(next);
+      scheduled.release();
+    };
+    const scheduled = scheduleThumbnailRead(() => {
+      if (disposed) return;
+      video = document.createElement("video");
+      video.muted = true; video.playsInline = true; video.preload = "auto";
+      const frameReady = () => {
+        const current = video;
+        if (disposed || !current || current.readyState < 2 || current.seeking
+          || Math.abs(current.currentTime - clip.source_start_seconds) > .05) return;
+        const canvas = canvasRef.current;
+        if (!canvas || current.videoWidth <= 0 || current.videoHeight <= 0) { finish("error"); return; }
+        const scale = Math.min(1, 256 / Math.max(current.videoWidth, current.videoHeight));
+        canvas.width = Math.max(1, Math.round(current.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(current.videoHeight * scale));
+        try {
+          const context = canvas.getContext("2d");
+          if (!context) { finish("error"); return; }
+          context.drawImage(current, 0, 0, canvas.width, canvas.height);
+        }
+        catch { finish("error"); return; }
+        finish("ready");
+      };
+      video.onloadedmetadata = () => { if (!disposed && video) video.currentTime = clip.source_start_seconds; };
+      video.onloadeddata = frameReady; video.onseeked = frameReady; video.oncanplay = frameReady;
+      video.onerror = () => finish("error");
+      video.src = url;
+      video.load();
+    });
+    scheduled.start();
+    return () => { disposed = true; destroyVideo(); scheduled.release(); };
+  }, [missing, url, clip.source_start_seconds]);
+  const message = missing ? "未关联媒体" : state === "loading" ? "读取缩略图…" : state === "error" ? "缩略图读取失败" : "缩略图已定位";
+  return <span className={`${mediaUi.thumbnail} ${className ?? mediaUi.thumbnailFill}`} data-media-state={missing ? "missing" : state}>
+    <canvas ref={canvasRef} width={1} height={1} aria-hidden="true" />
+    <span id={statusId} className={state === "ready" && !missing ? mediaUi.srOnly : mediaUi.thumbnailState} aria-live="off">{message}</span>
+  </span>;
 }
 
 function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded = false }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string; preview?: boolean; bounded?: boolean }) {

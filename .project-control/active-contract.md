@@ -18,6 +18,12 @@ S2开发按当前用户AGENTS与宿主并行指令执行，旧仓库的可见线
 
 已核准同Owner的 schemas.py 仅AssistantStreamEvent可选failure字段，服务器固定reason/repair_action两键安全投影，沿现sanitizer和长度边界；SSE与历史相同，不接原载荷/物理路径/凭据/隐藏推理。completed_output_checkpoint只为同现有goal的宿主核验refs/measurement/unavailable投影，scope固定production_and_output_observation；无新status enum/独立完成事实，不能清除原未完成要求或凭它宣布全部原目标成功。
 
+## 本轮真实验收发现的必要窄修（2026-10-13）
+
+root核准 continuation Owner 独占 assistant_pi.py、conversation_repository.py 及原直接测试：read_creation_execution 必须进入真正工具消费set；纯读取以宿主真实状态说明查询，不采信模型“已提交恢复”，也不凭旧execution结果登记新waiting goal。只有与宿主持久真实提交proof相同Job的执行才登记；先真实提交再读取同Job仍保留write动作归属。不改权限、供应商、validator、重试或状态枚举。
+
+root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直接媒体测试：原21镜头缩略图各保留video解码器是本轮真实内存拒绝的可消除来源，改为同文件私有串行读取真实起点帧、低分辨率canvas显示并立即清源释放；错误、换素材、卸载和排队取消也释放。主播放器不变，无新持久cache/worker/依赖/预算。单测不能证明具体释放量，须同候选正常21镜头GUI及资源测量/真实完整渲染验证。#131专业剪辑台整体改造仍为后续，必要缩略图故障纳入本轮。
+
 ## 验收与旧目标
 
 技术：原start回执已核验→模型回合中断→原Job真实成功→持久来源保留→未失效目标从新事实继续检查；两次修改、提案实际采用、同版本/hash观察、stop/拒绝/新指令使旧目标失效、重启及unknown原请求查询；不重复制作。退役目标是依赖模型最终返回才记录制作来源及误用媒体Job查询制作Job的消费者，不改正常历史/旧数据；同候选正向与窄负向验证。
