@@ -36,6 +36,10 @@ void main() {
       expect(find.text('登录'), findsNothing);
       await tester.tap(find.text('知道了'));
       await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('进度'));
+      await tester.pumpAndSettle();
+      expect(find.text('连接曜核后查看制作进度'), findsOneWidget);
+      expect(find.text('手机里的素材'), findsNothing);
       expect(find.text('已发送'), findsNothing);
       expect(find.text('演示用户'), findsNothing);
       expect(find.text('产品演示片'), findsNothing);

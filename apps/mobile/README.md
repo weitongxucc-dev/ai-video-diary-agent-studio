@@ -33,7 +33,9 @@ python3 -m http.server 4341 --bind 127.0.0.1 --directory build/web
 
 ## 代码与行为
 
-- `lib/ui/companion_app.dart`：已认可原型的原生首页、独立底部素材确认动作、素材传输／制作进度页签、我的连接与声音样本入口；真实系统视频多选、素材说明、录音及试听。未接入接收服务时只显示本机待发送清单，不生成传输或任务样例。
+- `lib/ui/companion_app.dart`：应用组装、外层导航、生命周期和弹窗调用；首页、进度与个人页分别由`companion_materials_page.dart`、`companion_progress_page.dart`和`companion_account_page.dart`呈现。页面只读取对应事实并调用具体动作；进度子页选择由进度页保留。
+- `lib/data/local_media_draft.dart`和`local_media_draft_controller.dart`：本地素材、说明和声音引用的恢复与唯一保存入口，以及系统选择和复制。使用原安全存储键及格式；串行保存完整快照，移除清单不删除文件。未接入接收服务时仍只显示本机待发送清单，不生成传输或任务样例。
+- `lib/data/voice_sample_controller.dart`和`voice_sample_io.dart`：录音/试听生命周期及原生插件边界。关闭弹窗时处理仍在等待的录音请求，声音加载的迟到结果不能重新开始播放；新样本由本地草稿入口保存。
 - `lib/ui/connection_sheet.dart`：默认真实查找 `_yaohe._tcp` 服务与扫码入口，发现结果仅为候选。已有开发连接可重新核验；原手填输入只在 debug 的“开发调试连接”内展开。读取二维码不会猜测地址、发凭证或保存假绑定；正式配对协议待电脑版确认后接入。
 - `lib/ui/voice_sample_sheet.dart`：固定操作区与可滚动内容，录音/试听控制同宽、状态切换不移动按钮；播放器状态决定“试听／停止试听”。未加载的旧样本不显示虚假零秒时长。
 
