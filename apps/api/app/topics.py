@@ -21,7 +21,8 @@ from app.product_hunt import (
     ProductHuntConfigurationError,
     ProductHuntResponseError,
 )
-from app.sources import ObsidianVault, TopicSourceItem
+from app.sources import ObsidianVault
+from app.source_types import TopicSourceItem
 from app.speech_timing import estimate_speech_seconds, CHINESE_CHARACTERS_PER_SECOND, LATIN_WORDS_PER_SECOND
 
 

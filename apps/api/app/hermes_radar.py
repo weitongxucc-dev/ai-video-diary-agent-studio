@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from app.sources import TopicSourceItem
+from app.source_types import TopicSourceItem
 
 
 @dataclass(frozen=True)

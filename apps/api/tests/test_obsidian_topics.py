@@ -6,7 +6,8 @@ import pytest
 
 from app.config import Settings
 from app.external_sources import HtmlPageSourceClient
-from app.sources import ObsidianVault, TopicSourceItem
+from app.sources import ObsidianVault
+from app.source_types import TopicSourceItem
 from app.topics import DeepSeekTopicGenerator
 
 

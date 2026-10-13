@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
-from app.sources import SourceBoundaryError, TopicSourceItem, source_error_from_http_status
+from app.source_sync import SourceBoundaryError, source_error_from_http_status
+from app.source_types import TopicSourceItem
 
 
 @dataclass(frozen=True)
