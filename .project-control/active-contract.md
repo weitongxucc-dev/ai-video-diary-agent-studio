@@ -4,9 +4,19 @@
 
 用户已明确授权：先修#120自动接续及#130中栏可见执行，再以真实视频完成连续修改/保存/恢复验收，通过后打包供本人试用；同步现有教学线程，及时保存提交GitHub，并解释全项目哪些已做、本轮做及未做。owner=desktop-v32，branch=codex/desktop-v32-20261010，产品基线c263a112c7e2433d1e45ff392b8c3d3d1cd9f452，实时origin/main=5968e9bf0471a7ff0ea088e87f84febc873de300。original为脏历史checkout，不写、不合并。既有PR#124保持Draft，不自动merge/发布。
 
-S2开发按当前用户AGENTS与宿主并行指令执行，旧仓库的可见线程/cmux限定不作为本轮限制。root唯一主控/共享文档/Git/Issue/QA及打包决策者。稳定规则绑定架构§3.13、领域§6/7、产品§2.3/2.5/2.6及§14、DESIGN§2/7、开发流程§3.1；不创建新完成状态库、不全局放宽版本/权限/采用/资源门。不改模型供应商或安装依赖，不盲扩保护线/默认资源额度。实际原接口422“CPU音频预算未标定，未启动媒体”后，root核准只对已采用115.788秒单旁白工作量做有限CPU_AUDIO标定：保留原实测进程RSS256MiB/线程8/FFmpeg1线程/15秒/0.1秒监控及512MiB内存保护；仅显式声明真实输入6MiB、时长120.401秒、PCM输出32MiB和临时磁盘64MiB边界，先测正常整机许可下的原音轨试听，未实测不称已标定。宿主CPU91%/空闲内存1GiB及原render2GiB/512MiB门不放宽；若拒绝先读决定、不盲重跑。正常观察已经沿原CPU_RENDER成功，仅有限抽帧/媒体规格，OCR/语义/听感明确不可用，本轮不额外配置OCR预算。原配置不复制凭据/DB，实測通过后才能给同机试用采用对应本机profile。
+S2开发遵循用户2026-10-13最新指令：root担任总控，不再调动内部子Agent写代码；编码、独立审核及实际验收交由侧栏可见Codex线程。root保留共享权威/合同、Git/Issue、集成验收和打包放行决策；具体QA服务及用户任务操作仅在明确交接后由唯一可见验收线程持有。稳定规则绑定架构§3.13、领域§6/7、产品§2.3/2.5/2.6及§14、DESIGN§2/7、开发流程§3.1；不创建新完成状态库、不全局放宽版本/权限/采用/资源门。不改模型供应商或安装依赖，不盲扩保护线/默认资源额度。实际原接口422“CPU音频预算未标定，未启动媒体”后，root核准只对已采用115.788秒单旁白工作量做有限CPU_AUDIO标定：保留原实测进程RSS256MiB/线程8/FFmpeg1线程/15秒/0.1秒监控及512MiB内存保护；仅显式声明真实输入6MiB、时长120.401秒、PCM输出32MiB和临时磁盘64MiB边界，先测正常整机许可下的原音轨试听，未实测不称已标定。宿主CPU91%/空闲内存1GiB及原render2GiB/512MiB门不放宽；若拒绝先读决定、不盲重跑。正常观察已经沿原CPU_RENDER成功，仅有限抽帧/媒体规格，OCR/语义/听感明确不可用，本轮不额外配置OCR预算。原配置不复制凭据/DB，实測通过后才能给同机试用采用对应本机profile。
 
 ## 独占分工与协议
+
+### 当前执行归属（用户最新指令优先，取代下方历史内部Agent分工）
+
+所有内部Agent已HOLD_ACK/RELEASE，不再写入或测试；既有提交和dirty diff保留。当前HEAD=e13a298，PR#124。以下可见线程在同一desktop-v32活动checkout按互斥文件工作，不得使用内部子Agent，也不写original历史checkout。
+
+- 可见线程「曜核：调色预览范围修复」（01a13533-b38c-7430-a2de-cb419e2340d6）：唯一编码owner，接手现有dirty的apps/api/app/main.py、tests/test_creation_audio_mix.py、tests/test_task_media_grants.py、tests/test_visual_effects.py（测试均位于apps/api/）。仅完成已核准的调色预览窄修及对应回归；当前6例2pass/4fail，失败为新fixture有效字幕轨缺artifact/transform provenance，须补真实fixture证据，不改生产validator。定位_visual_preview_projection/_task_media_facts/_visual_scope_case。不得改其他源码、共享文档、服务、用户数据、profile或Git；必要新增消费者先报root。完成后提交精确diff、命令/结果、边界与RELEASE供root审核提交。
+- 可见线程「曜核：自动接续与中栏独立审核」（01a13533-cec4-70d2-aa5d-ab5bb6c6aefd）：只读已提交#120/#130代码、现有测试及本轮真实证据；仅写本轮QA目录visible-review.md/json。检查真实提交来源、纯读取、持久接续、失效/中断语义和原320/360中栏结果/失败/范围呈现。明确静态与失败链证据、尚缺成功链证据；不改代码/Issue/Git/服务/用户任务，不操作浏览器。实际成功截图/回执由验收线程提供后再审核。
+- 可见线程「曜核：真实视频闭环与试用打包」（01a13533-e91f-7482-acce-f5968e52fae5）：先只读准备，唯一写入本轮QA验收脚本、回执和媒体输出（不得覆盖旧证据）。root审核代码并给出新SHA后，单独消息转交QA服务、GUI、有限profile、task_93d78477016b正常可撤销编辑验收的操作租约；此前不得启动/终止服务、改用户任务或配置。自然语言音量/clip2调色→实际试听/代表预览→采用→真实115.788秒成片→同版本/hash观察，并验证中断后的原成功Job自动接续、保存/undo/重启和中栏可见状态。禁止raw DB改写、重新TTS、改CPU91门/资源默认。原app暂退已授权，验收后须恢复。打包必须等root确认同候选实际验收通过后才开始；不发布正式Release、不改原private.env直至测量证明并获root具体同机profile租约。
+
+root不编码上述owned文件，不重复执行worker已经充分证明的无关测试；负责review/集成、及时commit/push、#117动态总览及有关Issue/PR、教学同步。可见线程消息出自root并承接用户对本轮派工及报告的授权；worker可向本总控发送ACK/证据/发现/RELEASE。每次切换owner先释放，代码租约完成前API保持停止。下方历史条目只记录既有实现范围，不再给内部Agent写入权。
 
 - continuation Owner（pi_objects）：apps/api/app/main.py、assistant_pi.py、assistant_goal_continuation.py、agent_tools/diary_tools.ts及其直接test_assistant_goal_api.py/test_assistant_goal_continuation.py/test_assistant_pi.py/test_assistant_pi_failures.py/test_assistant_typed_tools.py。必要现有对话repo/DTO变更先向root报告具体路径，核准后独占。真实start/resume回执核验后立即持久既有locator/proof；普通制作Job与TaskMediaJob分别查询；模型中断不丢原作业来源，原成功结果可在未失效目标中继续观察。失败/停止/新指令/撤权/旧版本/unknown保持原语义。已完成的有限制作/观察链与无进展清楚区分，不凭模型、空steps或旧文件宣称任意要求全部完成。向Web发布实际可用的goal/event投影字段及可信错误契约，不发原载荷或隐藏推理。
 - Web Owner（execution_ui）：AssistantConversationPanel.tsx、AssistantConversation.css、useAssistantConversation.ts、AssistantConversationProvider.tsx及直接ConversationPanel/ReadRaces测试；apps/web/src/lib/types.ts/api.ts只允许本轮会话event/goal字段与解析消费者。复用原目标、真实工具事件、提案/版本/作业/观察结果；展示当前目标、真实步骤、产物及等待/失败/恢复原因；读取/提案/采用/排队/运行/完成分开。不新建进度状态库、不改全局三栏、不抢未发送草稿、不显示原始工具载荷/路径/凭据/推理。旧失败历史保留但不充当已恢复后当前阻断。遵循design-md：DESIGN.md完整读一次。缺API字段报告，先用现有真实字段独立实现，不自造成功。
@@ -27,6 +37,8 @@ root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直
 root另核准 Web Owner 临时独占 creation_execution.py 与直接test_creation_execution.py，仅实际CPU render的CreationJobUnitExecutor.execute异常分支复用已有detail.reason/error抽取，避免新Job.failure_reason保存Python原字典字符串。无需新DTO/前端解析/旧历史改写；失败仍failed，许可释放，上游保持。
 
 root核准 continuation Owner 必要渲染组合修复：独占 montage.py、host_resource_probes.py、member_permits.py 及各直接测试（包括tests/conftest.py及test_timed_subtitle_render_input.py的同一真实grant/预算合成consumer）；另核准 _media_preview_test_fixtures.py、test_task_clip_preview.py、test_creation_resource_contract.py、test_creation_audio_mix.py、test_creation_execution.py 仅新必需构造字段的直接消费者更新（最后文件前Owner已RELEASE）；直接配置消费者新增必需字段须具体报备。实际21输入进程峰值2.148GiB且运行重复要求整份2GiB追加预留已确证。仅多镜头hard-cut/no-transition改为逐镜头lossless H264静音中间片及同Job相对ffconcat；原fade/颜色/帧端点时钟、全局字幕/graphic、混音、最终验证保持，xfade仍原消费者。同grant及原199秒总deadline；中间片合计含音频/字幕/manifest不得越既有512MiB追加磁盘，final仍原99,638,206字节，不降质量/改变validator/为每镜头重借预算。CPU render启动仍原1GiB系统余量+2GiB新增峰值；运行保留1GiB余量且实际进程RSS不得越原2GiB，并保留CPU91%/swap/IO/身份/许可门。新增显式总进程线程profile，缺失fail-closed，不给任意默认；本机候选51线程仅源于已测实际21输入最大值，采样0.1秒沿现HostBudget，必须先有限实测再完整片验收。原.env不复制/不扩大RSS资源额；root唯一profile配置/真实数据/服务/Git owner。架构§3.12新增此有限CPU成片资源不变量；旧上下文合同须重读ACK。
+
+root核准 Web Owner 必要调色预览范围修复：独占main.py及test_creation_audio_mix.py/test_task_media_grants.py/test_visual_effects.py。真实AdjustVisualEffects仅clip2却执行21镜头115.788秒，标签称最多5秒；root已正常取消自己的该测试MediaJob，原v28/sequence28无采用/修改，不能记为单片标定。普通短预览复用原clip_preview及silent/max5；资源事实按同真实clip_ids代表镜头封存。长淡出仅对应完整镜头窗口的只读图/音轨/字幕/图层投影，保持时钟及尾帧；事实与执行同一稳定投影、无随机漂移。深拷贝中处理窗口外锁，原目标锁/原对象/5秒validator/权限/资源保持。多目标代表预览、独立镜头未覆盖相邻转场时标签明确，不假称全图已检查。无新DTO/预算默认/业务状态库。真实e13部分执行每注册子进程已采峰值248.67MiB/6线程（不等于进程组/完整峰值），两次运行拒绝CPU94/91.6>91，根本预算不调整；独立工程#141及#128追踪。
 
 ## 验收与旧目标
 
