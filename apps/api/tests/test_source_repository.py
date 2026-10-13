@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+import sqlite3
 
 import pytest
 
@@ -146,6 +147,77 @@ def test_sync_write_is_atomic_when_one_item_is_invalid(tmp_path):
     run = repo.get_run("workspace-a", failure.value.run.id)
     assert run.status == "failed"
     assert repo.get_connector("workspace-a", "connector_1").cursor is None
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+def test_sync_commit_rolls_back_items_and_run_when_connector_update_fails(tmp_path, status):
+    database_path = tmp_path / "sources.sqlite3"
+    repo = SourceRepository(database_path)
+    repo.upsert_connector(_connector("workspace-a"))
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("""
+            CREATE TRIGGER reject_connector_update BEFORE UPDATE ON source_connectors
+            BEGIN SELECT RAISE(ABORT, 'connector update failed'); END
+        """)
+
+    with pytest.raises(sqlite3.IntegrityError, match="connector update failed"):
+        if status == "succeeded":
+            repo.record_sync_success(
+                "workspace-a", "connector_1", [_item("workspace-a", "connector_1")], "cursor-1"
+            )
+        else:
+            repo.record_sync_failure(
+                "workspace-a", "connector_1", reason="fetch failed", impact="No new items",
+                repair_action="Retry", retryable=True,
+            )
+
+    reopened = SourceRepository(database_path)
+    assert reopened.list_source_items("workspace-a") == []
+    assert reopened.list_runs("workspace-a", "connector_1") == []
+    connector = reopened.get_connector("workspace-a", "connector_1")
+    assert connector.cursor is None
+    assert connector.latest_run_id is None
+    assert connector.connection_status == "configured"
+
+
+@pytest.mark.parametrize("has_previous_version", [False, True])
+def test_knowledge_head_and_version_roll_back_together_on_snapshot_write_failure(
+    tmp_path, has_previous_version,
+):
+    database_path = tmp_path / "sources.sqlite3"
+    repo = SourceRepository(database_path)
+    repo.upsert_connector(_connector("workspace-a"))
+    source = replace(
+        _item("workspace-a", "connector_1"), content_hash="hash-v1",
+        file_reference="资料.md", body="第一版原文",
+    )
+    repo.save_source_items("workspace-a", [source])
+    previous = None
+    if has_previous_version:
+        previous = repo.save_source_item_to_knowledge(
+            "workspace-a", source.id, verified_owner_user_id="uploader-a",
+        )
+        source = replace(source, id="source-v2", content_hash="hash-v2", body="第二版原文")
+        repo.save_source_items("workspace-a", [source])
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("""
+            CREATE TRIGGER reject_snapshot_write BEFORE INSERT ON knowledge_item_versions
+            BEGIN SELECT RAISE(ABORT, 'snapshot write failed'); END
+        """)
+
+    with pytest.raises(sqlite3.IntegrityError, match="snapshot write failed"):
+        repo.save_source_item_to_knowledge(
+            "workspace-a", source.id, verified_owner_user_id="uploader-a",
+        )
+
+    reopened = SourceRepository(database_path)
+    items = reopened.list_knowledge_items_readable_by("workspace-a", user_id="uploader-a")
+    assert items == ([previous] if has_previous_version else [])
+    if previous:
+        versions = reopened.list_knowledge_item_versions("workspace-a", previous.id)
+        assert [(version.version, version.body) for version in versions] == [("1", "第一版原文")]
+    # The independent imported source remains available; no partial knowledge write survives.
+    assert reopened.get_source_item("workspace-a", source.id).body == source.body
 
 
 @pytest.mark.parametrize(

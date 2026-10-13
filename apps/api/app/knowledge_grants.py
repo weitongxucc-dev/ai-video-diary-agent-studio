@@ -6,31 +6,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.repository import LEGACY_WORKSPACE_ID
+from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL
 
 if TYPE_CHECKING:
     from fastapi import Request
     from app.source_repository import SourceRepository
-    from app.sources import KnowledgeGrant
-
-
-KNOWLEDGE_GRANTS_DDL = """
-CREATE TABLE IF NOT EXISTS knowledge_grants (
-    id TEXT PRIMARY KEY,
-    knowledge_item_id TEXT NOT NULL REFERENCES knowledge_items(id),
-    source_workspace_id TEXT NOT NULL,
-    target_workspace_id TEXT NOT NULL,
-    granted_by TEXT NOT NULL,
-    granted_at TEXT NOT NULL,
-    revoked_by TEXT,
-    revoked_at TEXT,
-    CHECK (source_workspace_id <> target_workspace_id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS knowledge_grants_active_target
-    ON knowledge_grants(knowledge_item_id, target_workspace_id)
-    WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS knowledge_grants_target
-    ON knowledge_grants(target_workspace_id, knowledge_item_id, revoked_at);
-"""
+    from app.source_types import KnowledgeGrant
 
 
 @dataclass(frozen=True)

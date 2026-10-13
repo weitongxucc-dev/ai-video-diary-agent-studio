@@ -1,347 +1,37 @@
+"""Public source exports and the Obsidian filesystem-read adapter."""
+
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
-from uuid import uuid4
 
-from app.database_migrations import (
-    CONTENT_VISIBILITY_DEFAULT as CONTENT_VISIBILITY_PRIVATE,
-    CONTENT_VISIBILITY_LEGACY as CONTENT_VISIBILITY_SHARED,
-)
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection
-
-if TYPE_CHECKING:
-    from app.source_repository import SourceRepository
-
-
-ContentUseState = Literal[
-    "available",
-    "reference_only",
-    "excluded",
-    "not_for_automation",
-    "not_for_publish",
-]
-ContentUsePurpose = Literal[
-    "read", "reference", "understanding", "automatic_selection", "media", "preview", "publish"
-]
-CONTENT_USE_STATES = frozenset(
-    {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}
+from app.source_policy import (
+    CONTENT_VISIBILITY_PRIVATE,
+    CONTENT_VISIBILITY_SHARED,
+    content_allows_use,
+    knowledge_item_readable,
 )
-
-
-def content_allows_use(state: str, purpose: ContentUsePurpose) -> bool:
-    """Return whether a saved item may serve this consumer purpose."""
-    if state not in CONTENT_USE_STATES:
-        raise ValueError(f"unknown content use state: {state}")
-    if purpose not in {"read", "reference", "understanding", "automatic_selection", "media", "preview", "publish"}:
-        raise ValueError(f"unknown content use purpose: {purpose}")
-    if state == "excluded":
-        return False
-    if state == "reference_only" and purpose in {"automatic_selection", "media", "publish"}:
-        return False
-    if purpose == "automatic_selection" and state == "not_for_automation":
-        return False
-    if purpose == "publish" and state == "not_for_publish":
-        return False
-    return True
-
-
-@dataclass(frozen=True)
-class SourceConnector:
-    id: str
-    workspace_id: str
-    platform: str
-    protocol: str
-    account_or_rule: str
-    frequency: str
-    permissions: tuple[str, ...]
-    cursor: str | None = None
-    connection_status: str = "configured"
-    latest_run_id: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-
-@dataclass(frozen=True)
-class SourceItem:
-    id: str
-    workspace_id: str
-    connector_id: str
-    source_label: str
-    source_url: str | None
-    content_type: str
-    author: str | None
-    published_at: datetime | None
-    body: str | None
-    subtitles: str | None
-    media_references: tuple[str, ...]
-    license: str
-    title: str
-    file_reference: str | None = None
-    content_hash: str | None = None
-    sections: tuple[KnowledgeSection, ...] = ()
-    parameters: tuple[KnowledgeParameter, ...] = ()
-    # 网页快照的抓取时间；其他来源没有抓取动作时为空。
-    fetched_at: datetime | None = None
-    use_state: ContentUseState = "available"
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-
-@dataclass(frozen=True)
-class KnowledgeItemVersion:
-    knowledge_item_id: str
-    version: str
-    content_hash: str | None
-    title: str
-    body: str | None
-    file_reference: str | None
-    source_item_id: str | None
-    sections: tuple[KnowledgeSection, ...]
-    parameters: tuple[KnowledgeParameter, ...]
-    saved_at: datetime
-    # 这一版内容实际从哪个网址抓来、什么时候抓的。网页快照回查当时内容靠它。
-    fetched_at: datetime | None = None
-    source_url: str | None = None
-
-
-@dataclass(frozen=True)
-class KnowledgeItem:
-    id: str
-    workspace_id: str
-    content_type: str
-    title: str
-    body: str | None
-    file_reference: str | None
-    authorization: str
-    ownership: str
-    source_item_id: str | None
-    version: str
-    content_hash: str | None = None
-    sections: tuple[KnowledgeSection, ...] = ()
-    parameters: tuple[KnowledgeParameter, ...] = ()
-    # 上传者身份（已验证的 user_id）。这是「私有内容只属于上传者」的判据；
-    # 旧行或本地无身份写入留空，读取时按可见范围处理，不猜归属。
-    owner_user_id: str | None = None
-    # 当前版本内容的抓取时间；不是网页快照时为空。
-    fetched_at: datetime | None = None
-    source_url: str | None = None
-    use_state: ContentUseState = "available"
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-
-@dataclass(frozen=True)
-class KnowledgeGrant:
-    id: str
-    knowledge_item_id: str
-    source_workspace_id: str
-    target_workspace_id: str
-    granted_by: str
-    granted_at: datetime
-    revoked_by: str | None = None
-    revoked_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class SourceRunEvidence:
-    id: str
-    workspace_id: str
-    connector_id: str
-    status: str
-    started_at: datetime
-    finished_at: datetime
-    cursor_before: str | None
-    cursor_after: str | None
-    item_count: int
-    reason: str | None = None
-    impact: str | None = None
-    repair_action: str | None = None
-    retryable: bool | None = None
-
-
-def knowledge_item_readable(
-    *,
-    user_id: str | None,
-    local_diagnostic: bool,
-    visibility: str,
-    owner_user_id: str | None,
-) -> bool:
-    """判断一条知识能否被当前调用方读到。
-
-    ``user_id`` 是**已经解析出的可信调用方标识**，来源有两种既有身份，都归一到
-    这一个字符串参与判定，不新造第二套身份框架：
-    - 已验证的 Bearer 身份（AuthPrincipal.user_id，来自 Supabase Auth）；
-    - 本地成员令牌（local_members_service.resolve_member 返回的 member_id）。
-    两者都不是客户端自报。local 模式的多名成员同处一个 workspace，正是靠这个
-    id 区分各自的私有上传。
-
-    ``local_diagnostic`` 只在保留的 local workspace、未开认证的受控诊断下为真：
-    这时本机自己的私有内容照常可读，产品在单机上仍然可用——但这不是多人隔离，
-    认证态或已带成员令牌的请求缺可信身份时不得借此降级到 local。
-
-    共享内容对本工作区成员可读；私有内容只对上传者本人可读。可见范围未知时按
-    更保守的一侧处理，不当作共享。
-    """
-    if local_diagnostic:
-        return True
-    # 认证范围内缺可信身份就是没有可用身份：不因为缺身份就只退到共享范围。
-    if not user_id:
-        return False
-    if visibility == CONTENT_VISIBILITY_SHARED:
-        return True
-    if visibility != CONTENT_VISIBILITY_PRIVATE:
-        return False
-    if not owner_user_id:
-        return False
-    return user_id == owner_user_id
-
-
-class SourceBoundaryError(RuntimeError):
-    """A platform boundary failure with a UI/API-safe, actionable semantic."""
-
-    def __init__(
-        self,
-        kind: str,
-        message: str,
-        *,
-        impact: str | None = None,
-        repair_action: str | None = None,
-        retryable: bool = False,
-    ) -> None:
-        super().__init__(message)
-        self.kind = kind
-        self.impact = impact or "No new items were imported; existing items are unchanged."
-        self.repair_action = repair_action or "Review the source configuration before retrying."
-        self.retryable = retryable
-
-
-class SourceSyncFailedError(RuntimeError):
-    def __init__(self, run: SourceRunEvidence) -> None:
-        super().__init__(run.reason or "source sync failed")
-        self.run = run
-
-
-def source_error_from_http_status(status_code: int, source_name: str) -> SourceBoundaryError:
-    if status_code == 401:
-        return SourceBoundaryError(
-            "authentication_required", f"{source_name} requires login or a valid token",
-            repair_action="Sign in again or update the source credential.", retryable=False,
-        )
-    if status_code == 403:
-        return SourceBoundaryError(
-            "access_denied", f"{source_name} denied access for the configured account or rule",
-            repair_action="Confirm the account has permission for this source.", retryable=False,
-        )
-    if status_code == 429:
-        return SourceBoundaryError(
-            "rate_limited", f"{source_name} rate limit was reached",
-            repair_action="Wait for the platform limit window, then retry.", retryable=True,
-        )
-    return SourceBoundaryError(
-        "temporary_failure", f"{source_name} request failed with HTTP {status_code}",
-        repair_action="Check the source service and retry.", retryable=True,
-    )
-
-
-def sync_source_connector(
-    repository: SourceRepository,
-    workspace_id: str,
-    connector_id: str,
-    fetch: Callable[[str | None], tuple[list[SourceItem], str | None]],
-) -> SourceRunEvidence:
-    """Persist an import attempt and force callers to observe failures."""
-    connector = repository.get_connector(workspace_id, connector_id)
-    try:
-        items, cursor_after = fetch(connector.cursor)
-        return repository.record_sync_success(
-            workspace_id, connector_id, items, cursor_after
-        )
-    except SourceBoundaryError as exc:
-        run = repository.record_sync_failure(
-            workspace_id,
-            connector_id,
-            reason=str(exc),
-            impact=exc.impact,
-            repair_action=exc.repair_action,
-            retryable=exc.retryable,
-            connection_status=exc.kind,
-        )
-        raise SourceSyncFailedError(run) from exc
-    except Exception as exc:
-        boundary_error = SourceBoundaryError(
-            "temporary_failure",
-            f"{connector.platform} sync failed: {exc}",
-            repair_action="Check the connector configuration and retry.",
-            retryable=True,
-        )
-        run = repository.record_sync_failure(
-            workspace_id,
-            connector_id,
-            reason=str(boundary_error),
-            impact=boundary_error.impact,
-            repair_action=boundary_error.repair_action,
-            retryable=boundary_error.retryable,
-            connection_status=boundary_error.kind,
-        )
-        raise SourceSyncFailedError(run) from exc
-
-
-@dataclass(frozen=True)
-class TopicSourceItem:
-    source_type: str
-    title: str
-    ref: str
-    excerpt: str
-    source_url: str | None = None
-    author: str | None = None
-    published_at: datetime | None = None
-    license: str = "unknown"
-    media_references: tuple[str, ...] = ()
-
-    def to_source_item(self, workspace_id: str, connector_id: str) -> SourceItem:
-        return SourceItem(
-            id=f"src_{uuid4().hex}",
-            workspace_id=workspace_id,
-            connector_id=connector_id,
-            source_label=self.source_type,
-            source_url=self.source_url or self.ref,
-            content_type="article",
-            author=self.author,
-            published_at=self.published_at,
-            body=self.excerpt,
-            subtitles=None,
-            media_references=self.media_references,
-            license=self.license,
-            title=self.title,
-        )
-
-
-@dataclass(frozen=True)
-class ObsidianNote:
-    title: str
-    ref: str
-    excerpt: str
-    modified_at: datetime
-    tags: list[str]
-    wikilinks: list[str]
-    outlinks: list[str]
-
-    def to_topic_source(self) -> TopicSourceItem:
-        context_lines = [self.excerpt]
-        if self.tags:
-            context_lines.append(f"标签：{'、'.join(self.tags)}")
-        if self.wikilinks:
-            context_lines.append(f"双链：{'、'.join(self.wikilinks)}")
-        if self.outlinks:
-            context_lines.append(f"外链：{'、'.join(self.outlinks[:5])}")
-        return TopicSourceItem(
-            source_type="Obsidian",
-            title=self.title,
-            ref=self.ref,
-            excerpt="\n".join(line for line in context_lines if line),
-        )
+from app.source_sync import (
+    SourceBoundaryError,
+    SourceSyncFailedError,
+    source_error_from_http_status,
+    sync_source_connector,
+)
+from app.source_types import (
+    CONTENT_USE_STATES,
+    ContentUsePurpose,
+    ContentUseState,
+    KnowledgeGrant,
+    KnowledgeItem,
+    KnowledgeItemVersion,
+    ObsidianNote,
+    SourceConnector,
+    SourceItem,
+    SourceRunEvidence,
+    TopicSourceItem,
+)
 
 
 class ObsidianVault:

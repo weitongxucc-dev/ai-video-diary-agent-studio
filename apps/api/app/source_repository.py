@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
-from app.sources import (
+from app.source_types import (
     CONTENT_USE_STATES,
     ContentUsePurpose,
     KnowledgeItem,
@@ -18,7 +18,6 @@ from app.sources import (
     SourceConnector,
     SourceItem,
     SourceRunEvidence,
-    content_allows_use,
 )
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
@@ -26,7 +25,8 @@ from app.database_migrations import (
     ensure_content_visibility_columns,
 )
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection, parse_knowledge_file
-from app.knowledge_grants import KNOWLEDGE_GRANTS_DDL
+from app.source_policy import content_allows_use
+from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL, SOURCE_TABLES_DDL
 
 
 class KnowledgeVersionConflict(ValueError):
@@ -1184,109 +1184,7 @@ class SourceRepository:
 
     def _init_database(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                PRAGMA foreign_keys = ON;
-                CREATE TABLE IF NOT EXISTS source_connectors (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    platform TEXT NOT NULL,
-                    protocol TEXT NOT NULL,
-                    account_or_rule TEXT NOT NULL,
-                    frequency TEXT NOT NULL,
-                    cursor_value TEXT,
-                    permissions TEXT NOT NULL,
-                    connection_status TEXT NOT NULL,
-                    latest_run_id TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_source_connectors_workspace
-                    ON source_connectors(workspace_id);
-                CREATE TABLE IF NOT EXISTS source_items (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    connector_id TEXT NOT NULL,
-                    source_label TEXT NOT NULL DEFAULT '',
-                    source_url TEXT,
-                    content_type TEXT NOT NULL,
-                    author TEXT,
-                    published_at TEXT,
-                    body TEXT,
-                    subtitles TEXT,
-                    media_references TEXT NOT NULL,
-                    license TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    file_reference TEXT,
-                    fetched_at TEXT,
-                    created_at TEXT NOT NULL,
-                    use_state TEXT NOT NULL DEFAULT 'available',
-                    FOREIGN KEY(connector_id) REFERENCES source_connectors(id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_source_items_workspace
-                    ON source_items(workspace_id, connector_id, created_at);
-                CREATE TABLE IF NOT EXISTS knowledge_items (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    content_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    body TEXT,
-                    file_reference TEXT,
-                    authorization TEXT NOT NULL,
-                    ownership TEXT NOT NULL,
-                    source_item_id TEXT,
-                    version TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    -- 新建内容默认私有（用户 2026-09-29 拍板）。注意：这里的 DEFAULT
-                    -- 只管 fresh 库的 INSERT；升级库的存量行由
-                    -- ensure_content_visibility_columns 回填为 shared。
-                    visibility TEXT NOT NULL DEFAULT 'private',
-                    -- 上传者身份（已验证的 user_id）；旧行与本地无身份写入留空。
-                    owner_user_id TEXT,
-                    use_state TEXT NOT NULL DEFAULT 'available',
-                    FOREIGN KEY(source_item_id) REFERENCES source_items(id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace
-                    ON knowledge_items(workspace_id, created_at);
-                CREATE TABLE IF NOT EXISTS knowledge_item_versions (
-                    knowledge_item_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    version TEXT NOT NULL,
-                    content_hash TEXT,
-                    title TEXT NOT NULL,
-                    body TEXT,
-                    file_reference TEXT,
-                    source_item_id TEXT,
-                    sections TEXT NOT NULL DEFAULT '[]',
-                    parameters TEXT NOT NULL DEFAULT '[]',
-                    fetched_at TEXT,
-                    source_url TEXT,
-                    saved_at TEXT NOT NULL,
-                    PRIMARY KEY (knowledge_item_id, version),
-                    FOREIGN KEY(knowledge_item_id) REFERENCES knowledge_items(id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_workspace
-                    ON knowledge_item_versions(workspace_id, saved_at DESC);
-                CREATE TABLE IF NOT EXISTS source_runs (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    connector_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT NOT NULL,
-                    cursor_before TEXT,
-                    cursor_after TEXT,
-                    item_count INTEGER NOT NULL,
-                    reason TEXT,
-                    impact TEXT,
-                    repair_action TEXT,
-                    retryable INTEGER,
-                    FOREIGN KEY(connector_id) REFERENCES source_connectors(id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_source_runs_workspace
-                    ON source_runs(workspace_id, connector_id, finished_at DESC);
-                """
-            )
+            conn.executescript(SOURCE_TABLES_DDL)
             columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(source_items)")
             }
