@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；先接字幕五源 WIP 与 None 夹具/float 回读边界，再接 R4 三 production 消费者、完整 R2/R3/bootstrap。R4/R6 整文件例外继续排除。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；先审核冻结 Web 六源及最少独立反例，后核 R4 联合公开候选；旧已过门与准备脚本只读复用。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；本批接下方显式组装/安全重载组，R4 授权模块释放后仍由 API 接消费者；完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；核稳定新 Web 消费者、API bootstrap 及 R4 授权联合候选；已过 Web/字幕/usage 门与原脚本只读复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；本批产品只读，只写 `test-runs/refactor-20261014/fresh-runtime-reload/**`，先实证五 DB 服务重载遗漏与失败半切换风险，再由 API 唯一 bootstrap owner 修复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源租约已归还，本批独占下方新增的执行回读 hook、字幕输入组件及两定向测试，修复三个已复现消费者反例；新 SOURCE_RELEASE 再冻结对应准确文件。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；本批独占 `materials/assets.py` 与 `test_material_asset_review_and_usage_store.py` 两 WIP，复用 26 模块检查并交 SOURCE_RELEASE；production 三薄委托归 API，联合公开门未过不接受。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；资产组租约已归还，当前独占下方版本化授权四源模块；production 消费者归 API，模块未接线/联合门未过不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
@@ -24,7 +24,7 @@ R6 已在 `fresh-runtime-reload/REPORT.json` 给出实际服务读写与临时�
 
 Web 六源集成并归还后，依据 `fresh-web-consumers/REPORT.md` 的三个实际反例，R5 追加独占 `apps/web/src/components/creation-task/useCreationExecution.ts`、`apps/web/src/components/SubtitleWorkspace.tsx`、既有 `__tests__/useCreationExecution.test.tsx` 与 `__tests__/SubtitleWorkspace.test.tsx` 的最小修复。成功接受完整回读后才更新轮询快照；失败允许原终态重读，poll/changeExecution 共用有限读取归属，旧回包不覆盖后来请求，恢复后清除对应旧错误。同对象、同版本、相同持久值的新 JSON 引用不能重置正在输入的字幕文字/时间/样式草稿，真实提交、换对象与版本变化保留原规则。不新增后端字段/通用状态层，不改变 API、类型、样式或共享权威。当前四文件无他人 WIP；必要接线仍限原 R5 已归还文件并须明列候选。以原三门、最小产品回归和同候选保持焦点的真实浏览器回读差额验证；未执行 GUI 不算可见通过。
 
-R4 当前资产两源继续冻结等待已接线联合门，同时接续独立的版本化授权仓储模块：独占实际新增 `apps/api/app/profiles/authorizations.py`、`profiles/versioned_payloads.py`、`tests/test_media_authorization_store.py`，并仅在既有 `app/persistence_json.py` 原样迁入授权 decoder 实际使用的 `_required_text`、`_optional_string_tuple`、`_required_datetime`、`_optional_datetime` 四纯函数。`MediaAuthorizationStore` 只收有限 SQLite 连接 factory，迁入 save/get/list/list_versions 四公开方法、三个现 conn 授权方法、原 payload/decoder/validator；调用方提供 conn 时不得另开或提交。原 `_save_versioned_payload`、`_list_versioned_payloads`、`_versioned_row` 三 helper 原样归 `versioned_payloads`，供授权/人物/声音/发音词典现消费者消费同一实现，不新增表、授权政策、版本排序或 production 回调。`_as_utc` 直接消费现 profiles/contracts 唯一对象。production 组装、四公开/三个 conn 薄委托、其他版本 helper 消费者接线、旧 helper/decoder/validator body 删除仍归 API；R4 不改 production/main/schema/原 API 档案测试。文件/媒体归属声明、人物/声音保存用例、DDL 与模型执行不迁入 store。未接线模块不集成或接受；模块释放后由 API 接线，联合门验证不可变版本/幂等、工作区隔离、revoked/expired 历史不升级、固定版本缺失拒绝、调用方未提交可读及同事务回滚和实际 HTTP/档案消费者。本组不替代完整人物/声音仓储与 R4。
+R4 资产组租约已归还，当前接续独立的版本化授权仓储模块：独占实际新增 `apps/api/app/profiles/authorizations.py`、`profiles/versioned_payloads.py`、`tests/test_media_authorization_store.py`，并仅在既有 `app/persistence_json.py` 原样迁入授权 decoder 实际使用的 `_required_text`、`_optional_string_tuple`、`_required_datetime`、`_optional_datetime` 四纯函数。`MediaAuthorizationStore` 只收有限 SQLite 连接 factory，迁入 save/get/list/list_versions 四公开方法、三个现 conn 授权方法、原 payload/decoder/validator；调用方提供 conn 时不得另开或提交。原 `_save_versioned_payload`、`_list_versioned_payloads`、`_versioned_row` 三 helper 原样归 `versioned_payloads`，供授权/人物/声音/发音词典现消费者消费同一实现，不新增表、授权政策、版本排序或 production 回调。`_as_utc` 直接消费现 profiles/contracts 唯一对象。production 组装、四公开/三个 conn 薄委托、其他版本 helper 消费者接线、旧 helper/decoder/validator body 删除仍归 API；R4 不改 production/main/schema/原 API 档案测试。文件/媒体归属声明、人物/声音保存用例、DDL 与模型执行不迁入 store。未接线模块不集成或接受；模块释放后由 API 接线，联合门验证不可变版本/幂等、工作区隔离、revoked/expired 历史不升级、固定版本缺失拒绝、调用方未提交可读及同事务回滚和实际 HTTP/档案消费者。本组不替代完整人物/声音仓储与 R4。
 
 ## 用户决定、入口与范围
 
