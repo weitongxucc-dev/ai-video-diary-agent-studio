@@ -29,6 +29,7 @@ const HELP = `曜核 CLI — Node >=22，普通业务 API 消费者
   timeline undo|redo TASK [--expected-version VERSION --expected-sequence N]
 全局：--config FILE（默认 ~/.config/yaohe/config.json，POSIX mode 0600）
 预览版本可写入 edit.json；缺少时只读一次当前任务绑定。
+音频/画面动作也用 edit preview/apply，字段以 capabilities describe 的共同API schema为准：EditAudioTimeline提交audio_edit(action/target_id/values)，AdjustVisualEffects提交clip_ids/effects。values/effects只写非空指定patch，遗漏保持；音频淡入淡出毫秒、画面秒、gain_db绝对dB。solo持久化、音量关键点写入和独立音频变速未开放。采用保存草稿，不自动出片。
 脚本仅消费API的Python/Pillow单PNG来源预览；不自动应用或出片。配方命令复用普通API；不继承旧任务授权，不自动应用。扩展加载和导出尚未接入。
 退出：0 已完成；1 API/终态失败；2 参数/配置；3 尚未完成；4 结果未知。
 `;

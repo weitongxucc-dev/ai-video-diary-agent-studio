@@ -143,9 +143,9 @@ def with_visual_effects(clip, effects: dict):
     """Color/geometry preserve a cut envelope; new fades target this piece."""
     from dataclasses import replace
     before = VisualEffects.model_validate(clip.visual_effects)
-    after = VisualEffects.model_validate(effects)
+    after = VisualEffects.model_validate({**before.model_dump(), **effects})
     changed = (before.fade_in_seconds, before.fade_out_seconds) != (after.fade_in_seconds, after.fade_out_seconds)
-    return replace(clip, visual_effects=effects, **({"fade_envelope_offset_frames":0,"fade_envelope_rate":1,
+    return replace(clip, visual_effects=after.model_dump(), **({"fade_envelope_offset_frames":0,"fade_envelope_rate":1,
         "fade_envelope_duration_frames":None} if changed else {}))
 
 

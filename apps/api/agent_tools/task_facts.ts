@@ -25,8 +25,13 @@ export function clipFacts(clip: any, index: number, cues: any[]) {
   return {
     ...fields(clip, ["id", "asset_id", "segment_id", "cue_id", "person_render_id", "role", "locked",
       "source_start_seconds", "source_end_seconds", "timeline_start_seconds", "timeline_end_seconds",
-      "playback_rate", "fit_mode", "crop_x", "crop_y", "transition_in_seconds", "needs_confirmation", "manually_selected"]),
-    object_ref: `clip:${clip.id}`, units: {time: "seconds", crop: "0–1", playback_rate: "dimensionless multiplier"},
+      "playback_rate", "fit_mode", "crop_x", "crop_y", "transition_in_seconds", "needs_confirmation", "manually_selected",
+      "fade_envelope_rate", "fade_envelope_offset_frames", "fade_envelope_duration_frames"]),
+    object_ref: `clip:${clip.id}`, units: {time: "seconds", crop: "0–1", playback_rate: "dimensionless multiplier",
+      fade_envelope_frames: "30 fps effect clock", fade_envelope_rate: "effect clock multiplier",
+      visual_effects: {exposure: "EV", fade_in_seconds: "seconds", fade_out_seconds: "seconds",
+        contrast: "multiplier", saturation: "multiplier", temperature: "−1–1",
+        zoom: "multiplier", offset_x: "signed canvas fraction", offset_y: "signed canvas fraction", rotation: "degrees"}},
     source_reference: logicalReference(clip.source_reference),
     visual_effects: fields(clip.visual_effects || {}, ["fade_in_seconds", "fade_out_seconds", "zoom", "offset_x", "offset_y",
       "rotation", "beauty_strength", "skin_exposure", "exposure", "contrast", "saturation", "temperature"]),
@@ -117,7 +122,8 @@ export function audioClipFacts(clip: any, track: any, task: any) {
     narration_segment_ids: (task.narration?.segments || []).filter((segment: any) => segment.audio_reference === clip.source_ref).map((segment: any) => segment.id),
     linked_clip_ids: linkedClips.slice(0, 24).map((shot: any) => shot.id), linked_clip_count: linkedClips.length,
     linked_clips_truncated: linkedClips.length > 24,
-    association_source: "matching_recorded_source_reference", units: {time: "milliseconds", gain: "dB", loudness: "LUFS"}};
+    association_source: "matching_recorded_source_reference", units: {time: "milliseconds", gain: "dB", loudness: "LUFS",
+      editor_gain_point_offset: "milliseconds from current clip start; read-only in the current typed mix action"}};
 }
 
 export function audioTrackFacts(track: any, task: any, clipLimit = 24) {

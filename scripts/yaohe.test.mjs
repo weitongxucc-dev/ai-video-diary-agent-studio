@@ -71,6 +71,54 @@ test('preview binds current version once and keeps a stable UUID without assista
   assert.ok(!Object.hasOwn(body,'assistant_turn_id'));
 });
 
+const fineActions = [
+  {operation_type:'EditAudioTimeline',audio_edit:{action:'update',target_id:'music_clip',values:{gain_db:-9,fade_out_ms:1000,loudness_target_lufs:null}}},
+  {operation_type:'AdjustVisualEffects',clip_ids:['clip_2'],effects:{exposure:.5,temperature:-.2}},
+];
+for (const action of fineActions) {
+  test(`${action.operation_type} uses the same versioned preview/apply endpoints with only explicit patch fields`,async t=>{
+    const applyId='12345678-1234-4321-8123-123456789abd';
+    const applyQuery=`${PREFIX}/assistant/edit-requests/${applyId}?phase=apply`;
+    const f=await fixture(t,(call,res)=>{
+      if(call.url===query('preview')||call.url===applyQuery) return absent(res);
+      if(call.url===PREFIX) return send(res,200,{task:{current_timeline_version_id:'fine_base',timeline_sequence:8}});
+      if(call.url.endsWith('/edits/proposal_fine/result')) return send(res,200,{proposal_id:'proposal_fine',
+        base_version_id:'fine_base',input_digest:'a'.repeat(64),status:'proposed',result:null});
+      if(call.url.endsWith('/edits/exact/preview')) return send(res,200,{proposal:{id:'proposal_fine',operation:action},preview:{}});
+      return send(res,200,{operation:{id:'fine_operation'},result_version_id:'fine_saved'});
+    });
+    const file=join(f.directory,'fine.json');await writeFile(file,JSON.stringify(action));
+    assert.equal((await f.cli('edit','preview',TASK,'--file',file,'--request-id',REQUEST)).code,0);
+    assert.equal((await f.cli('edit','apply',TASK,'proposal_fine','--request-id',applyId)).code,0);
+    const writes=f.calls.filter(call=>call.method==='POST');
+    assert.deepEqual(writes[0].body,{...action,expected_timeline_version_id:'fine_base',expected_timeline_sequence:8,request_id:REQUEST});
+    assert.deepEqual(writes[1].body,{request_id:applyId,expected_base_version_id:'fine_base',expected_input_digest:'a'.repeat(64)});
+    assert.equal(writes.length,2);
+    assert.ok(writes.every(call=>!Object.hasOwn(call.body,'assistant_turn_id')));
+    assert.ok(!f.calls.some(call=>call.url.includes('/audio/preview')||call.url.includes('/visual/preview')||call.url.includes('/execution/')));
+  });
+
+  for (const status of [403,409,422]) {
+    test(`${action.operation_type} preserves API rejection ${status} and never retries or changes its explicit base`,async t=>{
+      const f=await fixture(t,(call,res)=>call.method==='GET'?absent(res):send(res,status,{detail:'actual fine edit rejection'}));
+      const file=join(f.directory,'fine.json');await writeFile(file,JSON.stringify({...action,
+        expected_timeline_version_id:'original_fine_base',expected_timeline_sequence:8}));
+      const result=await f.cli('edit','preview',TASK,'--file',file,'--request-id',REQUEST);
+      assert.equal(result.code,1);assert.equal(result.json.http_status,status);
+      assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+      assert.equal(f.calls.at(-1).body.expected_timeline_version_id,'original_fine_base');
+      assert.ok(!f.calls.some(call=>call.url===PREFIX));
+    });
+  }
+
+  test(`${action.operation_type} with an unknown original receipt queries only and never reads a new edit file`,async t=>{
+    const f=await fixture(t,(call,res)=>send(res,200,{status:'unknown',result_status_code:null,result:null}));
+    const result=await f.cli('edit','preview',TASK,'--file','unread-fine.json','--request-id',REQUEST);
+    assert.equal(result.code,4);assert.equal(result.json.submitted,false);
+    assert.deepEqual(f.calls.map(call=>[call.method,call.url]),[['GET',query('preview')]]);
+  });
+}
+
 test('explicit preview base is preserved and API conflict never retries',async t=>{
   const f=await fixture(t,(call,res)=>call.method==='GET' ? absent(res) : send(res,409,{detail:'stale base'}));
   const action=join(f.directory,'edit.json');

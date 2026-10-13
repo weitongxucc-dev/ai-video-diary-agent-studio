@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
@@ -1498,7 +1499,42 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     confirmed: bool | None = None
 
 
+class AudioMixPatch(BaseModel):
+    """Only explicitly supplied existing-domain controls enter the audio patch."""
+    model_config = ConfigDict(extra="forbid")
+    gain_db: float = deepcopy(TimelineAudioClip.model_fields["gain_db"])
+    muted: bool = deepcopy(TimelineAudioClip.model_fields["muted"])
+    fade_in_ms: int = deepcopy(TimelineAudioClip.model_fields["fade_in_ms"])
+    fade_out_ms: int = deepcopy(TimelineAudioClip.model_fields["fade_out_ms"])
+    denoise_db: float = deepcopy(TimelineAudioClip.model_fields["denoise_db"])
+    loudness_target_lufs: float | None = deepcopy(TimelineAudioClip.model_fields["loudness_target_lufs"])
+    duck_under_voice: bool = deepcopy(TimelineAudioTrack.model_fields["duck_under_voice"])
+
+    @model_validator(mode="after")
+    def nonempty_patch(self):
+        if not self.model_fields_set:
+            raise ValueError("音频混音修改须指定至少一个参数")
+        return self
+
+
+class AudioMixEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["update", "track"]
+    target_id: str = Field(min_length=1, max_length=120)
+    values: AudioMixPatch
+
+    @model_validator(mode="after")
+    def target_controls(self):
+        allowed = ({"gain_db", "muted", "duck_under_voice"} if self.action == "track" else
+            {"gain_db", "muted", "fade_in_ms", "fade_out_ms", "denoise_db", "loudness_target_lufs"})
+        if not self.values.model_fields_set <= allowed:
+            raise ValueError("该混音参数不适用于所选音轨或片段动作")
+        return self
+
+
 EXACT_EDIT_FIELDS = {
+    "EditAudioTimeline": {"audio_edit"},
+    "AdjustVisualEffects": {"clip_ids", "effects"},
     "ReplaceClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds"},
     "TrimClip": {"clip_id", "source_start_seconds"},
     "ChangeClipSpeed": {"clip_id", "playback_rate"},
@@ -1520,6 +1556,7 @@ EXACT_EDIT_FIELDS = {
     "GenerateCoverFromFrame": {"frame_time_seconds", "title", "title_position"},
 }
 EXACT_MONTAGE_REQUIRED_FIELDS = {
+    "EditAudioTimeline": {"audio_edit"}, "AdjustVisualEffects": {"clip_ids", "effects"},
     "ChangeCrop": {"fit_mode", "crop_x", "crop_y"}, "ReplaceClip": {"asset_id", "segment_id"},
     "TrimClip": {"source_start_seconds"}, "SplitClip": {"split_time_seconds"},
     "ChangeClipSpeed": {"playback_rate"}, "ReorderClip": {"position"},
@@ -1529,6 +1566,10 @@ EXACT_EDIT_ENVELOPE_FIELDS = {"assistant_turn_id", "request_id", "expected_timel
 
 
 class CreationTaskExactEditRequest(BaseModel):
+    audio_edit: AudioMixEditRequest | None = None
+    clip_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    effects: VisualEffects | None = Field(default=None,
+        description="只修改明确提交的字段；遗漏字段保留每个镜头既有效果。重置字段须显式提交其默认值。")
     assistant_turn_id: UUID | None = None
     request_id: UUID | None = None
     expected_timeline_version_id: str | None = None
@@ -1546,6 +1587,8 @@ class CreationTaskExactEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     operation_type: Literal[
+        "EditAudioTimeline",
+        "AdjustVisualEffects",
         "ReplaceClip",
         "ChangeCanvas",
         "SetClipTransition",
@@ -1603,6 +1646,13 @@ class CreationTaskExactEditRequest(BaseModel):
         allowed = EXACT_EDIT_FIELDS.get(self.operation_type)
         if allowed is not None and self.model_fields_set - allowed - EXACT_EDIT_ENVELOPE_FIELDS - {"operation_type"}:
             raise ValueError("精确编辑包含与当前动作无关的字段")
+        if self.operation_type == "EditAudioTimeline" and self.audio_edit is None:
+            raise ValueError("音频混音动作须指定audio_edit")
+        if self.operation_type == "AdjustVisualEffects":
+            if not self.clip_ids or len(self.clip_ids) != len(set(self.clip_ids)) or any(not ref or len(ref) > 120 for ref in self.clip_ids):
+                raise ValueError("画面效果动作须指定不重复的当前镜头ID")
+            if self.effects is None or not self.effects.model_fields_set:
+                raise ValueError("画面效果动作须指定至少一个效果参数")
         if self.operation_type == "ConfigureSubtitleTrack":
             modes = {"style", "subtitle_display", "target_language"} & self.model_fields_set
             if len(modes) > 1:

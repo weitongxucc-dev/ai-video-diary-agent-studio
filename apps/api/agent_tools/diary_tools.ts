@@ -1264,7 +1264,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       const parameters = typedEditSchema(editCapabilities);
       pi.registerTool({
         name: "preview_typed_edit", label: "预览类型化修改",
-        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。只生成提案/预览，不应用或宣称成片。最多3个不同预览，未知或失败结果不盲重放。",
+        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id、update片段或track音轨、非空values patch；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；本轮不开放音量关键点写入、solo持久化或独立音频变速。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。最多3个不同候选，同输入、未知结果或授权/版本拒绝不重放。",
         parameters,
         execute: async (_id: string, params: Record<string, unknown>) => {
           if (!currentTaskRead || !selectedTaskVersion) throw new Error("请先读取本轮可信任务与版本");
@@ -1278,7 +1278,8 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
           const turn = process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;
           if (!instruction || !turn) throw new Error("本轮原句或身份未绑定，未提交预览");
           if (typeof _id !== "string" || !_id) throw new Error("本轮可信工具调用身份缺失，未提交预览");
-          const input = JSON.stringify(Object.fromEntries(Object.entries(params).sort(([a], [b]) => a.localeCompare(b))));
+          const input = JSON.stringify(params, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value);
           if (typedInputs.has(input)) throw new Error("本轮已提交相同预览，不重复请求");
           typedInputs.add(input); typedAttempts++; typedPreviewBlocked = true; previewCreated = true;
           const requestId = typedRequestId(turn, _id);

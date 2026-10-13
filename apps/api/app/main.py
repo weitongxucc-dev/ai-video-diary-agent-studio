@@ -3630,13 +3630,31 @@ def _prepare_exact_edit_request(task_id, request, payload):
 
 def _exact_edit_source_facts(task, payload, request):
     """Bind the actual authorized material revision without exposing host paths."""
-    if payload.clip_id is None:
+    if payload.operation_type == "EditAudioTimeline":
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
+        graph = _effective_audio_timeline(montage)
+        edit = _audio_mix_request(payload, task.current_timeline_version_id)
+        try:
+            apply_audio_edit(graph, edit, round(montage.duration_seconds * 1000))
+            actor = _require_permit_actor(request, task.workspace_id)
+            facts = []
+            for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
+                stat = _task_audio().source(task.workspace_id, task.id, reference, actor=actor).stat()
+                facts.append({"reference": reference, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+                    "ctime_ns": stat.st_ctime_ns, "inode": stat.st_ino, "device": stat.st_dev})
+            return facts
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (KeyError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    ids = payload.clip_ids if payload.operation_type == "AdjustVisualEffects" else [payload.clip_id] if payload.clip_id else []
+    if not ids:
         return []
     montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
-    clip = next((item for item in montage.clips if item.id == payload.clip_id), None)
-    if clip is None:
+    clips = [clip for clip in montage.clips if clip.id in ids]
+    if len(clips) != len(ids):
         raise HTTPException(status_code=404, detail="当前任务镜头不存在")
-    pairs = [(clip.asset_id, clip.segment_id)] if not clip.person_render_id else []
+    pairs = [(clip.asset_id, clip.segment_id) for clip in clips if not clip.person_render_id]
     if payload.asset_id is not None and payload.segment_id is not None:
         pairs.append((payload.asset_id, payload.segment_id))
     facts = []
@@ -3656,6 +3674,11 @@ def _exact_edit_source_facts(task, payload, request):
             "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
             "inode": stat.st_ino, "device": stat.st_dev})
     return facts
+
+
+def _audio_mix_request(payload, base_version_id):
+    return AudioEditRequest(base_version_id=base_version_id, action=payload.audio_edit.action,
+        target_id=payload.audio_edit.target_id, values=payload.audio_edit.values.model_dump(mode="json", exclude_unset=True))
 
 
 def _claim_edit_request(task, member_id, request_id, phase, inputs):
@@ -4013,6 +4036,9 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             "source":[clip.source_path,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]}
         return facts,resources
     audio_operations = {"audio_import", "recording_save", "audio_listen", "audio_extract", "audio_edit_preview", "audio_waveform", "narration_waveform"}
+    exact_audio = operation == "exact_edit_preview" and payload.get("operation_type") == "EditAudioTimeline"
+    if exact_audio:
+        audio_operations.add(operation)
     if operation == "command_edit_preview" and arguments.get("_media_kind") in {"audio_mix", "audio_probe", "audio_stretch"} and not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip()):
         audio_operations.add(operation)
     files, audio_inputs, audio_uses, graphics = [], [], {}, []
@@ -4074,8 +4100,9 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
                         audio=True, metadata=service.source_metadata(workspace_id, task_id, reference))
         references = {clip.source_ref for clip in clips}
         audio_uses.update(Counter(clip.source_ref for clip in clips))
-        if operation == "audio_edit_preview":
-            edit = AudioEditRequest.model_validate(payload)
+        if operation == "audio_edit_preview" or exact_audio:
+            edit = (_audio_mix_request(CreationTaskExactEditRequest.model_validate(payload), task.current_timeline_version_id)
+                if exact_audio else AudioEditRequest.model_validate(payload))
             duration_ms = round(plan.duration_seconds * 1000)
             if edit.action == "replace_narration":
                 edit = edit.model_copy(update={"values": {**edit.values, "source_end_ms": duration_ms}})
@@ -4320,6 +4347,8 @@ def _task_media_job_response(media, job, actor, runtime):
         refs = [f"clip:{payload['clip_id']}"]
     if not refs and payload.get("target_id"):
         refs = [f"audio:{payload['target_id']}"]
+    if not refs and payload.get("audio_edit"):
+        refs = [f"audio:{payload['audio_edit']['target_id']}"]
     if not refs and payload.get("track_id"):
         refs = [f"subtitle-track:{payload['track_id']}"]
     if not refs and event["operation"] == "audio_waveform":
@@ -5379,11 +5408,13 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         raise HTTPException(status_code=404,detail="所选镜头不存在")
     if any(clip.locked for clip in clips):
         raise HTTPException(status_code=409,detail="所选范围包含锁定镜头，请先解锁或缩小范围")
-    if all(VisualEffects.model_validate(clip.visual_effects)==payload.effects for clip in clips):
+    patch = payload.effects.model_dump(exclude_unset=True)
+    changed_clips = {clip.id: with_visual_effects(clip, patch) for clip in clips}
+    if all(VisualEffects.model_validate(clip.visual_effects).model_dump() == changed_clips[clip.id].visual_effects for clip in clips):
         raise HTTPException(status_code=422,detail="画面参数没有变化")
     try:
         for target in clips:
-            fade_filters(with_visual_effects(target, payload.effects.model_dump()))
+            fade_filters(changed_clips[target.id])
     except ValueError as exc:
         raise HTTPException(status_code=422,detail=str(exc)) from exc
     # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
@@ -5404,16 +5435,16 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         preview_clip,source=resolve_target(clip)
         records=[]
         if not draft_only:
-            if payload.effects.beauty_strength or payload.effects.skin_exposure:
+            if any(item.visual_effects["beauty_strength"] or item.visual_effects["skin_exposure"] for item in changed_clips.values()):
                 raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
             from copy import deepcopy
             base = _ensure_montage_base_version(workspace_id, task, plan)
             tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
             changed = deepcopy(plan)
-            changed.clips = [with_visual_effects(item, payload.effects.model_dump())
+            changed.clips = [with_visual_effects(item, patch)
                              if item.id in payload.clip_ids else item for item in changed.clips]
             records = [_publish_task_picture_preview(workspace_id, task, base, candidate, tracks,
-                kind="color_preview", parameters={"effects": payload.effects.model_dump(), "side": side})
+                kind="color_preview", parameters={"effects": patch, "side": side})
                 for side, candidate in (("before", plan), ("after", changed))]
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
@@ -5424,16 +5455,14 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="visual_adjustment",
         scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True,"preserve_audio":True,"preserve_face_geometry":True},confidence=1,status="interpreted"))
-    detail=(f"曝光 {payload.effects.exposure:+.1f} EV · 对比度 {payload.effects.contrast:.2f} · "
-            f"饱和度 {payload.effects.saturation:.2f} · 冷暖 {payload.effects.temperature:+.2f} · "
-            f"磨皮 {payload.effects.beauty_strength:.0%} · 肤色曝光 {payload.effects.skin_exposure:+.2f} EV · "
-            f"缩放 {payload.effects.zoom:g} 倍 · 旋转 {payload.effects.rotation:g}° · "
-            f"位置 {payload.effects.offset_x:+.0%} / {payload.effects.offset_y:+.0%} · "
-            f"黑场淡入 {payload.effects.fade_in_seconds:g} 秒 / 淡出 {payload.effects.fade_out_seconds:g} 秒")
+    labels = {"exposure": "曝光", "contrast": "对比度", "saturation": "饱和度", "temperature": "冷暖",
+        "beauty_strength": "磨皮", "skin_exposure": "肤色曝光", "zoom": "缩放", "rotation": "旋转",
+        "offset_x": "水平位置", "offset_y": "垂直位置", "fade_in_seconds": "黑场淡入秒", "fade_out_seconds": "黑场淡出秒"}
+    detail = "只调整 " + " · ".join(f"{labels[key]} {value:g}" for key, value in patch.items())
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
         operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
-            "effects":payload.effects.model_dump(),"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
+            "effects":patch,"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
         invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
         preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":"当前画面" if side=="before" else detail,
             "detail":f"预览镜头 {plan.clips.index(clip)+1} 的{'完整区间（包含结尾淡出）' if preview_limit is None else '开头（最多 5 秒）'}；确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
@@ -12470,7 +12499,7 @@ def _confirm_creation_task_edit(
         targets=[clip for clip in montage.clips if clip.id in expected]
         if len(targets)!=len(expected) or any(clip.locked or asdict(clip)!=expected[clip.id] for clip in targets):
             raise HTTPException(status_code=409,detail="所选镜头已变化，请重新预览")
-        effects=VisualEffects.model_validate(operation_payload["effects"]).model_dump()
+        effects=VisualEffects.model_validate(operation_payload["effects"]).model_dump(exclude_unset=True)
         for clip in targets:
             updated=with_visual_effects(clip,dict(effects))
             clip.visual_effects=updated.visual_effects
@@ -13220,6 +13249,11 @@ def get_creation_task_edit_capabilities(task_id: str, request: Request):
             reason = "先保留当前故事板并建立可撤销版本"
         elif "clip_id" in fields and not clips:
             reason = "当前任务没有可编辑镜头"
+        elif operation == "AdjustVisualEffects" and not clips:
+            reason = "当前任务没有可调整画面的镜头"
+        elif operation == "EditAudioTimeline" and not any(track.clips for track in
+                _effective_audio_timeline(creation_task_montage_plan_from_payload(payload)).tracks):
+            reason = "当前任务没有可修改的真实音轨片段"
         elif operation in {"UpdateSubtitleCue", "ReplaceSubtitleText", "SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue", "ConfigureSubtitleTrack"} and not tracks:
             reason = "当前版本没有字幕轨"
         operations.append({"operation_type": operation, "available": reason is None, "reason": reason,
@@ -13232,7 +13266,25 @@ def get_creation_task_edit_capabilities(task_id: str, request: Request):
         "units": {"source_start_seconds": "源片段起点，秒；TrimClip 保留镜头时长与旁白",
                   "start_seconds": "时间轴秒", "end_seconds": "时间轴秒", "split_time_seconds": "时间轴秒",
                   "playback_rate": "0.25–4，语义按operation区分。ChangeClipSpeed：绝对画面速度，每1秒timeline消耗rate秒source；source_span=timeline_span*rate。0.7减速、2加速；2.5秒槽@0.7消耗2.5*0.7=1.75秒源片段，保留时间槽、旁白和字幕。ChangeLinkedSpeed：相对当前速度倍率，联动改变时轴，不是绝对速度。",
-                  "crop_x": "0–1，裁剪窗口水平位置", "crop_y": "0–1，裁剪窗口垂直位置"},
+                  "crop_x": "0–1，裁剪窗口水平位置", "crop_y": "0–1，裁剪窗口垂直位置",
+            "audio_edit.action": "update修改音频片段；track修改音轨。目标必须是当前版本的真实音频ID，不使用视频clip ID。",
+            "audio_edit.target_id": "当前音轨或音频片段ID；与action对应。",
+            "audio_edit.values.gain_db": "-60至12 dB，绝对目标音量；轨道与片段音量叠加。减6dB须读取原值后计算目标。",
+            "audio_edit.values.muted": "布尔值；true静音，false恢复。",
+            "audio_edit.values.fade_in_ms": "音频片段淡入毫秒，非负整数；淡入+淡出不能超过片段包络长度。",
+            "audio_edit.values.fade_out_ms": "音频片段淡出毫秒，非负整数；不是时间线结束位置。",
+            "audio_edit.values.denoise_db": "0至24 dB，片段降噪强度，0关闭。",
+            "audio_edit.values.loudness_target_lufs": "-30至-10 LUFS，片段响度目标；显式null清除。",
+            "audio_edit.values.duck_under_voice": "仅music轨布尔值；按当前真实旁白压低背景音乐。",
+            "effects.exposure": "-2至2 EV，绝对曝光设置。", "effects.contrast": "0.5至1.5，1为默认。",
+            "effects.saturation": "0至2，1为默认。", "effects.temperature": "-1至1，负值冷、正值暖。",
+            "effects.zoom": "0.1至4倍，1为默认。", "effects.offset_x": "-1至1，归一化水平位置；正值右移。",
+            "effects.offset_y": "-1至1，归一化垂直位置；正值下移。", "effects.rotation": "-180至180度，绝对角度。",
+            "effects.fade_in_seconds": "0至5秒黑场淡入；非零至少两输出帧，与淡出总长不超过镜头。",
+            "effects.fade_out_seconds": "0至5秒黑场淡出；独立于音频淡出。",
+            "effects.beauty_strength": "0至1；非零本机人像效果尚无受许可执行路径。",
+            "effects.skin_exposure": "-0.5至0.5 EV；非零本机人像效果尚无受许可执行路径。",
+            "patch": "只修改明确提交字段，遗漏保持各对象现值；重置须明确提交默认值。不接音频关键点、独立变速、solo持久化或来源替换。"},
         "preview_modes": {"draft": "只生成参数差异，不生成媒体", "media": "需现有设备许可和标定预算，返回实际预览或异步作业"}}
 
 
@@ -13246,6 +13298,12 @@ def preview_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditPreviewResponse:
+    if payload.operation_type in {"EditAudioTimeline", "AdjustVisualEffects"}:
+        task, _member_id = _exact_edit_access(task_id, request, write=True)
+        if payload.operation_type == "EditAudioTimeline":
+            return preview_creation_task_audio.__wrapped__(task_id, request, _audio_mix_request(payload, task.current_timeline_version_id))
+        return preview_creation_task_visual.__wrapped__(task_id, request, VisualEditRequest(
+            base_version_id=task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects))
     if payload.operation_type == "EditGraphicOverlay":
         return _preview_graphic_overlay(task_id,request,payload)
     if payload.operation_type == "SetClipTransition":

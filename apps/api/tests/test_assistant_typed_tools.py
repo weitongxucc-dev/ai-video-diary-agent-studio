@@ -133,6 +133,52 @@ def test_failed_typed_request_is_not_replayed(tmp_path):
     assert sum(call["method"] == "POST" for call in observed["calls"]) == 1
 
 
+@pytest.mark.parametrize("action", [
+    {"operation_type": "EditAudioTimeline", "audio_edit": {"action": "update", "target_id": "music-clip",
+        "values": {"gain_db": -9, "fade_out_ms": 1000, "loudness_target_lufs": None}}},
+    {"operation_type": "EditAudioTimeline", "audio_edit": {"action": "track", "target_id": "music-track",
+        "values": {"muted": False, "duck_under_voice": True}}},
+    {"operation_type": "AdjustVisualEffects", "clip_ids": ["second"], "effects": {"exposure": .5, "temperature": -.2}},
+])
+def test_common_typed_schema_passes_only_explicit_audio_or_visual_patch(tmp_path, action):
+    assert CreationTaskExactEditRequest.model_validate(action).model_dump(exclude_unset=True) == action
+    actual = preview()
+    actual["proposal"]["operation"]["operation_type"] = action["operation_type"]
+    seen = invoke(tmp_path, result=actual, steps=[{"tool": "preview_typed_edit", "args": action}])
+    post = next(call for call in seen["calls"] if call["method"] == "POST")
+    assert post["path"].endswith("/edits/exact/preview")
+    assert post["body"] == {**action, "assistant_turn_id": "trusted-turn", "request_id": seen["requestIdentity"],
+        "expected_timeline_version_id": "version-current", "expected_timeline_sequence": 4}
+    assert seen["parameters"]["$defs"] == caps()["schema"]["$defs"]
+    assert seen["results"][0]["result"]["details"]["kind"] == "edit_preview"
+    events = [{"type": "tool_execution_end", "toolName": "preview_typed_edit", "isError": False,
+        "result": seen["results"][0]["result"]},
+        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "尚未应用"}]}},
+        {"type": "agent_settled"}]
+    reply, returned = host._last_answer_and_preview("\n".join(json.dumps(event) for event in events), "edit_preview")
+    assert returned["proposal"]["operation"]["operation_type"] == action["operation_type"]
+    assert "尚未应用修改" in reply
+
+
+@pytest.mark.parametrize("action", [
+    {"operation_type": "EditAudioTimeline", "audio_edit": {"action": "update", "target_id": "music-clip",
+        "values": {"gain_db": -9, "fade_out_ms": 1000}}},
+    {"operation_type": "AdjustVisualEffects", "clip_ids": ["second"], "effects": {"exposure": .5, "contrast": 1.1}},
+])
+def test_reordered_nested_patch_cannot_repeat_a_rejected_typed_input(tmp_path, action):
+    reordered = {key: value for key, value in reversed(list(action.items()))}
+    if "audio_edit" in action:
+        reordered["audio_edit"] = {"values": dict(reversed(list(action["audio_edit"]["values"].items()))),
+            "target_id": "music-clip", "action": "update"}
+    else:
+        reordered["effects"] = dict(reversed(list(action["effects"].items())))
+    seen = invoke(tmp_path, failure=True, steps=[{"tool": "preview_typed_edit", "args": action},
+        {"tool": "preview_typed_edit", "args": reordered}])
+    assert seen["results"][0]["result"]["details"]["correction_allowed"]
+    assert not seen["results"][1]["ok"] and "相同预览" in seen["results"][1]["error"]
+    assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
+
+
 def test_known_parameter_rejection_allows_distinct_bounded_correction(tmp_path):
     first = {"tool": "preview_typed_edit", "args": {"operation_type": "TrimClip", "clip_id": "second", "source_start_seconds": 1}}
     correction = {"tool": "preview_typed_edit", "args": {**first["args"], "source_start_seconds": 2}}
@@ -232,6 +278,31 @@ def test_object_directory_and_reads_reach_audio_and_overlay_tails(tmp_path):
     assert last["timeline_sequence"] == 4 and last["revision"] == "version-current"
     assert overlay["items"][0]["object_ref"] == "overlay:overlay-9" and overlay["items"][0]["color"] == "#FFD166"
     assert "/private/" not in json.dumps(seen["results"])
+
+
+def test_fine_object_reads_include_mix_controls_and_the_existing_picture_effect_clock(tmp_path):
+    workspace = complete_workspace()
+    audio = workspace["montage"]["audio_timeline"]["tracks"][-1]["clips"][-1]
+    audio.update(fade_in_ms=120, fade_out_ms=900, muted=False, locked=False, denoise_db=3,
+        loudness_target_lufs=None, envelope_offset_ms=500, envelope_duration_ms=1500)
+    workspace["montage"]["clips"] = [{"id": "picture", "source_start_seconds": 0, "source_end_seconds": 1,
+        "timeline_start_seconds": 0, "timeline_end_seconds": 1, "fade_envelope_rate": 2,
+        "fade_envelope_offset_frames": 15, "fade_envelope_duration_frames": 90,
+        "visual_effects": {"exposure": .2, "contrast": 1.1, "saturation": .9, "temperature": -.2,
+            "zoom": 1.2, "offset_x": .1, "rotation": 5, "fade_in_seconds": .5}}]
+    seen = invoke(tmp_path, workspace=workspace, steps=[
+        {"tool": "read_task_object", "args": {"kind": "audio_clips", "object_id": audio["id"]}},
+        {"tool": "read_task_object", "args": {"kind": "audio_tracks", "object_id": "audio-track-9"}},
+        {"tool": "read_task_object", "args": {"kind": "clips", "object_id": "picture"}},
+    ])
+    clip, track, picture = [item["result"]["details"]["items"][0] for item in seen["results"]]
+    assert {key: clip[key] for key in ("gain_db", "fade_out_ms", "denoise_db", "loudness_target_lufs")} == {
+        "gain_db": -2, "fade_out_ms": 900, "denoise_db": 3, "loudness_target_lufs": None}
+    assert track["gain_db"] == -3 and track["duck_under_voice"] is True
+    assert picture["fade_envelope_rate"] == 2 and picture["fade_envelope_offset_frames"] == 15
+    assert picture["fade_envelope_duration_frames"] == 90 and picture["visual_effects"]["exposure"] == .2
+    assert picture["units"]["visual_effects"]["exposure"] == "EV"
+    assert picture["units"]["fade_envelope_frames"] == "30 fps effect clock"
 
 
 def test_complete_subtitle_and_script_reads_discover_parents_and_actual_revisions(tmp_path):
