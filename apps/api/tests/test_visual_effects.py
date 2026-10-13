@@ -209,6 +209,16 @@ def test_fade_preview_includes_tail_and_matches_export(tmp_path):
     assert max(abs(x-y) for p,q in zip(before,after) for x,y in zip(p,q))<8
 
 
+def test_granted_clip_preview_keeps_its_five_second_limit(tmp_path):
+    from app.montage import render_granted_clip_preview
+    checks = []
+    context = SimpleNamespace(check=lambda: checks.append('checked'))
+    with pytest.raises(ValueError, match='五秒以内'):
+        render_granted_clip_preview(None, tmp_path/'unused.mp4', tmp_path/'unused-output.mp4',
+            context, aspect_ratio='9:16', max_seconds=6)
+    assert checks == ['checked'] and not (tmp_path/'unused-output.mp4').exists()
+
+
 def test_split_inside_fades_has_same_visible_frames_as_unsplit(tmp_path):
     from dataclasses import replace
     from app.montage import MontageClip

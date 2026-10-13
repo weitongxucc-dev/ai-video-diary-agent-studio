@@ -4015,11 +4015,31 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     expected = payload.get("base_version_id")
     if "base_version_id" in payload and expected != task.current_timeline_version_id:
         raise ValueError("时间线已变化，请重新安排当前要求")
+    visual_scope = None
+    visual_edit = operation == "visual_edit_preview" or (
+        operation == "exact_edit_preview" and payload.get("operation_type") == "AdjustVisualEffects")
+    if visual_edit and plan is not None and arguments.get("_media_kind") in {"clip_preview", "picture_preview"}:
+        tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
+        representative, _after, projected = _visual_preview_projection(
+            plan, payload["clip_ids"], payload["effects"], tracks)
+        visual_scope = {"representative_clip_id": representative.id,
+            "selected_clip_ids": [item.id for item in plan.clips if item.id in payload["clip_ids"]],
+            "start_seconds": representative.timeline_start_seconds,
+            "end_seconds": representative.timeline_end_seconds,
+            "scope": "independent_clip", "adjacent_transitions_included": False}
+        if (projected is None) != (arguments["_media_kind"] == "clip_preview"):
+            raise ValueError("画面预览范围与封存的媒体用途不一致")
+        if projected is not None:
+            plan = projected[0][0]
+            picture_candidates = [candidate for candidate, _tracks in projected]
+            visual_scope["subtitle_tracks"] = [{key: value for key, value in asdict(track).items()
+                if key not in {"created_at", "updated_at"}} for track in projected[0][1]]
     if arguments.get("_media_kind") == "clip_preview":
         from app.canvas import preview_size
         if plan is None:
             raise ValueError("当前任务没有可预览的镜头")
-        selected = payload.get("clip_id") or next((ref[5:] for ref in payload.get("selected_object_refs", []) if ref.startswith("clip:")), None)
+        selected = (visual_scope["representative_clip_id"] if visual_scope is not None else
+            payload.get("clip_id") or next((ref[5:] for ref in payload.get("selected_object_refs", []) if ref.startswith("clip:")), None))
         clip = next((item for item in plan.clips if item.id == selected), None)
         if clip is None:
             raise ValueError("当前选中镜头不存在")
@@ -4056,6 +4076,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             "clip_preview":True,"silent":True,"preview_window_limit_seconds":5.}
         facts = {"base_version_id":task.current_timeline_version_id,"clip":asdict(clip),"aspect_ratio":plan.aspect_ratio,
             "source":[clip.source_path,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]}
+        if visual_scope is not None:
+            facts["visual_preview"] = visual_scope
         return facts,resources
     audio_operations = {"audio_import", "recording_save", "audio_listen", "audio_extract", "audio_edit_preview", "audio_waveform", "narration_waveform"}
     exact_audio = operation == "exact_edit_preview" and payload.get("operation_type") == "EditAudioTimeline"
@@ -4154,6 +4176,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
                  if task.confirmed_script_id else None,
              "plan_id": task.plan_id, "plan_digest": media_digest(asdict(production_repo.get_creation_plan(workspace_id, task.plan_id))), "montage": snapshot, "files": files,
              "narration_cache_key": task.narration_cache_key}
+    if visual_scope is not None:
+        facts["visual_preview"] = visual_scope
     if operation == "audio_import":
         facts = {"base_version_id": None, "files": files}
     if graphics:
@@ -5462,6 +5486,40 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     return FileResponse(path,media_type="image/png" if path.suffix == ".png" else "video/mp4")
 
 
+def _visual_preview_projection(plan, clip_ids, patch, tracks=()):
+    """Project one representative shot identically at sealing and execution."""
+    from copy import deepcopy
+    selected = [clip for clip in plan.clips if clip.id in clip_ids]
+    if len(selected) != len(set(clip_ids)) or not selected:
+        raise ValueError("所选镜头不存在")
+    if any(clip.locked for clip in selected):
+        raise ValueError("所选范围包含锁定镜头，请先解锁或缩小范围")
+    before = selected[0]
+    after = with_visual_effects(before, patch)
+    if (before.timeline_end_seconds - before.timeline_start_seconds <= 5 or
+            not (before.visual_effects.get("fade_out_seconds") or after.visual_effects.get("fade_out_seconds"))):
+        return before, after, None
+    start, end = round(before.timeline_start_seconds * 1000), round(before.timeline_end_seconds * 1000)
+    duration = round(plan.duration_seconds * 1000)
+    removed = [(a, b) for a, b in ((0, start), (end, duration)) if a < b]
+    def project(clip):
+        readonly = deepcopy(plan)
+        # This comparison covers the shot itself, not its neighboring dissolve.
+        readonly.clips = [replace(deepcopy(clip), locked=False, transition_in_seconds=0)]
+        readonly.status = "ready"
+        audio = _effective_audio_timeline(plan).model_copy(deep=True)
+        for track in audio.tracks:
+            track.locked = False
+            for item in track.clips:
+                item.locked = False
+        if removed:
+            # One retained interval keeps all original IDs: no split/copy UUIDs.
+            return remove_time_ranges(readonly, tracks, audio, removed)
+        readonly.audio_timeline = audio
+        return readonly, deepcopy(tracks)
+    return before, after, [project(before), project(after)]
+
+
 @app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
 @_task_media_route("visual_edit_preview", "edit_preview")
 def preview_creation_task_visual(task_id: str, request: Request, payload: VisualEditRequest):
@@ -5487,7 +5545,8 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
         raise HTTPException(status_code=422,detail=str(exc)) from exc
     # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
     clip=clips[0]
-    preview_limit = None if (payload.effects.fade_out_seconds or clip.visual_effects.get("fade_out_seconds")) else 5
+    preview_limit = None if (clip.timeline_end_seconds - clip.timeline_start_seconds > 5 and
+        (changed_clips[clip.id].visual_effects.get("fade_out_seconds") or clip.visual_effects.get("fade_out_seconds"))) else 5
     def resolve_target(target):
         preview_target=replace(target)
         if target.person_render_id:
@@ -5500,20 +5559,23 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             source=production_repo.resolve_clip_media_reference(workspace_id,target.asset_id,target.source_path)
         return preview_target,source
     try:
-        preview_clip,source=resolve_target(clip)
+        preview_clip,_source=resolve_target(clip)
         records=[]
         if not draft_only:
             if any(item.visual_effects["beauty_strength"] or item.visual_effects["skin_exposure"] for item in changed_clips.values()):
                 raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
-            from copy import deepcopy
             base = _ensure_montage_base_version(workspace_id, task, plan)
             tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
-            changed = deepcopy(plan)
-            changed.clips = [with_visual_effects(item, patch)
-                             if item.id in payload.clip_ids else item for item in changed.clips]
-            records = [_publish_task_picture_preview(workspace_id, task, base, candidate, tracks,
-                kind="color_preview", parameters={"effects": patch, "side": side})
-                for side, candidate in (("before", plan), ("after", changed))]
+            before, after, projected = _visual_preview_projection(plan, payload.clip_ids, patch, tracks)
+            if projected is None:
+                records = [_publish_task_clip_preview(workspace_id, task, base, candidate,
+                    kind="color_preview", side=side, aspect_ratio=plan.aspect_ratio)
+                    for side, candidate in (("before", preview_clip), ("after", after))]
+            else:
+                records = [_publish_task_picture_preview(workspace_id, task, base, candidate, scoped_tracks,
+                    kind="color_preview", parameters={"effects": patch, "side": side,
+                        "representative_clip_id": before.id, "scope": "independent_clip"})
+                    for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
@@ -5533,7 +5595,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             "effects":patch,"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
         invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
         preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":"当前画面" if side=="before" else detail,
-            "detail":f"预览镜头 {plan.clips.index(clip)+1} 的{'完整区间（包含结尾淡出）' if preview_limit is None else '开头（最多 5 秒）'}；确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
+            "detail":f"仅预览代表镜头 {plan.clips.index(clip)+1} 的{'完整区间（包含结尾淡出及该区间音轨、字幕和图层）' if preview_limit is None else '开头（最多 5 秒，静音画面，不含字幕和图层）'}；未覆盖相邻转场。确认将应用到 {len(clips)} 个指定镜头，不改变声音和时长。",
             "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
             for side,record in zip(("before","after"),records)}}))
     return _edit_preview_response(intent,proposal)

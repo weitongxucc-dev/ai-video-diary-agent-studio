@@ -260,13 +260,15 @@ def test_unknown_and_known_source_probe_rejects_before_dsp(tmp_path, monkeypatch
 
 
 def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, monkeypatch):
+    import app.main as main
     import subprocess
     import wave
     import shutil
     from app.artifact_store import ArtifactStore
-    from app.host_resource_probes import HostProcessProbe, HostCapacity
+    from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, HostCapacity
     from app.montage import MontageRenderer, CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
     from app.task_audio import TaskAudio
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
         pytest.skip('FFmpeg required for synthetic picture verification')
     source=tmp_path/'source.mp4'
@@ -307,8 +309,12 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
             operation='picture_preview',media_input={'plan':creation_task_montage_plan_to_payload(plan),'subtitle_tracks':[]})
         return {'video_url':'/synthetic-preview','artifact_id':record.id}
     media.execute_operation=operation
+    configure_synthetic_media_budgets(monkeypatch, main)
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
+    runtime.scheduler.resources=HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
+        100, 0, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
+        cpu_render=main.cpu_render_budget_from_env()))
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     saved=repo.get_job_run('local',job.id)
@@ -317,6 +323,221 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     assert store.resolve_file(saved.output_refs[0]).stat().st_size > 0
     assert repo.list_transform_runs('local','task')[0].parameters['duration_ms'] == 1000
     runtime.stop(0)
+
+
+def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
+    import json
+    import subprocess
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
+    import app.main as main
+    from app.artifact_store import ArtifactStore
+    from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
+    from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe
+    from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_to_payload
+    from app.production import MaterialAsset, MaterialSegment, SubtitleCue, SubtitleTrack, TimelineVersion
+    from app.task_audio import TaskAudio
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets, synthetic_wav_bytes
+    configure_synthetic_media_budgets(monkeypatch, main)
+    repo, actor, _state, _factory, build, media = case(tmp_path)
+    repo.video_library_path.mkdir(exist_ok=True)
+    source = repo.video_library_path/'source.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=30:d=6',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(source)],
+        check=True, capture_output=True, timeout=5)
+    voice = repo.video_library_path/'voice.wav'
+    voice.write_bytes(synthetic_wav_bytes(8))
+    references = []
+    for asset_id, path, seconds, media_type in [('asset', source, 6, 'video'), ('voice', voice, 8, 'audio')]:
+        repo._save_asset(MaterialAsset(id=asset_id, workspace_id='local', file_name=path.name, path=str(path),
+            size_bytes=path.stat().st_size, modified_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+            duration_seconds=seconds, usage_role='b_roll', review_status='approved', analysis_status='ready',
+            media_type=media_type, owner_user_id=actor.member_id,
+            segments=[MaterialSegment(id=asset_id+'-segment', asset_id=asset_id, start_seconds=0, end_seconds=seconds,
+                description='synthetic source', review_status='approved')]))
+        reference = repo.workspace_media_reference_for_asset('local', asset_id)
+        references.append(reference)
+        with repo._connect() as conn:
+            repo._claim_workspace_media_reference(conn, workspace_id='local', reference=reference)
+    clips, at = [], 0
+    for index in range(21):
+        length = 6 if index == 1 else 1
+        clips.append(MontageClip(f'clip_{index}', f'cue_{index}', 'asset', 'asset-segment', references[0],
+            0, length, at, at+length, 1, [], False, locked=index == 0,
+            transition_in_seconds=.2 if index == 1 else 0,
+            visual_effects={'fade_out_seconds':fade_out} if index == 1 else {}))
+        at += length
+    graph = AudioTimeline(tracks=[TimelineAudioTrack(id='voice', name='voice', role='narration', locked=True,
+        clips=[TimelineAudioClip(id='voice-clip', name='voice', source_ref=references[1], source_start_ms=0,
+            source_end_ms=8000, timeline_start_ms=0, locked=True, fade_in_ms=400, fade_out_ms=400)])])
+    plan = CreationTaskMontagePlan('montage', 'local', 'task', 'script', 'scope fixture', 'ready',
+        [NarrationCue(f'cue_{index}', f'section_{index}', '', clip.timeline_end_seconds-clip.timeline_start_seconds)
+         for index, clip in enumerate(clips)], clips, at, 0, aspect_ratio='1:1', audio_timeline=graph,
+        graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3},
+                          {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
+    payload = creation_task_montage_plan_to_payload(plan)
+    with repo._connect() as conn:
+        task = repo.get_creation_task('local', 'task')
+        task.montage_plan_id = plan.id
+        task.stage = 'montage'
+        task.owner_user_id = actor.member_id
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
+            (json.dumps(asdict(task), default=str),))
+    repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
+    payload = repo.get_creation_task_montage_plan('local', 'task')
+    repo.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
+    store = ArtifactStore(tmp_path/'output')
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, 'artifact_store', store)
+    monkeypatch.setattr(main, 'settings', SimpleNamespace(
+        video_output_path=str(tmp_path/'output'), effective_temporary_root_path=tmp_path/'temp'))
+    subtitle_ref, transform_id = main._publish_subtitle_text(
+        workspace_id='local', task_id='task', proposal_id='scope-fixture', kind='subtitle_text_edit',
+        input_refs=['timeline:timeline'],
+        content='1\n00:00:02,000 --> 00:00:03,000\ninside\n\n2\n00:00:09,000 --> 00:00:10,000\noutside\n',
+        engine='synthetic-fixture', parameters={'timeline_version_id':'timeline'})
+    track = SubtitleTrack('subtitles', 'local', 'task', 'timeline', 'en-US', None,
+        {'font_family':'Arial', 'font_size':32, 'enabled':True},
+        [SubtitleCue('inside', None, 'inside', 2, 3), SubtitleCue('outside', None, 'outside', 9, 10)],
+        'timeline', None, subtitle_ref, transform_id, 'valid')
+    repo.create_subtitle_track(track)
+    service = TaskAudio(repo, store, tmp_path/'temp', picture_renderer=main._render_task_picture_input)
+    monkeypatch.setattr(main, 'montage_renderer', MontageRenderer(tmp_path/'render'))
+    monkeypatch.setattr(main, '_task_audio', lambda:service)
+    monkeypatch.setattr(main, '_require_permit_actor', lambda *args:actor)
+    monkeypatch.setattr(main, '_assistant_member_id', lambda *args:actor.member_id)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request:'local')
+    media.facts = main._task_media_facts
+    media.execute_operation = main._execute_task_media_operation
+    media.validate_result = main._validate_task_media_result
+    runtime = build(media)
+    runtime.scheduler.processes = HostProcessProbe()
+    runtime.scheduler.resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
+        100, 0, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
+        cpu_render=main.cpu_render_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()))
+    monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
+    return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
+
+
+@pytest.mark.parametrize('route', ['visual', 'exact'])
+def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp_path, monkeypatch, route):
+    import json
+    import subprocess
+    main, repo, actor, media, runtime, client, original, _track, store = _visual_scope_case(tmp_path, monkeypatch)
+    try:
+        payload = {'clip_ids':['clip_20', 'clip_1'], 'effects':{'exposure':.15}}
+        if route == 'visual':
+            path = '/api/creation-tasks/task/visual/preview'
+            payload['base_version_id'] = 'timeline'
+        else:
+            path = '/api/creation-tasks/task/edits/exact/preview'
+            payload.update(operation_type='AdjustVisualEffects', expected_timeline_version_id='timeline', expected_timeline_sequence=1)
+        queued = client.post(path, json=payload)
+        assert queued.status_code == 202, queued.text
+        job_id = queued.json()['job_id']
+        _job, event = media.read('local', job_id)
+        resources = event['resources']
+        assert event['arguments']['_media_kind'] == 'clip_preview'
+        assert resources['duration_seconds'] == 5 and resources['clip_count'] == 1
+        assert resources['silent'] is True and resources['overlay_count'] == 0 and 'audio_mix' not in resources
+        assert event['input_facts']['visual_preview']['selected_clip_ids'] == ['clip_1', 'clip_20']
+        assert event['input_facts']['clip']['id'] == 'clip_1'
+        assert resources['input_bytes'] == repo.resolve_clip_media_reference('local', 'asset', original['clips'][1]['source_path']).stat().st_size
+        assert runtime.run_once()
+        done = client.get(queued.json()['result_url']).json()
+        assert done['status'] == 'succeeded', done
+        proposal = done['result']['proposal']
+        assert set(proposal['operation']['payload']['expected_clips']) == {'clip_1', 'clip_20'}
+        assert '代表镜头 2' in proposal['preview']['after']['detail']
+        assert '静音画面' in proposal['preview']['after']['detail'] and '未覆盖相邻转场' in proposal['preview']['after']['detail']
+        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        assert len(records) == 2
+        for record in records:
+            metadata = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries',
+                'format=duration:stream=codec_type', '-of', 'json', str(store.resolve_file(record.logical_ref))]))
+            assert float(metadata['format']['duration']) == pytest.approx(5, abs=.05)
+            assert [stream['codec_type'] for stream in metadata['streams']] == ['video']
+        assert repo.get_creation_task_montage_plan('local', 'task') == original
+        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        locked = client.post(path, json={**payload, 'clip_ids':['clip_0']})
+        assert locked.status_code == 409 and '锁定' in locked.text
+        asset = repo.get_asset('local', 'asset')
+        repo._save_asset(replace(asset, use_state='excluded'))
+        with pytest.raises(PermissionError, match='素材使用状态'):
+            main._task_media_facts('local', 'task', event['operation'], event['arguments'], actor)
+    finally:
+        runtime.stop(0)
+
+
+@pytest.mark.parametrize('existing_fade', [False, True])
+def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(tmp_path, monkeypatch, existing_fade):
+    import json
+    import subprocess
+    from dataclasses import asdict
+    from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+    main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(
+        tmp_path, monkeypatch, fade_out=.4 if existing_fade else 0)
+    try:
+        patch = {'fade_out_seconds':0 if existing_fade else .4}
+        queued = client.post('/api/creation-tasks/task/edits/exact/preview', json={
+            'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':patch,
+            'expected_timeline_version_id':'timeline', 'expected_timeline_sequence':1})
+        assert queued.status_code == 202, queued.text
+        job_id = queued.json()['job_id']
+        _job, event = media.read('local', job_id)
+        assert event['arguments']['_media_kind'] == 'picture_preview'
+        assert event['resources']['clip_count'] == 1 and event['resources']['duration_seconds'] == 6
+        assert event['resources']['overlay_count'] == 1 and event['resources']['audio_mix']['input_count'] == 1
+        assert event['input_facts']['audio_mix_candidates'] == event['resources']['audio_mix_candidates']
+        assert main._task_media_facts('local', 'task', event['operation'], event['arguments'], actor) == (
+            event['input_facts'], event['resources'])
+        plan = creation_task_montage_plan_from_payload(original)
+        before_tracks = asdict(track)
+        first = main._visual_preview_projection(plan, ['clip_1'], patch, [track])[2]
+        second = main._visual_preview_projection(plan, ['clip_1'], patch, [track])[2]
+        for (candidate, tracks), (again, again_tracks) in zip(first, second, strict=True):
+            assert creation_task_montage_plan_to_payload(candidate) == creation_task_montage_plan_to_payload(again)
+            assert [asdict(item) for item in tracks] == [asdict(item) for item in again_tracks]
+            assert len(candidate.clips) == 1 and candidate.clips[0].id == 'clip_1'
+            assert candidate.clips[0].timeline_start_seconds == 0 and candidate.clips[0].transition_in_seconds == 0
+            audio = candidate.audio_timeline.tracks[0].clips[0]
+            assert (audio.source_start_ms, audio.source_end_ms, audio.timeline_start_ms) == (1000, 7000, 0)
+            assert (audio.envelope_offset_ms, audio.envelope_duration_ms) == (1000, 8000)
+            assert [(item['id'], item['start_seconds'], item['end_seconds']) for item in candidate.graphic_overlays] == [('in-window', 1, 2)]
+            assert [(cue.id, cue.start_seconds, cue.end_seconds) for cue in tracks[0].cues] == [('inside', 1, 2)]
+        assert creation_task_montage_plan_to_payload(plan) == original and asdict(track) == before_tracks
+        assert runtime.run_once()
+        done = client.get(queued.json()['result_url']).json()
+        assert done['status'] == 'succeeded', done
+        assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
+        assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']
+        inputs = [item for item in repo.list_task_events('local', 'task')
+                  if item.job_id == job_id and item.event_type == 'task_media_input']
+        assert len(inputs) == 2
+        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        assert len(records) == 2
+        for event_input in inputs:
+            candidate = event_input.payload['media_input']['plan']
+            assert len(candidate['clips']) == 1 and candidate['duration_seconds'] == 6
+        for record in records:
+            path = store.resolve_file(record.logical_ref)
+            metadata = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries',
+                'format=duration:stream=codec_type', '-of', 'json', str(path)]))
+            assert float(metadata['format']['duration']) == pytest.approx(6, abs=.05)
+            assert {stream['codec_type'] for stream in metadata['streams']} == {'video', 'audio'}
+            raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path), '-vf', 'scale=1:1',
+                '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'])
+            assert len(raw) == 180*3
+            event_input = next(item for item in inputs if item.payload['parameters']['side'] ==
+                next(transform.parameters['side'] for transform in repo.list_transform_runs('local', 'task')
+                     if record.logical_ref in transform.output_refs))
+            has_fade = event_input.payload['media_input']['plan']['clips'][0]['visual_effects'].get('fade_out_seconds', 0) > 0
+            assert (max(raw[-3:]) < 8) if has_fade else (raw[-1] > 240)
+        assert repo.get_creation_task_montage_plan('local', 'task') == original
+        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+    finally:
+        runtime.stop(0)
 
 
 def test_explicit_failed_retry_reuses_job_and_original_request(tmp_path):

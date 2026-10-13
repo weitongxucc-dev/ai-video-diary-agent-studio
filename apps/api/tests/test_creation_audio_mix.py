@@ -249,7 +249,7 @@ def test_main_render_consumer_reads_current_actor_and_same_sealed_mix(tmp_path, 
         scheduler.close()
 
 
-def test_normal_color_preview_seals_its_real_audio_and_linkage_flag(tmp_path, monkeypatch):
+def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path, monkeypatch):
     import app.main as main
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
     repo, task_id, _, _, actor, _, _, scheduler, _, service, _, _ = case(tmp_path, normalize=True)
@@ -258,17 +258,37 @@ def test_normal_color_preview_seals_its_real_audio_and_linkage_flag(tmp_path, mo
         monkeypatch.setattr(main, '_task_audio', lambda: service)
         monkeypatch.setattr(main, 'settings', replace(main.settings, video_inbox_path=str(repo.video_library_path)))
         configure_synthetic_media_budgets(monkeypatch, main)
+        payload = repo.get_creation_task_montage_plan('local', task_id)
+        original = payload['clips'][0]
+        payload['clips'] = [
+            {**original, 'id':'before', 'locked':True},
+            {**original, 'timeline_start_seconds':1, 'timeline_end_seconds':7,
+                'source_end_seconds':6, 'visual_effects':{'fade_out_seconds':.4}},
+            {**original, 'id':'outside', 'timeline_start_seconds':7, 'timeline_end_seconds':27, 'locked':True}]
+        payload['duration_seconds'] = 27
+        graph = service.repository.get_creation_task_montage_plan('local', task_id)['audio_timeline']
+        for track in graph['tracks']:
+            track['locked'] = True
+            track['clips'][0].update(source_end_ms=2000, playback_rate=.25, locked=True)
+        payload['audio_timeline'] = graph
+        repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+        payload = repo.get_creation_task_montage_plan('local', task_id)
         task = repo.get_creation_task('local', task_id)
         facts, resources = main._task_media_facts('local', task_id, 'exact_edit_preview',
-            {'payload':{'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'saturation':.8},
+            {'payload':{'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'fade_out_seconds':0},
                 'expected_timeline_version_id':task.current_timeline_version_id, 'expected_timeline_sequence':2},
              '_media_kind':'picture_preview'}, actor)
         assert resources['kind'] == 'creation_render'
+        assert resources['duration_seconds'] == 6 and resources['clip_count'] == 1
+        assert facts['visual_preview']['representative_clip_id'] == 'clip_1'
         assert resources['audio_mix']['input_count'] == 2
         assert resources['audio_mix']['normalize_voice_sources'] is True
         assert resources['audio_mix']['temporary_output_bytes'] > resources['audio_mix']['mix_output_bytes']
         assert facts['audio_mix_candidates'] == resources['audio_mix_candidates']
         assert all(item['resources']['normalize_voice_sources'] for item in resources['audio_mix_candidates'])
+        assert all(item['resources']['inputs'][0]['duration_seconds'] == 2
+                   for item in resources['audio_mix_candidates'])
+        assert repo.get_creation_task_montage_plan('local', task_id) == payload
     finally:
         scheduler.close()
 
