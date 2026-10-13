@@ -4590,7 +4590,9 @@ def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
     calls=[]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
+    source_service = main_module._task_audio()
+    monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
     def publish(*args,**kwargs):
         calls.append(True)
         return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
@@ -4648,7 +4650,9 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
+    source_service = main_module._task_audio()
+    monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
     monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='partial',logical_ref='artifacts/partial.mp4'))
     result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     assert result.status_code==200,result.text
@@ -4700,7 +4704,9 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
     captured=[]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
+    source_service = main_module._task_audio()
+    monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
     def publish(workspace,task,version,plan,tracks,**kwargs):
         captured.append([track.style for track in tracks])
         return SimpleNamespace(id='subtitle-compound',logical_ref='artifacts/compound.mp4')
@@ -4714,7 +4720,8 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     assert selected.status_code==200,selected.text
     partial=selected.json()['proposal']
     assert partial['target_refs']==['subtitle:all']
-    assert state.client.post(base+'/edits/'+partial['id']+'/confirm').status_code==200
+    adopted = state.client.post(base+'/edits/'+partial['id']+'/confirm')
+    assert adopted.status_code == 200, adopted.text
     after=state.client.get(base).json()
     assert after['subtitle_tracks'][0]['style']['font_size']==64
     assert [track['cues'] for track in after['subtitle_tracks']]==[track['cues'] for track in before['subtitle_tracks']]
@@ -4739,7 +4746,9 @@ def test_compound_caption_text_time_and_translation_boundary(person_render_edit_
         cues=[replace(zh.cues[0],id='compound-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
+    source_service = main_module._task_audio()
+    monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
     monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='text-preview',logical_ref='artifacts/text-preview.mp4'))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     assert preview('当前镜头亮一点，同时字幕1改成“歧义字幕”').status_code==422
@@ -5256,7 +5265,9 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
         cues=[replace(zh.cues[0],id='shift-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
-    monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
+    source_service = main_module._task_audio()
+    monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
     monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='shift-preview',logical_ref='artifacts/shift-preview.mp4'))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     for invalid in ['当前镜头亮一点，同时字幕1提前0.2秒','当前镜头亮一点，同时英文字幕1提前2秒']:

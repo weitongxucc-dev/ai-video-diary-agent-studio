@@ -14,19 +14,19 @@ class EditSourceVerifier:
         self.audio_actor = audio_actor
 
     def facts(self, command, action, *, clip_ids=None, connection=None):
-        if action['operation_type'] == 'EditAudioTimeline':
+        if action['operation_type'] == 'EditAudioTimeline' and clip_ids is None:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
                 command.workspace_id, command.task_id, connection=connection))
             graph = plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
             edit = action['audio_edit']
             apply_audio_edit(graph, AudioEditRequest(base_version_id=command.base_version_id,
                 action=edit['action'], target_id=edit['target_id'], values=edit['values']), round(plan.duration_seconds*1000))
-            facts = []
-            for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
-                stat = self.audio_service.source(command.workspace_id, command.task_id, reference, actor=self.audio_actor).stat()
-                facts.append({'reference':reference, 'size':stat.st_size, 'mtime_ns':stat.st_mtime_ns,
-                    'ctime_ns':stat.st_ctime_ns, 'inode':stat.st_ino, 'device':stat.st_dev})
-            return facts
+            return self.audio_facts(command, graph)
+        if action['operation_type'] == 'EditCompoundTimeline' and clip_ids is None:
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
+                command.workspace_id, command.task_id, connection=connection))
+            graph = plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
+            return self.audio_facts(command, graph)
         ids = clip_ids if clip_ids is not None else (action.get('clip_ids') or list(action.get('expected_clips', {}))) if action['operation_type'] == 'AdjustVisualEffects' else (
             [action['clip_id']] if action.get('clip_id') else [])
         if not ids:
@@ -35,6 +35,14 @@ class EditSourceVerifier:
         return self.repository.clip_edit_source_facts(command.workspace_id, command.task_id, clip_ids=ids,
             replacement=replacement, user_id=self.identity['member_id'],
             local_diagnostic=self.identity['local_diagnostic'], connection=connection)
+
+    def audio_facts(self, command, graph):
+        facts = []
+        for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
+            stat = self.audio_service.source(command.workspace_id, command.task_id, reference, actor=self.audio_actor).stat()
+            facts.append({'reference':reference, 'size':stat.st_size, 'mtime_ns':stat.st_mtime_ns,
+                'ctime_ns':stat.st_ctime_ns, 'inode':stat.st_ino, 'device':stat.st_dev})
+        return facts
 
     def freeze(self, command):
         action = {'operation_type':command.operation_type, **command.values}
@@ -55,6 +63,15 @@ class EditSourceVerifier:
                 clip_ids=command.affected_clip_ids, connection=connection) != command.affected_source_facts:
             raise EditConflict("修改实际影响范围内的源文件或片段修订已变化，请重新预览")
 
+    def verify_change(self, command, after_payload, connection):
+        before = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
+            command.workspace_id, command.task_id, connection=connection))
+        after = creation_task_montage_plan_from_payload(after_payload)
+        actual = affected_source_clip_ids(before, after)
+        if command.affected_clip_ids != actual:
+            raise EditConflict("封存来源范围与本次实际影响的镜头不一致，请重新预览")
+        self.verify(command, connection)
+
     def freeze_affected(self, command, clip_ids):
         action = command.source['action'] if command.source is not None else {
             'operation_type':command.operation_type, **command.values}
@@ -65,7 +82,7 @@ class EditSourceVerifier:
         if command.source is None and command.input_source_facts is None:
             command = replace(command, input_source_facts=self.freeze(command))
         if not ids:
-            return command
+            return replace(command, affected_clip_ids=(), affected_source_facts=[], affected_clip_facts=[])
         return replace(command, affected_clip_ids=ids, affected_source_facts=self.freeze_affected(command, ids),
             affected_clip_facts=affected_clip_facts(before, ids))
 

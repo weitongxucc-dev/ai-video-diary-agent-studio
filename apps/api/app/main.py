@@ -80,6 +80,7 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.sources import EditSourceVerifier
+from app.creation.editing.compound import calculate_compound_edit, prepare_compound_proposal, apply_compound_proposal
 from app.creation.editing.linked import (prepare_linked_speed, prepare_linked_splice, prepare_linked_insert,
     apply_linked_speed, apply_linked_splice, apply_linked_insert)
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
@@ -10292,9 +10293,10 @@ def _persist_typed_montage_edit(
         absent_cover_value=True)
     try:
         _confirmed, persisted_operation, _version, _task = (commit_direct_change(
-            production_repo, direct_command, direct_intent, proposal, change, verify_sources=direct_source_verifier.verify) if direct_intent is not None else
+            production_repo, direct_command, direct_intent, proposal, change,
+            verify_sources=lambda command, conn: direct_source_verifier.verify_change(command, change.montage_payload, conn)) if direct_intent is not None else
             commit_change_set(production_repo, change, connection=connection,
-                verify_sources=(lambda conn:proposal_source_verifier.verify(proposal_source_command, conn))
+                verify_sources=(lambda conn:proposal_source_verifier.verify_change(proposal_source_command, change.montage_payload, conn))
                 if proposal_source_verifier is not None else None))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -12566,20 +12568,28 @@ def _confirm_creation_task_edit(
         if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409,detail="时间线已变化，请重新预览全部修改")
         montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-        data=creation_task_montage_plan_to_payload(montage)
-        data.update(clips=operation_payload["clips"],audio_timeline=operation_payload["audio_timeline"])
-        candidate=creation_task_montage_plan_from_payload(data)
-        try:
-            _task_audio().validate(workspace_id,task_id,candidate.audio_timeline,candidate.duration_seconds, draft_only=True)
-        except (ValueError,OSError,subprocess.SubprocessError) as exc:
-            raise HTTPException(status_code=409,detail="音频来源已变化，请重新预览") from exc
         base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
         tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=montage)
-        changed_tracks=apply_compound_subtitles(tracks,operation_payload["steps"],montage.duration_seconds)
+        bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("affected_source_scope")
+        if bound is None:
+            raise HTTPException(status_code=409, detail="原复合提案未封存实际影响的来源范围，请为当前版本重新预览")
+        command = _metadata_edit_command(task, request, "EditCompoundTimeline", operation_payload, source=source)
+        command = EditSourceVerifier.restore_scope(command, bound)
+        service = _task_audio()
+        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity,
+            audio_service=service, audio_actor=CreationExecutionActor(workspace_id, command.actor_identity["member_id"]))
+        try:
+            candidate, changed_tracks = apply_compound_proposal(task, montage, tracks, command,
+                validate_audio=lambda graph, duration: service.validate(workspace_id, task_id, graph, duration, draft_only=True))
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError,OSError,subprocess.SubprocessError) as exc:
+            raise HTTPException(status_code=409,detail="音频来源已变化，请重新预览") from exc
         _prepare_changed_montage(candidate,message="复合修改已应用，可重新渲染；一次撤销恢复全部修改。")
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=candidate,
-            operation_type="EditCompoundTimeline",operation_payload=operation_payload,edited_subtitle_tracks=changed_tracks)
+            operation_type="EditCompoundTimeline",operation_payload=operation_payload,edited_subtitle_tracks=changed_tracks,
+            proposal_source_command=command, proposal_source_verifier=verifier)
     if operation_type in CLIP_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
@@ -13738,57 +13748,50 @@ def preview_compound_selection(task_id:str,proposal_id:str,request:Request,paylo
 
 def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
     draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    workspace_id=current_workspace_id(request)
-    # Narrow candidate commands before loading the montage.
-    if not is_indexed_subtitle_command(payload.raw_command) and not re.search(r'[，,；;]|同时|并且|然后',payload.raw_command):
+    workspace_id = current_workspace_id(request)
+    if not is_indexed_subtitle_command(payload.raw_command) and not re.search(r'[，,；;]|同时|并且|然后', payload.raw_command):
         return None
-    if not re.search(r'音乐|配音|原声|音效|字幕|英文放在中文',payload.raw_command):
+    if not re.search(r'音乐|配音|原声|音效|字幕|英文放在中文', payload.raw_command):
         return None
     try:
-        plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task.id))
-        audio=_effective_audio_timeline(plan)
-        compiled=compile_compound_edit(payload.raw_command,plan,audio,payload.selected_object_refs,task.current_timeline_version_id,payload.playhead_ms,included_step_indices)
-        if compiled is None:
+        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+        current = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        tracks = _current_subtitle_tracks(workspace_id, task, current_version=current, montage=plan)
+        calculated = calculate_compound_edit(plan, tracks, _effective_audio_timeline(plan),
+            raw_command=payload.raw_command, selected_refs=payload.selected_object_refs,
+            base_version_id=task.current_timeline_version_id, playhead_ms=payload.playhead_ms,
+            included_step_indices=included_step_indices)
+        if calculated is None:
             return None
-        if plan.status=="rendering":
-            raise ValueError("正在渲染，请完成后重新预览")
-        candidate,steps=compiled
-        dissolve_frames(candidate.clips)
-        for clip in candidate.clips:
-            fade_filters(clip)
-        _task_audio().validate(workspace_id,task.id,candidate.audio_timeline,candidate.duration_seconds, draft_only=True)
-        base=_ensure_montage_base_version(workspace_id,task,plan)
-        tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
-        changed_tracks=apply_compound_subtitles(tracks,steps,plan.duration_seconds)
-        if '字幕不变' in payload.raw_command and changed_tracks!=tracks:
-            raise ValueError("字幕不变与字幕修改冲突，请明确要保留的内容")
-        records=[]
+        service = _task_audio()
+        service.validate(workspace_id, task.id, calculated.plan.audio_timeline, calculated.plan.duration_seconds, draft_only=True)
+        base = _ensure_montage_base_version(workspace_id, task, plan)
+        task = production_repo.get_creation_task(workspace_id, task.id)
+        command = _metadata_edit_command(task, request, "EditCompoundTimeline", {"base_version_id": base.id})
+        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity,
+            audio_service=service, audio_actor=CreationExecutionActor(workspace_id, command.actor_identity["member_id"]))
+        command, intent, proposal = prepare_compound_proposal(task, plan, command, calculated,
+            raw_command=payload.raw_command, context_stage=payload.context_stage,
+            selected_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms,
+            selection_command=selection_command, verifier=verifier, output_refs=_logical_montage_output_refs(plan))
+        records = []
         if not draft_only:
-            records=[_publish_task_picture_preview(workspace_id,task,base,item,render_tracks,kind="compound_preview",parameters={"steps":steps,"side":side}) for side,item,render_tracks in (("before",plan,tracks),("after",candidate,changed_tracks))]
+            records = [_publish_task_picture_preview(workspace_id, task, base, item, captions,
+                kind="compound_preview", parameters={"steps": calculated.steps, "side": side})
+                for side, item, captions in (("before", plan, tracks), ("after", calculated.plan, calculated.subtitle_tracks))]
+        proposal = replace(proposal, preview={**proposal.preview, **{
+            side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else proposal.summary,
+                "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
+                "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
+            for side, record in zip(("before", "after"), records)}})
+        intent, proposal = production_repo.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (EditConflict, TimelineVersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
-    if production_repo.get_creation_task(workspace_id,task.id).current_timeline_version_id!=base.id:
-        raise HTTPException(status_code=409,detail="预览期间版本已变化，请重新预览")
-    effects=["中文字幕内容已改变，旧英文翻译将失效；需要重新翻译后输出双语字幕。"] if any(track.language=='en-US' and track.source_language=='zh-CN' for track in tracks) and not any(track.language=='en-US' and track.source_language=='zh-CN' for track in changed_tracks) else []
-    effects.extend(
-        f"{'中文' if before.language == 'zh-CN' else '英文'}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。"
-        for before in tracks for after in changed_tracks if before.id == after.id
-        for start, end in new_subtitle_gap_intervals(before, after, plan.duration_seconds)
-    )
-    if any(step['enabled'] and step['operation_type']=='UpdateSubtitleCue' for step in steps):
-        effects.append("字幕文字和显示时间的修改不会重新生成配音。")
-    refs=list(dict.fromkeys(step['target_ref'] for step in steps if step['enabled']))
-    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,
-        raw_command=payload.raw_command,context_stage=payload.context_stage,selected_object_refs=refs,playhead_ms=payload.playhead_ms,
-        intent_type="compound_edit",scope={"target_refs":refs,"context_refs":payload.selected_object_refs,"selection_command":selection_command},constraints={"preserve_video_duration":True},confidence=1,status="interpreted"))
-    detail="；".join(step['command'] for step in steps if step['enabled'])
-    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task.id,intent_id=intent.id,
-        summary=detail,target_refs=refs,operation={"operation_type":"EditCompoundTimeline","payload":{"base_version_id":base.id,"steps":steps,"selection_enabled":True,
-            "clips":[asdict(clip) for clip in candidate.clips],"audio_timeline":candidate.audio_timeline.model_dump()}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=effects,
-        preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else detail,
-            "detail":"整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
-            "video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}}))
-    return _edit_preview_response(intent,proposal)
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
+    return _edit_preview_response(intent, proposal)
 
 
 def _graphic_overlay_candidate(plan, payload):
