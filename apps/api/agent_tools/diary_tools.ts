@@ -1130,7 +1130,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       let submitted = false;
       pi.registerTool({
         name: "preview_media_script", label: "创建可编辑图片来源",
-        description: "提交API真实声明的Python/Pillow程序，只产生一个PNG来源Job；不应用、不出片。Python命名空间含parameters、inputs、outputs，使用outputs['name.png']写本次声明输出；0输入可绘图。所有文件/网络/进程及预算边界由普通API/运行时校验，不支持video/audio脚本。先读取真实能力和输入来源；参数不能覆盖宿主身份、版本或运行时路径。",
+        description: "提交API真实声明的Python/Pillow程序，只产生一个PNG来源Job；不应用、不出片。parameters是API parameters参数对象；inputs[name]按input_refs的name映射授权PNG读取路径字符串，用Image.open(inputs[name])读取。outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串，用Pillow图像对象的image.save(outputs['name.png'])写声明PNG；name.png须与声明名称一致。不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称；0输入可绘图。所有文件/网络/进程及预算边界由普通API/运行时校验，不支持video/audio脚本。先读取真实能力和输入来源；参数不能覆盖宿主身份、版本或运行时路径。",
         parameters,
         execute: async (_id: string, params: Record<string, unknown>) => {
           if (!currentTaskRead || !selectedTaskVersion) throw new Error("请先读取可信任务与版本");

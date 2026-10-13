@@ -126,6 +126,12 @@ def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, 
     assert expected in tools and excluded not in tools
     assert "preview_edit" not in tools
     assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
+    prompt = calls[0]["cmd"][calls[0]["cmd"].index("--system-prompt") + 1]
+    assert "parameters是API parameters参数对象" in prompt
+    assert "inputs[name]按input_refs的name" in prompt and "Image.open(inputs[name])" in prompt
+    assert "outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串" in prompt
+    assert "image.save(outputs['name.png'])" in prompt
+    assert "不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称" in prompt
     assert "找不到或同名歧义时说明具体缺口或询问" in calls[0]["cmd"][calls[0]["cmd"].index("--system-prompt") + 1]
 
 

@@ -53,7 +53,8 @@ if(input.code){
  }};
  results.push({ok:true,result:await tools.get('codemode').execute('script-parent',{code:input.code},undefined,undefined,ctx)});
 }
-console.log(JSON.stringify({calls,results,parameters:tools.get('preview_media_script').parameters}));
+console.log(JSON.stringify({calls,results,parameters:tools.get('preview_media_script').parameters,
+ description:tools.get('preview_media_script').description}));
 """
 
 
@@ -92,6 +93,12 @@ def test_actual_script_schema_and_trusted_submit_binding(tmp_path):
     details = seen["results"][0]["result"]["details"]
     assert details["kind"] == "task_media_job" and details["media_job"]["result_kind"] == "graphic_source"
     assert details["media_job"]["request_query_url"].endswith("?phase=script")
+    description = seen["description"]
+    assert "parameters是API parameters参数对象" in description
+    assert "inputs[name]按input_refs的name" in description and "Image.open(inputs[name])" in description
+    assert "outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串" in description
+    assert "image.save(outputs['name.png'])" in description
+    assert "不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称" in description
 
 
 @pytest.mark.parametrize("field", ["runtime_paths", "request_id", "expected_timeline_sequence", "mystery"])
