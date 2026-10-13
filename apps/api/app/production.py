@@ -33,6 +33,8 @@ from app.database_migrations import (
 from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE, searchable_ocr_text
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
+from app.materials.collections import MaterialCollectionStore, collection_ids_for_workspace
+from app.persistence_json import _json_payload, _json_object, _json_default, _with_datetime
 from app.materials.contracts import (
     AssetReviewStatus,
     ContentVisibility,
@@ -913,6 +915,7 @@ class ProductionRepository:
         self.visual_understanding = visual_understanding
         self._usage_role_prompt_vectors: list[list[float]] | None = None
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
+        self._material_collections = MaterialCollectionStore(self._connect)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
 
@@ -2928,49 +2931,10 @@ class ProductionRepository:
         ]
 
     def list_collections(self, workspace_id: str) -> list[MaterialCollection]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload FROM material_collections
-                WHERE workspace_id = ? ORDER BY updated_at DESC
-                """,
-                (workspace_id,),
-            ).fetchall()
-        return [
-            self._collection_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
+        return self._material_collections.list_collections(workspace_id)
 
     def save_collection(self, collection: MaterialCollection) -> MaterialCollection:
-        if collection.parent_id is not None:
-            parent = next(
-                (
-                    item
-                    for item in self.list_collections(collection.workspace_id)
-                    if item.id == collection.parent_id
-                ),
-                None,
-            )
-            if parent is None:
-                raise KeyError(collection.parent_id)
-        collection.updated_at = utc_now()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO material_collections (id, workspace_id, payload, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    collection.id,
-                    collection.workspace_id,
-                    _json_payload(collection),
-                    collection.updated_at.isoformat(),
-                ),
-            )
-        return collection
+        return self._material_collections.save_collection(collection)
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
         if (not self._material_library_available() or self.get_material_ingestion_binding()
@@ -5087,7 +5051,7 @@ class ProductionRepository:
             if user_tags is not None:
                 segment.user_tags = _normalized_labels(user_tags)
             if collection_ids is not None:
-                known_collections = {row["id"] for row in conn.execute("SELECT id FROM material_collections WHERE workspace_id=?", (workspace_id,))}
+                known_collections = collection_ids_for_workspace(conn, workspace_id)
                 if not set(collection_ids) <= known_collections:
                     raise ValueError("标签夹不存在或不属于当前工作区")
                 segment.collection_ids = list(dict.fromkeys(collection_ids))
@@ -10606,11 +10570,6 @@ class ProductionRepository:
         return MediaPreviewRunRecord(**data)
 
     @staticmethod
-    def _collection_from_payload(data: dict[str, object]) -> MaterialCollection:
-        data = _with_datetime(data, "created_at", "updated_at")
-        return MaterialCollection(**data)
-
-    @staticmethod
     def _asset_from_row(row: sqlite3.Row) -> MaterialAsset:
         """读素材时，可见性以列为准。
 
@@ -11294,14 +11253,6 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
             "source": {"id": source_id, "reference": voice.reference_audio_path,
                        "file_revision": revision, "duration_seconds": duration}}}
     return manifest, originals
-
-
-def _json_payload(value: object) -> str:
-    return json.dumps(asdict(value), ensure_ascii=False, default=_json_default)
-
-
-def _json_object(value: dict[str, object]) -> str:
-    return json.dumps(value, ensure_ascii=False, default=_json_default)
 
 
 def _validated_assistant_reply_reference(value: dict[str, str]) -> dict[str, str]:
@@ -12228,21 +12179,6 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True)) / (
         left_norm * right_norm
     )
-
-
-def _json_default(value: object) -> str:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    raise TypeError(f"cannot serialize {type(value).__name__}")
-
-
-def _with_datetime(data: dict[str, object], *keys: str) -> dict[str, object]:
-    converted = dict(data)
-    for key in keys:
-        value = converted.get(key)
-        if isinstance(value, str):
-            converted[key] = datetime.fromisoformat(value)
-    return converted
 
 
 def _normalized_labels(values: list[str]) -> list[str]:

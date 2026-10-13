@@ -13,7 +13,7 @@ from app.creation_execution import CreationExecutionActor, CreationStageGrantCon
 from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork
 from app.models import utc_now
-from app.production import _json_payload
+from app.persistence_json import _json_payload
 
 OWNER = "media_preview"
 
