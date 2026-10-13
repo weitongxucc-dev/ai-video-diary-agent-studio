@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
-import { ClipThumbnail, VideoClipInspector, VideoEditingStage } from "../VideoEditor";
+import { ClipThumbnail, VideoClipInspector, VideoClipQuickEditor, VideoEditingStage } from "../VideoEditor";
 
 vi.mock("../NarrationWaveformTrack", () => ({ NarrationWaveformTrack: () => <div>配音</div> }));
 
@@ -277,6 +277,20 @@ describe("complete source in clip details and replacement", () => {
     Object.defineProperty(video, "videoHeight", { configurable: true, value: height });
     fireEvent.loadedMetadata(video);
   }
+
+  it("shows the real source span after linked speed and retains it for a trim draft", () => {
+    const sped = { ...clip, source_start_seconds: 0, source_end_seconds: 6, timeline_start_seconds: 1, timeline_end_seconds: 4 };
+    const view = render(inspector(sped));
+    expect(screen.getByText("终点（秒）").querySelector("output")).toHaveTextContent("6.0");
+    fireEvent.change(screen.getByLabelText("镜头 1 裁剪起点"), { target: { value: "1" } });
+    expect(screen.getByText("终点（秒）").querySelector("output")).toHaveTextContent("7.0");
+    view.unmount();
+    const props = { clip: sped, index: 0, busy: false, draft: { start: 0, mode: "fill" as const, x: .5, y: .5 }, onDraftStateChange: vi.fn(), onDraftChange: vi.fn(), onPreview: vi.fn(), onOpenDetails: vi.fn() };
+    const quick = render(<VideoClipQuickEditor {...props} />);
+    expect(screen.getByText("当前源画面").parentElement).toHaveTextContent("00:00.0–00:06.0");
+    quick.rerender(<VideoClipQuickEditor {...props} draft={{ ...props.draft, start: 1 }} />);
+    expect(screen.getByText("当前源画面").parentElement).toHaveTextContent("00:01.0–00:07.0");
+  });
 
   it.each([[1920, 1080], [1080, 1920], [1080, 1080]])("uses the actual %sx%s source independently of the output canvas and crop settings", (width, height) => {
     const onPreview = vi.fn();

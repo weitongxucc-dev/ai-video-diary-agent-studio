@@ -1,9 +1,10 @@
 import { chooseSelectValue } from "./select-interaction";
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import * as api from "@/lib/api";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace } from "../CreationTaskWorkspace";
-import type { CreationTask, CreationTaskQualityCheck, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import type { CreationTask, CreationTaskEditPreviewResponse, CreationTaskEditConfirmResponse, CreationTaskQualityCheck, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 
 // WIL-175 专项：输出页（activeView === "review"）原生保存的成功/取消/失败三种结果，
 // 失败必须同时给出「没有保存成」「为什么」「接下来怎么做」，取消必须安静，
@@ -35,6 +36,110 @@ const mocks = vi.hoisted(() => {
   getJobProgress: vi.fn().mockResolvedValue({ task_id: "task-1", current: null, items: [], total_count: 0 }),
   previewExecution: vi.fn().mockResolvedValue(null),
   };
+});
+
+describe("editing proposal input ownership", () => {
+  function editorWorkspace() {
+    const data = reviewWorkspace();
+    data.task = { ...data.task, stage: "montage", output_ready: false };
+    data.montage = { ...data.montage!, status: "ready", output_url: null, clips: [0, 1].map(index => ({
+      id: `clip-${index + 1}`, cue_id: `cue-${index + 1}`, asset_id: "asset-1", segment_id: `segment-${index + 1}`,
+      source_reference: "workspace://synthetic.mp4", source_start_seconds: 0, source_end_seconds: 6,
+      timeline_start_seconds: index * 6, timeline_end_seconds: (index + 1) * 6,
+      match_score: 1, match_reasons: [], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false,
+    })) };
+    return data;
+  }
+  function preview(data: WorkspaceState): CreationTaskEditPreviewResponse {
+    return { intent: { id: "intent-delete", workspace_id: "local", task_id: data.task.id,
+      raw_command: "删除当前镜头", context_stage: "montage", selected_object_refs: ["clip:clip-1"], playhead_ms: null,
+      intent_type: "exact_montage_edit", scope: {}, constraints: {}, confidence: 1, status: "interpreted", created_at: data.task.created_at },
+      proposal: { id: "proposal-delete", workspace_id: "local", task_id: data.task.id, intent_id: "intent-delete",
+        summary: "删除所选镜头并联动时轴", target_refs: ["clip:clip-1"], operation: { operation_type: "DeleteClip", payload: { clip_id: "clip-1" } },
+        invalidated_refs: [], external_effects: [], preview: { before: { ref: "clip:clip-1", label: "当前镜头", detail: "6秒" }, after: { ref: "timeline:next", label: "删除后", detail: "保留其他镜头" } },
+        status: "proposed", created_at: data.task.created_at, updated_at: data.task.updated_at } };
+  }
+  function saved(data: WorkspaceState, candidate: CreationTaskEditPreviewResponse): CreationTaskEditConfirmResponse {
+    return { operation: { id: "delete-operation", workspace_id: "local", task_id: data.task.id, proposal_id: candidate.proposal.id,
+      operation_type: "DeleteClip", payload: { clip_id: "clip-1" }, base_version_id: "timeline-version-1", result_version_id: "timeline-version-2",
+      status: "applied", failure_reason: null, created_at: data.task.created_at, applied_at: data.task.updated_at }, montage: data.montage! };
+  }
+  async function begin(origin: "exact" | "input", compound = false) {
+    const data = editorWorkspace();
+    const candidate = preview(data);
+    if (compound) candidate.proposal.operation = { operation_type: "EditCompoundTimeline", payload: {
+      selection_enabled: true, steps: [{ index: 0, command: "删除当前镜头", enabled: true }, { index: 1, command: "复制下一段", enabled: true }],
+    } };
+    mocks.getWorkspace.mockResolvedValue(data);
+    vi.mocked(api.previewCreationTaskEdit).mockResolvedValue(candidate);
+    vi.mocked(api.previewCreationTaskExactEdit).mockResolvedValue(candidate);
+    const view = render(<CreationTaskWorkspace initialWorkspace={data} initialTopics={null} initialTasks={[data.task]} />);
+    const input = await screen.findByRole("textbox", { name: "局部修改要求" });
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "删除当前镜头" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+    if (origin === "exact") {
+      fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+      fireEvent.click(screen.getByText("更多剪辑"));
+      fireEvent.click(screen.getByRole("button", { name: "删除镜头…" }));
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
+    }
+    await screen.findByRole("button", { name: compound ? "应用到草稿" : "确认删除" });
+    return { view, input, data, candidate };
+  }
+
+  it("keeps an unrelated draft even when its text equals an exact button proposal", async () => {
+    const { data, candidate } = await begin("exact");
+    vi.mocked(api.confirmCreationTaskEdit).mockResolvedValue(saved(data, candidate));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "修改提案" })).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "局部修改要求" })).toHaveValue("删除当前镜头");
+    expect(vi.mocked(api.updateAssistantConversation).mock.calls.some(([, patch]) => patch.draft_text === "")).toBe(false);
+  });
+
+  it("clears the actual preview input after adoption when it remains unchanged", async () => {
+    const { data, candidate } = await begin("input");
+    vi.mocked(api.confirmCreationTaskEdit).mockResolvedValue(saved(data, candidate));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "局部修改要求" })).toHaveValue(""));
+  });
+
+  it("does not clear later input retyped to the same text while adoption waits", async () => {
+    const { data, candidate } = await begin("input");
+    let resolve!: (value: CreationTaskEditConfirmResponse) => void;
+    vi.mocked(api.confirmCreationTaskEdit).mockReturnValue(new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "修改提案" })).getByRole("button", { name: "关闭卡片" }));
+    const input = screen.getByRole("textbox", { name: "局部修改要求" });
+    fireEvent.change(input, { target: { value: "后来输入" } });
+    fireEvent.change(input, { target: { value: "删除当前镜头" } });
+    await act(async () => resolve(saved(data, candidate)));
+    expect(input).toHaveValue("删除当前镜头");
+  });
+
+  it("gives an unmounted task no draft write permission on its late adoption result", async () => {
+    const { view, data, candidate } = await begin("input");
+    let resolve!: (value: CreationTaskEditConfirmResponse) => void;
+    vi.mocked(api.confirmCreationTaskEdit).mockReturnValue(new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    view.unmount();
+    vi.mocked(api.updateAssistantConversation).mockClear();
+    await act(async () => { resolve(saved(data, candidate)); await new Promise(done => setTimeout(done, 520)); });
+    expect(vi.mocked(api.updateAssistantConversation).mock.calls.some(([, patch]) => patch.draft_text === "")).toBe(false);
+  });
+
+  it("does not rewrite later chat input when a compound selection preview returns", async () => {
+    const { candidate } = await begin("input", true);
+    let resolve!: (value: CreationTaskEditPreviewResponse) => void;
+    vi.mocked(api.previewCompoundSelection).mockReturnValue(new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "保留修改2：复制下一段" }));
+    fireEvent.click(screen.getByRole("button", { name: "重看所选" }));
+    const input = screen.getByRole("textbox", { name: "局部修改要求", hidden: true });
+    fireEvent.change(input, { target: { value: "后来输入的聊天草稿" } });
+    await act(async () => resolve({ ...candidate, intent: { ...candidate.intent, raw_command: "旧请求编译后的命令" } }));
+    expect(input).toHaveValue("后来输入的聊天草稿");
+  });
 });
 
 // 忠实复刻真实 AppShell：inspector 放在 detailsOpen 门后（AppShell.tsx L222/L555），
@@ -101,6 +206,8 @@ vi.mock("@/lib/api", () => ({
   previewCreationTaskExactEdit: vi.fn(),
   previewCreationTaskAudio: vi.fn(),
   previewCreationTaskVisual: vi.fn(),
+  resolveCreationTaskMediaResponse: vi.fn(async (_taskId, response) => response),
+  TaskMediaJobError: class extends Error { job = { status: "failed" }; },
   renderCreationTaskMontage: vi.fn(),
   saveCreationTaskRecording: vi.fn(),
   selectCreationTaskNarrationVoice: vi.fn(),

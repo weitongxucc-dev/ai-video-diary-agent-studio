@@ -82,7 +82,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const pendingMediaJobRef = useRef(pendingMediaJob);
   pendingMediaJobRef.current = pendingMediaJob;
   const mediaController = useRef<AbortController | null>(null);
-  useEffect(() => () => mediaController.current?.abort(), []);
+  useEffect(() => {
+    currentTaskId.current = currentWorkspace.current.task.id;
+    return () => {
+      currentTaskId.current = "";
+      previewRequestSequence.current += 1;
+      assistantRequestSequence.current += 1;
+      mediaController.current?.abort();
+    };
+  }, []);
   const currentTaskId = useRef(initialWorkspace.task.id);
   currentTaskId.current = workspace.task.id;
   const currentWorkspace = useRef(workspace);
@@ -131,7 +139,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? null,
   );
   const [selectedNarrationSegmentId, setSelectedNarrationSegmentId] = useState<string | null>(null);
-  const [editPreview, setEditPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
+  const [editPreview, setEditPreviewState] = useState<CreationTaskEditPreviewResponse | null>(null);
+  type DraftInput = { taskId: string; conversationId: string | undefined; text: string };
+  const previewInputOwner = useRef<{ proposalId: string; input: DraftInput } | null>(null);
+  function setEditPreview(preview: CreationTaskEditPreviewResponse | null, input: DraftInput | null = null) {
+    previewInputOwner.current = preview && input ? { proposalId: preview.proposal.id, input } : null;
+    setEditPreviewState(preview);
+  }
   const currentEditPreview = useRef(editPreview);
   currentEditPreview.current = editPreview;
   const [assistantPreview, setAssistantPreview] = useState(false);
@@ -184,7 +198,20 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const selectedKnowledgeReference = useAssistantKnowledgeReference()?.reference;
   const replyTransferRequests = useRef(new Map<string, string>());
   const editCommand = assistantConversation.draftText;
-  const setEditCommand = assistantConversation.setDraftText;
+  // This identity belongs to an actual input event, including retyping the same text.
+  // Exact parameter previews carry no chat-input write permission.
+  const draftInput = useRef<DraftInput>({ taskId: task.id, conversationId: assistantConversation.conversation?.id, text: editCommand });
+  if (draftInput.current.taskId !== task.id || draftInput.current.conversationId !== assistantConversation.conversation?.id || draftInput.current.text !== editCommand) {
+    draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text: editCommand };
+  }
+  function setEditCommand(text: string) {
+    draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text };
+    assistantConversation.setDraftText(text);
+  }
+  function ownsDraftInput(input: DraftInput) {
+    return input === draftInput.current && input.taskId === currentTaskId.current
+      && Boolean(input.conversationId && assistantConversation.isCurrentConversation(input.conversationId));
+  }
   const [detachedReference, setDetachedReference] = useState<string | null>(null);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
@@ -668,7 +695,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if(commandOverride === undefined && editPreview?.proposal.operation.operation_type==="EditCompoundTimeline" && editPreview.proposal.operation.payload.selection_enabled){
       await reviseCompoundSelection(rawCommand);return;
     }
-    if (commandOverride !== undefined) setEditCommand(rawCommand);
+    const input = commandOverride === undefined ? draftInput.current : null;
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -687,7 +714,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           ? Math.round(playheadRef.current * 1000) : null,
       });
       const preview = await resolveEditMedia(response, revision);
-      if (stillCurrent()) setEditPreview(preview);
+      if (stillCurrent()) setEditPreview(preview, input);
     } catch (cause) {
       if (stillCurrent() && !mediaController.current?.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(errorDetails(cause));
     } finally {
@@ -873,6 +900,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function confirmEdit() {
     if (!editPreview) return;
     const proposal = editPreview.proposal;
+    const inputOwner = previewInputOwner.current;
     const preserveNextDraft = assistantPreview;
     const conversationId = preserveNextDraft ? assistantConversation.conversation?.id : undefined;
     const originalTurnId = preserveNextDraft
@@ -891,13 +919,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       const result = await confirmCreationTaskEdit(task.id, proposal.id);
       if (!taskIsCurrent()) return;
       if (conversationIsCurrent()) {
+        const consumesInput = ownsBusy() && inputOwner?.proposalId === proposal.id
+          && previewInputOwner.current === inputOwner && ownsDraftInput(inputOwner.input);
         if ("status" in result) {
           setPendingLocalEdit({ taskId: task.id, jobId: result.job_id,
             operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
           setNotice(queuedEditNotice(proposal.operation.operation_type));
         }
         invalidateEditPreview();
-        if (!preserveNextDraft) setEditCommand("");
+        if (consumesInput) setEditCommand("");
         if (conversationId && originalTurnId) await assistantConversation.refreshAfterTaskAdoption({
           conversation_id: conversationId, original_turn_id: originalTurnId, task_id: task.id, proposal_id: proposal.id,
         });
@@ -1040,6 +1070,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function reviseCompoundSelection(selection: number[] | string) {
     if (!editPreview) return;
     const proposalId = editPreview.proposal.id;
+    const input = typeof selection === "string" ? draftInput.current : previewInputOwner.current?.input ?? null;
     setBusy("edit-preview"); setError(null);
     const revision = ++editContextRevision.current;
     const sequence = ++previewRequestSequence.current;
@@ -1048,8 +1079,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       const response = await previewCompoundSelection(task.id, proposalId, selection);
       const next = await resolveEditMedia(response, revision);
       if (ownsRequest() && editContextRevision.current === revision) {
-        setEditPreview(next);
-        if (!assistantPreview) setEditCommand(next.intent.raw_command);
+        if (input && ownsDraftInput(input)) {
+          setEditCommand(next.intent.raw_command);
+          setEditPreview(next, draftInput.current);
+        } else {
+          setEditPreview(next, input);
+        }
       }
     } catch (cause) { if (ownsRequest() && editContextRevision.current === revision && !mediaController.current?.signal.aborted) setError(errorDetails(cause)); }
     finally { if (ownsRequest()) setBusy(null); }
@@ -1161,7 +1196,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   // target_refs is the actual proposal scope; external_effects is explanatory
   // copy (even a local crop includes it), not a boolean permission/fee flag.
   const operation = editPreview?.proposal.operation;
-  const previewCommand = assistantPreview && editPreview ? editPreview.intent.raw_command : editCommand;
+  const previewCommand = editPreview && !previewInputOwner.current ? editPreview.intent.raw_command : editCommand;
   const ordinaryObjectEdit = operation && (["ReplaceClip", "ChangeCrop", "TrimClip", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "SetClipTransition", "AdjustVisualEffects", "UpdateSubtitleCue"].includes(operation.operation_type)
     || (operation.operation_type === "EditGraphicOverlay" && operation.payload.overlay_action === "update"));
   const localConfirmation = Boolean(ordinaryObjectEdit && selectedEditContext && editPreview

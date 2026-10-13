@@ -251,8 +251,8 @@ export function AppShell({
   const previousTaskProps = useRef(creationTasks);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
   useEffect(() => {
-    if (inspectorConfirmationKey) setDetailsOpen(true);
-  }, [inspectorConfirmationKey]);
+    if (inspectorConfirmationKey && !quickOpen) setDetailsOpen(true);
+  }, [inspectorConfirmationKey, quickOpen]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
   useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
 
@@ -448,12 +448,12 @@ export function AppShell({
           <div className="desktop-toolbar__actions">
             <button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></button>
             {toolbarActions}
-            {quickAvailable ? <button aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(true); setQuickOpen(true); }} type="button">镜头参数</button> : null}
+            {quickAvailable ? <button aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(false); setQuickOpen(true); }} type="button">镜头参数</button> : null}
             <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
               <Search size={16} />
 
             </button>
-            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => setDetailsOpen(true)} type="button">查看详情</button> : null}
+            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => { setQuickOpen(false); setDetailsOpen(true); }} type="button">查看详情</button> : null}
             {panels.collapsed ? <><button type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
             {!localAuthMode ? (
               <form action="/auth/signout" method="post">
@@ -470,20 +470,20 @@ export function AppShell({
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) setDetailsOpen(true); }}>
+          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
             {children}
           </main>
         </div>
 
       </section>
       <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} />
-      {providedInspector ? <HomeCardDialog open={detailsOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
+      {providedInspector ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
         {providedInspector}
-        {quickOpen && quickInspector ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>
-          {quickInspector(() => { setQuickOpen(false); setDetailsOpen(true); })}
-          {inspectorConfirmation}
-        </HomeCardDialog> : null}
-        {!quickOpen ? inspectorConfirmation : null}
+        {inspectorConfirmation}
+      </HomeCardDialog> : null}
+      {quickOpen && quickInspector && !panels.workspaceCollapsed ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>
+        {quickInspector(() => { setQuickOpen(false); setDetailsOpen(true); })}
+        {inspectorConfirmation}
       </HomeCardDialog> : null}
       <HelpPanel />
       <CommandPalette
