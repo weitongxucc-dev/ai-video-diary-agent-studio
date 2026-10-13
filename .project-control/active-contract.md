@@ -85,6 +85,8 @@ R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d
 
 资源子批集成后接续R9安装器：独占model_installer.py、其实际需要的安装作业存储/执行模块及test_model_installer.py。已在隔离线程复现构造新实例把仍运行的原作业误写interrupted；先将恢复写入移出构造，显式启动恢复与活跃作业责任分开，安装状态只有一个写负责人，保存格式与原协议保持。API主控实例构造/重载接线仍由API负责人修改，须协调该必要consumer后才算集成完成。下载/pip执行可按真实边界拆分，但不下载/启动用户模型、不读取私人配置、不删除模型或新建状态事实库。新配置/格式或公共能力改变先报主控；纯值规格与配置模块此时只读，不能因首个缺陷自动扩大为重写所有配置。
 
+安装器及主入口v2集成后，API已FILE_RELEASE_ACK确认config.py/runtime_settings.py及对应最小测试无WIP、env_files.py不存在。R6现独占config.py（仅dotenv IO闭包迁出/同对象导出）、新增app/env_files.py、runtime_settings.py（仅IO owner直接导入），及test_config_atomic.py/test_env_shadow.py/test_runtime_settings.py的最小边界接续。五个IO函数、覆盖路径常量与SETTINGS_OWNED_ENV_KEYS唯一归env_files；保留路径、覆盖优先级、原子替换、异常和保存后环境更新。不得新增不存在的dotenv锁，服务观测锁仍原位；六路径纯解析、Settings默认/身份/秘密投影及workspace_settings存储本批只读。API对上述整个文件只读，不同时改六路径章节；main/bootstrap接续仍API负责。config公共IO导出沿同对象保留，实际runtime_settings writer直接消费新owner；不新建兼容层或第二份IO实现。所有验证只读写合成env文件，并提前将IO owner次级repo路径绑定隔离目录；不读取私人主/次级dotenv或账号/模型配置。若共享conftest/验证runner须接续先报确切符号，由主控绑定，不自行改共享夹具或放宽隔离检查。
+
 ### R5 Web负责人
 
 可见线程为01a13626-c206-74f1-a258-ae4d9d86c7a8，host为local。
@@ -127,7 +129,7 @@ R2按活跃动作形成具体输入、计算与联合变更集，保留一个版
 
 R2首子批集成后，API负责人接续其余镜头替换/分割/排序、关联和复合编辑、字幕结构/时间/样式的具体用例及撤销/恢复；追加narration.py的中立档案契约直接导入接线，以及test_crop_preview_description.py/test_montage_pipeline.py/test_assistant_goal_api.py这三个实际共享夹具的最小契约接续写权（R6的test_pi_instruction_closure.py保持只读）。提案测试不伪称媒体已生成；媒体测试用同一合法人物/声音产物和显式合成用途预算，不改生产默认、实际资源门或授权规则。对应R2稳定一组交源码后继续R3执行及bootstrap，不以单组结束或文档ACK停止施工。
 
-镜头实际影响范围子批集成后，API负责人下一小批接续main安装器的显式startup恢复/同owner重载/落盘前guard，及creation/projection.py的列表与详情共同任务版本事实。config.py仅追加ModelCatalog所消费六项路径的唯一纯解析函数与prospective参数读取，不读取/修改私人dotenv，不重写身份/secret投影；Settings.from_env和写前候选复用同一规则，现runtime_health.model_catalog_from_settings保持既有组装归属。对应test_config_atomic.py/test_runtime_settings.py/test_timeline_history.py和最小主入口集成测试可写；R9四个安装器源保持冻结，不与其原负责人并写，必须连同主消费者验收才收口。runtime_settings.py/workspace_settings.py的存储/钥匙串此时只读，用既有写接口在明确保护范围内提交。后续materials/contracts.py与其已准备测试按上文新的API/R4互斥分工一次接续。
+镜头实际影响范围子批中，API完成main安装器的显式startup恢复/同owner重载/落盘前guard，及creation/projection.py的列表与详情共同任务版本事实后交SOURCE_RELEASE。config.py六路径唯一纯解析及test_config_atomic.py/test_runtime_settings.py已随v2集成；当前这些文件写权按上文转交R6的IO小片，API本批只读，仍可写test_timeline_history.py和原主入口集成测试。Settings.from_env和写前候选保持同一纯规则，runtime_health.model_catalog_from_settings保持既有组装归属；不读取/修改私人dotenv或重写身份/secret投影。R9四个安装器源保持冻结，非当前新施工范围。workspace_settings.py的存储/钥匙串仍只读，用既有写接口在明确保护范围内提交。后续materials/contracts.py与其已准备测试按上文新的API/R4互斥分工一次接续。
 
 R1旧目标：仅该路径的伪造HTTP执行、路由反射/重入、隐含业务上下文和重复写入口；其他尚未迁移动作逐项分类，不能因一个动作通过就删除整套执行协议。R7旧目标：main中迁出的具体实现及其重复状态/全局依赖。
 
