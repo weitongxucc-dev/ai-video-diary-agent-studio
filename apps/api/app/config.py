@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -21,6 +20,7 @@ from app.env_files import (
     write_dotenv_values as write_dotenv_values,
 )
 
+from app.local_runtime_status import observe_local_runtime_status
 from app.service_status_projection import (
     LLM_SERVICE_AVAILABLE as LLM_SERVICE_AVAILABLE,
     LLM_SERVICE_FAILED as LLM_SERVICE_FAILED,
@@ -138,35 +138,7 @@ def _topic_source_urls_from_env() -> tuple[str, ...]:
     return tuple(url.strip() for url in raw.split(",") if url.strip())
 
 
-def _pending_video_count(path: str | None) -> int:
-    if not path:
-        return 0
-    inbox = Path(path).expanduser()
-    if not inbox.exists() or not inbox.is_dir():
-        return 0
-    supported_extensions = {".mp4", ".mov", ".m4v"}
-    return len(
-        [
-            item
-            for item in inbox.iterdir()
-            if item.is_file() and item.suffix.lower() in supported_extensions
-        ]
-    )
 
-
-def _hermes_radar_status(path: str | None) -> dict[str, Any]:
-    from app.hermes_radar import HermesRadarSourceClient
-
-    status = HermesRadarSourceClient(path).status()
-    return {
-        "configured": status.configured,
-        "exists": status.exists,
-        "path": status.path,
-        "latest_report": status.latest_report,
-        "total_count": status.total_count,
-        "product_hunt_count": status.product_hunt_count,
-        "watcha_count": status.watcha_count,
-    }
 
 
 # 进程内记录「本次运行真的连通过/没通过」。不落盘：重启后我们确实不知道，
@@ -506,15 +478,13 @@ class Settings:
         mirror it here once `LLMStatusResponse` grows a real field.
         """
         cloud_configured = self.llm_configured
-        obsidian_path = self.obsidian_vault_path
-        obsidian_exists = bool(
-            obsidian_path
-            and Path(obsidian_path).expanduser().exists()
-            and Path(obsidian_path).expanduser().is_dir()
+        local_status = observe_local_runtime_status(
+            obsidian_vault_path=self.obsidian_vault_path,
+            hermes_radar_path=self.hermes_radar_path,
+            video_inbox_path=self.video_inbox_path,
+            video_output_path=self.video_output_path,
+            database_path=self.database_path,
         )
-        video_inbox = Path(self.video_inbox_path).expanduser()
-        video_output = Path(self.video_output_path).expanduser()
-        database_path = Path(self.database_path).expanduser()
         return {
             "llm": {
                 "provider": self.effective_llm_provider if cloud_configured else "local-extractive",
@@ -522,12 +492,7 @@ class Settings:
                 "model": self.effective_llm_model if cloud_configured else "source-grounded-v1",
                 "base_url": self.effective_llm_base_url if cloud_configured else "local",
             },
-            "obsidian": {
-                "configured": bool(obsidian_path),
-                "exists": obsidian_exists,
-                "path": obsidian_path,
-                "markdown_count": None,
-            },
+            "obsidian": local_status["obsidian"],
             "product_hunt": {
                 "configured": bool(self.product_hunt_token),
                 "api_url": self.product_hunt_api_url,
@@ -536,19 +501,9 @@ class Settings:
                 "configured": len(self.topic_source_urls) > 0,
                 "urls": list(self.topic_source_urls),
             },
-            "hermes_radar": _hermes_radar_status(self.hermes_radar_path),
-            "video": {
-                "inbox_path": str(video_inbox),
-                "output_path": str(video_output),
-                "inbox_exists": video_inbox.exists() and video_inbox.is_dir(),
-                "output_exists": video_output.exists() and video_output.is_dir(),
-                "pending_count": _pending_video_count(str(video_inbox)),
-                "ffmpeg_available": shutil.which("ffmpeg") is not None,
-            },
-            "storage": {
-                "database_path": str(database_path),
-                "database_exists": database_path.exists(),
-            },
+            "hermes_radar": local_status["hermes_radar"],
+            "video": local_status["video"],
+            "storage": local_status["storage"],
             "asr": {
                 "provider": self.asr_provider,
                 "configured": self.asr_configured,

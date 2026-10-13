@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
 from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
+from app.local_runtime_status import ffmpeg_available as probe_ffmpeg_available
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
     QWEN3_VL_4B_4BIT,
@@ -57,7 +57,7 @@ def _feature_gates(
     catalog: ModelCatalog,
     pi_checks: list[dict],
 ) -> list[dict[str, Any]]:
-    ffmpeg_available = shutil.which("ffmpeg") is not None
+    ffmpeg_available = probe_ffmpeg_available()
     blockers = [check for check in pi_checks if check["status"] != "ready"]
     conversation_reason = " ".join(f"{c['reason']} {c['repair_action']}" for c in blockers)
     if not settings.llm_configured:
@@ -230,7 +230,7 @@ def _obsidian_item(settings: Settings, checked_at) -> dict[str, Any]:
 
 
 def _ffmpeg_item(checked_at) -> dict[str, Any]:
-    available = shutil.which("ffmpeg") is not None
+    available = probe_ffmpeg_available()
     return _health_item(
         item_id="ffmpeg",
         label="ffmpeg",
