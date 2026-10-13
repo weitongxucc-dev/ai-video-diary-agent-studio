@@ -7,6 +7,60 @@ import 'package:http/testing.dart';
 import 'package:yaohe_mobile/data/host_api.dart';
 import 'package:yaohe_mobile/data/mobile_store.dart';
 
+class GatedStorage extends FlutterSecureStorage {
+  GatedStorage([Map<String, String>? initial]) : values = {...?initial};
+  final Map<String, String> values;
+  Future<void> Function(String key)? readGate, writeGate, deleteGate;
+
+  @override
+  Future<String?> read({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    final value = values[key];
+    await readGate?.call(key);
+    return value;
+  }
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    await writeGate?.call(key);
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    await deleteGate?.call(key);
+    values.remove(key);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
@@ -57,6 +111,140 @@ void main() {
         : '{"items":[{"id":"task-a","name":"confirmed task","status":"running","stage":"script"}]}',
     200,
   );
+
+  http.Response joinSuccess(http.Request request) =>
+      request.url.path.endsWith('/join')
+      ? http.Response(
+          jsonEncode({...savedSession.toJson(), 'member_token': 'new-token'}),
+          200,
+        )
+      : success(request);
+
+  test(
+    'disconnect deletes a credential whose write is already in flight',
+    () async {
+      final entered = Completer<void>(), release = Completer<void>();
+      final storage = GatedStorage();
+      storage.writeGate = (key) async {
+        if (key == 'yaohe_session') {
+          entered.complete();
+          await release.future;
+        }
+      };
+      final store = MobileStore(
+        storage: storage,
+        api: HostApi(
+          client: MockClient((request) async => joinSuccess(request)),
+        ),
+      );
+      addTearDown(store.dispose);
+      final joining = store.join('https://host', 'invite', 'A');
+      await entered.future;
+      final disconnecting = store.disconnect();
+      expect(store.session, isNull);
+      expect(store.tasks, isEmpty);
+      release.complete();
+      await Future.wait([joining, disconnecting]);
+      expect(storage.values['yaohe_session'], isNull);
+      expect(store.connected, false);
+    },
+  );
+
+  for (final delayedKey in ['yaohe_session', 'tasks:https://host:member-a']) {
+    test(
+      'initialization cannot restore $delayedKey after disconnect',
+      () async {
+        final entered = Completer<void>(), release = Completer<void>();
+        final storage = GatedStorage({
+          ...savedValues(),
+          'tasks:https://host:member-a': jsonEncode({
+            'tasks': [
+              {'id': 'old-task'},
+            ],
+            'updated_at': '2026-10-14T00:00:00.000Z',
+          }),
+        });
+        storage.readGate = (key) async {
+          if (key == delayedKey) {
+            entered.complete();
+            await release.future;
+          }
+        };
+        var requests = 0;
+        final store = MobileStore(
+          storage: storage,
+          api: HostApi(
+            client: MockClient((request) async {
+              requests++;
+              return success(request);
+            }),
+          ),
+        );
+        addTearDown(store.dispose);
+        final initializing = store.initialize();
+        await entered.future;
+        await store.disconnect();
+        release.complete();
+        await initializing;
+        expect(store.ready, true);
+        expect(store.session, isNull);
+        expect(store.tasks, isEmpty);
+        expect(store.lastUpdated, isNull);
+        expect(requests, 0);
+      },
+    );
+  }
+
+  test('a pending disconnect may finish after store disposal', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    final storage = GatedStorage(savedValues());
+    storage.deleteGate = (_) async {
+      entered.complete();
+      await release.future;
+    };
+    final store = MobileStore(
+      storage: storage,
+      api: HostApi(client: MockClient((request) async => success(request))),
+    );
+    final disconnecting = store.disconnect();
+    await entered.future;
+    store.dispose();
+    release.complete();
+    await disconnecting;
+    expect(storage.values['yaohe_session'], isNull);
+  });
+
+  test('new join persists after an earlier pending disconnect', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    final storage = GatedStorage(savedValues());
+    storage.deleteGate = (_) async {
+      entered.complete();
+      await release.future;
+    };
+    final store = MobileStore(
+      storage: storage,
+      api: HostApi(client: MockClient((request) async => joinSuccess(request))),
+    );
+    addTearDown(store.dispose);
+    await store.initialize();
+    final disconnecting = store.disconnect();
+    await entered.future;
+    final joining = store.join('https://host', 'invite', 'A');
+    await Future<void>.delayed(Duration.zero);
+    expect(store.session, isNull);
+    expect(
+      jsonDecode(storage.values['yaohe_session']!)['member_token'],
+      'token',
+    );
+    release.complete();
+    await Future.wait([disconnecting, joining]);
+    expect(store.session?.token, 'new-token');
+    expect(
+      jsonDecode(storage.values['yaohe_session']!)['member_token'],
+      'new-token',
+    );
+    expect(store.connected, true);
+  });
 
   testWidgets(
     'foreground retries transient failure and stops requests in background',

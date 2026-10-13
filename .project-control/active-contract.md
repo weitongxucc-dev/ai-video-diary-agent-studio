@@ -103,6 +103,8 @@ R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d
 
 R8剩余主机连接边界由R6线程作独立只读审核：host_api.dart、mobile_store.dart及现有host_api/mobile_store/connection_sheet测试只读；只写test-runs/refactor-20261014/r8-host-audit/**中的隔离探针和证据。用合成HTTP与内存安全存储检查初始化、断开/重连、晚回包和存储提交，不访问真实凭证或手机。复现的缺陷交主控按精确文件绑定修复，不据此机械拆分已内聚的小模块；R9安装器四源继续冻结。
 
+该审核已以d7595c18…候选复现A1–A5：断开后凭证晚写、初始化晚读恢复旧连接/缓存、销毁后通知、旧断开清除新连接。主控现独占mobile_store.dart及test/mobile_store_test.dart的精确修复；连接事实按原epoch绑定，所属存储变化由一个负责人保持顺序，断开立即取消当前内存上下文，旧完成不得重设新连接。保留现安全存储键、缓存、HTTP和成员协议；不删除缓存或用户数据。R6对稳定候选独立重跑实际反例，原生安全存储未运行时单列。
+
 R9打包闭包中PyInstaller嵌套模块清单首批已由主控集成，后续spec及test_packaging_modules.py写权转交上述R6/R9资源负责人；主控只审核集成，不同时改写。应用标识、签名、发布、依赖排除策略和用户安装保持原界限；打包清单检查不冒充二进制真实启动。
 
 Web首批SOURCE_RELEASE并集成后，主控接手其lib/api/transport.ts、creation-transport.ts、materials.ts、task-media.ts和新增定向请求边界测试；Web实施线程在这些文件只读，继续独占剪辑布局子批。将JSON、流式、FormData和Blob请求复用同一既有身份注入入口，保留各调用的原URL、请求体/取消信号、响应及错误语义；FormData不得写JSON Content-Type，不新增身份/空间或兼容分支。该API内部收敛不改R5的产品布局或服务端协议，新摘要分项记录。
