@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
+# Standalone file execution resolves this helper beside the worker.
+from media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 
 
 MODEL_ID = "latentsync-1.5-mlx-fidelity-brow"

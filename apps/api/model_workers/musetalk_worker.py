@@ -9,10 +9,8 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-# Workers run as file entrypoints in a separate Python environment. Share the
-# standard-library-only timing contract with the API from the same source root.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
+# Standalone file execution resolves this helper beside the worker.
+from media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 
 
 MODEL_FILES = (

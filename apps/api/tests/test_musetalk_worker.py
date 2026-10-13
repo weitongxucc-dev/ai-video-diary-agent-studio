@@ -11,7 +11,11 @@ spec = importlib.util.spec_from_file_location(
     "musetalk_worker", Path(__file__).parents[1] / "model_workers" / "musetalk_worker.py"
 )
 worker = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(worker)
+# Match Python's file-entry import directory for this private-function fixture;
+# the real copied-resource executable boundary is tested independently.
+with pytest.MonkeyPatch.context() as imports:
+    imports.syspath_prepend(str(Path(__file__).parents[1] / "model_workers"))
+    spec.loader.exec_module(worker)
 
 
 def _video(path, picture_seconds, audio_seconds):

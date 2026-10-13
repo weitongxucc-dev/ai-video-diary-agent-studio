@@ -31,7 +31,12 @@ _REPO_ROOT = _SPEC_DIR.parent.parent  # backend/
 _ENTRY = _SPEC_DIR / "server.py"
 
 # Assets shipped inside the bundle
-_ASSET_DIRS: list[tuple[str, str]] = []
+# These exact bare files are read/hash inputs of app.media_script. PyInstaller
+# supplies __file__ under _MEIPASS/app, so preserve that declared relative layout.
+_ASSET_DIRS: list[tuple[str, str]] = [
+    (str(_SPEC_DIR / "app" / "media_script.py"), "app"),
+    (str(_SPEC_DIR / "model_workers" / "media_script_worker.py"), "model_workers"),
+]
 
 # ── Hidden imports ───────────────────────────────────────────────────────────
 # Include nested packages used by runtime registrations as well as HTTP imports.
