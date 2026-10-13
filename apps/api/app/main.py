@@ -57,7 +57,7 @@ from app.linked_timeline import splice_clip, retime_clip, remove_time_ranges, in
 from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command
 from app.subtitle_edits import merge_linked_subtitle_tracks, replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
-from app.subtitle_schedule import subtitle_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
+from app.subtitle_schedule import subtitle_schedule, narration_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
 from app.avatar_lipsync import (
     compile_person_edit_command,
     Authorization,
@@ -5682,19 +5682,12 @@ def _subtitle_track_from_montage(
             transform_id = f"transform_{transform_id}"
     if not isinstance(transform_id, str) or not transform_id:
         return None
-    # 时间轴按 clip 的实际区间投影（与 montage._plan_to_srt / _write_subtitle_overlays 同源），
-    # 不再按 cue 顺序累加，否则镜头排序后两者会立刻分叉。
-    windows: dict[str, tuple[float, float]] = {}
-    for item in montage.clips:
-        if item.cue_id and item.cue_id not in windows:
-            windows[item.cue_id] = (item.timeline_start_seconds, item.timeline_end_seconds)
+    # First render uses the narration schedule even when one cue spans multiple shots.
+    schedule = narration_schedule(montage.cues, montage.duration_seconds)
     cues: list[SubtitleCue] = []
-    for cue in montage.cues:
-        window = windows.get(cue.id)
-        if window is None:
-            continue
-        start = round(window[0], 3)
-        end = round(min(window[1], montage.duration_seconds), 3)
+    for cue, caption in zip(montage.cues, schedule, strict=True):
+        start = round(caption.start_seconds, 3)
+        end = round(caption.end_seconds, 3)
         normalized_text, line_breaks = _normalize_subtitle_text_and_breaks(
             cue.text,
             None,
@@ -14195,9 +14188,10 @@ def _preview_remove_silence(task, request, payload):
                 "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
                 "start_seconds": clip.timeline_start_seconds, "end_seconds": clip.timeline_end_seconds,
                 "solo_track_ids": sorted(voice_ids)})
-        cuts = detect_silence_cuts(artifact_store.resolve_file(analysis.logical_ref),
-            clip.timeline_end_seconds-clip.timeline_start_seconds, clip.timeline_start_seconds,
-            context=bounded_audio_context(_task_media_grant_or_queue()))
+        with bounded_audio_context(_task_media_grant_or_queue()) as audio_context:
+            cuts = detect_silence_cuts(artifact_store.resolve_file(analysis.logical_ref),
+                clip.timeline_end_seconds-clip.timeline_start_seconds, clip.timeline_start_seconds,
+                context=audio_context)
         active_context, active_job = TASK_MEDIA_CONTEXT.get()[:2]
         active_context.check()
         analysis_transform = service._transform_for(workspace_id, task.id, analysis)
@@ -17111,19 +17105,20 @@ def _render_montage_with_resolved_clip_sources(
             mixed_audio = Path(job_staging_path) / "timeline-mix.wav"
             if render_context is None:
                 raise PermissionError("成片音轨处理必须持有当前设备许可")
-            audio_facts, source_paths = _granted_audio_mix_sources(workspace_id, plan, render_context)
-            audio_resources = audio_facts["resources"]
-            audio_options = {"scheduler": render_context.scheduler, "grant": render_context.grant,
-                "cancel_event": render_context.cancel_event,
-                "deadline_monotonic": bounded_audio_context(render_context).deadline_monotonic,
-                "max_output_bytes": audio_resources["max_output_bytes"],
-                "threads": audio_resources["threads"]}
-            render_audio_mix(plan.audio_timeline, plan.duration_seconds,
-                lambda reference: source_paths[reference], mixed_audio,
-                normalize_voice_sources=audio_resources["normalize_voice_sources"], **audio_options)
-            render_context.check()
-            if _granted_audio_mix_sources(workspace_id, plan, render_context)[0] != audio_facts:
-                raise ValueError("混音期间音频来源或许可发生变化")
+            with bounded_audio_context(render_context) as audio_context:
+                audio_facts, source_paths = _granted_audio_mix_sources(workspace_id, plan, audio_context)
+                audio_resources = audio_facts["resources"]
+                audio_options = {"scheduler": audio_context.scheduler, "grant": audio_context.grant,
+                    "cancel_event": audio_context.cancel_event,
+                    "deadline_monotonic": audio_context.deadline_monotonic,
+                    "max_output_bytes": audio_resources["max_output_bytes"],
+                    "threads": audio_resources["threads"]}
+                render_audio_mix(plan.audio_timeline, plan.duration_seconds,
+                    lambda reference: source_paths[reference], mixed_audio,
+                    normalize_voice_sources=audio_resources["normalize_voice_sources"], **audio_options)
+                audio_context.check()
+                if _granted_audio_mix_sources(workspace_id, plan, audio_context)[0] != audio_facts:
+                    raise ValueError("混音期间音频来源或许可发生变化")
             narration_audio_path = mixed_audio
         render_options = (
             {"scheduler": render_context.scheduler, "grant": render_context.grant,

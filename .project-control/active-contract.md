@@ -29,6 +29,10 @@ Pi/CLI Owner窄QA lease仅本轮独立evidence的silence-case/脚本：准备新
 
 组合API包及独立QA准备均已RELEASE；API集中239项检查通过，最后动态上界窄回归19项通过，Ruff和diff检查通过。root收回集成及真实验收；静音样本最终为2秒/60帧、0.7–1.3秒真静音、linkage=True/-16LUFS，两PCM上界899072B；沿实际旧command预览入口验回归（RemoveSilence未进入typed/CLI目录），不新增该迁移范围。
 
+真实eab818b验收窄修：初次无字幕轨渲染的SRT5秒与后续初轨投影2.5秒不一致，API Owner独占main初轨投影及test_montage_pipeline/test_timed_subtitle_render_input直接用例，改为同narration_schedule，不改既有显式轨。静音after混音首超时确证固定audio15秒包含中间video，沿原7files/creation_audio_mix改为同context音频active阶段累计≤15、每section固定剩余时间、video只outer60，不增加预算。root显式修正本合成QA旧错轨并重验，正常用户库不改。no_progress但实际步骤完成的语义缺口归#120/#130，不在本波引新泛化完成证书。
+
+API Owner新窄修回合因宿主模型容量错误终止，未发布新diff。root收回其lease并授Pi/CLI Owner上述音频active时钟及首次字幕投影的同7files/直接tests唯一writer；原API Owner只读/停止新写。已授权范围及旧eab818b实证不变，无新模型/预算或外部操作授权。
+
 ## 验收、非目标与实际旧路径
 
 共同typed目录支持真实音频对象音量/静音/淡入淡出/混音参数，以及镜头现有画面效果；未支持独立音频retime/通用关键帧/solo持久化不承诺。既有手动audio/visual入口保持，其执行内核由共同受理入口复用，不建立第二validator/状态机。实际对象必须按当前版本读取；只改指定字段，不把完整效果默认值覆盖其他效果。

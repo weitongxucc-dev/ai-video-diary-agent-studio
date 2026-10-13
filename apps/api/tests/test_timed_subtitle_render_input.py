@@ -138,6 +138,22 @@ def test_real_creation_plan_uses_one_subtitle_input_at_both_durations(tmp_path, 
     assert "合成字幕 0" in captured["sidecar"] and "Synthetic caption 0" in captured["sidecar"]
 
 
+def test_initial_two_shot_caption_uses_five_second_narration_but_explicit_track_keeps_its_end(tmp_path, monkeypatch):
+    plan = plan_for(tmp_path, 5)
+    first = replace(plan.clips[0], source_end_seconds=2.5, timeline_end_seconds=2.5)
+    second = replace(first, id="clip-2", timeline_start_seconds=2.5, timeline_end_seconds=5.)
+    plan.clips = [first, second]
+    initial = capture_render(monkeypatch, tmp_path, plan, None)
+    assert "00:00:00,000 --> 00:00:05,000\n合成字幕" in initial["sidecar"]
+    # Current authored tracks have their own clock, even when it is shorter than narration.
+    explicit = replace(bilingual_tracks(5)[0], cues=[SubtitleCue("manual", None, "用户设置", 0., 2.5)])
+    rendered = capture_render(monkeypatch, tmp_path, replace(plan, status="ready"), [explicit])
+    assert "00:00:00,000 --> 00:00:02,500\n用户设置" in rendered["sidecar"]
+    assert "00:00:05,000" not in rendered["sidecar"]
+    assert any(high == 0 and duration is not None for (path, duration), (low, high)
+        in zip(rendered["entries"], rendered["alpha_extrema"], strict=True))
+
+
 def test_transparent_gaps_fractional_edges_and_simultaneous_positions_keep_frame_visibility(tmp_path):
     # Distinct alpha colors make both order and transparency observable without text/font fixtures.
     schedule = [TimedCaption(.05, .21, "bottom", {"position": "bottom"}),

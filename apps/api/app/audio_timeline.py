@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import json
 import re
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -608,15 +608,24 @@ def _audio_grant_resources(scheduler, grant):
     return resources
 
 
+@contextmanager
 def bounded_audio_context(context):
-    """Keep sequential audio commands inside the original unit's calibrated clock."""
+    """Charge audio sections to one allowance, excluding intervening video work."""
     from dataclasses import replace
     resources = _audio_grant_resources(context.scheduler, context.grant)
     compound = resources.get("kind") in {"creation_render", "creation_presenter_render"}
     declared = resources["audio_mix"] if compound else resources
-    return replace(context, max_output_bytes=min(context.max_output_bytes, declared["max_output_bytes"]),
+    started = time.monotonic()
+    audio_context = replace(context, max_output_bytes=min(context.max_output_bytes, declared["max_output_bytes"]),
         threads=declared["threads"], deadline_monotonic=min(context.deadline_monotonic,
-            context.started_monotonic + declared["timeout_seconds"]), resource_purpose="audio_mix" if compound else None)
+            started + declared["timeout_seconds"] - context._audio_active_seconds[0]),
+        resource_purpose="audio_mix" if compound else None)
+    try:
+        audio_context.check()
+        yield audio_context
+        audio_context.check()
+    finally:
+        context._audio_active_seconds[0] += time.monotonic() - started
 
 
 def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event=None,

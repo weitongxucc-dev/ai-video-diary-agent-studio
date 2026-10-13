@@ -1,6 +1,7 @@
 """Task ownership and artifact publication for local audio operations."""
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -303,7 +304,7 @@ class TaskAudio:
     def publish(self, workspace_id: str, task_id: str, *, kind: str, parameters: dict,
                 input_refs: list[str], operation: str, media_input: dict,
                 suffix: str = ".wav", engine: str = "local-audio-v1") -> ArtifactRecord:
-        from app.audio_timeline import render_audio_mix, render_stretched_audio
+        from app.audio_timeline import bounded_audio_context, render_audio_mix, render_stretched_audio
         import shutil
         active = TASK_MEDIA_CONTEXT.get()
         if active is None:
@@ -341,7 +342,8 @@ class TaskAudio:
             publication = self.artifact_store.describe(logical_ref)
             if (publication.sha256, publication.size_bytes) != (previous.sha256, previous.size_bytes):
                 raise ValueError("本次已提交媒体内容发生变化，不能重用或重渲染")
-            self._measure_publication(self.artifact_store.resolve_file(logical_ref),operation,media_input,context)
+            with bounded_audio_context(context) if operation == "audio_mix" else nullcontext(context) as probe_context:
+                self._measure_publication(self.artifact_store.resolve_file(logical_ref),operation,media_input,probe_context)
             context.check()
         self.temporary_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="task-media-", dir=self.temporary_root) as directory:
@@ -354,24 +356,25 @@ class TaskAudio:
                     "max_output_bytes": context.max_output_bytes - consumed, "threads": context.threads}
                 if operation == "audio_mix":
                     graph = AudioTimeline.model_validate(media_input["audio_timeline"])
-                    from app.audio_timeline import _audio_grant_resources, bounded_audio_context
+                    from app.audio_timeline import _audio_grant_resources
                     declared = _audio_grant_resources(context.scheduler, context.grant)
                     if declared.get("kind") in {"creation_render", "creation_presenter_render"}:
                         declared = declared["audio_mix"]
                     if bool(media_input.get("normalize_voice_sources", False)) != bool(declared.get("normalize_voice_sources", False)):
                         raise ValueError("音轨响度处理与本次许可事实不一致")
-                    audio_context = bounded_audio_context(context)
-                    options.update(max_output_bytes=min(options["max_output_bytes"], audio_context.max_output_bytes),
-                        threads=audio_context.threads, deadline_monotonic=audio_context.deadline_monotonic)
-                    produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
-                                if record.producer_job_id == job.id}
-                    render_audio_mix(graph, media_input["duration_seconds"],
-                        lambda ref: self.source(workspace_id, task_id, ref), path,
-                        produced_source_paths={self.source(workspace_id, task_id, reference) for reference in input_refs if reference in produced},
-                        start_seconds=media_input.get("start_seconds", 0),
-                        end_seconds=media_input.get("end_seconds"),
-                        normalize_voice_sources=media_input.get("normalize_voice_sources", False),
-                        solo_track_ids=set(media_input.get("solo_track_ids", [])) or None, **options)
+                    with bounded_audio_context(context) as audio_context:
+                        options.update(max_output_bytes=min(options["max_output_bytes"], audio_context.max_output_bytes),
+                            threads=audio_context.threads, deadline_monotonic=audio_context.deadline_monotonic)
+                        produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
+                                    if record.producer_job_id == job.id}
+                        render_audio_mix(graph, media_input["duration_seconds"],
+                            lambda ref: self.source(workspace_id, task_id, ref), path,
+                            produced_source_paths={self.source(workspace_id, task_id, reference) for reference in input_refs if reference in produced},
+                            start_seconds=media_input.get("start_seconds", 0),
+                            end_seconds=media_input.get("end_seconds"),
+                            normalize_voice_sources=media_input.get("normalize_voice_sources", False),
+                            solo_track_ids=set(media_input.get("solo_track_ids", [])) or None, **options)
+                        measured = self._measure_publication(path,operation,media_input,audio_context)
                 elif operation == "audio_stretch":
                     source = self.repository.resolve_workspace_media_reference(workspace_id, input_refs[0], require_registered=True)
                     render_stretched_audio(source, media_input["source_start_ms"], media_input["source_end_ms"],
@@ -406,7 +409,8 @@ class TaskAudio:
                 context.check()
                 if path.stat().st_size > context.max_output_bytes:
                     raise ValueError("媒体输出超过本次许可上限")
-                measured = self._measure_publication(path,operation,media_input,context)
+                if operation != "audio_mix":
+                    measured = self._measure_publication(path,operation,media_input,context)
                 duration = measured["duration_seconds"]
                 if kind == "task_recording":
                     if duration > 600:
@@ -429,7 +433,8 @@ class TaskAudio:
                 published = self.artifact_store.publish_file(logical_ref, path)
             else:
                 # Publication survived a crash before its database receipt.
-                measured = self._measure_publication(published_path,operation,media_input,context)
+                with bounded_audio_context(context) if operation == "audio_mix" else nullcontext(context) as probe_context:
+                    measured = self._measure_publication(published_path,operation,media_input,probe_context)
                 duration = measured["duration_seconds"]
                 published = self.artifact_store.describe(logical_ref)
         context.check()

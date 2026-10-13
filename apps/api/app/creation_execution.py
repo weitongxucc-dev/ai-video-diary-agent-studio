@@ -87,6 +87,8 @@ class CreationStageGrantContext:
     cancel_event: threading.Event | None = None
     started_monotonic: float = field(default_factory=time.monotonic)
     resource_purpose: str | None = None
+    # Replaced views of this grant share one audio allowance; video wall time is separate.
+    _audio_active_seconds: list[float] = field(default_factory=lambda: [0.0], repr=False, compare=False)
 
     def check(self) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout

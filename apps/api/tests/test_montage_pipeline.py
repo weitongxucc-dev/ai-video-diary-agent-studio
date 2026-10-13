@@ -3370,6 +3370,32 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     assert track.style == plan.template_settings["subtitle_style"]
 
 
+def test_first_subtitle_projection_spans_two_shots_but_keeps_explicit_short_track(monkeypatch):
+    from app.subtitle_schedule import narration_schedule, schedule_srt
+    task = SimpleNamespace(id="task", plan_id="plan", current_timeline_version_id="version")
+    version = SimpleNamespace(id="version", snapshot={"transform_run_id":"transform"})
+    montage = CreationTaskMontagePlan(
+        id="montage", workspace_id="workspace", task_id=task.id, script_id="script",
+        script_title="初次字幕", status="rendered",
+        cues=[NarrationCue("cue", "section", "旁白跨越两个镜头。", 5)],
+        clips=[MontageClip(f"clip-{index}", "cue", "asset", "segment", "workspace://video.mp4",
+            0, 2.5, index * 2.5, (index + 1) * 2.5, 1, [], False) for index in range(2)],
+        duration_seconds=5, low_confidence_clip_count=0, subtitle_path="artifacts/subtitles.srt")
+    persisted = []
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(
+        get_creation_plan=lambda *_: SimpleNamespace(language="zh-CN"),
+        list_subtitle_tracks=lambda *_, **__: persisted))
+    projected = main_module._current_subtitle_tracks("workspace", task,
+        current_version=version, montage=montage)
+    assert [(cue.id, cue.start_seconds, cue.end_seconds) for cue in projected[0].cues] == [("cue", 0., 5.)]
+    assert schedule_srt(subtitle_schedule(projected, 5)) == schedule_srt(narration_schedule(montage.cues, 5))
+    explicit = replace(projected[0], cues=[replace(projected[0].cues[0], end_seconds=2.5)])
+    persisted.append(explicit)
+    current = main_module._current_subtitle_tracks("workspace", task, current_version=version, montage=montage)
+    assert current == [explicit]
+    assert current[0].cues[0].end_seconds == 2.5
+
+
 @pytest.mark.parametrize("target,expected_calls", [(0, 0), (100, 1)])
 def test_initial_montage_generates_face_only_for_selected_share(permitted_person_edit_state, monkeypatch, target, expected_calls):
     state = permitted_person_edit_state

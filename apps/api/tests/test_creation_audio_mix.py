@@ -215,7 +215,8 @@ def test_main_render_consumer_reads_current_actor_and_same_sealed_mix(tmp_path, 
         job = execution.start('local', task_id, script_id, digest, actor=actor)
         submit_creation_stage(execution, scheduler, job, actor)
         grant = scheduler.pick_and_grant()
-        context = CpuRenderGrantContext(scheduler, grant, time.monotonic()+30, 8_000_000, 1)
+        context = CpuRenderGrantContext(scheduler, grant, time.monotonic()+30, 8_000_000, 1,
+            started_monotonic=time.monotonic()-31)
         monkeypatch.setattr(main, 'production_repo', repo)
         monkeypatch.setattr(main, '_task_audio', lambda: service)
         monkeypatch.setattr(main, '_verify_creation_identity', owner.verify_identity)
@@ -411,23 +412,78 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         scheduler.close()
 
 
-def test_sequential_audio_cannot_restart_the_original_unit_clock(tmp_path):
+def test_audio_sections_share_active_allowance_but_exclude_video_time(monkeypatch):
+    import app.audio_timeline as audio_module
+    import app.creation_execution as execution_module
     from app.audio_timeline import bounded_audio_context
     from app.creation_execution import CpuRenderGrantContext
     from app.granted_subprocess import GrantedCommandTimeout
-    repo, task_id, script_id, digest, actor, execution, _, scheduler, _, _, _, _ = case(tmp_path)
-    try:
-        job = execution.start('local', task_id, script_id, digest, actor=actor)
-        submit_creation_stage(execution, scheduler, job, actor)
-        grant = scheduler.pick_and_grant()
-        context = CpuRenderGrantContext(scheduler, grant, time.monotonic()+60, 8_000_000, 1,
-                                       started_monotonic=time.monotonic()-31)
-        audio = bounded_audio_context(context)
-        assert audio.deadline_monotonic == context.started_monotonic + 30
-        with pytest.raises(GrantedCommandTimeout):
+    clock = [100.]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(audio_module, 'time', timer)
+    monkeypatch.setattr(execution_module, 'time', timer)
+    monkeypatch.setattr(audio_module, '_audio_grant_resources', lambda *_: {
+        'kind':'creation_render', 'audio_mix':{'timeout_seconds':15., 'threads':1, 'max_output_bytes':899072}})
+    checked = []
+    grant = object()
+    scheduler = SimpleNamespace(assert_grant=lambda value: checked.append(value))
+    context = CpuRenderGrantContext(scheduler, grant, 160., 8_000_000, 2, started_monotonic=100.)
+    with bounded_audio_context(context) as audio:
+        assert (audio.deadline_monotonic, audio.max_output_bytes, audio.threads, audio.resource_purpose) == (
+            115., 899072, 1, 'audio_mix')
+        # Probe, normalization and mix use this section's fixed clock.
+        for stage_time in (101., 102., 104.):
+            clock[0] = stage_time
             audio.check()
-        scheduler.defer_unit(grant, reason='worker_interrupted',
-            retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=30))
-        scheduler.assert_released(grant)
-    finally:
-        scheduler.close()
+            assert audio.deadline_monotonic == 115.
+    clock[0] = 124.  # Video took 20 seconds, consuming only the outer allowance.
+    with bounded_audio_context(replace(context, max_output_bytes=4_000_000)) as audio:
+        assert audio.deadline_monotonic == 135.  # 15 - 4 active seconds remain.
+        clock[0] = 130.
+    clock[0] = 140.
+    with pytest.raises(GrantedCommandTimeout):
+        with bounded_audio_context(context) as audio:
+            assert audio.deadline_monotonic == 145.
+            clock[0] = 145.
+            audio.check()
+    with pytest.raises(GrantedCommandTimeout):
+        with bounded_audio_context(context):
+            pytest.fail('exhausted audio allowance must not start another section')
+    context.check()  # Audio exhaustion does not masquerade as the outer/video deadline.
+    assert checked and all(value is grant for value in checked)
+
+
+@pytest.mark.parametrize('failure', ['error', 'cancelled'])
+def test_failed_audio_section_preserves_consumed_time(monkeypatch, failure):
+    import threading
+    import app.audio_timeline as audio_module
+    import app.creation_execution as execution_module
+    from app.audio_timeline import bounded_audio_context
+    from app.creation_execution import CpuRenderGrantContext
+    from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
+    clock = [100.]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(audio_module, 'time', timer)
+    monkeypatch.setattr(execution_module, 'time', timer)
+    monkeypatch.setattr(audio_module, '_audio_grant_resources', lambda *_: {
+        'kind':'creation_render', 'audio_mix':{'timeout_seconds':15., 'threads':1, 'max_output_bytes':899072}})
+    cancelled = threading.Event()
+    context = CpuRenderGrantContext(SimpleNamespace(assert_grant=lambda _: None), object(), 125.,
+        8_000_000, 1, cancelled, started_monotonic=100.)
+    with pytest.raises(ValueError if failure == 'error' else GrantedCommandCancelled):
+        with bounded_audio_context(context):
+            clock[0] = 105.
+            if failure == 'error':
+                raise ValueError('measured audio failure')
+            cancelled.set()
+    cancelled.clear()
+    clock[0] = 108.
+    with bounded_audio_context(context) as audio:
+        assert audio.deadline_monotonic == 118.
+        clock[0] = 110.
+    clock[0] = 122.
+    # Remaining audio would allow eight seconds, but the original outer deadline wins.
+    with pytest.raises(GrantedCommandTimeout):
+        with bounded_audio_context(context) as audio:
+            assert audio.deadline_monotonic == 125.
+            clock[0] = 125.
