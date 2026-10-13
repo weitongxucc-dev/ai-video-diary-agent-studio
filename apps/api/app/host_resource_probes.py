@@ -302,6 +302,7 @@ class HostBudget:
     cpu_audio: CpuAudioBudget | None = None
     media_script: MediaScriptBudget | None = None
     observation: ObservationBudget | None = None
+    clip_preview: CpuRenderBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -312,7 +313,7 @@ class HostBudget:
             self.max_unit_input_bytes,
         )):
             raise ValueError("Host budget cannot contain negative limits")
-        if (self.cpu_render is not None or self.presenter_cpu_render is not None) and self.sample_seconds > .25:
+        if (self.cpu_render is not None or self.presenter_cpu_render is not None or self.clip_preview is not None) and self.sample_seconds > .25:
             raise ValueError("CPU render needs a bounded process sampling interval")
         if self.scene_window is not None and (
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
@@ -707,8 +708,9 @@ class HostResourceProbe:
 
         kind, size = resources.get("kind"), resources.get("size_bytes")
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
-                  else self.budget.cpu_render if kind == "creation_render" else None)
-        if kind in {"creation_render", "creation_presenter_render"}:
+                  else self.budget.cpu_render if kind == "creation_render"
+                  else self.budget.clip_preview if kind == "task_clip_preview" else None)
+        if kind in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 return decision(None, "render_budget_or_execution_mode_unavailable")
             numeric_fields = ("duration_seconds", "timeout_seconds")
@@ -724,6 +726,11 @@ class HostResourceProbe:
             if any(resources[name] == 0 for name in
                    ("width_px", "height_px", "clip_count", "max_output_bytes", "threads")):
                 return decision(None, "render_required_fields_zero")
+            if kind == "task_clip_preview" and (resources.get("silent") is not True or resources.get("clip_preview") is not True
+                    or resources.get("output_count") != 2 or resources.get("preview_window_limit_seconds") != 5.
+                    or resources["duration_seconds"] > 5 or resources["clip_count"] != 1 or resources["overlay_count"] != 0
+                    or "audio_mix" in resources):
+                return decision(False, "clip_preview_scope_invalid")
             checks["render_budget"] = {"limits": asdict(render)}
             if "dynamic_clip_count_limit" in resources or "dynamic_overlay_count_limit" in resources:
                 for name, actual, cap in (("dynamic_clip_count_limit", "clip_count", render.max_clip_count),
@@ -735,7 +742,7 @@ class HostResourceProbe:
                     or resources["width_px"] > render.max_width_px
                     or resources["height_px"] > render.max_height_px
                     or (resources["width_px"] * resources["height_px"]
-                        * resources["duration_seconds"] > render.max_pixel_seconds)
+                        * resources["duration_seconds"] * (2 if kind == "task_clip_preview" else 1) > render.max_pixel_seconds)
                     or resources["input_bytes"] > render.max_input_bytes
                     or resources["clip_count"] > render.max_clip_count
                     or resources["overlay_count"] > render.max_overlay_count
@@ -1030,7 +1037,7 @@ class HostResourceProbe:
                 self._running_io.clear()
                 self._running_io_key = key
             decision = self._sample(resources, running_io=True)
-        elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+        elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             decision = self._sample(resources, running_render=True)
         else:
             decision = (self._sample(resources) if resources is not None else
@@ -1052,8 +1059,9 @@ class HostResourceProbe:
             if refusal is not None:
                 raise RecoveryBlocked("组合音频子进程预算尚未标定或许可声明无效")
             resources = resources["audio_mix"]
-        if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
-            render = self.budget.presenter_cpu_render if resources["kind"] == "creation_presenter_render" else self.budget.cpu_render
+        if resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
+            render = (self.budget.presenter_cpu_render if resources["kind"] == "creation_presenter_render"
+                      else self.budget.clip_preview if resources["kind"] == "task_clip_preview" else self.budget.cpu_render)
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 raise RecoveryBlocked("CPU 成片进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
@@ -1118,7 +1126,7 @@ class HostResourceProbe:
             return True  # Resident model allocations live only in the proven-exited child group.
         if resources.get("kind") == "creation_montage_plan" and resources.get("execution_mode") == "metadata_only":
             return True
-        if (resources.get("kind") in {"creation_render", "creation_presenter_render"}
+        if (resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
         if resources.get("kind") == "task_audio" and resources.get("execution_mode") == "cpu_ffmpeg":

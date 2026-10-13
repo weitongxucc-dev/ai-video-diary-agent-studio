@@ -367,6 +367,23 @@ def cpu_render_budget_from_env(
         raise HostBudgetUncalibrated(f"CPU 成片预算无效：{exc}") from exc
 
 
+def clip_preview_budget_from_env(environ: Mapping[str, str] | None = None) -> CpuRenderBudget | None:
+    """Independent measured profile; never borrow the full-movie allowance."""
+    source = os.environ if environ is None else environ
+    names = {item.name: "DEVICE_CLIP_PREVIEW_" + item.name.upper() for item in fields(CpuRenderBudget)}
+    if not any(source.get(name, "").strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not source.get(name, "").strip()]
+    if missing:
+        raise HostBudgetUncalibrated("短镜头预览预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        values = {field: float(source[name]) if field in _FLOAT_CPU_RENDER_FIELDS else int(source[name])
+            for field, name in names.items()}
+        return CpuRenderBudget(**values)
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(f"短镜头预览预算无效：{exc}") from exc
+
+
 def build_host_probes(
     *,
     database_path: str | Path,

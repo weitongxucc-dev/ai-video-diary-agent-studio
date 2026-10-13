@@ -83,6 +83,8 @@ from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
+from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewConflict, ClipPreviewUnavailable, prepare_clip_edit, needs_full_visual_preview
+from app.media.clip_preview import ClipPreviewExecutor
 from app.media_script import ScriptToolchain, media_script_resource_facts, MediaScriptError
 from app.media_script_jobs import read_script_toolchain, script_limits, seal_script, execute_script, script_definition
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
@@ -98,6 +100,7 @@ from app.member_permits import (
     host_budget_from_env, permit_actor, resolve_member_token,
     creation_stage_budgets_from_env, presenter_budgets_from_env,
     observation_budget_from_env,
+    clip_preview_budget_from_env,
 )
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -176,6 +179,7 @@ from app.scheduled_tasks import (
 from app.production import (
     EXACT_EDIT_SOURCE,
     MaterialVersionConflict,
+    TimelineVersionConflict,
     ScriptLibraryEntry,
     content_readable,
     ArtifactRecord,
@@ -3828,7 +3832,9 @@ def _task_media_route(operation, result_kind):
             if operation == "command_edit_preview":
                 task = _creation_task_or_404(current_workspace_id(request), bound.arguments["task_id"])
                 bound.arguments["payload"] = _bind_assistant_edit_instruction(request, task, bound.arguments["payload"])
-            scope = _TASK_MEDIA_SUBMISSION.set(True)
+                request.state.task_media_command = bound.arguments["payload"]
+                request.state.task_media_base_version_id = task.current_timeline_version_id
+            scope = _TASK_MEDIA_SUBMISSION.set(operation)
             source_token = EXACT_EDIT_SOURCE.set(typed_source)
             try:
                 if operation not in {"audio_import", "recording_save"}:
@@ -3944,9 +3950,16 @@ def _task_media_route(operation, result_kind):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+    if "_clip_preview" in arguments:
+        command = ClipPreviewCommand(**arguments["_clip_preview"])
+        if command.task_id != task_id or actor.workspace_id != workspace_id:
+            raise PermissionError("镜头预览封存输入不属于当前成员和任务")
+        return _clip_preview_use_case().seal(actor, command)
     from app.canvas import canvas_size
     from app.member_permits import cpu_render_budget_from_env
     task = production_repo.get_creation_task(workspace_id, task_id)
+    if arguments.get("_media_kind") == "clip_preview":
+        raise ValueError("历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览")
     source = arguments.get("_typed_source")
     if source is not None:
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
@@ -4018,7 +4031,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     visual_scope = None
     visual_edit = operation == "visual_edit_preview" or (
         operation == "exact_edit_preview" and payload.get("operation_type") == "AdjustVisualEffects")
-    if visual_edit and plan is not None and arguments.get("_media_kind") in {"clip_preview", "picture_preview"}:
+    if visual_edit and plan is not None and arguments.get("_media_kind") == "picture_preview":
         tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
         representative, _after, projected = _visual_preview_projection(
             plan, payload["clip_ids"], payload["effects"], tracks)
@@ -4027,58 +4040,13 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             "start_seconds": representative.timeline_start_seconds,
             "end_seconds": representative.timeline_end_seconds,
             "scope": "independent_clip", "adjacent_transitions_included": False}
-        if (projected is None) != (arguments["_media_kind"] == "clip_preview"):
+        if projected is None:
             raise ValueError("画面预览范围与封存的媒体用途不一致")
         if projected is not None:
             plan = projected[0][0]
             picture_candidates = [candidate for candidate, _tracks in projected]
             visual_scope["subtitle_tracks"] = [{key: value for key, value in asdict(track).items()
                 if key not in {"created_at", "updated_at"}} for track in projected[0][1]]
-    if arguments.get("_media_kind") == "clip_preview":
-        from app.canvas import preview_size
-        if plan is None:
-            raise ValueError("当前任务没有可预览的镜头")
-        selected = (visual_scope["representative_clip_id"] if visual_scope is not None else
-            payload.get("clip_id") or next((ref[5:] for ref in payload.get("selected_object_refs", []) if ref.startswith("clip:")), None))
-        clip = next((item for item in plan.clips if item.id == selected), None)
-        if clip is None:
-            raise ValueError("当前选中镜头不存在")
-        if clip.person_render_id:
-            from app.creation_execution import presenter_inputs, current_presenter_render
-            creation_plan = production_repo.get_creation_plan(workspace_id,task.plan_id)
-            script = production_repo.get_creation_task_script(workspace_id,task.confirmed_script_id)
-            matches = [current_presenter_render(production_repo,task,segment,person_request,_person_render_media_path)
-                       for segment,person_request in presenter_inputs(production_repo,task,script,creation_plan,_presenter_model_ids())]
-            if not any(item is not None and item.id==clip.person_render_id for item in matches):
-                raise PermissionError("当前人物/声音授权或片段版本已失效")
-            source = _person_render_media_path(production_repo.get_person_render(workspace_id,task_id,clip.person_render_id))
-            _, budget = presenter_budgets_from_env()
-            kind = "creation_presenter_render"
-        else:
-            asset = production_repo.get_asset(workspace_id,clip.asset_id)
-            if not material_allows_footage(asset) or not content_readable(user_id=actor.user_id or actor.member_id,
-                    local_diagnostic=False,visibility=asset.visibility,owner_user_id=asset.owner_user_id):
-                raise PermissionError("当前成员或素材使用状态不允许预览此镜头")
-            source = production_repo.resolve_clip_media_reference(workspace_id,clip.asset_id,clip.source_path)
-            budget = cpu_render_budget_from_env()
-            kind = "creation_render"
-        if source is None or budget is None:
-            raise ValueError("镜头媒体或 CPU 预览预算不可用")
-        stat = source.stat()
-        width,height = preview_size(plan.aspect_ratio)
-        # The bounded window is independent of the parent movie's duration.
-        window = min(5., clip.timeline_end_seconds-clip.timeline_start_seconds)
-        if payload.get("operation_type") == "ChangeClipSpeed":
-            window = 5.
-        resources = {"kind":kind,"execution_mode":"cpu_ffmpeg","duration_seconds":window,
-            "width_px":width,"height_px":height,"input_bytes":stat.st_size,"clip_count":1,"overlay_count":0,
-            "max_output_bytes":budget.max_output_bytes,"threads":budget.max_threads,"timeout_seconds":budget.max_timeout_seconds,
-            "clip_preview":True,"silent":True,"preview_window_limit_seconds":5.}
-        facts = {"base_version_id":task.current_timeline_version_id,"clip":asdict(clip),"aspect_ratio":plan.aspect_ratio,
-            "source":[clip.source_path,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]}
-        if visual_scope is not None:
-            facts["visual_preview"] = visual_scope
-        return facts,resources
     audio_operations = {"audio_import", "recording_save", "audio_listen", "audio_extract", "audio_edit_preview", "audio_waveform", "narration_waveform"}
     exact_audio = operation == "exact_edit_preview" and payload.get("operation_type") == "EditAudioTimeline"
     if exact_audio:
@@ -4293,6 +4261,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if event["arguments"].get("_media_kind") == "clip_preview":
+        raise ValueError("短镜头预览必须经独立封存执行入口，不能重入路由")
     from types import SimpleNamespace
     import typing
     function, signature = _TASK_MEDIA_HANDLERS[event["operation"]]
@@ -4818,6 +4788,85 @@ def retry_task_media_job(task_id: str, job_id: str, request: Request):
 
 def _task_audio() -> TaskAudio:
     return TaskAudio(production_repo, artifact_store, settings.effective_temporary_root_path, picture_renderer=_render_task_picture_input)
+
+
+def _clip_preview_use_case(repository=None):
+    repo = production_repo if repository is None else repository
+    def profile():
+        try:
+            return clip_preview_budget_from_env()
+        except HostBudgetUncalibrated as exc:
+            raise ClipPreviewUnavailable(str(exc)) from exc
+    def presenter_source(task, clip):
+        plan = repo.get_creation_plan(task.workspace_id, task.plan_id)
+        script = repo.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+        matches = [current_presenter_render(repo, task, segment, request, _person_render_media_path)
+            for segment, request in presenter_inputs(repo, task, script, plan, _presenter_model_ids())]
+        if not any(item is not None and item.id == clip.person_render_id for item in matches):
+            raise PermissionError("当前人物/声音授权或片段版本已失效")
+        return _person_render_media_path(repo.get_person_render(task.workspace_id, task.id, clip.person_render_id))
+    return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile)
+
+
+def _submit_clip_preview(task_id, request, *, base_version_id, operation_type, clip_ids, values, raw_command):
+    """HTTP adapter: trusted identity/source in, explicit persistent command out."""
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    task = _creation_task_or_404(workspace_id, task_id)
+    source = EXACT_EDIT_SOURCE.get()
+    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise HTTPException(status_code=403, detail="当前成员不能修改此任务")
+    try:
+        if base_version_id is None:
+            raise ClipPreviewConflict("当前故事板没有基础版本，请先保留当前故事板并建立版本")
+        if task.current_timeline_version_id != base_version_id:
+            raise ClipPreviewConflict("时间线已经变化，请刷新后重新预览")
+        base = production_repo.get_timeline_version(workspace_id, base_version_id)
+        original = getattr(request.state, "task_media_command", None)
+        if source is None and original is not None:
+            action = CreationTaskExactEditRequest(operation_type=operation_type,
+                **({"clip_ids":clip_ids, "effects":values} if operation_type == "AdjustVisualEffects" else {"clip_id":clip_ids[0], **values}))
+            source = {"workspace_id":workspace_id, "task_id":task_id, "member_id":actor.user_id or actor.member_id,
+                "actor_identity":actor.identity_payload(), "request_id":None, "raw_command":original.raw_command,
+                "expected_timeline_version_id":base.id, "expected_timeline_sequence":base.sequence,
+                "action":action.model_dump(mode="json", exclude_unset=True),
+                "source_facts":_exact_edit_source_facts(task, action, request)}
+            if original.assistant_turn_id is not None:
+                origin = conversation_repo.task_turn_source(str(original.assistant_turn_id), workspace_id,
+                    actor.user_id or actor.member_id, task_id)
+                source.update(assistant_turn_id=str(original.assistant_turn_id), conversation_id=origin["conversation_id"])
+        command = ClipPreviewCommand(task_id, base.id, operation_type, clip_ids, values, raw_command, source)
+        use_case = _clip_preview_use_case()
+        use_case.prepare(actor, command)
+        draft = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
+        if draft:
+            return _edit_preview_response(*use_case.proposal(actor, command))
+        use_case.seal(actor, command)
+        runtime = _creation_runtime()
+        media = runtime.registrations["creation_job"].owner.task_media
+        media.clip_preview = ClipPreviewExecutor(use_case, _task_audio())
+        operation = _TASK_MEDIA_SUBMISSION.get() or ("exact_edit_preview" if source is not None or operation_type != "AdjustVisualEffects" else "visual_edit_preview")
+        arguments = {"_media_kind":"clip_preview", "_draft":False, "_clip_preview":asdict(command)}
+        if source is not None:
+            arguments["_typed_source"] = source
+        # Keep the original action/target projection used by existing receipts.
+        arguments["payload"] = {"operation_type":operation_type, "clip_ids":clip_ids,
+            "clip_id":clip_ids[0], "base_version_id":base.id,
+            **({"effects":values} if operation_type == "AdjustVisualEffects" else values)}
+        job = media.submit(runtime, actor, task_id, operation, arguments, "edit_preview")
+        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt["result"] = None
+        return JSONResponse(status_code=202, content=receipt)
+    except (ClipPreviewUnavailable, HostBudgetUncalibrated) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (ClipPreviewConflict, TimelineVersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
@@ -5535,30 +5584,33 @@ def _visual_preview_projection(plan, clip_ids, patch, tracks=()):
 @app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
 @_task_media_route("visual_edit_preview", "edit_preview")
 def preview_creation_task_visual(task_id: str, request: Request, payload: VisualEditRequest):
+    return _preview_visual_request(task_id, request, payload)
+
+
+def _preview_visual_request(task_id, request, payload):
     draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
     workspace_id=current_workspace_id(request)
     task=_creation_task_or_404(workspace_id,task_id)
     if task.current_timeline_version_id != payload.base_version_id:
         raise HTTPException(status_code=409,detail="时间线已经变化，请刷新后重新预览")
     plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-    clips=[clip for clip in plan.clips if clip.id in payload.clip_ids]
-    if len(clips) != len(set(payload.clip_ids)):
-        raise HTTPException(status_code=404,detail="所选镜头不存在")
-    if any(clip.locked for clip in clips):
-        raise HTTPException(status_code=409,detail="所选范围包含锁定镜头，请先解锁或缩小范围")
     patch = payload.effects.model_dump(exclude_unset=True)
-    changed_clips = {clip.id: with_visual_effects(clip, patch) for clip in clips}
-    if all(VisualEffects.model_validate(clip.visual_effects).model_dump() == changed_clips[clip.id].visual_effects for clip in clips):
-        raise HTTPException(status_code=422,detail="画面参数没有变化")
     try:
-        for target in clips:
-            fade_filters(changed_clips[target.id])
+        clips, candidates = prepare_clip_edit(plan, ClipPreviewCommand(task_id, payload.base_version_id,
+            "AdjustVisualEffects", payload.clip_ids, patch, payload.raw_command))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ClipPreviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422,detail=str(exc)) from exc
-    # Show a representative selected clip; all targets and the exact shared parameters remain explicit.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    changed_clips = {clip.id: clip for clip in candidates}
+    # Short picture-only previews use the explicit command/job path.
     clip=clips[0]
-    preview_limit = None if (clip.timeline_end_seconds - clip.timeline_start_seconds > 5 and
-        (changed_clips[clip.id].visual_effects.get("fade_out_seconds") or clip.visual_effects.get("fade_out_seconds"))) else 5
+    if not needs_full_visual_preview(clip, changed_clips[clip.id]):
+        return _submit_clip_preview(task_id, request, base_version_id=payload.base_version_id, operation_type="AdjustVisualEffects",
+            clip_ids=payload.clip_ids, values=patch, raw_command=payload.raw_command)
+    preview_limit = None
     def resolve_target(target):
         preview_target=replace(target)
         if target.person_render_id:
@@ -5579,15 +5631,10 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             base = _ensure_montage_base_version(workspace_id, task, plan)
             tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
             before, after, projected = _visual_preview_projection(plan, payload.clip_ids, patch, tracks)
-            if projected is None:
-                records = [_publish_task_clip_preview(workspace_id, task, base, candidate,
-                    kind="color_preview", side=side, aspect_ratio=plan.aspect_ratio)
-                    for side, candidate in (("before", preview_clip), ("after", after))]
-            else:
-                records = [_publish_task_picture_preview(workspace_id, task, base, candidate, scoped_tracks,
-                    kind="color_preview", parameters={"effects": patch, "side": side,
-                        "representative_clip_id": before.id, "scope": "independent_clip"})
-                    for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
+            records = [_publish_task_picture_preview(workspace_id, task, base, candidate, scoped_tracks,
+                kind="color_preview", parameters={"effects": patch, "side": side,
+                    "representative_clip_id": before.id, "scope": "independent_clip"})
+                for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
     except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
         raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
@@ -10946,7 +10993,7 @@ def _bind_assistant_edit_instruction(request: Request, task, payload: CreationTa
     return payload.model_copy(update={"raw_command": original})
 
 
-def _preview_selected_crop(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest):
+def _preview_selected_crop(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest, *, base_version_id):
     workspace_id = current_workspace_id(request)
     try:
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
@@ -10954,9 +11001,8 @@ def _preview_selected_crop(task_id: str, request: Request, payload: CreationTask
         crop = compile_crop_command(payload.raw_command.strip(), {"fit_mode": clip.fit_mode, "crop_x": clip.crop_x, "crop_y": clip.crop_y,
                                                                  "clip_index": plan.clips.index(clip) + 1})
         if crop is not None:
-            _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, CreationTaskExactEditRequest(
-                operation_type="ChangeCrop", clip_id=clip.id, **crop))
-            return _edit_preview_response(intent, proposal)
+            return _submit_clip_preview(task_id, request, base_version_id=base_version_id, operation_type="ChangeCrop",
+                clip_ids=[clip.id], values=crop, raw_command=payload.raw_command)
     except (ValueError, KeyError, StopIteration) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "当前镜头不可用") from exc
     return None
@@ -11096,6 +11142,7 @@ def preview_creation_task_edit(
 ) -> CreationTaskEditPreviewResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
+    short_preview_base_version = getattr(request.state, "task_media_base_version_id", task.current_timeline_version_id)
     payload = _bind_assistant_edit_instruction(request, task, payload)
     command = payload.raw_command.strip()
     parsed_overlay = None
@@ -11127,7 +11174,7 @@ def preview_creation_task_edit(
     if (payload.context_stage in {"montage", "review"} and len(payload.selected_object_refs) == 1
             and payload.selected_object_refs[0].startswith("clip:")
             and re.fullmatch(r"把当前选中的第[1-9]\d*个镜头改为完整显示。保持镜头顺序、时长、配音和字幕不变，生成修改提案[。！]?", command)):
-        return _preview_selected_crop(task_id, request, payload)
+        return _preview_selected_crop(task_id, request, payload, base_version_id=short_preview_base_version)
     share_command = re.fullmatch(r"(?:把)?(?:这条视频的?|整片的?)?(?:露脸|口播出镜)(?:占比|比例)?(?:改成|改为|调到|设为)\s*(0|20|40|60|80|100)\s*%[。！]?", command)
     if share_command and payload.context_stage in {"montage", "review"}:
         return _preview_presenter_share(task, request, payload, int(share_command.group(1)))
@@ -11192,7 +11239,7 @@ def preview_creation_task_edit(
         if transition or remove_transition:
             return _preview_transition(task_id,request,CreationTaskExactEditRequest(operation_type="SetClipTransition",
                 clip_id=selected_ref.removeprefix("clip:"),transition_seconds=0 if remove_transition else float(transition[1])))
-        crop_preview = _preview_selected_crop(task_id, request, payload)
+        crop_preview = _preview_selected_crop(task_id, request, payload, base_version_id=short_preview_base_version)
         if crop_preview is not None:
             return crop_preview
         try:
@@ -11202,7 +11249,7 @@ def preview_creation_task_edit(
         except (ValueError,KeyError,StopIteration) as exc:
             raise HTTPException(status_code=422,detail=str(exc) or "当前镜头不可用") from exc
         if effects is not None:
-            return preview_creation_task_visual(task_id,request,VisualEditRequest(base_version_id=task.current_timeline_version_id,
+            return _preview_visual_request(task_id,request,VisualEditRequest(base_version_id=short_preview_base_version,
                 clip_ids=[selected_clip.id],effects=effects,raw_command=command))
     if selected_ref.startswith("audio:"):
         try:
@@ -11411,9 +11458,8 @@ def preview_creation_task_edit(
         if speed_match:
             if not .25 <= float(speed_match.group(1)) <= 4:
                 raise HTTPException(status_code=422, detail="画面倍速须在0.25–4之间")
-            return preview_creation_task_exact_edit(task_id, request,
-                CreationTaskExactEditRequest(operation_type="ChangeClipSpeed",
-                    clip_id=selected_ref.removeprefix("clip:"), playback_rate=float(speed_match.group(1))))
+            return _submit_clip_preview(task_id, request, base_version_id=short_preview_base_version, operation_type="ChangeClipSpeed",
+                clip_ids=[selected_ref.removeprefix("clip:")], values={"playback_rate":float(speed_match.group(1))}, raw_command=command)
         linked_commands = {"删除这个镜头": "DeleteClip", "删除当前镜头": "DeleteClip",
             "删掉这个镜头，把后面接上": "DeleteClip", "复制这个镜头": "DuplicateClip", "复制当前镜头": "DuplicateClip",
             #插入还需要一段素材，语音里给不出来，交给 _preview_insert 说明缺什么。
@@ -13446,8 +13492,9 @@ def preview_creation_task_exact_edit(
         task, _member_id = _exact_edit_access(task_id, request, write=True)
         if payload.operation_type == "EditAudioTimeline":
             return preview_creation_task_audio.__wrapped__(task_id, request, _audio_mix_request(payload, task.current_timeline_version_id))
-        return preview_creation_task_visual.__wrapped__(task_id, request, VisualEditRequest(
-            base_version_id=task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects))
+        source = EXACT_EDIT_SOURCE.get()
+        return _preview_visual_request(task_id, request, VisualEditRequest(
+            base_version_id=source["expected_timeline_version_id"] if source is not None else task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects))
     if payload.operation_type == "EditGraphicOverlay":
         return _preview_graphic_overlay(task_id,request,payload)
     if payload.operation_type == "SetClipTransition":
@@ -13466,7 +13513,15 @@ def preview_creation_task_exact_edit(
         return _preview_linked_clip_edit(task_id, request, payload)
     if payload.operation_type == "InsertClip":
         return _preview_insert(task_id, request, payload)
-    if payload.operation_type in {"ReplaceClip", "ChangeCrop", "TrimClip", "SplitClip", "ChangeClipSpeed", "ReorderClip", "SetClipLock", "ConfirmClip"}:
+    if payload.operation_type in {"ChangeCrop", "ChangeClipSpeed"}:
+        task = _creation_task_or_404(current_workspace_id(request), task_id)
+        source = EXACT_EDIT_SOURCE.get()
+        base_version_id = source["expected_timeline_version_id"] if source is not None else task.current_timeline_version_id
+        fields = {key:value for key,value in payload.model_dump(exclude_unset=True).items()
+            if key not in {"operation_type", "clip_id"} and value is not None}
+        return _submit_clip_preview(task_id, request, base_version_id=base_version_id, operation_type=payload.operation_type,
+            clip_ids=[payload.clip_id], values=fields, raw_command="精确操作：" + payload.operation_type)
+    if payload.operation_type in {"ReplaceClip", "TrimClip", "SplitClip", "ReorderClip", "SetClipLock", "ConfirmClip"}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
@@ -13772,15 +13827,6 @@ def _validate_montage_material_use(workspace_id, plan):
 
 
 def _render_task_picture_input(workspace_id, task_id, media_input, output, context):
-    if "clip" in media_input:
-        from app.montage import MontageClip, render_granted_clip_preview
-        clip = MontageClip(**media_input["clip"])
-        source = (_person_render_media_path(production_repo.get_person_render(workspace_id,task_id,clip.person_render_id))
-                  if clip.person_render_id else production_repo.resolve_clip_media_reference(workspace_id,clip.asset_id,clip.source_path))
-        if source is None:
-            raise ValueError("当前选中镜头媒体不可用")
-        return render_granted_clip_preview(clip,source,output,context,aspect_ratio=media_input["aspect_ratio"],
-            max_seconds=media_input["max_seconds"])
     plan = creation_task_montage_plan_from_payload(media_input["plan"])
     if plan.workspace_id != workspace_id or plan.task_id != task_id:
         raise PermissionError("画面预览输入不属于当前许可任务")
@@ -13789,13 +13835,6 @@ def _render_task_picture_input(workspace_id, task_id, media_input, output, conte
     _render_montage_with_resolved_clip_sources(workspace_id, plan, output.parent / "timeline-mix.wav",
         job_staging_path=output.parent, subtitle_tracks=tracks, render_context=context)
     (output.parent / "preview.mp4").replace(output)
-
-
-def _publish_task_clip_preview(workspace_id,task,base,clip,*,kind,side,aspect_ratio):
-    return _task_audio().publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-clip-preview-v1",
-        parameters={"base_version_id":base.id,"side":side,"clip_id":clip.id,"max_seconds":5,"silent":True},
-        input_refs=[f"timeline:{base.id}",clip.source_path],operation="clip_preview",
-        media_input={"clip":asdict(clip),"aspect_ratio":aspect_ratio,"max_seconds":5})
 
 
 def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind,parameters):
@@ -14591,27 +14630,6 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
         return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
 
     media_previews = {}
-    if not draft_only and payload.operation_type in {"ChangeClipSpeed", "ChangeCrop"}:
-        preview_kind = "speed_preview" if payload.operation_type == "ChangeClipSpeed" else "color_preview"
-        try:
-            for side, target in (("before", before_clip), ("after", after_clip)):
-                if target.person_render_id:
-                    render = production_repo.get_person_render(workspace_id, task_id, target.person_render_id)
-                    source = _person_render_media_path(render)
-                    if source is None:
-                        raise ValueError("人物口型片段不可用，请重新生成")
-                else:
-                    source = production_repo.resolve_clip_media_reference(workspace_id, target.asset_id, target.source_path)
-                record = _publish_task_clip_preview(workspace_id,task,base_version,target,
-                    kind=preview_kind,side=side,aspect_ratio=plan.aspect_ratio)
-                media_previews[side] = {"ref": record.logical_ref,
-                    "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
-        except (ValueError, OSError, subprocess.SubprocessError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError)
-                else ("变速预览失败，请检查源素材、FFmpeg和外接盘" if payload.operation_type == "ChangeClipSpeed"
-                      else "画面预览失败，请检查源素材、FFmpeg和外接盘")) from exc
-        if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
-            raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
     if payload.operation_type == "TrimClip":
         try:
             for side, target in (("before", before_clip), ("after", after_clip)):
@@ -19855,7 +19873,8 @@ def _build_device_components(*, repository: ProductionRepository):
         MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
     )
 
-    cpu_render_budget = cpu_render_budget_from_env()
+    cpu_render_budget = (cpu_render_budget_from_env() if any(
+        value.strip() for name, value in os.environ.items() if name.startswith("DEVICE_CPU_RENDER_")) else None)
     budget = host_budget_from_env(cpu_render=cpu_render_budget)
     narration_budget, montage_budget = creation_stage_budgets_from_env()
     presenter_budget, presenter_cpu_render_budget = presenter_budgets_from_env()
@@ -19863,11 +19882,13 @@ def _build_device_components(*, repository: ProductionRepository):
                      presenter=presenter_budget, presenter_cpu_render=presenter_cpu_render_budget)
     audio_budget = cpu_audio_budget_from_env()
     from app.member_permits import media_script_budget_from_env
-    budget = replace(budget, cpu_audio=audio_budget, media_script=media_script_budget_from_env(),
+    budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),
                      observation=observation_budget_from_env())
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         execute_operation=_execute_task_media_operation, validate_result=_validate_task_media_result,
-        verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations)
+        verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
+        clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
+            TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
         "creation_job": creation_job_registration(
             repository,

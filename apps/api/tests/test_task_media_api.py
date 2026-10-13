@@ -125,8 +125,10 @@ def test_terminal_conversation_uses_same_resource_history_without_changing_cance
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
                      (json.dumps(asdict(task),default=str),))
     conversation = conversations.create('local',actor.member_id,'task','task')
+    draft = conversations.save_draft(conversation['id'], 'local', actor.member_id,
+        'fixture original instruction', conversation['draft_version'])
     turn, _ = conversations.create_turn_idempotent(conversation['id'],'local',actor.member_id,
-        'fixture original instruction','fixture-request',0,
+        'fixture original instruction','fixture-request',draft['draft_version'],
         {'kind':'task','task_id':'task','target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}})
     source = {'workspace_id':'local','task_id':'task','member_id':actor.member_id,
         'actor_identity':actor.identity_payload(), 'assistant_turn_id':turn['id'],

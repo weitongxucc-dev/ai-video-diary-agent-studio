@@ -73,7 +73,43 @@ def _verdict(probe: HostResourceProbe, resources: dict) -> bool | None:
     request = _Request()
     request.id = "resource-contract-fixture"
     request.resources = resources
-    return probe.admit(request)
+    return probe.admit(request).verdict
+
+
+def test_short_preview_profile_is_independent_complete_and_has_no_guessed_defaults():
+    from app.member_permits import clip_preview_budget_from_env, HostBudgetUncalibrated
+    assert clip_preview_budget_from_env({}) is None
+    full_movie = {'DEVICE_CPU_RENDER_' + key.upper():str(value) for key, value in asdict(_render_budget()).items()}
+    assert clip_preview_budget_from_env(full_movie) is None
+    with pytest.raises(HostBudgetUncalibrated, match='缺少'):
+        clip_preview_budget_from_env({'DEVICE_CLIP_PREVIEW_MAX_DURATION_SECONDS':'5'})
+    profile = {'DEVICE_CLIP_PREVIEW_' + key.upper():str(value) for key, value in asdict(_render_budget()).items()}
+    assert clip_preview_budget_from_env(profile) == _render_budget()
+
+
+def test_short_preview_admission_and_child_limits_consume_the_same_profile(tmp_path):
+    from dataclasses import replace
+    from app.device_scheduler import RecoveryBlocked
+    profile = _render_budget(max_pixel_seconds=200)
+    probe = _probe(tmp_path)
+    values = {'kind':'task_clip_preview', 'execution_mode':'cpu_ffmpeg', 'duration_seconds':1.,
+        'width_px':10, 'height_px':10, 'input_bytes':1, 'clip_count':1, 'overlay_count':0,
+        'max_output_bytes':profile.max_output_bytes, 'threads':profile.max_threads,
+        'timeout_seconds':profile.max_timeout_seconds, 'clip_preview':True, 'silent':True,
+        'preview_window_limit_seconds':5., 'output_count':2}
+    # An existing full-movie allowance grants no permission for the short workload.
+    assert probe._sample(values).verdict is None
+    probe.budget = replace(probe.budget, cpu_render=None, clip_preview=profile)
+    assert probe._sample({**values, 'duration_seconds':1.1}).verdict is False  # before + after both count
+    assert probe._sample({**values, 'silent':False}).verdict is False
+    assert probe._sample({**values, 'output_count':1}).verdict is False
+    probe._grant_resources = lambda grant: values
+    limits = probe.scene_runtime_limits(object())
+    assert limits.max_process_rss_bytes == profile.additional_memory_bytes
+    assert limits.max_process_threads == profile.max_process_threads
+    probe.budget = replace(probe.budget, clip_preview=None)
+    with pytest.raises(RecoveryBlocked):
+        probe.scene_runtime_limits(object())
 
 
 def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,

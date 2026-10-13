@@ -1289,6 +1289,10 @@ class MaterialVersionConflict(ValueError):
     """A frozen material revision changed before the atomic mutation."""
 
 
+class TimelineVersionConflict(ValueError):
+    """The original timeline changed before an atomic edit or preview submission."""
+
+
 class CreationRequestConflict(ValueError):
     """A request/window identity or revision no longer matches its frozen input."""
 
@@ -7052,76 +7056,80 @@ class ProductionRepository:
             ).fetchall()
         return [self._transform_run_from_row(row) for row in rows]
 
-    def create_dependency_edge(self, edge: DependencyEdge) -> DependencyEdge:
+    def create_dependency_edge(self, edge: DependencyEdge, *, connection: sqlite3.Connection | None = None) -> DependencyEdge:
         _validate_dependency_edge(edge)
-        with self._connect() as conn:
-            self._require_creation_task(conn, edge.workspace_id, edge.task_id)
-            transform_row = conn.execute(
+        if connection is None:
+            with self._connect() as conn:
+                self.create_dependency_edge(edge, connection=conn)
+            return self.get_dependency_edge(edge.workspace_id, edge.id)
+        conn = connection
+        self._require_creation_task(conn, edge.workspace_id, edge.task_id)
+        transform_row = conn.execute(
+            """
+            SELECT * FROM transform_runs
+            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            """,
+            (
+                edge.workspace_id,
+                edge.task_id,
+                edge.created_by_transform_id,
+            ),
+        ).fetchone()
+        if transform_row is None:
+            raise ValueError("依赖边关联的变换不属于当前工作区与任务")
+        transform = self._transform_run_from_row(transform_row)
+        if transform.status != "succeeded":
+            raise ValueError("只能为成功变换登记依赖边")
+        if edge.upstream_ref not in transform.input_refs:
+            raise ValueError("依赖边上游不在变换输入引用中")
+        if edge.downstream_ref not in transform.output_refs:
+            raise ValueError("依赖边下游不在变换输出引用中")
+        existing_row = conn.execute(
+            "SELECT * FROM dependency_edges WHERE id = ?",
+            (edge.id,),
+        ).fetchone()
+        if existing_row is None:
+            existing_row = conn.execute(
                 """
-                SELECT * FROM transform_runs
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                SELECT * FROM dependency_edges
+                WHERE workspace_id = ? AND task_id = ?
+                  AND upstream_ref = ? AND downstream_ref = ?
+                  AND created_by_transform_id = ?
                 """,
                 (
                     edge.workspace_id,
                     edge.task_id,
+                    edge.upstream_ref,
+                    edge.downstream_ref,
                     edge.created_by_transform_id,
                 ),
             ).fetchone()
-            if transform_row is None:
-                raise ValueError("依赖边关联的变换不属于当前工作区与任务")
-            transform = self._transform_run_from_row(transform_row)
-            if transform.status != "succeeded":
-                raise ValueError("只能为成功变换登记依赖边")
-            if edge.upstream_ref not in transform.input_refs:
-                raise ValueError("依赖边上游不在变换输入引用中")
-            if edge.downstream_ref not in transform.output_refs:
-                raise ValueError("依赖边下游不在变换输出引用中")
-            existing_row = conn.execute(
-                "SELECT * FROM dependency_edges WHERE id = ?",
-                (edge.id,),
-            ).fetchone()
-            if existing_row is None:
-                existing_row = conn.execute(
-                    """
-                    SELECT * FROM dependency_edges
-                    WHERE workspace_id = ? AND task_id = ?
-                      AND upstream_ref = ? AND downstream_ref = ?
-                      AND created_by_transform_id = ?
-                    """,
-                    (
-                        edge.workspace_id,
-                        edge.task_id,
-                        edge.upstream_ref,
-                        edge.downstream_ref,
-                        edge.created_by_transform_id,
-                    ),
-                ).fetchone()
-            if existing_row is not None:
-                persisted = self._dependency_edge_from_row(existing_row)
-                if persisted != edge:
-                    raise ValueError("依赖边 ID 或逻辑唯一键已存在，且领域字段不一致")
-                return persisted
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO dependency_edges
-                        (id, workspace_id, task_id, upstream_ref, downstream_ref,
-                         created_by_transform_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        edge.id,
-                        edge.workspace_id,
-                        edge.task_id,
-                        edge.upstream_ref,
-                        edge.downstream_ref,
-                        edge.created_by_transform_id,
-                        edge.created_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("依赖边 ID 或同一变换中的边已存在") from exc
-        return self.get_dependency_edge(edge.workspace_id, edge.id)
+        if existing_row is not None:
+            persisted = self._dependency_edge_from_row(existing_row)
+            if persisted != edge:
+                raise ValueError("依赖边 ID 或逻辑唯一键已存在，且领域字段不一致")
+            return persisted
+        try:
+            conn.execute(
+                """
+                INSERT INTO dependency_edges
+                    (id, workspace_id, task_id, upstream_ref, downstream_ref,
+                     created_by_transform_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    edge.id,
+                    edge.workspace_id,
+                    edge.task_id,
+                    edge.upstream_ref,
+                    edge.downstream_ref,
+                    edge.created_by_transform_id,
+                    edge.created_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("依赖边 ID 或同一变换中的边已存在") from exc
+        return edge
 
     def get_dependency_edge(
         self, workspace_id: str, edge_id: str
@@ -7615,50 +7623,90 @@ class ProductionRepository:
                 ).fetchall()
         return [self._cover_asset_from_row(row) for row in rows]
 
-    def create_edit_intent(self, intent: EditIntent) -> EditIntent:
-        source = EXACT_EDIT_SOURCE.get()
+    def save_clip_preview_proposal(self, intent: EditIntent, proposal: EditProposal, *, expected_version_id: str):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, intent.workspace_id, intent.task_id)
+            if task.current_timeline_version_id != expected_version_id:
+                raise TimelineVersionConflict("预览期间时间线发生变化，请重新预览")
+            if (proposal.workspace_id, proposal.task_id, proposal.intent_id) != (intent.workspace_id, intent.task_id, intent.id):
+                raise ValueError("预览提案不属于原编辑意图")
+            self.create_edit_intent(intent, connection=conn, source=None)
+            self.create_edit_proposal(proposal, connection=conn)
+        return intent, proposal
+
+    def create_clip_preview_job(self, run: JobRun, payload: dict, *, expected_version_id: str) -> JobRun:
+        """Compare the caller's original version and save the job/input together."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, run.workspace_id, run.task_id)
+            if task.current_timeline_version_id != expected_version_id:
+                raise TimelineVersionConflict("提交预览前时间线发生变化，请重新预览")
+            if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
+                raise PermissionError("当前成员不能安排此任务的媒体处理")
+            job = self.create_job_run(run, connection=conn)
+            self.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=job.workspace_id,
+                task_id=job.task_id, job_id=job.id, event_type="task_media_submitted", payload=payload,
+                created_at=job.created_at), connection=conn)
+        return job
+
+    def record_task_media_publication(self, artifact: ArtifactRecord, transform: TransformRun, edges: list[DependencyEdge]):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self.create_artifact_record(artifact, connection=conn)
+            self.create_transform_run(transform, connection=conn)
+            for edge in edges:
+                self.create_dependency_edge(edge, connection=conn)
+        return artifact
+
+    def create_edit_intent(self, intent: EditIntent, *, connection: sqlite3.Connection | None = None, source: dict | None | Literal[False] = False) -> EditIntent:
+        source = EXACT_EDIT_SOURCE.get() if source is False else source
         if source is not None:
             if (source["workspace_id"], source["task_id"]) != (intent.workspace_id, intent.task_id):
                 raise ValueError("类型化编辑来源不属于当前任务")
             intent = replace(intent, raw_command=source.get("raw_command") or intent.raw_command,
                              constraints={**intent.constraints, "request_source": source})
         _validate_edit_intent(intent)
-        with self._connect() as conn:
-            self._require_creation_task(conn, intent.workspace_id, intent.task_id)
-            existing_row = conn.execute(
-                "SELECT * FROM edit_intents WHERE id = ?",
-                (intent.id,),
-            ).fetchone()
-            if existing_row is not None:
-                persisted = self._edit_intent_from_row(existing_row)
-                if persisted != intent:
-                    raise ValueError("编辑意图 ID 已存在，不能覆盖")
-                return persisted
-            conn.execute(
-                """
-                INSERT INTO edit_intents
-                    (id, workspace_id, task_id, raw_command, context_stage,
-                     selected_object_refs_json, playhead_ms, intent_type,
-                     scope_json, constraints_json, confidence, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    intent.id,
-                    intent.workspace_id,
-                    intent.task_id,
-                    intent.raw_command,
-                    intent.context_stage,
-                    json.dumps(intent.selected_object_refs, ensure_ascii=False),
-                    intent.playhead_ms,
-                    intent.intent_type,
-                    _json_object(intent.scope),
-                    _json_object(intent.constraints),
-                    intent.confidence,
-                    intent.status,
-                    intent.created_at.isoformat(),
-                ),
-            )
-        return self.get_edit_intent(intent.workspace_id, intent.id)
+        if connection is None:
+            with self._connect() as conn:
+                self.create_edit_intent(intent, connection=conn, source=None)
+            return self.get_edit_intent(intent.workspace_id, intent.id)
+        conn = connection
+        self._require_creation_task(conn, intent.workspace_id, intent.task_id)
+        existing_row = conn.execute(
+            "SELECT * FROM edit_intents WHERE id = ?",
+            (intent.id,),
+        ).fetchone()
+        if existing_row is not None:
+            persisted = self._edit_intent_from_row(existing_row)
+            if persisted != intent:
+                raise ValueError("编辑意图 ID 已存在，不能覆盖")
+            return persisted
+        conn.execute(
+            """
+            INSERT INTO edit_intents
+                (id, workspace_id, task_id, raw_command, context_stage,
+                 selected_object_refs_json, playhead_ms, intent_type,
+                 scope_json, constraints_json, confidence, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                intent.id,
+                intent.workspace_id,
+                intent.task_id,
+                intent.raw_command,
+                intent.context_stage,
+                json.dumps(intent.selected_object_refs, ensure_ascii=False),
+                intent.playhead_ms,
+                intent.intent_type,
+                _json_object(intent.scope),
+                _json_object(intent.constraints),
+                intent.confidence,
+                intent.status,
+                intent.created_at.isoformat(),
+            ),
+        )
+        return intent
 
     def get_edit_intent(self, workspace_id: str, intent_id: str) -> EditIntent:
         with self._connect() as conn:
@@ -7728,58 +7776,62 @@ class ProductionRepository:
             ).fetchall()
         return [self._edit_intent_from_row(row) for row in rows]
 
-    def create_edit_proposal(self, proposal: EditProposal) -> EditProposal:
+    def create_edit_proposal(self, proposal: EditProposal, *, connection: sqlite3.Connection | None = None) -> EditProposal:
         _validate_new_edit_proposal(proposal)
-        with self._connect() as conn:
-            self._require_creation_task(conn, proposal.workspace_id, proposal.task_id)
-            intent_row = conn.execute(
-                """
-                SELECT 1 FROM edit_intents
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (proposal.workspace_id, proposal.task_id, proposal.intent_id),
-            ).fetchone()
-            if intent_row is None:
-                raise ValueError("编辑提案关联的意图不属于当前工作区与任务")
-            existing_row = conn.execute(
-                "SELECT * FROM edit_proposals WHERE id = ?",
-                (proposal.id,),
-            ).fetchone()
-            if existing_row is not None:
-                persisted = self._edit_proposal_from_row(existing_row)
-                if persisted != proposal:
-                    raise ValueError("编辑提案 ID 已存在，且领域字段不一致")
-                return persisted
-            conn.execute(
-                """
-                INSERT INTO edit_proposals
-                    (id, workspace_id, task_id, intent_id, summary,
-                     target_refs_json, operation_json, invalidated_refs_json,
-                     preview_json, external_effects_json, status, created_at,
-                     updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    proposal.id,
-                    proposal.workspace_id,
-                    proposal.task_id,
-                    proposal.intent_id,
-                    proposal.summary,
-                    json.dumps(proposal.target_refs, ensure_ascii=False),
-                    _json_object(proposal.operation),
-                    json.dumps(proposal.invalidated_refs, ensure_ascii=False),
-                    _json_object(proposal.preview),
-                    json.dumps(
-                        proposal.external_effects,
-                        ensure_ascii=False,
-                        default=_json_default,
-                    ),
-                    proposal.status,
-                    proposal.created_at.isoformat(),
-                    proposal.updated_at.isoformat(),
+        if connection is None:
+            with self._connect() as conn:
+                self.create_edit_proposal(proposal, connection=conn)
+            return self.get_edit_proposal(proposal.workspace_id, proposal.id)
+        conn = connection
+        self._require_creation_task(conn, proposal.workspace_id, proposal.task_id)
+        intent_row = conn.execute(
+            """
+            SELECT 1 FROM edit_intents
+            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            """,
+            (proposal.workspace_id, proposal.task_id, proposal.intent_id),
+        ).fetchone()
+        if intent_row is None:
+            raise ValueError("编辑提案关联的意图不属于当前工作区与任务")
+        existing_row = conn.execute(
+            "SELECT * FROM edit_proposals WHERE id = ?",
+            (proposal.id,),
+        ).fetchone()
+        if existing_row is not None:
+            persisted = self._edit_proposal_from_row(existing_row)
+            if persisted != proposal:
+                raise ValueError("编辑提案 ID 已存在，且领域字段不一致")
+            return persisted
+        conn.execute(
+            """
+            INSERT INTO edit_proposals
+                (id, workspace_id, task_id, intent_id, summary,
+                 target_refs_json, operation_json, invalidated_refs_json,
+                 preview_json, external_effects_json, status, created_at,
+                 updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proposal.id,
+                proposal.workspace_id,
+                proposal.task_id,
+                proposal.intent_id,
+                proposal.summary,
+                json.dumps(proposal.target_refs, ensure_ascii=False),
+                _json_object(proposal.operation),
+                json.dumps(proposal.invalidated_refs, ensure_ascii=False),
+                _json_object(proposal.preview),
+                json.dumps(
+                    proposal.external_effects,
+                    ensure_ascii=False,
+                    default=_json_default,
                 ),
-            )
-        return self.get_edit_proposal(proposal.workspace_id, proposal.id)
+                proposal.status,
+                proposal.created_at.isoformat(),
+                proposal.updated_at.isoformat(),
+            ),
+        )
+        return proposal
 
     def get_edit_proposal(
         self, workspace_id: str, proposal_id: str

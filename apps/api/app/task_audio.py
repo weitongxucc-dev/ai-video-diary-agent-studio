@@ -304,10 +304,12 @@ class TaskAudio:
 
     def publish(self, workspace_id: str, task_id: str, *, kind: str, parameters: dict,
                 input_refs: list[str], operation: str, media_input: dict,
-                suffix: str = ".wav", engine: str = "local-audio-v1") -> ArtifactRecord:
+                suffix: str = ".wav", engine: str = "local-audio-v1", execution=None) -> ArtifactRecord:
         from app.audio_timeline import bounded_audio_context, render_audio_mix, render_stretched_audio
         import shutil
-        active = TASK_MEDIA_CONTEXT.get()
+        if operation == "clip_preview" and execution is None:
+            raise ValueError("镜头预览必须显式传入原作业、操作者及许可")
+        active = execution if execution is not None else TASK_MEDIA_CONTEXT.get()
         if active is None:
             raise TaskMediaRequired(operation)
         context, job, event, actor = active
@@ -382,10 +384,9 @@ class TaskAudio:
                         media_input["rate"], media_input["duration_ms"], path, **options)
                 elif operation == "clip_preview":
                     from dataclasses import replace
-                    if self.picture_renderer is None:
-                        raise ValueError("受许可镜头预览执行器不可用")
-                    self.picture_renderer(workspace_id,task_id,media_input,path,
-                        replace(context,max_output_bytes=context.max_output_bytes-consumed))
+                    clip_context = replace(context, max_output_bytes=context.max_output_bytes-consumed)
+                    from app.media.clip_preview import render_clip_input
+                    render_clip_input(media_input, path, clip_context)
                 elif operation == "picture_preview":
                     if self.picture_renderer is None:
                         raise ValueError("受许可画面预览执行器不可用")
@@ -439,20 +440,20 @@ class TaskAudio:
                 duration = measured["duration_seconds"]
                 published = self.artifact_store.describe(logical_ref)
         context.check()
-        record = self.repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",
+        record = ArtifactRecord(id=f"artifact_{identity}",
             workspace_id=workspace_id, task_id=task_id, kind=kind, logical_ref=published.logical_ref,
             sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs,
-            created_at=job.created_at))
-        transform = self.repository.create_transform_run(TransformRun(id=f"transform_{identity}",
+            created_at=job.created_at)
+        transform = TransformRun(id=f"transform_{identity}",
             workspace_id=workspace_id, task_id=task_id, job_id=job.id, transform_type=kind,
             input_digest=identity, input_refs=input_refs, output_refs=[record.logical_ref], engine=engine,
             parameters={**parameters, "duration_ms": round(duration * 1000), "sample_rate": measured["sample_rate"], "channels": measured["channels"]}, status="succeeded",
-            started_at=job.created_at, finished_at=job.created_at))
-        for index, reference in enumerate(input_refs):
-            self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}",
+            started_at=job.created_at, finished_at=job.created_at)
+        edges = [DependencyEdge(id=f"edge_{identity}_{index}",
                 workspace_id=workspace_id, task_id=task_id, upstream_ref=reference,
-                downstream_ref=record.logical_ref, created_by_transform_id=transform.id, created_at=job.created_at))
-        return record
+                downstream_ref=record.logical_ref, created_by_transform_id=transform.id, created_at=job.created_at)
+            for index, reference in enumerate(input_refs)]
+        return self.repository.record_task_media_publication(record, transform, edges)
 
 
 # The context exists only while the sole device driver executes a persisted job.
@@ -504,10 +505,11 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None):
+    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None):
         self.repository = repository
         self.facts = facts
         self.execute_operation = execute_operation
+        self.clip_preview = clip_preview
         self.validate_result = validate_result
         self.on_settled = on_settled
         self.verify_identity = verify_identity
@@ -662,6 +664,10 @@ class TaskMediaJobs:
         if access != "ready":
             return access
         try:
+            if event["arguments"].get("_media_kind") == "clip_preview" and "_clip_preview" not in event["arguments"]:
+                if self.clip_preview is None:
+                    return "stale"
+                return "ready" if self.clip_preview.use_case.legacy_result_current(job, event, actor) else "stale"
             current, resources = self.facts(job.workspace_id, job.task_id, event["operation"], event["arguments"], actor)
         except PermissionError:
             return "unauthorized"
@@ -683,15 +689,19 @@ class TaskMediaJobs:
                    "input_facts": facts, "resources": resources, **actor.identity_payload()}
         digest = media_digest(payload)
         job_id = "job_media_" + digest
-        with self.repository._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            job = self.repository.create_job_run(JobRun(id=job_id, workspace_id=actor.workspace_id,
-                task_id=task_id, kind=TASK_MEDIA_KIND, idempotency_key=f"task-media:{task_id}:{digest}",
-                input_digest=digest), connection=conn)
-            payload["input_digest"] = digest
-            self.repository.append_task_event(TaskEvent(
-                id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,
-                event_type="task_media_submitted", payload=payload, created_at=job.created_at), connection=conn)
+        run = JobRun(id=job_id, workspace_id=actor.workspace_id, task_id=task_id, kind=TASK_MEDIA_KIND,
+            idempotency_key=f"task-media:{task_id}:{digest}", input_digest=digest)
+        payload["input_digest"] = digest
+        if "_clip_preview" in arguments:
+            job = self.repository.create_clip_preview_job(run, payload,
+                expected_version_id=arguments["_clip_preview"]["base_version_id"])
+        else:
+            with self.repository._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                job = self.repository.create_job_run(run, connection=conn)
+                self.repository.append_task_event(TaskEvent(
+                    id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,
+                    event_type="task_media_submitted", payload=payload, created_at=job.created_at), connection=conn)
         if job.status in {"queued", "interrupted"}:
             runtime.scheduler.submit(SubmissionIntent(job.workspace_id, "creation_job", job.id,
                 job.input_digest, f"task_media:{job.input_digest}", SchedulePolicy()), actor)
@@ -726,6 +736,8 @@ class TaskMediaJobs:
 
     def verify_retry(self, request, actor, reason, conn):
         job, event = self.read(request.workspace_id, request.owner_id, conn)
+        if event["arguments"].get("_media_kind") == "clip_preview" and "_clip_preview" not in event["arguments"]:
+            raise PermissionError("历史短预览仅供回读，请为当前版本提交新的独立预览请求")
         expected = "succeeded" if reason == "result_invalid" else reason
         if job.status != expected or self.check(job, event, actor) != "ready":
             raise PermissionError("只能显式重试当前成员、当前固定输入的对应终态媒体作业")
@@ -775,12 +787,17 @@ class TaskMediaJobs:
                 resources["max_output_bytes"], resources["threads"], cancellation)
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
-            context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
+            direct_clip = "_clip_preview" in event["arguments"]
+            if not direct_clip:
+                context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
             context.check()
             try:
                 result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                result = self.execute_operation(job, event, actor)
+                if direct_clip:
+                    result = self.clip_preview.execute(job, event, actor, context)
+                else:
+                    result = self.execute_operation(job, event, actor)
                 # Persist the receipt before validation; retry validates this same output.
                 self.repository.append_task_event(TaskEvent(
                     id=f"event_{job.id}_result", workspace_id=job.workspace_id, task_id=job.task_id,

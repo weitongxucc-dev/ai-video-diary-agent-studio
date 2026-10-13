@@ -523,7 +523,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
             source_end_ms=8000, timeline_start_ms=0, locked=True, fade_in_ms=400, fade_out_ms=400)])])
     plan = CreationTaskMontagePlan('montage', 'local', 'task', 'script', 'scope fixture', 'ready',
         [NarrationCue(f'cue_{index}', f'section_{index}', '', clip.timeline_end_seconds-clip.timeline_start_seconds)
-         for index, clip in enumerate(clips)], clips, at, 0, aspect_ratio='1:1', audio_timeline=graph,
+         for index, clip in enumerate(clips)], clips, at, 0, aspect_ratio='1:1', audio_timeline=graph, narration_audio_path=references[1],
         graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3},
                           {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
     payload = creation_task_montage_plan_to_payload(plan)
@@ -537,6 +537,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
     payload = repo.get_creation_task_montage_plan('local', 'task')
     repo.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
+    monkeypatch.setattr(main, 'clip_preview_budget_from_env', main.cpu_render_budget_from_env)
     store = ArtifactStore(tmp_path/'output')
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', store)
@@ -565,7 +566,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     runtime.scheduler.processes = HostProcessProbe()
     runtime.scheduler.resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 0, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=main.cpu_render_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()))
+        cpu_render=main.cpu_render_budget_from_env(), clip_preview=main.clip_preview_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()))
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 
@@ -743,11 +744,11 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
         return {'artifact_id':record.id}
     original_transform=repo.create_transform_run
     attempts={'count':0}
-    def transform(value):
+    def transform(value, **kwargs):
         attempts['count']+=1
         if attempts['count']==1:
             raise ValueError('synthetic crash after immutable artifact receipt')
-        return original_transform(value)
+        return original_transform(value, **kwargs)
     monkeypatch.setattr(repo,'create_transform_run',transform)
     media.execute_operation=operation
     runtime=build(media)
@@ -755,6 +756,8 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
+    assert repo.list_artifact_records('local','task') == []
+    assert repo.list_transform_runs('local','task') == []
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
