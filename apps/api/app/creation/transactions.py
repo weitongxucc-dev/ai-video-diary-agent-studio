@@ -76,14 +76,14 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
         subtitle_tracks, cover_asset, narration_segments, narration_artifact)
 
 
-def commit_change_set(repository, change: EditChangeSet, *, connection=None):
+def commit_change_set(repository, change: EditChangeSet, *, connection=None, verify_sources=None):
     """The repository owns the CAS and all cross-track writes, including grant checkpoints."""
     operation = change.operation
     return repository.confirm_edit_proposal(operation.workspace_id, operation.task_id, operation.proposal_id,
         operation=operation, result_version=change.version, montage_plan_id=change.montage_plan_id,
         montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks,
         cover_asset=change.cover_asset, narration_segments=change.narration_segments,
-        narration_artifact=change.narration_artifact, connection=connection)
+        narration_artifact=change.narration_artifact, connection=connection, verify_sources=verify_sources)
 
 
 def commit_direct_change(repository, command, intent, proposal, change, *, verify_sources):

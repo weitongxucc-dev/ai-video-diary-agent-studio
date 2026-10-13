@@ -8,7 +8,7 @@ from app.canvas import preview_size
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import (content_readable, material_allows_footage, material_segment_eligible, effective_segment_usage_role)
-from app.creation.contracts import (EditIntent, EditProposal)
+from app.creation.contracts import (EditIntent, EditProposal, EditCommand)
 from app.visual_effects import VisualEffects, with_visual_effects, fade_filters, clip_playback_rate
 
 
@@ -125,6 +125,19 @@ class ClipPreviewUseCase:
         source = command.source
         if source is not None and job is not None:
             source = {**source, "media_job_id":job.id, "actor_identity":actor.identity_payload()}
+        from copy import deepcopy
+        from app.creation.editing.sources import EditSourceVerifier
+        candidate = deepcopy(plan)
+        changed = {clip.id:clip for clip in after}
+        candidate.clips = [changed.get(clip.id, clip) for clip in candidate.clips]
+        action = ({'clip_ids':command.clip_ids, 'effects':command.values} if command.operation_type == 'AdjustVisualEffects'
+            else {'clip_id':command.clip_ids[0], **command.values})
+        metadata = EditCommand(actor.workspace_id, command.task_id,
+            {'member_id':actor.user_id or actor.member_id, 'local_diagnostic':False}, command.base_version_id,
+            command.operation_type, action, source)
+        verifier = EditSourceVerifier(self.repository, identity=metadata.actor_identity)
+        metadata = verifier.bind_affected(metadata, plan, candidate)
+        source_scope = verifier.scope_payload(metadata)
         now = job.created_at if job is not None else utc_now()
         suffix = job.id if job is not None else uuid4().hex
         intent = EditIntent(id=f"intent_clip_{suffix}", workspace_id=actor.workspace_id, task_id=task.id,
@@ -132,7 +145,8 @@ class ClipPreviewUseCase:
             context_stage="montage", selected_object_refs=refs, playhead_ms=round(before[0].timeline_start_seconds * 1000),
             intent_type="visual_adjustment" if command.operation_type == "AdjustVisualEffects" else "exact_montage_edit",
             scope={"kind":"clips", "clip_ids":command.clip_ids},
-            constraints={"preserve_timing":True, "preserve_audio":True, **({"request_source":source} if source else {})},
+            constraints={"preserve_timing":True, "preserve_audio":True, "affected_source_scope":source_scope,
+                **({"request_source":source} if source else {})},
             confidence=1, status="interpreted", created_at=now)
         labels = {"AdjustVisualEffects":f"调整 {len(before)} 个镜头的画面效果", "ChangeCrop":"调整画面适配", "ChangeClipSpeed":"改变画面速度，保留成片时长、声音和字幕"}
         if command.operation_type == "AdjustVisualEffects":
@@ -148,6 +162,10 @@ class ClipPreviewUseCase:
         for side, record in zip(("before", "after"), records):
             previews[side].update(ref=record.logical_ref, video_url=f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}",
                 detail=f"仅预览代表镜头 {plan.clips.index(before[0])+1} 的开头（最多 5 秒，静音画面，不含字幕和图层）；未覆盖相邻转场。确认将应用到 {len(before)} 个指定镜头，不改变声音和时长。")
+        if command.operation_type in {'ChangeCrop', 'ChangeClipSpeed'}:
+            from app.creation.editing.metadata import describe_clip_settings
+            for side, clip in (('before', before[0]), ('after', after[0])):
+                previews[side]['detail'] = describe_clip_settings(clip, plan.clips, command.operation_type)
         invalidated = [ref for ref in (plan.output_path, plan.subtitle_path) if ref]
         if any(Path(ref).is_absolute() or ".." in Path(ref).parts for ref in invalidated):
             raise ClipPreviewConflict("当前成片仍使用迁移前的文件引用，不能建立可撤销修改")

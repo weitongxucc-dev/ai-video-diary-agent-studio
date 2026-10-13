@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from app.models import Episode, EpisodeStatus, utc_now
 from app.speech_timing import estimate_speech_seconds
-from app.avatar_lipsync import profile_use_failure, profile_cache_identity, PronunciationEntry, VoiceProfile as VersionedVoiceProfile
+from app.profiles.contracts import (profile_use_failure, profile_cache_identity, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.production import ProductionProfile, VoiceProfile
 from app.voice_clone import (
     MediaRuntimeFailure,

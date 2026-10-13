@@ -58,19 +58,8 @@ from app.canvas import canvas_size
 from app.subtitle_style import validate_style_patch, compile_subtitle_style_command
 from app.subtitle_edits import merge_linked_subtitle_tracks, replace_subtitle_text, restructure_subtitle, normalize_subtitle_text_and_breaks, update_subtitle_cue
 from app.subtitle_schedule import subtitle_schedule, narration_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
-from app.avatar_lipsync import (
-    compile_person_edit_command,
-    Authorization,
-    AvatarAndLipSyncService,
-    AvatarPreviewService,
-    PersonProfile,
-    ProfileReference,
-    PronunciationEntry,
-    VoiceProfile as VersionedVoiceProfile,
-    avatar_lipsync_cache_key,
-    profile_use_failure,
-    avatar_lipsync_provider_from_settings,
-)
+from app.avatar_lipsync import (compile_person_edit_command, AvatarAndLipSyncService, AvatarPreviewService, avatar_lipsync_cache_key, avatar_lipsync_provider_from_settings)
+from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, PronunciationEntry, VoiceProfile as VersionedVoiceProfile, profile_use_failure)
 from app.auth import (
     AuthPrincipal,
     ForbiddenError,
@@ -88,9 +77,10 @@ from app.media.clip_preview import ClipPreviewExecutor
 from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_picture_metadata,
     apply_audio_metadata, prepare_picture_command, prepare_audio_command, metadata_request_identity,
     prepare_clip_command, apply_clip_proposal, prepare_subtitle_display_command)
-from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, ClipPreviewConflict
+from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.sources import EditSourceVerifier
+from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import (subtitle_display_selection, apply_subtitle_cue)
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
@@ -9949,19 +9939,31 @@ def _validate_edit_graphic_sources(workspace_id, task_id, overlays):
             resolve_graphic_source(production_repo, artifact_store, workspace_id, task_id, overlay['source_ref'])
 
 
+def _bind_affected_source_command(verifier, command, before, after):
+    try:
+        return verifier.bind_affected(command, before, after)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def _edit_clip_source_bounds(task, request, clip):
-    if clip.person_render_id:
-        person = production_repo.get_person_render(task.workspace_id, task.id, clip.person_render_id)
-        if person.status != 'ready' or person.duration_seconds is None:
-            raise EditConflict('人物口型片段不可用，请重新生成')
-        return 0., person.duration_seconds, True
-    asset = production_repo.get_asset(task.workspace_id, clip.asset_id)
-    segment = next((item for item in asset.segments if item.id == clip.segment_id), None)
-    if not _content_visible(request, task.workspace_id, asset.visibility, asset.owner_user_id):
-        raise PermissionError('当前成员无权使用该素材')
-    if segment is None or not material_segment_eligible(asset, segment, task.workspace_id):
-        raise EditConflict('素材片段当前不可用，请检查来源、范围和使用限制')
-    return segment.start_seconds, segment.end_seconds, effective_segment_usage_role(asset, segment) == 'a_roll'
+    identity, diagnostic = _content_reader(request, task.workspace_id)
+    selection = production_repo.resolve_edit_clip_source(task.workspace_id, task.id, clip, {},
+        user_id=identity, local_diagnostic=diagnostic)
+    return selection.start_seconds, selection.end_seconds, selection.is_speech
+
+
+def _resolve_edit_clip_source(task, request, clip, values):
+    identity, diagnostic = _content_reader(request, task.workspace_id)
+    return production_repo.resolve_edit_clip_source(task.workspace_id, task.id, clip, values,
+        user_id=identity, local_diagnostic=diagnostic)
+
+
+def _link_reordered_edit(task, candidate):
+    linkage, tracks = _apply_reorder_narration_linkage(task.workspace_id, task, candidate)
+    return tracks, linkage
 
 
 def _preview_metadata_settings(task, request, operation_type, values, base_version_id):
@@ -9972,12 +9974,18 @@ def _preview_metadata_settings(task, request, operation_type, values, base_versi
     try:
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
         if operation_type in CLIP_SETTING_OPERATIONS:
-            pair, _changed = prepare_clip_command(task, plan, command,
-                source_bounds=lambda clip:_edit_clip_source_bounds(task, request, clip))
+            pair, _changed, _tracks, _linkage = prepare_clip_command(task, plan, command,
+                resolve_source=lambda clip, values:_resolve_edit_clip_source(task, request, clip, values),
+                link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
         else:
             pair, _changed = prepare_picture_command(task, plan, command,
                 validate_graphic_sources=lambda overlays:_validate_edit_graphic_sources(task.workspace_id, task.id, overlays))
         intent, proposal = pair
+        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
+        command = _bind_affected_source_command(verifier, command, plan, _changed)
+        intent = replace(intent, constraints={**intent.constraints,
+            'affected_source_scope':verifier.scope_payload(command)})
+
         proposal = replace(proposal, invalidated_refs=_logical_montage_output_refs(plan))
         return _edit_preview_response(*production_repo.save_clip_preview_proposal(intent, proposal,
             expected_version_id=base_version_id))
@@ -10022,7 +10030,7 @@ def _save_direct_metadata_edit(task_id, request, payload):
     if set(values) - EXACT_EDIT_FIELDS[clean.operation_type]:
         raise HTTPException(status_code=422, detail='精确编辑不能混入其他操作')
     required = EXACT_MONTAGE_REQUIRED_FIELDS.get(clean.operation_type, set()) | (
-        {'clip_id'} if clean.operation_type in CLIP_SETTING_OPERATIONS else set())
+        {'clip_id'} if clean.operation_type in CLIP_METADATA_OPERATIONS else set())
     if any(values.get(key) is None for key in required):
         raise HTTPException(status_code=422, detail='exact edit is missing required values')
 
@@ -10038,9 +10046,10 @@ def _save_direct_metadata_edit(task_id, request, payload):
         if command.operation_type == 'ConfigureSubtitleTrack':
             tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
             (intent, proposal), changed, edited_tracks = prepare_subtitle_display_command(task, plan, tracks, command)
-        elif command.operation_type in CLIP_SETTING_OPERATIONS:
-            (intent, proposal), changed = prepare_clip_command(task, plan, command,
-                source_bounds=lambda clip:_edit_clip_source_bounds(task, request, clip))
+        elif command.operation_type in CLIP_METADATA_OPERATIONS:
+            (intent, proposal), changed, edited_tracks, _linkage = prepare_clip_command(task, plan, command,
+                resolve_source=lambda clip, values:_resolve_edit_clip_source(task, request, clip, values),
+                link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
         elif command.operation_type in PICTURE_METADATA_OPERATIONS:
             (intent, proposal), changed = prepare_picture_command(task, plan, command,
                 validate_graphic_sources=lambda overlays:_validate_edit_graphic_sources(workspace_id, task_id, overlays))
@@ -10050,6 +10059,7 @@ def _save_direct_metadata_edit(task_id, request, payload):
                 edit=_audio_mix_request(clean, base.id), validate_sources=lambda graph, duration:
                     _task_audio().validate(workspace_id, task_id, graph, duration, draft_only=True))
         proposal = replace(proposal, invalidated_refs=_logical_montage_output_refs(plan))
+        command = _bind_affected_source_command(source_verifier, command, plan, changed)
         _prepare_changed_montage(changed, message='修改已保存到草稿；明确生成后更新成片。')
         result = _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=changed, operation_type=command.operation_type,
@@ -10216,6 +10226,8 @@ def _persist_typed_montage_edit(
     direct_command=None,
     direct_intent=None,
     direct_source_verifier=None,
+    proposal_source_command=None,
+    proposal_source_verifier=None,
 ) -> CreationTaskEditConfirmResponse:
     try:
         dissolve_frames(updated_plan.clips)
@@ -10277,7 +10289,13 @@ def _persist_typed_montage_edit(
     try:
         _confirmed, persisted_operation, _version, _task = (commit_direct_change(
             production_repo, direct_command, direct_intent, proposal, change, verify_sources=direct_source_verifier.verify) if direct_intent is not None else
-            commit_change_set(production_repo, change, connection=connection))
+            commit_change_set(production_repo, change, connection=connection,
+                verify_sources=(lambda conn:proposal_source_verifier.verify(proposal_source_command, conn))
+                if proposal_source_verifier is not None else None))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail='修改来源已失效，请重新预览') from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if connection is not None:
@@ -10944,25 +10962,11 @@ def _preview_selected_crop(task_id: str, request: Request, payload: CreationTask
 
 
 def _reorder_montage_plan(workspace_id: str, task, plan, new_order: list[str], *, link_narration: bool):
-    current_order = [clip.id for clip in plan.clips]
-    if len(new_order) != len(current_order) or set(new_order) != set(current_order):
-        raise HTTPException(status_code=409, detail="排序目标与当前镜头不一致，请重新预览。")
-    if plan.status == "rendering":
-        raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
-    by_id = {clip.id: clip for clip in plan.clips}
-    cursor = 0.0
-    for index, clip_id in enumerate(new_order):
-        clip = by_id[clip_id]
-        if clip.locked and (current_order.index(clip_id) != index or abs(round(cursor, 3) - clip.timeline_start_seconds) > .001):
-            raise HTTPException(status_code=409, detail="本次排序会移动已锁定镜头，请先解锁受影响的镜头。")
-        cursor += clip.timeline_end_seconds - clip.timeline_start_seconds
-    plan.clips = [by_id[clip_id] for clip_id in new_order]
-    cursor = 0.0
-    for clip in plan.clips:
-        duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-        clip.timeline_start_seconds = round(cursor, 3)
-        clip.timeline_end_seconds = round(cursor + duration, 3)
-        cursor += duration
+    try:
+        changed = reorder_picture(plan, new_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    plan.clips = changed.clips
     if link_narration:
         linkage, tracks = _apply_reorder_narration_linkage(workspace_id, task, plan)
         return tracks, linkage
@@ -11048,11 +11052,16 @@ def _preview_timeline_reorder(task, request: Request, payload, change):
         raise HTTPException(status_code=409, detail="人物镜头换位须联动对应配音和字幕，与保持配音时轴不变的要求冲突。")
     summary = (f"交换第{source + 1}和第{destination + 1}个镜头" if kind == "swap" else f"将第{source + 1}个镜头移动到第{destination + 1}个位置")
     summary += "；总时长保持不变；" + ("人物镜头的配音和字幕按来源一并移动。" if linkage else "配音和字幕时轴保持不变。")
+    source_command = _metadata_edit_command(task, request, 'ReorderTimelineItems',
+        {'base_version_id':base.id, 'target_clip_ids':target_ids, 'new_order':new_order}, source=EXACT_EDIT_SOURCE.get())
+    verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
+    source_command = _bind_affected_source_command(verifier, source_command, plan, candidate)
+    source_scope = verifier.scope_payload(source_command)
     intent = production_repo.create_edit_intent(EditIntent(
         id=f"intent_{uuid4().hex}", workspace_id=workspace_id, task_id=task.id, raw_command=payload.raw_command,
         context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms,
         intent_type="trim_or_reorder", scope={"target_refs": [f"clip:{item}" for item in target_ids]},
-        constraints={"preserve_duration": True, "linked_narration": link_narration}, confidence=1, status="interpreted"))
+        constraints={**{"preserve_duration": True, "linked_narration": link_narration}, 'affected_source_scope':source_scope}, confidence=1, status="interpreted"))
     proposal = production_repo.create_edit_proposal(EditProposal(
         id=f"proposal_{uuid4().hex}", workspace_id=workspace_id, task_id=task.id, intent_id=intent.id,
         summary=summary, target_refs=[f"clip:{item}" for item in target_ids],
@@ -11941,6 +11950,15 @@ def _preview_replacement_clip(task, request: Request, payload: CreationTaskEditP
     base_version = _ensure_montage_base_version(workspace_id, task, plan)
     replacement = candidates[0]
     now = utc_now()
+    source_command = _metadata_edit_command(task, request, 'ReplaceClip',
+        {'base_version_id':base_version.id, 'clip_id':clip.id, 'asset_id':replacement.asset_id,
+         'segment_id':replacement.segment_id, 'source_start_seconds':replacement.start_seconds}, source=EXACT_EDIT_SOURCE.get())
+    changed, _tracks, _linkage = apply_clip_patch(plan, clip.id, source_command.values,
+        resolve_source=lambda target, values:_resolve_edit_clip_source(task, request, target, values),
+        link_reordered=lambda target:_link_reordered_edit(task, target))
+    verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
+    source_command = _bind_affected_source_command(verifier, source_command, plan, changed)
+    source_scope = verifier.scope_payload(source_command)
     intent = production_repo.create_edit_intent(
         EditIntent(
             id=f"intent_{uuid4().hex}",
@@ -11952,11 +11970,11 @@ def _preview_replacement_clip(task, request: Request, payload: CreationTaskEditP
             playhead_ms=payload.playhead_ms,
             intent_type="replace_visual",
             scope={"kind": "clip", "clip_id": clip.id},
-            constraints={
+            constraints={**{
                 "preserve_narration": True,
                 "preserve_timing": True,
                 "material_query": material_constraint or None,
-            },
+            }, 'affected_source_scope':source_scope},
             confidence=0.95,
             status="interpreted",
             created_at=now,
@@ -12547,10 +12565,16 @@ def _confirm_creation_task_edit(
         if link_narration != operation_payload["link_narration"]:
             raise HTTPException(status_code=409, detail="人物镜头关联已变化，请重新预览。")
         tracks, linkage = _reorder_montage_plan(workspace_id, task, plan, new_order, link_narration=link_narration)
+        bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+        if bound is None:
+            raise HTTPException(status_code=409, detail='原排序提案未封存来源范围，请为当前版本重新预览')
+        source_command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
+        source_command = EditSourceVerifier.restore_scope(source_command, bound)
+        verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
         _prepare_changed_montage(plan, message="整组镜头排序已保存；一次撤销可恢复，重新生成后播放新成片。")
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id),
-            updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+            updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
     if operation_type == "ChangePresenterShare" and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已变化，请重新预览露脸比例")
@@ -12595,18 +12619,30 @@ def _confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=candidate,
             operation_type="EditCompoundTimeline",operation_payload=operation_payload,edited_subtitle_tracks=changed_tracks)
-    if operation_type in CLIP_SETTING_OPERATIONS and isinstance(operation_payload, dict):
+    if operation_type in CLIP_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         try:
-            changed = apply_clip_proposal(task, montage, command,
-                source_bounds=lambda clip:_edit_clip_source_bounds(task, request, clip))
+            changed, edited_tracks, _linkage = apply_clip_proposal(task, montage, command,
+                resolve_source=lambda clip, values:_resolve_edit_clip_source(task, request, clip, values),
+                link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+        if bound is not None:
+            command = EditSourceVerifier.restore_scope(command, bound)
+            verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
+        else:
+            selected = set(command.values.get('clip_ids') or ([command.values['clip_id']] if command.values.get('clip_id') else []))
+            if not set(affected_source_clip_ids(montage, changed)) <= selected:
+                raise HTTPException(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
+            verifier = EditSourceVerifier(production_repo, identity=command.actor_identity) if command.source is not None else None
         _prepare_changed_montage(changed, message='镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。')
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=production_repo.get_timeline_version(workspace_id, command.base_version_id),
-            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload)
+            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
     if operation_type in PICTURE_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
@@ -12615,12 +12651,21 @@ def _confirm_creation_task_edit(
                 validate_graphic_sources=lambda overlays: _validate_edit_graphic_sources(workspace_id, task_id, overlays))
         except (EditConflict, ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+        if bound is not None:
+            command = EditSourceVerifier.restore_scope(command, bound)
+            verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
+        else:
+            selected = set(command.values.get('clip_ids') or ([command.values['clip_id']] if command.values.get('clip_id') else []))
+            if not set(affected_source_clip_ids(montage, changed)) <= selected:
+                raise HTTPException(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
+            verifier = EditSourceVerifier(production_repo, identity=command.actor_identity) if command.source is not None else None
         messages = {"EditGraphicOverlay":"图文已更新，可以重新渲染。",
             "SetClipTransition":"转场已更新，配音与字幕时轴不变。", "AdjustVisualEffects":"画面效果已更新，可以重新渲染。"}
         _prepare_changed_montage(changed, message=messages[operation_type])
         base = production_repo.get_timeline_version(workspace_id, command.base_version_id)
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
-            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload)
+            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
     if operation_type == "EditAudioTimeline" and isinstance(operation_payload, dict):
         if task.current_timeline_version_id != operation_payload.get("base_version_id"):
             raise HTTPException(status_code=409, detail="时间线已经变化，不能确认旧的音频提案")
@@ -13255,79 +13300,7 @@ def _confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=updated, operation_type=operation_type,
             operation_payload=operation_payload, edited_subtitle_tracks=tracks)
-    if operation_draft.get("operation_type") not in {"ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"} or not isinstance(operation_payload, dict):
-        raise HTTPException(status_code=409, detail="unsupported creation task edit operation")
-    required_strings = {
-        key: operation_payload.get(key)
-        for key in (
-            "clip_id",
-            "expected_asset_id",
-            "expected_segment_id",
-            "base_version_id",
-        )
-    }
-    if any(not isinstance(value, str) or not value for value in required_strings.values()):
-        raise HTTPException(status_code=409, detail="invalid creation task edit operation")
-    if task.current_timeline_version_id != required_strings["base_version_id"]:
-        raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
-    try:
-        base_version = production_repo.get_timeline_version(
-            workspace_id, required_strings["base_version_id"]
-        )
-        plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-        )
-        current_clip = next(
-            item for item in plan.clips if item.id == required_strings["clip_id"]
-        )
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=409, detail="creation task edit base no longer exists") from exc
-    if (current_clip.asset_id, current_clip.segment_id) != (
-        required_strings["expected_asset_id"],
-        required_strings["expected_segment_id"],
-    ):
-        raise HTTPException(status_code=409, detail="creation task edit target has changed")
-    operation_type = operation_draft["operation_type"]
-    if operation_type == "ReplaceClip" and operation_payload.get("automation_only"):
-        viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-        candidate = next((item for item in _creation_task_montage_candidates(workspace_id, plan, current_clip,
-            automation_only=True, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-            if (item.asset_id, item.segment_id) == (operation_payload.get("asset_id"), operation_payload.get("segment_id"))
-            and (item.asset_id, item.segment_id) != (current_clip.asset_id, current_clip.segment_id)
-            and item.end_seconds - item.start_seconds + 1e-6 >= (current_clip.timeline_end_seconds - current_clip.timeline_start_seconds) * clip_playback_rate(current_clip)), None)
-        if candidate is None:
-            raise HTTPException(status_code=409, detail="替换候选已不可用于自动选片，请重新查找并预览。")
-    update = CreationTaskMontageClipUpdateRequest(
-        split_time_seconds=operation_payload.get("split_time_seconds") if operation_type == "SplitClip" else None,
-        asset_id=operation_payload.get("asset_id") if operation_type == "ReplaceClip" else None,
-        segment_id=operation_payload.get("segment_id") if operation_type == "ReplaceClip" else None,
-        source_start_seconds=operation_payload.get("source_start_seconds") if operation_type in {"ReplaceClip", "TrimClip"} else None,
-        position=operation_payload.get("position") if operation_type == "ReorderClip" else None,
-        confirmed=True if operation_type == "ReplaceClip" else None,
-    )
-    updated_plan, edited_subtitle_tracks, linkage = _apply_creation_task_montage_clip_update(
-        workspace_id,
-        task_id,
-        plan,
-        required_strings["clip_id"],
-        update,
-        request=request,
-    )
-    updated_plan, _payload = _prepare_changed_montage(
-        updated_plan,
-        message=("镜头顺序已更新；该人物镜头的配音与字幕已按来源一并移动，可以重新渲染。"
-            if linkage else "镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。"),
-    )
-    return _persist_typed_montage_edit(
-        workspace_id=workspace_id,
-        task=task,
-        proposal=proposal,
-        base_version=base_version,
-        updated_plan=updated_plan,
-        operation_type=operation_draft["operation_type"],
-        operation_payload=dict(operation_payload),
-        edited_subtitle_tracks=edited_subtitle_tracks,
-    )
+    raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 
 @app.get("/api/creation-tasks/{task_id}/assistant/edit-capabilities")
@@ -13668,7 +13641,7 @@ def apply_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditConfirmResponse:
-    if payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_SETTING_OPERATIONS or (
+    if payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS or (
             payload.operation_type == "EditAudioTimeline" and payload.audio_edit.action in {"update", "track"}) or (
             payload.operation_type == "ConfigureSubtitleTrack" and payload.subtitle_display is not None):
         return _save_direct_metadata_edit(task_id, request, payload)
@@ -13928,10 +13901,16 @@ def _preview_transition(task_id: str, request: Request, payload: CreationTaskExa
     if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
         raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览转场")
     refs=[f"clip:{clip.id}" for clip in targets]
+    source_command = _metadata_edit_command(task, request, 'SetClipTransition',
+        {'base_version_id':base.id, 'clip_id':payload.clip_id, 'transition_seconds':payload.transition_seconds},
+        source=EXACT_EDIT_SOURCE.get())
+    source_verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
+    source_command = _bind_affected_source_command(source_verifier, source_command, plan, edited)
+    source_scope = source_verifier.scope_payload(source_command)
     intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
         raw_command=f"叠化{payload.transition_seconds:g}秒",context_stage="montage",selected_object_refs=refs,
         playhead_ms=round(targets[1].timeline_start_seconds*1000),intent_type="transition",scope={"kind":"clips","clip_ids":[clip.id for clip in targets]},
-        constraints={"preserve_timing":True,"preserve_audio":True},confidence=1,status="interpreted"))
+        constraints={"preserve_timing":True,"preserve_audio":True,"affected_source_scope":source_scope},confidence=1,status="interpreted"))
     proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
         summary=f"镜头 {index} → {index+1}："+(f"叠化 {payload.transition_seconds:g} 秒" if payload.transition_seconds else "硬切"),target_refs=refs,
         operation={"operation_type":"SetClipTransition","payload":{"base_version_id":base.id,"clip_id":payload.clip_id,
@@ -14539,6 +14518,12 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
     if linkage:
         after_detail = "\n".join([after_detail, *_linkage_lines(linkage)])
     now = utc_now()
+    source_command = _metadata_edit_command(task, request, payload.operation_type,
+        {'base_version_id':base_version.id, 'clip_id':payload.clip_id,
+         **{key:value for key,value in supplied.items() if value is not None}}, source=EXACT_EDIT_SOURCE.get())
+    source_verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
+    source_command = _bind_affected_source_command(source_verifier, source_command, persisted_plan, plan)
+    source_scope = source_verifier.scope_payload(source_command)
     intent = production_repo.create_edit_intent(
         EditIntent(
             id=f"intent_{uuid4().hex}",
@@ -14550,7 +14535,7 @@ def _preview_exact_montage_edit(task_id: str, request: Request, payload: Creatio
             playhead_ms=round(after_clip.timeline_start_seconds * 1000),
             intent_type="exact_montage_edit",
             scope={"kind": "clip", "clip_id": payload.clip_id},
-            constraints={"preserve_narration": True},
+            constraints={"preserve_narration": True, "affected_source_scope":source_scope},
             confidence=1.0,
             status="interpreted",
             created_at=now,
@@ -14830,120 +14815,27 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
     )
 
 
-def _apply_creation_task_montage_clip_update(
-    workspace_id: str,
-    task_id: str,
-    plan: CreationTaskMontagePlan,
-    clip_id: str,
-    payload: CreationTaskMontageClipUpdateRequest,
-    *,
-    request: Request,
-) -> CreationTaskMontagePlan:
+def _apply_creation_task_montage_clip_update(workspace_id, task_id, plan, clip_id, payload, *, request):
+    identity, diagnostic = _content_reader(request, workspace_id)
+    task = production_repo.get_creation_task(workspace_id, task_id)
     try:
-        clip = next(item for item in plan.clips if item.id == clip_id)
-    except StopIteration as exc:
-        raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    if plan.status == "rendering":
-        raise HTTPException(status_code=409, detail="rendering montage cannot be edited")
-    if payload.split_time_seconds is not None:
-        if clip.locked:
-            raise HTTPException(status_code=409, detail="请先解锁镜头，再分割。")
-        at = round(payload.split_time_seconds, 3)
-        if min(at - clip.timeline_start_seconds, clip.timeline_end_seconds - at) < 0.04:
-            raise HTTPException(status_code=422, detail="分割点须在镜头内，两侧至少保留0.04秒。")
-        effects = VisualEffects.model_validate(clip.visual_effects)
-        source_at = round(clip.source_start_seconds + (at - clip.timeline_start_seconds) * clip_playback_rate(clip), 3)
-        second = replace(clip, id=f"clip_{uuid4().hex[:12]}", source_start_seconds=source_at,
-            timeline_start_seconds=at, transition_in_seconds=0)
-        if effects.fade_in_seconds or effects.fade_out_seconds:
-            envelope=clip.fade_envelope_duration_frames
-            if envelope is None:
-                envelope=round(clip.timeline_end_seconds*30)-round(clip.timeline_start_seconds*30)
-            second.fade_envelope_duration_frames=clip.fade_envelope_duration_frames=envelope
-            second.fade_envelope_offset_frames=clip.fade_envelope_offset_frames+(round(at*30)-round(clip.timeline_start_seconds*30))*clip.fade_envelope_rate
-        clip.source_end_seconds = source_at
-        clip.timeline_end_seconds = at
-        plan.clips.insert(plan.clips.index(clip) + 1, second)
-        _refresh_montage_review_state(plan)
-        return plan, None, None
-    if clip.locked and any(value is not None for value in (
-        payload.fit_mode, payload.crop_x, payload.crop_y, payload.asset_id,
-        payload.segment_id, payload.source_start_seconds, payload.position, payload.playback_rate,
-    )):
-        raise HTTPException(status_code=409, detail="请先解锁镜头，再修改素材、裁剪或位置。")
-    replacing_material = payload.asset_id is not None or payload.segment_id is not None
-    if clip.person_render_id and not replacing_material:
-        render = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
-        if render.status != "ready" or render.duration_seconds is None:
-            raise HTTPException(status_code=409, detail="人物口型片段不可用，请重新生成")
-        source_min, source_max = 0.0, render.duration_seconds
-        asset = segment = None
-    else:
-        asset_id = payload.asset_id or clip.asset_id
-        segment_id = payload.segment_id or clip.segment_id
-        try:
-            asset = production_repo.get_asset(workspace_id, asset_id)
-            segment = next(item for item in asset.segments if item.id == segment_id)
-        except (KeyError, StopIteration) as exc:
-            raise HTTPException(status_code=404, detail="material segment not found") from exc
-        if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
-            raise HTTPException(status_code=403, detail="当前成员无权使用该素材")
-        if not material_segment_eligible(asset, segment, workspace_id):
-            raise HTTPException(status_code=409, detail="素材片段当前不可用，请检查来源、范围和使用限制")
-        source_min, source_max = segment.start_seconds, segment.end_seconds
-    slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-    source_start = (
-        payload.source_start_seconds
-        if payload.source_start_seconds is not None
-        else max(source_min, clip.source_start_seconds) if not replacing_material else source_min
-    )
-    rate = payload.playback_rate if payload.playback_rate is not None else clip_playback_rate(clip)
-    if abs(rate - 1) > .001 and (clip.person_render_id or (asset is not None and effective_segment_usage_role(asset, segment) == "a_roll")):
-        raise HTTPException(status_code=409, detail="人物口型镜头不能只改变画面速度；请调整配音后重新对口型。")
-    source_end = source_start + slot_duration * rate
-    if source_start < source_min - 1e-6 or source_end > source_max + 1e-6:
-        raise HTTPException(status_code=400, detail=f"当前镜头需保留 {slot_duration:.1f} 秒，裁剪起点须在 {source_min:.1f}–{max(source_min, source_max - slot_duration * rate):.1f} 秒之间。")
-    if payload.asset_id is not None or payload.segment_id is not None:
-        assert asset is not None and segment is not None
-        clip.asset_id = asset.id
-        clip.segment_id = segment.id
-        clip.source_path = production_repo.workspace_media_reference_for_asset(
-            workspace_id, asset.id
-        )
-        clip.role = (
-            "a_roll"
-            if effective_segment_usage_role(asset, segment) == "a_roll"
-            else "b_roll"
-        )
-        clip.match_reasons = ["由用户替换", "当前工作区可用素材"]
-        clip.match_score = 1.0
-        clip.manually_selected = True
-        clip.person_render_id = None
-    clip.source_start_seconds = round(source_start, 3)
-    clip.source_end_seconds = round(source_end, 3)
-    if payload.locked is not None:
-        clip.locked = payload.locked
-    if payload.fit_mode is not None:
-        clip.fit_mode = payload.fit_mode
-    if payload.crop_x is not None:
-        clip.crop_x = payload.crop_x
-    if payload.crop_y is not None:
-        clip.crop_y = payload.crop_y
-    if payload.confirmed is True or payload.asset_id is not None or payload.segment_id is not None:
-        clip.needs_confirmation = False
-    edited_tracks: list[SubtitleTrack] | None = None
-    linkage: list[dict[str, object]] | None = None
-    if payload.position is not None:
-        current_index = plan.clips.index(clip)
-        target_index = min(payload.position, len(plan.clips) - 1)
-        if current_index != target_index:
-            new_order = [item.id for item in plan.clips]
-            new_order.insert(target_index, new_order.pop(current_index))
-            edited_tracks, linkage = _reorder_montage_plan(workspace_id,
-                production_repo.get_creation_task(workspace_id, task_id), plan, new_order,
-                link_narration=bool(clip.person_render_id))
-    _refresh_montage_review_state(plan)
-    return plan, edited_tracks, linkage
+        edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True),
+            resolve_source=lambda clip, values:production_repo.resolve_edit_clip_source(workspace_id, task_id,
+                clip, values, user_id=identity, local_diagnostic=diagnostic),
+            link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TimelineVersionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ClipPreviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        status = 422 if payload.split_time_seconds is not None else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    _refresh_montage_review_state(edited)
+    return edited, tracks, linkage
 
 
 @app.patch(

@@ -21,16 +21,9 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
-from app.avatar_lipsync import (
-    Authorization,
-    AvatarAndLipSyncRequest,
-    PersonProfile,
-    ProfileReference,
-    profile_use_failure,
-    _as_utc,
-    PronunciationEntry,
-    VoiceProfile as VersionedVoiceProfile,
-)
+from app.avatar_lipsync import (AvatarAndLipSyncRequest)
+from app.creation.contracts import ClipSourceSelection
+from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
     LOCAL_ADOPTION_RECEIPTS_DDL,
@@ -7647,6 +7640,28 @@ class ProductionRepository:
                 raise ValueError("编辑提案已被其他操作转换")
         return self.get_edit_proposal(workspace_id, proposal_id)
 
+    def resolve_edit_clip_source(self, workspace_id, task_id, clip, values, *, user_id, local_diagnostic):
+        replacing = values.get("asset_id") is not None or values.get("segment_id") is not None
+        if clip.person_render_id and not replacing:
+            render = self.get_person_render(workspace_id, task_id, clip.person_render_id)
+            if render.status != "ready" or render.duration_seconds is None:
+                raise TimelineVersionConflict("人物口型片段不可用，请重新生成")
+            return ClipSourceSelection(0., render.duration_seconds, True)
+        asset = self.get_asset(workspace_id, values.get("asset_id") or clip.asset_id)
+        segment_id = values.get("segment_id") or clip.segment_id
+        segment = next((item for item in asset.segments if item.id == segment_id), None)
+        if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
+                visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+            raise PermissionError("当前成员无权使用该素材")
+        if segment is None:
+            raise KeyError("material segment not found")
+        if not material_segment_eligible(asset, segment, workspace_id, automation_only=bool(values.get('automation_only'))):
+            raise TimelineVersionConflict("素材片段当前不可用，请检查来源、范围和使用限制")
+        speech = effective_segment_usage_role(asset, segment) == "a_roll"
+        return ClipSourceSelection(segment.start_seconds, segment.end_seconds, speech,
+            asset.id, segment.id, self.workspace_media_reference_for_asset(workspace_id, asset.id),
+            "a_roll" if speech else "b_roll")
+
     def clip_edit_source_facts(self, workspace_id: str, task_id: str, *, clip_ids: list[str],
                                replacement: tuple[str, str] | None, user_id: str | None,
                                local_diagnostic: bool, connection: sqlite3.Connection | None = None):
@@ -7718,6 +7733,7 @@ class ProductionRepository:
         subtitle_tracks: list[SubtitleTrack] | None = None,
         cover_asset: CoverAsset | None = None,
         connection: sqlite3.Connection | None = None,
+        verify_sources=None,
     ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
         """Confirm applied facts; a supplied permit transaction owns the commit."""
         _validate_edit_operation(operation)
@@ -7790,6 +7806,8 @@ class ProductionRepository:
             _json_object(montage_payload)
 
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             task = self._require_creation_task(conn, workspace_id, task_id)
             proposal_row = conn.execute(
                 """
@@ -7814,6 +7832,8 @@ class ProductionRepository:
                 raise ValueError("编辑操作基础版本不属于当前工作区与任务")
             if task.current_timeline_version_id != operation.base_version_id:
                 raise ValueError("编辑操作基础版本已不是当前任务版本")
+            if verify_sources is not None:
+                verify_sources(conn)
             if result_version.sequence != int(base_row["sequence"]) + 1:
                 raise ValueError("结果时间线版本序号必须连续递增")
             conflicts = (

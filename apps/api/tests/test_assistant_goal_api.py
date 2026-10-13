@@ -23,6 +23,9 @@ script_state = test_media_script_api.state
 def isolated_local_workspace(state, monkeypatch):
     # Existing domain fixtures name their single local workspace workspace_a.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
+    from test_montage_pipeline import synthetic_clip_preview_budget
+    monkeypatch.setattr(main, 'clip_preview_budget_from_env', synthetic_clip_preview_budget)
+
 
 
 def wait_until(predicate):

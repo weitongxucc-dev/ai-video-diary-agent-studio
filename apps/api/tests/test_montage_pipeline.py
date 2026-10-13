@@ -803,6 +803,15 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     )
 
 
+def synthetic_clip_preview_budget():
+    from app.host_resource_probes import CpuRenderBudget
+    # Finite metadata/synthetic-media test profile, never a host calibration or default.
+    return CpuRenderBudget(max_duration_seconds=5, max_pixel_seconds=1920*1920*5*2,
+        max_width_px=1920, max_height_px=1920, max_input_bytes=32*1024**2, max_clip_count=1,
+        max_overlay_count=0, max_output_bytes=32*1024**2, max_threads=1, max_timeout_seconds=30,
+        additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2, max_process_threads=16)
+
+
 def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_override=None, validate_override=None):
     """Use real membership/version/JobRun/permit/checkpoint for domain assertions.
 
@@ -820,8 +829,13 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     def live_identity(candidate):
         return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
     access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
+    clip_profile = synthetic_clip_preview_budget()
+    monkeypatch.setattr(main_module, 'clip_preview_budget_from_env', lambda:clip_profile)
     def facts(workspace,task_id,operation,arguments,original):
         assert original==actor
+        if '_clip_preview' in arguments:
+            return main_module._task_media_facts(workspace, task_id, operation, arguments, original)
+
         current=state.production.get_creation_task(workspace,task_id)
         assert current.owner_user_id==state.member.member_id
         payload=state.production.get_creation_task_montage_plan(workspace,task_id)
@@ -829,8 +843,11 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         return {'base_version_id':current.current_timeline_version_id,'montage':stable}, {
             'kind':'creation_render','execution_mode':'cpu_ffmpeg','threads':1,'timeout_seconds':10,'max_output_bytes':1024**2}
     def render(workspace,task_id,inputs,path,context):
-        assert TASK_MEDIA_CONTEXT.get()[0].grant == context.grant
-        assert TASK_MEDIA_CONTEXT.get()[0].scheduler is context.scheduler
+        if 'clip' in inputs:
+            assert TASK_MEDIA_CONTEXT.get() is None
+        else:
+            assert TASK_MEDIA_CONTEXT.get()[0].grant == context.grant
+            assert TASK_MEDIA_CONTEXT.get()[0].scheduler is context.scheduler
         assert context.grant.workspace_id==state.workspace_id and context.grant.owner_type=='creation_job'
         context.check()
         state.preview_inputs.append(inputs)
@@ -840,6 +857,12 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
             main_module._render_task_picture_input(workspace, task_id, inputs, path, context)
         else:
             path.write_bytes(b'domain-render-receipt')
+    def clip_input(inputs, path, context):
+        # Metadata-lineage seam. Real FFmpeg media is verified in the permitted_media_state path.
+        service = main_module._task_audio()
+        return service.picture_renderer(state.workspace_id, state.task.id, inputs, path, context)
+    if facts_override is None:
+        monkeypatch.setattr('app.media.clip_preview.render_clip_input', clip_input)
     original_measure = TaskAudio._measure_publication
     def measure(self,path,operation,inputs,context):
         if facts_override is not None or operation not in {"clip_preview", "picture_preview"}:
@@ -879,7 +902,8 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     # The domain tests use persisted receipts, not claims of playable video.
     if facts_override is None:
         monkeypatch.setattr(main_module,'_task_media_outputs_current',lambda job:True)
-    original_post=state.client.post
+    original_post=getattr(state, "domain_original_post", state.client.post)
+    state.domain_original_post=original_post
     def post(*args,**kwargs):
         response=original_post(*args,**kwargs)
         if response.status_code!=202:
@@ -1010,10 +1034,8 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     (tmp_path / "release-evidence.json").write_text(json.dumps(state.releases, indent=2))
 
 
-@pytest.fixture
-def permitted_media_state(person_render_edit_state, monkeypatch):
+def prepare_current_presenter_media(state, monkeypatch):
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
-    state = person_render_edit_state
     from _media_preview_test_fixtures import synthetic_wav_bytes
     state.original_person_clip = replace(state.montage.clips[0])
     narration = state.production.resolve_authorized_narration_audio_reference(state.workspace_id, state.montage.narration_audio_path)
@@ -1056,6 +1078,12 @@ def permitted_media_state(person_render_edit_state, monkeypatch):
     state.production.save_creation_task_montage_plan(state.workspace_id, task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     configure_synthetic_media_budgets(monkeypatch, main_module)
+    return state
+
+
+@pytest.fixture
+def permitted_media_state(person_render_edit_state, monkeypatch):
+    state = prepare_current_presenter_media(person_render_edit_state, monkeypatch)
     runtime = _granted_domain_preview_adapter(state, monkeypatch,
         facts_override=main_module._task_media_facts, validate_override=main_module._validate_task_media_result)
     yield state

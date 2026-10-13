@@ -1,6 +1,6 @@
 """Apply the registered picture/audio metadata commands to a supplied timeline."""
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from uuid import uuid4
 import hashlib
 import json
@@ -12,7 +12,7 @@ from app.creation.editing.audio import apply_audio_proposal
 from app.audio_timeline import apply_audio_edit
 from app.models import utc_now
 from app.creation.editing.clips import ClipPreviewCommand, prepare_clip_edit
-from app.creation.editing.clips import apply_clip_settings
+from app.creation.editing.clips import apply_clip_patch, ClipPreviewConflict
 from app.creation.editing.subtitles import apply_subtitle_display
 
 
@@ -134,30 +134,80 @@ def metadata_request_identity(source):
         source['request_id']], ensure_ascii=False).encode()).hexdigest()
 
 
-def prepare_clip_command(task, plan, command, *, source_bounds):
+def _clip_command_candidate(plan, operation_type, values, *, resolve_source, link_reordered):
+    patch = {key:value for key,value in values.items() if key in {
+        'fit_mode','crop_x','crop_y','asset_id','segment_id','source_start_seconds','split_time_seconds',
+        'playback_rate','position','locked'} and value is not None}
+    # Expected source IDs are proposal guards, not replacement parameters for a crop.
+    if operation_type == 'ChangeCrop':
+        patch = {key:value for key,value in patch.items() if key in {'fit_mode','crop_x','crop_y'}}
+    if operation_type in {'ConfirmClip','ReplaceClip'}:
+        patch['confirmed'] = True
+    if values.get('automation_only'):
+        patch['automation_only'] = True
+    return apply_clip_patch(plan, values['clip_id'], patch, resolve_source=resolve_source, link_reordered=link_reordered)
+
+
+def prepare_clip_command(task, plan, command, *, resolve_source, link_reordered):
     check_command(task, command)
     clip = next((item for item in plan.clips if item.id == command.values['clip_id']), None)
     if clip is None:
-        raise KeyError("creation task montage clip not found")
-    changed = apply_clip_settings(plan, command.operation_type, command.values, source_bounds=source_bounds)
+        raise KeyError('creation task montage clip not found')
+    if command.operation_type == 'ReplaceClip' and (command.values['asset_id'], command.values['segment_id']) == (
+            clip.asset_id, clip.segment_id) and command.values.get('source_start_seconds') in {None, clip.source_start_seconds}:
+        raise ClipPreviewConflict('这个候选就是当前镜头。')
+    changed, tracks, linkage = _clip_command_candidate(plan, command.operation_type, command.values,
+        resolve_source=resolve_source, link_reordered=link_reordered)
+    if [asdict(item) for item in changed.clips] == [asdict(item) for item in plan.clips]:
+        raise ClipPreviewConflict('这项设置与当前镜头一致。')
     values = {key:value for key,value in command.values.items() if key != 'base_version_id'}
     payload = {'base_version_id':command.base_version_id, 'expected_asset_id':clip.asset_id,
         'expected_segment_id':clip.segment_id, **values}
+    after = next(item for item in changed.clips if item.id == clip.id)
+    if command.operation_type == 'ReplaceClip':
+        payload['source_start_seconds'] = after.source_start_seconds
     if command.operation_type == 'ChangeCrop':
         payload.update(asset_id=clip.asset_id, segment_id=clip.segment_id, source_start_seconds=clip.source_start_seconds)
     labels = {'ChangeCrop':'调整画面适配', 'ChangeClipSpeed':'改变画面速度，保留成片时长、声音和字幕',
-        'SetClipLock':'更改镜头锁定状态', 'ConfirmClip':'确认当前镜头'}
-    return make_metadata_proposal(command, [f"clip:{clip.id}"], labels[command.operation_type], payload), changed
+        'SetClipLock':'更改镜头锁定状态', 'ConfirmClip':'确认当前镜头', 'ReplaceClip':'替换镜头',
+        'TrimClip':'调整镜头起点', 'SplitClip':'分割镜头，保留配音与字幕时轴', 'ReorderClip':'调整镜头顺序'}
+    if linkage:
+        summary = '调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。'
+    elif command.operation_type == 'ReorderClip' and clip.person_render_id is None and any(item.person_render_id for item in plan.clips):
+        summary = '调整镜头顺序；本次移动的是纯素材镜头，按已冻结的纯素材默认只换画面，同片人物口型镜头的配音与字幕保持不变。'
+    else:
+        summary = labels[command.operation_type] + '；文案、配音和其他镜头保持不变。'
+    pair = make_metadata_proposal(command, [f'clip:{clip.id}'], summary, payload)
+    intent, proposal = pair
+    proposal = replace(proposal, preview={
+        'before':{'ref':f'clip:{clip.id}', 'label':labels[command.operation_type], 'detail':describe_clip_settings(clip, plan.clips, command.operation_type)},
+        'after':{'ref':f'clip:{after.id}', 'label':labels[command.operation_type], 'detail':describe_clip_settings(after, changed.clips, command.operation_type)}})
+    return (intent, proposal), changed, tracks, linkage
 
 
-def apply_clip_proposal(task, plan, command, *, source_bounds):
+def describe_clip_settings(clip, clips, operation):
+    from app.visual_effects import clip_playback_rate
+    if operation == 'ChangeCrop':
+        return '完整显示 · 裁剪位置已保留，在此模式下不生效' if clip.fit_mode == 'fit' else f'填满画面 · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}'
+    if operation == 'ChangeClipSpeed':
+        return f'{clip_playback_rate(clip):.2f} 倍速 · 源素材 {clip.source_start_seconds:.3f}–{clip.source_end_seconds:.3f} 秒'
+    if operation == 'SetClipLock':
+        return '已锁定' if clip.locked else '未锁定'
+    if operation == 'ConfirmClip':
+        return '待确认' if clip.needs_confirmation else '已确认'
+    if operation == 'ReorderClip':
+        return f'第 {clips.index(clip)+1} 个镜头'
+    return f'{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒'
+
+
+def apply_clip_proposal(task, plan, command, *, resolve_source, link_reordered):
     check_command(task, command)
     values = command.values
     clip = next((item for item in plan.clips if item.id == values['clip_id']), None)
     if clip is None or (clip.asset_id, clip.segment_id) != (values['expected_asset_id'], values['expected_segment_id']):
-        raise EditConflict("creation task edit target has changed")
-    return apply_clip_settings(plan, command.operation_type, values, source_bounds=source_bounds)
-
+        raise EditConflict('creation task edit target has changed')
+    return _clip_command_candidate(plan, command.operation_type, values,
+        resolve_source=resolve_source, link_reordered=link_reordered)
 
 def prepare_subtitle_display_command(task, plan, tracks, command):
     check_command(task, command)

@@ -5,12 +5,12 @@ import pytest
 
 import app.main as main_module
 from app.production import TimelineVersion
-from test_montage_pipeline import person_render_edit_state as person_render_edit_state
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state, prepare_current_presenter_media
 
 
 @pytest.fixture
-def legal_crop_state(person_render_edit_state):
-    state = person_render_edit_state
+def legal_crop_state(person_render_edit_state, monkeypatch):
+    state = prepare_current_presenter_media(person_render_edit_state, monkeypatch)
     # Both fixture clips must lie inside their approved material segment.
     clip = state.montage.clips[1]
     asset = state.production.get_asset(state.workspace_id, clip.asset_id)
@@ -118,7 +118,7 @@ def test_crop_preview_rejects_unavailable_source(legal_crop_state, crop_previews
             raise ValueError("源素材已断开")
         monkeypatch.setattr(state.production, "resolve_clip_media_reference", disconnected)
     base, before, _, response = preview_crop(state, clip_index)
-    assert response.status_code == 422, response.text
+    assert response.status_code == (403 if clip_index == 0 else 422), response.text
     assert not crop_previews
     assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
     assert state.client.get(base).json()["montage"] == before["montage"]
@@ -147,7 +147,11 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     service.picture_renderer = concurrent
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
     _, _, job_id = queue_crop(state)
-    assert_failed(state, job_id)
+    assert state.preview_runtime.run_once()
+    assert state.production.get_job_run(state.workspace_id, job_id).status == 'interrupted'
+    receipt = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{job_id}').json()
+    assert receipt['status'] == 'stale' and receipt['result'] is None
+    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
     assert len(crop_previews) == 1
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
 

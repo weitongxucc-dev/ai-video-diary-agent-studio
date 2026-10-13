@@ -299,4 +299,17 @@ class EditCommand:
     values: dict
     source: dict | None = None
     input_source_facts: list | None = None
+    affected_clip_ids: tuple[str, ...] | None = None
+    affected_source_facts: list | None = None
+    affected_clip_facts: list | None = None
 
+
+@dataclass(frozen=True)
+class ClipSourceSelection:
+    start_seconds: float
+    end_seconds: float
+    is_speech: bool
+    asset_id: str | None = None
+    segment_id: str | None = None
+    reference: str | None = None
+    role: str | None = None
