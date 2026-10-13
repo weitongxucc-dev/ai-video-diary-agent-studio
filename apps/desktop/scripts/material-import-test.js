@@ -10,8 +10,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { pipeline } = require('node:stream/promises');
+const { createMaterialImporter } = require('../runtime/material-import');
+const { createNativeMedia } = require('../runtime/native-media');
+const { registerDesktopIpc } = require('../runtime/ipc-handlers');
 
 let passed = 0;
 const failures = [];
@@ -31,40 +32,11 @@ function sha256(target) {
   return crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
 }
 
-function loadImportSection() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf('// ── Material import');
-  const end = source.indexOf('// ── IPC Handlers', start);
-  assert.ok(start >= 0 && end > start, 'desktop material import section exists');
-  return source.slice(start, end);
-}
-
-function buildContext(section, overrides = {}) {
-  const context = {
-    fs, http, path, crypto, pipeline, Buffer, setTimeout, clearTimeout,
-    MaterialImportError: class MaterialImportError extends Error {},
-    MATERIAL_IMPORT_EXTENSIONS: new Set(['.mp4', '.mov', '.m4v']),
-    MATERIAL_STAGING_SEGMENTS: ['_已处理', '.import-staging'],
-    MATERIAL_NAME_ATTEMPTS: 200,
-    MATERIAL_HARD_LINK_UNSUPPORTED: new Set(['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV']),
-    MATERIAL_BINDING_TIMEOUT_MS: 8000,
-    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
-    mainWindow: null,
-    recordLifecycle: () => {},
-    ...overrides,
-  };
-  vm.runInNewContext(
-    section + '\nglobalThis.api = { importMaterials, readMaterialBinding, resolveTrustedMaterialDirectory,'
-      + ' createRunDirectory, assertStagingAncestorsContained, revalidateTargetDirectory,'
-      + ' removeOwnedPath, removeEmptyRunDirectory, isPathInside, describeFileError,'
-      + ' commitMaterialStaging, assertHardLinkSupported };',
-    context,
-  );
-  return context;
+function buildImporter(overrides = {}) {
+  return createMaterialImporter({ recordLifecycle: () => {}, fileSystem: overrides.fs || fs });
 }
 
 async function main() {
-  const section = loadImportSection();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wil177-material-'));
   const sourceDir = path.join(root, 'sources');
   const boundDir = path.join(root, 'materials');
@@ -95,8 +67,6 @@ async function main() {
   let rebindTarget = null;
   let readsThisImport = 0;
   const requestedPaths = [];
-  // Arrays built inside the vm realm have a different Array prototype, so a
-  // deepEqual against a host array fails on identity alone.
   const plain = (value) => JSON.parse(JSON.stringify(value));
 
   const server = http.createServer((request, reply) => {
@@ -125,9 +95,9 @@ async function main() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
 
-  const context = buildContext(section);
-  const importMaterials = context.api.importMaterials;
-  const resolveTrusted = context.api.resolveTrustedMaterialDirectory;
+  const context = buildImporter();
+  const importMaterials = context.importMaterials;
+  const resolveTrusted = context.resolveTrustedMaterialDirectory;
 
   const bindingFor = (directory) => ({
     bound_to_current_workspace: true,
@@ -350,7 +320,7 @@ async function main() {
     });
 
     await check('isPathInside rejects sibling and parent paths', () => {
-      const isInside = context.api.isPathInside;
+      const isInside = context.isPathInside;
       assert.equal(isInside('/a/b', '/a/b/c'), true);
       assert.equal(isInside('/a/b', '/a/b'), false);
       assert.equal(isInside('/a/b', '/a/bc'), false);
@@ -363,7 +333,7 @@ async function main() {
       fs.writeFileSync(target, 'x');
       fs.chmodSync(root, 0o500); // directory not writable: unlink must fail
       try {
-        const removal = await context.api.removeOwnedPath(target);
+        const removal = await context.removeOwnedPath(target);
         // Running as root defeats the permission check; then the only honest
         // assertion is that the result is a structured cleanup result.
         assert.equal(typeof removal.removed, 'boolean');
@@ -379,7 +349,7 @@ async function main() {
     });
 
     await check('removing an absent path is reported as already gone, not as a failure', async () => {
-      const removal = await context.api.removeOwnedPath(path.join(root, 'never-existed'));
+      const removal = await context.removeOwnedPath(path.join(root, 'never-existed'));
       assert.equal(removal.removed, false);
       assert.equal(removal.alreadyGone, true);
       assert.equal(removal.code, undefined);
@@ -389,7 +359,7 @@ async function main() {
       const runDirectory = path.join(boundDir, '_已处理', '.import-staging', 'run-not-empty');
       fs.mkdirSync(runDirectory, { recursive: true });
       fs.writeFileSync(path.join(runDirectory, 'stranger.bin'), 'not ours');
-      const result = await context.api.removeEmptyRunDirectory(runDirectory);
+      const result = await context.removeEmptyRunDirectory(runDirectory);
       assert.equal(result.removed, false);
       assert.equal(result.code, 'ENOTEMPTY');
       assert.ok(fs.existsSync(path.join(runDirectory, 'stranger.bin')));
@@ -401,7 +371,7 @@ async function main() {
       const runDirectory = path.join(boundDir, '_已处理', '.import-staging', 'probe-ok');
       fs.mkdirSync(runDirectory, { recursive: true });
       try {
-        const result = await context.api.assertHardLinkSupported(runDirectory);
+        const result = await context.assertHardLinkSupported(runDirectory);
         assert.equal(result.supported, true);
         assert.equal(fs.readdirSync(runDirectory).length, 0, 'probe files cleaned up');
       } finally {
@@ -423,10 +393,10 @@ async function main() {
           },
         },
       };
-      const failingContext = buildContext(section, { fs: failingFs });
+      const failingContext = buildImporter({ fs: failingFs });
       try {
         await assert.rejects(
-          failingContext.api.assertHardLinkSupported(runDirectory),
+          failingContext.assertHardLinkSupported(runDirectory),
           (error) => {
             // EPERM is equally consistent with a permission problem, so the
             // message offers both and asserts neither as the cause.
@@ -460,10 +430,10 @@ async function main() {
           },
         },
       };
-      const failingContext = buildContext(section, { fs: failingFs });
+      const failingContext = buildImporter({ fs: failingFs });
       try {
         await assert.rejects(
-          failingContext.api.assertHardLinkSupported(runDirectory),
+          failingContext.assertHardLinkSupported(runDirectory),
           /不支持本导入入口所需的原子提交方式/,
         );
         assert.deepEqual(fs.readdirSync(runDirectory), [], 'probe files cleaned up');
@@ -486,10 +456,10 @@ async function main() {
           },
         },
       };
-      const fullContext = buildContext(section, { fs: fullFs });
+      const fullContext = buildImporter({ fs: fullFs });
       try {
         await assert.rejects(
-          fullContext.api.assertHardLinkSupported(runDirectory),
+          fullContext.assertHardLinkSupported(runDirectory),
           (error) => {
             assert.match(error.message, /磁盘空间不足/);
             assert.doesNotMatch(error.message, /不支持本导入入口所需的原子提交方式/);
@@ -660,14 +630,14 @@ async function main() {
     await check('a source that changes during the copy is refused rather than committed', async () => {
       const source = path.join(sourceDir, 'clip-changing.mp4');
       fs.writeFileSync(source, Buffer.alloc(64, 1));
-      const growingContext = buildContext(section);
+      const growingContext = buildImporter();
       // Mutate the source while the copy pipeline is in flight by racing a
       // timer against the copy.
       setTimeout(() => {
         try { fs.appendFileSync(source, Buffer.alloc(64, 2)); } catch { /* already copied */ }
       }, 0);
       try {
-        const result = await growingContext.api.importMaterials({ port, pickSources: async () => [source] });
+        const result = await growingContext.importMaterials({ port, pickSources: async () => [source] });
         if (result.copied.length === 0) {
           assert.equal(result.failures.length, 1);
           assert.match(result.failures[0].error, /复制期间发生变化|复制不完整/);
@@ -713,21 +683,15 @@ async function main() {
       // The handler is the only place that turns an internal cleanup result into
       // user-visible text, so the wording is checked here rather than through the
       // import function it wraps.
-      const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-      const handlerStart = source.indexOf("ipcMain.handle('import-materials'");
-      const handlerEnd = source.indexOf("ipcMain.handle('", handlerStart + 10);
-      assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, 'import-materials handler exists');
-      let run = null;
       let nextResult = null;
-      const handlerContext = {
-        ipcMain: { handle(_name, callback) { run = callback; } },
-        apiPort: port,
-        serviceStates: { api: { state: 'ready' } },
-        recordLifecycle: () => {},
-        pickMaterialSources: async () => [],
+      const media = createNativeMedia({
+        getApiEndpoint: () => ({ port, state: 'ready' }),
+        recordLifecycle: () => {}, pickMaterialSources: async () => [],
         importMaterials: async () => nextResult,
-      };
-      vm.runInNewContext(source.slice(handlerStart, handlerEnd), handlerContext);
+      });
+      const handlers = new Map();
+      registerDesktopIpc({ ipcMain: { handle: (name, callback) => handlers.set(name, callback) }, media });
+      const run = handlers.get('import-materials');
       const residue = { removed: false, alreadyGone: false, code: 'EPERM', error: 'not permitted' };
 
       // Nothing was imported and every file failed. The residue is still real

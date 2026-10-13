@@ -15,6 +15,7 @@ const path = require('node:path');
 const Module = require('node:module');
 
 const MAIN_SOURCE = path.resolve(__dirname, '..', 'main.js');
+const RUNTIME_SOURCE = path.resolve(__dirname, '..', 'runtime');
 const DEVICE_IDENTITY_SOURCE = path.resolve(__dirname, '..', 'device-identity.js');
 const { createMetadata } = require('./generate-build-identity');
 const POLL_MS = 25;
@@ -267,7 +268,7 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return mock.electron;
     if (request === 'electron-updater') return mock.updater;
-    if (request === 'fs' && parent.filename === mainPath && lifecycleStreamFactory) return { ...fs, createWriteStream: lifecycleStreamFactory };
+    if (request === 'fs' && parent.filename === path.join(path.dirname(mainPath), 'runtime', 'lifecycle-log.js') && lifecycleStreamFactory) return { ...fs, createWriteStream: lifecycleStreamFactory };
     if (request === 'child_process' && parent.filename === mainPath) {
       const childProcess = originalLoad.call(this, request, parent, isMain);
       return { ...childProcess, spawn(...args) { const child = childProcess.spawn(...args); children.push(child); return child; } };
@@ -301,9 +302,26 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   };
 }
 
+// Ordinary packaged cases use the product's existing isolated-profile/port
+// contract so this smoke never competes with a user's running Web service.
+async function loadIsolatedMain(options) {
+  const { resourcesPath } = options;
+  const configPath = path.join(resourcesPath, 'app', 'assets', 'distribution-config.generated.json');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({ authMode: 'local' }));
+  const server = net.createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  return loadMain({ ...options,
+    userDataPath: options.userDataPath || path.join(resourcesPath, 'user-data'),
+    localWebPort: String(port),
+  });
+}
+
 async function assertVisibleByConstruction(windowLoadMode) {
   const resources = createResources();
-  const runtime = await loadMain({ resourcesPath: resources, development: false, windowLoadMode });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false, windowLoadMode });
   try {
     await waitFor(() => runtime.windows.length === 1, `${windowLoadMode} initial BrowserWindow`);
     const window = runtime.windows[0];
@@ -327,7 +345,7 @@ async function assertVisibleByConstruction(windowLoadMode) {
 
 async function assertVisibleWindowLifecycleBoundary() {
   const resources = createResources();
-  const runtime = await loadMain({ resourcesPath: resources, development: false, windowLoadMode: 'manual' });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false, windowLoadMode: 'manual' });
   try {
     await waitFor(() => runtime.windows.length === 1, 'manual BrowserWindow creation');
     const firstWindow = runtime.windows[0];
@@ -377,6 +395,7 @@ function createResources({ api = true, web = true, legacyWorker = false, buildId
   fs.mkdirSync(appRoot, { recursive: true });
   const mainPath = path.join(appRoot, 'main.js');
   fs.copyFileSync(MAIN_SOURCE, mainPath);
+  fs.cpSync(RUNTIME_SOURCE, path.join(appRoot, 'runtime'), { recursive: true });
   // Test-only access to the actual selected constants; readiness is held so
   // default/Supabase origin probes never start services or bind real 3000.
   if (portProbe) fs.appendFileSync(mainPath, '\nmodule.exports = { webPort, webOrigin };\n');
@@ -412,7 +431,7 @@ async function assertRuntimeAcceptsCodeUnitIdentityOrder() {
     { path: 'web/.next/server/app/production/page.js', content: 'page' },
   ];
   const resources = createResources({ identityRecords: records });
-  const runtime = await loadMain({ resourcesPath: resources, development: false });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false });
   try {
     await waitFor(() => runtime.windows.length === 1, 'code-unit identity startup');
     const status = await runtime.handlers.get('get-service-status')();
@@ -440,7 +459,7 @@ async function assertBuildIdentityMetadataFailure(buildIdentity, expectedMessage
 
 async function assertMissingResource(name) {
   const resources = createResources({ [name]: false });
-  const runtime = await loadMain({ resourcesPath: resources, development: false });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false });
   try {
     await waitFor(() => runtime.dialogs.length === 1, `${name} startup failure`);
     assert.equal(runtime.windows.length, 0, `${name} must fail before BrowserWindow creation`);
@@ -464,7 +483,7 @@ async function startPackaged() {
   const previousVaultPath = process.env.OBSIDIAN_VAULT_PATH;
   process.env.AI_VIDEO_DIARY_LIFECYCLE_WORKER_MARKER_PATH = workerMarkerPath;
   process.env.OBSIDIAN_VAULT_PATH = vaultPath;
-  const runtime = await loadMain({ resourcesPath: resources, development: false });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false });
   try {
     await waitFor(() => runtime.windows.length === 1, 'packaged BrowserWindow creation');
     const status = await runtime.handlers.get('get-service-status')();
@@ -478,7 +497,7 @@ async function startPackaged() {
       resources,
       runtime,
       status,
-      lifecycleLog: path.join(resources, 'logs', 'desktop-runtime.jsonl'),
+      lifecycleLog: path.join(runtime.app.getPath('logs'), 'desktop-runtime.jsonl'),
       previousWorkerMarkerPath,
       previousVaultPath,
     };
@@ -514,7 +533,7 @@ async function assertIsolatedUserData() {
     /--user-data-dir must be an absolute path/,
   );
   const userDataPath = path.join(resources, 'isolated-profile');
-  const runtime = await loadMain({ resourcesPath: resources, development: false, userDataPath });
+  const runtime = await loadIsolatedMain({ resourcesPath: resources, development: false, userDataPath });
   try {
     await waitFor(() => runtime.windows.length === 1, 'isolated BrowserWindow creation');
     const status = await runtime.handlers.get('get-service-status')();
@@ -603,6 +622,10 @@ async function assertClosedPipe() {
 }
 
 async function assertDevelopmentExternalServices() {
+  if (!await portIsAvailable(8000) || !await portIsAvailable(3000)) {
+    console.log('desktop development external-service case: SKIP (8000/3000 occupied; existing services untouched)');
+    return;
+  }
   const resources = createResources({ api: false, web: false });
   const api = await startExternalFixture(8000);
   const web = await startExternalFixture(3000);

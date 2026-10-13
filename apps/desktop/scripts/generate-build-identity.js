@@ -16,6 +16,7 @@ const FORMAT = 'ai-video-diary-candidate-inputs/v1';
 const INPUT_SOURCES = [
   { identityPath: 'desktop/main.js', relativePath: 'apps/desktop/main.js' },
   { identityPath: 'desktop/device-identity.js', relativePath: 'apps/desktop/device-identity.js' },
+  { identityPath: 'desktop/runtime', relativePath: 'apps/desktop/runtime', include: (relativePath) => relativePath.endsWith('.js') },
   { identityPath: 'desktop/preload.js', relativePath: 'apps/desktop/preload.js' },
   { identityPath: 'desktop/package.json', relativePath: 'apps/desktop/package.json' },
   { identityPath: 'desktop/assets', relativePath: 'apps/desktop/assets' },
@@ -25,7 +26,7 @@ const INPUT_SOURCES = [
   { identityPath: 'web', relativePath: 'apps/web/.next/standalone-bundled/apps/web' },
 ];
 
-// String relational comparison is locale-independent and matches main.js.
+// String relational comparison is locale-independent and matches runtime/build-identity.js.
 function compareIdentityPaths(left, right) {
   if (left === right) return 0;
   return left < right ? -1 : 1;

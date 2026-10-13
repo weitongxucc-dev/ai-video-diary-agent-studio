@@ -1,4 +1,4 @@
-// Exact desktop import section, real isolated filesystem and loopback HTTP.
+// Actual desktop import module, real isolated filesystem and loopback HTTP.
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -6,7 +6,9 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { pipeline } = require('node:stream/promises');
+const { createMaterialImporter } = require('../runtime/material-import');
+const { createNativeMedia } = require('../runtime/native-media');
+const { registerDesktopIpc } = require('../runtime/ipc-handlers');
 
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wil126-copy-'));
@@ -48,32 +50,20 @@ async function main() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
-    const sourceCode = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-    const start = sourceCode.indexOf('// ── Material import');
-    const end = sourceCode.indexOf('// ── IPC Handlers', start);
-    assert.ok(start >= 0 && end > start);
-    const context = { fs, http, path, crypto, pipeline, Buffer, setTimeout, clearTimeout,
-      MATERIAL_IMPORT_EXTENSIONS: new Set(['.mp4', '.mov', '.m4v']),
-      MATERIAL_STAGING_SEGMENTS: ['_已处理', '.import-staging'],
-      MATERIAL_NAME_ATTEMPTS: 200, MATERIAL_BINDING_TIMEOUT_MS: 8000,
-      recordLifecycle: () => {},
-    };
-    vm.runInNewContext(sourceCode.slice(start, end) + '\nglobalThis.runImport = importMaterials;', context);
-    let importHandler;
-    context.ipcMain = { handle: (_name, callback) => { importHandler = callback; } };
-    context.apiPort = server.address().port;
-    context.serviceStates = { api: { state: 'ready' } };
-    context.pickMaterialSources = async () => [source];
-    const handlerStart = sourceCode.indexOf("ipcMain.handle('import-materials'");
-    const handlerEnd = sourceCode.indexOf("ipcMain.handle('", handlerStart + 10);
-    assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
-    vm.runInNewContext(sourceCode.slice(handlerStart, handlerEnd), context);
+    const { importMaterials } = createMaterialImporter({ recordLifecycle: () => {} });
+    const handlers = new Map();
+    const media = createNativeMedia({
+      getApiEndpoint: () => ({ port: server.address().port, state: 'ready' }),
+      importMaterials, pickMaterialSources: async () => [source], recordLifecycle: () => {},
+    });
+    registerDesktopIpc({ ipcMain: { handle: (name, callback) => handlers.set(name, callback) }, media });
+    const importHandler = handlers.get('import-materials');
     let bridge;
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), {
       process: { platform: 'darwin' },
       require: () => ({
         contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
-        ipcRenderer: { invoke: (name, identity) => {
+        ipcRenderer: { send() {}, invoke: (name, identity) => {
           assert.equal(name, 'import-materials');
           return importHandler({}, identity);
         } },

@@ -38,6 +38,7 @@ function main() {
   try {
     write(root, 'apps/desktop/main.js', 'main-v1');
     write(root, 'apps/desktop/device-identity.js', 'device-identity-v1');
+    write(root, 'apps/desktop/runtime/supervisor.js', 'runtime-v1');
     write(root, 'apps/desktop/preload.js', 'preload-v1');
     write(root, 'apps/desktop/package.json', '{"build":{"files":["main.js"]}}');
     write(root, 'apps/desktop/assets/runtime.json', '{"mode":"local"}');
@@ -62,7 +63,7 @@ function main() {
     assert.equal(repeated.candidateInputDigest, first.candidateInputDigest, 'same packaged inputs must have one identity');
     assert.equal(fs.readFileSync(path.join(root, 'apps/desktop/build-identity.generated.json'), 'utf8'), firstMetadata, 'metadata must be deterministic');
     assert.equal(new Set(first.inputs.map((input) => input.path)).size, first.inputs.length, 'input paths must be unique');
-    for (const inputPath of ['desktop/main.js', 'desktop/device-identity.js', 'desktop/preload.js', 'desktop/package.json', 'desktop/assets/runtime.json']) {
+    for (const inputPath of ['desktop/main.js', 'desktop/device-identity.js', 'desktop/preload.js', 'desktop/runtime/supervisor.js', 'desktop/package.json', 'desktop/assets/runtime.json']) {
       assert.equal(first.inputs.some((input) => input.path === inputPath), true, `${inputPath} must be auditable`);
     }
     for (const inputPath of [
@@ -79,6 +80,7 @@ function main() {
       'apps/desktop/main.js',
       'apps/desktop/device-identity.js',
       'apps/desktop/preload.js',
+      'apps/desktop/runtime/supervisor.js',
       'apps/desktop/package.json',
       'apps/desktop/assets/runtime.json',
       'apps/api/agent_tools/diary_tools.ts',
@@ -87,6 +89,10 @@ function main() {
     write(root, 'apps/web/.next/standalone-bundled/apps/web/server.js', 'web-v2');
     const changedIncluded = generate(root);
     assert.notEqual(changedIncluded.candidateInputDigest, first.candidateInputDigest, 'an included packaged input must change identity');
+
+    write(root, 'apps/desktop/runtime/untracked.js', 'additional-runtime-v1');
+    assert.notEqual(generate(root).candidateInputDigest, changedIncluded.candidateInputDigest, 'a new packaged runtime module must change identity');
+    fs.unlinkSync(path.join(root, 'apps/desktop/runtime/untracked.js'));
 
     write(root, '.env', 'SECRET=must-not-be-hashed');
     write(root, 'apps/desktop/dist/old-output/ignored.txt', 'generated output');

@@ -4,14 +4,11 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
-const { pipeline } = require('node:stream/promises');
+const { downloadSelectedSubtitles } = require('../runtime/media-downloads');
+const { createNativeMedia } = require('../runtime/native-media');
+const { registerDesktopIpc } = require('../runtime/ipc-handlers');
 
 async function main() {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf('async function downloadSelectedSubtitles(');
-  const end = source.indexOf('// ── Material import', start);
-  assert.ok(start >= 0 && end > start, 'desktop subtitle downloader exists');
   const requested = [];
   let response = { status: 200, type: 'application/x-subrip; charset=utf-8', body: '1\n00:00:00,400 --> 00:00:02,800\n中文\nEnglish\n' };
   // 'body' stalls the response after the headers, which is the case where a
@@ -32,29 +29,22 @@ async function main() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wil176-subtitle-'));
   try {
-    const context = {
-      fs, http, pipeline, URLSearchParams, Buffer,
-      apiPort: server.address().port,
-      serviceStates: { api: { state: 'ready' } },
-      SUBTITLE_RESPONSE_TIMEOUT_MS: 30000,
-      setTimeout,
-      clearTimeout,
-    };
-    vm.runInNewContext(source.slice(start, end) + '\nglobalThis.download = downloadSelectedSubtitles;', context);
+    const endpoint = { port: server.address().port, state: 'ready' };
+    const download = (selection, target, timeoutMs) => downloadSelectedSubtitles(endpoint, selection, target, timeoutMs);
     const selection = { taskId: 'task_export', expectedVersionId: 'version_2', mode: 'zh-en', zhTrackId: 'subtitle_zh', enTrackId: 'subtitle_en' };
     const saved = path.join(root, 'current.srt');
-    await context.download(selection, saved);
+    await download(selection, saved);
     assert.equal(fs.readFileSync(saved, 'utf8'), response.body);
     assert.match(requested[0], /expected_version_id=version_2/);
     assert.match(requested[0], /zh_track_id=subtitle_zh/);
     assert.match(requested[0], /en_track_id=subtitle_en/);
 
     response = { status: 409, type: 'application/json', body: JSON.stringify({ detail: '当前字幕版本已变化，请重新选择后保存。' }) };
-    await assert.rejects(context.download(selection, path.join(root, 'stale.srt')), /当前字幕版本已变化/);
+    await assert.rejects(download(selection, path.join(root, 'stale.srt')), /当前字幕版本已变化/);
     response = { status: 200, type: 'text/html', body: '<html>wrong output</html>' };
-    await assert.rejects(context.download(selection, path.join(root, 'wrong-type.srt')), /没有返回可保存的字幕/);
+    await assert.rejects(download(selection, path.join(root, 'wrong-type.srt')), /没有返回可保存的字幕/);
     response = { status: 200, type: 'application/x-subrip', body: '' };
-    await assert.rejects(context.download(selection, path.join(root, 'empty.srt')), /空的字幕文件/);
+    await assert.rejects(download(selection, path.join(root, 'empty.srt')), /空的字幕文件/);
 
     // A service that accepts the request and then never answers must not leave
     // the save pending forever. The timeout is passed explicitly here so the
@@ -62,14 +52,14 @@ async function main() {
     behaviour = 'hang-after-headers';
     const startedAt = Date.now();
     await assert.rejects(
-      context.download(selection, path.join(root, 'stuck.srt'), 150),
+      download(selection, path.join(root, 'stuck.srt'), 150),
       /长时间没有返回/,
     );
     assert.ok(Date.now() - startedAt < 3000, 'the stuck response is abandoned promptly');
     behaviour = 'hang-before-response';
     const startedNoHeaders = Date.now();
     await assert.rejects(
-      context.download(selection, path.join(root, 'silent.srt'), 150),
+      download(selection, path.join(root, 'silent.srt'), 150),
       /长时间没有返回/,
     );
     assert.ok(Date.now() - startedNoHeaders < 3000, 'the silent service is abandoned promptly');
@@ -82,26 +72,19 @@ async function main() {
     let dialogResult = { canceled: true };
     let saveFailure = false;
     let stuckDownload = false;
-    const ipcContext = {
-      ipcMain: { handle(name, callback) { if (name === 'save-subtitle-file') handler = callback; } },
-      dialog: { showSaveDialog: async () => dialogResult },
-      mainWindow: null,
-      app: { getPath: () => root },
-      path, fs, crypto: require('node:crypto'),
+    const media = createNativeMedia({
+      showSaveDialog: async () => dialogResult,
+      getMediaDirectory: () => root,
+      getApiEndpoint: () => endpoint,
       recordLifecycle: () => {},
-      SUBTITLE_RESPONSE_TIMEOUT_MS: 30000,
-      downloadSelectedSubtitles: async (_selection, temporaryPath, timeoutMs) => {
-        // The handler must pass the timeout through; a downloader invoked with
-        // the default would hang the save.
+      downloadSelectedSubtitles: async (_endpoint, _selection, temporaryPath, timeoutMs) => {
         if (timeoutMs !== 30000) throw new Error('handler did not pass SUBTITLE_RESPONSE_TIMEOUT_MS');
         if (stuckDownload) throw new Error('本地字幕服务长时间没有返回，已取消本次保存，请重试。');
         fs.writeFileSync(temporaryPath, response.body || '1\n00:00:00,400 --> 00:00:02,800\n中文\nEnglish\n');
         if (saveFailure) throw new Error('磁盘写入失败');
       },
-    };
-    const handlerStart = source.indexOf("ipcMain.handle('save-subtitle-file'");
-    const handlerEnd = source.indexOf("ipcMain.handle('open-path'", handlerStart);
-    vm.runInNewContext(source.slice(handlerStart, handlerEnd), ipcContext);
+    });
+    registerDesktopIpc({ ipcMain: { handle(name, callback) { if (name === 'save-subtitle-file') handler = callback; } }, media });
     assert.deepEqual(JSON.parse(JSON.stringify(await handler(null, selection))), { saved: false, canceled: true });
     const destination = path.join(root, 'desktop-save.srt');
     dialogResult = { canceled: false, filePath: destination };

@@ -54,6 +54,7 @@
     "files": [
       "main.js",
       "device-identity.js",
+      "runtime/**/*.js",
       "preload.js",
       "build-identity.generated.json",
       "assets/**/*"
