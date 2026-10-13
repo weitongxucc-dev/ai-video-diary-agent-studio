@@ -572,6 +572,55 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         scheduler.close()
 
 
+@pytest.mark.parametrize("failure", ["http_detail", "runtime_error"])
+def test_granted_render_failure_reads_actual_reason_and_preserves_upstream(tmp_path, monkeypatch, failure):
+    from fastapi import HTTPException
+
+    repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
+    reason = "运行中可用内存低于安全线，本次制作已停止。" if failure == "http_detail" else "actual render worker failed"
+    task_before = repo.get_creation_task("local", task_id)
+    montage_before = repo.get_creation_task_montage_plan("local", task_id)
+    narration_before = repo.get_narration_artifact("local", task_before.narration_cache_key)
+    try:
+        monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
+            cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=.5))
+        monkeypatch.setattr(main_module, "production_repo", repo)
+        monkeypatch.setattr(main_module, "creation_execution", execution)
+
+        def failed_render(_workspace, _task, _context):
+            if failure == "http_detail":
+                raise HTTPException(status_code=500, detail={"error": "montage_render_failed", "reason": reason,
+                    "impact": "当前任务仍没有可播放 MP4。", "repair_action": "释放资源后沿原任务继续制作。"})
+            raise RuntimeError(f"  {reason}  ")
+
+        job = execution.start("local", task_id, script_id, digest, actor=actor)
+        request_id = submit_creation_stage(execution, scheduler, job, actor)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == request_id
+        executor = CreationJobUnitExecutor(repo, render_action=failed_render,
+            render_is_valid=lambda _w, _t, _context: False)
+        executor.execute(grant, scheduler)
+        scheduler.assert_released(grant)
+        persisted = repo.get_job_run("local", job.id)
+        assert persisted.status == "failed" and persisted.failure_reason == reason
+        assert persisted.progress != 100 and persisted.output_refs == []
+        status = main_module._creation_execution_status("local", task_id)
+        assert status["job"]["status"] == "failed" and status["job"]["failure_reason"] == reason
+        assert status["video_ready"] is False
+        task_after = repo.get_creation_task("local", task_id)
+        assert task_after.confirmed_script_id == script_id
+        assert task_after.current_timeline_version_id == base.id
+        assert task_after.narration_cache_key == task_before.narration_cache_key
+        assert repo.get_creation_task_montage_plan("local", task_id) == montage_before
+        assert repo.get_narration_artifact("local", task_after.narration_cache_key) == narration_before
+        assert Path(narration_before.audio_path).is_file()
+        with repo._connect() as conn:
+            assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "failed"
+            assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+    finally:
+        scheduler.close()
+
+
 @pytest.mark.parametrize("stop", [None, "revoked", "cancelled", "output", "rss", "timeout", "commit_unknown", "input", "render_revoked", "render_commit_unknown"])
 def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account(tmp_path, monkeypatch, stop):
     """Real scheduler/SQL/media, synthetic TTS worker; no model or cloud claim."""

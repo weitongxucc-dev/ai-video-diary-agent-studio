@@ -24,6 +24,8 @@ root核准 continuation Owner 独占 assistant_pi.py、conversation_repository.p
 
 root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直接媒体测试：原21镜头缩略图各保留video解码器是本轮真实内存拒绝的可消除来源，改为同文件私有串行读取真实起点帧、低分辨率canvas显示并立即清源释放；错误、换素材、卸载和排队取消也释放。主播放器不变，无新持久cache/worker/依赖/预算。单测不能证明具体释放量，须同候选正常21镜头GUI及资源测量/真实完整渲染验证。#131专业剪辑台整体改造仍为后续，必要缩略图故障纳入本轮。
 
+root另核准 Web Owner 临时独占 creation_execution.py 与直接test_creation_execution.py，仅实际CPU render的CreationJobUnitExecutor.execute异常分支复用已有detail.reason/error抽取，避免新Job.failure_reason保存Python原字典字符串。无需新DTO/前端解析/旧历史改写；失败仍failed，许可释放，上游保持。
+
 ## 验收与旧目标
 
 技术：原start回执已核验→模型回合中断→原Job真实成功→持久来源保留→未失效目标从新事实继续检查；两次修改、提案实际采用、同版本/hash观察、stop/拒绝/新指令使旧目标失效、重启及unknown原请求查询；不重复制作。退役目标是依赖模型最终返回才记录制作来源及误用媒体Job查询制作Job的消费者，不改正常历史/旧数据；同候选正向与窄负向验证。

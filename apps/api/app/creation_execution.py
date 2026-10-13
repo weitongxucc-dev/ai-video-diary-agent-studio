@@ -1430,7 +1430,10 @@ class CreationJobUnitExecutor:
                 else:
                     if isinstance(exc, PermissionError) and self._defer_permission_loss(grant, scheduler):
                         return
-                    reason = str(exc).strip() or type(exc).__name__
+                    detail = getattr(exc, "detail", None)
+                    reason = (str(detail.get("reason") or detail.get("error") or exc)
+                              if isinstance(detail, dict)
+                              else str(detail or exc).strip() or type(exc).__name__)
                     try:
                         scheduler.fail_unit(grant, reason="creation_render_failed",
                                             failure_write=lambda conn, current: self._checkpoint(
