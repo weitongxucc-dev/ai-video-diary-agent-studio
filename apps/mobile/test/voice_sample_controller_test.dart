@@ -7,11 +7,18 @@ import 'package:yaohe_mobile/data/voice_sample_io.dart';
 class RecordingFixture implements VoiceRecording {
   bool permitted = true, disposed = false, failStop = false;
   Future<bool>? pendingPermission;
+  Future<void>? pendingStart;
+  Completer<void>? startEntered;
   int starts = 0, stops = 0;
   @override
   Future<bool> hasPermission() => pendingPermission ?? Future.value(permitted);
   @override
-  Future<void> start(String path) async => starts++;
+  Future<void> start(String path) async {
+    starts++;
+    startEntered?.complete();
+    await pendingStart;
+  }
+
   @override
   Future<String?> stop() async {
     stops++;
@@ -27,6 +34,8 @@ class PlaybackFixture implements VoicePlayback {
   final changes = StreamController<void>.broadcast();
   String? source;
   Future<void>? pendingSource;
+  Future<void>? pendingPlay;
+  Completer<void>? playEntered;
   @override
   bool playing = false;
   @override
@@ -39,6 +48,8 @@ class PlaybackFixture implements VoicePlayback {
 
   @override
   Future<void> play() async {
+    playEntered?.complete();
+    await pendingPlay;
     playing = true;
     changes.add(null);
   }
@@ -54,6 +65,79 @@ class PlaybackFixture implements VoicePlayback {
 }
 
 void main() {
+  test(
+    'native start returning after inactive is stopped and preserved once',
+    () async {
+      final started = Completer<void>(), entered = Completer<void>();
+      final recorder = RecordingFixture()
+        ..pendingStart = started.future
+        ..startEntered = entered;
+      var saves = 0;
+      final controller = VoiceSampleController(
+        sample: () => null,
+        onRecorded: (_) async => saves++,
+        recorder: recorder,
+        player: PlaybackFixture(),
+        recordingDirectory: () async => '/fixture',
+      );
+      addTearDown(controller.dispose);
+      final starting = controller.toggleRecording();
+      await entered.future;
+      await controller.stopOnInactive();
+      started.complete();
+      await starting;
+      expect(controller.recording, isFalse);
+      expect(recorder.stops, 1);
+      expect(saves, 1);
+    },
+  );
+
+  test('native playback returning after close is stopped again', () async {
+    final played = Completer<void>(), entered = Completer<void>();
+    final player = PlaybackFixture()
+      ..pendingPlay = played.future
+      ..playEntered = entered;
+    final controller = VoiceSampleController(
+      sample: () => '/current.wav',
+      onRecorded: (_) async {},
+      recorder: RecordingFixture(),
+      player: player,
+    );
+    addTearDown(controller.dispose);
+    controller.openSheet();
+    final listening = controller.listen();
+    await entered.future;
+    await controller.closeSheet();
+    played.complete();
+    await listening;
+    expect(controller.playing, isFalse);
+  });
+
+  test('reopening cannot adopt an older pending permission request', () async {
+    final permitted = Completer<bool>();
+    final recorder = RecordingFixture()..pendingPermission = permitted.future;
+    final controller = VoiceSampleController(
+      sample: () => null,
+      onRecorded: (_) async => fail('stale start'),
+      recorder: recorder,
+      player: PlaybackFixture(),
+      recordingDirectory: () async => '/fixture',
+    );
+    addTearDown(controller.dispose);
+    controller.openSheet();
+    final starting = controller.toggleRecording();
+    final closing = controller.closeSheet();
+    controller.openSheet();
+    permitted.complete(true);
+    await Future.wait([starting, closing]);
+    expect(recorder.starts, 0);
+    expect(controller.recording, isFalse);
+    recorder.pendingPermission = null;
+    await controller.toggleRecording();
+    expect(recorder.starts, 1);
+    await controller.closeSheet();
+  });
+
   test('closing during audio loading cannot restart hidden playback', () async {
     final loaded = Completer<void>();
     final player = PlaybackFixture()..pendingSource = loaded.future;
