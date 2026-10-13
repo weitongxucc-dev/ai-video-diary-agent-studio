@@ -1,9 +1,8 @@
 import type { MaterialAssetNote } from '../types/materials';
 export type { MaterialAssetNote } from '../types/materials';
-import { localMemberTokenHeader } from "../local-member-auth";
 import type { BusinessObjectKind, MaterialBusinessObject, MaterialBusinessObjects, MaterialUsageRecords, MaterialIntakeStatus, MaterialCopyCompleteInput, MaterialAsset, MaterialCollection, MaterialCollections, MaterialLibrary, MaterialLibraryInsights } from '../types/materials';
 import type { ContentVisibility } from '../types/common';
-import { apiUrl, request } from './transport';
+import { apiUrl, request, authorizedFetch } from './transport';
 export function getProductionMaterials(input?: {
     limit?: number;
     offset?: number;
@@ -103,8 +102,8 @@ export async function transcribeMaterialVoiceNote(audio: Blob, signal?: AbortSig
     const body = new FormData();
     body.append("audio", audio, `素材口述录音.${suffix}`);
     body.append("local_only", "true");
-    const response = await fetch(apiUrl("/api/voice/transcribe"), {
-        method: "POST", body, signal, cache: "no-store", headers: { ...localMemberTokenHeader() },
+    const response = await authorizedFetch(apiUrl("/api/voice/transcribe"), {
+        method: "POST", body, signal, cache: "no-store",
     });
     const payload = await response.json();
     if (!response.ok)

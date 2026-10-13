@@ -1,9 +1,8 @@
 import type { ResourceAdmissionCheck, TaskMediaJob, TaskMediaResultMap, TaskMediaJobPage } from '../types/task-edits';
 import type { AudioEditInput, CreationTaskRecording } from '../types/timeline';
-import { localMemberTokenHeader } from "../local-member-auth";
 import type { CreationTaskNarration } from '../types/creation-tasks';
 import type { CreationTaskEditPreviewResponse } from '../types/task-edits';
-import { API_BASE, apiUrl, getServerAuthorization } from './transport';
+import { API_BASE, apiUrl, authorizedFetch } from './transport';
 import { CreationPlanApiError, creationPlanRequest } from './creation-transport';
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
@@ -30,7 +29,7 @@ export async function saveCreationTaskRecording(taskId: string, recording: Blob)
         throw new Error("当前录音格式无法保存，请换一个支持录音的浏览器重试。");
     const body = new FormData();
     body.append("audio", recording, `本机录音.${suffix}`);
-    const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`), { method: "POST", body, cache: "no-store", headers: { ...localMemberTokenHeader() } });
+    const response = await authorizedFetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/recordings`), { method: "POST", body, cache: "no-store" });
     const payload = await response.json();
     if (!response.ok)
         throw new Error(typeof payload.detail === "string" ? payload.detail : "电脑录音未保存");
@@ -49,7 +48,7 @@ export function listenCreationTaskAudio(taskId: string, input: {
 export async function importCreationTaskAudio(taskId: string, file: File): Promise<TaskMediaResultMap["audio_source"] | TaskMediaJob> {
     const body = new FormData();
     body.append("audio", file);
-    const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body, headers: { ...localMemberTokenHeader() } });
+    const response = await authorizedFetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/import`), { method: "POST", body });
     const payload = await response.json();
     if (!response.ok)
         throw new Error(typeof payload.detail === "string" ? payload.detail : "音频导入失败");
@@ -61,7 +60,7 @@ export function previewCreationTaskVisual(taskId: string, input: import("../type
 export async function importCreationTaskGraphic(taskId: string, file: File): Promise<import("../types").GraphicSource> {
     const body = new FormData();
     body.append("image", file);
-    const response = await fetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`), { method: "POST", body, headers: { ...localMemberTokenHeader() } });
+    const response = await authorizedFetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/import`), { method: "POST", body });
     const payload = await response.json();
     if (!response.ok)
         throw new Error(typeof payload.detail === "string" ? payload.detail : "图片导入失败");
@@ -71,9 +70,8 @@ export function getCreationTaskGraphicSources(taskId: string, signal?: AbortSign
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/sources`, { signal });
 }
 export async function readCreationTaskGraphicSource(taskId: string, artifactId: string, signal?: AbortSignal): Promise<Blob> {
-    const authorization = await getServerAuthorization();
-    const response = await fetch(`${API_BASE}/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/source/${encodeURIComponent(artifactId)}`, {
-        headers: { ...(authorization ? { Authorization: authorization } : {}), ...localMemberTokenHeader() }, signal, cache: "no-store",
+    const response = await authorizedFetch(`${API_BASE}/api/creation-tasks/${encodeURIComponent(taskId)}/graphics/source/${encodeURIComponent(artifactId)}`, {
+        signal, cache: "no-store",
     });
     if (!response.ok)
         throw new CreationPlanApiError(response.status, null, "当前任务图片来源无法读取。");

@@ -1,7 +1,7 @@
-import { ensureLocalMemberIdentity, localMemberTokenHeader, readLocalMemberToken } from "../local-member-auth";
+import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
 import type { AssistantStreamEvent } from '../types/assistant';
-import { API_BASE, getServerAuthorization } from './transport';
+import { API_BASE, authorizedFetch } from './transport';
 export class CreationPlanApiError extends Error {
     constructor(public readonly status: number, public readonly code: string | null, message: string, public readonly impact: string | null = null, public readonly repairAction: string | null = null, public readonly reason: string | null = null) {
         super(message);
@@ -37,15 +37,11 @@ export function parseJson(value: string): unknown {
 export async function creationPlanRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response;
     try {
-        const serverAuthorization = await getServerAuthorization();
-        response = await fetch(`${API_BASE}${path}`, {
+        response = await authorizedFetch(`${API_BASE}${path}`, {
             ...init,
             headers: {
                 "Content-Type": "application/json",
                 ...(init?.headers ?? {}),
-                ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
-                // 无令牌时不注入，缺席即匿名放行（方案 A）。
-                ...localMemberTokenHeader(),
             },
             cache: "no-store",
         });
@@ -82,15 +78,12 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
     }
     let response: Response;
     try {
-        const serverAuthorization = await getServerAuthorization();
-        response = await fetch(`${API_BASE}${path}`, {
+        response = await authorizedFetch(`${API_BASE}${path}`, {
             method: "POST",
             body: JSON.stringify(body),
             headers: {
                 "Content-Type": "application/json",
                 Accept: "text/event-stream",
-                ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
-                ...localMemberTokenHeader(),
             },
             cache: "no-store",
         });

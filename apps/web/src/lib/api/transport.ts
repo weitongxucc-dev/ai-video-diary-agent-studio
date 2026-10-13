@@ -22,18 +22,23 @@ export function setServerAuthorizationProvider(provider: ServerAuthorizationProv
 export class ApiRequestError extends Error {
     constructor(public readonly status: number, message: string) { super(message); }
 }
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Identity injection is shared by JSON, streams and native body/media reads. */
+export async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
     const serverAuthorization = await getServerAuthorization();
-    const response = await fetch(`${API_BASE}${path}`, {
+    return fetch(url, {
         ...init,
         headers: {
-            "Content-Type": "application/json",
             ...(init?.headers ?? {}),
             ...(serverAuthorization ? { Authorization: serverAuthorization } : {}),
-            // 无令牌时 localMemberTokenHeader() 返回 {}，保持 header 缺席 = 后端方案 A 匿名放行。
             ...localMemberTokenHeader(),
         },
         cache: "no-store",
+    });
+}
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await authorizedFetch(`${API_BASE}${path}`, {
+        ...init,
+        headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
     if (!response.ok) {
         const message = await response.text();
