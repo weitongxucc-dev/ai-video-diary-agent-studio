@@ -436,6 +436,27 @@ def build_audio_mix_command(
     return command
 
 
+def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_sources):
+    """Bound the mixed PCM and any whole-source narration files together."""
+    normalized = []
+    if normalize_voice_sources:
+        references = {clip.source_ref for track in timeline.tracks if track.role == "narration" and not track.muted
+                      for clip in track.clips if not clip.muted}
+        for source in inputs:
+            if source["reference"] not in references:
+                continue
+            duration = source.get("duration_seconds")
+            if type(duration) not in {int, float} or not math.isfinite(duration) or duration <= 0:
+                raise ValueError("整源旁白归一化缺少已保存的时长，未处理媒体")
+            normalized.append({"reference": source["reference"], "path": source["path"],
+                               "duration_seconds": duration, "max_output_bytes": math.ceil(duration * 192000) + 65536})
+    mix_bytes = math.ceil(duration_seconds * 192000) + 65536
+    return {"normalize_voice_sources": bool(normalize_voice_sources),
+            "normalized_source_outputs": normalized, "mix_output_bytes": mix_bytes,
+            "temporary_output_bytes": mix_bytes + sum(item["max_output_bytes"] for item in normalized),
+            "output_duration_limit_seconds": max([duration_seconds, *(item["duration_seconds"] for item in normalized)])}
+
+
 def render_audio_mix(*args, **kwargs) -> Path:
     scheduler = kwargs.pop("scheduler", None)
     grant = kwargs.pop("grant", None)
@@ -459,12 +480,13 @@ def render_audio_mix(*args, **kwargs) -> Path:
     staging = (TemporaryDirectory(prefix="narration-normalized-", dir=args[3].parent)
                if normalize_voice_sources else nullcontext(None))
     with staging as directory:
+        output_paths = [args[3]]
         if directory is not None:
             kwargs["normalized_narration"] = _render_narration_normalizations(
                 directory, args[0], args[2], kwargs.get("probe_duration") or probe_audio_source,
                 scheduler=scheduler, grant=grant, cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
-                threads=threads, solo_track_ids=kwargs.get("solo_track_ids"))
+                threads=threads, solo_track_ids=kwargs.get("solo_track_ids"), output_paths=output_paths)
             produced_source_paths.update(path.resolve() for path in kwargs["normalized_narration"].values())
         command = build_audio_mix_command(*args, **kwargs)
         if grant is not None:
@@ -475,10 +497,14 @@ def render_audio_mix(*args, **kwargs) -> Path:
                 bounded.append(argument)
             command = bounded
             command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
-            command[-1:-1] = ["-threads:a", str(threads), "-fs", str(max_output_bytes)]
+            mix_duration = kwargs.get("end_seconds") or args[1]
+            mix_duration -= kwargs.get("start_seconds", 0)
+            mix_ceiling = min(max_output_bytes, math.ceil(mix_duration * 192000) + 65536)
+            command[-1:-1] = ["-threads:a", str(threads), "-fs", str(mix_ceiling)]
             _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
-                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
-            if Path(command[-1]).stat().st_size > max_output_bytes:
+                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
+                                       output_paths=output_paths, max_output_file_bytes=max_output_bytes)
+            if Path(command[-1]).stat().st_size > mix_ceiling:
                 raise OSError("音轨中间产物超出本次受许可输出上限")
         return Path(command[-1])
 
@@ -489,7 +515,7 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
                                      scheduler: DeviceScheduler | None, grant: Grant | None,
                                      cancel_event: threading.Event | None, deadline_monotonic: float | None,
                                      max_output_bytes: int | None, threads: int | None,
-                                     solo_track_ids: set[str] | None) -> dict[Path, Path]:
+                                     solo_track_ids: set[str] | None, output_paths) -> dict[Path, Path]:
     """Measure each narration source once, on the whole stream, and let the mix read the results.
 
     Single-pass loudnorm measures the stream it is fed, so a source whose segments have been
@@ -517,6 +543,7 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
         if max_output_bytes is not None:
             ceiling = min(ceiling, max_output_bytes)
         target = Path(directory) / f"narration-{position}.wav"
+        output_paths.append(target)
         command = ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", str(source),
                    "-filter_complex", f"[0:a:0]{WHOLE_SOURCE_LOUDNESS_FILTER},{FINITE_LOUDNESS_FILTER},"
                                       "aresample=48000[out]",
@@ -531,7 +558,8 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
             command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
             command[-1:-1] = ["-threads:a", str(threads)]
             _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
-                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
+                                       output_paths=output_paths, max_output_file_bytes=max_output_bytes)
         # -fs stops at the ceiling rather than rejecting the write, so the size is checked the same way
         # the final mix is checked; a short file must not go on to set the level of the mix either.
         if target.stat().st_size > ceiling:
@@ -545,7 +573,7 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
 
 def _run_granted_audio_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,
                                timeout_seconds: float | None, cancel_event: threading.Event | None,
-                               deadline_monotonic: float | None):
+                               deadline_monotonic: float | None, output_paths=(), max_output_file_bytes=None):
     from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
 
     if deadline_monotonic is None:
@@ -554,13 +582,41 @@ def _run_granted_audio_command(scheduler: DeviceScheduler, grant: Grant, command
     if remaining <= 0:
         raise GrantedCommandTimeout("音轨阶段已超出总时限")
     timeout = min(timeout_seconds, remaining) if timeout_seconds is not None else remaining
+    resources = _audio_grant_resources(scheduler, grant)
+    purpose = "audio_mix" if resources.get("kind") in {"creation_render", "creation_presenter_render"} else None
     result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout,
                                  max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
-                                 cancel_event=cancel_event)
+                                 cancel_event=cancel_event, resource_purpose=purpose,
+                                 output_paths=output_paths, max_output_file_bytes=max_output_file_bytes)
     if result.returncode:
         raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout,
                                             stderr=result.stderr)
     return result
+
+
+def _audio_grant_resources(scheduler, grant):
+    with scheduler._connect() as conn:
+        row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+    if row is None:
+        raise PermissionError("音频探测缺少持久许可事实")
+    resources = json.loads(row["resources_json"])
+    if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+        audio = resources.get("audio_mix")
+        if not isinstance(audio, dict) or audio.get("kind") != "task_audio":
+            raise PermissionError("成片许可未声明音频混音用途")
+        return resources
+    return resources
+
+
+def bounded_audio_context(context):
+    """Keep sequential audio commands inside the original unit's calibrated clock."""
+    from dataclasses import replace
+    resources = _audio_grant_resources(context.scheduler, context.grant)
+    compound = resources.get("kind") in {"creation_render", "creation_presenter_render"}
+    declared = resources["audio_mix"] if compound else resources
+    return replace(context, max_output_bytes=min(context.max_output_bytes, declared["max_output_bytes"]),
+        threads=declared["threads"], deadline_monotonic=min(context.deadline_monotonic,
+            context.started_monotonic + declared["timeout_seconds"]), resource_purpose="audio_mix" if compound else None)
 
 
 def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event=None,
@@ -590,11 +646,9 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
     measured = {"duration_seconds": float(raw), "sample_rate": int(stream["sample_rate"]), "channels": int(stream["channels"])}
     if any(not math.isfinite(value) or value <= 0 for value in measured.values()):
         raise ValueError("源音频时长、采样率或声道无效")
-    with scheduler._connect() as conn:
-        row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
-    if row is None:
-        raise PermissionError("音频探测缺少持久许可事实")
-    resources = json.loads(row["resources_json"])
+    resources = _audio_grant_resources(scheduler, grant)
+    if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+        resources = resources["audio_mix"]
     if resources.get("kind") == "task_audio":
         prefix = "output" if output else "source"
         limits = {"duration_seconds": resources[prefix + "_duration_limit_seconds"],

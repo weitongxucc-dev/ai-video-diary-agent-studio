@@ -81,9 +81,14 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
             try:
                 rss += current.memory_info().rss
                 threads += current.num_threads()
-            except psutil.NoSuchProcess:
+            except psutil.NoSuchProcess as exc:
                 if current.pid == process.pid and process.poll() is None:
-                    raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling")
+                    # macOS can remove the pid just before waitpid exposes its
+                    # exit. Reap only this registered Popen; unknown/live stays refused.
+                    try:
+                        process.wait(timeout=.01)
+                    except subprocess.TimeoutExpired:
+                        raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling") from exc
         if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
             raise GrantedCommandResourceLimit(rss=rss, threads=threads, limits=limits)
         if (psutil.virtual_memory().available < limits.min_host_available_memory_bytes
@@ -91,7 +96,10 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
             raise GrantedCommandResourceUnavailable("Host memory pressure during scene decode")
     except psutil.NoSuchProcess as exc:
         if process.poll() is None:
-            raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
+            try:
+                process.wait(timeout=.01)
+            except subprocess.TimeoutExpired:
+                raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
     except (psutil.Error, OSError) as exc:
         raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
 
@@ -143,6 +151,7 @@ def run_granted_command(
     env: dict[str, str] | None = None,
     output_paths: Sequence[str | Path] = (),
     max_output_file_bytes: int | None = None,
+    resource_purpose: str | None = None,
 ) -> GrantedCommandResult:
     """Run one command with group cleanup; nonzero exit is returned to caller.
 
@@ -172,7 +181,10 @@ def run_granted_command(
         or (grant.owner_type == "media_preview" and grant.unit_key.startswith(("voice:", "avatar_lipsync:")))))
     if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
-    scene_limits = resources.scene_runtime_limits(grant) if isinstance(resources, HostResourceProbe) else None
+    if resource_purpose is not None and not isinstance(resources, HostResourceProbe):
+        raise RecoveryBlocked("组合音频用途缺少真实资源探针")
+    scene_limits = (resources.scene_runtime_limits(grant, purpose=resource_purpose) if resource_purpose is not None else
+                    resources.scene_runtime_limits(grant)) if isinstance(resources, HostResourceProbe) else None
     if (scene_unit or model_unit) and scene_limits is None:
         raise RecoveryBlocked("场景子进程缺少运行中资源预算")
     read_fd, write_fd = os.pipe()

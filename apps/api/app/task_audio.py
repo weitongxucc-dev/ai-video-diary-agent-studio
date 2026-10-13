@@ -4,13 +4,48 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from app.audio_timeline import AudioTimeline, probe_audio_source, probe_audio_metadata
+from app.audio_timeline import AudioTimeline, probe_audio_source, probe_audio_metadata, audio_mix_output_bounds
 from app.models import utc_now
 from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun, TaskEvent
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 import threading
 import time
+from collections import Counter
+
+
+def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_sources, budget):
+    if budget is None:
+        raise ValueError("CPU 音频处理预算尚未标定，未启动媒体")
+    bounds = [audio_mix_output_bounds(graph, inputs, duration_seconds, normalize_voice_sources) for graph in timelines]
+    normalized = {item["reference"]: item for bound in bounds for item in bound["normalized_source_outputs"]}
+    mix_bytes = bounds[0]["mix_output_bytes"]
+    output_duration = max(bound["output_duration_limit_seconds"] for bound in bounds)
+    temporary_bytes = mix_bytes + sum(item["max_output_bytes"] for item in normalized.values())
+    resources = {"kind": "task_audio", "execution_mode": "cpu_ffmpeg",
+        "input_policy": "probe_then_bounded_decode", "inputs": inputs,
+        "input_count": sum(item["uses"] for item in inputs),
+        "input_bytes": sum(item["size_bytes"] * item["uses"] for item in inputs),
+        "source_duration_limit_seconds": budget.max_source_duration_seconds,
+        "output_duration_limit_seconds": output_duration,
+        "source_sample_rate_limit": budget.max_sample_rate, "source_channels_limit": budget.max_channels,
+        "output_sample_rate_limit": 48000, "output_channels_limit": 2,
+        "max_output_bytes": temporary_bytes, "threads": budget.max_threads,
+        "timeout_seconds": budget.max_timeout_seconds,
+        "normalize_voice_sources": bool(normalize_voice_sources),
+        "normalized_source_outputs": list(normalized.values()),
+        "mix_output_bytes": mix_bytes, "temporary_output_bytes": temporary_bytes}
+    if (resources["input_count"] > budget.max_input_count or resources["input_bytes"] > budget.max_input_bytes
+            or output_duration > budget.max_output_duration_seconds or temporary_bytes > budget.max_output_bytes
+            or 48000 > budget.max_sample_rate or 2 > budget.max_channels):
+        raise ValueError("当前音轨组合输入或临时输出超出已标定 CPU 音频预算")
+    for source in inputs:
+        for field, cap in (("duration_seconds", budget.max_source_duration_seconds),
+                           ("sample_rate", budget.max_sample_rate), ("channels", budget.max_channels)):
+            value = source[field]
+            if value is not None and (type(value) not in {int, float} or not 0 < value <= cap):
+                raise ValueError("已保存的音频源规格超出标定预算")
+    return resources
 
 
 class TaskMediaRequired(RuntimeError):
@@ -26,6 +61,51 @@ class TaskAudio:
         self.artifact_store = artifact_store
         self.temporary_root = temporary_root
         self.picture_renderer = picture_renderer
+
+    def mix_facts(self, workspace_id, task_id, timeline, duration_seconds, *, actor,
+                  normalize_voice_sources, budget):
+        """Freeze authorized current source content for one render's audio phase."""
+        if budget is None:
+            raise ValueError("CPU 音频处理预算尚未标定，未启动媒体")
+        if actor is None:
+            raise PermissionError("音轨组合缺少当前成员许可身份")
+        audible = [clip for track in timeline.tracks if not track.muted for clip in track.clips if not clip.muted]
+        uses = Counter(clip.source_ref for clip in audible)
+        inputs, files = [], []
+        records = {record.logical_ref: record for record in self.repository.list_artifact_records(workspace_id, task_id)}
+        for reference in dict.fromkeys(clip.source_ref for track in timeline.tracks for clip in track.clips):
+            path = self.source(workspace_id, task_id, reference, actor=actor).resolve()
+            stat = path.stat()
+            if stat.st_size <= 0 or stat.st_size > budget.max_input_bytes:
+                raise ValueError("音轨源文件为空或超出已标定输入字节上限")
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            after = path.stat()
+            if any(getattr(after, field) != getattr(stat, field) for field in
+                   ("st_size", "st_mtime_ns", "st_ctime_ns", "st_ino", "st_dev")):
+                raise ValueError("音轨来源在读取摘要期间发生变化")
+            record = records.get(reference)
+            if record is not None:
+                producer = self.repository.get_job_run(workspace_id, record.producer_job_id)
+                transform = self._transform_for(workspace_id, task_id, record)
+                if (producer.task_id != task_id or producer.status != "succeeded"
+                        or transform.status != "succeeded" or transform.task_id != task_id
+                        or transform.job_id != producer.id
+                        or (record.sha256, record.size_bytes) != (digest.hexdigest(), stat.st_size)):
+                    raise ValueError("音轨产物与实际已完成来源回执不一致")
+            fact = {"reference": reference, "path": str(path), "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+                    "inode": stat.st_ino, "device": stat.st_dev, "sha256": digest.hexdigest(),
+                    "producer_job_id": record.producer_job_id if record is not None else None,
+                    **self.source_metadata(workspace_id, task_id, reference)}
+            files.append(fact)
+            if reference in uses:
+                inputs.append({**fact, "uses": uses[reference]})
+        resources = audio_mix_resources(inputs, [timeline], duration_seconds,
+            normalize_voice_sources=normalize_voice_sources, budget=budget)
+        return {"sources": files, "resources": resources}
 
     def source(self, workspace_id: str, task_id: str, reference: str, *, actor=None) -> Path:
         self.repository.get_creation_task(workspace_id, task_id)
@@ -274,6 +354,15 @@ class TaskAudio:
                     "max_output_bytes": context.max_output_bytes - consumed, "threads": context.threads}
                 if operation == "audio_mix":
                     graph = AudioTimeline.model_validate(media_input["audio_timeline"])
+                    from app.audio_timeline import _audio_grant_resources, bounded_audio_context
+                    declared = _audio_grant_resources(context.scheduler, context.grant)
+                    if declared.get("kind") in {"creation_render", "creation_presenter_render"}:
+                        declared = declared["audio_mix"]
+                    if bool(media_input.get("normalize_voice_sources", False)) != bool(declared.get("normalize_voice_sources", False)):
+                        raise ValueError("音轨响度处理与本次许可事实不一致")
+                    audio_context = bounded_audio_context(context)
+                    options.update(max_output_bytes=min(options["max_output_bytes"], audio_context.max_output_bytes),
+                        threads=audio_context.threads, deadline_monotonic=audio_context.deadline_monotonic)
                     produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
                                 if record.producer_job_id == job.id}
                     render_audio_mix(graph, media_input["duration_seconds"],
@@ -281,6 +370,7 @@ class TaskAudio:
                         produced_source_paths={self.source(workspace_id, task_id, reference) for reference in input_refs if reference in produced},
                         start_seconds=media_input.get("start_seconds", 0),
                         end_seconds=media_input.get("end_seconds"),
+                        normalize_voice_sources=media_input.get("normalize_voice_sources", False),
                         solo_track_ids=set(media_input.get("solo_track_ids", [])) or None, **options)
                 elif operation == "audio_stretch":
                     source = self.repository.resolve_workspace_media_reference(workspace_id, input_refs[0], require_registered=True)

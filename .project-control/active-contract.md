@@ -21,6 +21,14 @@ CLI成片消费者必要窄补：Pi/CLI Owner重新独占scripts/yaohe.mjs及yao
 
 调研覆盖Owner重新取得仅本计划§4.5及覆盖映射的文档lease；其他文档和合同仍由root独占。
 
+组合许可冻结：CreationJobOwnerVerifier沿可信audio_mix_facts封存同一资源声明，HostResourceProbe同时核既有CPU_RENDER/CPU_AUDIO预算；顺序memory取较大值、磁盘计并存中间WAV。API/编辑Owner补granted_subprocess.py及直接测试lease，仅可信组合音频用途消费已标定音频子进程RSS/线程/输出约束，视频保持原预算，不开放任意用途。明确尚未submit的准入拒绝沿原JobRun失败/impact/repair，不新增状态，unknown不伪造终态。旧QA被拒作业由正常API取消并保留历史，正常用户库不改。
+
+共享许可改动须保留既有消费者：compound按原编译器及included selection封存实际after；RemoveSilence的动态after仅由同job真实分析来源和removed_ranges_ms沿原指令/版本重算，核来源/hash/当前actor及音频uses/中间输出上界。不得给未知graph无条件许可或遗留本轮引入的回归；范围仍为同7文件和直接测试，无新执行队列/预算默认/领域对象。
+
+Pi/CLI Owner窄QA lease仅本轮独立evidence的silence-case/脚本：准备新的合成5秒单镜头/单声音静音样本，不运行/提交或改DB；root待最终API就绪后按普通录音/采用/typed预览检查动态回归，无私人数据或生产库变更。
+
+组合API包及独立QA准备均已RELEASE；API集中239项检查通过，最后动态上界窄回归19项通过，Ruff和diff检查通过。root收回集成及真实验收；静音样本最终为2秒/60帧、0.7–1.3秒真静音、linkage=True/-16LUFS，两PCM上界899072B；沿实际旧command预览入口验回归（RemoveSilence未进入typed/CLI目录），不新增该迁移范围。
+
 ## 验收、非目标与实际旧路径
 
 共同typed目录支持真实音频对象音量/静音/淡入淡出/混音参数，以及镜头现有画面效果；未支持独立音频retime/通用关键帧/solo持久化不承诺。既有手动audio/visual入口保持，其执行内核由共同受理入口复用，不建立第二validator/状态机。实际对象必须按当前版本读取；只改指定字段，不把完整效果默认值覆盖其他效果。

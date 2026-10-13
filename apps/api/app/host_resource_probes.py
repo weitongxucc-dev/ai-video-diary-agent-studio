@@ -522,6 +522,9 @@ class HostResourceRefusal(RecoveryBlocked):
             "render_numeric_fields_invalid": "成片时长或阶段时限无效",
             "render_integer_fields_invalid": "成片输入的数量或大小字段无效",
             "render_required_fields_zero": "成片必需的尺寸、数量或线程为零",
+            "audio_budget_or_execution_mode_unavailable": "CPU 音频预算尚未标定或执行模式不可用",
+            "audio_resource_fields_invalid": "CPU 音频资源声明缺失或无效",
+            "audio_probe_contract_missing": "CPU 音频缺少固定输入与先探测再解码约定",
             "stage_budget_unavailable": "当前阶段的专属设备预算尚未标定",
             "stage_execution_mode_unavailable": "当前阶段的执行模式不受支持",
             "media_script_budget_or_execution_mode_unavailable": "隔离脚本预算未标定或执行模式不可用",
@@ -566,6 +569,37 @@ class HostResourceRefusal(RecoveryBlocked):
             "cpu_percent", "available_memory_bytes", "swap_used_bytes", "disk_io_bytes_per_second",
         } or name.startswith("disk_free_bytes:") for name in failed)
 
+
+
+def audio_resource_refusal(resources, audio):
+    """Reuse one calibrated CPU-audio declaration check in previews and render."""
+    if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
+        return (None, "audio_budget_or_execution_mode_unavailable")
+    fields = {"input_count": "max_input_count", "input_bytes": "max_input_bytes",
+              "source_duration_limit_seconds": "max_source_duration_seconds",
+              "output_duration_limit_seconds": "max_output_duration_seconds",
+              "source_sample_rate_limit": "max_sample_rate", "source_channels_limit": "max_channels",
+              "output_sample_rate_limit": "max_sample_rate", "output_channels_limit": "max_channels",
+              "max_output_bytes": "max_output_bytes", "threads": "max_threads",
+              "timeout_seconds": "max_timeout_seconds"}
+    for name, limit in fields.items():
+        value = resources.get(name)
+        numeric = name.endswith("seconds")
+        if (type(value) not in ({int, float} if numeric else {int})
+                or not math.isfinite(value) or value < 0
+                or (value == 0 and name not in {"input_count", "input_bytes"})):
+            return (None, "audio_resource_fields_invalid")
+        if value > getattr(audio, limit):
+            return (False, "declared_resources_exceed_budget")
+    if resources.get("input_policy") != "probe_then_bounded_decode" or not isinstance(resources.get("inputs"), list):
+        return (None, "audio_probe_contract_missing")
+    if "dynamic_input_count_limit" in resources or "dynamic_input_bytes_limit" in resources:
+        for name, actual, cap in (("dynamic_input_count_limit", "input_count", audio.max_input_count),
+                                  ("dynamic_input_bytes_limit", "input_bytes", audio.max_input_bytes)):
+            value = resources.get(name)
+            if type(value) is not int or not resources[actual] <= value <= cap:
+                return (None, "audio_resource_fields_invalid")
+    return None
 
 
 class HostResourceProbe:
@@ -686,6 +720,12 @@ class HostResourceProbe:
                    ("width_px", "height_px", "clip_count", "max_output_bytes", "threads")):
                 return decision(None, "render_required_fields_zero")
             checks["render_budget"] = {"limits": asdict(render)}
+            if "dynamic_clip_count_limit" in resources or "dynamic_overlay_count_limit" in resources:
+                for name, actual, cap in (("dynamic_clip_count_limit", "clip_count", render.max_clip_count),
+                                          ("dynamic_overlay_count_limit", "overlay_count", render.max_overlay_count)):
+                    value = resources.get(name)
+                    if type(value) is not int or not resources[actual] <= value <= cap:
+                        return decision(None, "render_integer_fields_invalid")
             if (resources["duration_seconds"] > render.max_duration_seconds
                     or resources["width_px"] > render.max_width_px
                     or resources["height_px"] > render.max_height_px
@@ -701,6 +741,17 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
+            if "audio_mix" in resources:
+                audio_resources = resources["audio_mix"]
+                if not isinstance(audio_resources, dict) or audio_resources.get("kind") != "task_audio":
+                    return decision(None, "audio_probe_contract_missing")
+                refusal = audio_resource_refusal(audio_resources, self.budget.cpu_audio)
+                if refusal is not None:
+                    return decision(*refusal)
+                checks["audio_budget"] = {"limits": asdict(self.budget.cpu_audio)}
+                required_memory = self.budget.min_available_memory_bytes + max(
+                    render.additional_memory_bytes, self.budget.cpu_audio.additional_memory_bytes)
+                required_disk += self.budget.cpu_audio.additional_disk_bytes + audio_resources["max_output_bytes"]
         elif kind == "task_output_observation":
             observation = self.budget.observation
             if observation is None or resources.get("execution_mode") != "local_ffmpeg_apple_vision":
@@ -750,24 +801,9 @@ class HostResourceProbe:
             audio = self.budget.cpu_audio
             if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 return decision(None, "audio_budget_or_execution_mode_unavailable")
-            fields = {"input_count": "max_input_count", "input_bytes": "max_input_bytes",
-                      "source_duration_limit_seconds": "max_source_duration_seconds",
-                      "output_duration_limit_seconds": "max_output_duration_seconds",
-                      "source_sample_rate_limit": "max_sample_rate", "source_channels_limit": "max_channels",
-                      "output_sample_rate_limit": "max_sample_rate", "output_channels_limit": "max_channels",
-                      "max_output_bytes": "max_output_bytes", "threads": "max_threads",
-                      "timeout_seconds": "max_timeout_seconds"}
-            for name, limit in fields.items():
-                value = resources.get(name)
-                numeric = name.endswith("seconds")
-                if (type(value) not in ({int, float} if numeric else {int})
-                        or not math.isfinite(value) or value < 0
-                        or (value == 0 and name not in {"input_count", "input_bytes"})):
-                    return decision(None, "audio_resource_fields_invalid")
-                if value > getattr(audio, limit):
-                    return decision(False, "declared_resources_exceed_budget")
-            if resources.get("input_policy") != "probe_then_bounded_decode" or not isinstance(resources.get("inputs"), list):
-                return decision(None, "audio_probe_contract_missing")
+            refusal = audio_resource_refusal(resources, audio)
+            if refusal is not None:
+                return decision(*refusal)
             checks["audio_budget"] = {"limits": asdict(audio)}
             required_memory = self.budget.min_available_memory_bytes + audio.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + audio.additional_disk_bytes + resources["max_output_bytes"]
@@ -996,10 +1032,19 @@ class HostResourceProbe:
             raise HostResourceRefusal(decision)
         return True
 
-    def scene_runtime_limits(self, grant: Grant) -> SceneRuntimeLimits | None:
+    def scene_runtime_limits(self, grant: Grant, *, purpose: str | None = None) -> SceneRuntimeLimits | None:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if purpose is not None:
+            if (purpose != "audio_mix" or resources.get("kind") not in {"creation_render", "creation_presenter_render"}
+                    or not isinstance(resources.get("audio_mix"), dict)
+                    or resources["audio_mix"].get("kind") != "task_audio"):
+                raise RecoveryBlocked("当前许可未封存组合音频执行用途")
+            refusal = audio_resource_refusal(resources["audio_mix"], self.budget.cpu_audio)
+            if refusal is not None:
+                raise RecoveryBlocked("组合音频子进程预算尚未标定或许可声明无效")
+            resources = resources["audio_mix"]
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":

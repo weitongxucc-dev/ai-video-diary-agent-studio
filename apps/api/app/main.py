@@ -81,8 +81,8 @@ from app.auth import (
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
 from app.artifact_store import ArtifactStore
 from app.audio_waveform import AudioWaveformError, audio_waveform
-from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio
-from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest
+from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
+from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
 from app.media_script import ScriptToolchain, media_script_resource_facts, MediaScriptError
 from app.media_script_jobs import read_script_toolchain, script_limits, seal_script, execute_script, script_definition
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
@@ -3990,6 +3990,28 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == "exact_edit_preview" and payload.get("operation_type") == "EditGraphicOverlay":
         overlay_payload = CreationTaskExactEditRequest.model_validate(payload)
         picture_candidates.append(_graphic_overlay_candidate(plan, overlay_payload))
+    compound_proposal = None
+    if plan is not None and arguments.get("_media_kind") == "picture_preview" and operation in {"command_edit_preview", "compound_selection_preview"}:
+        command_payload, included = payload, None
+        if operation == "compound_selection_preview":
+            proposal = production_repo.get_edit_proposal(workspace_id, arguments["proposal_id"])
+            selection = CompoundEditSelectionRequest.model_validate(payload)
+            data = proposal.operation.get("payload", {})
+            if (proposal.task_id != task_id or proposal.status != "proposed"
+                    or proposal.operation.get("operation_type") != "EditCompoundTimeline"
+                    or not data.get("selection_enabled") or data.get("base_version_id") != task.current_timeline_version_id):
+                raise ValueError("当前复合修改提案已失效，不能封存预览")
+            included = (selection.included_step_indices if selection.raw_command is None else
+                        compile_compound_selection(selection.raw_command, data["steps"]))
+            intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
+            command_payload = {"raw_command": intent.raw_command, "selected_object_refs": intent.scope["context_refs"],
+                               "playhead_ms": intent.playhead_ms}
+            compound_proposal = asdict(proposal)
+        compiled = compile_compound_edit(command_payload["raw_command"], plan, _effective_audio_timeline(plan),
+            command_payload.get("selected_object_refs", []), task.current_timeline_version_id,
+            command_payload.get("playhead_ms"), included)
+        if compiled is not None:
+            picture_candidates.append(compiled[0])
     expected = payload.get("base_version_id")
     if "base_version_id" in payload and expected != task.current_timeline_version_id:
         raise ValueError("时间线已变化，请重新安排当前要求")
@@ -4042,6 +4064,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == "command_edit_preview" and arguments.get("_media_kind") in {"audio_mix", "audio_probe", "audio_stretch"} and not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip()):
         audio_operations.add(operation)
     files, audio_inputs, audio_uses, graphics = [], [], {}, []
+    audio_graphs = []
     service = _task_audio()
     def remember(reference, path, *, audio=False, metadata=None):
         stat = path.stat()
@@ -4084,6 +4107,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
                 graphics.append(item)
                 remember(reference, Path(item["path"]))
         graph = _effective_audio_timeline(plan)
+        audio_graphs.append(graph)
         solo = set(payload.get("solo_track_ids", []))
         clips = [clip for track in graph.tracks if not track.muted and (not solo or track.id in solo)
                  for clip in track.clips if not clip.muted]
@@ -4107,6 +4131,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             if edit.action == "replace_narration":
                 edit = edit.model_copy(update={"values": {**edit.values, "source_end_ms": duration_ms}})
             candidate = apply_audio_edit(graph, edit, duration_ms)
+            audio_graphs.append(candidate)
             after_clips = [clip for track in candidate.tracks if not track.muted for clip in track.clips if not clip.muted]
             references.update(clip.source_ref for clip in after_clips)
             for reference, count in Counter(clip.source_ref for clip in after_clips).items():
@@ -4133,6 +4158,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         facts = {"base_version_id": None, "files": files}
     if graphics:
         facts["graphic_sources"] = graphics
+    if compound_proposal is not None:
+        facts["compound_selection_proposal"] = compound_proposal
     if operation in audio_operations:
         budget = cpu_audio_budget_from_env()
         if budget is None:
@@ -4173,6 +4200,12 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             "output_channels_limit": budget.max_channels if operation in {"audio_import", "recording_save", "audio_waveform", "narration_waveform"} else 2,
             "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
             "timeout_seconds": budget.max_timeout_seconds}
+        if audio_graphs and (operation in {"audio_listen", "audio_edit_preview"} or exact_audio
+                or arguments.get("_media_kind") == "audio_mix"):
+            mix = audio_mix_resources(audio_inputs, audio_graphs, output_duration,
+                normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=budget)
+            resources.update({key: mix[key] for key in ("normalize_voice_sources", "normalized_source_outputs",
+                "mix_output_bytes", "temporary_output_bytes", "output_duration_limit_seconds")})
         if (resources["input_count"] > budget.max_input_count or resources["input_bytes"] > budget.max_input_bytes
                 or output_duration > budget.max_output_duration_seconds
                 or resources["output_sample_rate_limit"] > budget.max_sample_rate):
@@ -4196,6 +4229,39 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             "clip_count": len(plan.clips), "overlay_count": max(len(candidate.graphic_overlays) for candidate in picture_candidates),
             "threads": budget.max_threads, "timeout_seconds": budget.max_timeout_seconds,
             "max_output_bytes": budget.max_output_bytes}
+        audio_budget = cpu_audio_budget_from_env()
+        candidates = []
+        for candidate in picture_candidates:
+            graph = _effective_audio_timeline(candidate)
+            mix_facts = service.mix_facts(workspace_id, task_id, graph, candidate.duration_seconds,
+                actor=actor, normalize_voice_sources=candidate.narration_linkage_created_audio_timeline, budget=audio_budget)
+            candidates.append({"key": media_digest([graph.model_dump(), candidate.duration_seconds,
+                candidate.narration_linkage_created_audio_timeline]), **mix_facts})
+        mix_inputs = {}
+        for candidate in candidates:
+            for source in candidate["resources"]["inputs"]:
+                previous = mix_inputs.get(source["reference"])
+                if previous is None or previous["uses"] < source["uses"]:
+                    mix_inputs[source["reference"]] = source
+        resources["audio_mix"] = audio_mix_resources(list(mix_inputs.values()),
+            [_effective_audio_timeline(candidate) for candidate in picture_candidates],
+            max(candidate.duration_seconds for candidate in picture_candidates),
+            normalize_voice_sources=any(candidate.narration_linkage_created_audio_timeline for candidate in picture_candidates),
+            budget=audio_budget)
+        resources["audio_mix_candidates"] = candidates
+        facts["audio_mix_candidates"] = candidates
+        if (operation == "command_edit_preview" and re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip())):
+            selected = payload.get("selected_object_refs", [])
+            if len(selected) != 1 or not selected[0].startswith("clip:"):
+                raise ValueError("静音检测必须绑定一个实际镜头")
+            clip = next((item for item in plan.clips if f"clip:{item.id}" == selected[0]), None)
+            if clip is None or clip.locked:
+                raise ValueError("静音检测镜头不存在或已锁定")
+            resources["silence_analysis_scope"] = {"base_version_id":task.current_timeline_version_id, "clip_id":clip.id}
+            resources["dynamic_clip_count_limit"] = budget.max_clip_count
+            resources["dynamic_overlay_count_limit"] = budget.max_overlay_count
+            resources["audio_mix"]["dynamic_input_count_limit"] = audio_budget.max_input_count
+            resources["audio_mix"]["dynamic_input_bytes_limit"] = audio_budget.max_input_bytes
         # Local recognition has model memory requirements beyond FFmpeg budgets.
         if "校准" in payload.get("raw_command", ""):
             raise ValueError("本地字幕识别尚无独立标定的模型资源许可，未启动识别")
@@ -4965,6 +5031,7 @@ def listen_creation_task_audio(task_id: str, request: Request, payload: AudioLis
                         "end_seconds": payload.end_seconds, "solo_track_ids": sorted(payload.solo_track_ids)},
             input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
             operation="audio_mix", media_input={"audio_timeline": graph.model_dump(), "duration_seconds": plan.duration_seconds,
+                "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
                 "start_seconds": payload.start_seconds, "end_seconds": payload.end_seconds,
                 "solo_track_ids": sorted(payload.solo_track_ids)})
     except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
@@ -5071,6 +5138,7 @@ def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEd
                         parameters={"audio_timeline": graph.model_dump(), "start_seconds": start, "end_seconds": end},
                         input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
                         operation="audio_mix", media_input={"audio_timeline": graph.model_dump(), "duration_seconds": plan.duration_seconds,
+                "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
                             "start_seconds": start, "end_seconds": end})
                     previews.append(record)
             preview_media = {**{side: {"ref": f"timeline:{payload.base_version_id}", "label": label, "detail": "只更新音轨草稿；明确试听或生成时才处理音频。"} for side, label in (("before", "当前音轨"), ("after", "修改后音轨"))}, **{side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else "音轨修改后",
@@ -14124,10 +14192,27 @@ def _preview_remove_silence(task, request, payload):
             parameters={"action":"silence_analysis", "clip_id":clip.id},
             input_refs=sorted({c.source_ref for t in graph.tracks if t.id in voice_ids for c in t.clips}),
             operation="audio_mix", media_input={"audio_timeline": graph.model_dump(), "duration_seconds": plan.duration_seconds,
+                "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
                 "start_seconds": clip.timeline_start_seconds, "end_seconds": clip.timeline_end_seconds,
                 "solo_track_ids": sorted(voice_ids)})
         cuts = detect_silence_cuts(artifact_store.resolve_file(analysis.logical_ref),
-            clip.timeline_end_seconds-clip.timeline_start_seconds, clip.timeline_start_seconds, context=_task_media_grant_or_queue())
+            clip.timeline_end_seconds-clip.timeline_start_seconds, clip.timeline_start_seconds,
+            context=bounded_audio_context(_task_media_grant_or_queue()))
+        active_context, active_job = TASK_MEDIA_CONTEXT.get()[:2]
+        active_context.check()
+        analysis_transform = service._transform_for(workspace_id, task.id, analysis)
+        measured_event = TaskEvent(id=f"event_{active_job.id}_{analysis.id}_silence_detected",
+            workspace_id=workspace_id, task_id=task.id, job_id=active_job.id, event_type="silence_analysis_result",
+            payload={"base_version_id":base.id, "clip_id":clip.id, "analysis_ref":analysis.logical_ref,
+                "analysis_sha256":analysis.sha256, "transform_id":analysis_transform.id, "removed_ranges_ms":cuts},
+            created_at=datetime.now(UTC))
+        try:
+            saved_event = production_repo.get_task_event(workspace_id, measured_event.id)
+        except KeyError:
+            production_repo.append_task_event(measured_event)
+        else:
+            if replace(saved_event, created_at=measured_event.created_at) != measured_event:
+                raise ValueError("同一分析产物的静音结果已变化，未生成新预览")
         edited, changed_tracks = remove_time_ranges(plan, tracks, graph, cuts)
         service.validate(workspace_id, task.id, edited.audio_timeline, edited.duration_seconds, draft_only=True)
         for c in edited.clips:
@@ -14135,7 +14220,7 @@ def _preview_remove_silence(task, request, payload):
         previews = {}
         for side, candidate, captions in (("before",plan,tracks),("after",edited,changed_tracks)):
             record = _publish_task_picture_preview(workspace_id,task,base,candidate,captions,
-                kind="silence_preview",parameters={"side":side,"removed_ranges_ms":cuts})
+                kind="silence_preview",parameters={"side":side,"removed_ranges_ms":cuts,"analysis_ref":analysis.logical_ref})
             previews[side] = {"ref":record.logical_ref,"label":"修改前" if side=="before" else "缩短停顿后",
                 "detail":f"{candidate.duration_seconds:.3f} 秒", "video_url":f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
@@ -16831,6 +16916,127 @@ def _granted_graphic_source_paths(workspace_id, task_id, overlays, context):
     return paths
 
 
+def _verify_silence_audio_candidate(workspace_id, plan, context, resources, facts, actor):
+    """Accept only the original silence request's actually measured derived candidate."""
+    from app.task_audio import media_render_canonical
+    scope = resources.get("silence_analysis_scope")
+    if not isinstance(scope, dict):
+        raise ValueError("画面预览音轨与本次封存候选输入不一致")
+    task = production_repo.get_creation_task(workspace_id, plan.task_id)
+    job = production_repo.get_job_run(workspace_id, context.grant.owner_id)
+    start = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
+    arguments = start.payload.get("arguments", {}).get("payload", {})
+    if (job.kind != TASK_MEDIA_KIND or job.task_id != plan.task_id
+            or CreationExecutionActor.from_event(workspace_id, start.payload) != actor
+            or start.payload.get("operation") != "command_edit_preview"
+            or arguments.get("selected_object_refs") != [f"clip:{scope['clip_id']}"]
+            or not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", arguments.get("raw_command", "").strip())
+            or task.current_timeline_version_id != scope["base_version_id"]):
+        raise PermissionError("动态静音候选没有本次原始指令或当前版本许可")
+    inputs = [event for event in production_repo.list_task_events(workspace_id, plan.task_id)
+        if event.job_id == job.id and event.event_type == "task_media_input"
+        and event.payload.get("operation") == "picture_preview"
+        and event.payload.get("parameters", {}).get("side") == "after"
+        and event.payload.get("media_input", {}).get("plan", {}).get("audio_timeline") == plan.audio_timeline.model_dump()
+        and event.payload["media_input"]["plan"].get("duration_seconds") == plan.duration_seconds]
+    if len(inputs) != 1:
+        raise ValueError("动态静音候选缺少唯一的本次实际画面输入")
+    actual = inputs[0].payload
+    analysis_ref = actual["parameters"].get("analysis_ref")
+    record = next((item for item in production_repo.list_artifact_records(workspace_id, plan.task_id)
+        if item.logical_ref == analysis_ref and item.kind == "audio_preview" and item.producer_job_id == job.id), None)
+    if record is None:
+        raise ValueError("静音候选缺少本次真实分析产物")
+    service = _task_audio()
+    transform = service._transform_for(workspace_id, plan.task_id, record)
+    result = production_repo.get_task_event(workspace_id, f"event_{job.id}_{record.id}_silence_detected")
+    cuts = actual["parameters"]["removed_ranges_ms"]
+    if (transform.status != "succeeded" or transform.job_id != job.id
+            or transform.parameters.get("action") != "silence_analysis"
+            or transform.parameters.get("clip_id") != scope["clip_id"]
+            or result.job_id != job.id or result.event_type != "silence_analysis_result"
+            or result.payload != {"base_version_id":scope["base_version_id"], "clip_id":scope["clip_id"],
+                "analysis_ref":record.logical_ref, "analysis_sha256":record.sha256,
+                "transform_id":transform.id, "removed_ranges_ms":cuts}):
+        raise ValueError("动态静音候选与已完成的实际分析记录不一致")
+    publication = artifact_store.describe(record.logical_ref)
+    if (publication.sha256, publication.size_bytes) != (record.sha256, record.size_bytes):
+        raise ValueError("静音分析产物内容已变化")
+    service.source(workspace_id, plan.task_id, record.logical_ref, actor=actor)
+    before = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, plan.task_id))
+    clip = next((item for item in before.clips if item.id == scope["clip_id"]), None)
+    voice_ids = sorted(track.id for track in _effective_audio_timeline(before).tracks
+        if track.role in {"narration", "original"} and not track.muted and any(not item.muted for item in track.clips))
+    voice_refs = sorted({item.source_ref for track in _effective_audio_timeline(before).tracks
+        if track.id in voice_ids for item in track.clips})
+    analysis_input = production_repo.get_task_event(workspace_id, f"event_{job.id}_{transform.input_digest}_input")
+    if (clip is None or transform.input_refs != voice_refs or transform.output_refs != [record.logical_ref]
+            or analysis_input.job_id != job.id or analysis_input.event_type != "task_media_input"
+            or analysis_input.payload.get("operation") != "audio_mix"
+            or analysis_input.payload.get("parameters") != {"action":"silence_analysis", "clip_id":clip.id}
+            or analysis_input.payload.get("media_input") != {"audio_timeline":_effective_audio_timeline(before).model_dump(),
+                "duration_seconds":before.duration_seconds, "normalize_voice_sources":before.narration_linkage_created_audio_timeline,
+                "start_seconds":clip.timeline_start_seconds, "end_seconds":clip.timeline_end_seconds,
+                "solo_track_ids":voice_ids}):
+        raise ValueError("静音分析不是本次实际镜头的固定原始音轨与区间")
+    base = production_repo.get_timeline_version(workspace_id, scope["base_version_id"])
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=before)
+    expected, expected_tracks = remove_time_ranges(before, tracks, _effective_audio_timeline(before), cuts)
+    transient = {"status", "message", "output_path", "subtitle_path", "created_at", "updated_at"}
+    expected_input = {"plan": {key: value for key, value in creation_task_montage_plan_to_payload(expected).items() if key not in transient},
+        "subtitle_tracks": [{key: value for key, value in asdict(track).items() if key not in {"created_at", "updated_at"}} for track in expected_tracks]}
+    actual_input = {"plan": {key: value for key, value in actual["media_input"]["plan"].items() if key not in transient},
+        "subtitle_tracks": [{key: value for key, value in track.items() if key not in {"created_at", "updated_at"}} for track in actual["media_input"]["subtitle_tracks"]]}
+    if media_render_canonical(expected_input) != media_render_canonical(actual_input):
+        raise ValueError("静音画面输入不是原范围与本次实际切点的精确派生")
+    if (len(expected.clips) > resources["dynamic_clip_count_limit"]
+            or len(expected.graphic_overlays) > resources["dynamic_overlay_count_limit"]):
+        raise ValueError("实际静音切分画面超出本次已标定成片上界")
+    captured = {item["reference"]: item for item in resources["audio_mix_candidates"][0]["sources"]}
+    if any(captured.get(item["reference"]) != item for item in facts["sources"]):
+        raise ValueError("静音候选扩大或改变了本次固定音频来源")
+    declared, derived = resources["audio_mix"], facts["resources"]
+    if (derived["input_count"] > declared["dynamic_input_count_limit"]
+            or derived["input_bytes"] > declared["dynamic_input_bytes_limit"]
+            or derived["max_output_bytes"] > declared["max_output_bytes"]
+            or derived["output_duration_limit_seconds"] > declared["output_duration_limit_seconds"]
+            or derived["normalize_voice_sources"] != declared["normalize_voice_sources"]):
+        raise ValueError("实际静音切分音轨超出本次已标定音频上界")
+    context.check()
+
+
+def _granted_audio_mix_sources(workspace_id, plan, context):
+    context.check()
+    actor = CreationExecutionActor.from_event(workspace_id,
+        production_repo.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
+    if _verify_creation_identity(actor) != "ready":
+        raise PermissionError("当前音轨渲染成员许可不可核验")
+    with context.scheduler._connect() as conn:
+        row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?",
+            (context.grant.request_id,)).fetchone()
+    if row is None:
+        raise PermissionError("当前成片音轨许可不可读取")
+    resources = json.loads(row["resources_json"])
+    declared = resources.get("audio_mix")
+    if not isinstance(declared, dict):
+        raise PermissionError("当前成片未封存音轨混音用途")
+    facts = _task_audio().mix_facts(workspace_id, plan.task_id, plan.audio_timeline, plan.duration_seconds,
+        actor=actor, normalize_voice_sources=plan.narration_linkage_created_audio_timeline,
+        budget=context.scheduler.resources.budget.cpu_audio)
+    if "audio_mix_candidates" in resources:
+        key = media_digest([plan.audio_timeline.model_dump(), plan.duration_seconds,
+            plan.narration_linkage_created_audio_timeline])
+        candidate = next((item for item in resources["audio_mix_candidates"] if item["key"] == key), None)
+        if candidate is None:
+            _verify_silence_audio_candidate(workspace_id, plan, context, resources, facts, actor)
+        elif {name: value for name, value in candidate.items() if name != "key"} != facts:
+            raise ValueError("画面预览音轨与本次封存候选输入不一致")
+    elif facts["resources"] != declared:
+        raise ValueError("音轨输入、摘要或资源与本次成片许可不一致")
+    context.check()
+    return facts, {item["reference"]: Path(item["path"]) for item in facts["sources"]}
+
+
 def _render_montage_with_resolved_clip_sources(
     workspace_id: str,
     plan,
@@ -16903,21 +17109,21 @@ def _render_montage_with_resolved_clip_sources(
             return montage_renderer.render(plan, narration_audio_path)
         if isinstance(plan, CreationTaskMontagePlan) and plan.audio_timeline is not None:
             mixed_audio = Path(job_staging_path) / "timeline-mix.wav"
-            service = _task_audio()
-            audio_options = (
-                {"scheduler": render_context.scheduler, "grant": render_context.grant,
-                 "cancel_event": render_context.cancel_event,
-                 "deadline_monotonic": render_context.deadline_monotonic,
-                 "max_output_bytes": int(plan.duration_seconds * 192_000) + 4096,
-                 "threads": render_context.threads}
-                if render_context is not None else {}
-            )
+            if render_context is None:
+                raise PermissionError("成片音轨处理必须持有当前设备许可")
+            audio_facts, source_paths = _granted_audio_mix_sources(workspace_id, plan, render_context)
+            audio_resources = audio_facts["resources"]
+            audio_options = {"scheduler": render_context.scheduler, "grant": render_context.grant,
+                "cancel_event": render_context.cancel_event,
+                "deadline_monotonic": bounded_audio_context(render_context).deadline_monotonic,
+                "max_output_bytes": audio_resources["max_output_bytes"],
+                "threads": audio_resources["threads"]}
             render_audio_mix(plan.audio_timeline, plan.duration_seconds,
-                lambda reference: service.source(workspace_id, plan.task_id, reference), mixed_audio,
-                produced_source_paths={artifact_store.resolve_file(record.logical_ref)
-                    for record in production_repo.list_artifact_records(workspace_id, plan.task_id)
-                    if render_context is not None and record.producer_job_id == render_context.grant.owner_id},
-                normalize_voice_sources=plan.narration_linkage_created_audio_timeline, **audio_options)
+                lambda reference: source_paths[reference], mixed_audio,
+                normalize_voice_sources=audio_resources["normalize_voice_sources"], **audio_options)
+            render_context.check()
+            if _granted_audio_mix_sources(workspace_id, plan, render_context)[0] != audio_facts:
+                raise ValueError("混音期间音频来源或许可发生变化")
             narration_audio_path = mixed_audio
         render_options = (
             {"scheduler": render_context.scheduler, "grant": render_context.grant,
@@ -19574,6 +19780,9 @@ def _build_device_components(*, repository: ProductionRepository):
             task_media=task_media,
             graphic_source_facts=lambda workspace_id, task_id, reference, *, actor: graphic_source_facts(
                 repository, artifact_store, workspace_id, task_id, reference, actor=actor),
+            audio_mix_facts=lambda workspace_id, task_id, montage, *, actor: _task_audio().mix_facts(
+                workspace_id, task_id, montage.audio_timeline, montage.duration_seconds, actor=actor,
+                normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget),
             render_action=_render_creation_stage_with_grant,
             render_is_valid=_creation_stage_valid_with_grant,
             cpu_render_budget=cpu_render_budget,

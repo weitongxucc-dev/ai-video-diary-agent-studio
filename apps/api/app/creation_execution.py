@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -85,6 +85,8 @@ class CreationStageGrantContext:
     max_output_bytes: int
     threads: int
     cancel_event: threading.Event | None = None
+    started_monotonic: float = field(default_factory=time.monotonic)
+    resource_purpose: str | None = None
 
     def check(self) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
@@ -103,6 +105,7 @@ class CreationStageGrantContext:
             max_stdout_bytes=65536, max_stderr_bytes=65536, cancel_event=self.cancel_event,
             env=env, output_paths=output_paths,
             max_output_file_bytes=self.max_output_bytes if output_bytes is None else output_bytes,
+            resource_purpose=self.resource_purpose,
         )
 
 
@@ -350,7 +353,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      creation_plan: CreationPlan, limits: CpuRenderLimits,
                      *, request: WorkRequest | None = None, presenter_limits=None,
                      presenter_models=None, resolve_presenter_output=None,
-                     actor=None, graphic_source_facts=None) -> tuple[str, dict[str, object]]:
+                     actor=None, graphic_source_facts=None, audio_mix_facts=None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
         raise ValueError("当前任务缺少已确认故事板或配音")
@@ -380,8 +383,11 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         script = repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
         person_inputs = {segment.id: (segment, item) for segment, item in
                          presenter_inputs(repository, task, script, creation_plan, presenter_models or {})}
+    audio_mix = None
     if montage.audio_timeline is not None:
-        raise ValueError("当前有效音轨组合尚未接入 CPU 成片预算")
+        if not isinstance(actor, CreationExecutionActor) or audio_mix_facts is None:
+            raise PermissionError("音轨成片缺少当前成员或已许可来源解析器")
+        audio_mix = audio_mix_facts(task.workspace_id, task.id, montage, actor=actor)
     if any(item.get("kind") != "image" for item in montage.graphic_overlays):
         raise ValueError("CPU 成片当前仅支持已登记PNG图片图层")
     validate_overlays(montage.graphic_overlays, montage.duration_seconds)
@@ -448,7 +454,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                 != {key: item for key, item in payload.items() if key not in transient}):
             raise ValueError("当前时间线与已确认故事板不一致")
     audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, narration_reference)
-    sources = [audio, *(Path(item["path"]) for item in graphics)]
+    sources = [audio, *(Path(item["path"]) for item in graphics),
+               *(Path(item["path"]) for item in (audio_mix["sources"] if audio_mix is not None else []))]
     for clip in montage.clips:
         if clip.person_render_id:
             cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
@@ -492,6 +499,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     }
     if graphics:
         manifest["graphic_sources"] = graphics
+    if audio_mix is not None:
+        manifest["audio_mix"] = audio_mix
     digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
                                        default=str).encode("utf-8")).hexdigest()
     # These are the exact fields HostResourceProbe reads back to budget the unit.
@@ -510,6 +519,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         "max_output_bytes": limits.max_output_bytes,
         "threads": limits.threads,
     }
+    if audio_mix is not None:
+        resources["audio_mix"] = audio_mix["resources"]
     return f"render:{digest}", resources
 
 
@@ -565,7 +576,7 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -577,6 +588,7 @@ class CreationJobOwnerVerifier:
         self.resolve_presenter_output = resolve_presenter_output
         self.task_media = task_media
         self.graphic_source_facts = graphic_source_facts
+        self.audio_mix_facts = audio_mix_facts
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None):
         # Person composition never inherits the pure-material caps.
@@ -586,7 +598,7 @@ class CreationJobOwnerVerifier:
         return cpu_render_facts(self.repository, conn, task, plan, limits, request=request,
             presenter_limits=self.presenter_cpu_render_limits, presenter_models=self.presenter_models,
             resolve_presenter_output=self.resolve_presenter_output,
-            actor=actor, graphic_source_facts=self.graphic_source_facts)
+            actor=actor, graphic_source_facts=self.graphic_source_facts, audio_mix_facts=self.audio_mix_facts)
 
     def stage_facts(self, task, script, plan, stage):
         if stage == "person_render":
@@ -809,7 +821,29 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
     """Queue exactly the next persisted stage; repeated submissions reuse one request."""
     if job.status not in {"queued", "interrupted"}:
         return None
-    intent = next_creation_intent(execution.repository, scheduler, job)
+    try:
+        intent = next_creation_intent(execution.repository, scheduler, job)
+    except (ValueError, PermissionError) as exc:
+        # This is before scheduler.submit: the registered job has a known
+        # rejection, rather than an unknown submission or a running worker.
+        now = datetime.now(timezone.utc).isoformat()
+        with execution.repository._connect() as conn:
+            event = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (job.workspace_id, f"event_{job.id}_start")).fetchone()
+            original = CreationExecutionActor.from_event(job.workspace_id, json.loads(event["payload_json"])) if event else None
+            if original != actor:
+                raise PermissionError("不能改变其他成员的制作作业") from exc
+            changed = conn.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,"
+                "finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status IN ('queued','interrupted') "
+                "AND NOT EXISTS (SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_id=? "
+                "AND owner_type='creation_job' AND state IN ('waiting','blocked','granted','yield_requested'))",
+                (str(exc), "当前阶段未提交设备队列，上游产物和已采用版本保留。",
+                 "修复首个拒绝原因后点击继续制作。", now, now, job.workspace_id, job.id, job.workspace_id, job.id)).rowcount
+            if changed:
+                conn.execute("INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) "
+                    "VALUES (?,?,?,?,?,?,?)", (f"event_{job.id}_admission_failed", job.workspace_id, job.task_id, job.id,
+                    "creation_execution_stage", json.dumps({"stage": "admission", "status": "failed", "reason": str(exc)}, ensure_ascii=False), now))
+        raise
     return scheduler.submit(intent, actor).id if intent is not None else None
 
 

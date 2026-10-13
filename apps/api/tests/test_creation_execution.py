@@ -1038,6 +1038,8 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 0
             conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE workspace_id=? AND task_id=?",
                          (json.dumps(creation_task_montage_plan_to_payload(montage)), task.workspace_id, task_id))
+        assert repo.get_job_run(task.workspace_id, job.id).status == "failed"
+        job = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
         request_id = submit_creation_stage(execution, scheduler, job, actor)
         with repo._connect() as conn:
             row = conn.execute("SELECT unit_key,resources_json FROM device_work_requests WHERE id=?",
