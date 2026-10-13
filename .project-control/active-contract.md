@@ -2,7 +2,7 @@
 
 ## 2026-10-12 PI-OPEN：按已审方案实施并同步教学
 
-PI路径输出提示四文件已RELEASE；所有源码writer再次退出本批，root集中保存最后提示候选与后台成功分支复测，随后恢复原安装实例。
+PI路径输出提示四文件已RELEASE；所有源码writer已退出本批。root已完成正常模型后台成功与失败的同轮次回填、图片图层正常成片、撤销/重做、重启回读及配方版本/停用验证；收口仅含接口文档澄清、GitHub回执和退出本轮验收进程后恢复原安装实例，不扩大源码或分发授权。
 
 PI路径输出提示窄接续：真实延迟程序在模型结束后返回失败，宿主已在原轮次回填终态；实际代码将outputs[name]覆盖为PNG bytes而未写声明文件。Pi Owner仅续assistant_pi.py/diary_tools.ts及直接提示契约测试，明确outputs是宿主提供的可信文件路径映射，使用Image.save(outputs[name])，不把dict项替换为bytes/BytesIO；不自动改写模型代码、不放宽产物检查/路径或预算，不改错误归一化。完成最小相关检查后RELEASE由root保存复测。
 

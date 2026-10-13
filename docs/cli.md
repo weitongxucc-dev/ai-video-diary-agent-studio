@@ -52,7 +52,7 @@ node scripts/yaohe.mjs job wait TASK JOB --timeout-seconds 20
 
 能力来自 `/assistant/media-script-capabilities` 的真实 `MediaScriptPreviewRequest` schema。工具链、隔离环境或专用预算缺档时，以 `available/reason` 为准，不自动安装或执行本地Python。当前只支持单PNG输出，以及本任务已登记PNG来源输入；视频/音频脚本未接入。
 
-`script.json` 使用API的 `script_source`、`language`、`purpose`、`parameters`、`input_refs`、`requested_outputs` 字段，整体读取上限256KiB。脚本命名空间是 `parameters`、`inputs`、`outputs`；通过 `outputs[声明名称]` 写输出。输入的 `source_ref/artifact_id/sha256` 须来自实际 `script sources` 回执；0输入也可绘图。脚本字段和数值契约仅由普通API校验，CLI不执行代码、不接受运行时路径。
+`script.json` 使用API的 `script_source`、`language`、`purpose`、`parameters`、`input_refs`、`requested_outputs` 字段，整体读取上限256KiB。脚本命名空间遵循[架构中的程序接口](system-architecture.md#38-editcompiler)：`parameters` 是参数对象，`inputs[声明名称]`、`outputs[声明名称]` 是可信文件路径，使用 `image.save(outputs[声明名称])` 写文件，不覆盖映射项为图片字节。输入的 `source_ref/artifact_id/sha256` 须来自实际 `script sources` 回执；0输入也可绘图。脚本字段和数值契约仅由普通API校验，CLI不执行代码、不接受运行时路径。
 
 ```json
 {
