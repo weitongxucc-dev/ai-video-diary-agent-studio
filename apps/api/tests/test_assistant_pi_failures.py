@@ -309,12 +309,43 @@ def test_missing_business_tool_import_has_reinstall_action_not_pi_install(monkey
     from app.assistant_pi import pi_runtime_checks
     _install_fake_pi(monkeypatch, tmp_path)
     extension = tmp_path / "diary_tools.ts"
-    extension.write_text("// initial test fixture, missing required sibling")
+    extension.write_text('import {rankByQuery} from "./retrieval.ts";\n')
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(extension))
     checks = {c["id"]: c for c in pi_runtime_checks()}
     assert checks["pi_tools"]["status"] == "missing"
-    assert "retrieval.ts" in checks["pi_tools"]["repair_action"]
+    assert "相对导入文件和子目录" in checks["pi_tools"]["repair_action"]
     assert checks["pi_tools"]["fix_command"] is None
+
+
+@pytest.mark.parametrize("missing", ["diary/runtime.ts", "diary/transport.ts", "materials/selection.ts"])
+def test_runtime_check_requires_actual_nested_packaged_imports(monkeypatch, tmp_path, missing):
+    import shutil
+    from app.assistant_pi import pi_runtime_checks
+    from app.assistant.tool_sources import tool_sources_readable
+    source = Path(__file__).parents[1] / "agent_tools"
+    target = tmp_path / "agent-tools"
+    shutil.copytree(source, target, ignore=shutil.ignore_patterns("*.mjs"))
+    extension = target / "diary_tools.ts"
+    assert tool_sources_readable(extension)
+    (target / missing).unlink()
+    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(extension))
+    monkeypatch.setattr("app.assistant_pi._pi_executable", lambda: None)
+    monkeypatch.setattr("app.assistant_pi.shutil.which", lambda *args, **kwargs: None)
+    checks = {item["id"]: item for item in pi_runtime_checks()}
+    assert checks["pi_tools"]["status"] == "missing"
+    assert checks["pi_tools"]["fix_command"] is None
+
+
+def test_tool_readiness_uses_import_graph_instead_of_fixed_module_names(tmp_path):
+    from app.assistant.tool_sources import tool_sources_readable
+    extension = tmp_path / "diary_tools.ts"
+    module = tmp_path / "specific" / "runtime.ts"
+    module.parent.mkdir()
+    extension.write_text('export {register} from "./specific/runtime.ts";\n')
+    module.write_text('export function register() {}\n')
+    assert tool_sources_readable(extension)
+    module.write_text('import "../missing.ts";\n')
+    assert not tool_sources_readable(extension)
 
 
 

@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import json
+import re
+
+FAILURE_KEY_REJECTED = "key_rejected"              # 密钥被拒
+FAILURE_ADDRESS_UNREACHABLE = "address_unreachable"  # 服务地址不通
+FAILURE_TIMEOUT = "timeout"                        # 超时
+FAILURE_RUNTIME_MISSING = "runtime_missing"        # 运行环境缺失
+FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
+FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
+
+# service_contacted=True 的只有三种：它们都真的向模型服务发过请求，结论可以写进
+# 服务状态。业务工具失败和「拿不到原因」不写——本地工具坏掉或日志缺失都不能
+# 拿来证明密钥是好的或坏的。
+_FAILURES: dict[str, dict[str, object]] = {
+    FAILURE_KEY_REJECTED: {
+        "service_contacted": True,
+        "explanation": "模型服务拒绝了这把密钥——这一次是真的连到了服务，是密钥没通过。",
+        "next_step": "在服务商控制台重新复制 API Key 粘贴到设置页，别带上空格和换行，保存后再试一次。",
+    },
+    FAILURE_ADDRESS_UNREACHABLE: {
+        "service_contacted": True,
+        "explanation": "连不上设置里的服务地址，还没走到鉴权那一步，所以不是密钥的问题。",
+        "next_step": "在设置页核对服务地址是否完整（要含 https:// 和 /v1），并确认当前网络能访问该服务后重试。",
+    },
+    FAILURE_TIMEOUT: {
+        "service_contacted": True,
+        "explanation": "等模型回复超时，这一轮没有拿到回复；任务和时间线没有因此改变。",
+        "next_step": "先重试一次；仍然超时就核对服务地址是否可达，或换用响应更快的模型。",
+    },
+    FAILURE_RUNTIME_MISSING: {
+        "service_contacted": False,
+        "explanation": "对话没能在本机跑起来，所以这一轮根本没碰到密钥和网络。",
+        "next_step": "安装 Node.js 22.19 或更高版本，再执行 npm install -g @earendil-works/pi-coding-agent；确认 node --version 和 pi --version 可运行后重新打开应用。桌面安装包尚不自带 Node/Pi。",
+    },
+    FAILURE_TOOL_FAILED: {
+        "service_contacted": False,
+        "explanation": "本轮业务操作未完成，当前任务修改保留。",
+        "next_step": "查看本轮工具记录中的具体阻断，再处理后重试。",
+    },
+    FAILURE_UNKNOWN: {
+        "service_contacted": False,
+        "explanation": "这一轮没有完成，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
+        "next_step": "重试一次；仍然失败请打开设置页的运行时体检，看服务状态。",
+    },
+}
+
+# 文本匹配是启发式的，只能说「日志里出现过这句话」，不等于服务端真的这么判。
+_KEY_REJECTED_PATTERNS = (
+    "invalid api key", "invalid_api_key", "incorrect api key", "incorrect_api_key",
+    "unauthorized", "authentication_error", "authentication failed",
+    "invalid authentication", "invalid bearer", "no auth credentials",
+)
+_ADDRESS_PATTERNS = (
+    "enotfound", "econnrefused", "ehostunreach", "enetunreach", "eai_again",
+    "getaddrinfo", "connection refused", "name resolution", "name or service not known",
+    "could not resolve host", "proxyerror",
+)
+_TIMEOUT_PATTERNS = ("timeout", "timed out", "etimedout", "deadline exceeded", "read timeout")
+_TOOL_ERROR_PATTERNS = ("tool_execution_end", "tool call failed", "tool_error", "isError")
+
+class AssistantUnavailable(RuntimeError):
+    """A conversation failure the user can read.
+
+    `cause` is the class actually observed this round; `service_contacted`
+    says whether a request really reached the external model service, which
+    is the only thing that may be written back into the service state.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: str = FAILURE_UNKNOWN,
+        service_contacted: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.service_contacted = service_contacted
+
+
+def _fail(
+    cause: str, *, explanation: str | None = None, repair_action: str | None = None,
+) -> AssistantUnavailable:
+    """Build the user-facing failure text: what happened, then what to do.
+
+    The text is assembled from fixed copy only — never from the process log,
+    which can hold the key or the whole session.
+    """
+    copy = _FAILURES[cause]
+    headline = explanation or str(copy["explanation"])
+    return AssistantUnavailable(
+        f"{headline} 下一步：{repair_action or copy['next_step']}",
+        cause=cause,
+        service_contacted=bool(copy["service_contacted"]),
+    )
+
+
+def _tool_error_seen(output: str) -> bool:
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "tool_execution_end" and event.get("isError"):
+            return True
+    return False
+
+
+def _classify_output(stdout: str, stderr: str = "") -> str:
+    """Read one Pi run's logs and name the failure class, or admit we can't."""
+    text = f"{stdout}\n{stderr}".lower()
+    if _tool_error_seen(stdout):
+        return FAILURE_TOOL_FAILED
+    if any(pattern in text for pattern in _KEY_REJECTED_PATTERNS) or re.search(r"\b401\b", text):
+        return FAILURE_KEY_REJECTED
+    if any(pattern in text for pattern in _TIMEOUT_PATTERNS):
+        return FAILURE_TIMEOUT
+    if any(pattern in text for pattern in _ADDRESS_PATTERNS):
+        return FAILURE_ADDRESS_UNREACHABLE
+    if _tool_error_seen(stdout) or any(pattern in stdout for pattern in _TOOL_ERROR_PATTERNS):
+        return FAILURE_TOOL_FAILED
+    return FAILURE_UNKNOWN
