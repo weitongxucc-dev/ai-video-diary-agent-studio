@@ -3935,6 +3935,7 @@ def test_linked_delete_removes_last_caption_without_reviving_projection(person_r
 def test_linked_delete_rejects_shifting_locked_later_shot(person_render_edit_state):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
+    assert state.client.post(base + "/timeline/initialize").status_code == 200
     result = state.client.post(base + "/edits/exact", json={"operation_type":"SetClipLock", "clip_id":state.montage.clips[1].id, "locked":True})
     assert result.status_code == 200, result.text
     result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"DeleteClip", "clip_id":state.montage.clips[0].id})
@@ -3981,6 +3982,7 @@ def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_re
 def test_insert_clip_rejects_shifting_locked_later_shot(person_render_edit_state):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
+    assert state.client.post(base + "/timeline/initialize").status_code == 200
     result = state.client.post(base + "/edits/exact", json={"operation_type":"SetClipLock", "clip_id":state.montage.clips[1].id, "locked":True})
     assert result.status_code == 200, result.text
     result = state.client.post(base + "/edits/exact/preview", json={"operation_type":"InsertClip",
