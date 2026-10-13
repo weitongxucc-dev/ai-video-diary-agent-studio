@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 from app.audio_timeline import AudioTimeline, probe_audio_source, probe_audio_metadata, audio_mix_output_bounds
 from app.models import utc_now
-from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun, TaskEvent
+from app.creation.contracts import (ArtifactRecord, DependencyEdge, JobRun, TransformRun, TaskEvent)
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 import threading

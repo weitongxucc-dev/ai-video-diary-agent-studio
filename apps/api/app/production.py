@@ -85,12 +85,12 @@ def content_readable(
     visibility: str,
     owner_user_id: str | None,
 ) -> bool:
-    """内容可读判据。与知识域共用同一套规则（转发到 app.sources）。
+    """内容可读判据。与知识域共用同一套规则（转发到 app.source_policy）。
 
     私有只对上传者本人可读，共享对成员可读；认证态缺可信身份不可读，不降级
     local；保留的 local workspace 受控诊断下本机私有照常可读（非成员隔离）。
     """
-    from app.sources import knowledge_item_readable
+    from app.source_policy import knowledge_item_readable
 
     return knowledge_item_readable(
         user_id=user_id,
@@ -1001,288 +1001,28 @@ class ScriptLibraryEntry:
     updated_at: datetime = field(default_factory=utc_now)
 
 
-JobRunStatus = Literal[
-    "queued", "running", "succeeded", "failed", "cancelled", "interrupted"
-]
-
-
-@dataclass(frozen=True)
-class TimelineVersion:
-    id: str
-    workspace_id: str
-    task_id: str
-    parent_version_id: str | None
-    sequence: int
-    snapshot: dict[str, object]
-    created_by_operation_id: str | None
-    created_at: datetime = field(default_factory=utc_now)
-
-
-SubtitleTrackStatus = Literal["valid", "failed", "unavailable", "superseded"]
-
-
-@dataclass(frozen=True)
-class SubtitleCue:
-    id: str
-    source_cue_id: str | None
-    text: str
-    start_seconds: float
-    end_seconds: float
-    speaker: str | None = None
-    line_breaks: list[int] = field(default_factory=list)
-    emphasis: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class SubtitleTrack:
-    id: str
-    workspace_id: str
-    task_id: str
-    timeline_version_id: str
-    language: Literal["zh-CN", "en-US"]
-    source_language: Literal["zh-CN", "en-US"] | None
-    style: dict[str, object]
-    cues: list[SubtitleCue]
-    generation_method: Literal["timeline", "translation"]
-    model_id: str | None
-    artifact_ref: str | None
-    transform_id: str | None
-    status: SubtitleTrackStatus
-    failure_reason: str | None = None
-    impact: str | None = None
-    repair_action: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class CoverAsset:
-    id: str
-    workspace_id: str
-    task_id: str
-    timeline_version_id: str
-    source_video_ref: str
-    frame_time_seconds: float
-    title: str
-    safe_area: dict[str, float]
-    layout: dict[str, object]
-    generation_method: Literal["video_frame", "image_model"]
-    model_or_engine: str
-    artifact_ref: str | None
-    transform_id: str | None
-    status: SubtitleTrackStatus
-    failure_reason: str | None = None
-    impact: str | None = None
-    repair_action: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class JobRun:
-    id: str
-    workspace_id: str
-    task_id: str
-    kind: str
-    idempotency_key: str
-    input_digest: str
-    status: JobRunStatus = "queued"
-    progress: int = 0
-    attempt: int = 0
-    output_refs: list[str] = field(default_factory=list)
-    failure_reason: str | None = None
-    impact: str | None = None
-    repair_action: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class ArtifactRecord:
-    id: str
-    workspace_id: str
-    task_id: str
-    kind: str
-    logical_ref: str
-    sha256: str
-    size_bytes: int
-    producer_job_id: str
-    input_refs: list[str]
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class TaskEvent:
-    id: str
-    workspace_id: str
-    task_id: str
-    job_id: str | None
-    event_type: str
-    payload: dict[str, object]
-    created_at: datetime = field(default_factory=utc_now)
-
-
-TransformRunStatus = Literal["running", "succeeded", "failed"]
-
-
-@dataclass(frozen=True)
-class TransformRun:
-    id: str
-    workspace_id: str
-    task_id: str
-    job_id: str
-    transform_type: str
-    input_digest: str
-    input_refs: list[str]
-    output_refs: list[str]
-    engine: str
-    parameters: dict[str, object]
-    status: TransformRunStatus
-    started_at: datetime
-    finished_at: datetime | None = None
-    failure_reason: str | None = None
-    remediation: str | None = None
-
-
-@dataclass(frozen=True)
-class DependencyEdge:
-    id: str
-    workspace_id: str
-    task_id: str
-    upstream_ref: str
-    downstream_ref: str
-    created_by_transform_id: str
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass(frozen=True)
-class EditIntent:
-    id: str
-    workspace_id: str
-    task_id: str
-    raw_command: str
-    context_stage: str
-    selected_object_refs: list[str]
-    playhead_ms: int | None
-    intent_type: str
-    scope: dict[str, object]
-    constraints: dict[str, object]
-    confidence: float
-    status: str
-    created_at: datetime = field(default_factory=utc_now)
-
-
-EditProposalStatus = Literal["proposed", "confirmed", "rejected", "expired"]
-
-
-@dataclass(frozen=True)
-class EditProposal:
-    id: str
-    workspace_id: str
-    task_id: str
-    intent_id: str
-    summary: str
-    target_refs: list[str]
-    operation: dict[str, object]
-    invalidated_refs: list[str]
-    preview: dict[str, object]
-    external_effects: list[object]
-    status: EditProposalStatus = "proposed"
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-EditOperationStatus = Literal["running", "applied", "failed"]
-EditOperationType = Literal[
-    "ChangePresenterShare",
-    "EditAudioTimeline",
-    "EditCompoundTimeline",
-        "RemoveSilence",
-    "AdjustVisualEffects",
-    "ChangeCrop",
-    "ChangeCanvas",
-        "SetClipTransition",
-        "EditGraphicOverlay",
-    "ReplaceClip",
-    "TrimClip",
-        "SplitClip",
-        "ChangeClipSpeed",
-        "ChangeLinkedSpeed",
-        "DeleteClip",
-        "DuplicateClip",
-    "InsertClip",
-    "ReorderClip",
-    "ReorderTimelineItems",
-    "SetClipLock",
-    "ConfirmClip",
-    "UndoTimelineVersion",
-    "RedoTimelineVersion",
-    "RegenerateNarrationSegment",
-    "UpdateSubtitleCue",
-    "AlignSubtitleTiming",
-    "ReplaceSubtitleText",
-    "SplitSubtitleCue",
-    "MergeSubtitleCue",
-    "DeleteSubtitleCue",
-    "ConfigureSubtitleTrack",
-    "GenerateCoverFromFrame",
-    "ChangePersonSegment",
-    "RegeneratePersonRender",
-]
-SUPPORTED_EDIT_OPERATION_TYPES = {
-    "ChangePresenterShare",
-    "EditAudioTimeline",
-    "EditCompoundTimeline",
-        "RemoveSilence",
-    "AdjustVisualEffects",
-    "ChangeCrop",
-    "ChangeCanvas",
-        "SetClipTransition",
-        "EditGraphicOverlay",
-    "ReplaceClip",
-    "TrimClip",
-        "SplitClip",
-        "ChangeClipSpeed",
-        "ChangeLinkedSpeed",
-        "DeleteClip",
-        "DuplicateClip",
-    "InsertClip",
-    "ReorderClip",
-    "ReorderTimelineItems",
-    "SetClipLock",
-    "ConfirmClip",
-    "UndoTimelineVersion",
-    "RedoTimelineVersion",
-    "RegenerateNarrationSegment",
-    "UpdateSubtitleCue",
-    "AlignSubtitleTiming",
-    "ReplaceSubtitleText",
-    "SplitSubtitleCue",
-    "MergeSubtitleCue",
-    "DeleteSubtitleCue",
-    "ConfigureSubtitleTrack",
-    "GenerateCoverFromFrame",
-    "ChangePersonSegment",
-    "RegeneratePersonRender",
-}
-
-
-@dataclass(frozen=True)
-class EditOperation:
-    id: str
-    workspace_id: str
-    task_id: str
-    proposal_id: str
-    operation_type: EditOperationType
-    payload: dict[str, object]
-    base_version_id: str
-    result_version_id: str | None
-    status: EditOperationStatus
-    failure_reason: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    applied_at: datetime | None = None
+# Public imports retained while downstream creation consumers migrate.
+from app.creation.contracts import (
+    JobRunStatus,
+    TimelineVersion,
+    SubtitleTrackStatus,
+    SubtitleCue,
+    SubtitleTrack,
+    CoverAsset,
+    JobRun,
+    ArtifactRecord,
+    TaskEvent,
+    TransformRunStatus,
+    TransformRun,
+    DependencyEdge,
+    EditIntent,
+    EditProposalStatus,
+    EditProposal,
+    EditOperationStatus,
+    EditOperationType,
+    SUPPORTED_EDIT_OPERATION_TYPES,
+    EditOperation
+)
 
 
 class MaterialVersionConflict(ValueError):
@@ -1601,8 +1341,9 @@ class ProductionRepository:
         self,
         workspace_id: str,
         asset_id: str,
+        *, connection: sqlite3.Connection | None = None,
     ) -> str:
-        asset = self.get_asset(workspace_id, asset_id)
+        asset = self.get_asset(workspace_id, asset_id, connection=connection)
         root = self.video_library_path.resolve()
         resolved = Path(asset.path).resolve()
         try:
@@ -1620,15 +1361,16 @@ class ProductionRepository:
         workspace_id: str,
         asset_id: str,
         reference: str,
+        *, connection: sqlite3.Connection | None = None,
     ) -> Path:
-        asset = self.get_asset(workspace_id, asset_id)
+        asset = self.get_asset(workspace_id, asset_id, connection=connection)
         if not material_allows_footage(asset):
             raise MediaAuthorityError(reason="material_use_restricted",
                 impact="素材已设为仅参考或不使用，未传给渲染器。",
                 repair_action="替换这个镜头，或在素材详情明确修改使用状态。")
         expected_reference = self.workspace_media_reference_for_asset(
             workspace_id,
-            asset_id,
+            asset_id, connection=connection,
         )
         if reference != expected_reference:
             raise MediaAuthorityError(
@@ -5301,8 +5043,8 @@ class ProductionRepository:
             for rank, match in enumerate(selected, start=1)
         ]
 
-    def get_asset(self, workspace_id: str, asset_id: str) -> MaterialAsset:
-        with self._connect() as conn:
+    def get_asset(self, workspace_id: str, asset_id: str, *, connection: sqlite3.Connection | None = None) -> MaterialAsset:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 """
                 SELECT payload, visibility FROM material_assets
@@ -7905,6 +7647,62 @@ class ProductionRepository:
                 raise ValueError("编辑提案已被其他操作转换")
         return self.get_edit_proposal(workspace_id, proposal_id)
 
+    def clip_edit_source_facts(self, workspace_id: str, task_id: str, *, clip_ids: list[str],
+                               replacement: tuple[str, str] | None, user_id: str | None,
+                               local_diagnostic: bool, connection: sqlite3.Connection | None = None):
+        """The current material/source authority shared by typed preview and direct commit."""
+        if connection is None:
+            with self._connect() as conn:
+                return self.clip_edit_source_facts(workspace_id, task_id, clip_ids=clip_ids,
+                    replacement=replacement, user_id=user_id, local_diagnostic=local_diagnostic, connection=conn)
+        plan = self.get_creation_task_montage_plan(workspace_id, task_id, connection=connection)
+        clips = [clip for clip in plan["clips"] if clip["id"] in clip_ids]
+        if len(clips) != len(clip_ids):
+            raise KeyError("当前任务镜头不存在")
+        pairs = [(clip["asset_id"], clip["segment_id"]) for clip in clips if not clip.get("person_render_id")]
+        if replacement is not None:
+            pairs.append(replacement)
+        facts = []
+        for asset_id, segment_id in dict.fromkeys(pairs):
+            asset = self.get_asset(workspace_id, asset_id, connection=connection)
+            if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
+                    visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+                raise PermissionError("当前成员不能使用该镜头素材")
+            segment = next((item for item in asset.segments if item.id == segment_id), None)
+            if segment is None:
+                raise ValueError("镜头来源或使用状态已失效")
+            reference = self.workspace_media_reference_for_asset(workspace_id, asset_id, connection=connection)
+            path = self.resolve_clip_media_reference(workspace_id, asset_id, reference, connection=connection)
+            stat = path.stat()
+            facts.append({"asset_id":asset_id, "segment_id":segment_id, "reference":reference,
+                "modified_at":asset.modified_at.isoformat(), "start_seconds":segment.start_seconds,
+                "end_seconds":segment.end_seconds, "size":stat.st_size, "mtime_ns":stat.st_mtime_ns,
+                "ctime_ns":stat.st_ctime_ns, "inode":stat.st_ino, "device":stat.st_dev})
+        return facts
+
+    def confirm_direct_edit(self, command, intent: EditIntent, proposal: EditProposal, change, *, verify_sources):
+        """A deterministic control saves its lineage and full change in one CAS transaction."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, command.workspace_id, command.task_id)
+            if task.current_timeline_version_id != command.base_version_id:
+                raise TimelineVersionConflict("当前时间线已变化，未保存这项修改")
+            member = command.actor_identity.get("user_id") or command.actor_identity["member_id"]
+            if task.owner_user_id and task.owner_user_id != member and not command.actor_identity.get("local_diagnostic"):
+                raise PermissionError("当前成员不能修改此任务")
+            if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (
+                    command.workspace_id, command.task_id, intent.id, proposal.id):
+                raise ValueError("直接编辑命令与变更谱系不一致")
+            verify_sources(command, conn)
+            self.create_edit_intent(intent, connection=conn, source=None)
+            self.create_edit_proposal(proposal, connection=conn)
+            result = self.confirm_edit_proposal(command.workspace_id, command.task_id, proposal.id,
+                operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id,
+                montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks,
+                cover_asset=change.cover_asset, narration_segments=change.narration_segments,
+                narration_artifact=change.narration_artifact, connection=conn)
+        return result
+
     def confirm_edit_proposal(
         self,
         workspace_id: str,
@@ -10183,9 +9981,9 @@ class ProductionRepository:
         return task, payload
 
     def get_creation_task_montage_plan(
-        self, workspace_id: str, task_id: str
+        self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection | None = None
     ) -> dict[str, object]:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT payload FROM creation_task_montage_plans WHERE workspace_id = ? AND task_id = ?",
                 (workspace_id, task_id),

@@ -1,0 +1,201 @@
+"""Direct metadata controls and adopted proposals share one complete version transaction."""
+from dataclasses import replace
+import ast
+import json
+from pathlib import Path
+import subprocess
+import sys
+from uuid import uuid4
+
+import pytest
+
+from test_task_media_grants import _visual_scope_case
+
+
+@pytest.mark.parametrize('action', ['picture', 'overlay', 'transition', 'audio', 'crop', 'speed', 'lock', 'subtitle'])
+def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_complete(tmp_path, monkeypatch, action):
+    main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('direct metadata control cannot reenter HTTP routes or media runtime')
+    try:
+        monkeypatch.setattr(main, 'preview_creation_task_exact_edit', forbidden)
+        monkeypatch.setattr(main, 'preview_creation_task_edit', forbidden)
+        monkeypatch.setattr(main, 'confirm_creation_task_edit', forbidden)
+        monkeypatch.setattr(main, '_creation_runtime', forbidden)
+        payloads = {
+            'subtitle':{'operation_type':'ConfigureSubtitleTrack', 'subtitle_display':'none'},
+            'crop':{'operation_type':'ChangeCrop', 'clip_id':'clip_1', 'fit_mode':'fit', 'crop_x':.5, 'crop_y':.5},
+            'speed':{'operation_type':'ChangeClipSpeed', 'clip_id':'clip_1', 'playback_rate':.7},
+            'lock':{'operation_type':'SetClipLock', 'clip_id':'clip_1', 'locked':True},
+            'picture':{'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}},
+            'overlay':{'operation_type':'EditGraphicOverlay', 'overlay_action':'delete', 'overlay_id':'outside'},
+            'transition':{'operation_type':'SetClipTransition', 'clip_id':'clip_2', 'transition_seconds':.1},
+            'audio':{'operation_type':'EditAudioTimeline', 'audio_edit':{'action':'update', 'target_id':'voice-clip', 'values':{'gain_db':-3}}},
+        }
+        jobs = len(repo.list_job_runs('local', 'task'))
+        if action == 'audio':
+            # The fixture deliberately locks its narrator; only this control's test input unlocks it.
+            original['audio_timeline']['tracks'][0]['locked'] = False
+            original['audio_timeline']['tracks'][0]['clips'][0]['locked'] = False
+            repo.save_creation_task_montage_plan('local', 'task', 'montage', original)
+            original = repo.get_creation_task_montage_plan('local', 'task')
+            from app.creation.contracts import TimelineVersion
+            from app.creation.transactions import clone_subtitle_track
+            copied = clone_subtitle_track(track, timeline_version_id='audio-input')
+            base = repo.get_timeline_version('local', 'timeline')
+            repo.create_timeline_version(TimelineVersion('audio-input', 'local', 'task', 'timeline', 2,
+                {**base.snapshot, 'montage':original, 'subtitle_track_ids':[copied.id]}, None))
+            repo.create_subtitle_track(copied)
+        response = client.post('/api/creation-tasks/task/edits/exact', json=payloads[action])
+        assert response.status_code == 200, response.text
+        assert response.json()['operation']['operation_type'] == payloads[action]['operation_type']
+        saved = repo.get_creation_task_montage_plan('local', 'task')
+        assert len(repo.list_job_runs('local', 'task')) == jobs
+        assert len(repo.list_edit_operations('local', 'task')) == 1
+        assert len(repo.list_edit_proposals('local', 'task')) == 1
+        assert repo.list_edit_proposals('local', 'task')[0].status == 'confirmed'
+        if action != 'audio':
+            assert saved['audio_timeline'] == original['audio_timeline']
+        else:
+            assert saved['clips'] == original['clips']
+        if action == 'subtitle':
+            tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=repo.get_creation_task('local', 'task').current_timeline_version_id)
+            assert tracks[0].style['enabled'] is False
+        if action == 'picture':
+            assert saved['clips'][1]['visual_effects']['exposure'] == .15
+        if action == 'overlay':
+            assert [item['id'] for item in saved['graphic_overlays']] == ['in-window']
+        undo = client.post('/api/creation-tasks/task/timeline/undo', json={})
+        assert undo.status_code == 200, undo.text
+        restored = repo.get_creation_task_montage_plan('local', 'task')
+        assert restored['clips'] == original['clips'] and restored['audio_timeline'] == original['audio_timeline']
+        assert restored['graphic_overlays'] == original['graphic_overlays']
+        redo = client.post('/api/creation-tasks/task/timeline/redo', json={})
+        assert redo.status_code == 200, redo.text
+        restored = repo.get_creation_task_montage_plan('local', 'task')
+        assert restored['clips'] == saved['clips'] and restored['audio_timeline'] == saved['audio_timeline']
+    finally:
+        runtime.stop(0)
+
+
+@pytest.mark.parametrize('failure', ['version', 'after_proposal', 'after_version'])
+def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_writes(tmp_path, monkeypatch, failure):
+    main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
+    try:
+        if failure == 'version':
+            original_commit = repo.confirm_direct_edit
+            def commit(command, *args, **kwargs):
+                from app.creation.contracts import TimelineVersion
+                repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
+                return original_commit(command, *args, **kwargs)
+            monkeypatch.setattr(repo, 'confirm_direct_edit', commit)
+        else:
+            write = repo.create_edit_proposal if failure == 'after_proposal' else repo.confirm_edit_proposal
+            def crash(*args, **kwargs):
+                write(*args, **kwargs)
+                raise ValueError('injected atomic commit failure')
+            monkeypatch.setattr(repo, 'create_edit_proposal' if failure == 'after_proposal' else 'confirm_edit_proposal', crash)
+        jobs = len(repo.list_job_runs('local', 'task'))
+        response = client.post('/api/creation-tasks/task/edits/exact', json={
+            'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}})
+        assert response.status_code == 409, response.text
+        assert repo.get_creation_task('local', 'task').current_timeline_version_id == ('next' if failure == 'version' else 'timeline')
+        assert repo.list_edit_operations('local', 'task') == []
+        assert repo.list_edit_intents('local', 'task') == []
+        assert repo.list_edit_proposals('local', 'task') == []
+        assert repo.get_creation_task_montage_plan('local', 'task') == original
+        assert len(repo.list_job_runs('local', 'task')) == jobs
+        assert len(repo.list_subtitle_tracks('local', 'task')) == 1
+    finally:
+        runtime.stop(0)
+
+
+def test_direct_request_replay_recovers_a_lost_receipt_without_reapplying(tmp_path, monkeypatch):
+    main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
+    try:
+        payload = {'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15},
+            'request_id':str(uuid4()), 'expected_timeline_version_id':'timeline', 'expected_timeline_sequence':1}
+        path = '/api/creation-tasks/task/edits/exact'
+        saved = client.post(path, json=payload)
+        assert saved.status_code == 200, saved.text
+        assert client.post(path, json=payload).json() == saved.json()
+        with repo._connect() as conn:
+            conn.execute("DELETE FROM task_events WHERE event_type='edit_request_result'")
+        recovered = client.post(path, json=payload)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()['operation'] == saved.json()['operation']
+        assert len(repo.list_edit_operations('local', 'task')) == 1
+        assert client.post(path, json={**payload, 'effects':{'exposure':.25}}).status_code == 409
+    finally:
+        runtime.stop(0)
+
+
+def test_edit_contract_imports_no_repository_or_app_and_computations_have_no_http_or_sql():
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run([sys.executable, '-c', "import sys; import app.creation.contracts; assert 'app.main' not in sys.modules; assert 'app.production' not in sys.modules"],
+        cwd=root, check=True, capture_output=True, timeout=10)
+    for path in (root/'app/creation/editing').glob('*.py'):
+        tree = ast.parse(path.read_text())
+        assert not any(isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(('app.main', 'fastapi', 'starlette')) for node in ast.walk(tree))
+        assert not any(isinstance(node, ast.Attribute) and node.attr == '_connect' for node in ast.walk(tree))
+
+
+def test_clone_preserves_explicit_empty_subtitle_result_and_distinguishes_none():
+    from app.creation.contracts import SubtitleCue, SubtitleTrack
+    from app.creation.transactions import clone_subtitle_track
+    from app.subtitle_edits import restructure_subtitle
+    source = SubtitleTrack('track', 'local', 'task', 'v1', 'en-US', None, {'enabled':True},
+        [SubtitleCue('cue', None, 'last subtitle', 0, 1)], 'timeline', None, None, None, 'valid')
+    deleted, _ = restructure_subtitle(source, 'DeleteSubtitleCue', 'cue')
+    assert deleted.cues == []
+    assert clone_subtitle_track(source, timeline_version_id='v2', cues=deleted.cues).cues == []
+    assert clone_subtitle_track(source, timeline_version_id='v2', cues=None).cues == source.cues
+    assert clone_subtitle_track(source, timeline_version_id='v2', style={}).style == {}
+    assert clone_subtitle_track(source, timeline_version_id='v2', style=None).style == source.style
+
+
+@pytest.mark.parametrize('change', ['file', 'owner', 'restriction', 'segment'])
+@pytest.mark.parametrize('typed', [True, False])
+def test_source_change_after_binding_before_direct_transaction_creates_no_lineage(tmp_path, monkeypatch, change, typed):
+    main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
+    commit = repo.confirm_direct_edit
+    called = False
+    def change_source(command, *args, **kwargs):
+        nonlocal called
+        assert command.source['source_facts'] if typed else command.input_source_facts
+        asset = repo.get_asset('local', 'asset')
+        if change == 'file':
+            with Path(asset.path).open('ab') as source:
+                source.write(b'changed source before direct commit')
+        elif change == 'owner':
+            repo._save_asset(replace(asset, visibility='private', owner_user_id='other-member'))
+        elif change == 'restriction':
+            repo._save_asset(replace(asset, use_state='excluded'))
+        else:
+            asset.segments[0].start_seconds = .1
+            repo._save_asset(asset)
+        called = True
+        verify = kwargs['verify_sources']
+        def in_write_transaction(current, connection):
+            assert connection.in_transaction
+            return verify(current, connection)
+        kwargs['verify_sources'] = in_write_transaction
+        return commit(command, *args, **kwargs)
+    try:
+        # Plain controls also carry the trusted member, so private ownership cannot turn into diagnostic access.
+        monkeypatch.setattr(main, '_content_reader', lambda *args:(actor.member_id, False))
+        monkeypatch.setattr(repo, 'confirm_direct_edit', change_source)
+        payload = {'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
+        if typed:
+            payload.update(request_id=str(uuid4()), expected_timeline_version_id='timeline', expected_timeline_sequence=1)
+        response = client.post('/api/creation-tasks/task/edits/exact', json=payload)
+        assert called
+        assert response.status_code == (403 if change == 'owner' else 409), response.text
+        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.list_edit_intents('local', 'task') == []
+        assert repo.list_edit_proposals('local', 'task') == []
+        assert repo.list_edit_operations('local', 'task') == []
+        assert len(repo.list_timeline_versions('local', 'task')) == 1
+        assert repo.get_creation_task_montage_plan('local', 'task') == original
+    finally:
+        runtime.stop(0)

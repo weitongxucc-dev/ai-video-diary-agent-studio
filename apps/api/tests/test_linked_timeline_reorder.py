@@ -405,16 +405,13 @@ def test_first_split_normalizes_the_whole_narration_source_not_the_remixed_maste
 def test_the_material_sentence_only_applies_to_a_reorder(person_render_edit_state, monkeypatch):
     """A crop on a material shot keeps its own label; it must not be described as a reorder."""
     state = _build_linked_state(person_render_edit_state, material=True)
-    from test_montage_pipeline import _granted_domain_preview_adapter
-    runtime = _granted_domain_preview_adapter(state, monkeypatch)
-    preview = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview", json={
+    preview = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/exact/preview?draft=true", json={
         "operation_type": "ChangeCrop", "clip_id": "clip-link-b",
         "fit_mode": "fit", "crop_x": 0.4, "crop_y": 0.6})
     assert preview.status_code == 200, preview.text
     summary = preview.json()["proposal"]["summary"]
     assert "本次移动的是纯素材镜头" not in summary
     assert "调整镜头顺序" not in summary
-    assert runtime.stop(1)
 
 
 needs_ffmpeg = pytest.mark.skipif(
@@ -515,7 +512,8 @@ def test_the_narration_normalization_is_a_second_granted_pass_under_the_same_gra
 
     # What this test is about is how the two units are gated and what the second one reads, so the
     # units themselves stand in; the real mix is covered by the reordered-render regression above.
-    def fake_granted(scheduler, grant, command, *, timeout_seconds, cancel_event, deadline_monotonic):
+    def fake_granted(scheduler, grant, command, *, timeout_seconds, cancel_event, deadline_monotonic,
+                     output_paths=(), max_output_file_bytes=None):
         seen.append({"scheduler": scheduler, "grant": grant, "command": list(command),
                      "cancel_event": cancel_event, "deadline": deadline_monotonic})
         shutil.copyfile(source, command[-1])

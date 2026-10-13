@@ -140,12 +140,26 @@ def test_assistant_typed_source_is_host_bound_and_not_parsed_again(material_edit
     # existing explicit media substitutes, then end Pi before executing it.
     original_post = state.client.post
     runtime = _granted_domain_preview_adapter(state, monkeypatch)
+    from test_creation_resource_contract import _render_budget
+    monkeypatch.setattr(main, 'clip_preview_budget_from_env', lambda:_render_budget())
+    media = runtime.registrations['creation_job'].owner.task_media
+    media.facts = main._task_media_facts
+    def render_input(inputs, path, context):
+        # Domain lineage seam only; playable media has separate R1 regressions.
+        context.check()
+        assert context.grant.workspace_id == state.workspace_id
+        state.preview_inputs.append(inputs)
+        path.write_bytes(b'domain-render-receipt')
+    monkeypatch.setattr('app.media.clip_preview.render_clip_input', render_input)
     crop = bound(state, operation_type="ChangeCrop", clip_id=state.clip.id,
                  fit_mode="fill", crop_x=0.2, crop_y=0.5, assistant_turn_id=turn["id"])
     queued = original_post(state.base_url + "/edits/exact/preview", json=crop)
     assert queued.status_code == 202, queued.text
     event = state.production.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
-    assert set(event.payload["arguments"]["payload"]) == {"operation_type", "clip_id", "fit_mode", "crop_x", "crop_y"}
+    command = event.payload['arguments']['_clip_preview']
+    assert command['base_version_id'] == crop['expected_timeline_version_id']
+    assert command['values'] == {'fit_mode':'fill', 'crop_x':.2, 'crop_y':.5}
+    assert command['source']['assistant_turn_id'] == turn['id']
     conversations.finish_turn(turn["id"], "completed", "已准备修改")
     assert runtime.run_once()
     settled = state.client.get(queued.json()["result_url"])

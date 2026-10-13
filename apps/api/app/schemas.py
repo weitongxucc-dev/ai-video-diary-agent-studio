@@ -13,7 +13,7 @@ from app.database_migrations import CONTENT_VISIBILITY_DEFAULT, CONTENT_VISIBILI
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
-from app.production import ContentUseState
+from app.source_types import ContentUseState
 
 from app.models import (
     EpisodeIntakeMode,

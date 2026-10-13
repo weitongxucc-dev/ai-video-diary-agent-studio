@@ -22,7 +22,8 @@ from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, Schedu
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
-from app.production import CreationPlan, CreationTask, CreationTaskScript, JobRun, TaskEvent
+from app.production import (CreationPlan, CreationTask, CreationTaskScript)
+from app.creation.contracts import (JobRun, TaskEvent)
 from app.repository import reset_workspace_context, set_workspace_context
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 

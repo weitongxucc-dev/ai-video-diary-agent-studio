@@ -1,74 +1,21 @@
 """Prepare and seal picture-only edits without executing media or changing drafts."""
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit, needs_full_visual_preview
 from app.canvas import preview_size
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload
-from app.production import (EditIntent, EditProposal, content_readable,
-    material_allows_footage, material_segment_eligible, effective_segment_usage_role)
+from app.production import (content_readable, material_allows_footage, material_segment_eligible, effective_segment_usage_role)
+from app.creation.contracts import (EditIntent, EditProposal)
 from app.visual_effects import VisualEffects, with_visual_effects, fade_filters, clip_playback_rate
-
-
-class ClipPreviewConflict(ValueError):
-    """The current version or selected range cannot accept this edit."""
 
 
 class ClipPreviewUnavailable(ValueError):
     """A required measured execution profile is absent."""
 
 
-@dataclass(frozen=True)
-class ClipPreviewCommand:
-    task_id: str
-    base_version_id: str
-    operation_type: str
-    clip_ids: list[str]
-    values: dict
-    raw_command: str
-    source: dict | None = None
-
-
-def prepare_clip_edit(plan, command):
-    """Pure candidate computation; timing and all unselected objects stay intact."""
-    selected = [clip for clip in plan.clips if clip.id in command.clip_ids]
-    if not selected or len(selected) != len(set(command.clip_ids)):
-        raise KeyError("所选镜头不存在")
-    if any(clip.locked for clip in selected) or plan.status == "rendering":
-        raise ClipPreviewConflict("所选范围包含锁定镜头或任务正在渲染")
-    if command.operation_type == "AdjustVisualEffects":
-        after = [with_visual_effects(clip, command.values) for clip in selected]
-        if all(VisualEffects.model_validate(a.visual_effects).model_dump() == b.visual_effects
-               for a, b in zip(selected, after, strict=True)):
-            raise ValueError("画面参数没有变化")
-    elif command.operation_type == "ChangeCrop":
-        if set(command.values) != {"fit_mode", "crop_x", "crop_y"} or len(selected) != 1:
-            raise ValueError("exact edit is missing required values or mixes multiple operations")
-        from app.visual_effects import framing_filter
-        framing_filter(**command.values)
-        after = [replace(selected[0], **command.values)]
-    elif command.operation_type == "ChangeClipSpeed":
-        if set(command.values) != {"playback_rate"} or len(selected) != 1:
-            raise ValueError("exact edit is missing required values or mixes multiple operations")
-        rate = command.values["playback_rate"]
-        if type(rate) not in {int, float} or not .25 <= rate <= 4:
-            raise ValueError("画面速度须在0.25至4倍之间")
-        clip = selected[0]
-        end = round(clip.source_start_seconds + (clip.timeline_end_seconds - clip.timeline_start_seconds) * rate, 3)
-        after = [replace(clip, source_end_seconds=end)]
-    else:
-        raise ValueError("未知短镜头画面修改")
-    for clip in after:
-        fade_filters(clip)
-    if [asdict(item) for item in selected] == [asdict(item) for item in after]:
-        raise ClipPreviewConflict("这项设置与当前镜头一致，没有创建新的时间线版本")
-    return selected, after
-
-
-def needs_full_visual_preview(before, after):
-    return (before.timeline_end_seconds - before.timeline_start_seconds > 5 and
-        bool(before.visual_effects.get("fade_out_seconds") or after.visual_effects.get("fade_out_seconds")))
 
 
 class ClipPreviewUseCase:
