@@ -46,7 +46,8 @@ export async function readMediaScriptToolCapabilities() {
 
 class BusinessRequestError extends Error {
   httpStatus: number;
-  constructor(message: string, status: number) { super(message); this.httpStatus = status; }
+  repairAction?: string;
+  constructor(message: string, status: number, repairAction?: string) { super(message); this.httpStatus = status; this.repairAction = repairAction; }
 }
 
 class RequestNotSubmitted extends Error {}
@@ -122,7 +123,7 @@ async function request(path: string, init?: RequestInit) {
   const body = await response.json();
   if (!response.ok) {
     const reason = typeof body.detail === "string" ? body.detail : body.detail?.reason;
-    throw new BusinessRequestError(reason || `业务操作失败（${response.status}）`, response.status);
+    throw new BusinessRequestError(reason || `业务操作失败（${response.status}）`, response.status, body.detail?.repair_action);
   }
   return body;
 }
@@ -1439,12 +1440,44 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
   });
 
   if (taskId && stage !== "topic" && stage !== "script") {
+    pi.registerTool({
+      name: "read_creation_execution", label: "读取原制作作业",
+      description: "只读指定普通制作作业，使用原 job_id，不走媒体预览作业接口。最多20秒有限GET等待，不重启或恢复制作；若任务已有新作业明确拒绝，不把新作业当原结果。job succeeded仍须video_ready才是当前有效成片。",
+      parameters: {type: "object", properties: {job_id: {type: "string", minLength: 1, maxLength: 120},
+        wait_seconds: {type: "integer", minimum: 0, maximum: 20}}, required: ["job_id"], additionalProperties: false},
+      execute: async (_id: string, params: {job_id: string; wait_seconds?: number}) => {
+        const seconds = params.wait_seconds ?? 0;
+        if (!Number.isInteger(seconds) || seconds < 0 || seconds > 20) throw new Error("作业等待须为0–20秒整数");
+        const parentSignal = toolSignal.getStore();
+        const deadline = AbortSignal.timeout(seconds > 0 ? seconds * 1000 : 15000);
+        const signal = parentSignal ? AbortSignal.any([parentSignal, deadline]) : deadline;
+        let status: any = null;
+        for (;;) {
+          try {
+            const value = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution?job_id=${encodeURIComponent(params.job_id)}`, {signal});
+            if (value.task_id !== taskId || value.job?.id !== params.job_id || value.job.task_id !== taskId) throw new Error("原制作作业响应身份不一致");
+            status = value;
+          } catch (error) {
+            if (parentSignal?.aborted || !deadline.aborted || !status) throw error;
+            break;
+          }
+          if (!seconds || !["queued", "running"].includes(status.job.status) || signal.aborted) break;
+          try { await delay(1000, undefined, {signal}); }
+          catch (error) { if (parentSignal?.aborted || !deadline.aborted) throw error; break; }
+        }
+        const details = {kind: "execution_result", status, wait: {seconds, deadline_reached: deadline.aborted, queried_only: true}};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      },
+    });
     const perform = async (action: "start" | "resume" | "cancel") => {
       if (!currentTaskRead) throw new Error("请先读取当前创作任务");
       if (creationActionApplied) throw new Error("本轮制作动作已经提交，不重复执行");
       if (editControlWriteAttempted) throw new Error("本轮已提交历史控制动作，不能同时开始、继续或取消制作");
       if (previewCreated) throw new Error("本轮已请求修改预览，不能同时开始、继续或取消制作");
       creationActionApplied = true;
+      const turn = process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;
+      if (action !== "cancel" && !turn) throw new RequestNotSubmitted("制作请求缺少当前助手轮次，未提交");
+      const binding = action !== "cancel" ? `?assistant_turn_id=${encodeURIComponent(turn!)}` : "";
       let status: Record<string, unknown>;
       if (action === "start") {
         const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`);
@@ -1458,15 +1491,15 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
           && (existingJob.status === "failed" || existingJob.status === "interrupted"
             || existingJob.status === "cancelled" || !current.video_ready);
         status = canRetryCurrent
-          ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume`, {
+          ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume${binding}`, {
             method: "POST", body: JSON.stringify({}),
           })
-          : await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start`, {
+          : await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start${binding}`, {
             method: "POST",
             body: JSON.stringify({ script_id: preview.script_id, input_digest: preview.input_digest, requirements_confirmed: true }),
           });
       } else {
-        status = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/${action}`, {
+        status = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/${action}${binding}`, {
           method: "POST", body: JSON.stringify({}),
         });
       }
@@ -1486,7 +1519,15 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       pi.registerTool({
         name, label, description,
         parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: async () => perform(action),
+        execute: async () => {
+          try { return await perform(action); }
+          catch (error) {
+            const reason = boundedText(error instanceof Error ? error.message : String(error), 500).text;
+            const repair = error instanceof BusinessRequestError && typeof error.repairAction === "string" ? boundedText(error.repairAction, 500).text : undefined;
+            return {isError: true, content: [{type: "text", text: reason}], details: {
+              kind: "execution_action_failed", action, failure: {reason, ...(repair ? {repair_action: repair} : {})}}};
+          }
+        },
       });
     }
   }

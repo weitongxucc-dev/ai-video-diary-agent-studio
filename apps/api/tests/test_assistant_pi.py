@@ -184,13 +184,11 @@ globalThis.fetch = async (url, init) => {
 const {default: register} = await import(input.extension);
 register({registerTool: tool => tools.set(tool.name, tool)});
 let beforeReadError;
-try { await tools.get('start_creation_execution').execute('start', {}); }
-catch (e) { beforeReadError = e.message; }
+beforeReadError = (await tools.get('start_creation_execution').execute('start', {})).details.failure.reason;
 await tools.get('read_current_task').execute('read', {});
 const result = await tools.get('start_creation_execution').execute('start', {});
 let duplicateError;
-try { await tools.get('cancel_creation_execution').execute('again', {}); }
-catch (e) { duplicateError = e.message; }
+duplicateError = (await tools.get('cancel_creation_execution').execute('again', {})).details.failure.reason;
 const followUpTools = new Map();
 register({registerTool: tool => followUpTools.set(tool.name, tool)});
 await followUpTools.get('read_current_task').execute('read', {});
@@ -208,6 +206,7 @@ console.log(JSON.stringify({calls, result, resume, cancel, beforeReadError, dupl
         env={"PATH": str(Path(node).parent), "HOME": str(tmp_path),
              "AI_VIDEO_DIARY_AGENT_API_BASE": "http://127.0.0.1:1",
              "AI_VIDEO_DIARY_AGENT_TASK_ID": "task-one",
+             "AI_VIDEO_DIARY_AGENT_TURN_ID": "host-turn",
              "AI_VIDEO_DIARY_AGENT_STAGE": "montage"},
     )
     observed = json.loads(result.stdout)
@@ -216,8 +215,8 @@ console.log(JSON.stringify({calls, result, resume, cancel, beforeReadError, dupl
     assert observed["resume"]["details"]["action"] == "resume"
     assert observed["cancel"]["details"]["action"] == "cancel"
     assert [(call["url"].rsplit("/", 1)[-1], call["method"]) for call in observed["calls"]] == [
-        ("task-one", "GET"), ("execution", "GET"), ("preview", "GET"), ("execution", "GET"), ("start", "POST"),
-        ("task-one", "GET"), ("execution", "GET"), ("resume", "POST"), ("task-one", "GET"), ("execution", "GET"), ("cancel", "POST"),
+        ("task-one", "GET"), ("execution", "GET"), ("preview", "GET"), ("execution", "GET"), ("start?assistant_turn_id=host-turn", "POST"),
+        ("task-one", "GET"), ("execution", "GET"), ("resume?assistant_turn_id=host-turn", "POST"), ("task-one", "GET"), ("execution", "GET"), ("cancel", "POST"),
     ]
     assert observed["calls"][4]["body"] == {
         "script_id": "confirmed-script", "input_digest": "a" * 64,
@@ -373,6 +372,18 @@ def test_pi_stream_projects_only_text_and_safe_business_tool_status():
     }
     assert "/private/" not in json.dumps([started, ended])
     assert "private-id" not in json.dumps([started, ended])
+
+
+@pytest.mark.parametrize("name", ["preview_typed_edit", "observe_task_output"])
+def test_controlled_parameter_rejection_projects_only_bounded_failure_reason(name):
+    reason = "曝光参数超过当前范围，未提交修改。" + "x"*600
+    projected = _PiStreamProjector().project(json.dumps({"type":"tool_execution_end", "toolName":name,
+        "isError":True, "result":{"details":{"kind":"edit_request_status", "status":"rejected",
+            "failure_reason":{"text":reason, "truncated":True}, "raw_payload":{"secret":"private"}},
+            "content":[{"type":"text", "text":"not a trusted failure"}]}}))
+    assert projected["failure"] == {"reason":reason[:500]}
+    assert projected["ok"] is False
+    assert "raw_payload" not in json.dumps(projected) and "private" not in json.dumps(projected)
 
 
 def test_script_save_summary_does_not_invent_zero_sections_from_identity_only_result():

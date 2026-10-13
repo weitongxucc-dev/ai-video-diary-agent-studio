@@ -46,7 +46,7 @@ ASSISTANT_BUSINESS_TOOLS = {
     "task_edit": ("read_current_task", "find_knowledge", "find_materials",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
-                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution"),
+                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution"),
 }
 
 TASK_READ_PREVIEW_TOOLS = ("read_task_object", "read_task_edit_capabilities", "read_task_media_job",
@@ -154,6 +154,7 @@ _PI_TOOL_LABELS = {
     "start_creation_execution": "提交连续制作",
     "resume_creation_execution": "继续连续制作",
     "cancel_creation_execution": "取消连续制作",
+    "read_creation_execution": "读取原制作作业",
     "read_selected_profile": "读取所引用档案",
     "read_selected_knowledge": "读取所引用知识",
     "read_selected_material": "读取所选素材",
@@ -260,7 +261,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
             return f"已读取{scope}的文字分析状态和我的标签，共 {len(tags)} 项标签。"
         return (f"{scope}的我的标签已提交并回读。" if details.get("changed")
                 else f"已回读{scope}的我的标签，内容没有变化。")
-    if tool_name in {"start_creation_execution", "resume_creation_execution", "cancel_creation_execution"}:
+    if tool_name in {"start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution"}:
         action = details.get("action")
         status = details.get("status") if isinstance(details.get("status"), dict) else {}
         job = status.get("job") if isinstance(status.get("job"), dict) else {}
@@ -269,7 +270,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
                  "failed": "失败", "interrupted": "中断", "cancelled": "已取消"}.get(job_status, "状态已返回")
         if action == "cancel":
             return f"取消动作已返回，当前作业{state}。"
-        return f"制作请求已返回，当前作业{state}。"
+        return f"{'原制作作业已回读' if tool_name == 'read_creation_execution' else '制作请求已返回'}，当前作业{state}。"
     if tool_name in {"preview_creation_plan", "prepare_creation_window"}:
         preview = details.get("preview") if isinstance(details.get("preview"), dict) else {}
         if preview.get("kind") == "creation_request":
@@ -380,10 +381,18 @@ class _PiStreamProjector:
                 self._next_id += 1
                 tool_id, label = self._next_id, _PI_TOOL_LABELS[name]
             failed = bool(event.get("isError"))
+            details = (event.get("result") or {}).get("details") or {}
+            failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
+            if failure is None and details.get("kind") == "edit_request_status":
+                reason = details.get("failure_reason")
+                if isinstance(reason, dict) and isinstance(reason.get("text"), str):
+                    failure = {"reason": reason["text"]}
             return {
                 "type": "tool_end", "tool_id": tool_id, "label": label,
                 "ok": not failed,
                 "summary": _safe_tool_result_summary(name, event.get("result"), failed),
+                **({"failure": {key: value[:500] for key, value in failure.items()
+                    if key in {"reason", "repair_action"} and isinstance(value, str)}} if failed and failure else {}),
             }
         return None
 
@@ -853,6 +862,10 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                     details = (event.get("result") or {}).get("details") or {}
                     if details.get("kind") == "execution_action":
                         action_result = {**details, "action": action_tools[event["toolName"]]}
+            if event.get("toolName") == "read_creation_execution" and not event.get("isError"):
+                details = (event.get("result") or {}).get("details") or {}
+                if details.get("kind") == "execution_result":
+                    action_result = details
             if event.get("toolName") == "generate_creation_task_topics":
                 topic_failed = bool(event.get("isError"))
                 if not topic_failed:
@@ -953,7 +966,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
             answer = "任务记录显示制作已完成，当前成片产物可用。"
         else:
             answer = f"制作动作已返回；当前作业状态：{job_status or '未知'}。请以任务页回读为准。"
-        return answer, {"kind": "execution_action", "action": action, "status": status}
+        return answer, {"kind": "execution_result" if action is None else "execution_action", "action": action, "status": status}
     if topic_result is not None:
         topics = topic_result.get("candidates") or []
         count = len(topics)
@@ -1322,6 +1335,7 @@ def _run_turn(
                    "原指令仍是本轮message；下列结果和剩余检查点提供上下文，不扩大原授权、不代替用户采用。"
                    "先读取当前事实、原请求结果和实际输出检查，再判断原要求剩余步骤；已成功的来源创建、保存或制作不得重放。"
                    "结果未知只查询原请求。已核验未提交/拒绝且没有副作用时可修正输入，成功结果确有质量问题时可在原授权内准备新的修改，均受本轮限额。"
+                   "普通制作作业用read_creation_execution读取原job_id；read_task_media_job仅供预览、图片来源和观察作业，不能混用。"
                    "PNG完成后若原要求是放入画面，应继续准备实际图层修改，并等待真实采用；只生成PNG不算完成画面要求。"
                    "completed_source_slots是宿主核验的已完成来源；按name和固定input_refs复用其真实source_ref/artifact/hash，"
                    "不得因为旧原句要求先创建而重做同槽，也不得换一段代码、调用ID或输出名绕过完成记录。不同合法来源仍按原授权和实际输入处理。"

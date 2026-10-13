@@ -22,7 +22,9 @@ globalThis.fetch=async(url,init)=>{
  let value=input.workspace;
  if(path.endsWith('/assistant/edit-capabilities'))value=input.capabilities;
  if(path.includes('/candidates'))value=[];
- if(path.endsWith('/execution'))value={task_id:'task-current',job:null};
+ if(path.endsWith('/execution'))value=new URL(url).searchParams.has('job_id')?input.execution:(input.execution_before||{task_id:'task-current',job:null});
+ if(path.endsWith('/execution/preview'))value={script_id:'confirmed-script',input_digest:'a'.repeat(64),requirements:{can_continue:true}};
+ if(path.endsWith('/execution/start')||path.endsWith('/execution/resume')){value=input.execution;if(input.lost_receipt)throw new TypeError('fixture reply lost');}
  if(path.endsWith('/knowledge-items/search'))value=input.knowledge;
  if(path.endsWith('/assistant/script-context')&&input.script_context)value=input.script_context;
  if(path.endsWith('/observations')){value=init?.method==='POST'?input.observation_job:input.observations;
@@ -70,7 +72,7 @@ def preview():
         "invalidated_refs": ["render:old"], "external_effects": []}}
 
 
-def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None):
+def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, execution=None, execution_before=None):
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="task-current",
                AI_VIDEO_DIARY_AGENT_STAGE=stage, AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
@@ -89,9 +91,36 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
                                                  "preview": result or preview(), "job": job, "failure": failure, "code": code, "lost_receipt": lost_receipt, "delay_ms": delay_ms,
                                                  "knowledge": knowledge, "script_context": script_context,
                                                  "failure_once": failure_once, "failure_status": failure_status,
-                                                 "observations": observations, "observation_job": observation_job}),
+                                                 "observations": observations, "observation_job": observation_job,
+                                                 "execution": execution, "execution_before": execution_before}),
                                env=env, cwd=tmp_path, text=True, capture_output=True, timeout=45, check=True)
     return json.loads(completed.stdout)
+
+
+def test_execution_tools_bind_start_to_host_turn_and_read_original_job(tmp_path):
+    actual = {"task_id":"task-current", "job":{"id":"execution:one", "task_id":"task-current", "status":"queued"}, "video_ready":False}
+    observed = invoke(tmp_path, stage="montage", execution=actual, steps=[{"tool":"start_creation_execution"},
+        {"tool":"read_creation_execution", "args":{"job_id":"execution:one", "wait_seconds":0}}])
+    posts = [call for call in observed["calls"] if call["method"] == "POST"]
+    assert len(posts) == 1 and posts[0]["path"].endswith('/execution/start')
+    assert posts[0]["query"] == '?assistant_turn_id=trusted-turn'
+    assert posts[0]["body"]["requirements_confirmed"] is True
+    queried = observed["calls"][-1]
+    assert queried["path"].endswith('/execution') and queried["query"] == '?job_id=execution%3Aone'
+    assert observed["results"][-1]["result"]["details"]["status"] == actual
+    assert not any('/media-jobs/' in call["path"] for call in observed["calls"])
+
+
+def test_execution_unknown_cannot_repost_and_job_switch_cannot_claim_original_success(tmp_path):
+    actual = {"task_id":"task-current", "job":{"id":"execution:new", "task_id":"task-current", "status":"succeeded"}, "video_ready":True}
+    observed = invoke(tmp_path, stage="montage", execution=actual, lost_receipt=True,
+        steps=[{"tool":"start_creation_execution"}, {"tool":"start_creation_execution"},
+               {"tool":"read_creation_execution", "args":{"job_id":"execution:old"}}])
+    assert len([call for call in observed["calls"] if call["method"] == "POST"]) == 1
+    assert observed["results"][0]["result"]["isError"] is True
+    assert 'fixture reply lost' in observed["results"][0]["result"]["details"]["failure"]["reason"]
+    assert observed["results"][1]["result"]["isError"] is True
+    assert not observed["results"][2]["ok"] and '身份不一致' in observed["results"][2]["error"]
 
 
 def test_api_schema_declares_model_fields_and_host_binds_http(tmp_path):

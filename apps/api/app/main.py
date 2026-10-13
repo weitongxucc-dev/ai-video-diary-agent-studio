@@ -7811,7 +7811,7 @@ def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
 
 def _assistant_stream_safe_text(value: str, workspace_id: str) -> str:
     safe = _assistant_text_without_credentials(value, workspace_id)
-    return re.sub(r"(?:file://)?(?:/Users/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", "[本机路径]", safe)
+    return re.sub(r"(?:file://)?(?:/Users/|/Volumes/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", "[本机路径]", safe)
 
 
 class _AssistantStreamTextSanitizer:
@@ -7906,6 +7906,9 @@ def _assistant_stream_response(
                 "ok": bool(raw_event.get("ok")),
                 "summary": _assistant_stream_safe_text(str(raw_event.get("summary", "")), workspace_id),
             }
+            if isinstance(raw_event.get("failure"), dict):
+                event["failure"] = {key: _assistant_stream_safe_text(value[:500], workspace_id)
+                    for key, value in raw_event["failure"].items() if key in {"reason", "repair_action"} and isinstance(value, str)}
         elif event_type == "turn_started":
             event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state", "draft_version") if key in raw_event}
             turn_ref["id"] = str(raw_event["turn_id"])
@@ -8434,6 +8437,12 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if topics.task.id != task_id:
             raise HTTPException(status_code=502, detail="对话生成的选题不属于当前任务。")
         topic_candidates = topics
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get("kind") == "execution_result":
+        status = preview.get("status")
+        if not isinstance(status, dict) or status.get("task_id") != task_id or not isinstance(status.get("job"), dict):
+            raise HTTPException(status_code=502, detail="没有返回可核验的原制作作业")
+        execution_status = _read_bound_execution_result(task_id, request, status["job"]["id"])
         edit_preview = None
     elif isinstance(preview, dict) and preview.get("kind") == "execution_action":
         action = preview.get("action")
@@ -19484,7 +19493,14 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
 
 
 @app.get("/api/creation-tasks/{task_id}/execution")
-def get_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+def get_creation_execution(task_id: str, request: Request, job_id: str | None = None) -> dict[str, object]:
+    if job_id is not None:
+        try:
+            return _read_bound_execution_result(task_id, request, job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="原制作作业不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _creation_execution_status(current_workspace_id(request), task_id)
 
 
@@ -19515,11 +19531,15 @@ def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResp
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)
-def start_creation_execution(task_id: str, request: Request, payload: ExecutionStartRequest) -> dict[str, object]:
+def start_creation_execution(task_id: str, request: Request, payload: ExecutionStartRequest,
+                             assistant_turn_id: UUID | None = None) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _require_automation_task_open(request,workspace_id,task_id)
     if not payload.requirements_confirmed:
         raise HTTPException(status_code=409, detail="请先确认实际文案与本次制作要求")
+    source, replay = _assistant_execution_source(task_id, request, assistant_turn_id, "start", payload.input_digest)
+    if replay is not None:
+        return replay
     runtime = _creation_runtime()
     actor = _require_permit_actor(request, workspace_id)
     try:
@@ -19533,14 +19553,18 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime.wake()
-    return _creation_execution_status(workspace_id, task_id)
+    result = _creation_execution_status(workspace_id, task_id)
+    return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/resume", status_code=202)
-def resume_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+def resume_creation_execution(task_id: str, request: Request, assistant_turn_id: UUID | None = None) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     _require_automation_task_open(request,workspace_id,task_id)
     _creation_task_or_404(workspace_id, task_id)
+    source, replay = _assistant_execution_source(task_id, request, assistant_turn_id, "resume")
+    if replay is not None:
+        return replay
     runtime = _creation_runtime()
     actor = _require_permit_actor(request, workspace_id)
     try:
@@ -19551,7 +19575,8 @@ def resume_creation_execution(task_id: str, request: Request) -> dict[str, objec
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime.wake()
-    return _creation_execution_status(workspace_id, task_id)
+    result = _creation_execution_status(workspace_id, task_id)
+    return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
 
 
 @app.post("/api/creation-tasks/{task_id}/execution/cancel")
@@ -20199,9 +20224,82 @@ def _verify_current_goal(goal, event):
                         reference["version"], reference.get("locator")))
             except HTTPException:
                 return {"status": "invalidated", "reason": "original_reference_authorization_changed"}
+    checkpoint = _goal_output_checkpoint(goal, event, facts, task, version, actor, request)
     return {"status": "ready", "task_version": {"timeline_version_id": task.current_timeline_version_id,
         "timeline_sequence": version.sequence if version else 0, **({"removed_selected_refs": removed_refs} if removed_refs else {})}, "facts": facts, "request": request,
-        "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources}
+        "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources,
+        **({"completed_output_checkpoint": checkpoint} if checkpoint else {})}
+
+
+def _goal_output_checkpoint(goal, event, facts, task, version, actor, request):
+    if event.get("phase") != "observation" or event.get("status") != "succeeded" or version is None:
+        return None
+    receipt = facts.get("media_job", {})
+    result = receipt.get("result") or {}
+    if (receipt.get("status") != "succeeded" or result.get("target", {}).get("kind") != "final"
+            or result.get("output_role") != "composed_output"
+            or result.get("timeline_version_id") != version.id or result.get("timeline_sequence") != version.sequence
+            or result.get("measurement_scope") != "actual_output_bounded_frames"):
+        return None
+    observed_start = production_repo.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
+    producer = observed_start["arguments"].get("_typed_source", {}).get("assistant_turn_id")
+    observed_goal = conversation_repo.get_task_goal(producer) if producer else None
+    if observed_goal is None or observed_goal["original_turn_id"] != goal["original_turn_id"]:
+        return None
+    try:
+        _path, output, _binding = _registered_observation_output(task.workspace_id, task.id,
+            CreationTaskObservationTarget(kind="final"), actor)
+    except (KeyError, OSError, ValueError, PermissionError, HTTPException):
+        return None
+    if (result.get("output") != {key: value for key, value in output.items() if key not in {"logical_ref", "mtime_ns", "ctime_ns"}}
+            or observed_start["input_facts"]["output"] != output):
+        return None
+    with production_repo._connect() as conn:
+        rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
+            (task.workspace_id, version.snapshot.get("creation_render_request_id"))).fetchone()
+        located = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+            "AND event_type='assistant_execution_located' AND job_id=? "
+            "AND json_extract(payload_json,'$.source.conversation_id')=? AND json_extract(payload_json,'$.source.member_id')=?",
+            (task.workspace_id, task.id, rendered["owner_id"] if rendered else None, goal["conversation_id"], goal["member_id"])).fetchone()
+        pending_jobs = conn.execute("SELECT e.payload_json FROM job_runs j JOIN task_events e "
+            "ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start' "
+            "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.status IN ('queued','running','interrupted') "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=?",
+            (task.workspace_id, task.id, TASK_MEDIA_KIND, goal["conversation_id"], goal["member_id"])).fetchall()
+        unknown_requests = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+            "AND event_type='assistant_edit_request_located' AND json_extract(payload_json,'$.source.conversation_id')=? "
+            "AND json_extract(payload_json,'$.source.member_id')=? "
+            "AND json_extract(payload_json,'$.locator.status') IN ('unknown','result_unknown')",
+            (task.workspace_id, task.id, goal["conversation_id"], goal["member_id"])).fetchall()
+    for row in pending_jobs:
+        source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
+        pending_goal = conversation_repo.get_task_goal(source["assistant_turn_id"])
+        if pending_goal and pending_goal["original_turn_id"] == goal["original_turn_id"]:
+            return None
+    for row in unknown_requests:
+        data = json.loads(row["payload_json"])
+        unknown_goal = conversation_repo.get_task_goal(data["source"]["assistant_turn_id"])
+        if unknown_goal and unknown_goal["original_turn_id"] == goal["original_turn_id"]:
+            original = get_exact_edit_request_result(task.id, UUID(data["locator"]["request_id"]), request, data["locator"]["phase"])
+            if original["status"] in {"unknown", "result_unknown"}:
+                return None
+    if rendered is None or rendered["state"] != "done" or located is None:
+        return None
+    source = json.loads(located["payload_json"])
+    execution_goal = conversation_repo.get_task_goal(source["source"]["assistant_turn_id"])
+    base = source["source"]["expected_timeline_version_id"]
+    if (execution_goal is None or execution_goal["original_turn_id"] != goal["original_turn_id"]
+            or version.parent_version_id != base or version.snapshot.get("render_input_timeline_version_id") != base):
+        return None
+    actual = _read_bound_execution_result(task.id, request, rendered["owner_id"])
+    if (actual["job"]["status"] != "succeeded" or not actual["video_ready"]
+            or source.get("input_digest") != actual["job"]["input_digest"]):
+        return None
+    return {"status": "completed", "scope": "production_and_output_observation", "job_id": actual["job"]["id"],
+        "observation_job_id": receipt["job_id"], "timeline_version_id": version.id, "sha256": output["sha256"],
+        "measurement_scope": result["measurement_scope"], "unavailable": [{"scope": item["scope"],
+            "reason": _assistant_stream_safe_text(item["reason"][:500], task.workspace_id)} for item in result.get("unavailable", [])]}
 
 
 def _run_goal_turn(claim, fresh):
@@ -20233,6 +20331,9 @@ def _run_goal_turn(claim, fresh):
             for key in ("label", "summary"):
                 if key in safe:
                     safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
+            if isinstance(event.get("failure"), dict):
+                safe["failure"] = {key: _assistant_stream_safe_text(value[:500], workspace_id)
+                    for key, value in event["failure"].items() if key in {"reason", "repair_action"} and isinstance(value, str)}
             conversation_repo.append_event(turn_id, safe)
     try:
         reply, preview = run_task_turn(_workspace_settings_for(workspace_id), workspace_id=workspace_id,
@@ -20246,6 +20347,7 @@ def _run_goal_turn(claim, fresh):
                                   "current_facts": fresh["facts"], "round_count": goal["round_count"],
                                   "goal_checkpoint": {key: goal[key] for key in ("target_snapshot", "unfinished_steps", "handled_event_ids")},
                                   "completed_source_slots": goal.get("completed_source_slots", []),
+                                  "completed_output_checkpoint": goal.get("completed_output_checkpoint"),
                                   "unfinished_steps": goal["unfinished_steps"], "next_checkpoint": goal.get("next_checkpoint")})
         tail = sanitizer.feed("", final=True)
         if tail:
@@ -20297,13 +20399,57 @@ def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, 
         if located:
             proofs.append({"kind": "edit_request", "id": str(edit_request.request_id)})
     if execution_status:
-        located = production_repo.get_task_event(workspace_id, f"event_assistant_execution_locator_{turn_id}")
-        if located.payload["source"]["assistant_turn_id"] == turn_id:
-            proofs.append({"kind": "execution_status", "id": execution_status["job"]["id"]})
+        try:
+            located = production_repo.get_task_event(workspace_id, f"event_assistant_execution_locator_{turn_id}")
+        except KeyError:
+            pass  # A read of an earlier job is not this turn's new execution.
+        else:
+            if located.payload["source"]["assistant_turn_id"] == turn_id and located.job_id == execution_status["job"]["id"]:
+                proofs.append({"kind": "execution_status", "id": execution_status["job"]["id"]})
     return proofs
 
 
-def _bind_assistant_execution_result(task_id, request, turn_id, candidate):
+def _assistant_execution_source(task_id, request, turn_id, action, input_digest=None):
+    if turn_id is None:
+        return None, None  # Existing explicit GUI/CLI starts keep their protocol.
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    try:
+        origin = conversation_repo.task_turn_source(str(turn_id), task.workspace_id, member_id, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    with conversation_repo._connect() as conn:
+        latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+            "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (origin["conversation_id"],)).fetchone()
+    original_turn_id = origin["context"].get("original_turn_id", str(turn_id))
+    if latest is None or latest["id"] != original_turn_id:
+        raise HTTPException(status_code=409, detail="原助手制作要求已被新的真人要求替代")
+    snapshot = origin["context"].get("target_snapshot", {})
+    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    if (origin["context"].get("stage") in {"topic", "script"}
+            or not origin["raw_command"].strip()
+            or (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
+                task.current_timeline_version_id, version.sequence if version else 0)):
+        raise HTTPException(status_code=409, detail="原助手制作要求的阶段或目标版本已失效")
+    goal = conversation_repo.get_task_goal(str(turn_id))
+    if goal is not None and (goal["status"] in {"invalidated", "no_progress", "limit_reached"}
+            or _goal_pending_preview(goal, task.current_timeline_version_id) is not None):
+        raise HTTPException(status_code=409, detail="原要求已停止或仍等待真实修改采用，未开始制作")
+    actor = _require_permit_actor(request, task.workspace_id)
+    source = {"workspace_id": task.workspace_id, "task_id": task_id, "member_id": member_id,
+        "assistant_turn_id": str(turn_id), "conversation_id": origin["conversation_id"],
+        "expected_timeline_version_id": snapshot["timeline_version_id"],
+        "expected_timeline_sequence": snapshot["timeline_sequence"], "actor_identity": actor.identity_payload(), "action": action}
+    try:
+        located = production_repo.get_task_event(task.workspace_id, f"event_assistant_execution_locator_{turn_id}")
+    except KeyError:
+        return source, None
+    if (located.payload["source"] != source
+            or input_digest is not None and located.payload["input_digest"] != input_digest):
+        raise HTTPException(status_code=409, detail="本轮已绑定不同的制作请求；请只查询原作业")
+    return source, _read_bound_execution_result(task_id, request, located.payload["job_id"])
+
+
+def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, source=None):
     if not isinstance(candidate.get("job"), dict) or not isinstance(candidate["job"].get("id"), str):
         raise HTTPException(status_code=502, detail="制作回执缺少真实作业身份")
     try:
@@ -20312,17 +20458,49 @@ def _bind_assistant_execution_result(task_id, request, turn_id, candidate):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     workspace_id = current_workspace_id(request)
     member_id = _assistant_member_id(request, workspace_id)
-    origin = conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id)
-    actor = _require_permit_actor(request, workspace_id)
-    snapshot = origin["context"]["target_snapshot"]
-    event_id = f"event_assistant_execution_locator_{turn_id}"
-    production_repo.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
-        job_id=result["job"]["id"], event_type="assistant_execution_located",
-        payload={"job_id": result["job"]["id"], "source": {"workspace_id": workspace_id, "task_id": task_id,
+    if source is None:
+        origin = conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id)
+        actor = _require_permit_actor(request, workspace_id)
+        snapshot = origin["context"]["target_snapshot"]
+        source = {"workspace_id": workspace_id, "task_id": task_id,
             "member_id": member_id, "assistant_turn_id": turn_id, "conversation_id": origin["conversation_id"],
             "expected_timeline_version_id": snapshot["timeline_version_id"],
-            "expected_timeline_sequence": snapshot["timeline_sequence"], "actor_identity": actor.identity_payload()}}))
+            "expected_timeline_sequence": snapshot["timeline_sequence"], "actor_identity": actor.identity_payload()}
+    event_id = f"event_assistant_execution_locator_{turn_id}"
+    try:
+        previous = production_repo.get_task_event(workspace_id, event_id)
+    except KeyError:
+        production_repo.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
+            job_id=result["job"]["id"], event_type="assistant_execution_located",
+            payload={"job_id": result["job"]["id"], "input_digest": result["job"]["input_digest"], "source": source}))
+    else:
+        if previous.job_id != result["job"]["id"]:
+            raise HTTPException(status_code=409, detail="本轮制作来源已绑定原作业，不能改绑")
+    task = production_repo.get_creation_task(workspace_id, task_id)
+    current = _execution_source_version_current(task, source, result["job"]["id"], result["job"]["status"])
+    conversation_repo.record_task_execution(turn_id, workspace_id, member_id, task_id, result, current_source=current)
+    _wake_assistant_continuations()
     return result
+
+
+def _execution_source_version_current(task, source, job_id, status):
+    """The original version, or the actual render child produced by this execution."""
+    base = source["expected_timeline_version_id"]
+    result_version = task.current_timeline_version_id
+    if result_version == base:
+        if result_version is None:
+            return source["expected_timeline_sequence"] == 0
+        version = production_repo.get_timeline_version(task.workspace_id, result_version)
+        return version.sequence == source["expected_timeline_sequence"]
+    if status != "succeeded" or result_version is None:
+        return False
+    version = production_repo.get_timeline_version(task.workspace_id, result_version)
+    render_request_id = version.snapshot.get("creation_render_request_id")
+    with production_repo._connect() as conn:
+        rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
+            (task.workspace_id, render_request_id)).fetchone() if render_request_id else None
+    return (version.parent_version_id == base and version.snapshot.get("render_input_timeline_version_id") == base
+        and rendered is not None and rendered["owner_id"] == job_id and rendered["state"] == "done")
 
 
 def _project_assistant_execution_results():
@@ -20358,15 +20536,7 @@ def _project_assistant_execution_results():
         task = production_repo.get_creation_task(workspace_id, task_id)
         base = source["expected_timeline_version_id"]
         result_version = task.current_timeline_version_id
-        current = result_version == base
-        if not current and row["status"] == "succeeded" and result_version:
-            version = production_repo.get_timeline_version(workspace_id, result_version)
-            render_request_id = version.snapshot.get("creation_render_request_id")
-            with production_repo._connect() as conn:
-                rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
-                    (workspace_id, render_request_id)).fetchone() if render_request_id else None
-            current = (version.parent_version_id == base and version.snapshot.get("render_input_timeline_version_id") == base
-                       and rendered is not None and rendered["owner_id"] == job_id and rendered["state"] == "done")
+        current = _execution_source_version_current(task, source, job_id, row["status"])
         event_id = f"event_assistant_execution_{row['id']}_{row['status']}"
         status = "stopped" if binding["status"] == "stopped" else row["status"] if current else "stale"
         event = {"type": "business_result", "event_id": event_id, "task_id": task_id, "phase": "execution",
@@ -20404,7 +20574,7 @@ def _assistant_business_turn_can_continue(binding, turn_id):
         return False
     turn = conversation_repo.get_turn(turn_id)
     goal = conversation_repo.get_task_goal(turn_id)
-    return bool(turn and (turn.get("result") or {}).get("reason") == "api_shutdown"
+    return bool(turn and conversation_repo.recoverable_business_failure(turn.get("result") or {})
                 and goal and goal["current_turn_id"] == turn_id
                 and goal["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"})
 

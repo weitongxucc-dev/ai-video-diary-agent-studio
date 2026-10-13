@@ -86,6 +86,127 @@ def test_old_completed_history_and_media_events_do_not_infer_a_goal(repo):
     assert len(repo.list_turns(chat["id"])) == 1
 
 
+@pytest.mark.parametrize("terminal", ["failed", "restarted"])
+def test_running_host_execution_survives_model_failure_and_restart(repo, terminal):
+    chat = repo.create("workspace", "member", "task", "task")
+    message = "制作后检查实际输出"
+    chat = repo.save_draft(chat["id"], "workspace", "member", message, chat["draft_version"])
+    turn, _ = repo.create_turn_idempotent(chat["id"], "workspace", "member", message, str(uuid4()), chat["draft_version"],
+        request_context={"kind":"task", "task_id":"task", "stage":"montage",
+            "target_snapshot":{"timeline_version_id":"version:one", "timeline_sequence":1}})
+    status = {"task_id":"task", "job":{"id":"execution:one", "task_id":"task", "status":"queued"}}
+    repo.record_task_execution(turn["id"], "workspace", "member", "task", status)
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
+    if terminal == "failed":
+        repo.finish_turn(turn["id"], "failed", result={"kind":"failure", "message":"model interrupted"})
+    else:
+        assert ConversationRepository(repo.database_path).fail_interrupted_turns() == 1
+    saved = repo.get_turn(turn["id"])
+    assert saved["status"] == "failed"
+    assert saved["result"]["response"]["execution_status"] == status
+    assert saved["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":"execution:one"}]
+    emit(repo, turn, phase="execution", result_kind="execution", job_id="execution:one")
+    svc, calls = service(ConversationRepository(repo.database_path), response={})
+    assert svc.reconcile() == 1 and len(calls) == 1
+    assert calls[0][0]["goal"]["original_instruction"] == message
+    assert svc.reconcile() == 0
+
+
+@pytest.mark.parametrize("interrupted_first", [False, True])
+def test_verified_execution_receipt_and_goal_commit_atomically_even_if_model_already_failed(repo, monkeypatch, interrupted_first):
+    chat = repo.create("workspace", "member", "task", "task")
+    chat = repo.save_draft(chat["id"], "workspace", "member", "制作并检查输出", chat["draft_version"])
+    turn, _ = repo.create_turn_idempotent(chat["id"], "workspace", "member", chat["draft_text"], str(uuid4()),
+        chat["draft_version"], request_context={"kind":"task", "task_id":"task", "stage":"review",
+            "target_snapshot":{"timeline_version_id":"version:one", "timeline_sequence":1}})
+    # Authorization was read by the host before the accepted start could race model failure.
+    assert repo.task_turn_source(turn["id"], "workspace", "member", "task")["raw_command"] == "制作并检查输出"
+    if interrupted_first:
+        repo.finish_turn(turn["id"], "failed", result={"kind":"failure", "message":"model interrupted"})
+    register = repo._register_task_goal
+    def while_registering(conn, turn_id, **kwargs):
+        visible = ConversationRepository(repo.database_path).get_turn(turn_id)
+        assert not (visible.get("result") or {}).get("goal_business_actions")
+        assert repo.get_task_goal(turn_id) is None
+        return register(conn, turn_id, **kwargs)
+    monkeypatch.setattr(repo, "_register_task_goal", while_registering)
+    receipt = {"task_id":"task", "job":{"id":"execution:race", "task_id":"task", "status":"queued"}}
+    assert repo.record_task_execution(turn["id"], "workspace", "member", "task", receipt)
+    if not interrupted_first:
+        repo.finish_turn(turn["id"], "failed", result={"kind":"failure", "message":"model interrupted"})
+    saved = ConversationRepository(repo.database_path).get_turn(turn["id"])
+    assert saved["status"] == "failed"
+    assert saved["result"]["response"]["execution_status"] == receipt
+    assert saved["result"]["goal_continuation"]["status"] == "waiting_result"
+    emit(repo, turn, phase="execution", job_id="execution:race")
+    svc, calls = service(repo, response={})
+    assert svc.reconcile() == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize("invalidation", ["stopped", "new_instruction", "source_version"])
+def test_late_verified_execution_receipt_preserves_history_without_reopening_invalid_goal(repo, invalidation):
+    chat = repo.create("workspace", "member", "task", "task")
+    chat = repo.save_draft(chat["id"], "workspace", "member", "开始制作", chat["draft_version"])
+    turn, _ = repo.create_turn_idempotent(chat["id"], "workspace", "member", chat["draft_text"], str(uuid4()),
+        chat["draft_version"], request_context={"kind":"task", "task_id":"task", "stage":"review",
+            "target_snapshot":{"timeline_version_id":"version:one", "timeline_sequence":1}})
+    repo.task_turn_source(turn["id"], "workspace", "member", "task")
+    if invalidation == "stopped":
+        repo.finish_turn(turn["id"], "stopped", result={"reason":"user_stopped"})
+    elif invalidation == "new_instruction":
+        repo.finish_turn(turn["id"], "failed", result={"kind":"failure", "message":"model interrupted"})
+        chat = repo.get(chat["id"], "workspace", "member")
+        chat = repo.save_draft(chat["id"], "workspace", "member", "只查看", chat["draft_version"])
+        repo.create_turn_idempotent(chat["id"], "workspace", "member", chat["draft_text"], str(uuid4()),
+            chat["draft_version"], request_context={"kind":"task", "task_id":"task"})
+    else:
+        repo.finish_turn(turn["id"], "failed", result={"kind":"failure"})
+    receipt = {"task_id":"task", "job":{"id":"execution:old", "status":"queued"}}
+    assert repo.record_task_execution(turn["id"], "workspace", "member", "task", receipt,
+        current_source=invalidation != "source_version")
+    assert repo.get_task_goal(turn["id"]) is None
+    assert repo.get_turn(turn["id"])["result"]["response"]["execution_status"] == receipt
+
+
+@pytest.mark.parametrize("change", ["adoption", "hash", "new_action"])
+def test_output_checkpoint_is_not_reused_after_adoption_changed_facts_or_new_action(repo, change):
+    _, turn, _, _ = original(repo)
+    checkpoint = {"status":"completed", "scope":"production_and_output_observation",
+        "job_id":"execution:one", "observation_job_id":"observation:one", "timeline_version_id":"version:one",
+        "sha256":"a"*64, "measurement_scope":"actual_output_bounded_frames", "unavailable":[]}
+    assert repo.record_goal_output_checkpoint(turn["id"], checkpoint)
+    emit(repo, turn, phase="apply" if change=="adoption" else "observation",
+        status="confirmed" if change=="adoption" else "succeeded", result_kind="observation")
+    fresh = {"status":"ready", "task_version":{
+        "timeline_version_id":"version:two" if change=="adoption" else "version:one", "timeline_sequence":2 if change=="adoption" else 1}}
+    if change == "new_action":
+        fresh["completed_output_checkpoint"] = checkpoint
+    svc, calls = service(repo, response={"media_job":{"job_id":"observation:new", "status":"queued"}} if change=="new_action" else {}, readiness=fresh)
+    assert svc.reconcile() == 1 and len(calls) == 1
+    goal = repo.get_task_goal(turn["id"])
+    assert "completed_output_checkpoint" not in goal
+    assert goal["waiting_reason"] != "bounded_output_checkpoint_completed"
+    assert goal["status"] == ("waiting_result" if change=="new_action" else "no_progress")
+
+
+def test_bounded_output_checkpoint_does_not_certify_all_instruction_steps(repo):
+    _, turn, _, _ = original(repo, message="生成成片检查技术输出，还需核对PNG中文与边框")
+    emit(repo, turn, phase="observation", result_kind="observation")
+    checkpoint = {"status":"completed", "scope":"production_and_output_observation",
+        "job_id":"execution:one", "observation_job_id":"observation:one", "timeline_version_id":"version:one",
+        "sha256":"a"*64, "measurement_scope":"actual_output_bounded_frames",
+        "unavailable":[{"scope":"visual_semantics", "reason":"No semantic validator"}]}
+    svc, calls = service(repo, response={}, readiness={"status":"ready",
+        "task_version":{"timeline_version_id":"version:one", "timeline_sequence":1}, "completed_output_checkpoint":checkpoint})
+    assert svc.reconcile() == 1 and len(calls) == 1
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == "no_progress"
+    assert goal["waiting_reason"] == "bounded_output_checkpoint_completed"
+    assert goal["completed_output_checkpoint"] == checkpoint
+    assert "complete_original_instruction" in goal["unfinished_steps"]
+    assert "PNG中文与边框" in goal["original_instruction"]
+
+
 def test_proposal_waits_real_adoption_then_new_version_drives_remaining_goal(repo):
     chat, turn, _, _ = original(repo)
     emit(repo, turn, status="proposed")
@@ -205,7 +326,7 @@ def test_reading_settled_old_receipts_does_not_wait_for_an_event_that_will_never
     svc, calls = service(repo, response={kind: receipt}, action_refs=[])
     assert svc.reconcile() == 1 and len(calls) == 1
     goal = repo.get_task_goal(turn["id"])
-    assert goal["status"] == "no_progress" and goal["unfinished_steps"] == []
+    assert goal["status"] == "no_progress" and "complete_original_instruction" in goal["unfinished_steps"]
     assert event in repo.get_turn(turn["id"])["events"] == before
     assert svc.reconcile() == 0
 

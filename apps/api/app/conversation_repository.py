@@ -530,7 +530,37 @@ class ConversationRepository:
                 cls._write_goal(conn, root, {**root["goal"], "status": "invalidated", "waiting_reason": reason,
                                            "unfinished_steps": []})
 
-    def register_task_goal(self, turn_id: str) -> dict | None:
+    def record_task_execution(self, turn_id: str, workspace_id: str, member_id: str,
+                              task_id: str, execution_status: dict, *, current_source: bool = True) -> bool:
+        """Preserve a host-verified execution receipt before the model can finish."""
+        job_id = execution_status["job"]["id"]
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT t.result_json,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id WHERE t.id=? "
+                "AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (turn_id, workspace_id, member_id)).fetchone()
+            if row is None or json.loads(row["request_context_json"]).get("task_id") != task_id:
+                raise ValueError("制作回执不属于原助手任务轮次")
+            result = json.loads(row["result_json"] or "{}")
+            actions = result.get("goal_business_actions", [])
+            proof = {"kind": "execution_status", "id": job_id}
+            if proof not in actions:
+                actions = [*actions, proof]
+            result.update(goal_business_actions=actions,
+                response={**result.get("response", {}), "execution_status": execution_status})
+            conn.execute("UPDATE assistant_conversation_turns SET result_json=?,updated_at=? WHERE id=?",
+                (json.dumps(result, ensure_ascii=False), _now(), turn_id))
+            if current_source:
+                self._register_task_goal(conn, turn_id, running_execution=True)
+            else:
+                root = self._goal_root(conn, turn_id)
+                if root and root["goal"]["status"] not in {"invalidated", "no_progress", "limit_reached"}:
+                    self._write_goal(conn, root, {**root["goal"], "status": "invalidated",
+                        "waiting_reason": "unrelated_timeline_change", "unfinished_steps": []})
+        return True
+
+    def register_task_goal(self, turn_id: str, *, running_execution: bool = False) -> dict | None:
         """Attach execution checkpoints to a real user's existing task turn.
 
         This is neither another task nor a model-authored authorization. The
@@ -538,38 +568,60 @@ class ConversationRepository:
         """
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT t.*,r.workspace_id,r.member_id,r.request_context_json "
-                               "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
-                               "WHERE t.id=? AND r.outcome='consumed'", (turn_id,)).fetchone()
-            if row is None or row["status"] != "completed" or not row["user_message"]:
+            return self._register_task_goal(conn, turn_id, running_execution=running_execution)
+
+    def _register_task_goal(self, conn: sqlite3.Connection, turn_id: str, *, running_execution: bool = False) -> dict | None:
+        row = conn.execute("SELECT t.*,r.workspace_id,r.member_id,r.request_context_json "
+                           "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                           "WHERE t.id=? AND r.outcome='consumed'", (turn_id,)).fetchone()
+        if row is None or row["status"] not in ({"running", "completed", "failed"} if running_execution else {"completed"}) or not row["user_message"]:
+            return None
+        context, result = json.loads(row["request_context_json"]), json.loads(row["result_json"] or "{}")
+        if running_execution:
+            execution = (result.get("response", {}).get("execution_status") or {}).get("job") or {}
+            if {"kind": "execution_status", "id": execution.get("id")} not in result.get("goal_business_actions", []):
                 return None
-            context, result = json.loads(row["request_context_json"]), json.loads(row["result_json"] or "{}")
-            if context.get("kind") != "task" or not context.get("task_id") or context.get("source_kind"):
-                return None
-            latest_user = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
-                                       "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (row["conversation_id"],)).fetchone()
-            if latest_user["id"] != turn_id:
-                return None
-            if result.get("goal_continuation"):
-                return result["goal_continuation"]
-            response = result.get("response", {})
-            if not any(response.get(key) for key in ("media_job", "edit_preview", "edit_request", "execution_status")):
-                return None
-            waiting = "waiting_adoption" if response.get("edit_preview") else "waiting_unknown" if (response.get("edit_request") or {}).get("status") == "result_unknown" else "waiting_result"
-            goal = {"original_turn_id": turn_id, "original_instruction": row["user_message"],
-                    "workspace_id": row["workspace_id"], "member_id": row["member_id"], "task_id": context["task_id"],
-                    "conversation_id": row["conversation_id"], "request_context": context,
-                    "target_snapshot": context.get("target_snapshot", {}), "status": waiting,
-                    "unfinished_steps": ["await_real_adoption" if waiting == "waiting_adoption" else "observe_actual_result", "complete_original_instruction"],
-                    "round_count": 0, "handled_event_ids": [], "current_turn_id": turn_id}
-            root = {"id": turn_id}
-            self._write_goal(conn, root, goal)
+        if context.get("kind") != "task" or not context.get("task_id") or context.get("source_kind"):
+            return None
+        latest_user = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+                                   "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (row["conversation_id"],)).fetchone()
+        if latest_user["id"] != turn_id:
+            return None
+        if result.get("goal_continuation"):
+            return result["goal_continuation"]
+        response = result.get("response", {})
+        if not any(response.get(key) for key in ("media_job", "edit_preview", "edit_request", "execution_status")):
+            return None
+        waiting = "waiting_adoption" if response.get("edit_preview") else "waiting_unknown" if (response.get("edit_request") or {}).get("status") == "result_unknown" else "waiting_result"
+        goal = {"original_turn_id": turn_id, "original_instruction": row["user_message"],
+                "workspace_id": row["workspace_id"], "member_id": row["member_id"], "task_id": context["task_id"],
+                "conversation_id": row["conversation_id"], "request_context": context,
+                "target_snapshot": context.get("target_snapshot", {}), "status": waiting,
+                "unfinished_steps": ["await_real_adoption" if waiting == "waiting_adoption" else "observe_actual_result", "complete_original_instruction"],
+                "round_count": 0, "handled_event_ids": [], "current_turn_id": turn_id}
+        root = {"id": turn_id}
+        self._write_goal(conn, root, goal)
         return goal
 
     def get_task_goal(self, turn_id: str) -> dict | None:
         with self._connect() as conn:
             root = self._goal_root(conn, turn_id)
         return root["goal"] if root else None
+
+    def record_goal_output_checkpoint(self, turn_id: str, checkpoint: dict | None) -> bool:
+        """A bounded host observation projection; never certifies the whole instruction."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            root = self._goal_root(conn, turn_id)
+            if root is None or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
+                return False
+            goal = dict(root["goal"])
+            if checkpoint:
+                goal["completed_output_checkpoint"] = checkpoint
+            else:
+                goal.pop("completed_output_checkpoint", None)
+            self._write_goal(conn, root, goal)
+        return True
 
     @staticmethod
     def _source_slot_key(name: str, input_refs: list[dict]) -> str:
@@ -733,6 +785,9 @@ class ConversationRepository:
                     "target_snapshot": {**goal["target_snapshot"], **task_version}, "current_turn_id": turn_id,
                     "handled_event_ids": [*goal["handled_event_ids"], event["event_id"]],
                     "unfinished_steps": [goal.get("next_checkpoint", "evaluate_actual_result"), "complete_original_instruction"]}
+            checkpoint = goal.get("completed_output_checkpoint")
+            if checkpoint and checkpoint.get("timeline_version_id") != goal["target_snapshot"].get("timeline_version_id"):
+                goal.pop("completed_output_checkpoint")
             self._write_goal(conn, root, goal)
         return {"turn_id": turn_id, "conversation_id": root["conversation_id"], "goal": goal,
                 "request_context": context, "event": event, "source_turn_id": candidate["source_turn_id"]}
@@ -787,10 +842,15 @@ class ConversationRepository:
             elif turn["status"] in {"failed", "stopped"}:
                 status, steps = "waiting_unknown", ["read_original_request_result"]
             else:
-                status, steps = "no_progress", []
-            goal = {**root["goal"], "status": status, "unfinished_steps": steps,
+                status, steps = "no_progress", root["goal"].get("unfinished_steps", [])
+            current_goal = dict(root["goal"])
+            checkpoint = current_goal.get("completed_output_checkpoint")
+            if new_action or checkpoint and checkpoint.get("timeline_version_id") != current_goal["target_snapshot"].get("timeline_version_id"):
+                current_goal.pop("completed_output_checkpoint", None)
+            goal = {**current_goal, "status": status, "unfinished_steps": steps,
                     "next_checkpoint": steps[0] if steps else None,
-                    "waiting_reason": "no_new_business_action" if status == "no_progress" else status}
+                    "waiting_reason": ("bounded_output_checkpoint_completed" if current_goal.get("completed_output_checkpoint")
+                        else "no_new_business_action") if status == "no_progress" else status}
             self._write_goal(conn, root, goal)
         return goal
 
@@ -879,7 +939,7 @@ class ConversationRepository:
             result = json.loads(row["result_json"]) if row["result_json"] else {}
             result["continuation"] = event
             text = row["assistant_text"]
-            shutdown_goal = self._goal_root(conn, turn_id) if row["status"] == "failed" and result.get("reason") == "api_shutdown" else None
+            shutdown_goal = self._goal_root(conn, turn_id) if row["status"] == "failed" and self.recoverable_business_failure(result) else None
             shutdown_result = bool(shutdown_goal
                 and shutdown_goal["goal"]["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"}
                 and shutdown_goal["goal"]["current_turn_id"] == turn_id
@@ -897,11 +957,34 @@ class ConversationRepository:
             conn.execute("UPDATE assistant_conversations SET updated_at=? WHERE id=?", (now, row["conversation_id"]))
         return True
 
+    @staticmethod
+    def recoverable_business_failure(result: dict) -> bool:
+        """Host interruption or a verified execution receipt, never an arbitrary tool failure."""
+        execution = ((result.get("response") or {}).get("execution_status") or {}).get("job") or {}
+        return (result.get("kind") == "failure"
+            or result.get("reason") in {"api_shutdown", "api_restarted", "goal_runner_interrupted"}
+            or {"kind": "execution_status", "id": execution.get("id")} in result.get("goal_business_actions", []))
+
+    @staticmethod
+    def _preserve_execution_result(previous: dict, incoming: dict) -> dict:
+        result = dict(incoming)
+        if previous.get("goal_continuation"):
+            result["goal_continuation"] = previous["goal_continuation"]
+        proofs = [item for item in previous.get("goal_business_actions", []) if item.get("kind") == "execution_status"]
+        if proofs:
+            result["goal_business_actions"] = [*proofs, *[item for item in result.get("goal_business_actions", []) if item not in proofs]]
+            execution = previous.get("response", {}).get("execution_status")
+            response = result.get("response", {})
+            if execution and not response.get("execution_status"):
+                result["response"] = {**response, "execution_status": execution}
+        return result
+
     def finish_turn(self, turn_id: str, status: str, assistant_text: str | None = None,
                     result: dict | None = None) -> dict | None:
         if status not in {"completed", "failed", "stopped"}:
             raise ValueError("invalid assistant turn terminal status")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             fields = ["status=?", "updated_at=?"]
             values: list[str] = [status, _now()]
             if assistant_text is not None:
@@ -909,7 +992,9 @@ class ConversationRepository:
                 values.append(assistant_text)
             if result is not None:
                 fields.append("result_json=?")
-                values.append(json.dumps(result, ensure_ascii=False))
+                previous = conn.execute("SELECT result_json FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
+                merged = self._preserve_execution_result(json.loads(previous["result_json"] or "{}") if previous else {}, result)
+                values.append(json.dumps(merged, ensure_ascii=False))
             values.append(turn_id)
             conn.execute(
                 f"UPDATE assistant_conversation_turns SET {','.join(fields)} WHERE id=? AND status='running'",
@@ -922,17 +1007,18 @@ class ConversationRepository:
         """Do not replay a running assistant turn after the API process restarts."""
         now = _now()
         with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE assistant_conversation_turns SET status='failed',result_json=?,updated_at=? "
-                "WHERE status='running'",
-                (json.dumps({"reason": "api_restarted"}), now),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT id,result_json FROM assistant_conversation_turns WHERE status='running'").fetchall()
+            for row in rows:
+                result = self._preserve_execution_result(json.loads(row["result_json"] or "{}"), {"reason": "api_restarted"})
+                conn.execute("UPDATE assistant_conversation_turns SET status='failed',result_json=?,updated_at=? WHERE id=?",
+                    (json.dumps(result, ensure_ascii=False), now, row["id"]))
             conn.execute(
                 "UPDATE assistant_conversations SET updated_at=? WHERE id IN "
                 "(SELECT DISTINCT conversation_id FROM assistant_conversation_turns WHERE updated_at=? AND status='failed')",
                 (now, now),
             )
-        return cursor.rowcount
+        return len(rows)
 
     def list_turns(self, conversation_id: str) -> list[dict]:
         with self._connect() as conn:

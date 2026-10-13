@@ -2375,6 +2375,7 @@ class AssistantStreamEvent(BaseModel):
     label: str | None = None
     ok: bool | None = None
     summary: str | None = None
+    failure: dict[str, str] | None = None
     result: dict[str, object] | None = None
     message: str | None = None
     status: int | None = None

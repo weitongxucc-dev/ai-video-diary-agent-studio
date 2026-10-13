@@ -409,3 +409,156 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
     assert main._goal_service().reconcile() == 0
     assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id)
                 if job.kind == "creation_task_execution"]) == 1
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_actual_start_is_persisted_before_model_failure_then_original_job_continues(state, monkeypatch, streaming):
+    state.finish()
+    monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
+        effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
+    execution = CreationExecution(state.production, run_narration=lambda *_: None, run_montage_plan=lambda *_: None,
+        run_render=lambda *_: None, render_is_valid=lambda *_: True)
+    monkeypatch.setattr(main, "creation_execution", execution)
+    monkeypatch.setattr(main, "submit_creation_stage", lambda *_: "isolated-receipt-test; no media execution")
+    calls, job_ids, turn_ids = [], [], []
+    def model(_settings, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("continuation_context"):
+            assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["id"] == job_ids[0]
+            return "已回读原制作作业，尚无语义或听感结论。", None
+        turn_id = kwargs["turn_id"]
+        turn_ids.append(turn_id)
+        preview = state.client.get(state.base_url + "/execution/preview").json()
+        started = state.raw_post(state.base_url + "/execution/start?assistant_turn_id=" + turn_id, json={
+            "script_id":preview["script_id"], "input_digest":preview["input_digest"], "requirements_confirmed":True})
+        assert started.status_code == 202, started.text
+        job_id = started.json()["job"]["id"]
+        job_ids.append(job_id)
+        # The real route already owns the locator/proof while this model is still running.
+        located = state.production.get_task_event(state.workspace_id, "event_assistant_execution_locator_" + turn_id)
+        assert located.job_id == job_id and located.payload["input_digest"] == preview["input_digest"]
+        assert state.conversations.get_task_goal(turn_id)["status"] == "waiting_result"
+        assert state.conversations.get_turn(turn_id)["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":job_id}]
+        replayed = state.raw_post(state.base_url + "/execution/start?assistant_turn_id=" + turn_id, json={
+            "script_id":preview["script_id"], "input_digest":preview["input_digest"], "requirements_confirmed":True})
+        assert replayed.status_code == 202 and replayed.json()["job"]["id"] == job_id
+        if kwargs.get("on_event"):
+            kwargs["on_event"]({"type":"tool_end", "tool_id":42, "label":"原制作已提交", "ok":False,
+                "summary":"模型回复随后中断", "failure":{"reason":"模型中断，输入位于 /Volumes/private/source.wav",
+                    "repair_action":"查询原制作作业，不重复提交", "raw_payload":"never expose"}})
+        raise pi.AssistantUnavailable("isolated model interruption after actual start")
+    monkeypatch.setattr(main, "run_task_turn", model)
+    chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
+    text = "生成后检查当前输出"
+    chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, text, chat["draft_version"])
+    response = state.raw_post(state.base_url + "/assistant/turn", headers={"Accept":"text/event-stream"} if streaming else {}, json={
+        "conversation_id":chat["id"], "message":text, "client_request_id":str(uuid4()),
+        "expected_draft_version":chat["draft_version"], "context_stage":"review", "selected_object_refs":[],
+        "expected_timeline_version_id":state.version.id, "expected_timeline_sequence":state.version.sequence})
+    assert response.status_code == (200 if streaming else 503), response.text
+    root_id = turn_ids[0]
+    saved = state.conversations.get_turn(root_id)
+    assert saved["status"] == "failed"
+    assert saved["result"]["response"]["execution_status"]["job"]["id"] == job_ids[0]
+    if streaming:
+        projected = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith('data: ')]
+        failure = next(event['failure'] for event in projected if event.get('tool_id') == 42)
+        historical = next(event['failure'] for event in saved['events'] if event.get('tool_id') == 42)
+        assert failure == historical and set(failure) == {'reason','repair_action'}
+        assert '/Volumes/' not in failure['reason'] and 'raw_payload' not in response.text
+    state.production.claim_job_run(state.workspace_id, job_ids[0])
+    state.production.finish_job_run(state.workspace_id, job_ids[0], status="succeeded")
+    original = state.client.get(state.base_url + "/execution", params={"job_id":job_ids[0]})
+    assert original.status_code == 200 and original.json()["job"]["id"] == job_ids[0]
+    main.start_assistant_continuation_driver()
+    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
+    assert len(calls) == 2 and main._project_assistant_execution_results() == 0
+    assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
+
+
+@pytest.mark.parametrize("mutation", ["none", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
+def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation):
+    # Real SQL selection with host/media-reader seams; this is not media acceptance.
+    import sqlite3
+    monkeypatch.setattr(main,'_workspace_settings_for',lambda _:SimpleNamespace(effective_llm_api_key=''))
+    connection = sqlite3.connect(':memory:')
+    connection.row_factory = sqlite3.Row
+    connection.executescript('CREATE TABLE device_work_requests(id,workspace_id,owner_id,state);'
+        'CREATE TABLE task_events(id,workspace_id,task_id,job_id,event_type,payload_json);'
+        'CREATE TABLE job_runs(id,workspace_id,task_id,kind,status);')
+    goal = {'original_turn_id':'root','conversation_id':'chat','member_id':'member'}
+    output = {'artifact_id':'video-artifact','artifact_kind':'rendered_video','sha256':'a'*64,
+        'registered_width':1080,'registered_height':1920,'size_bytes':100,'producer_job_id':'render-child',
+        'logical_ref':'artifacts/task/video.mp4','mtime_ns':1,'ctime_ns':2}
+    source = {'job_id':'execution','input_digest':'b'*64,'source':{'assistant_turn_id':'producer',
+        'expected_timeline_version_id':'base','conversation_id':'chat','member_id':'member'}}
+    connection.execute('INSERT INTO device_work_requests VALUES(?,?,?,?)',('render-request','workspace','execution','done'))
+    connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('locator','workspace','task','execution',
+        'assistant_execution_located',json.dumps(source)))
+    start = {'arguments':{'_typed_source':{'assistant_turn_id':'observer'}},'input_facts':{'output':dict(output)}}
+    result = {'target':{'kind':'final'},'output_role':'composed_output','timeline_version_id':'final',
+        'timeline_sequence':2,'measurement_scope':'actual_output_bounded_frames',
+        'output':{key:value for key,value in output.items() if key not in {'logical_ref','mtime_ns','ctime_ns'}},
+        'unavailable':[{'scope':'visual_semantics','reason':'No semantic validator'}]}
+    if mutation == 'hash':
+        result['output']['sha256'] = 'c'*64
+    elif mutation == 'version':
+        result['timeline_version_id'] = 'older'
+    elif mutation == 'preview':
+        result['target']['kind'] = 'media_job'
+    elif mutation in {'pending','unknown'}:
+        source = {'assistant_turn_id':'pending','conversation_id':'chat','member_id':'member'}
+        if mutation == 'pending':
+            connection.execute('INSERT INTO job_runs VALUES(?,?,?,?,?)',('pending-job','workspace','task',main.TASK_MEDIA_KIND,'queued'))
+            payload = {'arguments':{'_typed_source':source}}
+            connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('event_pending-job_start','workspace','task','pending-job','task_media_submitted',json.dumps(payload)))
+        else:
+            payload = {'source':source,'locator':{'status':'unknown','request_id':str(uuid4()),'phase':'preview'}}
+            connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('unknown','workspace','task',None,'assistant_edit_request_located',json.dumps(payload)))
+    monkeypatch.setattr(main,'production_repo',SimpleNamespace(_connect=lambda:connection,get_task_event=lambda *_:SimpleNamespace(payload=start)))
+    monkeypatch.setattr(main,'conversation_repo',SimpleNamespace(get_task_goal=lambda identifier:
+        {'original_turn_id':'foreign' if mutation=='foreign_goal' and identifier=='producer' else 'root'}))
+    monkeypatch.setattr(main,'_registered_observation_output',lambda *_:(None,output,{'kind':'composed_output'}))
+    monkeypatch.setattr(main,'_read_bound_execution_result',lambda *_:{'job':{'id':'execution','status':'succeeded','input_digest':'b'*64},'video_ready':mutation!='no_video'})
+    monkeypatch.setattr(main,'get_exact_edit_request_result',lambda *_:{'status':'unknown'})
+    task=SimpleNamespace(workspace_id='workspace',id='task')
+    version=SimpleNamespace(id='final',sequence=2,parent_version_id='base',snapshot={
+        'creation_render_request_id':'render-request','render_input_timeline_version_id':'base'})
+    checkpoint=main._goal_output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
+        {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,None)
+    if mutation=='none':
+        assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']=='a'*64
+        assert checkpoint['unavailable']==result['unavailable']
+    else:
+        assert checkpoint is None
+    connection.close()
+
+
+@pytest.mark.parametrize('rejection', ['foreign_turn','old_version','new_instruction','stopped'])
+def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction(state, rejection):
+    state.finish()
+    chat=state.conversations.get(state.conversation['id'],state.workspace_id,state.member.member_id)
+    text='开始制作'
+    chat=state.conversations.save_draft(chat['id'],state.workspace_id,state.member.member_id,text,chat['draft_version'])
+    turn,_=state.conversations.create_turn_idempotent(chat['id'],state.workspace_id,state.member.member_id,text,str(uuid4()),
+        chat['draft_version'],request_context={'kind':'task','task_id':state.task.id,'stage':'review',
+            'target_snapshot':{'timeline_version_id':'older' if rejection=='old_version' else state.version.id,
+                'timeline_sequence':state.version.sequence}})
+    if rejection=='new_instruction':
+        state.conversations.finish_turn(turn['id'],'failed',result={'kind':'failure','message':'model interrupted'})
+        chat=state.conversations.get(chat['id'],state.workspace_id,state.member.member_id)
+        chat=state.conversations.save_draft(chat['id'],state.workspace_id,state.member.member_id,'只读，不生成',chat['draft_version'])
+        state.conversations.create_turn_idempotent(chat['id'],state.workspace_id,state.member.member_id,chat['draft_text'],
+            str(uuid4()),chat['draft_version'],request_context={'kind':'task','task_id':state.task.id})
+    if rejection=='stopped':
+        state.conversations.finish_turn(turn['id'],'stopped',result={'reason':'user_stopped'})
+    current=state.production.get_creation_task(state.workspace_id,state.task.id)
+    script=state.production.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
+    plan=state.production.get_creation_plan(state.workspace_id,current.plan_id)
+    preview={'script_id':script.id,'input_digest':revision_digest(script,plan)}
+    before=[job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]
+    response=state.raw_post(state.base_url+'/execution/start?assistant_turn_id='+(str(uuid4()) if rejection=='foreign_turn' else turn['id']),
+        json={'script_id':preview['script_id'],'input_digest':preview['input_digest'],'requirements_confirmed':True})
+    assert response.status_code==409,response.text
+    assert [job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]==before

@@ -83,6 +83,8 @@ class GoalContinuationService:
                         waiting_reason=fresh.get("reason", "await_real_adoption"), event_id=event["event_id"]):
                     advanced += 1
                 continue
+            if readiness == "ready":
+                self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"))
             if readiness in {"waiting_identity", "waiting_result", "waiting_unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status=readiness,
                     waiting_reason=fresh.get("reason", readiness))
