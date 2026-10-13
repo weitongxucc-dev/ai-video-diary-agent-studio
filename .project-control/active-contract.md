@@ -44,3 +44,7 @@ API最终集成包及main.py/test_assistant_goal_api.py窄重绑均已RELEASE。
 CI窄包：OBSERVATION/API仅重新取得main.py和test_assistant_goal_api.py，修复38344749382已报告的两处Ruff未使用异常变量/导入fixture重定义；保持原行为及fixture约束。其余文件无授权写入；修复后做相同Ruff及直接回归并RELEASE。
 
 Web和CI窄包现均RELEASE。root审阅收回；直接Web检查、类型及lint和API窄回归已通过，实际暂停后采用→可见后台出片/观察仍由root验收。保留未完成的逐项PNG检查、内容/听感及长片验收，不以局部检查数收口整体目标。
+
+Web最终读失败边界窄重绑：OBJECTS仅取得useAssistantConversation.ts及useAssistantConversationReadRaces.test.tsx，实际采用后会话GET失败时保留明确错误，不基于旧缓存目标重开查询；成功同waiting快照仍按原规则唤醒。无其他文件写lease，直接case通过后RELEASE。
+
+最终Web窄包亦已RELEASE，root收回；真实GET拒绝沿现有采用消费者抛错，不增加生产catch；旧回包null不重开查询。

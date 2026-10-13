@@ -342,7 +342,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     // The caller has received the real adoption response. Read immediately,
     // then reopen one bounded result window even if the projection is unchanged.
     const fresh = await refresh();
-    if (ownsGoal()) setBusinessRefreshWake(value => value + 1);
+    if (fresh && ownsGoal()) setBusinessRefreshWake(value => value + 1);
     return fresh;
   }, [refresh, scopeKey]);
 

@@ -139,6 +139,29 @@ describe("same-turn business result reads", () => {
     unmount();
   });
 
+  it("keeps the original paused goal and read error when actual adoption's conversation GET is rejected", async () => {
+    const initial = adoptionConversation();
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(result.current.businessRefreshPaused).toBe(true);
+    act(() => result.current.setError("上一次读取的诊断仍保留"));
+    api.getAssistantConversation.mockRejectedValue(new Error("403 当前成员不能读取这个对话"));
+    await act(async () => { await expect(result.current.refreshAfterTaskAdoption(actualAdoption))
+      .rejects.toThrow("403 当前成员不能读取这个对话"); });
+    expect(result.current.error).toBe("上一次读取的诊断仍保留");
+    expect(result.current.businessRefreshPaused).toBe(true);
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(25);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(25);
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("does not let an adoption's old read wake the re-entered scope or replace a newer draft", async () => {
     const initial = {...adoptionConversation(), scope_kind: "task" as const, scope_id: "task-one"};
     api.getCurrentAssistantConversation.mockImplementation(async ({scope_id}: {scope_id: string}) => scope_id === "task-one"
