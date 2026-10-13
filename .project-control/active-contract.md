@@ -79,6 +79,8 @@
 
 依据R4-asset-core-readonly-29及API的无WIP/FILE_RELEASE_ACK，资料线程接续资产聚合核心：独占新增app/media_observations.py、app/materials/assets.py、tests/test_media_observation_contracts.py、tests/test_material_asset_store.py。media_observations只原样迁入SubtitleSegment、MaterialSpeechAnalysis、SegmentUnderstanding三值类和OCR_RETRIEVAL_MIN_CONFIDENCE，不迁模型/ASR/分析执行；API独占asr.py、material_speech.py、visual_understanding.py中上述旧定义删除及同对象导出接线，其余运行实现只读。MaterialAssetStore仅接有限连接factory，归属现有get_asset/list_assets/list_assets_page/普通与analysis_only保存、真实row/payload decoder和所需原标签/人工片段纯规则；get_asset的显式现有connection必须保留，不打开或提交调用方之外的连接。segments仍位于资产payload；analysis_only同一BEGIN IMMEDIATE中读取最新事实、保留人工字段/权限/用途、保存丢失人工片段的unmatched_corrections并UPSERT资产，两表共同回滚。列表/分页的真实可见性、缺viewer模式、过滤/count/排序、严格日期及旧事实解码规则保持，不猜统一策略。production组装、原四body薄委托、旧decoder/规则body退役及活跃内部消费者同对象接续仍API独占；不得把其它CAS/checkpoint UPDATE换成不同语义的通用save或另开事务。DDL、发现/摄取、人工字段CAS、探测/场景、使用记录、检索及档案仓储仍按API既有后续边界接续，本组不代替整体R4。先交中立模块供API删旧定义接线，再联合验证实际观察对象/JSON/Pydantic、无运行层导入、调用方未提交读取/回滚、迟到分析保留人工事实、SQL/序列化失败的两表回滚及公开消费者；前一集合七源审核冻结期间production不得同时接此新组。
 
+资产核心九源通过并集成后，依据R4-manual-mutations-readonly-36与API新增测试无WIP/FILE_RELEASE_ACK，R4接续当前同聚合人工修改组：独占materials/assets.py中update_asset_tags/update_assets_tags_batch/update_asset_notes/update_segment/set_asset_visibility五个现命令，以及新增tests/test_material_asset_mutations.py。仅原样迁入实际参数/返回、原workspace/id UPDATE、原单批预验证及事务、版本CAS/已审核/用途/空选择/去重规则；不得改为file_path UPSERT或调用另开连接的public save_asset。set_asset_visibility保持原专用列+payload更新和既有事务语义，不借提取更改并发政策。原payload-only读取也不改为另一可见性事实解码策略。MaterialVersionConflict只定义在同一资产owner，production删除旧定义并同对象导出，HTTP409捕获及原消费者身份不分裂。update_segment用既有现连接集合查询；不添加新viewer、批量CAS字段、授权策略或存储格式。production五薄委托、旧body删除及异常导入归API，main/schema/原测试只读；R4模块先SOURCE_RELEASE后API接线，实际仓储/HTTP与原CAS/两行写失败回滚联合门再接受。此前中立观察值和其测试保持冻结，其余摄取/探测/场景/使用记录/检索/档案仍按后续边界接续，不把本组当整体R4完成。
+
 ### R6工具与CLI首批负责人
 
 R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d481接续R6。独占apps/api/agent_tools/diary_tools.ts、material_tools.ts、其直接需要的实际分组模块和定向测试，以及scripts/yaohe.mjs、yaohe.test.mjs和实际CLI分组模块。首批只拆现有工具注册、可信上下文、HTTP传输与回执、CLI命令职责，保留工具名字/共同schema/公共导出和现有HTTP协议；不开放新动作，不重试未知副作用。assistant_pi.py和后端制作/编辑编排仍不在此写权中，待R2/R3稳定后另行接续。Desktop候选已冻结，不与QA审核同时改动。
@@ -130,6 +132,8 @@ Web首批SOURCE_RELEASE并集成后，主控接手其lib/api/transport.ts、crea
 报告包含：候选Git/diff、确切文件/符号、相关命令与结果、首个失败、结构/持久/媒体/GUI的证据等级、剩余消费者和未验证项。当前阶段报告不等于全面完成。
 
 共享main的Git提交由主控统一收口；实施者不自行stage/commit其他并行候选，完成当前批后交出SOURCE_RELEASE、确切文件及源摘要，该批写权交回主控审核集成。必要的集成修复须绑定具体文件并通知原负责人，实际变化另记候选与相关验证；新增文件同样纳入候选身份。尚未释放的独占修改可继续，不因等待其他角色的验证而重复全量测试。
+
+主控发出SOURCE_INTEGRATED / WRITE_LEASE_RETURN且精确提交字节已匹配时，该批冻结结束，原负责人按回传的具体文件继续已授权后续；其他批仍未验收不延长本批冻结。等待前核对最新主控消息和实时Git，不以旧SOURCE_RELEASE或早先的REBASE_ACK继续等待已集成文件；等待本身不需要新用户批准。当前turn无法处理已排队主控接续消息时，应结束等待turn以接续排队指令，不做无进展sleep循环。
 
 ## 退役、回滚与后续
 
