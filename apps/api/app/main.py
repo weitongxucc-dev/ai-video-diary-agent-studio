@@ -7917,7 +7917,7 @@ def _assistant_turn_scope(
             raise HTTPException(status_code=409, detail="当前任务没有可查看的成片")
         refs = {f"clip:{clip.id}" for clip in montage.clips}
         if stage in {"montage", "review"}:
-            refs.update(f"overlay:{overlay.id}" for overlay in montage.graphic_overlays)
+            refs.update(f"overlay:{overlay['id']}" for overlay in montage.graphic_overlays)
             audio = _effective_audio_timeline(montage)
             refs.update(f"audio:{track.id}" for track in audio.tracks)
             refs.update(f"audio:{clip.id}" for track in audio.tracks for clip in track.clips)

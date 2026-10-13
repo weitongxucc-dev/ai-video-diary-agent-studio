@@ -32,6 +32,39 @@ def wait_until(predicate):
     pytest.fail("normal lifecycle driver did not advance the actual result")
 
 
+def test_assistant_scope_reads_registered_image_overlay_from_persisted_montage(state):
+    import io
+    from PIL import Image
+    from app.graphic_overlays import ImageOverlay
+    from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+
+    image = io.BytesIO()
+    Image.new("RGBA", (48, 48), (255, 255, 0, 255)).save(image, format="PNG")
+    imported = state.raw_post(state.base_url + "/graphics/import",
+        files={"image": ("registered-scope.png", image.getvalue(), "image/png")})
+    assert imported.status_code == 200, imported.text
+    montage = creation_task_montage_plan_from_payload(
+        state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
+    overlay = ImageOverlay(source_ref=imported.json()["source_ref"], name="已登记测试图片",
+        start_seconds=0, end_seconds=min(1, montage.duration_seconds)).model_dump()
+    montage.graphic_overlays.append(overlay)
+    task, saved = state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id,
+        montage.id, creation_task_montage_plan_to_payload(montage))
+    stored = creation_task_montage_plan_from_payload(
+        state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
+    assert stored.graphic_overlays == saved["graphic_overlays"] == [overlay]
+    assert isinstance(stored.graphic_overlays[0], dict)
+    selected = [f"clip:{state.clip.id}", f"overlay:{overlay['id']}"]
+    payload = main.CreationTaskAssistantTurnRequest(conversation_id=state.conversation["id"],
+        message="查看当前镜头和图片", client_request_id=uuid4(), expected_draft_version=0,
+        context_stage="review", selected_object_refs=selected)
+    assert main._assistant_turn_scope(state.workspace_id, task, payload) == ("review", selected)
+    payload.selected_object_refs = ["overlay:foreign-overlay"]
+    with pytest.raises(main.HTTPException) as error:
+        main._assistant_turn_scope(state.workspace_id, task, payload)
+    assert error.value.status_code == 422
+
+
 @pytest.mark.parametrize("shutdown,operation", [(False, "ChangeCrop"), (True, "ChangeCrop"), (False, "DeleteClip")])
 def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(state, monkeypatch, shutdown, operation):
     state.finish()  # Old history must never become an inferred goal.
