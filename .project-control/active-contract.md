@@ -26,6 +26,8 @@ root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直
 
 root另核准 Web Owner 临时独占 creation_execution.py 与直接test_creation_execution.py，仅实际CPU render的CreationJobUnitExecutor.execute异常分支复用已有detail.reason/error抽取，避免新Job.failure_reason保存Python原字典字符串。无需新DTO/前端解析/旧历史改写；失败仍failed，许可释放，上游保持。
 
+root核准 continuation Owner 必要渲染组合修复：独占 montage.py、host_resource_probes.py、member_permits.py 及各直接测试；直接配置消费者新增必需字段须具体报备。实际21输入进程峰值2.148GiB且运行重复要求整份2GiB追加预留已确证。仅多镜头hard-cut/no-transition改为逐镜头lossless H264静音中间片及同Job相对ffconcat；原fade/颜色/帧端点时钟、全局字幕/graphic、混音、最终验证保持，xfade仍原消费者。同grant及原199秒总deadline；中间片合计含音频/字幕/manifest不得越既有512MiB追加磁盘，final仍原99,638,206字节，不降质量/改变validator/为每镜头重借预算。CPU render启动仍原1GiB系统余量+2GiB新增峰值；运行保留1GiB余量且实际进程RSS不得越原2GiB，并保留CPU91%/swap/IO/身份/许可门。新增显式总进程线程profile，缺失fail-closed，不给任意默认；本机候选51线程仅源于已测实际21输入最大值，采样0.1秒沿现HostBudget，必须先有限实测再完整片验收。原.env不复制/不扩大RSS资源额；root唯一profile配置/真实数据/服务/Git owner。架构§3.12新增此有限CPU成片资源不变量；旧上下文合同须重读ACK。
+
 ## 验收与旧目标
 
 技术：原start回执已核验→模型回合中断→原Job真实成功→持久来源保留→未失效目标从新事实继续检查；两次修改、提案实际采用、同版本/hash观察、stop/拒绝/新指令使旧目标失效、重启及unknown原请求查询；不重复制作。退役目标是依赖模型最终返回才记录制作来源及误用媒体Job查询制作Job的消费者，不改正常历史/旧数据；同候选正向与窄负向验证。
