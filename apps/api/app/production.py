@@ -4763,11 +4763,7 @@ class ProductionRepository:
         return latest
 
     def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
-        if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
-            raise ValueError("素材使用状态无效")
-        asset = self.get_asset(workspace_id, asset_id)
-        asset.use_state = use_state
-        return self._save_asset(asset)
+        return self._material_assets.update_asset_use_state(workspace_id, asset_id, use_state)
 
     def update_asset_review(
         self,
@@ -4777,32 +4773,9 @@ class ProductionRepository:
         review_status: AssetReviewStatus,
         usage_role: AssetUsageRole = "unassigned",
     ) -> MaterialAsset:
-        asset = self.get_asset(workspace_id, asset_id)
-        if usage_role == "exclude":
-            review_status = "rejected"
-        if review_status == "approved":
-            if usage_role not in {"a_roll", "b_roll"}:
-                raise ValueError("先选择人物主镜头或 B-roll，再加入可用库")
-            if asset.analysis_status != "ready" or not asset.segments:
-                raise ValueError("请先完成镜头分析再审核素材")
-        asset.review_status = review_status
-        asset.usage_role = usage_role
-        if review_status == "rejected":
-            asset.use_state = "excluded"
-        if review_status == "approved":
-            for segment in asset.segments:
-                if segment.usage_role == "unassigned":
-                    segment.usage_role = usage_role
-                if segment.review_status == "raw":
-                    segment.review_status = "approved"
-                    segment.updated_at = utc_now()
-        elif review_status == "rejected":
-            for segment in asset.segments:
-                if usage_role == "exclude":
-                    segment.usage_role = "exclude"
-                segment.review_status = "rejected"
-                segment.updated_at = utc_now()
-        return self._save_asset(asset)
+        return self._material_assets.update_asset_review(
+            workspace_id, asset_id, review_status=review_status, usage_role=usage_role,
+        )
 
     def update_segment(
         self,
@@ -4830,35 +4803,9 @@ class ProductionRepository:
         plan_id: str | None = None,
         clip_id: str | None = None,
     ) -> MaterialAsset:
-        asset = self.get_asset(workspace_id, asset_id)
-        segment = next((item for item in asset.segments if item.id == segment_id), None)
-        if segment is None:
-            raise KeyError(segment_id)
-        usage_plan_id = plan_id or f"manual_{uuid4().hex}"
-        usage_clip_id = clip_id or f"clip_{uuid4().hex}"
-        used_at = utc_now()
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO material_segment_usage
-                    (workspace_id, plan_id, clip_id, asset_id, segment_id, used_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    workspace_id,
-                    usage_plan_id,
-                    usage_clip_id,
-                    asset_id,
-                    segment_id,
-                    used_at.isoformat(),
-                ),
-            )
-        if cursor.rowcount == 0:
-            return asset
-        segment.usage_count += 1
-        segment.last_used_at = used_at
-        segment.updated_at = used_at
-        return self._save_asset(asset)
+        return self._material_assets.record_segment_usage(
+            workspace_id, asset_id, segment_id, plan_id=plan_id, clip_id=clip_id,
+        )
 
     def list_segment_usage_records(
         self, workspace_id: str, asset_id: str, segment_id: str
