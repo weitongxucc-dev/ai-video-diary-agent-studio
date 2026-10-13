@@ -977,7 +977,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id,
       expect.objectContaining({ message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover" }), expect.any(Function)));
     expect(await screen.findByText(/连续制作：已排队/)).toBeInTheDocument();
-    expect(screen.getByText("提交连续制作 · 已完成")).toBeInTheDocument();
+    expect(screen.getByText("提交连续制作 · 已返回")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
   });
 

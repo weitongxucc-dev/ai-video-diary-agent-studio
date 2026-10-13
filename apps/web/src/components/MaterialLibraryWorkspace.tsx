@@ -1,260 +1,38 @@
 "use client";
-
+import { MaterialNotesEditor } from "./material-library/MaterialNotesEditor";
+import { MaterialSegmentTags } from "./material-library/MaterialSegmentTags";
+import { MaterialSegmentEditor } from "./material-library/MaterialSegmentEditor";
+import { useMaterialNotes } from "./material-library/useMaterialNotes";
+import { MaterialAssetPreview } from "./material-library/MaterialAssetPreview";
+import { MaterialUsageEvidence } from "./material-library/MaterialUsageEvidence";
+import { MaterialAssetTags } from "./material-library/MaterialAssetTags";
+import { MaterialCollectionPicker } from "./material-library/MaterialCollectionPicker";
+import { MaterialResults } from "./material-library/MaterialResults";
+import { MaterialIntakePanel } from "./material-library/MaterialIntakePanel";
+import { MediaLinkImportPanel } from "./material-library/MediaLinkImportPanel";
+import { useMediaLinkImport } from "./material-library/useMediaLinkImport";
+import { useLocalMaterialImport } from "./material-library/useLocalMaterialImport";
+import { useMaterialIntake } from "./material-library/useMaterialIntake";
+import { useMaterialUsageRecords } from "./material-library/useMaterialUsageRecords";
+import { useMaterialBusinessObjects } from "./material-library/useMaterialBusinessObjects";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
-import {
-  AlertCircle,
-  Check,
-  ChevronRight,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  CircleMinus,
-  Film,
-  FolderPlus,
-  FolderSearch,
-  Grid2X2,
-  Plus,
-  Info,
-  List,
-  LoaderCircle,
-  Play,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  Volume2,
-  X,
-} from "lucide-react";
+import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { useAssistantMaterialReference } from "./AssistantConversationProvider";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
-import { DesktopVoiceRecorder } from "@/components/DesktopVoiceRecorder";
 import styles from "./MaterialLibraryControls.module.css";
 import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
-import {
-  analyzeProductionMaterial,
-  createMaterialBusinessObject,
-  createMaterialCollection,
-  getAssetBusinessObjects,
-  getAssetSegmentUsageRecords,
-  getMaterialBusinessObjects,
-  getMaterialLibraryInsights,
-  getMaterialIntakeStatus,
-  getProductionMaterials,
-  bindMaterialIntake,
-  confirmMaterialCopyComplete,
-  reviewProductionMaterial,
-  retryMaterialIntake,
-  saveAssetBusinessObjects,
-  scanMaterialIntake,
-  updateProductionMaterialSegment,
-  updateMaterialUseState,
-  updateMaterialNotes,
-  updateMaterialAssetTags,
-  transcribeMaterialVoiceNote,
-} from "@/lib/api";
-import { importLocalMaterials } from "@/lib/directoryPicker";
-import {
-  checkMediaLink,
-  importMediaLink,
-  mediaLinkErrorMessage,
-  type MediaLinkCheck,
-  type MediaLinkImport,
-} from "@/lib/media-link-api";
-import type {
-  BusinessObjectKind,
-  MaterialAsset,
-  MaterialBusinessObject,
-  MaterialCollections,
-  MaterialLibrary,
-  MaterialLibraryInsights,
-  MaterialPendingCopy,
-  MaterialSegment,
-  MaterialUsageRecord,
-  MaterialAssistantResult,
-  MaterialAssistantSelection,
-} from "@/lib/types";
+import { analyzeProductionMaterial, createMaterialCollection, getMaterialLibraryInsights, getProductionMaterials, reviewProductionMaterial, retryMaterialIntake, scanMaterialIntake, updateProductionMaterialSegment, updateMaterialUseState, updateMaterialAssetTags } from "@/lib/api";
 
-type Filter = "all" | "raw" | "approved" | "rejected";
-type MediaTypeFilter = "all" | MaterialAsset["media_type"];
-type SegmentEditAnchor = { assetId: string; segmentId: string; startSeconds: number; endSeconds: number };
-type IntakeStatus = Awaited<ReturnType<typeof getMaterialIntakeStatus>>;
-type Busy =
-  | "scan"
-  | "search"
-  | "load"
-  | "analyze"
-  | "review"
-  | "segment"
-  | "collection"
-  | "retry"
-  | "notes"
-  | null;
-
-const directoryStateLabel: Record<IntakeStatus["directory_state"], string> = {
-  ready: "目录可用",
-  missing: "目录不存在",
-  unmounted: "外接盘未连接",
-  read_only: "目录不可写",
-  invalid: "目录不可用",
-  changed: "目录已变更",
-  unknown: "等待确认",
-};
-
-const useStateOptions: { value: MaterialAsset["use_state"]; label: string; impact: string }[] = [
-  { value: "available", label: "可用于创作", impact: "可用于选片和发布。" },
-  { value: "reference_only", label: "仅参考", impact: "只供查看，不用于成片。" },
-  { value: "excluded", label: "不使用", impact: "不用于创作或发布。" },
-  { value: "not_for_automation", label: "不用于自动任务", impact: "手动创作可用，自动任务不使用。" },
-  { value: "not_for_publish", label: "不用于发布", impact: "可用于制作预览，发布时排除。" },
-];
-
-function duration(value: number | null) {
-  if (value === null) return "时长未知";
-  const milliseconds = Math.round(value * 1000);
-  const minutes = Math.floor(milliseconds / 60000);
-  const seconds = Math.floor(milliseconds % 60000 / 1000).toString().padStart(2, "0");
-  const fraction = (milliseconds % 1000).toString().padStart(3, "0").replace(/0+$/, "");
-  return `${minutes}:${seconds}${fraction ? `.${fraction}` : ""}`;
-}
-
-function observedTagSuggestions(segment: MaterialSegment) {
-  if (segment.description.trim() || segment.understanding?.status !== "ready") return [];
-  const seen = new Set(segment.user_tags);
-  return segment.understanding.facts.flatMap(fact => {
-    const label = (fact.label || fact.text).trim();
-    if (!label || label.length > 32 || seen.has(label)) return [];
-    seen.add(label);
-    const source = fact.kind === "action" ? "动作观察" : fact.kind === "scene" ? "场景观察" : "主体观察";
-    return [{ label, source, times: fact.sample_times }];
-  });
-}
-
-function roleLabel(asset: MaterialAsset) {
-  const suggestion = asset.usage_role === "unassigned" ? "建议：" : "";
-  const role =
-    asset.usage_role === "unassigned"
-      ? asset.suggested_usage_role
-      : asset.usage_role;
-  if (role === "a_roll") return `${suggestion}人物主镜头`;
-  if (role === "b_roll") return `${suggestion}补充画面`;
-  if (asset.usage_role === "exclude") return "不使用";
-  return "待判断";
-}
-
-function clipRoleLabel(role: string | null) {
-  if (role === "a_roll") return "人物主镜头";
-  if (role === "b_roll") return "补充画面";
-  return "未记录用途";
-}
-
-function mediaLabel(mediaType: MaterialAsset["media_type"]) {
-  return { video: "视频", audio: "音频", image: "图片" }[mediaType];
-}
-
-const mediaTypeOptions: MediaTypeFilter[] = ["all", "video", "audio", "image"];
-const mediaTypeLabels: Record<MediaTypeFilter, string> = {
-  all: "全部",
-  video: "视频",
-  audio: "音频",
-  image: "图片",
-};
-
-// 类型筛选和标签一样靠 URL 保留下来，刷新后从这里读回；读到的不是三个固定
-// 类型之一就当没筛，免得手改地址栏把列表卡在一个服务端不认的值上。
-function readMediaTypeFromUrl(): MediaTypeFilter {
-  if (typeof window === "undefined") return "all";
-  const value = new URLSearchParams(window.location.search).get("media_type");
-  return mediaTypeOptions.includes(value as MediaTypeFilter)
-    ? (value as MediaTypeFilter)
-    : "all";
-}
-
-function reviewLabel(asset: MaterialAsset) {
-  if (asset.review_status === "approved") return "已人工确认";
-  if (asset.review_status === "rejected") return "已标记排除";
-  return "未人工确认";
-}
-
-function modalityLabel(
-  status: "pending" | "ready" | "blocked" | "failed" | undefined,
-  subject: string,
-) {
-  if (status === "ready") return `${subject}已完成`;
-  if (status === "pending") return `${subject}待处理`;
-  if (status === "blocked") return `${subject}受阻`;
-  if (status === "failed") return `${subject}失败`;
-  return `${subject}状态未知`;
-}
-
-function analysisSummary(asset: MaterialAsset) {
-  const visualStatuses = asset.segments.map((segment) => segment.visual_status);
-  const ocrStatuses = asset.segments.map((segment) => segment.understanding?.ocr_status);
-  const summarize = (
-    statuses: ("pending" | "ready" | "blocked" | "failed" | undefined)[],
-    subject: string,
-    completed: string,
-  ) => {
-    if (!statuses.length || statuses.every((status) => status === undefined)) return `${subject}状态未知`;
-    if (statuses.every((status) => status === "ready")) return completed;
-    if (statuses.some((status) => status === "ready")) return `${subject}部分完成`;
-    if (statuses.some((status) => status === undefined)) return `${subject}状态不完整`;
-    if (statuses.every((status) => status === statuses[0])) return modalityLabel(statuses[0], subject);
-    return `${subject}部分受阻`;
-  };
-  const visual = summarize(visualStatuses, "画面分析", "画面已分析");
-  const ocr = summarize(ocrStatuses, "文字识别", "文字识别已完成");
-  return [
-    visual,
-    modalityLabel(asset.speech_analysis?.status, "声音转写"),
-    ocr,
-  ].join(" · ");
-}
-
-function analysisMessage(asset: MaterialAsset) {
-  const message = asset.analysis_message.trim();
-  if (!message || /[{}\n\r]|Traceback|Error:|\/Users\/|\/Volumes\/|[A-Za-z]:\\/.test(message)) {
-    return asset.analysis_status === "blocked"
-      ? "素材目录暂不可用，请连接原盘后重新检查。"
-      : "素材分析失败，请检查文件或本地模型后重试。";
-  }
-  return message;
-}
-
-function tagLabel(value: string) {
-  return value
-    .replaceAll("a_roll", "人物主镜头")
-    .replaceAll("b_roll", "补充画面");
-}
-
-function fileLabel(value: string) {
-  return value
-    .replace(/batch_(\d+)/gi, "第 $1 组")
-    .replace(/episode/gi, "创作任务");
-}
-
-function visibleError(cause: unknown, fallback: string) {
-  if (!(cause instanceof Error)) return fallback;
-  let message = cause.message;
-  if (message.startsWith("{")) {
-    try {
-      const payload = JSON.parse(message) as { detail?: unknown };
-      message = typeof payload.detail === "string" ? payload.detail : "";
-    } catch {
-      return fallback;
-    }
-  }
-  if (message === "API server unreachable") return "暂时无法连接本地服务，请确认应用正常运行后重试";
-  return /[\u3400-\u9fff]/.test(message) ? message : fallback;
-}
-
-// 关联还没读回来时传这个空数组，而不是每次渲染现造一个：同一个引用，
-// 子组件就不会因为父页重渲染而重算一次“选择有没有变”。
-const EMPTY_OBJECT_IDS: readonly string[] = [];
+import type { MaterialAsset, MaterialCollections, MaterialLibrary, MaterialLibraryInsights, MaterialSegment, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
+import type { Filter, MediaTypeFilter, SegmentEditAnchor, Busy } from './material-library/material-state';
+import { useStateOptions, EMPTY_OBJECT_IDS } from './material-library/material-state';
+import { duration, roleLabel, analysisMessage, tagLabel, fileLabel } from './material-library/material-labels';
+import { mediaTypeOptions, mediaTypeLabels, readMediaTypeFromUrl } from './material-library/material-filters';
+import { visibleError } from './material-library/material-errors';
 
 export function MaterialLibraryWorkspace({
   initialLibrary,
@@ -293,25 +71,11 @@ export function MaterialLibraryWorkspace({
   const [filter, setFilter] = useState<Filter>("all");
   const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [busy, setBusy] = useState<Busy>(null);
+  const [actionBusy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
-  const [intake, setIntake] = useState<IntakeStatus | null>(null);
-  const [intakeError, setIntakeError] = useState("");
-  const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | "confirm" | null>("refresh");
-  const [importBusy, setImportBusy] = useState(false);
-  const [importResult, setImportResult] = useState<{
-    copied: { sourceName: string; fileName: string }[];
-    skipped: string[];
-    failures: { sourceName: string; error: string }[];
-    canceled: boolean;
-    error?: string;
-    warning?: string;
-  } | null>(null);
-  const [linkUrl, setLinkUrl] = useState("");
-  const [linkBusy, setLinkBusy] = useState<"check" | "import" | null>(null);
-  const [linkCheck, setLinkCheck] = useState<MediaLinkCheck | null>(null);
-  const [linkImport, setLinkImport] = useState<MediaLinkImport | null>(null);
-  const [linkError, setLinkError] = useState("");
+  const { intake, intakeError, intakeBusy, refreshIntakeStatus, bindIntake, confirmCopy, readIntakeAfterScan } = useMaterialIntake();
+  const { importBusy, importResult, runImport } = useLocalMaterialImport(Boolean(intake?.bound_to_current_workspace && intake.directory_state === "ready"));
+  const { linkUrl, changeLinkUrl, linkBusy, linkCheck, linkImport, linkError, runLinkCheck, runLinkImport } = useMediaLinkImport(scan);
   const [detailError, setDetailError] = useState("");
   const persistentReference = useAssistantMaterialReference();
   const setMaterialReference = persistentReference?.setReference;
@@ -322,29 +86,6 @@ export function MaterialLibraryWorkspace({
   const [assetTagsPendingId, setAssetTagsPendingId] = useState<string | null>(null);
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
-  const [voiceNote, setVoiceNote] = useState<{ assetId: string; controller: AbortController } | null>(null);
-  const voiceNoteRef = useRef<typeof voiceNote>(null);
-  const [voiceNoteNotice, setVoiceNoteNotice] = useState("");
-  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
-  const [noteErrors, setNoteErrors] = useState<Record<string, string>>({});
-  const [noteSaved, setNoteSaved] = useState<Record<string, boolean>>({});
-  const [noteBatchIds, setNoteBatchIds] = useState<string[]>([]);
-  const [batchContext, setBatchContext] = useState("");
-  const [batchNoteError, setBatchNoteError] = useState("");
-  const [batchNoteSaved, setBatchNoteSaved] = useState(false);
-  // 名称条目按素材分别保存：每条素材读回自己的关联，换素材不会串。
-  const [businessObjects, setBusinessObjects] = useState<MaterialBusinessObject[]>([]);
-  const [assetObjectIds, setAssetObjectIds] = useState<Record<string, string[]>>({});
-  const [objectPending, setObjectPending] = useState<"create" | "save" | null>(null);
-  const [objectError, setObjectError] = useState("");
-  // 关联读成功之前 selectedIds 只是「还没读到」，不是「没有关联」，不能拿去保存。
-  const [objectRead, setObjectRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
-  const [objectReadTick, setObjectReadTick] = useState(0);
-  // 使用记录回查：按当前片段读取，读取本身不改任何计数。
-  const [usageRecords, setUsageRecords] = useState<MaterialUsageRecord[]>([]);
-  const [usageRead, setUsageRead] = useState<{ status: "loading" | "ready" | "error"; message: string }>({ status: "loading", message: "" });
-  const usageLoadRevision = useRef(0);
-  const [usageReadTick, setUsageReadTick] = useState(0);
   const [collectionQuery, setCollectionQuery] = useState("");
   const [collectionDraft, setCollectionDraft] = useState(
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
@@ -358,15 +99,11 @@ export function MaterialLibraryWorkspace({
   const editDraftRevision = useRef(0);
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const sourceAudio = useRef<HTMLAudioElement>(null);
-  const isComposingTag = useRef(false);
   const selectionRevision = useRef(0);
-  const intakeRevision = useRef(0);
   // 服务端渲染的第一页没有类型条件，所以这里的 mediaType 只能是「全部」；
   // 挂载后从 URL 读回的类型会让下面的搜索 effect 重新取第一页。
   const lastSearch = useRef({ filter, query, tag: initialTag ?? "", mediaType: "all" as MediaTypeFilter });
   const assetWriteRevision = useRef(0);
-  const objectLoadRevision = useRef(0);
-  const objectReadRetry = useRef(0);
 
   // Keep explicit assistant targets and edited segment drafts tied to their
   // original asset. If a filter drops that object, close the inspector and
@@ -399,6 +136,11 @@ export function MaterialLibraryWorkspace({
     : selected?.segments.find((segment) => segment.id === selectedSegmentId) ??
       selected?.segments[0] ??
       null;
+  const { businessObjects, assetObjectIds, objectPending, objectError, objectRead, createBusinessObject, saveBusinessObjects, retryObjectRead, dismissObjectError } = useMaterialBusinessObjects(selected?.id ?? null);
+  const { usageRecords, usageRead, retryUsageRead } = useMaterialUsageRecords(selected?.id ?? null, selectedSegment?.id ?? null);
+  const { pending: notesPending, voiceNote, voiceNoteNotice, noteDrafts, noteErrors, noteSaved, noteBatchIds, batchContext, batchNoteError, batchNoteSaved,
+    resetVoiceNote, changeAssetNote, cancelSpokenNote, startVoiceNote, receiveVoiceNote, saveNotes, chooseBatchAsset, changeBatchContext } = useMaterialNotes(selected?.id ?? null, replaceAsset);
+  const busy: Busy = notesPending ? "notes" : actionBusy;
   const noteBatchAssets = assets.filter(asset => noteBatchIds.includes(asset.id));
   const noteDraft = selected ? noteDrafts[selected.id] ?? selected.user_description : "";
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
@@ -424,48 +166,6 @@ export function MaterialLibraryWorkspace({
     const segment = materialAssistantSelection.scope === "segment" ? selected.segments.find(item => item.id === materialAssistantSelection.segment_id) : null;
     setMaterialReference?.({label: materialAssistantLabel, selection: { ...materialAssistantSelection, expected_updated_at: selected.updated_at, ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}) }});
   }, [materialAssistantSelection, materialAssistantLabel, selected, setMaterialReference]);
-
-  useEffect(() => {
-    const context = voiceNoteRef.current;
-    if (context && context.assetId !== selected?.id) {
-      context.controller.abort();
-      voiceNoteRef.current = null;
-      setVoiceNote(null);
-      setVoiceNoteNotice("");
-    }
-  }, [selected?.id]);
-
-  useEffect(() => () => {
-    voiceNoteRef.current?.controller.abort();
-    voiceNoteRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    let inFlight = false;
-    async function refresh() {
-      if (inFlight) return;
-      inFlight = true;
-      const revision = intakeRevision.current;
-      try {
-        const status = await getMaterialIntakeStatus();
-        if (active && revision === intakeRevision.current) {
-          setIntake(status);
-          setIntakeError("");
-        }
-      } catch (cause) {
-        if (active && revision === intakeRevision.current) setIntakeError(visibleError(cause, "无法查看素材目录状态，请重试。"));
-      } finally {
-        inFlight = false;
-        if (active) setIntakeBusy((current) => current === "refresh" ? null : current);
-      }
-    }
-    void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
-    }, 15000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
 
   useEffect(() => {
     if (!intake?.bound_to_current_workspace || busy !== null) return;
@@ -556,71 +256,6 @@ export function MaterialLibraryWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, initialLibrary.limit, initialTag, mediaType, query]);
 
-  // 工作区的名称条目与素材无关，进页面读一次就够了；之后新增的直接并进同一份列表。
-  useEffect(() => {
-    let active = true;
-    getMaterialBusinessObjects()
-      .then(result => { if (active) setBusinessObjects(result.items); })
-      .catch(cause => { if (active) setObjectError(visibleError(cause, "名称条目读取失败，请重试。")); });
-    return () => { active = false; };
-  }, []);
-
-  // 每条素材读回自己的关联。单独一个 revision：selectionRevision 也会被切片段
-  // 推进，用它会让切片段顺手作废这次读取，关联再也读不回来。
-  useEffect(() => {
-    const assetId = selected?.id ?? null;
-    const revision = ++objectLoadRevision.current;
-    // 换素材就清掉上一条素材的失败提示；之后迟到的失败不会再挂回来（见下面的目标判断）。
-    setObjectError("");
-    if (!assetId) {
-      setObjectRead({ status: "ready", message: "" });
-      return;
-    }
-    let active = true;
-    setObjectRead({ status: "loading", message: "" });
-    getAssetBusinessObjects(assetId)
-      .then(result => {
-        if (!active || revision !== objectLoadRevision.current) return;
-        setAssetObjectIds(current => ({ ...current, [assetId]: result.items.map(item => item.id) }));
-        setObjectRead({ status: "ready", message: "" });
-      })
-      .catch(cause => {
-        if (!active || revision !== objectLoadRevision.current) return;
-        // 读失败不等于「没有关联」。明确报出来并留重试，不让用户拿空选择去覆盖。
-        setObjectRead({ status: "error", message: visibleError(cause, "名称关联读取失败，请重试。") });
-      });
-    return () => { active = false; };
-  }, [selected?.id, objectReadTick]);
-
-  // 按当前片段读使用记录。切片段就重读；读到的版本只是任务当前版本，
-  // 界面必须写明这一点，不能让它看起来像当次使用的版本。
-  useEffect(() => {
-    const assetId = selected?.id ?? null;
-    const segmentId = selectedSegment?.id ?? null;
-    const revision = ++usageLoadRevision.current;
-    if (!assetId || !segmentId) {
-      setUsageRecords([]);
-      setUsageRead({ status: "ready", message: "" });
-      return;
-    }
-    let active = true;
-    // 换片段就先清空上一片段的记录：加载中不能把旧记录的文案挂在当前片段上。
-    setUsageRecords([]);
-    setUsageRead({ status: "loading", message: "" });
-    getAssetSegmentUsageRecords(assetId, segmentId)
-      .then(result => {
-        if (!active || revision !== usageLoadRevision.current) return;
-        setUsageRecords(result.items);
-        setUsageRead({ status: "ready", message: "" });
-      })
-      .catch(cause => {
-        if (!active || revision !== usageLoadRevision.current) return;
-        setUsageRecords([]);
-        setUsageRead({ status: "error", message: visibleError(cause, "使用记录读取失败，请重试。") });
-      });
-    return () => { active = false; };
-  }, [selected?.id, selectedSegment?.id, usageReadTick]);
-
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
     setAssets((current) =>
@@ -688,8 +323,7 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectAsset(asset: MaterialAsset, explicit = true) {
-    cancelVoiceNote();
-    setVoiceNoteNotice("");
+    resetVoiceNote();
     selectionRevision.current += 1;
     const first = asset.segments[0];
     setDescriptionDraft(first?.description ?? "");
@@ -746,50 +380,6 @@ export function MaterialLibraryWorkspace({
     }
   }
 
-  async function refreshIntakeStatus() {
-    const revision = ++intakeRevision.current;
-    setIntakeBusy("refresh");
-    try {
-      const status = await getMaterialIntakeStatus();
-      if (revision === intakeRevision.current) { setIntake(status); setIntakeError(""); }
-    } catch (cause) {
-      if (revision === intakeRevision.current) setIntakeError(visibleError(cause, "无法查看素材目录状态，请重试。"));
-    } finally {
-      setIntakeBusy(null);
-    }
-  }
-
-  async function bindIntake() {
-    const directory = intake?.configured_directory;
-    if (!directory || !intake.binding_available || intake.directory_state !== "ready" || intake.bound_to_current_workspace) return;
-    ++intakeRevision.current;
-    setIntakeBusy("bind");
-    setIntakeError("");
-    try {
-      setIntake(await bindMaterialIntake(directory));
-    } catch (cause) {
-      setIntakeError(visibleError(cause, "接入失败。请核对目录后重新确认。"));
-      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Preserve the reviewed directory and error. */ }
-    } finally {
-      setIntakeBusy(null);
-    }
-  }
-
-  async function confirmCopy(file: MaterialPendingCopy) {
-    ++intakeRevision.current;
-    setIntakeBusy("confirm");
-    setIntakeError("");
-    try {
-      const result = await confirmMaterialCopyComplete({ ...file, confirmation_source: "manual" });
-      ++intakeRevision.current;
-      setIntake(result.intake);
-    } catch (cause) {
-      setIntakeError(visibleError(cause, "复制完成确认未保存，请重新检查文件后重试。"));
-    } finally {
-      setIntakeBusy(null);
-    }
-  }
-
   async function scan() {
     if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
     const selectionAtStart = selectionRevision.current;
@@ -812,68 +402,11 @@ export function MaterialLibraryWorkspace({
         selectAsset(result.assets[0], false);
       }
       await refreshInsights();
-      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Keep the last directory status. */ }
+      try { await readIntakeAfterScan(); } catch { /* Keep the last directory status. */ }
     } catch (cause) {
       setError(visibleError(cause, "检查素材目录失败，请重试。"));
     } finally {
       setBusy(null);
-    }
-  }
-
-  async function runImport() {
-    if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
-    setImportBusy(true);
-    setImportResult(null);
-    try {
-      const result = await importLocalMaterials();
-      if ("kind" in result) {
-        setImportResult({
-          copied: [], skipped: [], failures: [], canceled: false,
-          error: "当前环境不支持从应用内导入素材，请使用桌面客户端。",
-        });
-        return;
-      }
-      setImportResult({
-        copied: result.copied ?? [],
-        skipped: result.skipped ?? [],
-        failures: result.failures ?? [],
-        canceled: result.canceled === true,
-        error: result.error,
-        warning: result.warning,
-      });
-    } finally {
-      setImportBusy(false);
-    }
-  }
-
-  async function runLinkCheck() {
-    if (!linkUrl.trim()) return;
-    setLinkBusy("check");
-    setLinkError("");
-    setLinkImport(null);
-    try {
-      setLinkCheck(await checkMediaLink(linkUrl.trim()));
-    } catch (cause) {
-      setLinkCheck(null);
-      setLinkError(mediaLinkErrorMessage(cause));
-    } finally {
-      setLinkBusy(null);
-    }
-  }
-
-  async function runLinkImport() {
-    if (!linkCheck?.supported) return;
-    setLinkBusy("import");
-    setLinkError("");
-    try {
-      const result = await importMediaLink(linkUrl.trim());
-      setLinkImport(result);
-      await scan();
-    } catch (cause) {
-      setLinkImport(null);
-      setLinkError(mediaLinkErrorMessage(cause));
-    } finally {
-      setLinkBusy(null);
     }
   }
 
@@ -980,7 +513,7 @@ export function MaterialLibraryWorkspace({
     setDetailError("");
     try {
       replaceAsset(await retryMaterialIntake(selected.id));
-      try { setIntake(await getMaterialIntakeStatus()); } catch { /* Keep the last directory status. */ }
+      try { await readIntakeAfterScan(); } catch { /* Keep the last directory status. */ }
     } catch (cause) {
       if (revision === selectionRevision.current) setDetailError(visibleError(cause, "重试失败，请检查素材目录后再试。"));
     } finally {
@@ -1121,261 +654,28 @@ export function MaterialLibraryWorkspace({
     }
   }
 
-  function cancelVoiceNote() {
-    voiceNoteRef.current?.controller.abort();
-    voiceNoteRef.current = null;
-    setVoiceNote(null);
-  }
-
-  function startVoiceNote(assetId: string) {
-    cancelVoiceNote();
-    const context = { assetId, controller: new AbortController() };
-    voiceNoteRef.current = context;
-    setVoiceNote(context);
-    setVoiceNoteNotice("");
-  }
-
-  async function receiveVoiceNote(context: NonNullable<typeof voiceNote>, blob: Blob) {
-    if (voiceNoteRef.current !== context) return;
-    try {
-      const transcript = await transcribeMaterialVoiceNote(blob, context.controller.signal);
-      if (voiceNoteRef.current !== context) return;
-      setNoteDrafts(current => ({ ...current, [context.assetId]: transcript }));
-      setNoteSaved(current => ({ ...current, [context.assetId]: false }));
-      setNoteErrors(current => ({ ...current, [context.assetId]: "" }));
-      cancelVoiceNote();
-      setVoiceNoteNotice("口述已转为可编辑草稿，尚未保存；请核对文字后保存本素材说明。");
-    } catch (cause) {
-      if (voiceNoteRef.current === context) {
-        throw new Error(`${visibleError(cause, "转写失败")}。原文字保留，可重试或直接输入说明。`);
-      }
-    }
-  }
-
-  async function saveNotes(targets: MaterialAsset[], context?: string) {
-    cancelVoiceNote();
-    setVoiceNoteNotice("");
-    const batch = context !== undefined;
-    const assetId = targets[0].id;
-    setBusy("notes");
-    if (batch) { setBatchNoteError(""); setBatchNoteSaved(false); }
-    else { setNoteErrors(current => ({ ...current, [assetId]: "" })); setNoteSaved(current => ({ ...current, [assetId]: false })); }
-    try {
-      const result = await updateMaterialNotes(targets.map(asset => ({
-        asset_id: asset.id,
-        user_description: batch ? asset.user_description : noteDrafts[asset.id] ?? asset.user_description,
-        upload_context: batch ? context : asset.upload_context,
-      })));
-      result.assets.forEach(replaceAsset);
-      if (batch) setBatchNoteSaved(true);
-      else {
-        setNoteDrafts(current => { const next = { ...current }; delete next[assetId]; return next; });
-        setNoteSaved(current => ({ ...current, [assetId]: true }));
-      }
-    } catch (cause) {
-      const message = `${visibleError(cause, "说明保存失败")}。草稿已保留，请重试保存。`;
-      if (batch) setBatchNoteError(message);
-      else setNoteErrors(current => ({ ...current, [assetId]: message }));
-    } finally { setBusy(null); }
-  }
-
-  // 新增只写名称条目本身，不碰任何素材的关联；组件拿到新条目后自己选中，
-  // 还要用户点「保存关联到当前素材」才真正写进这条素材。
-  async function createBusinessObject(kind: BusinessObjectKind, name: string) {
-    const targetAssetId = currentAssetIdRef.current;
-    setObjectPending("create");
-    setObjectError("");
-    try {
-      const created = await createMaterialBusinessObject({ kind, name });
-      setBusinessObjects(current => [created, ...current.filter(item => item.id !== created.id)]);
-      return created;
-    } catch (cause) {
-      const message = visibleError(cause, "名称条目新增失败，请重试");
-      // 用户已经切到别的素材：这条迟到失败不挂到眼前那条身上。
-      if (currentAssetIdRef.current === targetAssetId) setObjectError(message);
-      throw new Error(message);
-    } finally { setObjectPending(null); }
-  }
-
-  // 只写这一条素材的关联。它的说明、公共背景、片段描述和人工纠正都不在这里。
-  async function saveBusinessObjects(assetId: string, businessObjectIds: string[]) {
-    setObjectPending("save");
-    setObjectError("");
-    try {
-      const result = await saveAssetBusinessObjects(assetId, businessObjectIds);
-      setAssetObjectIds(current => ({ ...current, [assetId]: result.items.map(item => item.id) }));
-      return result.items;
-    } catch (cause) {
-      const message = visibleError(cause, "名称关联保存失败，请重试");
-      // 同上：目标素材已经不在眼前，就不把它的失败写成当前素材的问题。
-      if (currentAssetIdRef.current === assetId) setObjectError(message);
-      throw new Error(message);
-    } finally { setObjectPending(null); }
-  }
-
   const inspector = selected ? (
     <div className={`library-inspector ${styles.inspector}`}>
-      <div className={`library-preview ${styles.preview}`}>
-        {selected.media_type === "image" ? (
-          <img
-            alt={`原素材预览：${fileLabel(selected.file_name)}`}
-            key={`${selected.id}:${previewReadTick}`}
-            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
-            onError={() => setPreviewErrorId(selected.id)}
-          />
-        ) : selected.media_type === "audio" ? (
-          <audio
-            ref={sourceAudio}
-            onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
-            aria-label="原素材预览"
-            onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)}
-            onPlay={event => startSegmentPlayback(event.currentTarget)}
-            controls
-            key={`${selected.id}:${previewReadTick}`}
-            preload="metadata"
-            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
-            onError={() => setPreviewErrorId(selected.id)}
-          />
-        ) : (
-          <video
-            ref={sourceVideo}
-            aria-label="原素材预览"
-            onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)}
-            onPlay={event => startSegmentPlayback(event.currentTarget)}
-            onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)}
-            controls
-            key={`${selected.id}:${previewReadTick}`}
-            preload="metadata"
-            src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`}
-            onError={() => setPreviewErrorId(selected.id)}
-          />
-        )}
-        {selected.media_type === "image" ? null : (
-          <span>
-            <Play size={14} /> {duration(selected.duration_seconds)}
-          </span>
-        )}
-      </div>
-      <div className="library-inspector__title">
-        <strong title={fileLabel(selected.file_name)}>{fileLabel(selected.file_name)}</strong>
-        <span>
-          {mediaLabel(selected.media_type)} · {roleLabel(selected)} · {reviewLabel(selected)}
-        </span>
-      </div>
-      <div className={styles.rangeHeading}><span>{assistantSelection?.scope === "segment" && selectedSegment ? `当前范围：${duration(selectedSegment.start_seconds)}–${duration(selectedSegment.end_seconds)}` : "当前范围：整条素材"}</span>{assistantSelection?.scope === "segment" ? <button onClick={() => selectAsset(selected)} type="button">切回整条素材</button> : null}</div>
-      {previewErrorId === selected.id ? <p className={styles.analysisMessage} role="alert">原素材暂时无法预览，请连接原盘或检查文件后重试。<button type="button" onClick={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }}>重新读取预览</button></p> : null}
-      <p className={styles.modalitySummary}>{analysisSummary(selected)}</p>
-      {selected.analysis_status === "pending" ? (
-        <div className={styles.analysisMessage}>
-          <p role="status">等待分析，完成时间暂未知。</p>
-          {selected.analysis_message.trim() ? (
-            /[{}\n\r]|Traceback|Error:|\/Users\/|\/Volumes\/|[A-Za-z]:\\/.test(selected.analysis_message)
-              ? <details><summary>后台分析记录</summary><p>{selected.analysis_message}</p></details>
-              : <p>{selected.analysis_message}</p>
-          ) : null}
-        </div>
-      ) : null}
-      {selected.segments.length ? (
-        <div className="library-segments">
-          <h3>识别片段</h3>
-          {selected.segments.map((segment) => (
-            <button
-              className={
-                assistantSelection?.scope === "segment" && assistantSelection.segment_id === segment.id ? "is-selected" : ""
-              }
-              aria-pressed={assistantSelection?.scope === "segment" && assistantSelection.segment_id === segment.id}
-              disabled={busy !== null}
-              key={segment.id}
-              onClick={() => selectSegment(segment)}
-              type="button"
-            >
-              <span>
-                {duration(segment.start_seconds)}–
-                {duration(segment.end_seconds)}
-              </span>
-              <p>
-                {segment.description ||
-                  segment.understanding?.summary ||
-                  segment.transcript ||
-                  "等待补充片段描述"}
-              </p>
-              <ChevronRight size={14} />
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} />
       <details className={styles.detailSection}><summary>原文件与来源</summary><p>文件名：{selected.file_name}</p><p>原文件：{selected.path}</p>{selected.source_url ? <p>来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a></p> : null}</details>
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
       ) : null}
       {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
-      <section className={styles.tagEditor} aria-label="整条素材的我的标签">
-        <strong>整条素材 · 我的标签</strong>
-        <div className={styles.tagChips} aria-label="整条素材已保存的我的标签">
-          {selected.user_tags.length ? selected.user_tags.map((tag) => (
-            <span className={styles.tagChip} key={tag}>{tag}
-              <button aria-label={`移除整条素材标签 ${tag}`} disabled={assetTagsPendingId !== null} onClick={() => void saveAssetTags(selected, selected.user_tags.filter((entry) => entry !== tag))} type="button"><X size={13} /></button>
-            </span>
-          )) : <small>整条素材还没有我的标签。</small>}
-        </div>
-        <label htmlFor="material-asset-tag-input">添加到整条素材</label>
-        {assetTagErrors[selected.id] ? <p className={styles.tagError} role="alert">{assetTagErrors[selected.id]}</p> : null}
-        <input
-          autoComplete="off"
-          disabled={assetTagsPendingId !== null}
-          id="material-asset-tag-input"
-          onChange={(event) => setAssetTagDrafts((current) => ({ ...current, [selected.id]: event.target.value }))}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              void addAssetTag(selected);
-            }
-          }}
-          placeholder="输入整条素材标签后按回车"
-          value={assetTagDrafts[selected.id] ?? ""}
-        />
-        {assetTagsPendingId === selected.id ? <small role="status">正在保存整条素材标签…</small> : null}
-      </section>
-      <section className={styles.notesEditor} aria-label="素材文字说明">
-        <label>本素材说明（可选）<textarea disabled={busy === "notes"} value={noteDraft} onChange={event => {
-          if (voiceNoteRef.current) {
-            cancelVoiceNote();
-            setVoiceNoteNotice("说明已编辑，口述已取消；保留当前文字，可继续编辑保存。");
-          }
-          setNoteDrafts(current => ({ ...current, [selected.id]: event.target.value }));
-          setNoteSaved(current => ({ ...current, [selected.id]: false }));
-        }} /></label>
-        <p>只记录你的补充，不改片段描述或事实标签；留空不影响分析。</p>
-        <p>已保存背景：{selected.upload_context || "未填写"}</p>
-        <button disabled={busy !== null || voiceNote !== null} onClick={() => startVoiceNote(selected.id)} type="button">补口述说明</button>
-        <p>仅补当前素材库条目的说明，不改变公共背景。</p>
-        {voiceNote?.assetId === selected.id ? <>
-          <DesktopVoiceRecorder purpose="material-notes" onRecorded={blob => receiveVoiceNote(voiceNote, blob)} onCancel={() => {
-            cancelVoiceNote();
-            setVoiceNoteNotice("口述已取消，原文字保留，可直接输入说明。");
-          }} />
-          <button onClick={() => { cancelVoiceNote(); setVoiceNoteNotice("口述已取消，原文字保留，可直接输入说明。"); }} type="button">取消口述说明</button>
-        </> : null}
-        {voiceNoteNotice ? <p role="status">{voiceNoteNotice}</p> : null}
-        {noteErrors[selected.id] ? <p role="alert">{noteErrors[selected.id]}</p> : null}
-        {noteSaved[selected.id] ? <p role="status">本素材说明已保存。</p> : null}
-        <button disabled={busy !== null} onClick={() => void saveNotes([selected])} type="button">保存本素材说明</button>
-      </section>
+      <MaterialAssetTags tags={selected.user_tags} error={assetTagErrors[selected.id]} draft={assetTagDrafts[selected.id] ?? ""} pending={assetTagsPendingId !== null} saving={assetTagsPendingId === selected.id} onRemove={tag => void saveAssetTags(selected, selected.user_tags.filter(entry => entry !== tag))} onDraftChange={value => setAssetTagDrafts(current => ({ ...current, [selected.id]: value }))} onAdd={() => void addAssetTag(selected)} />
+      <MaterialNotesEditor draft={noteDraft} uploadContext={selected.upload_context} error={noteErrors[selected.id]} saved={noteSaved[selected.id]} saving={notesPending} disabled={busy !== null} voiceNoteActive={voiceNote?.assetId === selected.id} voiceNoteNotice={voiceNoteNotice} onDraftChange={value => changeAssetNote(selected.id, value)} onStartVoiceNote={() => startVoiceNote(selected.id)} onRecorded={async blob => { if (voiceNote) await receiveVoiceNote(voiceNote, blob); }} onCancelVoiceNote={cancelSpokenNote} onSave={() => void saveNotes([selected])} />
       <MaterialBusinessObjects
         assetId={selected.id}
         loaded={objectRead.status === "ready"}
         readError={objectRead.status === "error" ? objectRead.message : null}
-        onRetryRead={() => {
-          objectReadRetry.current += 1;
-          setObjectReadTick(tick => tick + 1);
-        }}
+        onRetryRead={retryObjectRead}
         objects={businessObjects}
         selectedIds={assetObjectIds[selected.id] ?? EMPTY_OBJECT_IDS}
         onCreate={createBusinessObject}
         onSave={saveBusinessObjects}
         pending={objectPending}
         error={objectError || null}
-        onDismissError={() => setObjectError("")}
+        onDismissError={dismissObjectError}
       />
       <dl className="library-inspector__meta">
         <div>
@@ -1439,182 +739,11 @@ export function MaterialLibraryWorkspace({
         </button>
       </div>
       {selectedSegment ? (
-        <div className="library-segment-organizer">
-          <div className="library-segment-heading">
-            <strong>片段分类</strong>
-            <span>
-              已用 {selectedSegment.usage_count} 次
-              {selectedSegment.last_used_at
-                ? ` · 最近 ${new Date(selectedSegment.last_used_at).toLocaleDateString("zh-CN")}`
-                : ""}
-            </span>
-          </div>
-          <p className={styles.segmentRange}>当前片段：{duration(selectedSegment.start_seconds)}–{duration(selectedSegment.end_seconds)}。下面的标签只用于这段画面。</p>
-          <section className="library-speech-evidence" aria-label="片段使用记录">
-            <strong>使用记录</strong>
-            <p>回查这个片段进过哪条成片。只列已实际写入的使用记录，读取不会增加使用次数。用途和版本都只反映该计划当前的取值，不是当次使用时的历史值。</p>
-            {usageRead.status === "loading" ? <p>正在读取使用记录……</p> : null}
-            {usageRead.status === "error" ? <p role="alert">{usageRead.message}<button type="button" onClick={() => setUsageReadTick(value => value + 1)}>重新读取使用记录</button></p> : null}
-            {usageRead.status === "ready" && !usageRecords.length ? <p>这个片段还没有被任何成片使用过。</p> : null}
-            {usageRead.status === "ready" ? usageRecords.map(record => <article key={`${record.plan_id}:${record.clip_id}`}>
-              <p>
-                {record.task?.name || "成片使用记录"} · {clipRoleLabel(record.role)}
-                {record.manually_selected === null ? "" : record.manually_selected ? " · 人工选定" : " · 自动匹配"}
-              </p>
-              <p>
-                {new Date(record.used_at).toLocaleString("zh-CN")}
-                {record.task
-                  ? ` · 任务 ${record.task.stage ?? "阶段未记录"} / ${record.task.status ?? "状态未记录"}`
-                  : " · 关联任务未记录"}
-              </p>
-              {record.task?.id ? <p><Link href={"/tasks/" + encodeURIComponent(record.task.id)}>打开任务{record.task.name ? `：${record.task.name}` : ""}</Link></p> : null}
-              <p>
-                {record.resolution === "current" && record.timeline_version_id
-                  ? "关联任务当前时间线（当次使用版本未记录）"
-                  : "时间线版本未记录"}
-              </p>
-            </article>) : null}
-          </section>
-          {selectedSegment.understanding ? <section className="library-speech-evidence" aria-label="画面观察证据">
-            <strong>画面观察</strong>
-            {selectedSegment.understanding.status === "ready" ? <>
-              <p>{selectedSegment.understanding.summary}</p>
-              <div className="library-evidence-times" aria-label="采样帧">{selectedSegment.understanding.sample_times.map(time =>
-                <button key={time} type="button" aria-label={`查看采样帧 ${time.toFixed(2)} 秒`} onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = time; }}><time>{duration(time)}</time></button>)}</div>
-              {selectedSegment.understanding.facts.length ? <details><summary>查看 {selectedSegment.understanding.facts.length} 条观察依据</summary>
-                {selectedSegment.understanding.facts.map((fact, index) => <button key={index} type="button" aria-label={`核对画面：${fact.text}`} onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = fact.sample_times[0]; }}>
-                  <time>{duration(fact.sample_times[0])}</time><span>{fact.text}</span>
-                </button>)}
-              </details> : null}
-              {selectedSegment.understanding.unknowns.length ? <p>待核对：{selectedSegment.understanding.unknowns.join("；")}</p> : null}
-            </> : <p>{selectedSegment.understanding.message}</p>}
-            <strong>画面文字</strong>
-            {selectedSegment.understanding.ocr_status === "ready" ? selectedSegment.understanding.ocr_frames.some(frame => frame.observations.length) ?
-              Array.from(new Set(selectedSegment.understanding.ocr_frames.flatMap(frame => frame.observations.map(item => item.text)))).map(text => {
-                const frame = selectedSegment.understanding!.ocr_frames.find(frame => frame.observations.some(item => item.text === text))!;
-                const eligible = selectedSegment.understanding!.ocr_frames.some(item => item.observations.some(observation => observation.text === text && observation.retrieval_eligible));
-                return <button key={text} type="button" onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = frame.timestamp_seconds; }}><time>{duration(frame.timestamp_seconds)}</time><span>{text}{!eligible ? " · 低置信度，未用于检索" : ""}</span></button>;
-              }) : <p>采样帧中未识别到文字。</p>
-              : <p>{selectedSegment.understanding.ocr_status === "failed" ? "本地文字识别失败，可重新分析。" : "本地文字识别尚未配置。"}</p>}
-          </section> : null}
-          <label><span>片段描述</span><textarea value={descriptionDraft} onChange={event => { markSegmentDraftChanged(); setDescriptionDraft(event.target.value); }} /></label>
-          <label><span>转写纠正（留空使用识别结果）</span><textarea value={transcriptDraft} onChange={event => { markSegmentDraftChanged(); setTranscriptDraft(event.target.value); }} /></label>
-          <label>
-            <span>片段用途</span>
-            <AppSelect
-              disabled={busy !== null}
-              value={usageRoleDraft}
-              onValueChange={newValue => { markSegmentDraftChanged(); setUsageRoleDraft(newValue as MaterialSegment["usage_role"]); }}
-            >
-              {usageRoleDraft === "unassigned" ? <AppSelectOption value="unassigned" disabled>未指定（当前用途）</AppSelectOption> : null}
-              {usageRoleDraft === "exclude" ? <AppSelectOption value="exclude" disabled>不使用（已排除）</AppSelectOption> : null}
-              <AppSelectOption value="a_roll">人物主镜头</AppSelectOption>
-              <AppSelectOption value="b_roll">补充画面</AppSelectOption>
-            </AppSelect>
-          </label>
-          {selected.speech_analysis ? <section className="library-speech-evidence" aria-label="原片语音证据">
-            <strong>原片语音</strong>
-            {selected.speech_analysis.status !== "ready" || !selected.speech_analysis.observations.length ? <p>{selected.speech_analysis.message}</p> : null}
-            {selected.speech_analysis.observations.filter(item => item.end_ms > selectedSegment.start_seconds * 1000 && item.start_ms < selectedSegment.end_seconds * 1000).map((item, index) =>
-              <button key={index} type="button" onClick={() => { if (sourceVideo.current) sourceVideo.current.currentTime = item.start_ms / 1000; }}>
-                <time>{duration(item.start_ms / 1000)}</time><span>{item.text}</span>
-              </button>)}
-          </section> : null}
-          <div className="library-tag-list" aria-label="系统标签">
-            {selectedSegment.system_tags.map((tag) => (
-              <span key={tag}>{tagLabel(tag)}</span>
-            ))}
-            {!selectedSegment.system_tags.length ? (
-              <small>等待画面理解生成系统标签</small>
-            ) : null}
-          </div>
-          {observedTagSuggestions(selectedSegment).length ? <details className={styles.tagSuggestions}>
-            <summary>标签建议 · {observedTagSuggestions(selectedSegment).length} 项待采纳</summary>
-            <p>根据这段画面的实际观察整理。采纳后加入我的标签。</p>
-            {observedTagSuggestions(selectedSegment).map(suggestion => <div key={suggestion.label}>
-              <span><strong>{suggestion.label}</strong><small>{suggestion.source} · 采样 {suggestion.times.map(duration).join("、")}</small></span>
-              <button type="button" disabled={busy !== null} aria-label={`采纳标签 ${suggestion.label}`} onClick={() => addTag(suggestion.label)}>采纳</button>
-            </div>)}
-          </details> : null}
-          <div className={styles.tagEditor}>
-            <strong>我的标签</strong>
-            <div className={styles.tagChips} aria-label="已保存的我的标签">
-              {selectedSegment.user_tags.length ? selectedSegment.user_tags.map((tag) => (
-                <span className={styles.tagChip} key={tag}>{tag}
-                  <button aria-label={`移除标签 ${tag}`} disabled={busy !== null} onClick={() => void saveTags(selectedSegment.user_tags.filter((entry) => entry !== tag))} type="button"><X size={13} /></button>
-                </span>
-              )) : <small>这段画面还没有我的标签。</small>}
-            </div>
-            <label htmlFor="material-tag-input">添加标签</label>
-            {tagError ? <p className={styles.tagError} role="alert">{tagError}</p> : null}
-            <input
-              autoComplete="off"
-              disabled={busy !== null}
-              id="material-tag-input"
-              onChange={(event) => setTagDrafts((current) => ({ ...current, [tagScope]: event.target.value }))}
-              onCompositionStart={() => { isComposingTag.current = true; }}
-              onCompositionEnd={() => { isComposingTag.current = false; }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !isComposingTag.current && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  addTag(tagDraft);
-                }
-              }}
-              placeholder="输入标签后按回车，如产品演示"
-              value={tagDraft}
-            />
-            {insights.tags.some((entry) => !selectedSegment.user_tags.includes(entry.tag)) ? (
-              <div className={styles.commonTags} aria-label="常用标签">
-                <span>常用标签</span>
-                {insights.tags.filter((entry) => !selectedSegment.user_tags.includes(entry.tag)).slice(0, 6).map((entry) => (
-                  <button disabled={busy !== null} key={entry.tag} onClick={() => addTag(entry.tag)} type="button">{tagLabel(entry.tag)}</button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className={styles.collectionPicker}>
-            <label htmlFor="material-collection-search">标签夹</label>
-            <input
-              id="material-collection-search"
-              onChange={(event) => setCollectionQuery(event.target.value)}
-              placeholder="搜索标签夹"
-              type="search"
-              value={collectionQuery}
-            />
-            <div className={styles.collectionOptions} role="group" aria-label="选择标签夹">
-              {[{ id: "", name: "未归类" }, ...collections]
-                .filter((collection) => collection.name.includes(collectionQuery.trim()))
-                .map((collection) => (
-                  <button aria-pressed={collectionDraft === collection.id} className={collectionDraft === collection.id ? styles.isSelected : ""} key={collection.id || "none"} onClick={() => { markSegmentDraftChanged(); setCollectionDraft(collection.id); }} type="button">{collection.name}</button>
-                ))}
-              {!collections.some((collection) => collection.name.includes(collectionQuery.trim())) && !"未归类".includes(collectionQuery.trim()) ? <small>没有匹配的标签夹</small> : null}
-            </div>
-          </div>
-          <div className="library-collection-create">
-            <input
-              aria-label="新标签夹名称"
-              onChange={(event) => setNewCollectionName(event.target.value)}
-              placeholder="新建标签夹"
-              value={newCollectionName}
-            />
-            <button
-              disabled={busy !== null || !newCollectionName.trim()}
-              onClick={() => void addCollection()}
-              type="button"
-            >
-              <FolderPlus size={14} />
-              新建
-            </button>
-          </div>
-          <button
-            className="library-segment-save"
-            disabled={busy !== null}
-            onClick={() => void saveSegmentOrganization()}
-            type="button"
-          >
-            {busy === "segment" ? "保存中…" : "保存片段修改"}
-          </button>
-        </div>
+        <MaterialSegmentEditor segment={selectedSegment} speechAnalysis={selected.speech_analysis} descriptionDraft={descriptionDraft} transcriptDraft={transcriptDraft} usageRoleDraft={usageRoleDraft} disabled={busy !== null} saving={busy === "segment"}
+          onDescriptionChange={value => { markSegmentDraftChanged(); setDescriptionDraft(value); }} onTranscriptChange={value => { markSegmentDraftChanged(); setTranscriptDraft(value); }} onUsageRoleChange={value => { markSegmentDraftChanged(); setUsageRoleDraft(value); }} onSeekSpeech={seconds => { if (sourceVideo.current) sourceVideo.current.currentTime = seconds; }} onSave={() => void saveSegmentOrganization()}
+          usageEvidence={<MaterialUsageEvidence usageRecords={usageRecords} usageRead={usageRead} retryUsageRead={retryUsageRead} />}
+          tagsEditor={<MaterialSegmentTags segment={selectedSegment} commonTags={insights.tags} tagDraft={tagDraft} tagError={tagError} disabled={busy !== null} onDraftChange={value => setTagDrafts(current => ({ ...current, [tagScope]: value }))} onAdd={addTag} onRemove={tag => void saveTags(selectedSegment.user_tags.filter(entry => entry !== tag))} />}
+          collectionPicker={<MaterialCollectionPicker query={collectionQuery} onQueryChange={setCollectionQuery} collections={collections} collectionDraft={collectionDraft} newCollectionName={newCollectionName} disabled={busy !== null} onChoose={id => { markSegmentDraftChanged(); setCollectionDraft(id); }} onNameChange={setNewCollectionName} onCreate={() => void addCollection()} />} />
       ) : null}
     </div>
   ) : null;
@@ -1668,7 +797,6 @@ export function MaterialLibraryWorkspace({
         <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span><button className={styles.iconButton} aria-label="查看素材统计" title="查看素材统计" onClick={() => setStatisticsOpen(true)} type="button"><Info size={16} /></button></div>
         {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><button onClick={() => setImportOpen(true)} type="button">查看接入</button></div> : null}
 
-
         {error ? (
           <div className="library-error" role="alert">
             <AlertCircle size={15} />
@@ -1690,80 +818,7 @@ export function MaterialLibraryWorkspace({
           </div>
         ) : null}
 
-        {visible.length ? (
-          <div className={`library-grid ${styles.results}${viewMode === "list" ? ` is-list ${styles.objectList}` : ""}`}>
-          {visible.map((asset) => {
-            const AssetStateIcon = asset.analysis_status === "failed" ? CircleAlert
-              : asset.analysis_status === "blocked" ? CircleMinus : asset.use_state === "excluded" ? CircleDot
-                : asset.analysis_status === "ready" ? CircleCheck : CircleDashed;
-            return (
-              <button
-                className={`library-card ${styles.materialCard}${selected?.id === asset.id ? " is-selected" : ""}`}
-                key={asset.id}
-                data-open-details onClick={() => selectAsset(asset)}
-                type="button"
-                >
-                <span className="library-card__poster">
-                  {failedThumbnails[asset.id] ? <Film className="library-card__fallback-icon" size={22} /> : asset.media_type === "image" ? (
-                    <img
-                      alt=""
-                      aria-hidden="true"
-                      loading="lazy"
-                      src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`}
-                      onError={() => setFailedThumbnails(current => ({ ...current, [asset.id]: true }))}
-                    />
-                  ) : asset.media_type === "audio" ? (
-                    <Volume2 className="library-card__fallback-icon" size={22} />
-                  ) : (
-                    <video
-                      aria-hidden="true"
-                      muted
-                      playsInline
-                      preload="metadata"
-                      src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`}
-                      onError={() => setFailedThumbnails(current => ({ ...current, [asset.id]: true }))}
-                    />
-                  )}
-                  {asset.media_type === "video" ? (
-                    <Film className="library-card__fallback-icon" size={22} />
-                  ) : null}
-                  <small>
-                    {asset.media_type === "image" ? mediaLabel(asset.media_type) : duration(asset.duration_seconds)}
-                  </small>
-                  <i
-                    className={`library-card__state state-${asset.analysis_status}`}
-                  >
-                    <AssetStateIcon size={13} />
-                  </i>
-                </span>
-                <span className="library-card__copy">
-                  <strong title={asset.file_name}>{fileLabel(asset.file_name)}</strong>
-                  <small>
-                    {mediaLabel(asset.media_type)} · {useStateOptions.find(option => option.value === asset.use_state)?.label}
-                    {asset.analysis_status === "pending" ? " · 等待分析" : ""}
-                  </small>
-                  <small>{asset.user_tags.slice(0, 2).join(" · ") || roleLabel(asset)} · {reviewLabel(asset)}</small>
-                </span>
-              </button>
-            );
-          })}
-          </div>
-        ) : (
-          <div className="library-empty">
-            <Film size={23} />
-            <div>
-              <strong>{query || filter !== "all" || mediaType !== "all" || initialTag ? "没有匹配的素材" : "素材库还是空的"}</strong>
-              <p>
-                {query || filter !== "all" || mediaType !== "all" || initialTag
-                  ? "试试清除搜索词，或重置全部筛选条件。"
-                  : intake?.bound_to_current_workspace
-                    ? "导入本地文件即可开始；外部复制的文件需要先确认复制完成。"
-                    : "点击导入素材，检查接入目录后选择本地文件或媒体直链。"}
-              </p>
-              {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? <Link href="/library" className={styles.resetFilters}>重置全部</Link> : <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button> : <button className={styles.importButton} onClick={() => setImportOpen(true)} type="button">导入素材</button>}
-            </div>
-          </div>
-        )}
+        <MaterialResults assets={visible} selectedId={selected?.id ?? null} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
         {hasMore ? (
           <div className="library-load-more">
             <button
@@ -1784,12 +839,9 @@ export function MaterialLibraryWorkspace({
           <summary>给选中素材保存公共背景（可选）</summary>
           <p>仅列出当前已加载素材。请明确勾选本批文件，不会默认应用到全库。</p>
           <div className={styles.notesSelection}>
-            {assets.map(asset => <label key={asset.id}><input type="checkbox" checked={noteBatchIds.includes(asset.id)} disabled={busy === "notes"} onChange={event => {
-              setNoteBatchIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id));
-              setBatchNoteSaved(false);
-            }} />{fileLabel(asset.file_name)}</label>)}
+            {assets.map(asset => <label key={asset.id}><input type="checkbox" checked={noteBatchIds.includes(asset.id)} disabled={busy === "notes"} onChange={event => chooseBatchAsset(asset.id, event.target.checked)} />{fileLabel(asset.file_name)}</label>)}
           </div>
-          <label>公共背景（可选）<textarea disabled={busy === "notes"} value={batchContext} onChange={event => { setBatchContext(event.target.value); setBatchNoteSaved(false); }} /></label>
+          <label>公共背景（可选）<textarea disabled={busy === "notes"} value={batchContext} onChange={event => changeBatchContext(event.target.value)} /></label>
           <p>当前选中 {noteBatchAssets.length} 份；只更新这些素材的背景，各自说明保持不变。</p>
           {batchNoteError ? <p role="alert">{batchNoteError}</p> : null}
           {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
@@ -1797,162 +849,7 @@ export function MaterialLibraryWorkspace({
         </details>
 
         {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>
-        <section className={styles.intakePanel} aria-label="素材自动接入">
-          <div className={styles.intakeHeading}>
-            <strong>素材自动接入</strong>
-            <span>{intake ? directoryStateLabel[intake.directory_state] : "正在核对目录"}</span>
-          </div>
-          {intakeError ? (
-            <p className={styles.intakeError} role="alert">{intakeError}
-              <button disabled={intakeBusy !== null} onClick={() => void refreshIntakeStatus()} type="button">重新检查</button>
-            </p>
-          ) : null}
-          {!intake ? (
-            <p className={styles.intakeDescription}>{intakeError ? "暂时无法确认目录状态，请重新检查。" : "正在确认素材目录与当前工作区的关系…"}</p>
-          ) : !intake.binding_available ? (
-            <p className={styles.intakeDescription}>该目录已接入其他工作区。请切换到所属工作区处理，当前工作区不能直接接入。</p>
-          ) : intake.directory_state === "changed" ? (
-            <>
-              <p className={styles.intakeDescription}>素材目录状态已变化。请到<Link href="/settings">设置</Link>核对后再继续；工作区归属不会自动更改。</p>
-              <details className={styles.intakeDetails}>
-                <summary>查看目录位置和原因</summary>
-                <code>{intake.configured_directory ?? "未设置"}</code>
-                <p>{intake.directory_message} {intake.repair_action}</p>
-              </details>
-            </>
-          ) : !intake.configured_directory ? (
-            <p className={styles.intakeDescription}>尚未选择素材目录。请先到<Link href="/settings">设置</Link>选择目录。</p>
-          ) : !intake.bound_to_current_workspace ? (
-            <div className={styles.intakeRow}>
-              <div className={styles.intakeCopy}>
-                <p className={styles.intakeDescription}>接入后每 {intake.scan_interval_seconds} 秒检查新文件，确认复制完成后才接收并分析，不会自动创建视频任务。</p>
-                <details className={styles.intakeDetails}>
-                  <summary>查看接入位置和检查结果</summary>
-                  <code>{intake.configured_directory}</code>
-                  {intake.directory_state !== "ready" ? <p>{intake.directory_message} {intake.repair_action ?? ""}</p> : null}
-                </details>
-              </div>
-              <button className={styles.intakePrimary} disabled={intakeBusy !== null || intake.directory_state !== "ready"} onClick={() => void bindIntake()} type="button">
-                {intakeBusy === "bind" ? "正在接入…" : "确认接入"}
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className={styles.intakeRow}>
-                <div className={styles.intakeCopy}>
-                  <p className={styles.intakeDescription}>已接入素材目录，每 {intake.scan_interval_seconds} 秒自动检查。外部文件须确认复制完成后才接收；应用内导入会自动确认复制完成。</p>
-                  <details className={styles.intakeDetails}>
-                    <summary>查看目录位置和检查结果</summary>
-                    <code>{intake.bound_directory ?? "未记录"}</code>
-                    {intake.directory_state !== "ready" ? <p>{intake.directory_message} {intake.repair_action ?? ""}</p> : null}
-                  </details>
-                </div>
-                {intake.directory_state === "ready" ? (
-                  <span className={styles.intakeRow}>
-                    <button className={styles.intakeSecondary} disabled={importBusy || busy !== null || intakeBusy !== null} onClick={() => void runImport()} type="button">
-                      {importBusy ? <LoaderCircle className="is-spinning" size={15} /> : <FolderPlus size={15} />}
-                      {importBusy ? "正在导入…" : "导入本地素材"}
-                    </button>
-                    <button className={styles.intakeSecondary} disabled={busy !== null || intakeBusy !== null || importBusy} onClick={() => void scan()} type="button">
-                      {busy === "scan" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderSearch size={15} />}
-                      {busy === "scan" ? "正在检查…" : "立即检查"}
-                    </button>
-                  </span>
-                ) : null}
-              </div>
-              {intake.directory_state === "ready" && intake.pending_files.length > 0 ? (
-                <section aria-label="待确认复制完成的文件">
-                  <p className={styles.intakeDescription}>请确认这些文件已复制完成。此声明不代表文件已经通过解析或内容校验。</p>
-                  {intake.pending_files.map((file) => (
-                    <div className={styles.intakeRow} key={file.relative_path}>
-                      <code>{file.relative_path}</code>
-                      <button className={styles.intakePrimary} disabled={intakeBusy !== null || importBusy || busy !== null} onClick={() => void confirmCopy(file)} type="button">
-                        复制完成，开始接收
-                      </button>
-                    </div>
-                  ))}
-                </section>
-              ) : null}
-              {importResult ? (
-                <p
-                  className={styles.intakeDescription}
-                  role={importResult.error || importResult.failures.length > 0 ? "alert" : "status"}
-                >
-                  {importResult.canceled ? "已取消导入，源文件保持不变。" : null}
-                  {!importResult.canceled && importResult.error ? importResult.error : null}
-                  {!importResult.error && importResult.copied.length > 0
-                    ? `已复制 ${importResult.copied.length} 个文件到素材目录：${importResult.copied.map((entry) => entry.fileName).join("、")}。复制完成确认已保存，等待接收并分析，源文件保持不变。`
-                    : null}
-                  {!importResult.error && importResult.copied.length === 0 && !importResult.canceled
-                    && importResult.failures.length === 0 && importResult.skipped.length > 0
-                    ? `没有可导入的文件：${importResult.skipped.join("、")}。仅支持 mp4、mov、m4v。`
-                    : null}
-                  {importResult.failures.length > 0
-                    ? `导入失败 ${importResult.failures.length} 个：${importResult.failures.map((entry) => `${entry.sourceName}（${entry.error}）`).join("；")}`
-                    : null}
-                  {importResult.skipped.length > 0 && importResult.copied.length > 0
-                    ? `跳过不支持的文件：${importResult.skipped.join("、")}。`
-                    : null}
-                  {importResult.warning ? ` ${importResult.warning}` : null}
-                </p>
-              ) : null}
-              <div className={`${styles.intakeRow} ${styles.intakeLinkRow}`}>
-                <input
-                  aria-label="媒体文件直链"
-                  className={styles.intakeLinkInput}
-                  disabled={linkBusy !== null}
-                  onChange={(event) => setLinkUrl(event.target.value)}
-                  placeholder="粘贴公开的视频、音频或图片直链"
-                  type="url"
-                  value={linkUrl}
-                />
-                <span className={styles.intakeRow}>
-                  <button
-                    className={styles.intakeSecondary}
-                    disabled={linkBusy !== null || !linkUrl.trim() || busy !== null}
-                    onClick={() => void runLinkCheck()}
-                    type="button"
-                  >
-                    {linkBusy === "check" ? <LoaderCircle className="is-spinning" size={15} /> : <ShieldCheck size={15} />}
-                    {linkBusy === "check" ? "正在检查…" : "检查直链"}
-                  </button>
-                  <button
-                    className={styles.intakeSecondary}
-                    disabled={linkBusy !== null || !linkCheck?.supported || busy !== null}
-                    onClick={() => void runLinkImport()}
-                    type="button"
-                  >
-                    {linkBusy === "import" ? <LoaderCircle className="is-spinning" size={15} /> : <FolderPlus size={15} />}
-                    {linkBusy === "import" ? "正在导入…" : "导入这条链接"}
-                  </button>
-                </span>
-              </div>
-              {linkCheck || linkImport || linkError ? (
-                <p
-                  className={styles.intakeDescription}
-                  role={linkError ? "alert" : "status"}
-                >
-                  {linkError ? linkError : null}
-                  {!linkError && linkCheck?.supported ? linkCheck.message : null}
-                  {!linkError && linkImport
-                    ? `已导入${linkImport.reused_existing_file ? "（复用已有素材）" : ""}：${linkImport.file_name}，${linkImport.size_bytes} 字节。${
-                        linkImport.media_type === "video"
-                          ? "已登记进素材库，等待文件稳定后分析。"
-                          : linkImport.analysis_message
-                      }来源：${linkImport.url}`
-                    : null}
-                </p>
-              ) : null}
-              <div className={styles.intakeCounts} aria-label="自动接入进度">
-                <span>待确认复制 {intake.pending_files.length}</span>
-                <span>分析中 {intake.file_counts.running}</span>
-                <span>已分析 {intake.file_counts.ready}</span>
-                <span>失败 {intake.file_counts.failed}</span>
-                <span>等待磁盘 {intake.file_counts.blocked_disk}</span>
-              </div>
-            </>
-          )}
-        </section>
+        <MaterialIntakePanel intake={intake} intakeError={intakeError} intakeBusy={intakeBusy} busy={busy} importBusy={importBusy} importResult={importResult} onRefresh={() => void refreshIntakeStatus()} onBind={() => void bindIntake()} onLocalImport={() => void runImport()} onScan={() => void scan()} onConfirmCopy={file => void confirmCopy(file)} mediaLinkImport={<MediaLinkImportPanel linkUrl={linkUrl} linkBusy={linkBusy} linkCheck={linkCheck} linkImport={linkImport} linkError={linkError} disabled={busy !== null} onUrlChange={changeLinkUrl} onCheck={() => void runLinkCheck()} onImport={() => void runLinkImport()} />} />
         </HomeCardDialog> : null}
         {statisticsOpen ? <HomeCardDialog kind="detail" title="素材统计" onClose={() => setStatisticsOpen(false)}>
         <section className={styles.statistics} aria-label="素材覆盖"><p>{insights.asset_count} 个可见文件 · {insights.segment_count} 个片段</p><div className={styles.statTags}>{insights.tags.filter(entry => entry.asset_count > 0).map(entry => <Link key={entry.tag} href={"/library?tag=" + encodeURIComponent(entry.tag)}>{tagLabel(entry.tag)}<small>{entry.asset_count} 份素材</small></Link>)}</div><p>此处统计已有内容；具体缺口会在制作任务检查素材时显示。</p></section>        </HomeCardDialog> : null}
