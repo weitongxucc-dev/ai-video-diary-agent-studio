@@ -826,6 +826,7 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     from app.host_resource_probes import HostProcessProbe
     from _media_preview_test_fixtures import ControlledResources
     actor = CreationExecutionActor(state.workspace_id,state.member.member_id)
+    monkeypatch.setattr(main_module, "LEGACY_WORKSPACE_ID", state.workspace_id)
     def live_identity(candidate):
         return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
     access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
@@ -883,11 +884,19 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
             raise
     media=TaskMediaJobs(state.production,facts=facts_override or facts,execute_operation=execute,
         validate_result=validate_override or validate,verify_identity=access.verify_identity)
+    resources = ControlledResources()
+    if facts_override is not None:
+        from app.host_resource_probes import HostBudget, HostResourceProbe
+        _presenter, presenter_cpu = main_module.presenter_budgets_from_env()
+        resources = HostResourceProbe(state.production.database_path, disk_paths=(state.production.database_path.parent,),
+            budget=HostBudget(75, 1, 1, 1, 32*1024**2, 32*1024**2,
+                cpu_render=main_module.cpu_render_budget_from_env(), clip_preview=clip_profile,
+                presenter_cpu_render=presenter_cpu, cpu_audio=main_module.cpu_audio_budget_from_env()))
     runtime=build_device_runtime(database_path=state.production.database_path,
         device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
         registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
             verify_identity=access.verify_identity,task_media=media),CreationJobUnitExecutor(state.production,
-            render_action=None,render_is_valid=None,task_media=media))},resources=ControlledResources(),
+            render_action=None,render_is_valid=None,task_media=media))},resources=resources,
         processes=HostProcessProbe())
     state.preview_runtime=runtime
     monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
@@ -4166,7 +4175,7 @@ def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_
     assert state.client.get(base).json()["task"]["can_redo"] is False
 
 
-def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(permitted_media_state):
+def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility(permitted_media_state, monkeypatch):
     state=permitted_media_state
     base=f"/api/creation-tasks/{state.task.id}"
     version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)

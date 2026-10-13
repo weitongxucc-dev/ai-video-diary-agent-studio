@@ -40,14 +40,14 @@ class TimelineAudioClip(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     source_start_ms: int = Field(ge=0)
     source_end_ms: int = Field(gt=0)
-    playback_rate: float = Field(default=1, gt=0, allow_inf_nan=False)
+    playback_rate: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     timeline_start_ms: int = Field(ge=0)
-    gain_db: float = Field(default=0, ge=-60, le=12, allow_inf_nan=False)
+    gain_db: float = Field(default=0.0, ge=-60, le=12, allow_inf_nan=False)
     fade_in_ms: int = Field(default=0, ge=0)
     fade_out_ms: int = Field(default=0, ge=0)
     muted: bool = False
     locked: bool = False
-    denoise_db: float = Field(default=0, ge=0, le=24, allow_inf_nan=False)
+    denoise_db: float = Field(default=0.0, ge=0, le=24, allow_inf_nan=False)
     loudness_target_lufs: float | None = Field(default=None, ge=-30, le=-10, allow_inf_nan=False)
     gain_points: list[AudioGainPoint] = Field(default_factory=list, max_length=100)
     envelope_offset_ms: int = Field(default=0, ge=0)
@@ -79,7 +79,7 @@ class TimelineAudioTrack(BaseModel):
     id: str = Field(min_length=1, max_length=120)
     name: str = Field(min_length=1, max_length=40)
     role: Literal["narration", "original", "music", "effect"]
-    gain_db: float = Field(default=0, ge=-60, le=12, allow_inf_nan=False)
+    gain_db: float = Field(default=0.0, ge=-60, le=12, allow_inf_nan=False)
     muted: bool = False
     locked: bool = False
     duck_under_voice: bool = False
