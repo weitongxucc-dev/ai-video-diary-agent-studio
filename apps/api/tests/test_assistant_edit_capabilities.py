@@ -87,6 +87,9 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     assert "preview_edit" not in contexts[1]["tool_names"]
     assert {"preview_typed_edit", "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
     assert "不自行重新生成或用同名图替换" in calls[1]["cmd"][calls[1]["cmd"].index("--system-prompt") + 1]
+    prompt = calls[1]["cmd"][calls[1]["cmd"].index("--system-prompt") + 1]
+    assert "不对这些对象JSON.parse；CLI stdout才是JSON文本" in prompt
+    assert "工具ID可直接只读describe" in prompt
     assert contexts[1]["selected_object_refs"] == ["clip:clip-current"]
     assert contexts[1]["material_selection"] == TOOL_SELECTION
     assert contexts[1]["task_version"]["timeline_sequence"] == 3

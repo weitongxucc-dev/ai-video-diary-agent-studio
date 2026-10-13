@@ -271,7 +271,6 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
   }) };
   const knownTools = new Map<string, any>();
   const describeTool = async (toolId: string, version?: number) => {
-    if (!knownTools.has(toolId)) throw new Error("工具编号未由本轮真实列表/保存回执返回，请先读取列表");
     const value = await request(`/api/media-script-tools/${encodeURIComponent(toolId)}${version === undefined ? "" : `?version=${version}`}`);
     if (value.tool_id !== toolId || !Number.isInteger(value.version)) throw new Error("配方身份或版本不可核验");
     knownTools.set(toolId, value);
@@ -280,13 +279,13 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       purpose: definition?.purpose};
   };
   pi.registerTool({name: "read_media_script_tool_capabilities", label: "读取可复用图片工具能力",
-    description: "读取实际保存/更新/停用/调用schema，不安装、不加载程序到宿主。",
+    description: "读取实际保存/更新/停用/调用schema；codemode返回结构化对象，直接读schemas，不JSON.parse对象。不安装、不加载程序到宿主。",
     parameters: {type: "object", properties: {}, additionalProperties: false},
     execute: async () => {const details = await readMediaScriptToolCapabilities();
       return {content: [{type: "text", text: JSON.stringify(details)}], details};},
   });
   pi.registerTool({name: "list_media_script_tools", label: "查找可复用图片工具",
-    description: "读取当前成员真实工具列表和active事实，最多24项及实际truncated标记；发现不授予旧任务/输入权限。",
+    description: "读取当前成员真实工具列表和active事实，最多24项及实际truncated标记。codemode返回结构化对象，直接读items，不JSON.parse对象；发现不授予旧任务/输入权限。",
     parameters: {type: "object", properties: {include_inactive: {type: "boolean"}}, additionalProperties: false},
     execute: async (_id: string, params: {include_inactive?: boolean} = {}) => {
       const page = await request(`/api/media-script-tools${params.include_inactive ? "?include_inactive=true" : ""}`);
@@ -297,7 +296,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
     },
   });
   pi.registerTool({name: "describe_media_script_tool", label: "查看工具参数和版本",
-    description: "用实际列表的tool_id读取明确版本、参数schema、输入名槽与输出契约；不取出程序代码供宿主执行。",
+    description: "用户明确给出的tool_id可直接只读GET，由后端核当前成员权限，不要求先列举。回读真实版本、参数schema、输入名槽与输出契约；codemode返回结构化对象，直接读version/parameter_schema，不JSON.parse对象。不取出程序代码供宿主执行。",
     parameters: {type: "object", properties: {tool_id: {type: "string"}, version: {type: "integer", minimum: 1}}, required: ["tool_id"], additionalProperties: false},
     execute: async (_id: string, params: {tool_id: string; version?: number}) => {
       const details = await describeTool(params.tool_id, params.version);
@@ -389,13 +388,13 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
       invokeParameters.properties.tool_id = {type: "string"}; invokeParameters.required.push("tool_id");
       let invoked = false;
       pi.registerTool({name: "preview_media_script_tool", label: "用已有工具准备图片来源",
-        description: "用真实tool_id/version、当前任务/新输入/参数调用普通API。用户明确复用指定已有来源时，输入绑定该真实来源及修订，不重新生成同名替代；缺失或同名歧义先说明或询问。只取得graphic_source Job，不继承旧输入或权限，不自动采用或出片；代码和输出槽由服务端读取。",
+        description: "用本轮真实回读的tool_id/version、当前任务/新输入/参数调用普通API。codemode返回结构化对象，直接读media_job，不JSON.parse对象。用户明确复用指定已有来源时，输入绑定该真实来源及修订，不重新生成同名替代；缺失或同名歧义先说明或询问。只取得graphic_source Job，不继承旧输入或权限，不自动采用或出片；代码和输出槽由服务端读取。",
         parameters: invokeParameters,
         execute: async (call: string, params: any) => {
           const turn = sourceTurn(); guardedFields(params, invokeParameters);
           if (!currentTaskRead || !selectedTaskVersion || !call) throw new Error("当前可信任务/版本/调用未绑定");
           const value = knownTools.get(params.tool_id);
-          if (!value || value.version !== params.tool_version || !value.active) throw new Error("请先发现并读取该实际active工具版本");
+          if (!value || value.version !== params.tool_version || !value.active) throw new Error("请先读取该实际active工具版本");
           if (invoked) throw new Error("本轮工具调用已提交，不重复未知结果");
           invoked = true; previewCreated = true;
           const request_id = typedRequestId(turn, call), {tool_id, ...body} = params;
@@ -1039,7 +1038,7 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
     });
     pi.registerTool({
       name: "read_task_media_job", label: "读取本轮预览作业结果",
-      description: "只读可信任务作业。可用wait_seconds进行至多20秒有限GET等待，每秒一次；超时仍返回最后实际pending状态，不重执行。PNG来源成功不表示已应用图层或出片。",
+      description: "只读可信任务作业；codemode返回结构化对象，直接读media_job，不JSON.parse对象。可用wait_seconds进行至多20秒有限GET等待，每秒一次；超时仍返回最后实际pending状态，不重执行。PNG来源成功不表示已应用图层或出片。",
       parameters: {type: "object", properties: {job_id: {type: "string", maxLength: 120},
         wait_seconds: {type: "integer", minimum: 0, maximum: 20}}, required: ["job_id"], additionalProperties: false},
       execute: async (_id: string, params: {job_id: string; wait_seconds?: number}) => {
@@ -1091,14 +1090,14 @@ export default function (agent: { registerTool: (tool: unknown) => void }) {
     });
     pi.registerTool({
       name: "read_media_script_capabilities", label: "读取图片程序能力",
-      description: "读取真实Python/Pillow单PNG能力、schema、工具链和预算缺口。不可用时说明实际reason，不安装或猜路径。",
+      description: "读取真实Python/Pillow单PNG能力、schema、工具链和预算缺口；codemode返回结构化对象，直接读schema/available，不JSON.parse对象。不可用时说明实际reason，不安装或猜路径。",
       parameters: {type: "object", properties: {}, additionalProperties: false},
       execute: async () => {const details = await readMediaScriptCapabilities();
         return {content: [{type: "text", text: JSON.stringify(details)}], details};},
     });
     pi.registerTool({
       name: "read_task_graphic_sources", label: "读取当前任务图片来源",
-      description: "只读取本任务已成功登记的可编辑PNG来源和输入修订。明确复用指定已有图片时使用该真实source_ref和修订，不另生成同名替代；缺失或同名歧义先说明或询问。不读取图片文件，不把模型自报来源当有效数据。",
+      description: "只读取本任务已成功登记的可编辑PNG来源和输入修订；codemode返回结构化对象，直接读items，不JSON.parse对象。明确复用指定已有图片时使用该真实source_ref和修订，不另生成同名替代；缺失或同名歧义先说明或询问。不读取图片文件，不把模型自报来源当有效数据。",
       parameters: {type: "object", properties: {offset: {type: "integer", minimum: 0}}, additionalProperties: false},
       execute: async (_id: string, params: {offset?: number} = {}) => {
         const offset = params.offset ?? 0;

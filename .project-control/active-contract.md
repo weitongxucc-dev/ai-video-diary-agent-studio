@@ -2,6 +2,10 @@
 
 ## 2026-10-12 PI-OPEN：按已审方案实施并同步教学
 
+PI输出类型/只读发现五文件包已RELEASE给root；所有本批产品写lease均停止，root接当前候选保存、最终正常模型/后台/重启及安装实例恢复验证。
+
+PI输出类型与只读发现窄接续：ca058b4真实新模型已按准确原PNG调用成功、没有重造输入，正常含图层成片也已succeeded。实际模型在只读来源后对结构化对象JSON.parse两次，随后describe因工具ID未先列举而拒绝，最终仍生成真实来源但宿主提示编排部分未完成。Pi Owner仅续diary_tools.ts/assistant_pi.py及对应直接测试：明确图片读取/工具返回的结构化对象语义；describe私有工具直接沿已授权共同GET，由backend判权限并回读实际元数据，不强制先列举。invoke/update/revoke的当前元数据/版本/授权及未知写入规则保持；不改一般错误归一化以掩盖此次真实失败，不放模型网络/文件/凭据/扩展权限。完成最小相关检查后RELEASE由root保存复测。
+
 PI-05图片成片五文件包已RELEASE给root审核、Git保存和同候选真实验收；API Owner上述图片facts/工厂透传写lease停止。正式生产预算和应用替换仍不由此获新许可。
 
 PI默认入口退役的四个测试消费者现已整体RELEASE给root；上述仅测试续写绑定停止，图片成片纵向API包保持独立唯一Owner。

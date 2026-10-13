@@ -203,6 +203,17 @@ def test_last_syntax_error_and_empty_success_do_not_count_as_recovered_business_
     assert "后续工具编排未完成" in answer and result["media_job"]["result"] == SOURCE
 
 
+def test_json_parsing_error_after_real_read_is_not_cleared_by_later_success():
+    failed = {"type":"tool_execution_end", "toolName":"codemode", "isError":True,
+        "result":{"content":[{"type":"text","text":"Script failed\nSyntaxError: unexpected token object"}],
+            "details":{"calls":[{"name":"read_task_graphic_sources","status":"ok"}], "incomplete_calls":False,
+                "business_receipts":[{"tool_name":"read_task_graphic_sources","tool_call_id":"source-page", "is_error":False,
+                    "result":{"items":[SOURCE], "total_count":1}}]}}}
+    answer, result = host._last_answer_and_preview(_settled_events(failed, _completed_source_codemode()))
+    assert "后续工具编排未完成" in answer
+    assert result["media_job"]["status"] == "succeeded" and result["media_job"]["result"] == SOURCE
+
+
 def test_later_unknown_overlay_keeps_both_original_locator_and_successful_source_job():
     job = {"job_id": "script-job", "result_kind": "graphic_source", "status": "succeeded", "result": SOURCE}
     locator = {"kind": "edit_request_status", "phase": "preview", "status": "result_unknown",

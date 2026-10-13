@@ -9,6 +9,7 @@ import pytest
 import app.assistant_pi as host
 from app.schemas import (MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest,
                          MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest)
+from test_assistant_typed_tools import installed_pi
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 CAPS = {"schemas": {name: cls.model_json_schema() for name, cls in (
@@ -20,41 +21,61 @@ TOOL = {"tool_id": "tool-real", "version": 1, "active": True, "name": "Panel", "
         "definition": {"script_source": "PRIVATE-CODE-NOT-LOADED", "input_slots": [],
                        "requested_outputs": [{"name": "panel.png", "width": 64, "height": 64, "max_bytes": 65536}]}}
 SAVE = {"producer_job_id": "producer-real", "name": "Panel", "description": "draw panel", "parameter_schema": TOOL["parameter_schema"]}
+SOURCE = {"source_ref":"artifacts/orange.png", "artifact_id":"orange", "sha256":"a" * 64,
+          "size_bytes":128, "name":"orange.png", "width":64, "height":64, "applied":False}
 RUNNER = r"""
 let data='';for await(const part of process.stdin)data+=part;
 const input=JSON.parse(data),tools=new Map(),calls=[],results=[];
 globalThis.fetch=async(url,init)=>{
  const path=new URL(url).pathname,method=init?.method||'GET',body=init?.body?JSON.parse(init.body):null;
- calls.push({path,method,body,token:init?.headers.get('X-Local-Member-Token')});
+ calls.push({path,query:new URL(url).search,method,body,token:init?.headers.get('X-Local-Member-Token')});
  if(input.lost&&method!=='GET')throw new TypeError('fixture response lost');
+ if(input.denied&&path==='/api/media-script-tools/tool-real')return {ok:false,status:403,json:async()=>({detail:'当前成员不可访问该工具'})};
  let value;
  if(path==='/api/media-script-tools')value={items:[input.tool],truncated:false};
  else if(path==='/api/media-script-tools/capabilities')value=input.caps;
  else if(path.endsWith('/preview'))value={job_id:'new-job',status:'queued',result_kind:'graphic_source',result:null,base_version_id:'new-base'};
+ else if(path.endsWith('/graphics/sources'))value=[input.source];
+ else if(path.includes('/media-jobs/'))value={job_id:'new-job',status:'succeeded',result_kind:'graphic_source',result:input.source,base_version_id:'new-base'};
  else if(path==='/api/creation-tasks/new-task')value={task:{id:'new-task',current_timeline_version_id:'new-base',timeline_sequence:5}};
  else value=input.tool;
  return {ok:true,status:200,json:async()=>value};
 };
 process.env.AI_VIDEO_DIARY_AGENT_SCRIPT_TOOL_CAPABILITIES=JSON.stringify(input.caps);
-const {default:register}=await import(process.argv[1]);await register({registerTool:tool=>tools.set(tool.name,tool)});
+const {default:register}=await import(process.argv[2]);await register({registerTool:tool=>tools.set(tool.name,tool),
+ getAllTools:()=>[...tools.values()],getSettings:()=>({}),appendEntry:()=>{}});
 for(const step of input.steps){
  try{results.push({ok:true,result:await tools.get(step.name).execute(step.call||'call-'+results.length,step.args||{})});}
  catch(error){results.push({ok:false,error:error.message});}
+}
+if(input.code){
+ const ctx={tools:[...tools.values()],sessionManager:{getBranch:()=>[]},executeTool:async(name,args,options)=>{
+  try{const result=await tools.get(name).execute('nested-'+calls.length,args,options.signal);
+   return {toolCall:{id:'nested-'+calls.length},isError:Boolean(result.isError),result};}
+  catch(error){return {toolCall:{id:'failed-'+calls.length},isError:true,result:{content:[{type:'text',text:error.message}]}};}
+ }};
+ results.push({ok:true,result:await tools.get('codemode').execute('parent',{code:input.code},undefined,undefined,ctx)});
 }
 console.log(JSON.stringify({calls,results,parameters:tools.get('save_media_script_tool').parameters}));
 """
 
 
-def invoke(tmp_path, steps, *, lost=False):
+def invoke(tmp_path, steps, *, lost=False, denied=False, code=None, tool=TOOL):
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="new-task",
                AI_VIDEO_DIARY_AGENT_STAGE="topic", AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1",
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member", AI_VIDEO_DIARY_AGENT_TURN_ID="trusted-turn",
                AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION="明确保存、更新或停用这个可复用工具",
                AI_VIDEO_DIARY_AGENT_TASK_VERSION=json.dumps({"timeline_version_id": "new-base", "timeline_sequence": 5}))
+    if code:
+        env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(installed_pi())
+        env["AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS"] = "read_task_graphic_sources,list_media_script_tools,describe_media_script_tool,preview_media_script_tool,read_task_media_job"
+    runner = tmp_path / "script-tool-proxy.mjs"
+    runner.write_text(RUNNER)
     result = subprocess.run([os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types",
-                             "--input-type=module", "-e", RUNNER, MODULE.as_uri()],
-                            input=json.dumps({"caps": CAPS, "tool": TOOL, "steps": steps, "lost": lost}),
+                             str(runner), MODULE.as_uri()],
+                            input=json.dumps({"caps": CAPS, "tool": tool, "steps": steps, "lost": lost,
+                                              "denied":denied,"code":code,"source":SOURCE}),
                             env=env, cwd=tmp_path, text=True, capture_output=True, check=True, timeout=10)
     return json.loads(result.stdout)
 
@@ -104,6 +125,59 @@ def test_unread_tool_and_changed_cas_are_rejected_before_write(tmp_path):
                  {"name": "revoke_media_script_tool", "args": {"tool_id": "tool-real", "expected_version": 2}}])
     assert not seen["results"][0]["ok"] and not seen["results"][2]["ok"]
     assert all(call["method"] == "GET" for call in seen["calls"])
+
+
+def test_explicit_id_describe_uses_authenticated_get_without_listing_and_binds_invocation(tmp_path):
+    seen = invoke(tmp_path, [{"name":"describe_media_script_tool", "args":{"tool_id":"tool-real", "version":1}},
+        {"name":"preview_media_script_tool", "args":{"tool_id":"tool-real", "tool_version":1,
+            "parameters":{"color":"red"}, "input_refs":[]}}])
+    read = seen["calls"][0]
+    assert read["path"] == "/api/media-script-tools/tool-real" and read["query"] == "?version=1"
+    assert read["method"] == "GET" and read["token"] == "fixture-member"
+    assert not any(call["path"] == "/api/media-script-tools" for call in seen["calls"])
+    metadata = seen["results"][0]["result"]
+    assert metadata["structuredContent"] == metadata["details"]
+    assert metadata["details"]["tool_id"] == "tool-real" and metadata["details"]["parameter_schema"] == TOOL["parameter_schema"]
+    assert "PRIVATE-CODE-NOT-LOADED" not in json.dumps(metadata)
+    assert seen["results"][1]["result"]["details"]["kind"] == "task_media_job"
+    assert seen["calls"][-1]["body"]["tool_version"] == 1
+
+
+def test_denied_describe_does_not_register_the_id_for_writes(tmp_path):
+    seen = invoke(tmp_path, [{"name":"describe_media_script_tool", "args":{"tool_id":"tool-real"}},
+        {"name":"preview_media_script_tool", "args":{"tool_id":"tool-real", "tool_version":1}}], denied=True)
+    assert not seen["results"][0]["ok"] and "当前成员不可访问" in seen["results"][0]["error"]
+    assert not seen["results"][1]["ok"]
+    assert len(seen["calls"]) == 1 and seen["calls"][0]["method"] == "GET"
+
+
+@pytest.mark.parametrize("step,tool", [
+    ({"name":"revoke_media_script_tool", "args":{"tool_id":"tool-real", "expected_version":2}}, TOOL),
+    ({"name":"preview_media_script_tool", "args":{"tool_id":"tool-real", "tool_version":1}}, {**TOOL,"active":False}),
+])
+def test_direct_describe_keeps_actual_cas_version_and_active_guards(tmp_path, step, tool):
+    seen = invoke(tmp_path, [{"name":"describe_media_script_tool", "args":{"tool_id":"tool-real"}}, step], tool=tool)
+    assert seen["results"][0]["ok"] and not seen["results"][1]["ok"]
+    assert all(call["method"] == "GET" for call in seen["calls"])
+
+
+def test_real_codemode_reads_image_and_tool_objects_without_json_parsing(tmp_path):
+    code = """const sourcePage = await tools.read_task_graphic_sources({});
+const toolPage = await tools.list_media_script_tools({});
+const tool = await tools.describe_media_script_tool({tool_id:toolPage.items[0].tool_id});
+const preview = await tools.preview_media_script_tool({tool_id:tool.tool_id,tool_version:tool.version,parameters:{color:'red'},input_refs:[]});
+const job = await tools.read_task_media_job({job_id:preview.media_job.job_id});
+text({source_ref:sourcePage.items[0].source_ref,tool_version:tool.version,status:job.media_job.status});"""
+    seen = invoke(tmp_path, [], code=code)
+    result = seen["results"][0]["result"]
+    assert not result.get("isError")
+    receipts = result["details"]["business_receipts"]
+    assert len(receipts) == 5 and all(not receipt["is_error"] for receipt in receipts)
+    assert receipts[0]["result"]["items"][0] == {key:value for key,value in SOURCE.items() if key != "applied"}
+    assert receipts[1]["result"]["items"][0]["tool_id"] == "tool-real"
+    assert receipts[2]["result"]["parameter_schema"] == TOOL["parameter_schema"]
+    assert receipts[4]["result"]["media_job"]["status"] == "succeeded"
+    assert receipts[4]["result"]["media_job"]["result"]["applied"] is False
 
 
 @pytest.mark.parametrize("recorded", [False, True])
