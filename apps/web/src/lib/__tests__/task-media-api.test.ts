@@ -1,12 +1,50 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cancelCreationTaskMediaJob, getCreationTaskMediaJob, listenCreationTaskAudio, resolveCreationTaskMediaResponse, TaskMediaJobError, listCreationTaskMediaJobs, taskMediaJobMatchesContext, taskMediaJobLabel } from "../api";
-import type { TaskMediaJob } from "../types";
+import { cancelCreationTaskMediaJob, getCreationTaskMediaJob, listenCreationTaskAudio, resolveCreationTaskMediaResponse, TaskMediaJobError, listCreationTaskMediaJobs, taskMediaJobMatchesContext, taskMediaJobLabel, taskMediaResourceCheckLabel } from "../api";
+import type { ResourceAdmissionReceipt, TaskMediaJob } from "../types";
 import { LOCAL_MEMBER_TOKEN_HEADER, LOCAL_MEMBER_TOKEN_STORAGE_KEY } from "../local-member-auth";
 
 const queued: TaskMediaJob = { operation: "audio_listen", target_refs: [], input_digest: "opaque-digest", created_at: "2026-10-11T10:00:00Z", job_id: "job-one", status: "queued", result_kind: "audio_listen",
   result_url: "/api/creation-tasks/task-one/media-jobs/job-one", device_request_id: "device-one",
-  waiting_reason: "等待设备空闲", base_version_id: "version-one", result: null, failure_reason: null, repair_action: null };
+  waiting_reason: "等待设备空闲", base_version_id: "version-one", result: null, failure_reason: null, repair_action: null, resource_wait: null };
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); window.localStorage.clear(); });
+
+const resourceReceipt: ResourceAdmissionReceipt = {
+  observation_id: "observation-one", device_request_id: "device-one", task_id: "task-one", job_id: "job-one",
+  input_digest: "opaque-digest", base_version_id: "version-one", attempt_number: 1, last_grant_generation: null,
+  phase: "admission", observation_kind: "first_refused", checked_at: "2026-10-13T01:02:03Z",
+  observed_interval_seconds: 0.1, context: "pending_request", admitted: false,
+  checks: [{metric: "cpu_percent", unit: "percent", actual: 95.6, minimum: null, maximum: 91, passed: false}],
+  summary: "首次检查时 CPU 使用率超过门限。", repair_action: "请等待设备资源恢复后查询原请求。",
+};
+
+it("keeps the same-request first observation through authorized job, list and cancellation reads", async () => {
+  const pending = {...queued, waiting_reason: "resource_busy", resource_wait: resourceReceipt};
+  const history = {...pending, status: "cancelled", waiting_reason: null,
+    resource_wait: {...resourceReceipt, context: "history"}};
+  const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(pending)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({items: [pending], next_cursor: null})))
+    .mockResolvedValueOnce(new Response(JSON.stringify(history)));
+  vi.stubGlobal("fetch", fetch);
+  expect(await getCreationTaskMediaJob("task-one", "job-one")).toEqual(pending);
+  expect(await listCreationTaskMediaJobs("task-one")).toEqual({items: [pending], next_cursor: null});
+  expect(await cancelCreationTaskMediaJob("task-one", "job-one")).toEqual(history);
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(resourceReceipt.last_grant_generation).toBeNull();
+  expect(resourceReceipt.checked_at).toBe("2026-10-13T01:02:03Z");
+});
+
+it("formats only recorded metric values and thresholds, keeping unknown distinct from zero", () => {
+  expect(taskMediaResourceCheckLabel({metric: "cpu_percent", unit: "percent", actual: 95.6,
+    minimum: null, maximum: 91, passed: false})).toBe("CPU 使用率：实测 95.6%；不高于 91%；检查未通过。");
+  expect(taskMediaResourceCheckLabel({metric: "available_memory_bytes", unit: "bytes", actual: null,
+    minimum: 3221225472, maximum: null, passed: null})).toBe("可用内存：实测值未知；至少 3,221,225,472 字节；检查结果未知。");
+  expect(taskMediaResourceCheckLabel({metric: "swap_used_bytes", unit: "bytes", actual: 0,
+    minimum: null, maximum: 0, passed: true})).toBe("交换空间使用量：实测 0 字节；不高于 0 字节；符合门限。");
+  expect(taskMediaResourceCheckLabel({metric: "disk_free_bytes", unit: "bytes", actual: 100,
+    minimum: 200, maximum: null, passed: false})).toBe("磁盘剩余空间：实测 100 字节；至少 200 字节；检查未通过。");
+  expect(taskMediaResourceCheckLabel({metric: "disk_io_bytes_per_second", unit: "bytes_per_second", actual: 12.5,
+    minimum: null, maximum: 10, passed: false})).toBe("磁盘读写速度：实测 12.5 字节/秒；不高于 10 字节/秒；检查未通过。");
+});
 
 it("recognizes registered script image-source recovery without requiring editor target refs or treating it as an edit", () => {
   const graphic: TaskMediaJob = {...queued, operation: "media_script_tool_preview", result_kind: "graphic_source",

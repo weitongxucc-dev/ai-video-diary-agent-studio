@@ -1658,6 +1658,37 @@ export type TaskMediaResultMap = {
   waveform: { peaks: number[]; seconds_per_peak: number };
 };
 
+export type ResourceAdmissionCheck = {
+  actual: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  passed: boolean | null;
+} & (
+  | { metric: "cpu_percent"; unit: "percent" }
+  | { metric: "available_memory_bytes" | "swap_used_bytes" | "disk_free_bytes"; unit: "bytes" }
+  | { metric: "disk_io_bytes_per_second"; unit: "bytes_per_second" }
+);
+
+export type ResourceAdmissionReceipt = {
+  observation_id: string;
+  device_request_id: string;
+  task_id: string;
+  job_id: string;
+  input_digest: string;
+  base_version_id: string | null;
+  attempt_number: number;
+  last_grant_generation: number | null;
+  phase: "admission";
+  observation_kind: "first_unknown" | "first_refused";
+  checked_at: string;
+  observed_interval_seconds: number | null;
+  context: "pending_request" | "history";
+  admitted: null | false;
+  checks: ResourceAdmissionCheck[];
+  summary: string;
+  repair_action: string;
+};
+
 export type TaskMediaJob = {
   operation: string;
   target_refs: string[];
@@ -1673,6 +1704,7 @@ export type TaskMediaJob = {
   result: TaskMediaResultMap[keyof TaskMediaResultMap] | null;
   failure_reason: string | null;
   repair_action: string | null;
+  resource_wait: ResourceAdmissionReceipt | null;
 };
 
 export type TaskMediaJobPage = { items: TaskMediaJob[]; next_cursor: string | null };

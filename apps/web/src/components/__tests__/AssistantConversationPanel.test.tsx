@@ -4,7 +4,7 @@ import { AssistantConversationPanel } from "../AssistantConversationPanel";
 import { referenceAssistantKnowledge, referenceAssistantMaterial } from "@/lib/assistant-reference";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
-import type { AssistantConversation, AssistantStreamEvent } from "@/lib/types";
+import type { AssistantConversation, AssistantStreamEvent, ResourceAdmissionReceipt } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
   getAssistantCapabilities: vi.fn(),
@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@/lib/api", async importOriginal => ({
   ...api,
   taskMediaJobLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaJobLabel,
+  taskMediaResourceCheckLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaResourceCheckLabel,
   getAssistantCapabilities: api.getAssistantCapabilities.mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
     pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0",
@@ -296,7 +297,138 @@ describe("actual goal progress", () => {
   });
 });
 
+const resourceReceipt: ResourceAdmissionReceipt = {
+  observation_id: "resource-observation", device_request_id: "device-request", task_id: "task-one", job_id: "job-preview",
+  input_digest: "frozen-input", base_version_id: "version-base", attempt_number: 1, last_grant_generation: null,
+  phase: "admission", observation_kind: "first_refused", checked_at: "2026-10-13T01:02:03Z",
+  observed_interval_seconds: 0.1, context: "pending_request", admitted: false,
+  checks: [{metric: "cpu_percent", unit: "percent", actual: 95.6, minimum: null, maximum: 91, passed: false},
+    {metric: "available_memory_bytes", unit: "bytes", actual: 1073741824, minimum: 3221225472, maximum: null, passed: false}],
+  summary: "首次检查时设备资源余量不足，本请求仍在等待。", repair_action: "请等待资源恢复后查询原请求。",
+};
+
 describe("persisted business result cards", () => {
+  it("shows the first same-request refusal beside the current wait and preserves the next draft", () => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, waiting_reason: "resource_busy", resource_wait: resourceReceipt};
+    const original = structuredClone(saved);
+    const onInput = vi.fn(), onSend = vi.fn();
+    const rendered = render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={onInput}
+      onSend={onSend} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    const receipt = within(details).getByText("首次资源检查 · 未通过").closest("details")!;
+    expect(details).toHaveAttribute("open");
+    expect(receipt).toHaveAttribute("open");
+    expect(within(details).getByText("等待处理：本机资源余量不足，正在等待满足制作条件。")).toBeVisible();
+    expect(within(receipt).getByText(resourceReceipt.summary)).toBeVisible();
+    expect(within(receipt).getByText("CPU 使用率：实测 95.6%；不高于 91%；检查未通过。")).toBeVisible();
+    expect(within(receipt).getByText("可用内存：实测 1,073,741,824 字节；至少 3,221,225,472 字节；检查未通过。")).toBeVisible();
+    expect(rendered.container.querySelector('time[datetime="2026-10-13T01:02:03Z"]')).toHaveTextContent("2026/10/13 01:02:03 UTC");
+    expect(within(receipt).getByText("采样窗口：0.1 秒。")).toBeVisible();
+    expect(within(receipt).getByText(resourceReceipt.repair_action)).toBeVisible();
+    expect(details).not.toHaveTextContent(/实时|当前 CPU|预览已生成|device-request|frozen-input/);
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    expect(onInput).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(saved).toEqual(original);
+  });
+
+  it("follows an arriving receipt for the same queued Job and preserves reading when it becomes history", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0, height = 600;
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      frames.set(++frameId, callback); return frameId;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(id => { frames.delete(id); });
+    const paint = () => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); };
+    const reading = {historyScrollPositions: {current: new Map<string, number>()},
+      historyFollowBottom: {current: new Map<string, boolean>()},
+      historyExpandedDetails: {current: new Map<string, Map<string, boolean>>()}};
+    const saved = projectedTaskConversation("queued");
+    const panel = (conversation: AssistantConversation) => <AssistantConversationPanel state={state({conversation, ...reading})}
+      input="保留下一条草稿" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    try {
+      const view = render(panel(saved));
+      const history = screen.getByLabelText("持久对话记录");
+      Object.defineProperties(history, {clientHeight: {configurable: true, value: 200},
+        scrollHeight: {configurable: true, get: () => height}});
+      act(paint);
+      history.scrollTop = 400;
+      fireEvent.scroll(history);
+      const pending = structuredClone(saved);
+      const response = pending.turns[0].result!.response as Record<string, unknown>;
+      response.media_job = {...response.media_job as Record<string, unknown>, resource_wait: resourceReceipt};
+      height = 1000;
+      view.rerender(panel(pending));
+      act(paint);
+      expect(history.scrollTop).toBe(800);
+      expect(screen.getByText(resourceReceipt.summary)).toBeVisible();
+      history.scrollTop = 120;
+      fireEvent.scroll(history);
+      const cancelled = structuredClone(pending);
+      const cancelledResponse = cancelled.turns[0].result!.response as Record<string, unknown>;
+      cancelledResponse.media_job = {...cancelledResponse.media_job as Record<string, unknown>, status: "cancelled",
+        resource_wait: {...resourceReceipt, context: "history"}};
+      view.rerender(panel(cancelled));
+      act(paint);
+      expect(history.scrollTop).toBe(120);
+      expect(screen.getByText("历史资源检查 · 未通过").closest("details")).not.toHaveAttribute("open");
+      expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    } finally { request.mockRestore(); cancel.mockRestore(); }
+  });
+
+  it("shows unknown first observations without manufacturing a refusal, values or a sampling window", () => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    const receipt: ResourceAdmissionReceipt = {...resourceReceipt, observation_kind: "first_unknown", admitted: null,
+      observed_interval_seconds: null, summary: "首次检查时暂不能可靠读取可用内存。", checks: [{
+        metric: "available_memory_bytes", unit: "bytes", actual: null, minimum: 3221225472, maximum: null, passed: null}]};
+    response.media_job = {...response.media_job as Record<string, unknown>, waiting_reason: "resource_unknown", resource_wait: receipt};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const record = screen.getByText("首次资源检查 · 暂未核实").closest("details")!;
+    expect(record).toHaveAttribute("open");
+    expect(within(record).getByText("可用内存：实测值未知；至少 3,221,225,472 字节；检查结果未知。")).toBeVisible();
+    expect(record).not.toHaveTextContent(/实测 0|检查未通过|采样窗口|预览已生成/);
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+  });
+
+  it.each([
+    ["cancelled", "cancelled", "后台处理已取消，未据此应用修改。"],
+    ["stale", "expired", "原修改结果已过期，仅保留为历史，不能沿旧版本应用。"],
+    ["succeeded", "proposed", "实际修改预览已返回，等待你查看并决定是否采用；当前草稿尚未改变。"],
+  ])("keeps %s state while putting its prior refusal in history", (status, outcome, label) => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, status, waiting_reason: null,
+      resource_wait: {...resourceReceipt, context: "history", summary: "首次检查时设备资源余量不足。"}};
+    if (status === "succeeded") response.edit_preview = {proposal: {id: "proposal-preview", status: "proposed"}};
+    saved.turns[0].result!.continuation = {type: "business_result", status: outcome, actionable: outcome === "proposed"};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    const history = within(details).getByText("历史资源检查 · 未通过").closest("details")!;
+    expect(within(details).getByText(label)).toBeVisible();
+    expect(history).not.toHaveAttribute("open");
+    expect(within(history).getByText("首次检查时设备资源余量不足。")).not.toBeVisible();
+    fireEvent.click(within(history).getByText("历史资源检查 · 未通过"));
+    expect(within(history).getByText("这是该请求的历史检查记录，不能代表当前设备资源或执行许可。")).toBeVisible();
+    expect(within(history).getByText("CPU 使用率：实测 95.6%；不高于 91%；检查未通过。")).toBeVisible();
+    expect(screen.queryByText(/等待处理：|首次资源检查 ·/)).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+  });
+
+  it.each([null, undefined])("keeps generic waiting text when resource_wait is %s", resource_wait => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, waiting_reason: "resource_busy", resource_wait};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText("等待处理：本机资源余量不足，正在等待满足制作条件。")).toBeVisible();
+    expect(screen.queryByText(/首次资源检查|历史资源检查|CPU|字节|首次检查时间/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ["resource_busy", "本机资源余量不足，正在等待满足制作条件。"],
     ["resource_unknown", "暂不能确认设备资源是否足够。"],

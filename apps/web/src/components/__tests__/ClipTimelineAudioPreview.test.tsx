@@ -45,7 +45,7 @@ it("hides a successful mix when its base changes", async () => {
 });
 
 it("shows resource waiting without a player until the persistent mix succeeds", async () => {
-  const job = { operation: "audio_listen", target_refs: [], input_digest: "opaque", created_at: "2026-10-11T10:00:00Z", job_id: "mix-job", status: "queued" as const, result_kind: "audio_listen" as const, result_url: "/api/creation-tasks/task/media-jobs/mix-job", device_request_id: null, waiting_reason: "等待设备空闲", base_version_id: "version", result: null, failure_reason: null, repair_action: null };
+  const job = { operation: "audio_listen", target_refs: [], input_digest: "opaque", created_at: "2026-10-11T10:00:00Z", job_id: "mix-job", status: "queued" as const, result_kind: "audio_listen" as const, result_url: "/api/creation-tasks/task/media-jobs/mix-job", device_request_id: null, waiting_reason: "等待设备空闲", base_version_id: "version", result: null, failure_reason: null, repair_action: null, resource_wait: null };
   vi.mocked(listenCreationTaskAudio).mockResolvedValueOnce(job);
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...job, status: "succeeded", result: { audio_url: "/persisted-mix.wav" } }))));
   render(<ClipTimelineAudioPreview taskId="task" versionId="version" start={4} end={7} busy={false} />);
@@ -57,7 +57,7 @@ it("shows resource waiting without a player until the persistent mix succeeds", 
 });
 
 it("cancels the persistent mix without showing an error or player", async () => {
-  const job = { operation: "audio_listen", target_refs: [], input_digest: "opaque", created_at: "2026-10-11T10:00:00Z", job_id: "mix-job", status: "queued" as const, result_kind: "audio_listen" as const, result_url: "/api/creation-tasks/task/media-jobs/mix-job", device_request_id: null, waiting_reason: null, base_version_id: "version", result: null, failure_reason: null, repair_action: null };
+  const job = { operation: "audio_listen", target_refs: [], input_digest: "opaque", created_at: "2026-10-11T10:00:00Z", job_id: "mix-job", status: "queued" as const, result_kind: "audio_listen" as const, result_url: "/api/creation-tasks/task/media-jobs/mix-job", device_request_id: null, waiting_reason: null, base_version_id: "version", result: null, failure_reason: null, repair_action: null, resource_wait: null };
   vi.mocked(listenCreationTaskAudio).mockResolvedValueOnce(job);
   const fetch = vi.fn(async () => new Response(JSON.stringify({ ...job, status: "cancelled" })));
   vi.stubGlobal("fetch", fetch);

@@ -9,8 +9,8 @@ import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
-import { getAssistantCapabilities, taskMediaJobLabel } from "@/lib/api";
-import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure } from "@/lib/types";
+import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
+import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
 
@@ -303,6 +303,21 @@ function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefine
         : `可复用图片工具${name}${version}已保存；尚未应用图片或生成成片。`;
 }
 
+function ResourceWaitReceipt({ receipt, reading, readingKey }: {
+  receipt: ResourceAdmissionReceipt; reading?: ReadingState; readingKey: string;
+}) {
+  const historical = receipt.context === "history";
+  return <ReadingDetails reading={reading} readingKey={readingKey} defaultOpen={!historical}>
+    <summary>{historical ? "历史资源检查" : "首次资源检查"} · {receipt.observation_kind === "first_unknown" ? "暂未核实" : "未通过"}</summary>
+    <p>首次检查时间：<time dateTime={receipt.checked_at}>{new Date(receipt.checked_at).toLocaleString("zh-CN", { timeZone: "UTC", hour12: false })} UTC</time></p>
+    <p>{receipt.summary}</p>
+    {historical ? <p>这是该请求的历史检查记录，不能代表当前设备资源或执行许可。</p> : null}
+    {receipt.observed_interval_seconds !== null ? <p>采样窗口：{receipt.observed_interval_seconds.toLocaleString("zh-CN", { maximumFractionDigits: 20 })} 秒。</p> : null}
+    {receipt.checks.length ? <ul aria-label="首次资源检查数值">{receipt.checks.map(check => <li key={check.metric}>{taskMediaResourceCheckLabel(check)}</li>)}</ul> : null}
+    {receipt.repair_action ? <p>{receipt.repair_action}</p> : null}
+  </ReadingDetails>;
+}
+
 function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
@@ -370,6 +385,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {mediaJobLabel ? <p>{mediaJobLabel}</p> : continuation?.waiting_reason || job?.waiting_reason
         ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
       {job?.status !== "cancelled" && job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
+      {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <button type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</button> : null}
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}
@@ -462,6 +478,7 @@ export function AssistantConversationPanel({
   const goalProgress = assistantConversationGoal(conversation);
   const historyContent = JSON.stringify(turns.map(turn => [turn.id, turn.status, turn.updated_at, turn.assistant_text,
     turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
+    assistantTaskTurnResult(turn)?.response?.media_job?.resource_wait,
     assistantTaskTurnResult(turn)?.response?.edit_request?.status, assistantTaskTurnResult(turn)?.response?.execution_status,
     turn.result?.goal_continuation]));
   const latestHistoryContent = useRef(historyContent);

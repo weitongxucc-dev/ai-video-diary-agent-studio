@@ -1,4 +1,4 @@
-import type { TaskMediaJob, TaskMediaResultMap, TaskMediaJobPage } from "./types";
+import type { ResourceAdmissionCheck, TaskMediaJob, TaskMediaResultMap, TaskMediaJobPage } from "./types";
 import type { HomeAggregation, ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrant, KnowledgeGrantState, PublishPlatformCapability, PlatformBrowserAccount, PlatformPublishJob, PublishPlatform } from "./types";
 import type { VideoTemplate, AudioEditInput, CreationTaskRecording } from "./types";
 import { ensureLocalMemberIdentity, localMemberTokenHeader, readLocalMemberToken } from "./local-member-auth";
@@ -1547,6 +1547,23 @@ export function taskMediaJobLabel(job: TaskMediaJob): string {
   if (job.status === "stale") return "输入已变化，请重新预览";
   if (job.status === "failed") return "预览未完成";
   return "预览已生成";
+}
+
+export function taskMediaResourceCheckLabel(check: ResourceAdmissionCheck): string {
+  const metricLabels: Record<ResourceAdmissionCheck["metric"], string> = {
+    cpu_percent: "CPU 使用率",
+    available_memory_bytes: "可用内存",
+    swap_used_bytes: "交换空间使用量",
+    disk_free_bytes: "磁盘剩余空间",
+    disk_io_bytes_per_second: "磁盘读写速度",
+  };
+  const value = (amount: number) => `${amount.toLocaleString("zh-CN", { maximumFractionDigits: 20 })}${check.unit === "percent" ? "%" : check.unit === "bytes" ? " 字节" : " 字节/秒"}`;
+  return [
+    `${metricLabels[check.metric]}：${check.actual === null ? "实测值未知" : `实测 ${value(check.actual)}`}`,
+    check.minimum === null ? null : `至少 ${value(check.minimum)}`,
+    check.maximum === null ? null : `不高于 ${value(check.maximum)}`,
+    check.passed === null ? "检查结果未知" : check.passed ? "符合门限" : "检查未通过",
+  ].filter(Boolean).join("；") + "。";
 }
 
 export class TaskMediaJobError extends Error {
