@@ -14,15 +14,28 @@ S2开发遵循用户2026-10-13最新指令：root担任总控，不再调动内�
 
 当前产品基线1a148dacd420975c4a5c2f764f52e602c23f39c2已push；主控归属提交47adb27e7dd5c69e10900868bb3f6ccc968b4028已核，工作树干净。所有内部Agent租约永久结束，三个可见worker此前所有租约撤销。新总控正常GET原API确认task29/gain0/ready、history29及running0/waiting3与交接回执一致；原app保持运行。下方历史记录不给写权。
 
-### 当前有限工作：#142接口与实测方法（CONTROL-142-DESIGN）
+### 当前实现：同请求资源回执（CONTROL-142-P1）
 
-本阶段只收敛已批准主交付的必要阻断，不改变产品范围、预算数值、原配置、服务或用户任务。绑定上述产品源码与架构§3.12/3.13、领域§6/7、产品§2.5/2.6及DESIGN§4.4/7。QA根为/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013。以下新租约须先REBASE_ACK；ACK符合时可直接开始所列只读工作，源码/媒体/服务/HOLD仍未解除。
+用户已要求继续；主控冻结本必要接口后直接实施，不等短preview预算方案，也不在阶段通过时交回。产品基线1a148da、治理前序ba41060；绑定架构§3.12/3.13、领域§6/7、产品§2.5/2.6及DESIGN§2/4.4/7。QA根仍为/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013。CONTROL-142-DESIGN旧只读租约已结束；旧提案仅保留作证据，下述主控修正优先。所有新Owner先按本次治理SHA完成REBASE_ACK，符合后可直接开始所列实现/审核，不另等START；服务、真实媒体、原配置和用户数据操作继续HOLD。
 
-- 编码01a13533-b38c-7430-a2de-cb419e2340d6（曜核：调色预览范围修复）：只读目标源码，唯一写QA根resource-wait-implementation-proposal.md/json。先交付同request的admission原始决定→同事务既有持久入口→安全DTO→GET及会话消费者的最小精确接口；再给sealed单clip≤5秒/silent/0overlay专属preview的facts/admission/runtime/producer一致选链与完整进程组/临时盘/时限/主机趋势标定方法。初次未grant的generation为null；禁止借日志、全局latest、其它Job或resources_json封存输入当回退。未知标定保持拒绝，不填猜测预算。列明实际源码/直接测试文件供总控冻结后另授实现租约。本阶段不写源码、不跑测试/构建、不import main、不启服务/GUI、不操作DB/任务/env/Git/Issue。
-- 独立审核01a13533-cec4-70d2-aa5d-ab5bb6c6aefd（曜核：自动接续与中栏独立审核）：只读1a中文状态窄diff和最新1a真实320/360取消截图/回执，唯一写QA根visible-review-1a148da.md/json，原visible-review证据保留。分清取消已证与等待/成功scope未证。上述proposal产出后可直接只读审核请求/输入版本/attempt/时点/身份绑定、同事务、历史及取消/失效/重启语义；提出具体阻断，不代替总控冻结接口。不重复已充分的108/18项检查，不写源码/共享文档/Git/Issue、不启服务或操作GUI/数据。
-- QA01a13533-e91f-7482-acce-f5968e52fae5（曜核：真实视频闭环与试用打包）：唯一写QA根host-resource-readonly-trend.json及preview-calibration-plan.md。仅做一次低负载约60秒的聚合主机数值观察，并核操作系统只读压力指标的语义；原app保持运行，记录CPU/可用内存/swap存量与可得换入换出增量/压力/IO及采样窗口，缺指标标unknown。不给当前Job制造admission，不运行媒体或benchmark，不退出app/启动服务，不读或复制凭据/DB/env，不改任务/门/profile/Git/Issue。计划使用现有许可入口与完整身份进程组测量，写清现门若拒绝如何停、需要什么有依据的政策决定；不得shell绕许可或把本次闲置趋势称为preview标定。
+#### 冻结接口与验收
 
-总控唯一负责精确接口及共享权威冻结、Git/Issue/PR同步、后续源码/服务/真实任务租约和验收放行；只读阶段完成后继续已授权实现，不另问是否开始。四项主交付欠账保持，打包仍须同候选真实验收通过。
+- ResourceProbe.admit返回含verdict/declared/checks/reason/observed_interval_seconds的结构协议，HostResourceProbe返回同一次HostResourceDecision；不接受裸bool的生产兼容或再次采样。continue_unit/released语义不变。DeviceScheduler/build_device_runtime显式传入admission_recorder(conn,request,decision,checked_at)，本包TaskMediaJobs.record_admission在原调度事务验证并append原TaskEvent；写入失败整事务回滚、不发grant。其它明确不属TaskMedia的单元不制造本包回执。
+- 事件键封存request/workspace/member/actor scope摘要/task/Job/input/unit/baseVersion/attempt/观察时last_grant_generation/phase/观察类别；初次未grant的last代是null，不能预测next或猜previous代。每代首次unknown及首次refused各一条，最多2条；同类重复采样/GET不刷新值、时点或追加。以此取代旧提案每代仅一条first_non_admitted，避免首次unknown吞掉后来真实拒绝。
+- production.py只增加get_task_event可选connection用于同事务去重，以及latest_task_resource_admission(workspace,task,job,request_id,connection=None)的同Job/请求/事件类型有界历史查询（LIMIT 1）；不能扫描全部task events或取全局latest。回读后重新核原actor/input/unit/baseVersion及观察时身份。当前resource_busy取当前attempt/last代首refused，resource_unknown取首unknown；其它情况只回读准确同request历史，缺记录为null。grant代变化、重试、取消及失效不导致旧事件消失，也不复活旧等待。
+- TaskMediaJobResponse增加resource_wait: ResourceAdmissionReceipt|null。冻结字段：observation_id/device_request_id/task_id/job_id/input_digest；base_version_id可null；attempt_number≥1、last_grant_generation可null；phase=admission；observation_kind=first_unknown|first_refused；checked_at为观察UTC时点；observed_interval_seconds为正有限秒或null；context=pending_request|history；admitted=null|false。checks最多5项，metric限定cpu_percent/available_memory_bytes/swap_used_bytes/disk_free_bytes/disk_io_bytes_per_second，unit限定percent/bytes/bytes_per_second且与指标对应，actual/minimum/maximum为非负有限数或null，passed为bool或null。summary≤480/repair_action≤160为固定普通中文，明确“首次检查”及其时点；不宣称实时或已获许可。磁盘只给安全聚合值，不暴露路径；缺失/不可靠值明确未知，不伪造0。
+- main._task_media_job_response及其GET/list/async/cancel/retry、等待会话和终态直接会话消费者共享安全回读；各自原业务status/结果/采用/权限保持，不为复用helper把expired等历史状态改成成功。已完成来源无同request事实保持null。资源phase=admission不解释后来的运行故障，不从日志、其它Job或QA快照补值，也不改resources_json封存输入。
+- Web只消费该typedDTO和服务端安全summary/action/时点；保留taskMediaJobLabel的真实当前状态，pending资源检查与当前等待分别表达，history放现有结果详情，不给取消/失效/成功覆盖旧拒绝。无回执仍用真实中文通用状态，不另建状态库、客户端理由猜测、轮询器或自动重试，不动草稿/原历史/CSS布局。
+- 最小后端验证使用pytest隔离TMP：一次真实探针拒绝→同事务回执和等待/无grant媒体；unknown→refused产生2条、同类重复仍2条；写失败回滚；跨actor/Job/input不串；null初代/下一attempt/准入后历史/取消失效/重启回读；GET与等待/终态会话安全投影一致且不泄密。Web直接验证pending/history/unknown/无记录/取消/过期及草稿保持。测试/构建不替代后续同候选真实320/360等待/取消与新片成功链。
+
+#### 独占文件与报告
+
+- API编码01a13533-b38c-7430-a2de-cb419e2340d6（曜核：调色预览范围修复）：唯一写apps/api/app/{device_scheduler.py,device_runtime.py,host_resource_probes.py,task_audio.py,schemas.py,main.py,production.py}。直接测试owned：apps/api/tests/{test_host_resource_probes.py,test_device_scheduler.py,test_device_runtime.py,test_device_runtime_wiring.py,test_task_media_grants.py,test_task_media_api.py}。为同一admit返回契约仅准同步真实测试替身：tests/{test_narration_edit_execution.py,test_material_ingestion.py,test_profile_api_contract.py,test_platform_publish.py,test_material_probe.py,_media_preview_test_fixtures.py}；均在apps/api。新增消费者先报具体路径。不写Web/共享文档/profile/预算/Git/Issue，不standalone import main、不用原DB/env、不启服务或真实Job。P1先完成实施与直接最小检查、回报精确diff/未验/RELEASE；P2设计不阻断本包。
+- Web编码01a135a1-7931-7d83-8b88-32b5ab01e3bb（曜核：资源等待原因界面实现）：唯一写apps/web/src/lib/{types.ts,api.ts}、components/AssistantConversationPanel.tsx以及现有components/__tests__/AssistantConversationPanel.test.tsx、lib/__tests__/task-media-api.test.ts。按design-md完整读DESIGN一次，复用原组件/标签/细节区域。仅目标测试、tsc和目标lint，不build/启服务/GUI，不写API/共享文档/草稿数据/Git/Issue；报告可见表达设计、精确diff/检查/未验/RELEASE。冻结字段不因后端文件正在写而自猜。
+- 独立审核01a13533-cec4-70d2-aa5d-ab5bb6c6aefd：只读本包接口与完成后的实际diff/证据，唯一写QA根visible-review-142-p1.md/json，保留旧visible-review-1a证据。未RELEASE源码不作最终验收，可先查冻结规则及直接消费者；不重复充分检查、不改源码/共享文档/Git/Issue、不服务/GUI/用户数据。首unknown/后refused、同事务、generation历史、两会话业务状态及敏感字段为重点。
+- QA01a13533-e91f-7482-acce-f5968e52fae5：前阶段只读趋势和标定计划已RELEASE，原app保持运行；等待主控给同候选服务/GUI/正常可撤销任务操作新租约。此前服务及真实任务租约不自恢复，不再次采样或启动媒体。主控可在其回报后给精确脚本准备范围；新资源profile和swap政策尚未核准，不猜数值或绕许可。
+
+总控独占共享权威/合同、Git/Issue/PR、候选与真实服务/用户任务租约和验收放行。各文件一writer，代码RELEASE后总控审diff并集中相关集成验证；真实候选通过后才打本人包。四项主交付欠账及#142短preview完整标定保持，不把本包诊断回执完成当整个目标完成。
 
 定点启动附件=/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013/主控交接-20261013.md（本机临时附件，不是产品权威）。新主控必须核最后安全状态、HEAD/dirty与用户新动作。user已授权可见线程互相发送交接ACK/证据。当前主交付还未完成：原成功Job自动观察、连续两次真实新片、保存/redo/候选重启及新包欠账；#142短预览准入/同request安全原因是首要阻断，不能把code/test/scope声明/旧输出恢复当交付。#117唯一动态总览，既有DraftPR124不merge/发布。
 
