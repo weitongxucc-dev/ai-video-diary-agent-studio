@@ -90,7 +90,8 @@ def test_probe_parser_rejects_malformed_unbounded_or_invalid_duration() -> None:
 
 class _Resources:
     def admit(self, request):
-        return True
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(True, dict(request.resources), {})
 
     def continue_unit(self, grant):
         return True

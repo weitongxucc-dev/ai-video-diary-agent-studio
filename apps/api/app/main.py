@@ -4408,6 +4408,20 @@ def _task_media_outputs_current(job):
     return True
 
 
+def _task_media_device_request(job, actor, runtime):
+    with production_repo._connect() as conn:
+        row = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
+            "AND owner_type='creation_job' AND owner_id=? AND input_digest=? AND unit_key=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (job.workspace_id, job.id, job.input_digest, f"task_media:{job.input_digest}")).fetchone()
+    if row is None:
+        return None, {}
+    view = runtime.scheduler.view_for(row["id"], actor)
+    if view.get("id", view.get("request_id")) != row["id"]:
+        return None, {}
+    return runtime.scheduler._request(row), view
+
+
 def _task_media_job_response(media, job, actor, runtime):
     from app.schemas import TaskMediaJobResponse
     current, event = media.read(job.workspace_id, job.id)
@@ -4422,12 +4436,9 @@ def _task_media_job_response(media, job, actor, runtime):
     if status == "succeeded":
         result = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
     device_request_id = waiting_reason = None
-    with production_repo._connect() as conn:
-        row = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' AND owner_id=? ORDER BY created_at DESC LIMIT 1",
-                           (job.workspace_id, job.id)).fetchone()
-    if row:
-        view = runtime.scheduler.view_for(row["id"], actor)
-        device_request_id = view.get("id", view.get("request_id"))
+    device_request, view = _task_media_device_request(job, actor, runtime)
+    if device_request is not None:
+        device_request_id = device_request.id
         waiting_reason = view.get("wait_reason")
     payload = event["arguments"].get("payload", {})
     refs = payload.get("selected_object_refs", [])
@@ -4448,6 +4459,7 @@ def _task_media_job_response(media, job, actor, runtime):
         operation=event["operation"], target_refs=refs, input_digest=job.input_digest, created_at=job.created_at,
         result_url=f"/api/creation-tasks/{job.task_id}/media-jobs/{job.id}", base_version_id=event["input_facts"]["base_version_id"],
         device_request_id=device_request_id, waiting_reason=waiting_reason, result=result,
+        resource_wait=media.resource_admission_receipt(current, event, actor, device_request, status),
         failure_reason="result_invalid" if result_invalid else current.failure_reason,
         repair_action="本次媒体文件已丢失或变化；请恢复原文件。系统不会重渲染已提交产物。" if result_invalid else current.repair_action).model_dump(mode="json")
 
@@ -19913,6 +19925,7 @@ def _build_device_components(*, repository: ProductionRepository):
         registrations=registrations,
         resources=resources,
         processes=processes,
+        admission_recorder=task_media.record_admission,
         # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
         activity_source_reliable=True,
     )
@@ -20752,11 +20765,14 @@ def _project_assistant_business_candidate(candidate):
         message = "媒体处理未完成，当前草稿保持不变；请查看作业原因。"
     if job is not None:
         from app.schemas import TaskMediaJobResponse
+        media = device_runtime.registrations["creation_job"].owner.task_media
+        device_request, _view = _task_media_device_request(job, actor, device_runtime)
         response_patch["media_job"] = TaskMediaJobResponse(job_id=job.id,
             status=status if status in {"failed", "cancelled", "stale"} else job.status,
             operation=start["operation"], input_digest=job.input_digest, created_at=job.created_at,
             result_kind=start["result_kind"], base_version_id=base_version,
             failure_reason=job.failure_reason, result=media_result if event["actionable"] or status == "succeeded" else None,
+            resource_wait=media.resource_admission_receipt(job, start, actor, device_request, status),
             result_url=f"/api/creation-tasks/{task_id}/media-jobs/{job.id}").model_dump(mode="json")
     if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
             response_patch=response_patch, message=message):

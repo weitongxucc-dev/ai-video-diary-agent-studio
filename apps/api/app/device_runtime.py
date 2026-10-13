@@ -22,6 +22,7 @@ from app.device_scheduler import (
     ProcessProbe,
     RecoveryBlocked,
     ResourceProbe,
+    ResourceAdmissionWrite,
     RetryReason,
     SessionHeartbeat,
     SubmissionIntent,
@@ -235,6 +236,7 @@ def build_device_runtime(
     processes: ProcessProbe,
     activity_source_reliable: bool = False,
     poll_interval_seconds: float = 1.0,
+    admission_recorder: ResourceAdmissionWrite | None = None,
 ) -> DeviceRuntime:
     """Build only from explicit trusted adapters; never supply permissive probes."""
     if not database_path or not device_lock_path or device_access is None or resources is None or processes is None:
@@ -261,6 +263,7 @@ def build_device_runtime(
     try:
         scheduler = DeviceScheduler(database, lock_path, owners=OwnerRouter(registered, device_access),
                                     resources=resources, processes=processes,
+                                    admission_recorder=admission_recorder,
                                     activity_source_reliable=activity_source_reliable)
     except ValueError as exc:
         raise RuntimeUnavailable(str(exc)) from exc

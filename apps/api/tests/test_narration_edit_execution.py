@@ -62,7 +62,8 @@ class Resources:
 
     def admit(self, request):
         assert request.resources["kind"] == "creation_narration"
-        return self.allowed
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(self.allowed, dict(request.resources), {})
 
     def continue_unit(self, grant):
         return True

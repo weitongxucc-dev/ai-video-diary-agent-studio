@@ -144,7 +144,8 @@ class ControlledResources:
         self.admitted = admitted
 
     def admit(self, _request):
-        return self.admitted
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(self.admitted, dict(_request.resources), {})
 
     def released(self, _grant):
         return True

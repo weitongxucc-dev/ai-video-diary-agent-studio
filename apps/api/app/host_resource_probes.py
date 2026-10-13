@@ -981,7 +981,7 @@ class HostResourceProbe:
             return decision(None, "io_window_incomplete", duration)
         return decision(passed, interval=duration)
 
-    def admit(self, request: WorkRequest) -> bool | None:
+    def admit(self, request: WorkRequest) -> HostResourceDecision:
         decision = self._sample(request.resources)
         if decision.verdict is not True:
             logger.warning("Device resource admission: %s", json.dumps({
@@ -1001,7 +1001,7 @@ class HostResourceProbe:
                 "reason": decision.reason,
                 "observed_interval_seconds": decision.observed_interval_seconds,
             }, ensure_ascii=False))
-        return decision.verdict
+        return decision
 
     def _grant_resources(self, grant: Grant) -> dict[str, object] | None:
         if grant.database_path != self.database_path:

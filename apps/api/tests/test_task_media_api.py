@@ -64,6 +64,92 @@ def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeyp
     runtime.stop(0)
 
 
+def _resource_api_case(tmp_path, monkeypatch):
+    from test_task_media_grants import _resource_admission_case
+    values = _resource_admission_case(tmp_path, monkeypatch)
+    repo, actor, _state, _, _, _media, runtime, _samples = values
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
+    monkeypatch.setattr(main, 'device_runtime', runtime)
+    monkeypatch.setattr(main, '_require_permit_actor', lambda *args:actor)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request:'local')
+    return values, TestClient(main.app)
+
+
+def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, monkeypatch):
+    from dataclasses import replace
+    (repo, actor, state, _, _, media, runtime, _), client = _resource_api_case(tmp_path, monkeypatch)
+    try:
+        job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
+        url = f'/api/creation-tasks/task/media-jobs/{job.id}'
+        assert client.get(url).json()['resource_wait'] is None
+        assert not runtime.run_once()
+        pending = TaskMediaJobResponse.model_validate(client.get(url).json())
+        assert pending.status == 'queued' and pending.waiting_reason == 'resource_busy'
+        assert pending.resource_wait.context == 'pending_request'
+        assert pending.resource_wait.job_id == job.id and pending.resource_wait.input_digest == job.input_digest
+        assert pending.resource_wait.last_grant_generation is None
+        page = client.get('/api/creation-tasks/task/media-jobs').json()
+        assert page['items'][0]['resource_wait']['observation_id'] == pending.resource_wait.observation_id
+        assert 'PRIVATE' not in client.get(url).text and str(tmp_path) not in client.get(url).text
+        state['revision'] += 1
+        second = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
+        assert second.id != job.id
+        assert client.get(f'/api/creation-tasks/task/media-jobs/{second.id}').json()['resource_wait'] is None
+        stale = client.get(url).json()
+        assert stale['status'] == 'stale' and stale['resource_wait']['context'] == 'history'
+        cancelled = client.post(url+'/cancel').json()
+        assert cancelled['status'] == 'cancelled' and cancelled['failure_reason'] == 'user_cancelled'
+        assert cancelled['resource_wait']['context'] == 'history'
+        assert cancelled['resource_wait']['checked_at'] == pending.resource_wait.checked_at.isoformat().replace('+00:00','Z')
+        monkeypatch.setattr(main, '_require_permit_actor', lambda *args:replace(actor,member_id='other'))
+        assert client.get(url).status_code == 404
+    finally:
+        runtime.stop(0)
+
+
+def test_terminal_conversation_uses_same_resource_history_without_changing_cancel_status(tmp_path, monkeypatch):
+    import json
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.conversation_repository import ConversationRepository
+    (repo, actor, _, _, _, media, runtime, _), client = _resource_api_case(tmp_path, monkeypatch)
+    conversations = ConversationRepository(repo.database_path)
+    monkeypatch.setattr(main, 'conversation_repo', conversations)
+    monkeypatch.setattr(main, '_verify_creation_identity', lambda *args:'ready')
+    monkeypatch.setattr(main, '_goal_service', lambda:SimpleNamespace(observe_business_result=lambda *args:False))
+    # Fixture ownership belongs to the same synthetic member; no user/app database.
+    task = repo.get_creation_task('local','task')
+    task.owner_user_id = actor.member_id
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
+                     (json.dumps(asdict(task),default=str),))
+    conversation = conversations.create('local',actor.member_id,'task','task')
+    turn, _ = conversations.create_turn_idempotent(conversation['id'],'local',actor.member_id,
+        'fixture original instruction','fixture-request',0,
+        {'kind':'task','task_id':'task','target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}})
+    source = {'workspace_id':'local','task_id':'task','member_id':actor.member_id,
+        'actor_identity':actor.identity_payload(), 'assistant_turn_id':turn['id'],
+        'conversation_id':conversation['id'],'expected_timeline_version_id':None,'expected_timeline_sequence':0}
+    try:
+        job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {'_typed_source':source}, 'edit_preview')
+        assert not runtime.run_once()
+        before = client.get(f'/api/creation-tasks/task/media-jobs/{job.id}').json()['resource_wait']
+        conversations.finish_turn(turn['id'],'completed',result={'kind':'task_turn','response':{}})
+        client.post(f'/api/creation-tasks/task/media-jobs/{job.id}/cancel')
+        candidate = next(item for item in repo.assistant_business_candidates() if item['id']==job.id)
+        assert main._project_assistant_business_candidate(candidate)
+        saved = conversations.get_turn(turn['id'])
+        assert saved['status'] == 'completed' and saved['result']['continuation']['status'] == 'cancelled'
+        projected = saved['result']['response']['media_job']
+        assert projected['status'] == 'cancelled' and projected['failure_reason'] == 'user_cancelled'
+        assert projected['resource_wait']['context'] == 'history'
+        assert projected['resource_wait']['observation_id'] == before['observation_id']
+        assert projected['resource_wait']['checked_at'] == before['checked_at']
+    finally:
+        runtime.stop(0)
+
+
 def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monkeypatch):
     import io
     import wave

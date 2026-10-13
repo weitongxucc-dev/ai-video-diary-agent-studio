@@ -6915,8 +6915,9 @@ class ProductionRepository:
                 raise ValueError("任务事件 ID 已存在") from exc
         return event if connection is not None else self.get_task_event(event.workspace_id, event.id)
 
-    def get_task_event(self, workspace_id: str, event_id: str) -> TaskEvent:
-        with self._connect() as conn:
+    def get_task_event(self, workspace_id: str, event_id: str, *,
+                       connection: sqlite3.Connection | None = None) -> TaskEvent:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT * FROM task_events WHERE workspace_id = ? AND id = ?",
                 (workspace_id, event_id),
@@ -6924,6 +6925,22 @@ class ProductionRepository:
         if row is None:
             raise KeyError(event_id)
         return self._task_event_from_row(row)
+
+    def latest_task_resource_admission(self, workspace_id: str, task_id: str, job_id: str,
+                                       request_id: str, *,
+                                       connection: sqlite3.Connection | None = None) -> TaskEvent | None:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute(
+                "SELECT * FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
+                "AND event_type='task_media_resource_admission' "
+                "AND json_extract(payload_json, '$.device_request_id')=? "
+                "ORDER BY json_extract(payload_json, '$.attempt_number') DESC, "
+                "COALESCE(json_extract(payload_json, '$.last_grant_generation'), -1) DESC, "
+                "created_at DESC, rowid DESC LIMIT 1",
+                (workspace_id, task_id, job_id, request_id),
+            ).fetchone()
+        return self._task_event_from_row(row) if row is not None else None
 
     def list_task_events(self, workspace_id: str, task_id: str) -> list[TaskEvent]:
         with self._connect() as conn:

@@ -141,10 +141,10 @@ def test_real_host_sample_admits_only_known_bounded_cpu_units(tmp_path):
         tmp_path / "production.sqlite", disk_paths=(tmp_path,),
         budget=HostBudget(100, 0, 2**63, 0, 2**63, 1024, 0.02),
     )
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 10})) is True
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_probe_meta", "size_bytes": 10})) is True
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "creation_render", "size_bytes": 10})) is None
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 1025})) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 10})).verdict is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_probe_meta", "size_bytes": 10})).verdict is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "creation_render", "size_bytes": 10})).verdict is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={"kind": "material_hash", "size_bytes": 1025})).verdict is False
 
 
 def test_platform_publish_uses_real_size_finite_browser_deadline_and_shared_host_budget(tmp_path, monkeypatch):
@@ -206,15 +206,15 @@ def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_p
     unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                 budget=HostBudget(**base))
     resources = _render_resources()
-    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)) is None
+    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is None
     measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                  budget=HostBudget(**base, cpu_render=_render_budget()))
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "gpu"})) is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is True
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "gpu"})).verdict is None
     assert measured.admit(SimpleNamespace(id="fixture-request", resources={k: v for k, v in resources.items()
-                                                     if k != "overlay_count"})) is None
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "duration_seconds": 2})) is False
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "overlay_count": 5})) is False
+                                                     if k != "overlay_count"})).verdict is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "duration_seconds": 2})).verdict is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "overlay_count": 5})).verdict is False
 
 
 @pytest.mark.parametrize("running", [False, True])
@@ -278,7 +278,7 @@ def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
                         cpu_render=_render_budget())
     probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources=_render_resources())) is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=_render_resources())).verdict is False
 
 
 @pytest.mark.parametrize("failure", [
@@ -327,10 +327,12 @@ def test_admission_logs_same_observation_without_resampling(
         "token": "PRIVATE_TOKEN", "private_numeric": 8675309,
     })
     with caplog.at_level("WARNING", logger=probes.__name__):
-        verdict = probe.admit(request)
+        admission = probe.admit(request)
+        verdict = admission.verdict
     assert len(observations) == 1
     assert calls == ["io", "io", "memory"]
     decision = observations[0]
+    assert admission is decision
     assert verdict is decision.verdict
     if failure is None:
         assert verdict is True
@@ -372,7 +374,7 @@ def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monk
         **_render_resources(), "duration_seconds": 2, "text": "PRIVATE_BODY",
     })
     with caplog.at_level("WARNING", logger=probes.__name__):
-        assert probe.admit(request) is False
+        assert probe.admit(request).verdict is False
     assert len(caplog.records) == 1
     payload = json.loads(caplog.records[0].args[0])
     assert payload["request_id"] == request.id
@@ -414,17 +416,17 @@ def test_scene_window_requires_calibrated_input_decode_and_hard_timeout(tmp_path
     resources = _scene_resources()
     unknown = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                 budget=HostBudget(**base))
-    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)) is None
+    assert unknown.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is None
     measured = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,),
                                  budget=HostBudget(**base, scene_window=_scene_budget()))
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_codec": "av1"})) is None
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": None})) is None
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_width_px": 3840})) is False
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": 240})) is False
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "scan_seconds": 16})) is False
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "output_max_frames": 20})) is None
-    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": 20})) is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is True
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_codec": "av1"})).verdict is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": None})).verdict is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_width_px": 3840})).verdict is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "source_frame_rate_fps": 240})).verdict is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "scan_seconds": 16})).verdict is False
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "output_max_frames": 20})).verdict is None
+    assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": 20})).verdict is False
 
 
 def test_registration_ack_precedes_real_exec(tmp_path, grant_entry):
@@ -942,11 +944,11 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                  "text_chars": 80, "section_count": 1, "reference_bytes": 1048576,
                  "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)) is True
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "text_chars": 81})) is False
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "reference_bytes": 1048577})) is False
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "in_process"})) is None
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": None})) is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "text_chars": 81})).verdict is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "reference_bytes": 1048577})).verdict is False
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "in_process"})).verdict is None
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "timeout_seconds": None})).verdict is None
     assert reads == ["cpu"]  # Declared rejection never becomes a ready host resample.
 
 
@@ -987,7 +989,7 @@ def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
     monkeypatch.setattr(psutil, "virtual_memory", memory)
     monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
     monkeypatch.setattr(psutil, "disk_usage", lambda _path: SimpleNamespace(free=10**12))
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)) is (None if available is None else False)
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is (None if available is None else False)
     monkeypatch.setattr(probe, "_grant_resources", lambda _grant: resources)
     grant = SimpleNamespace(request_id="fixture-request", generation=1)
     if runtime_verdict is True:

@@ -85,7 +85,9 @@ class _Runtime:
 
 
 class _HostResources:
-    def admit(self, request): return True
+    def admit(self, request):
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(True, dict(request.resources), {})
     def continue_unit(self, grant): return True
     def released(self, grant): return True
 

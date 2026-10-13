@@ -1974,6 +1974,63 @@ class CreationTaskAssistantTurnRequest(BaseModel):
     playhead_ms: int | None = Field(default=None, ge=0)
 
 
+class ResourceAdmissionCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    metric: Literal["cpu_percent", "available_memory_bytes", "swap_used_bytes", "disk_free_bytes", "disk_io_bytes_per_second"]
+    unit: Literal["percent", "bytes", "bytes_per_second"]
+    actual: int | float | None = None
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+    passed: bool | None = None
+
+    @field_validator("actual", "minimum", "maximum", mode="before")
+    @classmethod
+    def finite_measurement(cls, value):
+        import math
+        if value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0):
+            raise ValueError("资源检查数值必须为非负有限数或未知")
+        return value
+
+    @model_validator(mode="after")
+    def measurement_unit(self):
+        expected = "percent" if self.metric == "cpu_percent" else "bytes_per_second" if self.metric == "disk_io_bytes_per_second" else "bytes"
+        if self.unit != expected:
+            raise ValueError("资源检查单位与指标不一致")
+        return self
+
+
+class ResourceAdmissionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str
+    device_request_id: str
+    task_id: str
+    job_id: str
+    input_digest: str
+    base_version_id: str | None
+    attempt_number: int = Field(ge=1)
+    last_grant_generation: int | None
+    phase: Literal["admission"]
+    observation_kind: Literal["first_unknown", "first_refused"]
+    checked_at: datetime
+    observed_interval_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    context: Literal["pending_request", "history"]
+    admitted: Literal[False] | None
+    checks: list[ResourceAdmissionCheck] = Field(max_length=5)
+    summary: str = Field(max_length=480)
+    repair_action: str = Field(max_length=160)
+
+    @model_validator(mode="after")
+    def observation_scope(self):
+        offset = self.checked_at.utcoffset()
+        if offset is None or offset.total_seconds() != 0:
+            raise ValueError("资源检查时点必须是UTC")
+        if (self.observation_kind == "first_unknown") != (self.admitted is None):
+            raise ValueError("资源检查类别与准入结果不一致")
+        return self
+
+
 class TaskMediaJobResponse(BaseModel):
     operation: str
     target_refs: list[str] = Field(default_factory=list, max_length=8)
@@ -1989,6 +2046,7 @@ class TaskMediaJobResponse(BaseModel):
     result: dict[str, object] | None = None
     failure_reason: str | None = None
     repair_action: str | None = None
+    resource_wait: ResourceAdmissionReceipt | None = None
 
 
 class MediaScriptInputReference(BaseModel):

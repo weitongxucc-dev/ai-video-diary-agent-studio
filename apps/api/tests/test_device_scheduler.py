@@ -93,7 +93,8 @@ class Resources:
     continue_value = True
 
     def admit(self, request):
-        return self.admit_value
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(self.admit_value, dict(request.resources), {})
 
     def continue_unit(self, grant):
         return self.continue_value

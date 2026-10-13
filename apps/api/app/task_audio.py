@@ -1,6 +1,7 @@
 """Task ownership and artifact publication for local audio operations."""
 import hashlib
 import json
+import math
 from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -523,7 +524,7 @@ class TaskMediaJobs:
             raise KeyError(job_id)
         return self.repository._job_run_from_row(row), json.loads(event["payload_json"])
 
-    def check(self, job, event, actor):
+    def _read_access(self, job, event, actor):
         from app.creation_execution import CreationExecutionActor
         if media_digest({key: value for key, value in event.items() if key != "input_digest"}) != job.input_digest:
             return "stale"
@@ -534,8 +535,133 @@ class TaskMediaJobs:
             return identity
         try:
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
-            if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-                return "unauthorized"
+        except KeyError:
+            return "stale"
+        if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+            return "unauthorized"
+        return "ready"
+
+    @staticmethod
+    def _admission_binding(job, start, request):
+        from app.creation_execution import CreationExecutionActor
+        original = CreationExecutionActor.from_event(job.workspace_id, start)
+        if ((request.workspace_id, request.owner_type, request.owner_id, request.member_id) !=
+                (job.workspace_id, "creation_job", job.id, original.member_id)
+                or request.input_digest != job.input_digest or start["input_digest"] != job.input_digest
+                or request.unit_key != f"task_media:{job.input_digest}"
+                or request.resources != start["resources"]
+                or media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest):
+            raise PermissionError("资源观察不属于原任务媒体请求和身份")
+        return {"device_request_id": request.id, "workspace_id": job.workspace_id,
+            "member_id": original.member_id, "actor_scope_digest": media_digest(original.identity_payload()),
+            "task_id": job.task_id, "job_id": job.id, "input_digest": job.input_digest,
+            "unit_key": request.unit_key, "base_version_id": start["input_facts"]["base_version_id"],
+            "attempt_number": request.attempt_number, "last_grant_generation": request.last_grant_generation,
+            "phase": "admission"}
+
+    @staticmethod
+    def _admission_event_id(binding, kind):
+        return "event_resource_admission_" + media_digest({**binding, "observation_kind": kind})
+
+    @staticmethod
+    def _admission_checks(checks):
+        def number(value):
+            return value if type(value) in {int, float} and math.isfinite(value) and value >= 0 else None
+        result = []
+        for metric, unit in (("cpu_percent", "percent"), ("available_memory_bytes", "bytes"),
+                             ("swap_used_bytes", "bytes"), ("disk_io_bytes_per_second", "bytes_per_second")):
+            if metric not in checks:
+                continue
+            row = checks[metric]
+            values = {key: number(row.get(key)) for key in ("actual", "minimum", "maximum")}
+            passed = row.get("passed") if values["actual"] is not None and (values["minimum"] is not None or values["maximum"] is not None) else None
+            result.append({"metric": metric, "unit": unit, **values,
+                "passed": passed if type(passed) is bool else None})
+        disks = [row for key, row in checks.items() if key.startswith("disk_free_bytes:")]
+        if disks:
+            actuals = [number(row.get("actual")) for row in disks]
+            minima = [number(row.get("minimum")) for row in disks]
+            actual = min(actuals) if all(value is not None for value in actuals) else None
+            minimum = minima[0] if all(value is not None and value == minima[0] for value in minima) else None
+            passed = (all(row["passed"] for row in disks) if actual is not None and minimum is not None
+                and all(type(row.get("passed")) is bool for row in disks) else None)
+            result.append({"metric": "disk_free_bytes", "unit": "bytes", "actual": actual,
+                           "minimum": minimum, "maximum": None, "passed": passed})
+        return result
+
+    def record_admission(self, conn, request, decision, checked_at):
+        if request.owner_type != "creation_job" or not request.unit_key.startswith("task_media:"):
+            return
+        if decision.verdict is True:
+            return
+        if decision.verdict is not False and decision.verdict is not None:
+            raise ValueError("资源准入决定必须是拒绝或未知")
+        job, start = self.read(request.workspace_id, request.owner_id, conn)
+        binding = self._admission_binding(job, start, request)
+        if decision.declared != request.resources:
+            raise PermissionError("资源观察不是该请求的封存处理范围")
+        kind = "first_unknown" if decision.verdict is None else "first_refused"
+        event_id = self._admission_event_id(binding, kind)
+        try:
+            existing = self.repository.get_task_event(job.workspace_id, event_id, connection=conn)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            if existing.job_id != job.id or any(existing.payload.get(key) != value for key, value in binding.items()):
+                raise ValueError("原资源检查记录的请求归属不一致")
+            return
+        from app.schemas import ResourceAdmissionReceipt
+        timestamp = checked_at.astimezone(timezone.utc)
+        checks = self._admission_checks(decision.checks)
+        labels = {"cpu_percent": "CPU占用", "available_memory_bytes": "可用内存",
+            "swap_used_bytes": "交换空间占用", "disk_free_bytes": "磁盘余量",
+            "disk_io_bytes_per_second": "磁盘读写"}
+        refused = "、".join(labels[item["metric"]] for item in checks if item["passed"] is False)
+        detail = "部分资源状态暂不能核实" if kind == "first_unknown" else f"{refused}未满足准入条件" if refused else "处理范围或资源条件未获准"
+        interval = decision.observed_interval_seconds
+        receipt = ResourceAdmissionReceipt(observation_id=event_id,
+            **{key: binding[key] for key in ("device_request_id", "task_id", "job_id", "input_digest",
+                "base_version_id", "attempt_number", "last_grant_generation", "phase")},
+            observation_kind=kind, checked_at=timestamp,
+            observed_interval_seconds=interval if type(interval) in {int, float} and math.isfinite(interval) and interval > 0 else None,
+            context="history", admitted=decision.verdict, checks=checks,
+            summary=f"该请求首次检查（{timestamp.isoformat()}）记录：{detail}。这是当时的准入观察，不是实时资源或执行许可。",
+            repair_action="请结合当前作业状态查询原请求；检查记录不会重新提交或启动媒体。")
+        self.repository.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type="task_media_resource_admission",
+            payload={**binding, **receipt.model_dump(mode="json")}, created_at=timestamp), connection=conn)
+
+    def resource_admission_receipt(self, job, start, actor, request, projected_status):
+        if request is None or self._read_access(job, start, actor) != "ready":
+            return None
+        binding = self._admission_binding(job, start, request)
+        pending = (projected_status in {"queued", "interrupted"} and request.state == "blocked"
+                   and request.wait_reason in {"resource_busy", "resource_unknown"})
+        if pending:
+            kind = "first_refused" if request.wait_reason == "resource_busy" else "first_unknown"
+            try:
+                saved = self.repository.get_task_event(job.workspace_id, self._admission_event_id(binding, kind))
+            except KeyError:
+                return None
+        else:
+            saved = self.repository.latest_task_resource_admission(job.workspace_id, job.task_id, job.id, request.id)
+        if saved is None:
+            return None
+        if (saved.task_id != job.task_id or saved.job_id != job.id
+                or any(saved.payload.get(key) != value for key, value in binding.items()
+                       if key not in {"attempt_number", "last_grant_generation"})
+                or pending and any(saved.payload.get(key) != binding[key] for key in ("attempt_number", "last_grant_generation"))):
+            raise ValueError("资源检查记录未绑定原请求、身份和输入版本")
+        from app.schemas import ResourceAdmissionReceipt
+        values = {key: value for key, value in saved.payload.items() if key in ResourceAdmissionReceipt.model_fields}
+        values["context"] = "pending_request" if pending else "history"
+        return ResourceAdmissionReceipt.model_validate(values).model_dump(mode="json")
+
+    def check(self, job, event, actor):
+        access = self._read_access(job, event, actor)
+        if access != "ready":
+            return access
+        try:
             current, resources = self.facts(job.workspace_id, job.task_id, event["operation"], event["arguments"], actor)
         except PermissionError:
             return "unauthorized"

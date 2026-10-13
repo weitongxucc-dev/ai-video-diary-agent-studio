@@ -186,8 +186,19 @@ class OwnerVerifier(Protocol):
     def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason, conn: sqlite3.Connection) -> str: ...
 
 
+class ResourceAdmission(Protocol):
+    verdict: bool | None
+    declared: dict[str, object]
+    checks: dict[str, dict[str, object]]
+    reason: str | None
+    observed_interval_seconds: float | None
+
+
+ResourceAdmissionWrite = Callable[[sqlite3.Connection, WorkRequest, ResourceAdmission, datetime], None]
+
+
 class ResourceProbe(Protocol):
-    def admit(self, request: WorkRequest) -> bool | None: ...
+    def admit(self, request: WorkRequest) -> ResourceAdmission: ...
     def continue_unit(self, grant: Grant) -> bool | None: ...
     def released(self, grant: Grant) -> bool | None: ...
 
@@ -270,6 +281,7 @@ class DeviceScheduler:
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         activity_source_reliable: bool = False,
         session_ttl: timedelta = timedelta(seconds=30),
+        admission_recorder: ResourceAdmissionWrite | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser().resolve()
         raw_lock = Path(device_lock_path).expanduser()
@@ -280,6 +292,7 @@ class DeviceScheduler:
         self.lock_key = hashlib.sha256(str(self.lock_path).encode()).hexdigest()
         self.owners, self.resources, self.processes = owners, resources, processes
         self.clock, self.activity_source_reliable, self.session_ttl = clock, activity_source_reliable, session_ttl
+        self.admission_recorder = admission_recorder
         self._held_fd: int | None = None
         self._last_issued_grant: Grant | None = None
 
@@ -738,7 +751,10 @@ class DeviceScheduler:
             if idle is not True:
                 self._update_wait(conn, row, now, "activity_unknown" if idle is None else "device_active")
                 return False
-        available = self.resources.admit(request)
+        decision = self.resources.admit(request)
+        if self.admission_recorder is not None:
+            self.admission_recorder(conn, request, decision, self._now())
+        available = decision.verdict
         if available is not True:
             self._update_wait(conn, row, now, "resource_unknown" if available is None else "resource_busy")
             return False

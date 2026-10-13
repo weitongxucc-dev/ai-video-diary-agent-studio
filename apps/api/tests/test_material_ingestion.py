@@ -54,7 +54,8 @@ class HashResources:
         self.admit_value = admit
 
     def admit(self, request):
-        return self.admit_value
+        from app.host_resource_probes import HostResourceDecision
+        return HostResourceDecision(self.admit_value, dict(request.resources), {})
 
     def continue_unit(self, grant):
         return True

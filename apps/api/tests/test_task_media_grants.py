@@ -48,7 +48,7 @@ def case(tmp_path, action=None, validate=None, resources=None):
             device_access=access, registrations={'creation_job': OwnerRegistration(
                 CreationJobOwnerVerifier(repo, verify_identity=access.verify_identity, task_media=media),
                 CreationJobUnitExecutor(repo, render_action=None, render_is_valid=None, task_media=media))},
-            resources=resources or Resources(), processes=Processes())
+            resources=resources or Resources(), processes=Processes(), admission_recorder=media.record_admission)
     media = factory()
     return repo, actor, state, factory, runtime, media
 
@@ -136,6 +136,156 @@ def test_unknown_release_blocks_and_retains_permit(tmp_path):
         runtime.run_once()
     with repo._connect() as conn:
         assert conn.execute('SELECT state FROM device_permit').fetchone()[0] != 'free'
+
+
+def _resource_admission_case(tmp_path, monkeypatch):
+    from itertools import count
+    from types import SimpleNamespace
+    import app.host_resource_probes as probes
+    from test_host_resource_probes import _render_budget, _render_resources
+    repo, actor, state, factory, build, media = case(tmp_path)
+    resources = {**_render_resources(), 'private_payload':'PRIVATE_INPUT', 'secret':'PRIVATE_KEY'}
+    media.facts = lambda *args: ({'base_version_id':None, 'revision':state['revision']}, resources)
+    values = {'unknown':False, 'available':2801418240, 'swap':17957978112}
+    ticks, io = count(10, .1), count(0, 4096)
+    monkeypatch.setattr(probes.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(probes.psutil, 'cpu_percent', lambda **kwargs:21.4)
+    def memory():
+        if values['unknown']:
+            raise OSError('PRIVATE_SOURCE_PATH')
+        return SimpleNamespace(available=values['available'])
+    monkeypatch.setattr(probes.psutil, 'virtual_memory', memory)
+    monkeypatch.setattr(probes.psutil, 'swap_memory', lambda:SimpleNamespace(used=values['swap']))
+    monkeypatch.setattr(probes.psutil, 'disk_io_counters', lambda **kwargs:SimpleNamespace(read_bytes=next(io), write_bytes=0))
+    monkeypatch.setattr(probes.psutil, 'disk_usage', lambda path:SimpleNamespace(free=2**50))
+    runtime = build(media)
+    # Real admission implementation, synthetic envelope and platform observations in TMP only.
+    runtime.scheduler.resources = probes.HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),
+        budget=probes.HostBudget(91, 1024**3, 16342122496, 1, 10**12, 10**12,
+            cpu_render=replace(_render_budget(), additional_memory_bytes=2*1024**3)))
+    return repo, actor, state, factory, build, media, runtime, values
+
+
+def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_read(tmp_path, monkeypatch):
+    import json
+    repo, actor, state, _, _, media, runtime, values = _resource_admission_case(tmp_path, monkeypatch)
+    try:
+        job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
+        job, start = media.read('local', job.id)
+        values['unknown'] = True
+        assert not runtime.run_once()
+        with repo._connect() as conn:
+            request_id = conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()[0]
+        request = runtime.scheduler._get(request_id)
+        unknown = media.resource_admission_receipt(job, start, actor, request, 'queued')
+        assert unknown['observation_kind'] == 'first_unknown' and unknown['admitted'] is None
+        assert unknown['context'] == 'pending_request' and unknown['last_grant_generation'] is None
+        memory = next(item for item in unknown['checks'] if item['metric'] == 'available_memory_bytes')
+        assert memory['actual'] is None and memory['minimum'] == 3*1024**3 and memory['passed'] is None
+        values['unknown'] = False
+        assert not runtime.run_once()
+        request = runtime.scheduler._get(request.id)
+        refused = media.resource_admission_receipt(job, start, actor, request, 'queued')
+        assert refused['observation_kind'] == 'first_refused' and refused['admitted'] is False
+        assert refused['device_request_id'] == request.id and refused['job_id'] == job.id
+        assert refused['input_digest'] == job.input_digest and refused['base_version_id'] is None
+        checks = {item['metric']:item for item in refused['checks']}
+        assert checks['available_memory_bytes']['actual'] == 2801418240
+        assert checks['swap_used_bytes']['actual'] == 17957978112
+        assert checks['swap_used_bytes']['maximum'] == 16342122496
+        assert len(checks) == 5 and state['calls'] == 0
+        values['available'] = 1
+        for _ in range(3):
+            assert not runtime.run_once()
+        repeated = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request.id), 'queued')
+        assert repeated == refused
+        assert len([item for item in repo.list_task_events('local','task')
+                    if item.event_type == 'task_media_resource_admission']) == 2
+        for receipt in (unknown, refused):
+            assert 'PRIVATE' not in json.dumps(receipt) and str(tmp_path) not in json.dumps(receipt)
+        assert media.resource_admission_receipt(job, start, replace(actor, member_id='other'), request, 'queued') is None
+        values['available'], values['swap'] = 4*1024**3, 0
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None
+        history = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request.id), 'queued')
+        assert history['context'] == 'history' and history['last_grant_generation'] is None
+        assert history['checked_at'] == refused['checked_at']
+        runtime.scheduler.complete_unit(grant, checkpoint_database_path=repo.database_path,
+                                       checkpoint_write=lambda conn, current:None)
+    finally:
+        runtime.stop(0)
+
+
+def test_resource_receipt_write_failure_rolls_back_without_grant(tmp_path, monkeypatch):
+    repo, actor, state, _, _, media, runtime, _ = _resource_admission_case(tmp_path, monkeypatch)
+    job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
+    original = repo.append_task_event
+    def fail(event, *, connection=None):
+        if event.event_type == 'task_media_resource_admission':
+            assert connection is not None and connection.in_transaction
+            original(event, connection=connection)
+            raise RuntimeError('fixture persistence failure')
+        return original(event, connection=connection)
+    monkeypatch.setattr(repo, 'append_task_event', fail)
+    try:
+        with pytest.raises(RuntimeError, match='fixture persistence failure'):
+            runtime.run_once()
+        assert not [item for item in repo.list_task_events('local','task')
+                    if item.event_type == 'task_media_resource_admission']
+        with repo._connect() as conn:
+            row = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()
+            assert tuple(row) == ('waiting',None)
+            assert conn.execute('SELECT state FROM device_permit').fetchone()[0] == 'free'
+        assert state['calls'] == 0
+    finally:
+        runtime.stop(0)
+
+
+def test_resource_receipt_history_survives_cancel_retry_and_restart(tmp_path, monkeypatch):
+    repo, actor, _, _, build, media, runtime, _ = _resource_admission_case(tmp_path, monkeypatch)
+    try:
+        job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
+        job, start = media.read('local', job.id)
+        assert not runtime.run_once()
+        with repo._connect() as conn:
+            request_id = conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()[0]
+        first = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request_id), 'queued')
+        runtime.scheduler.cancel(request_id, actor)
+        repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
+                            impact='unchanged', repair_action='resubmit')
+        cancelled = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+                                                    runtime.scheduler._get(request_id), 'cancelled')
+        assert cancelled['context'] == 'history' and cancelled['observation_id'] == first['observation_id']
+        runtime.scheduler.retry_existing(request_id, actor, reason='cancelled')
+        assert not runtime.run_once()
+        second = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+                                                 runtime.scheduler._get(request_id), 'interrupted')
+        assert second['attempt_number'] == 2 and second['last_grant_generation'] is None
+        assert second['observation_id'] != first['observation_id']
+        runtime.stop(0)
+        rebuilt = build(media)
+        try:
+            monkeypatch.setattr(media, 'facts', lambda *args: (_ for _ in ()).throw(AssertionError('no fact resample on history read')))
+            history = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+                                                      rebuilt.scheduler._get(request_id), 'stale')
+            assert history['context'] == 'history' and history['checked_at'] == second['checked_at']
+        finally:
+            rebuilt.stop(0)
+    finally:
+        runtime.stop(0)
+
+
+def test_resource_projection_keeps_unknown_disk_and_rejects_invalid_units():
+    from app.schemas import ResourceAdmissionCheck
+    from pydantic import ValidationError
+    projected = TaskMediaJobs._admission_checks({
+        'disk_free_bytes:/PRIVATE/A':{'actual':100,'minimum':50,'passed':True},
+        'disk_free_bytes:/PRIVATE/B':{'minimum':50},
+        'cpu_percent':{'actual':float('nan'),'maximum':91,'passed':False}})
+    assert next(item for item in projected if item['metric']=='disk_free_bytes')['actual'] is None
+    assert next(item for item in projected if item['metric']=='cpu_percent')['passed'] is None
+    with pytest.raises(ValidationError, match='单位与指标'):
+        ResourceAdmissionCheck(metric='swap_used_bytes',unit='percent',actual=1)
 
 
 def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_path, monkeypatch):
