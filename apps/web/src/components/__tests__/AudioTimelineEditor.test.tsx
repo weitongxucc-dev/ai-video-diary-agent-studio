@@ -61,3 +61,31 @@ it("clears the old waveform while a changed source is being read", async () => {
   expect(screen.getByText("读取波形…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "选择音频：背景音乐" }).querySelector("svg")).toBeNull();
 });
+
+it("keeps one audio controller when shared tracks place the subtitle before import and listening tools", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ peaks: [.1, .5], seconds_per_peak: 1 }))));
+  vi.mocked(listenCreationTaskAudio).mockResolvedValue({ audio_url: "/shared-preview.wav" });
+  const workspace = { task: { id: "task", current_timeline_version_id: "version" }, montage: { duration_seconds: 10,
+    audio_timeline: { format_version: 1, tracks: [track] } } } as unknown as CreationTaskWorkspace;
+  render(<AudioTimelineTracks workspace={workspace} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}
+    sharedTimeScale subtitleTrack={<button type="button" aria-label="定位测试字幕">测试字幕</button>} />);
+
+  const audioClip = screen.getByRole("button", { name: "选择音频：背景音乐" });
+  const subtitle = screen.getByRole("button", { name: "定位测试字幕" });
+  const tools = screen.getByRole("group", { name: "音频导入与试听" });
+  expect(audioClip.compareDocumentPosition(subtitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(subtitle.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getAllByLabelText("试听起点")).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "导入音频" })).toHaveLength(1);
+
+  fireEvent.click(audioClip);
+  fireEvent.click(screen.getByRole("button", { name: "独听音乐" }));
+  fireEvent.change(screen.getByLabelText("试听起点"), { target: { value: "4.5" } });
+  fireEvent.click(subtitle);
+  expect(screen.getByLabelText("试听起点")).toHaveValue(4.5);
+  fireEvent.click(screen.getByRole("button", { name: "试听独听轨道" }));
+  await waitFor(() => expect(listenCreationTaskAudio).toHaveBeenLastCalledWith("task", {
+    base_version_id: "version", start_seconds: 4.5, end_seconds: 6, solo_track_ids: ["music"],
+  }));
+  expect(await screen.findByLabelText("选区音频试听")).toHaveAttribute("src", "/shared-preview.wav");
+});

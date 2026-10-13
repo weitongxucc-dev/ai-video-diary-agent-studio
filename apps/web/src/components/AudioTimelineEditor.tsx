@@ -1,7 +1,7 @@
 "use client";
 
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTaskAudioWaveform, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { AudioEditInput, CreationTaskWorkspace, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
@@ -37,9 +37,9 @@ function AudioWave({ taskId, versionId, clip }: { taskId: string; versionId: str
   return <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
 }
 
-export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false }: {
+export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false, subtitleTrack }: {
   workspace: CreationTaskWorkspace; selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
-  onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean;
+  onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
   const graph = workspace.montage!.audio_timeline!;
   const duration = workspace.montage!.duration_seconds;
@@ -106,13 +106,22 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
       if (result.status === "cancelled") { listenController.current?.abort(); setWorking(false); }
     } catch (cause) { if (currentListenContext.current === context) setError(cause instanceof Error ? cause.message : "试听取消未完成"); }
   }
-  return <section className={ui.audioTimeline} aria-label="多轨音频">
-    <div className={ui.audioToolbar}>
+  const importControls = (
+<div className={ui.audioToolbar}>
       <AppSelect aria-label="音频导入轨道" value={role} onValueChange={newValue => setRole(newValue)} disabled={busy || working}>{graph.tracks.map(track => <AppSelectOption key={track.id} value={track.id}>{track.name}</AppSelectOption>)}</AppSelect>
       <button className={ui.button} type="button" disabled={busy || working} onClick={() => file.current?.click()}>导入音频</button>
       <input ref={file} aria-label="选择音频文件" type="file" hidden accept=".wav,.mp3,.m4a,.aac,.flac" onChange={event => { const selected = event.target.files?.[0]; if (selected) void importAudio(selected); event.target.value=""; }} />
       {!sharedTimeScale ? <label>缩放<input aria-label="音轨缩放" type="range" min={1} max={4} step={.5} value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label> : null}
     </div>
+  );
+  const listenControls = (
+<div className={ui.audioToolbar}><label>试听（秒）<input aria-label="试听起点" type="number" min={0} max={duration} step={.1} value={start} onChange={event => { setStart(Number(event.target.value)); setAudio(null); }} /></label>
+      <label>至<input aria-label="试听终点" type="number" min={0} max={duration} step={.1} value={end} onChange={event => { setEnd(Number(event.target.value)); setAudio(null); }} /></label>
+      <button className={ui.button} disabled={busy || working || start >= end} type="button" onClick={() => void listen()}>{working ? "处理中…" : solo.length ? "试听独听轨道" : "试听混音"}</button>
+      {solo.length ? <small>独听只影响试听</small> : null}
+    </div>
+  );
+  return <section className={ui.audioTimeline} aria-label="多轨音频">
     <div className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
         <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>独听</button></div>
@@ -124,10 +133,10 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
         <AudioWave taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} clip={clip} /><span>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
       </button>)}<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
     </div>)}</div></div>
-    <div className={ui.audioToolbar}><label>试听（秒）<input aria-label="试听起点" type="number" min={0} max={duration} step={.1} value={start} onChange={event => { setStart(Number(event.target.value)); setAudio(null); }} /></label>
-      <label>至<input aria-label="试听终点" type="number" min={0} max={duration} step={.1} value={end} onChange={event => { setEnd(Number(event.target.value)); setAudio(null); }} /></label>
-      <button className={ui.button} disabled={busy || working || start >= end} type="button" onClick={() => void listen()}>{working ? "处理中…" : solo.length ? "试听独听轨道" : "试听混音"}</button>
-      {solo.length ? <small>独听只影响试听</small> : null}
+    {subtitleTrack}
+    <div className={ui.audioControls} role="group" aria-label="音频导入与试听">
+      {importControls}
+      {listenControls}
     </div>
     {job?.context === listenContext && job.value.status !== "succeeded" ? <p role="status">{taskMediaJobLabel(job.value)}{["queued", "running", "interrupted"].includes(job.value.status) ? <button className={ui.button} type="button" onClick={() => void cancelListen()}>{job.value.result_kind === "audio_source" ? "取消音频处理" : "取消试听"}</button> : null}</p> : null}
     {audio && audio.context===listenContext && audio.start===start && audio.end===end && audio.soloKey===solo.join(",") ? <audio aria-label="选区音频试听" controls src={apiUrl(audio.url)} onPlay={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} onTimeUpdate={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} /> : null}
