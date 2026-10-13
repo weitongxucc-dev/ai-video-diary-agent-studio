@@ -6,6 +6,20 @@
 
 新主控fresh聊天为01a1376c-acbf-7f50-90a6-31328276a581，host local、同main checkout。旧主控01a135cf-c6d4-78a2-9e40-e69a21651ab4仅完成本次交接文档最后提交、精确冻结核验与监督target转移；收到新主控只读REBASE_ACK并发出含该精确文档提交的OWNER_TRANSFER_COMPLETE后，唯一共享文档/派工/stage/commit负责人即为新主控，旧主控停止协调/派工/集成，不形成两个主控。新主控自行创建五条fresh可见角色：API编辑执行、独立QA、工具/安装/资源、Web消费者、资料/档案。新角色继承下文同职能的精确范围及例外，不继承旧ID授权；新主控登记各新ID并核语义REBASE_ACK后才能续写。当前13个WIP源字节及验收层级以交接JSON/实时Git核验，已有diff/失败记录保留，不reset或重复历史全矩阵。heartbeat标识仍automation，target转给新主控，prompt按本节和新角色表动态读取，不监督旧ID续工。
 
+### 当前 fresh 角色与本批互斥写权
+
+变更绑定 `REF-NEW-CTRL-20261014`，交接文档基线 `9fa1b58fda51cde1fc8048d86ad2f32ec969863b`；主控已收到 OWNER_TRANSFER_COMPLETE。下表是当前角色，后文对应职责及全部例外继续有效；旧角色仅从交接快照定位证据。各线程首轮只读接手，主控核对语义 REBASE_ACK 后在该线程发具体续工；未收到续工不得修改冻结候选。
+
+| 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
+| --- | --- | --- |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；先接字幕五源 WIP 与 None 夹具/float 回读边界，再接 R4 三 production 消费者、完整 R2/R3/bootstrap。R4/R6 整文件例外继续排除。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；先审核冻结 Web 六源及最少独立反例，后核 R4 联合公开候选；旧已过门与准备脚本只读复用。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；本批产品只读，只写 `test-runs/refactor-20261014/fresh-runtime-reload/**`，先实证五 DB 服务重载遗漏与失败半切换风险，再由 API 唯一 bootstrap owner 修复。 |
+| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；现六源发布候选冻结，先核字节/限定 GUI 证据及稳定消费者，QA/集成前不改六源，待 SOURCE_INTEGRATED/WRITE_LEASE_RETURN 或明确 ISSUE_REOPEN 后续写。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；本批独占 `materials/assets.py` 与 `test_material_asset_review_and_usage_store.py` 两 WIP，复用 26 模块检查并交 SOURCE_RELEASE；production 三薄委托归 API，联合公开门未过不接受。 |
+
+共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
 ## 用户决定、入口与范围
 
 用户已批准“按这个方案执行”，要求记住高内聚、低耦合；随后明确允许新建合适的可见实施线程或由主控直接执行。此前整体暂停由本次批准取代，旧线程和旧工作树租约不自动恢复。
@@ -20,7 +34,7 @@
 
 ## 第一波：R0/R1与独立R7
 
-当前可见线程：R1 API为01a13610-8468-7580-9b33-d854f0ad8b7d；R7 Desktop为01a13610-8970-7a50-96f9-244e1e37d481；R0 QA为01a13610-8dcc-7d33-8b7d-75b47619301d。三者均在本main目录执行，host为local。
+当前可见线程：R1 API为01a13772-0d4c-7d92-af3a-57312845da4c；R7 Desktop为01a13772-1968-74b0-8598-acb87024a819；R0 QA为01a13772-12d8-77d0-8487-42b1895027ba。三者均在本main目录执行，host为local。
 
 ### R1 API纵向负责人
 
@@ -67,7 +81,7 @@
 
 ### R4资料边界首批负责人
 
-可见线程为01a13630-0dc5-71a1-90af-cbbea77dcace，host为local。
+可见线程为01a13772-28ed-70c1-90fb-507e59a2fd3a，host为local。
 
 独占apps/api/app/sources.py、source_repository.py、knowledge_grants.py、这三个边界直接需要的中立类型/DDL/资料内部模块，以及test_source_repository.py、test_knowledge_grants.py、test_knowledge_grant_revocation.py和对应新增最小边界测试。目标是资料类型、读取/同步用例、持久存储与授权适配责任清楚；解除仓储反向依赖授权服务/同步服务，不改变现有数据库格式、表结构、共享权限、公共对象或同步提交原子性。公共Python导出沿原入口保持，其他消费者迁移由其文件负责人接续；main/production/schema/路由及其他已分配文件只读。素材与人物仓储提取仍归同一个API巨型文件负责人顺序执行，此首批不代替整个R4。
 
@@ -91,7 +105,7 @@
 
 ### R6工具与CLI首批负责人
 
-R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d481接续R6。独占apps/api/agent_tools/diary_tools.ts、material_tools.ts、其直接需要的实际分组模块和定向测试，以及scripts/yaohe.mjs、yaohe.test.mjs和实际CLI分组模块。首批只拆现有工具注册、可信上下文、HTTP传输与回执、CLI命令职责，保留工具名字/共同schema/公共导出和现有HTTP协议；不开放新动作，不重试未知副作用。assistant_pi.py和后端制作/编辑编排仍不在此写权中，待R2/R3稳定后另行接续。Desktop候选已冻结，不与QA审核同时改动。
+R7首批源码释放后，由同一可见线程01a13772-1968-74b0-8598-acb87024a819接续R6。独占apps/api/agent_tools/diary_tools.ts、material_tools.ts、其直接需要的实际分组模块和定向测试，以及scripts/yaohe.mjs、yaohe.test.mjs和实际CLI分组模块。首批只拆现有工具注册、可信上下文、HTTP传输与回执、CLI命令职责，保留工具名字/共同schema/公共导出和现有HTTP协议；不开放新动作，不重试未知副作用。assistant_pi.py和后端制作/编辑编排仍不在此写权中，待R2/R3稳定后另行接续。Desktop候选已冻结，不与QA审核同时改动。
 
 2026-10-14恢复时追加R6宿主适配写权：独占assistant_pi.py、其实际提取的assistant/**模块，以及test_assistant_pi_failures.py、test_pi_instruction_closure.py和直接相关宿主预读取/运行时体检测试。先修复新工具子目录缺失仍被体检报告ready的已复现缺口，再拆进程运行、轮次停止、业务事件投影与可信上下文组装；保持公开函数、env/会话/工具白名单、真实错误与停止语义，不改变后端编辑/制作用例、认证或模型协议，不调用真实账号模型。原工具首批先提供SOURCE_RELEASE与摘要，不与新宿主改动混淆候选。新协议/共享契约变化仍先报主控。
 
@@ -109,7 +123,7 @@ IO六源集成后，R6接续已定位的服务状态解释小片：独占新增a
 
 ### R5 Web负责人
 
-可见线程为01a13626-c206-74f1-a258-ae4d9d86c7a8，host为local。
+可见线程为01a13772-20d8-77a3-8c68-d372b38a7d3b，host为local。
 
 在既有HTTP/schema与用户交互保持的条件下，独占apps/web/src/components/CreationTaskWorkspace.tsx、MaterialLibraryWorkspace.tsx、直接提取的新组件/控制器、apps/web/src/lib/api.ts、types.ts及对应业务分组文件和定向前端测试。不改API/Desktop/Mobile、认证/存储协议、DESIGN或其他共享权威。当前R1承诺外部响应兼容；需要新增/改变契约时先由主控冻结。按阶段传明确的只读事实与必要动作，不把完整workspace或万能setter/deps传给所有子组件。保留选择、播放、草稿、持续会话、撤销及真实等待/失败表达；不重设计界面。读AGENTS1.1、DESIGN与方案R5；代码与三尺寸真实GUI分项验收。
 
