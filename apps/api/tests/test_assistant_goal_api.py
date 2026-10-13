@@ -14,6 +14,7 @@ from app.quality_inspection import QualityCheckRepository
 from test_assistant_business_continuation import state as state  # noqa: F401
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state  # noqa: F401
+from test_media_script_api import state as script_state  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +64,171 @@ def test_assistant_scope_reads_registered_image_overlay_from_persisted_montage(s
     with pytest.raises(main.HTTPException) as error:
         main._assistant_turn_scope(state.workspace_id, task, payload)
     assert error.value.status_code == 422
+
+
+@pytest.mark.parametrize("observation_first", [False, True])
+def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_adoption(state, monkeypatch, observation_first):
+    state.finish()
+    monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
+        effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
+    media = state.runtime.registrations["creation_job"].owner.task_media
+    execute = media.execute_operation
+    def bounded_media_seam(job, event, actor):
+        if event["operation"] == "output_observation":
+            # The media observer is a seam; real device/JobRun/event/HTTP ownership is exercised.
+            return {"observation_id": job.id, "task_id": job.task_id, "fixture": "bounded_reader_result"}
+        return execute(job, event, actor)
+    monkeypatch.setattr(media, "execute_operation", bounded_media_seam)
+    calls = []
+    def model(_settings, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("continuation_context"):
+            assert kwargs["continuation_context"]["business_event"]["status"] == "confirmed"
+            return "已读取真实采用结果。", None
+        observed = main.CreationTaskObservationRequest(target={"kind": "final"},
+            expected_timeline_version_id=state.version.id, expected_timeline_sequence=state.version.sequence,
+            assistant_turn_id=kwargs["turn_id"], request_id=uuid4())
+        source = main._prepare_observation_request(state.task.id, state.request, observed)
+        actor = main._require_permit_actor(state.request, state.workspace_id)
+        def submit_observation():
+            media.submit(state.runtime, actor, state.task.id, "output_observation",
+                {"payload": observed.model_dump(mode="json"), "_typed_source": source, "_media_kind": "output_observation"}, "observation")
+        if observation_first:
+            submit_observation()
+        preview = state.raw_post(state.base_url + "/edits/exact/preview", json={
+            "operation_type": "ChangeCrop", "clip_id": state.clip.id, "fit_mode": "fill", "crop_x": .2, "crop_y": .5,
+            "request_id": str(uuid4()), "assistant_turn_id": kwargs["turn_id"],
+            "expected_timeline_version_id": state.version.id, "expected_timeline_sequence": state.version.sequence})
+        assert preview.status_code == 202, preview.text
+        if not observation_first:
+            submit_observation()
+        return "已安排观察与待采用预览。", {"kind": "media_job", "media_job": preview.json()}
+    monkeypatch.setattr(main, "run_task_turn", model)
+    chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
+    raw = "检查实际结果并准备修改；等我实际采用，再继续生成"
+    chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
+    result = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": raw,
+        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "review",
+        "selected_object_refs": [f"clip:{state.clip.id}"], "expected_timeline_version_id": state.version.id,
+        "expected_timeline_sequence": state.version.sequence})
+    assert result.status_code == 200, result.text
+    root_id = result.json()["turn_id"]
+    main.start_assistant_continuation_driver()
+    assert state.runtime.run_once()
+    if observation_first:
+        wait_until(lambda: state.conversations.get_turn(root_id)["result"].get("continuation", {}).get("phase") == "observation")
+        assert main._goal_service().reconcile() == 0 and len(calls) == 1
+        assert state.conversations.get_task_goal(root_id)["status"] == "waiting_result"
+        assert state.runtime.run_once()
+    preview = wait_until(lambda: state.conversations.get_turn(root_id)["result"]["response"].get("edit_preview"))
+    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "waiting_adoption")
+    if not observation_first:
+        assert state.runtime.run_once()  # An unrelated completed observation must keep the actual preview card.
+        wait_until(lambda: state.conversations.get_turn(root_id)["result"].get("continuation", {}).get("phase") == "observation")
+        assert state.conversations.get_turn(root_id)["result"]["response"]["edit_preview"]["proposal"]["id"] == preview["proposal"]["id"]
+    proposal = state.production.get_edit_proposal(state.workspace_id, preview["proposal"]["id"])
+    assert proposal.status == "proposed" and len(calls) == 1
+    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
+    adopted = state.raw_post(state.base_url + f"/edits/{proposal.id}/confirm", json={"request_id": str(uuid4())})
+    assert adopted.status_code == 200, adopted.text
+    wait_until(lambda: len(calls) == 2)
+    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
+    assert main._goal_service().reconcile() == 0 and len(calls) == 2
+    assert not any(job.kind == "creation_task_execution" for job in state.production.list_job_runs(state.workspace_id, state.task.id))
+
+
+@pytest.mark.parametrize("damaged", [False, True])
+def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and_rechecks_file(script_state, state, monkeypatch, damaged):
+    state.finish()
+    monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
+        effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
+    models, receipts = [], []
+    def submit_source(kwargs, *, name="card.png"):
+        version = kwargs["task_version"]
+        return state.raw_post(state.base_url + "/media-scripts/preview", json={**script_state.payload,
+            "request_id": str(uuid4()), "assistant_turn_id": kwargs["turn_id"],
+            "expected_timeline_version_id": version["timeline_version_id"], "expected_timeline_sequence": version["timeline_sequence"],
+            "script_source": f"# another generated program at call {len(models)}\nprint('different')",
+            "requested_outputs": [{**script_state.payload["requested_outputs"][0], "name": name}]})
+    def model(_settings, **kwargs):
+        models.append(kwargs)
+        if not kwargs.get("continuation_context"):
+            response = submit_source(kwargs)
+            assert response.status_code == 202, response.text
+            receipts.append(response.json())
+            return "已安排一次图片来源。", {"kind": "media_job", "media_job": response.json()}
+        slots = kwargs["continuation_context"]["completed_source_slots"]
+        assert len(slots) == 1 and slots[0]["job_id"] == receipts[0]["job_id"]
+        assert "script_source" not in slots[0]
+        if damaged:
+            main.artifact_store.resolve_file(slots[0]["source_ref"]).write_bytes(b"changed actual PNG")
+        repeated = submit_source(kwargs)
+        assert repeated.status_code == (409 if damaged else 200), repeated.text
+        assert len(state.calls) == 1
+        if damaged:
+            return "原已完成来源发生变化，不能复用或自动重执行。", None
+        reused = repeated.json()
+        assert reused["job_id"] == receipts[0]["job_id"] and reused["result"]["reused_completed_source"] is True
+        assert reused["result"]["applied"] is False
+        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+        if len(models) == 2:
+            prepared = main._prepare_script_request(state.task.id, state.request, main.MediaScriptPreviewRequest.model_validate({
+                **script_state.payload, "request_id": uuid4(), "assistant_turn_id": kwargs["turn_id"],
+                "requested_outputs": [{**script_state.payload["requested_outputs"][0], "name": "new-slot.png"}]}))
+            assert "reused_completed_source" not in prepared  # A different slot follows normal scheduling.
+            proposal = state.raw_post(state.base_url + "/edits/exact/preview", json={
+                "operation_type": "DeleteClip", "clip_id": state.clip.id, "request_id": str(uuid4()),
+                "assistant_turn_id": kwargs["turn_id"], "expected_timeline_version_id": state.version.id,
+                "expected_timeline_sequence": state.version.sequence})
+            assert proposal.status_code == 200, proposal.text
+            return "请实际采用删除提案。", proposal.json()
+        assert kwargs["continuation_context"]["business_event"]["status"] == "confirmed"
+        assert kwargs["task_version"]["timeline_version_id"] != state.version.id
+        ordinary = state.client.get(receipts[0]["result_url"])
+        assert ordinary.status_code == 200 and ordinary.json()["status"] == "stale"
+        return "同目标已完成来源已重新核验，仅复用来源，未再次生成。", {"kind": "media_job", "media_job": reused}
+    monkeypatch.setattr(main, "run_task_turn", model)
+    chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
+    raw = "生成命名图片一次；实际采用修改后继续使用这份已完成来源"
+    chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
+    response = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": raw,
+        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "review",
+        "selected_object_refs": [f"clip:{state.clip.id}"], "expected_timeline_version_id": state.version.id,
+        "expected_timeline_sequence": state.version.sequence})
+    assert response.status_code == 200, response.text
+    root_id = response.json()["turn_id"]
+    main.start_assistant_continuation_driver()
+    assert state.runtime.run_once()
+    wait_until(lambda: len(models) == 2)
+    if not damaged:
+        child_id = models[-1]["turn_id"]
+        preview = wait_until(lambda: (state.conversations.get_turn(child_id)["result"] or {}).get("response", {}).get("edit_preview"))
+        assert state.production.get_edit_proposal(state.workspace_id, preview["proposal"]["id"]).status == "proposed"
+        adopted = state.raw_post(state.base_url + f"/edits/{preview['proposal']['id']}/confirm", json={"request_id": str(uuid4())})
+        assert adopted.status_code == 200, adopted.text
+        wait_until(lambda: len(models) == 3)
+    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
+    final = state.conversations.get_turn(models[-1]["turn_id"])
+    assert final["status"] == "completed" and final["result"]["goal_business_actions"] == []
+    if not damaged:
+        assert final["result"]["response"]["media_job"]["status"] == "succeeded"
+        assert final["result"]["response"]["media_job"]["result"]["reused_completed_source"] is True
+    assert len(state.calls) == 1 and main._goal_service().reconcile() == 0
+    assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+    if not damaged:
+        chat = state.conversations.get(chat["id"], state.workspace_id, state.member.member_id)
+        new_instruction = "新的独立指令：重新生成同名图片"
+        chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, new_instruction, chat["draft_version"])
+        task = state.production.get_creation_task(state.workspace_id, state.task.id)
+        version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+        new = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": new_instruction,
+            "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "montage",
+            "selected_object_refs": [], "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
+        assert new.status_code == 200 and new.json()["media_job"]["status"] == "queued", new.text
+        assert new.json()["media_job"]["job_id"] != receipts[0]["job_id"]
+        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 2 and len(state.calls) == 1
 
 
 @pytest.mark.parametrize("shutdown,operation", [(False, "ChangeCrop"), (True, "ChangeCrop"), (False, "DeleteClip")])

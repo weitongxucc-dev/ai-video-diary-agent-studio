@@ -3774,6 +3774,11 @@ def _task_media_route(operation, result_kind):
                             except (KeyError, PermissionError, ScriptToolError) as exc:
                                 _script_tool_error(exc)
                         typed_source = _prepare_script_request(bound.arguments["task_id"], request, script_payload)
+                        if typed_source.get("reused_completed_source") is not None:
+                            result = JSONResponse(status_code=200, content=typed_source["reused_completed_source"])
+                            if edit_request_event:
+                                _save_edit_request_result(task, edit_request_event, result)
+                            return result
                     else:
                         bound.arguments["payload"], typed_source = _prepare_exact_edit_request(bound.arguments["task_id"], request, original)
                 except HTTPException as exc:
@@ -5094,6 +5099,38 @@ def _script_configuration():
     return toolchain, budget
 
 
+def _completed_source_receipt(task, request, turn_id, slot, *, contract, input_refs):
+    actor = _require_permit_actor(request, task.workspace_id)
+    goal = conversation_repo.get_task_goal(turn_id)
+    bound = conversation_repo.completed_goal_source(turn_id, requested_outputs=[contract], input_refs=input_refs)
+    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    if (bound is None or bound["job_id"] != slot["job_id"] or
+            (goal["target_snapshot"].get("timeline_version_id"), goal["target_snapshot"].get("timeline_sequence")) != (
+                task.current_timeline_version_id, version.sequence if version else 0)):
+        raise HTTPException(status_code=409, detail="已完成来源的原目标版本链已失效")
+    try:
+        actual = _goal_script_source_slot(goal, slot["job_id"], actor)
+        if any(actual[key] != slot[key] for key in ("source_ref", "artifact_id", "sha256", "size_bytes", "width", "height", "name", "input_refs")):
+            raise ValueError("已完成来源登记事实发生变化")
+        if actual["size_bytes"] > contract["max_bytes"] or actual["width"] > contract["width"] or actual["height"] > contract["height"]:
+            raise ValueError("已完成来源不符合本次输出尺寸或大小上限")
+        for item in input_refs:
+            facts = graphic_source_facts(production_repo, artifact_store, task.workspace_id, task.id, item["source_ref"], actor=actor)
+            if facts["artifact_id"] != item["expected_artifact_id"] or facts["sha256"] != item["expected_sha256"]:
+                raise ValueError("原固定输入登记修订已变化")
+        job = production_repo.get_job_run(task.workspace_id, slot["job_id"])
+        start = production_repo.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
+        result = production_repo.get_task_event(task.workspace_id, f"event_{job.id}_result").payload["result"]
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (KeyError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return TaskMediaJobResponse(operation=start["operation"], target_refs=[],
+        input_digest=job.input_digest, created_at=job.created_at, job_id=job.id, status=job.status,
+        result_kind="graphic_source", result_url=f"/api/creation-tasks/{task.id}/media-jobs/{job.id}",
+        base_version_id=start["input_facts"]["base_version_id"], result={**result, "reused_completed_source": True}).model_dump(mode="json")
+
+
 def _prepare_script_request(task_id, request, payload):
     task, member_id = _exact_edit_access(task_id, request, write=True)
     version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
@@ -5114,6 +5151,14 @@ def _prepare_script_request(task_id, request, payload):
     actor = _request_permit_actor(request, task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id, member_id)
     if actor is not None:
         source["actor_identity"] = actor.identity_payload()
+    if payload.assistant_turn_id is not None:
+        slot = conversation_repo.completed_goal_source(str(payload.assistant_turn_id),
+            requested_outputs=[item.model_dump(mode="json") for item in payload.requested_outputs],
+            input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
+        if slot is not None:
+            source["reused_completed_source"] = _completed_source_receipt(task, request, str(payload.assistant_turn_id), slot,
+                contract=payload.requested_outputs[0].model_dump(mode="json"),
+                input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
     return source
 
 
@@ -8268,7 +8313,16 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         candidate = TaskMediaJobResponse.model_validate(preview.get("media_job"))
         # Only the stable job identity is consumed from the tool receipt.
         # Re-read state, ownership and result URLs from the production owner.
-        media_job = TaskMediaJobResponse.model_validate(get_task_media_job(task_id, candidate.job_id, request))
+        if (candidate.result or {}).get("reused_completed_source") is True:
+            goal = conversation_repo.get_task_goal(turn_id)
+            slot = next((item for item in (goal or {}).get("completed_source_slots", []) if item["job_id"] == candidate.job_id), None)
+            if slot is None:
+                raise HTTPException(status_code=409, detail="复用来源不属于当前原目标的已完成输出槽")
+            task, _member_id = _exact_edit_access(task_id, request, write=True)
+            media_job = TaskMediaJobResponse.model_validate(_completed_source_receipt(task, request, turn_id, slot,
+                contract=slot["requested_output"], input_refs=slot["input_refs"]))
+        else:
+            media_job = TaskMediaJobResponse.model_validate(get_task_media_job(task_id, candidate.job_id, request))
         edit_preview = None
     elif isinstance(preview, dict) and "script_id" in preview and "proposal" not in preview:
         script_id = preview.get("script_id") if isinstance(preview, dict) else None
@@ -19715,6 +19769,91 @@ def _goal_request(goal):
                     "headers": headers, "query_string": b"", "state": state})
 
 
+def _goal_script_source_slot(goal, job_id, actor):
+    job = production_repo.get_job_run(goal["workspace_id"], job_id)
+    start = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
+    source = start["arguments"]["_typed_source"]
+    producer_goal = conversation_repo.get_task_goal(source["assistant_turn_id"])
+    if (job.task_id != goal["task_id"] or job.kind != TASK_MEDIA_KIND or job.status != "succeeded"
+            or start["result_kind"] != "graphic_source" or CreationExecutionActor.from_event(job.workspace_id, start) != actor
+            or (source["workspace_id"], source["task_id"], source["member_id"], source["conversation_id"]) != (
+                goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
+            or producer_goal is None or producer_goal["original_turn_id"] != goal["original_turn_id"]
+            or media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest):
+        raise ValueError("已完成程序来源不属于原目标的实际成功作业")
+    payload = start["arguments"]["payload"]
+    result = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
+    facts = graphic_source_facts(production_repo, artifact_store, job.workspace_id, job.task_id, result["source_ref"], actor=actor)
+    publication = artifact_store.describe(result["source_ref"])
+    if (facts["producer_job_id"] != job.id or not _task_media_outputs_current(job)
+            or (publication.sha256, publication.size_bytes) != (result["sha256"], result["size_bytes"])
+            or any(facts[key] != result[key] for key in ("artifact_id", "sha256", "size_bytes", "width", "height"))):
+        raise ValueError("已完成PNG来源与当前真实登记文件不一致")
+    if start["operation"] == "media_script_preview":
+        outputs = payload["requested_outputs"]
+    elif start["operation"] == "media_script_tool_preview":
+        definition = next(item for item in production_repo.list_artifact_records(job.workspace_id, job.task_id)
+            if item.producer_job_id == job.id and item.kind == "media_script_definition")
+        published = artifact_store.describe(definition.logical_ref)
+        if (published.sha256, published.size_bytes) != (definition.sha256, definition.size_bytes) or definition.size_bytes > 256 * 1024:
+            raise ValueError("原成功配方定义不可核验")
+        outputs = json.loads(artifact_store.resolve_file(definition.logical_ref).read_text())["requested_outputs"]
+    else:
+        raise ValueError("已完成图片不是本目标的程序来源")
+    output, = outputs
+    if output["name"] != result["name"]:
+        raise ValueError("原成功图片与命名输出槽不一致")
+    return {"job_id": job.id, **{key: result[key] for key in ("source_ref", "artifact_id", "sha256", "size_bytes", "name", "width", "height")},
+        "requested_output": output, "input_refs": payload.get("input_refs", []), "base_version_id": start["input_facts"]["base_version_id"]}
+
+
+def _goal_completed_sources(goal, actor):
+    with production_repo._connect() as conn:
+        rows = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
+            "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
+            "AND j.status='succeeded' AND e.event_type='task_media_submitted' "
+            "AND json_extract(e.payload_json,'$.result_kind')='graphic_source' "
+            "AND json_extract(e.payload_json,'$.operation') IN ('media_script_preview','media_script_tool_preview') "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at,j.id",
+            (goal["workspace_id"], goal["task_id"], goal["conversation_id"], goal["member_id"])).fetchall()
+    slots = []
+    for row in rows:
+        source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
+        bound = conversation_repo.get_task_goal(source["assistant_turn_id"])
+        if bound and bound["original_turn_id"] == goal["original_turn_id"]:
+            slots.append(_goal_script_source_slot(goal, row["id"], actor))
+    return slots
+
+
+def _goal_pending_preview(goal, timeline_version_id):
+    """A sibling observation result cannot bypass this goal's actual adoption wait."""
+    with production_repo._connect() as conn:
+        proposals = conn.execute("SELECT p.id,i.constraints_json FROM edit_proposals p JOIN edit_intents i "
+            "ON i.workspace_id=p.workspace_id AND i.id=p.intent_id WHERE p.workspace_id=? AND p.task_id=? "
+            "AND p.status='proposed' AND json_extract(p.operation_json,'$.payload.base_version_id') IS ? "
+            "AND json_extract(i.constraints_json,'$.request_source.conversation_id')=? "
+            "AND json_extract(i.constraints_json,'$.request_source.member_id')=? ORDER BY p.created_at",
+            (goal["workspace_id"], goal["task_id"], timeline_version_id, goal["conversation_id"], goal["member_id"])).fetchall()
+        jobs = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
+            "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
+            "AND e.event_type='task_media_submitted' AND j.status IN ('queued','running','interrupted') "
+            "AND json_extract(e.payload_json,'$.result_kind')='edit_preview' "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.expected_timeline_version_id') IS ? "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at",
+            (goal["workspace_id"], goal["task_id"], timeline_version_id, goal["conversation_id"], goal["member_id"])).fetchall()
+    for rows, status in ((proposals, "waiting_adoption"), (jobs, "waiting_result")):
+        for row in rows:
+            source = (json.loads(row["constraints_json"])["request_source"] if status == "waiting_adoption"
+                else json.loads(row["payload_json"])["arguments"]["_typed_source"])
+            bound = conversation_repo.get_task_goal(source["assistant_turn_id"])
+            if bound and bound["original_turn_id"] == goal["original_turn_id"]:
+                return {"status": status, "reason": "await_real_adoption" if status == "waiting_adoption"
+                    else "await_actual_preview_result", "pending_id": row["id"]}
+    return None
+
+
 def _verify_current_goal(goal, event):
     request = _goal_request(goal)
     if request is None:
@@ -19730,7 +19869,15 @@ def _verify_current_goal(goal, event):
     event_version = event.get("result_version_id") or event.get("base_version_id")
     if event.get("base_version_id") != expected or task.current_timeline_version_id != event_version:
         return {"status": "invalidated", "reason": "unrelated_timeline_change"}
-    facts = {"business_event": event, "task": {"id": task.id, "stage": task.stage, "output_ready": task.output_ready}}
+    try:
+        completed_sources = _goal_completed_sources(goal, actor)
+    except (KeyError, ValueError, PermissionError, OSError) as exc:
+        return {"status": "invalidated", "reason": "completed_source_no_longer_authorized_or_current"}
+    pending = _goal_pending_preview(goal, task.current_timeline_version_id)
+    if pending is not None:
+        return {**pending, "completed_source_slots": completed_sources}
+    facts = {"business_event": event, "task": {"id": task.id, "stage": task.stage, "output_ready": task.output_ready},
+        "completed_source_slots": completed_sources}
     no_side_effect = False
     # Only the verified goal-version chain carries previously applied deletions;
     # later render/observation events do not repeat the adoption operation.
@@ -19792,7 +19939,7 @@ def _verify_current_goal(goal, event):
                 return {"status": "invalidated", "reason": "original_reference_authorization_changed"}
     return {"status": "ready", "task_version": {"timeline_version_id": task.current_timeline_version_id,
         "timeline_sequence": version.sequence if version else 0, **({"removed_selected_refs": removed_refs} if removed_refs else {})}, "facts": facts, "request": request,
-        "actor": actor, "no_side_effect": no_side_effect}
+        "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources}
 
 
 def _run_goal_turn(claim, fresh):
@@ -19834,7 +19981,10 @@ def _run_goal_turn(claim, fresh):
             profile_reference=fresh["facts"].get("profile_reference"), knowledge_reference=fresh["facts"].get("knowledge_reference"),
             task_version=fresh["task_version"], material_selection=material_selection,
             continuation_context={"original_turn_id": goal["original_turn_id"], "business_event": claim["event"],
-                                  "current_facts": fresh["facts"], "round_count": goal["round_count"]})
+                                  "current_facts": fresh["facts"], "round_count": goal["round_count"],
+                                  "goal_checkpoint": {key: goal[key] for key in ("target_snapshot", "unfinished_steps", "handled_event_ids")},
+                                  "completed_source_slots": goal.get("completed_source_slots", []),
+                                  "unfinished_steps": goal["unfinished_steps"], "next_checkpoint": goal.get("next_checkpoint")})
         tail = sanitizer.feed("", final=True)
         if tail:
             conversation_repo.append_event(turn_id, {"type": "text_delta", "delta": tail})
@@ -20077,7 +20227,7 @@ def _project_assistant_business_candidate(candidate):
              "job_id": job.id if job else source.get("media_job_id"), "proposal_id": proposal.id if proposal else None,
              "base_version_id": base_version, "result_version_id": result_version,
              "status": status, "actionable": status == "proposed" and _assistant_business_turn_can_continue(binding, turn_id)}
-    response_patch = {"edit_preview": None}
+    response_patch = {"edit_preview": None} if proposal is not None and status != "proposed" else {}
     if event["actionable"]:
         intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
         preview = _edit_preview_response(intent, proposal).model_dump(mode="json")

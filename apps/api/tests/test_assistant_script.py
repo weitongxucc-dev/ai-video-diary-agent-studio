@@ -109,12 +109,12 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
 
 def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_path, monkeypatch):
     from datetime import datetime
+    from app.creation_execution import CreationExecution, CreationExecutionActor
     from app.montage import MontageClip
-    from app.production import MaterialAsset, MaterialSegment
+    from app.production import JobRun, MaterialAsset, MaterialSegment, TaskEvent
 
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
-    material_repo = ProductionRepository(tmp_path / "selected-material.sqlite3", tmp_path / "selected-library")
-    material_repo.video_library_path.mkdir()
+    material_repo = _script_task(tmp_path)
     path = material_repo.video_library_path / "source.mp4"
     path.write_bytes(b"isolated-selection-metadata")
     material = material_repo._save_asset(MaterialAsset(
@@ -129,9 +129,9 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
         source_start_seconds=0, source_end_seconds=3, timeline_start_seconds=0,
         timeline_end_seconds=3, match_score=1, match_reasons=["existing selected material"],
         needs_confirmation=False)
-    events = []
     calls = []
-    task = SimpleNamespace(id="task-one", stage="review", confirmed_script_id="script-one",
+    task = CreationTask(id="task-one", workspace_id="local", plan_id="plan-one", name="选择范围验收",
+                           scenario="选择范围验收", stage="review", confirmed_script_id="script-one",
                            narration_cache_key="narration-one", current_timeline_version_id=None,
                            montage_plan_id="plan-one", visibility="shared", owner_user_id=None)
     montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
@@ -146,7 +146,12 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
             SimpleNamespace(id="segment-current", status="ready"),
         ],
         get_creation_task_montage_plan=lambda workspace_id, task_id: {},
-        append_task_event=events.append,
+        get_creation_task=lambda workspace_id, task_id: task,
+        get_job_run=material_repo.get_job_run,
+        get_task_event=material_repo.get_task_event,
+        list_task_events=material_repo.list_task_events,
+        append_task_event=material_repo.append_task_event,
+        _connect=material_repo._connect,
     )
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "_creation_task_or_404", lambda workspace_id, task_id: task
@@ -154,15 +159,23 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                         (_ for _ in ()).throw(HTTPException(status_code=404, detail="task not found")))
     monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
     monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
+    def no_execution(*_):
+        pytest.fail("this scope test must not run a media executor")
+    monkeypatch.setattr(main_module, "creation_execution", CreationExecution(material_repo,
+        run_narration=no_execution, run_montage_plan=no_execution, run_render=no_execution,
+        render_is_valid=lambda *_: False))
     def run_turn(_settings, **kwargs):
         calls.append(kwargs)
         if "把真实排队状态显示给我" in kwargs["message"]:
+            job = material_repo.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
+                kind="creation_task_execution", idempotency_key="scope-execution", input_digest="actual-scope-input"))
+            actor = CreationExecutionActor("local", member_id)
+            material_repo.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
+                task_id=task.id, job_id=job.id, event_type="creation_execution_started",
+                payload={"input_digest": job.input_digest, **actor.identity_payload()}))
             return "连续制作已提交并排队，尚未完成。", {
                 "kind": "execution_action", "action": "start",
-                "status": {"task_id": task.id, "job": {"id": "job-one", "status": "queued"},
-                           "stages": [], "current_stage": "narration", "waiting_reason": None,
-                           "status_updated_at": None, "video_ready": False,
-                           "cover_status": "pending", "cover_message": "尚未生成封面。"},
+                "status": main_module._creation_execution_status("local", task.id),
             }
         return "请检查修改。", None
     monkeypatch.setattr(main_module, "run_task_turn", run_turn)
@@ -205,7 +218,8 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     assert selection["asset_id"] == material.id and selection["segment_id"] == material.segments[0].id
     assert selection["expected_updated_at"] == material.updated_at.isoformat()
     assert selection["expected_segment_updated_at"] == material.segments[0].updated_at.isoformat()
-    assert events == []  # Assistant turns live in the conversation repository, not legacy TaskEvent chat rows.
+    assert {item.event_type for item in material_repo.list_task_events("local", task.id)} == {
+        "creation_execution_started", "assistant_execution_located"}  # Actual binding facts; no legacy chat rows.
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["status"]) for item in saved_turns] == [
         ("请检查当前片段", "completed"), ("请检查当前片段", "completed"),
