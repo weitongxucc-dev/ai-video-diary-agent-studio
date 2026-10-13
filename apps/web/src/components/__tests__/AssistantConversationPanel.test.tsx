@@ -92,6 +92,20 @@ function state(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
+it("shows a real business continuation without fabricating a user message or empty edit action", () => {
+  const saved = conversation("task");
+  saved.turns = [{...saved.turns[0], user_message: "", assistant_text: "已读取实际输出。", status: "failed",
+    events: [{type: "goal_continuation_started", source_kind: "business_event", original_turn_id: "original-human-turn",
+      source_turn_id: "source-turn", event_id: "real-event"}] as unknown as AssistantConversation["turns"][number]["events"],
+    result: null}];
+  const rendered = render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+    onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+  expect(screen.getByText("继续完成原要求")).toBeVisible();
+  expect(rendered.container.querySelector(".assistant-user-message")).toBeNull();
+  expect(screen.queryByRole("button", {name: "继续编辑本条要求"})).not.toBeInTheDocument();
+  expect(screen.getByText("接续未完成；原要求和实际结果保留在记录中。")).toBeVisible();
+});
+
 function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "confirmed" | "rejected"): AssistantConversation {
   const saved = conversation("task");
   const continuation = status === "queued" ? undefined : {type: "business_result", event_id: `event-${status}`,

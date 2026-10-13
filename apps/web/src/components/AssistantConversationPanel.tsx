@@ -197,6 +197,9 @@ function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefine
 }
 
 function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean }) {
+  const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
+    && "type" in event && event.type === "goal_continuation_started"
+    && "source_kind" in event && event.source_kind === "business_event");
   const result = turn.result;
   const taskResult = assistantTaskTurnResult(turn);
   const continuation = taskResult?.continuation;
@@ -248,7 +251,8 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
           ? result.message
           : null);
   return <article className="assistant-persisted-turn" data-turn-status={turn.status}>
-    <p className="assistant-user-message">{turn.user_message}</p>
+    {turn.user_message.trim() ? <p className="assistant-user-message">{turn.user_message}</p> : null}
+    {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnContent turn={turn} reading={reading} />
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
@@ -261,9 +265,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}
     </div></ReadingDetails> : null}
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <button className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button> : null}
-    {turn.status === "failed" ? <p role="status">本轮未完成；本条要求保留在记录中。</p> : null}
+    {turn.status === "failed" ? <p role="status">{businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
-    {(turn.status === "failed" || turn.status === "stopped") && !unknownRequest ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
+    {(turn.status === "failed" || turn.status === "stopped") && turn.user_message.trim() && !unknownRequest ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
     {turn.status !== "running" && turn.assistant_text.trim() ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined} onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
   </article>;
 }

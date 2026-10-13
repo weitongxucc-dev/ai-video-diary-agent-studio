@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -817,6 +818,70 @@ class SourceRepository:
         if row is None:
             raise KeyError(item_id)
         return self._knowledge_item_from_row(row)
+
+    def search_knowledge_items(
+        self, workspace_id: str, *, query: str, limit: int = 5, offset: int = 0,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Search current authorized versions in SQLite; only the bounded page leaves it.
+
+        This is substring retrieval, not a vector index. It shares the existing
+        visibility predicate and reference-use rules, including active grants.
+        """
+        self._require_workspace(workspace_id)
+        if user_id is None and not local_diagnostic:
+            raise ValueError("读取知识必须带已验证身份，或显式的本地受控诊断范围")
+        normalized = query.lower().strip()
+        if not normalized or len(query) > 120 or not 1 <= limit <= 20 or offset < 0:
+            raise ValueError("知识检索需要1–120字查询及有界分页")
+        cjk = r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff"
+        terms = []
+        for part in re.findall(f"[{cjk}]+|[^{cjk}\\s]+", normalized):
+            if re.fullmatch(f"[{cjk}]+", part) and len(part) > 1:
+                terms.extend(part[index:index + 2] for index in range(len(part) - 1))
+            terms.append(part)
+        terms = list(dict.fromkeys(terms))
+        parameters: dict[str, object] = {
+            "workspace_id": workspace_id, "user_id": user_id,
+            "private": CONTENT_VISIBILITY_DEFAULT, "shared": CONTENT_VISIBILITY_LEGACY,
+            "query": normalized, "limit": limit, "offset": offset,
+        }
+        access = "workspace_id = :workspace_id AND use_state != 'excluded'" if local_diagnostic else self._knowledge_access_clause()
+        allowed_states = [state for state in sorted(CONTENT_USE_STATES) if content_allows_use(state, "reference")]
+        for index, state in enumerate(allowed_states):
+            parameters[f"state{index}"] = state
+        access += " AND use_state IN (" + ",".join(f":state{index}" for index in range(len(allowed_states))) + ")"
+        haystack = "lower(title || ' ' || coalesce(body, ''))"
+        hits = []
+        matched_columns = []
+        for index, term in enumerate(terms):
+            parameters[f"term{index}"] = term
+            hit = f"(instr({haystack}, :term{index}) > 0)"
+            hits.append(hit)
+            matched_columns.append(f"{hit} AS hit{index}")
+        score = "(" + " + ".join(hits) + f") * 1.0 / {len(terms)} + (instr({haystack}, :query) > 0) * 0.5"
+        # Prefer the complete query; otherwise center the excerpt on the first
+        # matching term in the current body, rather than hiding a hit after 900 chars.
+        positions = ["instr(lower(coalesce(body, '')), :query)"] + [
+            f"instr(lower(coalesce(body, '')), :term{index})" for index in range(len(terms))]
+        excerpt_position = "coalesce(" + ",".join(f"nullif({position}, 0)" for position in positions) + ",1)"
+        selection = f"""SELECT id,title,version,content_hash,use_state,created_at,
+            substr(coalesce(body,''), max(1, {excerpt_position} - 160), 900) AS excerpt,
+            {score} AS relevance, {','.join(matched_columns)}
+            FROM knowledge_items WHERE {access}"""
+        with self._connect() as conn:
+            # Count and page share one read snapshot; concurrent edits cannot
+            # make the reported count describe a different page.
+            conn.execute("BEGIN")
+            total = conn.execute(f"SELECT count(*) FROM ({selection}) WHERE relevance > 0", parameters).fetchone()[0]
+            rows = conn.execute(f"""SELECT * FROM ({selection}) WHERE relevance > 0
+                ORDER BY relevance DESC,created_at DESC,id ASC LIMIT :limit OFFSET :offset""", parameters).fetchall()
+        items = [{"id": row["id"], "title": row["title"], "version": row["version"],
+                  "content_hash": row["content_hash"], "use_state": row["use_state"], "excerpt": row["excerpt"],
+                  "relevance": round(row["relevance"], 2),
+                  "matched_terms": [term for index, term in enumerate(terms) if row[f"hit{index}"]][:6]}
+                 for row in rows]
+        return items, total
 
     def get_knowledge_item_for_use(
         self, workspace_id: str, item_id: str, *, purpose: ContentUsePurpose,

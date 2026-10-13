@@ -14,20 +14,24 @@ import app.assistant_pi as host
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 RUNNER = r"""
 let raw=''; for await (const part of process.stdin) raw+=part;
-const input=JSON.parse(raw), tools=new Map(), calls=[], results=[];
+const input=JSON.parse(raw), tools=new Map(), calls=[], results=[]; let failedPosts=0;
 globalThis.fetch=async(url,init)=>{
  const path=new URL(url).pathname, body=init?.body?JSON.parse(init.body):null;
- calls.push({path,method:init?.method||'GET',body,token:init?.headers?.get('X-Local-Member-Token')});
+ calls.push({path,query:new URL(url).search,method:init?.method||'GET',body,token:init?.headers?.get('X-Local-Member-Token')});
  if(input.delay_ms){await new Promise(resolve=>setTimeout(resolve,input.delay_ms));if(init?.signal?.aborted)throw new Error('fixture call cancelled');}
  let value=input.workspace;
  if(path.endsWith('/assistant/edit-capabilities'))value=input.capabilities;
  if(path.includes('/candidates'))value=[];
  if(path.endsWith('/execution'))value={task_id:'task-current',job:null};
+ if(path.endsWith('/knowledge-items/search'))value=input.knowledge;
+ if(path.endsWith('/assistant/script-context')&&input.script_context)value=input.script_context;
+ if(path.endsWith('/observations')){value=init?.method==='POST'?input.observation_job:input.observations;
+  if(init?.method==='POST'&&input.lost_receipt)throw new TypeError('fixture reply lost');}
  if(path.endsWith('/edits/exact/preview')){value=input.preview;if(input.lost_receipt)throw new TypeError('fixture reply lost');}
- if(path.includes('/assistant/edit-requests/'))value={request_id:path.split('/').pop(),phase:'preview',status:'recorded',result:input.preview};
+ if(path.includes('/assistant/edit-requests/')){const phase=new URL(url).searchParams.get('phase');value={request_id:path.split('/').pop(),phase,status:'recorded',result:phase==='observation'?input.observation_job:input.preview};}
  if(path.includes('/media-jobs/'))value=input.job;
- const failed=Boolean(body&&input.failure);
- return {ok:!failed,status:failed?422:200,json:async()=>failed?{detail:'字段或版本拒绝'}:value};
+ const failed=Boolean(body&&input.failure&&(!input.failure_once||failedPosts++===0));
+ return {ok:!failed,status:failed?(input.failure_status||422):200,json:async()=>failed?{detail:'字段或版本拒绝'}:value};
 };
 process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES=JSON.stringify(input.capabilities);
 const {default:register,typedRequestId}=await import(process.argv[2]);
@@ -35,7 +39,7 @@ const api={registerTool:tool=>tools.set(tool.name,tool), getAllTools:()=>[...too
  getSettings:()=>({}),appendEntry:()=>{}};
 await register(api);
 for (const step of input.steps||[]) {
- try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push({ok:true,result:await tools.get(step.tool).execute('fixture',args)});}
+ try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push({ok:true,result:await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)});}
  catch(error){results.push({ok:false,error:error.message});}
 }
 if(input.code){
@@ -66,10 +70,10 @@ def preview():
         "invalidated_refs": ["render:old"], "external_effects": []}}
 
 
-def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0):
+def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None):
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="task-current",
-               AI_VIDEO_DIARY_AGENT_STAGE="topic", AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
+               AI_VIDEO_DIARY_AGENT_STAGE=stage, AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
                AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1", AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION="换第二镜头并保留旁白",
                AI_VIDEO_DIARY_AGENT_TURN_ID="trusted-turn",
                AI_VIDEO_DIARY_AGENT_TASK_VERSION=json.dumps({"timeline_version_id": "version-current", "timeline_sequence": 4}),
@@ -82,7 +86,10 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
     completed = subprocess.run([os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types",
                                 str(runner), MODULE.as_uri()],
                                input=json.dumps({"steps": steps, "workspace": workspace, "capabilities": caps(),
-                                                 "preview": result or preview(), "job": job, "failure": failure, "code": code, "lost_receipt": lost_receipt, "delay_ms": delay_ms}),
+                                                 "preview": result or preview(), "job": job, "failure": failure, "code": code, "lost_receipt": lost_receipt, "delay_ms": delay_ms,
+                                                 "knowledge": knowledge, "script_context": script_context,
+                                                 "failure_once": failure_once, "failure_status": failure_status,
+                                                 "observations": observations, "observation_job": observation_job}),
                                env=env, cwd=tmp_path, text=True, capture_output=True, timeout=45, check=True)
     return json.loads(completed.stdout)
 
@@ -126,6 +133,29 @@ def test_failed_typed_request_is_not_replayed(tmp_path):
     assert sum(call["method"] == "POST" for call in observed["calls"]) == 1
 
 
+def test_known_parameter_rejection_allows_distinct_bounded_correction(tmp_path):
+    first = {"tool": "preview_typed_edit", "args": {"operation_type": "TrimClip", "clip_id": "second", "source_start_seconds": 1}}
+    correction = {"tool": "preview_typed_edit", "args": {**first["args"], "source_start_seconds": 2}}
+    seen = invoke(tmp_path, steps=[first, first, correction], failure=True, failure_once=True)
+    assert seen["results"][0]["result"]["details"]["correction_allowed"] is True
+    assert not seen["results"][1]["ok"]  # Identical rejected input remains sealed.
+    assert seen["results"][2]["result"]["details"]["kind"] == "edit_preview"
+    posts = [call for call in seen["calls"] if call["method"] == "POST"]
+    assert len(posts) == 2 and posts[0]["body"]["request_id"] != posts[1]["body"]["request_id"]
+
+
+@pytest.mark.parametrize("mode", ["lost_receipt", "auth_rejected", "version_rejected"])
+def test_unknown_or_auth_version_denial_does_not_enable_changed_input_replay(tmp_path, mode):
+    args = {"operation_type": "TrimClip", "clip_id": "second", "source_start_seconds": 1}
+    seen = invoke(tmp_path, steps=[{"tool": "preview_typed_edit", "args": args},
+                                 {"tool": "preview_typed_edit", "args": {**args, "source_start_seconds": 2}}],
+                  lost_receipt=mode == "lost_receipt", failure=mode != "lost_receipt", failure_status=403 if mode == "auth_rejected" else 409)
+    first = seen["results"][0]["result"]["details"]
+    assert first["correction_allowed"] is False
+    assert first["status"] == ("result_unknown" if mode == "lost_receipt" else "rejected")
+    assert not seen["results"][1]["ok"] and sum(call["method"] == "POST" for call in seen["calls"]) == 1
+
+
 def test_fine_reads_expose_real_units_and_truthful_truncation(tmp_path):
     workspace = {"task": {"id": "task-current", "current_timeline_version_id": "version-current", "timeline_sequence": 4},
                  "montage": {"clips": [{"id": f"clip-{index}", "asset_id": "asset", "segment_id": "segment",
@@ -148,6 +178,149 @@ def test_fine_reads_expose_real_units_and_truthful_truncation(tmp_path):
     assert "/private/" not in json.dumps(facts)
     page = observed["results"][1]["result"]["details"]
     assert page["total_count"] == 30 and page["items"][0]["id"] == "clip-24"
+
+
+def complete_workspace():
+    """Actual response shapes, beyond both former summary cutoffs."""
+    tracks = [{"id": f"audio-track-{track}", "role": "music", "name": f"音乐{track}", "gain_db": -3,
+               "muted": False, "locked": False, "duck_under_voice": True,
+               "clips": [{"id": f"audio-{track}-{clip}", "name": "原音", "source_ref": "workspace://audio/source",
+                          "source_start_ms": 100, "source_end_ms": 1100, "timeline_start_ms": clip * 1000,
+                          "playback_rate": 1, "gain_db": -2, "editor_gain_points": [{"offset_ms": 0, "gain_db": -2}]}
+                         for clip in range(30)]} for track in range(10)]
+    return {"task": {"id": "task-current", "current_timeline_version_id": "version-current", "timeline_sequence": 4,
+                     "confirmed_script_id": "script-current"},
+            "montage": {"clips": [], "cues": [], "audio_timeline": {"format_version": 1, "tracks": tracks},
+                        "graphic_overlays": [{"id": f"overlay-{index}", "kind": "text", "text": f"标题{index}",
+                                              "start_seconds": 0, "end_seconds": 3, "x": .5, "y": .2,
+                                              "width": .8, "font_size": 64, "color": "#FFD166", "private_path": "/private/text"}
+                                             for index in range(10)]},
+            "subtitle_tracks": [{"id": f"subtitle-{index}", "language": "zh-CN", "status": "valid",
+                                 "timeline_version_id": "version-current", "updated_at": "2026-10-13T10:00:00Z",
+                                 "style": {"font_size": 48, "primary_color": "#FFFFFF"},
+                                 "cues": [{"id": f"cue-{index}-{cue}", "text": "字幕", "start_seconds": cue,
+                                           "end_seconds": cue + 1, "source_cue_id": f"source-{cue}"} for cue in range(30)]}
+                                for index in range(10)],
+            "narration": {"segments": [{"id": "narration", "source_section_id": "section-29", "text": "旁白",
+                                        "duration_seconds": 1, "source_sha256": "a" * 64, "sample_rate": 24000}]},
+            "scripts": [{"id": "script-current", "task_id": "task-current", "selection_status": "confirmed",
+                         "updated_at": "2026-10-13T10:00:00Z",
+                         "sections": [{"id": f"section-{index}", "title": "正文", "content": "文案", "visual_prompt": "画面",
+                                       "evidence_reference_ids": ["knowledge:source:3"]} for index in range(30)]}]}
+
+
+def test_object_directory_and_reads_reach_audio_and_overlay_tails(tmp_path):
+    seen = invoke(tmp_path, workspace=complete_workspace(), steps=[
+        {"tool": "read_current_task"},
+        {"tool": "read_task_object", "args": {"kind": "audio_tracks", "offset": 8, "limit": 2}},
+        {"tool": "read_task_object", "args": {"kind": "audio_clips", "parent_id": "audio-track-9", "offset": 24, "limit": 6}},
+        {"tool": "read_task_object", "args": {"kind": "audio_clips", "object_id": "audio-9-29"}},
+        {"tool": "read_task_object", "args": {"kind": "graphic_overlays", "object_id": "overlay-9"}},
+    ])
+    facts, tracks, clips, clip, overlay = [item["result"]["details"] for item in seen["results"]]
+    counts = {item["kind"]: item["total_count"] for item in facts["object_catalog"]["collections"]}
+    assert counts["audio_tracks"] == counts["graphic_overlays"] == 10 and counts["audio_clips"] == 300
+    assert facts["audio_tracks_truncated"] and facts["graphic_overlays_truncated"]
+    assert tracks["total_count"] == 10 and [item["id"] for item in tracks["items"]] == ["audio-track-8", "audio-track-9"]
+    assert tracks["items"][1]["role"] == "music" and tracks["items"][1]["object_ref"] == "audio:audio-track-9"
+    assert tracks["items"][1]["clip_count"] == 30 and tracks["items"][1]["clips_truncated"]
+    assert clips["collection_total_count"] == 300 and clips["total_count"] == 30 and not clips["has_more"]
+    assert [item["id"] for item in clips["items"]] == [f"audio-9-{index}" for index in range(24, 30)]
+    last = clip["items"][0]
+    assert last["audio_track_id"] == "audio-track-9" and last["duration_ms"] == 1000
+    assert last["units"]["time"] == "milliseconds" and last["editor_gain_points"] == [{"offset_ms": 0, "gain_db": -2}]
+    assert last["timeline_sequence"] == 4 and last["revision"] == "version-current"
+    assert overlay["items"][0]["object_ref"] == "overlay:overlay-9" and overlay["items"][0]["color"] == "#FFD166"
+    assert "/private/" not in json.dumps(seen["results"])
+
+
+def test_complete_subtitle_and_script_reads_discover_parents_and_actual_revisions(tmp_path):
+    seen = invoke(tmp_path, workspace=complete_workspace(), steps=[
+        {"tool": "read_task_object", "args": {"kind": "subtitle_tracks", "object_id": "subtitle-9"}},
+        {"tool": "read_task_object", "args": {"kind": "subtitle_cues", "parent_id": "subtitle-9", "offset": 24, "limit": 6}},
+        {"tool": "read_task_object", "args": {"kind": "subtitle_cues", "object_id": "cue-9-29"}},
+        {"tool": "read_task_object", "args": {"kind": "script_sections", "object_id": "section-29"}},
+        {"tool": "read_task_object", "args": {"kind": "narration_segments", "object_id": "narration"}},
+    ])
+    track, cues, cue, script, narration = [item["result"]["details"] for item in seen["results"]]
+    assert track["collection_total_count"] == 10 and track["items"][0]["cue_count"] == 30
+    assert track["items"][0]["object_ref"] == "subtitle-track:subtitle-9"
+    assert cues["total_count"] == 30 and cues["items"][-1]["id"] == "cue-9-29"
+    assert cue["collection_total_count"] == 300 and cue["items"][0]["object_ref"] == "cue:cue-9-29"
+    assert cue["items"][0]["revision_source"] == "parent_subtitle_track_updated_at"
+    assert script["items"][0]["script_id"] == "script-current"
+    assert script["items"][0]["revision"] == "2026-10-13T10:00:00Z"
+    assert script["items"][0]["evidence_reference_ids"] == ["knowledge:source:3"]
+    assert narration["items"][0]["source_section_id"] == "section-29" and narration["items"][0]["revision"] == "a" * 64
+
+
+@pytest.mark.parametrize("change", ["foreign_task", "stale_version", "missing_object", "missing_parent"])
+def test_complete_reads_keep_task_version_and_object_boundaries(tmp_path, change):
+    workspace = complete_workspace()
+    args = {"kind": "audio_clips", "object_id": "audio-9-29"}
+    if change == "foreign_task":
+        workspace["task"]["id"] = "other-task"
+    elif change == "stale_version":
+        workspace["task"]["timeline_sequence"] = 5
+    elif change == "missing_object":
+        args["object_id"] = "unknown-audio"
+    else:
+        args = {"kind": "audio_clips", "parent_id": "unknown-track"}
+    seen = invoke(tmp_path, workspace=workspace, steps=[{"tool": "read_task_object", "args": args}])
+    assert not seen["results"][0]["ok"]
+    assert all(call["method"] == "GET" for call in seen["calls"])
+
+
+def test_non_script_knowledge_reads_a_current_bounded_server_page(tmp_path):
+    page = {"items": [{"id": "current-source", "title": "当前资料", "version": "7", "content_hash": "a" * 64,
+                       "excerpt": "真实摘要", "matched_terms": ["资料"], "relevance": 1.5}],
+            "total_count": 1000, "offset": 995, "limit": 5, "next_offset": None}
+    seen = invoke(tmp_path, knowledge=page, steps=[{"tool": "find_knowledge", "args": {"query": "资料", "offset": 995}}])
+    facts = seen["results"][0]["result"]["details"]
+    assert facts["total_count"] == 1000 and facts["matches"] == page["items"]
+    assert facts["scope"] == "current_authorized_knowledge_versions"
+    assert seen["calls"][0]["path"] == "/api/knowledge-items/search"
+    assert "offset=995" in seen["calls"][0]["query"] and "limit=5" in seen["calls"][0]["query"]
+    assert all(call["path"] != "/api/knowledge-items" for call in seen["calls"])
+
+
+def test_script_knowledge_remains_current_task_allowed_sources(tmp_path):
+    seen = invoke(tmp_path, stage="script", script_context={"sources": [
+        {"reference_id": "knowledge:allowed:2", "title": "剪辑资料", "text": "提高剪辑效率", "version": "2"}]},
+        steps=[{"tool": "find_knowledge", "args": {"query": "剪辑"}}])
+    facts = seen["results"][0]["result"]["details"]
+    assert facts["scope"] == "current_task_allowed_sources" and facts["matches"][0]["id"] == "knowledge:allowed:2"
+    assert [call["path"] for call in seen["calls"]] == ["/api/creation-tasks/task-current/assistant/script-context"]
+
+
+def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp_path):
+    observations = {"task_id": "task-current", "timeline_version_id": "version-current", "timeline_sequence": 4,
+                    "targets": [{"kind": "final"}], "observations": [], "quality_check": {"stale": False},
+                    "media_policy": "local_measurements_and_text_only"}
+    job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued", "base_version_id": "version-current"}
+    seen = invoke(tmp_path, observations=observations, observation_job=job, steps=[
+        {"tool": "read_task_observations"},
+        {"tool": "observe_task_output", "args": {"target": {"kind": "final"}, "sample_times_seconds": [1, 2]}}])
+    assert seen["results"][0]["result"]["details"] == observations
+    result = seen["results"][1]["result"]["details"]
+    assert result["media_job"]["status"] == "queued" and result["media_job"]["result_kind"] == "observation"
+    post = next(call for call in seen["calls"] if call["method"] == "POST")
+    assert post["body"]["expected_timeline_version_id"] == "version-current" and post["body"]["expected_timeline_sequence"] == 4
+    assert post["body"]["assistant_turn_id"] == "trusted-turn" and post["body"]["target"] == {"kind": "final"}
+    assert UUID(post["body"]["request_id"]).version == 5
+
+
+def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
+    job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
+    request = {"tool": "observe_task_output", "args": {"target": {"kind": "final"}}}
+    seen = invoke(tmp_path, observation_job=job, lost_receipt=True, steps=[request, request,
+        {"tool": "read_task_observation_request", "fromReceipt": True}])
+    result = seen["results"][0]["result"]["details"]
+    assert result["status"] == "result_unknown" and result["phase"] == "observation"
+    assert result["assistant_turn_id"] == "trusted-turn" and result["tool_call_id"] == "fixture"
+    assert result["base_version_id"] == "version-current" and result["base_sequence"] == 4
+    assert not seen["results"][1]["ok"] and seen["results"][2]["result"]["details"]["media_job"] == job
+    assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
 
 
 def installed_pi():

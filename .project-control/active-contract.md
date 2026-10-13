@@ -13,7 +13,7 @@ root负责需求、共享权威、合同、审阅、集成、真实验收、教�
 ## 并行拆分与互斥文件
 
 - OBJECTS：apps/api/agent_tools/task_facts.ts、diary_tools.ts及直接对象/工具测试；另独占source_repository.py服务器知识分页检索方法和直接测试、AssistantConversationPanel.tsx及直接测试（仅真实后台回合不出现空用户气泡/编辑空原句，按DESIGN.md§2），非script find_knowledge接共同知识search；script已允许来源范围保持。必要material_tools.ts/retrieval.ts写入仍须先报告root。完整集合上ID/分页读取镜头、字幕轨/条、旁白、音轨/片段、已采用图层；当前版本、单位、关系、计数、明确截断。消费API Owner发布的观察协议，不自行造第二规则。
-- OBSERVATION/API：apps/api/app/main.py、schemas.py、quality_inspection.py、task_audio.py、必要新增task_observation.py和直接API/观察测试；所有main/schema整合只归此Owner。沿原认证/输出/质量及设备协调者提供版本/hash绑定的实际结果观察，禁止任意模型路径读取与原媒体外发。先提交观察/接续接口建议供root核定，再实现。核查素材/知识检索当前库与删除后引用；额外Repository写范围仅root逐项绑定。
+- OBSERVATION/API：apps/api/app/main.py、schemas.py、quality_inspection.py、task_audio.py、必要新增task_observation.py和直接API/观察测试；所有main/schema整合只归此Owner。OCR实证资源窄包另独占host_resource_probes.py、member_permits.py及test_task_observation_resources.py；预算必填、无生产默认值，root低负载合成校准后方启用OCR。沿原认证/输出/质量及设备协调者提供版本/hash绑定的实际结果观察，禁止任意模型路径读取与原媒体外发。先提交观察/接续接口建议供root核定，再实现。核查素材/知识检索当前库与删除后引用；额外Repository写范围仅root逐项绑定。
 - CONTINUATION：apps/api/app/assistant_pi.py、conversation_repository.py、必要新增assistant_goal_continuation.py及直接接续/Pi测试。原目标、身份、版本、待决定与进展持久化；可信业务结果触发有限新Pi回合，保留旧真实结果投影；main整合交给API Owner。不得伪造用户指令/确认，unknown先查原请求；stop/拒绝/撤权/不相关版本变化不得续作。先提交与API Owner可独立整合的调用协议。
 - root独占本合同、长期文档、Git/Issue/PR、真实运行与可见验收、临时验收脚本。教学线程只读不拥有产品write lease。
 
