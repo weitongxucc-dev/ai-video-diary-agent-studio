@@ -17,6 +17,10 @@
 
 CLI成片消费者必要窄补：Pi/CLI Owner重新独占scripts/yaohe.mjs及yaohe.test.mjs，补已有execution preview/start/status/原job有界wait/resume薄客户端，使本轮CLI采用后能沿普通API生成并回读真实成片。start必须显式提供真实preview/script/digest及requirements_confirmed；unknown只查execution原job，不拿编辑请求locator代替，不重POST；wait绑定真实job身份，任务发生新作业不得混为原作业成功。无新API/状态库、默认授权或完整CLI安装范围。
 
+真实采用暴露必要消费者缺口：creation_execution.cpu_render_facts尚无多轨音频资源绑定，不能单独移除其拒绝。root已核定必要同核组合许可方案；API/编辑Owner窄补独占creation_execution.py、main.py、audio_timeline.py、task_audio.py、host_resource_probes.py、member_permits.py及直接测试；沿现有混音及CPU成片同一许可，实际来源/区间/次数/中间输出/单位预算、文件变化及当前身份须纳入输入与重读核对，组合资源必须消费已标定CPU_AUDIO核验。linkage归一化标志须在同一facts及预览/最终保持一致。start登记后准入拒绝应给出真实阻断，不假装运行。无新执行器或生产预算放宽。Pi/CLI窄包已RELEASE。
+
+调研覆盖Owner重新取得仅本计划§4.5及覆盖映射的文档lease；其他文档和合同仍由root独占。
+
 ## 验收、非目标与实际旧路径
 
 共同typed目录支持真实音频对象音量/静音/淡入淡出/混音参数，以及镜头现有画面效果；未支持独立音频retime/通用关键帧/solo持久化不承诺。既有手动audio/visual入口保持，其执行内核由共同受理入口复用，不建立第二validator/状态机。实际对象必须按当前版本读取；只改指定字段，不把完整效果默认值覆盖其他效果。
