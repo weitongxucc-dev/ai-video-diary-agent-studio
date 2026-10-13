@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -192,7 +193,8 @@ def _render_budget():
         max_width_px=320, max_height_px=240, max_input_bytes=10_000,
         max_clip_count=2, max_overlay_count=4,
         max_output_bytes=1_000_000, max_threads=1, max_timeout_seconds=5,
-        additional_memory_bytes=1, additional_disk_bytes=1,
+        additional_memory_bytes=128*1024**2, additional_disk_bytes=64*1024**2,
+        max_process_threads=16,  # Finite synthetic process/disk profile, not a machine default.
     )
 
 
@@ -213,6 +215,62 @@ def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_p
                                                      if k != "overlay_count"})) is None
     assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "duration_seconds": 2})) is False
     assert measured.admit(SimpleNamespace(id="fixture-request", resources={**resources, "overlay_count": 5})) is False
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits(tmp_path, monkeypatch, running):
+    render = replace(_render_budget(), additional_memory_bytes=2*1024**3, max_process_threads=16)
+    probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
+        100,1024**3,2**63,0,2**63,1024,sample_seconds=.01,cpu_render=render))
+    resources = _render_resources()
+    monkeypatch.setattr(psutil,"virtual_memory",lambda:SimpleNamespace(available=2*1024**3))
+    decision = probe._sample(resources,running_render=running)
+    assert decision.checks["available_memory_bytes"]["minimum"] == (1 if running else 3)*1024**3
+    assert decision.verdict is running
+    monkeypatch.setattr(probe,"_grant_resources",lambda _:resources)
+    limits = probe.scene_runtime_limits(SimpleNamespace())
+    assert limits.max_process_rss_bytes == render.additional_memory_bytes
+    assert limits.max_process_threads == 16 and limits.min_host_available_memory_bytes == 1024**3
+    assert limits.sample_seconds == .01
+    assert probe.continue_unit(SimpleNamespace()) is True
+
+
+@pytest.mark.parametrize("failure", ["headroom","cpu","swap","memory_unknown","scope_unknown"])
+def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure):
+    render = replace(_render_budget(),additional_memory_bytes=2*1024**3)
+    probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
+        91,1024**3,1024,0,2**63,1024,sample_seconds=.01,cpu_render=render))
+    monkeypatch.setattr(probe,"_grant_resources",lambda _:None if failure=="scope_unknown" else _render_resources())
+    def memory():
+        if failure=="memory_unknown":
+            raise OSError("synthetic unknown sample")
+        return SimpleNamespace(available=1024**3-1 if failure=="headroom" else 2*1024**3)
+    monkeypatch.setattr(psutil,"virtual_memory",memory)
+    monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:92 if failure=="cpu" else 20)
+    monkeypatch.setattr(psutil,"swap_memory",lambda:SimpleNamespace(used=1025 if failure=="swap" else 0))
+    with pytest.raises(HostResourceRefusal):
+        probe.continue_unit(SimpleNamespace())
+
+
+@pytest.mark.parametrize("rss,threads,accepted", [(1024,2,True),(1025,2,False),(1024,3,False)])
+def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,rss,threads,accepted):
+    from app.granted_subprocess import _check_scene_runtime
+    from app.device_scheduler import ProcessIdentity
+    from app.host_resource_probes import SceneRuntimeLimits
+    child=ProcessIdentity(100,'1.000000','synthetic-boot')
+    current=SimpleNamespace(pid=100,create_time=lambda:1,memory_info=lambda:SimpleNamespace(rss=rss),num_threads=lambda:threads)
+    monkeypatch.setattr(psutil,'Process',lambda _:current)
+    monkeypatch.setattr(psutil,'process_iter',lambda:[current])
+    monkeypatch.setattr(os,'getpgid',lambda _:100)
+    monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=10000))
+    monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=0))
+    process=SimpleNamespace(pid=100,poll=lambda:None)
+    limits=SceneRuntimeLimits(1024,2,100,100,.1)
+    if accepted:
+        _check_scene_runtime(process,child,limits)
+    else:
+        with pytest.raises(GrantedCommandResourceLimit):
+            _check_scene_runtime(process,child,limits)
 
 
 def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):

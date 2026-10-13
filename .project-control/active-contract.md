@@ -22,11 +22,11 @@ S2开发按当前用户AGENTS与宿主并行指令执行，旧仓库的可见线
 
 root核准 continuation Owner 独占 assistant_pi.py、conversation_repository.py 及原直接测试：read_creation_execution 必须进入真正工具消费set；纯读取以宿主真实状态说明查询，不采信模型“已提交恢复”，也不凭旧execution结果登记新waiting goal。只有与宿主持久真实提交proof相同Job的执行才登记；先真实提交再读取同Job仍保留write动作归属。不改权限、供应商、validator、重试或状态枚举。
 
-root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直接媒体测试：原21镜头缩略图各保留video解码器是本轮真实内存拒绝的可消除来源，改为同文件私有串行读取真实起点帧、低分辨率canvas显示并立即清源释放；错误、换素材、卸载和排队取消也释放。主播放器不变，无新持久cache/worker/依赖/预算。单测不能证明具体释放量，须同候选正常21镜头GUI及资源测量/真实完整渲染验证。#131专业剪辑台整体改造仍为后续，必要缩略图故障纳入本轮。
+root核准 Web Owner 独占 VideoEditor.tsx、VideoEditorMedia.module.css 及直接媒体测试：原21镜头缩略图各保留video解码器是本轮真实内存拒绝的可消除来源，改为同文件私有串行读取真实起点帧、低分辨率canvas显示并立即清源释放；错误、换素材、卸载和排队取消也释放。主播放器不变，无新持久cache/worker/依赖/预算。单测不能证明具体释放量，须同候选正常21镜头GUI及资源测量/真实完整渲染验证。专业剪辑台多轨/监听/变速/关键帧整体仍为#132–#135后续，必要缩略图故障纳入本轮。
 
 root另核准 Web Owner 临时独占 creation_execution.py 与直接test_creation_execution.py，仅实际CPU render的CreationJobUnitExecutor.execute异常分支复用已有detail.reason/error抽取，避免新Job.failure_reason保存Python原字典字符串。无需新DTO/前端解析/旧历史改写；失败仍failed，许可释放，上游保持。
 
-root核准 continuation Owner 必要渲染组合修复：独占 montage.py、host_resource_probes.py、member_permits.py 及各直接测试；直接配置消费者新增必需字段须具体报备。实际21输入进程峰值2.148GiB且运行重复要求整份2GiB追加预留已确证。仅多镜头hard-cut/no-transition改为逐镜头lossless H264静音中间片及同Job相对ffconcat；原fade/颜色/帧端点时钟、全局字幕/graphic、混音、最终验证保持，xfade仍原消费者。同grant及原199秒总deadline；中间片合计含音频/字幕/manifest不得越既有512MiB追加磁盘，final仍原99,638,206字节，不降质量/改变validator/为每镜头重借预算。CPU render启动仍原1GiB系统余量+2GiB新增峰值；运行保留1GiB余量且实际进程RSS不得越原2GiB，并保留CPU91%/swap/IO/身份/许可门。新增显式总进程线程profile，缺失fail-closed，不给任意默认；本机候选51线程仅源于已测实际21输入最大值，采样0.1秒沿现HostBudget，必须先有限实测再完整片验收。原.env不复制/不扩大RSS资源额；root唯一profile配置/真实数据/服务/Git owner。架构§3.12新增此有限CPU成片资源不变量；旧上下文合同须重读ACK。
+root核准 continuation Owner 必要渲染组合修复：独占 montage.py、host_resource_probes.py、member_permits.py 及各直接测试（包括tests/conftest.py及test_timed_subtitle_render_input.py的同一真实grant/预算合成consumer）；另核准 _media_preview_test_fixtures.py、test_task_clip_preview.py、test_creation_resource_contract.py、test_creation_audio_mix.py、test_creation_execution.py 仅新必需构造字段的直接消费者更新（最后文件前Owner已RELEASE）；直接配置消费者新增必需字段须具体报备。实际21输入进程峰值2.148GiB且运行重复要求整份2GiB追加预留已确证。仅多镜头hard-cut/no-transition改为逐镜头lossless H264静音中间片及同Job相对ffconcat；原fade/颜色/帧端点时钟、全局字幕/graphic、混音、最终验证保持，xfade仍原消费者。同grant及原199秒总deadline；中间片合计含音频/字幕/manifest不得越既有512MiB追加磁盘，final仍原99,638,206字节，不降质量/改变validator/为每镜头重借预算。CPU render启动仍原1GiB系统余量+2GiB新增峰值；运行保留1GiB余量且实际进程RSS不得越原2GiB，并保留CPU91%/swap/IO/身份/许可门。新增显式总进程线程profile，缺失fail-closed，不给任意默认；本机候选51线程仅源于已测实际21输入最大值，采样0.1秒沿现HostBudget，必须先有限实测再完整片验收。原.env不复制/不扩大RSS资源额；root唯一profile配置/真实数据/服务/Git owner。架构§3.12新增此有限CPU成片资源不变量；旧上下文合同须重读ACK。
 
 ## 验收与旧目标
 

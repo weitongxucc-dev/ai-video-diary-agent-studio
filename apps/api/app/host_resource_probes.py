@@ -46,6 +46,7 @@ class CpuRenderBudget:
     max_timeout_seconds: float
     additional_memory_bytes: int
     additional_disk_bytes: int
+    max_process_threads: int
 
     def __post_init__(self) -> None:
         if (not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds <= 0
@@ -55,13 +56,15 @@ class CpuRenderBudget:
         if any(type(value) is not int or value < 0 for value in (
             self.max_width_px, self.max_height_px, self.max_input_bytes,
             self.max_clip_count, self.max_overlay_count, self.max_output_bytes, self.max_threads,
-            self.additional_memory_bytes, self.additional_disk_bytes,
+            self.additional_memory_bytes, self.additional_disk_bytes, self.max_process_threads,
         )) or any(value == 0 for value in (
             self.max_width_px, self.max_height_px, self.max_input_bytes,
             self.max_clip_count, self.max_output_bytes, self.max_threads,
-            self.additional_memory_bytes, self.additional_disk_bytes,
+            self.additional_memory_bytes, self.additional_disk_bytes, self.max_process_threads,
         )):
             raise ValueError("Render limits must be explicit nonnegative integers")
+        if self.max_process_threads < self.max_threads:
+            raise ValueError("Render process thread cap must cover the requested encoder threads")
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,8 @@ class HostBudget:
             self.max_unit_input_bytes,
         )):
             raise ValueError("Host budget cannot contain negative limits")
+        if (self.cpu_render is not None or self.presenter_cpu_render is not None) and self.sample_seconds > .25:
+            raise ValueError("CPU render needs a bounded process sampling interval")
         if self.scene_window is not None and (
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
         ):
@@ -693,7 +698,7 @@ class HostResourceProbe:
                 "busy_percent": "UNAVAILABLE: request times are not utilization",
                 "process_io": "UNAVAILABLE: host counters cannot attribute a process"}, None
 
-    def _sample(self, resources: dict[str, object], *, running_io: bool = False) -> HostResourceDecision:
+    def _sample(self, resources: dict[str, object], *, running_io: bool = False, running_render: bool = False) -> HostResourceDecision:
         checks: dict[str, dict[str, object]] = {}
 
         def decision(verdict: bool | None, reason: str | None = None,
@@ -738,7 +743,7 @@ class HostResourceProbe:
                     or resources["threads"] > render.max_threads
                     or resources["timeout_seconds"] > render.max_timeout_seconds):
                 return decision(False, "declared_resources_exceed_budget")
-            required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_render else render.additional_memory_bytes)
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
             if "audio_mix" in resources:
@@ -749,8 +754,8 @@ class HostResourceProbe:
                 if refusal is not None:
                     return decision(*refusal)
                 checks["audio_budget"] = {"limits": asdict(self.budget.cpu_audio)}
-                required_memory = self.budget.min_available_memory_bytes + max(
-                    render.additional_memory_bytes, self.budget.cpu_audio.additional_memory_bytes)
+                required_memory = self.budget.min_available_memory_bytes + (0 if running_render else max(
+                    render.additional_memory_bytes, self.budget.cpu_audio.additional_memory_bytes))
                 required_disk += self.budget.cpu_audio.additional_disk_bytes + audio_resources["max_output_bytes"]
         elif kind == "task_output_observation":
             observation = self.budget.observation
@@ -1025,6 +1030,8 @@ class HostResourceProbe:
                 self._running_io.clear()
                 self._running_io_key = key
             decision = self._sample(resources, running_io=True)
+        elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+            decision = self._sample(resources, running_render=True)
         else:
             decision = (self._sample(resources) if resources is not None else
                     HostResourceDecision(None, {}, {}, "granted_resources_unreadable"))
@@ -1045,6 +1052,12 @@ class HostResourceProbe:
             if refusal is not None:
                 raise RecoveryBlocked("组合音频子进程预算尚未标定或许可声明无效")
             resources = resources["audio_mix"]
+        if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+            render = self.budget.presenter_cpu_render if resources["kind"] == "creation_presenter_render" else self.budget.cpu_render
+            if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
+                raise RecoveryBlocked("CPU 成片进程预算尚未标定或执行模式无效")
+            return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds)
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":

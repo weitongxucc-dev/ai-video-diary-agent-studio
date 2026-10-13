@@ -706,8 +706,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     elif stop == "input":
         narration = replace(narration, max_text_chars=1)
     montage = MontageBudget(10, 20, 1_000_000, 1_000_000, 30, 1_000_000)
+    # Match the existing synthetic media profile, not the production host budget.
     render = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
-                            8_000_000, 1, 90, 1_000_000, 1_000_000)
+                            8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16)
     budget = HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
                         cpu_render=render, narration=narration, montage=montage)
     actor = CreationExecutionActor.account(workspace, device, user)

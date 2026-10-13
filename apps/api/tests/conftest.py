@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -80,6 +81,19 @@ def granted_media(tmp_path):
         job = media.submit(runtime, actor, "task", "synthetic_media", {}, "audio_listen")
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None and grant.owner_id == job.id
+        # Synthetic media fixture metadata only; not real host/RSS calibration.
+        if kind == "creation_render":
+            from types import SimpleNamespace
+            runtime.scheduler.resources.budget = SimpleNamespace(
+                cpu_render=SimpleNamespace(additional_disk_bytes=64 * 1024**2), presenter_cpu_render=None)
+            def granted_resources(current):
+                assert current == grant
+                with repository._connect() as conn:
+                    row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=? AND workspace_id=? "
+                        "AND owner_id=? AND state IN ('granted','yield_requested')",
+                        (current.request_id,current.workspace_id,current.owner_id)).fetchone()
+                return json.loads(row[0]) if row else None
+            runtime.scheduler.resources._grant_resources = granted_resources
         context = CpuRenderGrantContext(runtime.scheduler, grant, time.monotonic() + 30, 32 * 1024**2, 1)
         succeeded = False
         try:

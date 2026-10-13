@@ -1671,6 +1671,9 @@ def test_creation_montage_runs_all_media_commands_under_one_grant(tmp_path, monk
 
     class RecordingGrant:
         processes = HostProcessProbe()
+        # Isolated synthetic media profile; no real machine-budget claim.
+        resources = SimpleNamespace(_grant_resources=lambda _: {"kind":"creation_render"},
+            budget=SimpleNamespace(cpu_render=SimpleNamespace(additional_disk_bytes=64 * 1024**2)))
 
         def __init__(self):
             self.children = []
@@ -5854,3 +5857,49 @@ def test_tag_and_observation_relevance_precedes_semantic_similarity_and_repeat_p
     # A manual correction continues to shadow contradictory model observations.
     corrected = replace(observed, description="这是电脑键盘特写", system_tags=[])
     assert _score_candidate(cue, asset, corrected, 0, 0, visual_only=True)[0] < by_observation[0]
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='ffmpeg unavailable')
+def test_serial_lossless_hard_cut_uses_real_synthetic_media_and_original_frames(tmp_path,monkeypatch,granted_media):
+    # Real media + persisted isolated grant; synthetic grant fixture is not host calibration.
+    import app.montage as montage
+    blue,green,audio=tmp_path/'blue.mp4',tmp_path/'green.mp4',tmp_path/'voice.wav'
+    for path,color in ((blue,'blue'),(green,'green')):
+        subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',f'color=c={color}:s=160x120:d=1.6:r=30',
+            '-c:v','libx264','-threads','1','-pix_fmt','yuv420p',str(path)],check=True,capture_output=True)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=1.6',str(audio)],check=True,capture_output=True)
+    clips=[MontageClip('one','cue','blue','segment',str(blue),0,.8,0,.8,1,[],False),
+        MontageClip('two','cue','green','segment',str(green),.4,1.2,.8,1.6,1,[],False,
+            visual_effects={'fade_out_seconds':.2})]
+    plan=CreationTaskMontagePlan(id='serial-test',workspace_id='workspace',task_id='task',script_id='script',
+        script_title='合成硬切测试',status='ready',cues=[],clips=clips,duration_seconds=1.6,low_confidence_clip_count=0)
+    commands=[]
+    runner=montage._run_granted_media_command
+    def recorded(scheduler,grant,command,**kwargs):
+        commands.append((command.copy(),dict(kwargs)))
+        return runner(scheduler,grant,command,**kwargs)
+    monkeypatch.setattr(montage,'_run_granted_media_command',recorded)
+    with granted_media([blue,green,audio],kind='creation_render') as context:
+        rendered=montage.MontageRenderer(tmp_path).render(plan,audio,job_staging_path=tmp_path/'job',subtitle_tracks=[],
+            scheduler=context.scheduler,grant=context.grant,max_output_bytes=context.max_output_bytes,threads=context.threads,
+            deadline_monotonic=context.deadline_monotonic)
+    assert rendered.status=='rendered'
+    encodes=[command for command,_ in commands if command[0]=='ffmpeg']
+    assert len(encodes)==3
+    assert [command.count('-i') for command in encodes]==[1,1,2]
+    assert all(command[command.index('-crf')+1]=='0' for command in encodes[:2])
+    assert all(options['deadline_monotonic']==context.deadline_monotonic for _,options in commands)
+    assert not list((tmp_path/'job').glob('.subtitle-overlays-*'))
+    output=tmp_path/'job'/'preview.mp4'
+    info=json.loads(subprocess.run(['ffprobe','-v','error','-count_frames','-show_entries',
+        'stream=codec_type,codec_name,width,height,nb_read_frames:format=duration','-of','json',str(output)],
+        check=True,capture_output=True,text=True).stdout)
+    video=next(item for item in info['streams'] if item['codec_type']=='video')
+    assert (video['width'],video['height'],int(video['nb_read_frames']))==(1080,1920,48)
+    def rgb_at(seconds):
+        raw=subprocess.run(['ffmpeg','-v','error','-ss',str(seconds),'-i',str(output),'-frames:v','1','-vf','scale=1:1',
+            '-f','rawvideo','-pix_fmt','rgb24','pipe:1'],check=True,capture_output=True).stdout
+        return tuple(raw[:3])
+    first,second,tail=rgb_at(.2),rgb_at(1),rgb_at(47/30)
+    assert first[2]>first[0]+100 and second[1]>second[2]+50
+    assert max(tail)<10  # Original final fade clock was retained across serial encoding.

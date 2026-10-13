@@ -48,7 +48,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     repo.create_timeline_version(TimelineVersion('timeline','local','task',None,1,{'montage':creation_task_montage_plan_to_payload(plan)},None))
     budget=CpuRenderBudget(max_duration_seconds=20.401,max_pixel_seconds=1920*1920*20.401,max_width_px=1920,max_height_px=1920,
         max_input_bytes=10000000,max_clip_count=64,max_overlay_count=16,max_output_bytes=2000000,max_threads=1,max_timeout_seconds=30,
-        additional_memory_bytes=1,additional_disk_bytes=1)
+        additional_memory_bytes=1,additional_disk_bytes=1,max_process_threads=16)  # Synthetic test profile.
     monkeypatch.setattr(main,'cpu_render_budget_from_env',lambda:budget)
     # _task_media_facts imports the calibration reader at its boundary.
     monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env',lambda:budget)

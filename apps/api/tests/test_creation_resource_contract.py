@@ -56,7 +56,7 @@ def _render_budget(**overrides) -> CpuRenderBudget:
               "max_width_px": 4096, "max_height_px": 4096, "max_input_bytes": 10 ** 12,
               "max_clip_count": 64, "max_overlay_count": 8, "max_output_bytes": 10 ** 9,
               "max_threads": 8, "max_timeout_seconds": 600,
-              "additional_memory_bytes": 1, "additional_disk_bytes": 1}
+              "additional_memory_bytes": 1, "additional_disk_bytes": 1, "max_process_threads": 16}  # Synthetic test profile.
     fields.update(overrides)
     return CpuRenderBudget(**fields)
 

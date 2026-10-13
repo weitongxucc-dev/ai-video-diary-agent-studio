@@ -329,6 +329,7 @@ _CPU_RENDER_ENV = {
     "max_timeout_seconds": "DEVICE_CPU_RENDER_MAX_TIMEOUT_SECONDS",
     "additional_memory_bytes": "DEVICE_CPU_RENDER_ADDITIONAL_MEMORY_BYTES",
     "additional_disk_bytes": "DEVICE_CPU_RENDER_ADDITIONAL_DISK_BYTES",
+    "max_process_threads": "DEVICE_CPU_RENDER_MAX_PROCESS_THREADS",
 }
 
 _FLOAT_CPU_RENDER_FIELDS = frozenset({

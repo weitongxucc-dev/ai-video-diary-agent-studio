@@ -87,6 +87,7 @@ _CPU_RENDER_ENV = {
     "DEVICE_CPU_RENDER_MAX_OVERLAY_COUNT": "40",
     "DEVICE_CPU_RENDER_MAX_OUTPUT_BYTES": "8000000",
     "DEVICE_CPU_RENDER_MAX_THREADS": "2",
+    "DEVICE_CPU_RENDER_MAX_PROCESS_THREADS": "16",  # Synthetic test profile.
     "DEVICE_CPU_RENDER_MAX_TIMEOUT_SECONDS": "900",
     "DEVICE_CPU_RENDER_ADDITIONAL_MEMORY_BYTES": "1073741824",
     "DEVICE_CPU_RENDER_ADDITIONAL_DISK_BYTES": "10737418240",
@@ -152,7 +153,11 @@ def test_cpu_render_budget_is_all_or_nothing_and_feeds_the_verifier():
     partial = {k: v for k, v in _CPU_RENDER_ENV.items() if k != "DEVICE_CPU_RENDER_MAX_WIDTH_PX"}
     with pytest.raises(HostBudgetUncalibrated, match="DEVICE_CPU_RENDER_MAX_WIDTH_PX"):
         cpu_render_budget_from_env(partial)
+    without_process_threads = {key:value for key,value in _CPU_RENDER_ENV.items() if key != "DEVICE_CPU_RENDER_MAX_PROCESS_THREADS"}
+    with pytest.raises(HostBudgetUncalibrated, match="DEVICE_CPU_RENDER_MAX_PROCESS_THREADS"):
+        cpu_render_budget_from_env(without_process_threads)
     budget = cpu_render_budget_from_env(_CPU_RENDER_ENV)
+    assert budget.max_process_threads == 16
     assert cpu_render_limits_from_budget(budget) == CpuRenderLimits(8_000_000, 2, 900)
 
 
@@ -488,7 +493,9 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
             submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         with case.repo._connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone()[0] == 0
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
+        rejected = case.repo.get_job_run(WORKSPACE, case.job.id)
+        assert rejected.status == "failed" and "专属预算尚未标定" in rejected.failure_reason
+        assert rejected.finished_at is not None and rejected.output_refs == []
     finally:
         scheduler.close()
 

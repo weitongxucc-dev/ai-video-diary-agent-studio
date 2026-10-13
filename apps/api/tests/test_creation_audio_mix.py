@@ -53,7 +53,7 @@ def case(tmp_path, *, normalize=False, budget=True):
     owner.audio_mix_facts = lambda workspace, task, plan, *, actor: service.mix_facts(
         workspace, task, plan.audio_timeline, plan.duration_seconds, actor=actor,
         normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=cap)
-    render = CpuRenderBudget(10, 30_000_000, 1920, 1920, 8_000_000, 4, 4, 8_000_000, 1, 60, 1_000_000, 1_000_000)
+    render = CpuRenderBudget(10, 30_000_000, 1920, 1920, 8_000_000, 4, 4, 8_000_000, 1, 60, 1_000_000, 1_000_000, 16)  # Synthetic test profile.
     probe = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 0, 2**63, 0, 2**63, 8_000_000, sample_seconds=.01, cpu_render=render, cpu_audio=cap))
     scheduler.resources = probe
@@ -72,7 +72,9 @@ def test_composite_grant_seals_real_sources_and_runs_bounded_audio(tmp_path, nor
         assert declared['input_count'] == 2 and len(declared['inputs']) == 2
         assert all(len(item['sha256']) == 64 for item in declared['inputs'])
         assert declared['normalize_voice_sources'] is normalize
-        assert scheduler.resources.scene_runtime_limits(grant) is None
+        render_limits = scheduler.resources.scene_runtime_limits(grant)
+        assert render_limits.max_process_rss_bytes == scheduler.resources.budget.cpu_render.additional_memory_bytes
+        assert render_limits.max_process_threads == scheduler.resources.budget.cpu_render.max_process_threads
         assert scheduler.resources.scene_runtime_limits(grant, purpose='audio_mix').max_process_rss_bytes == audio_budget().max_process_rss_bytes
         if normalize:
             assert declared['output_duration_limit_seconds'] == 2  # Whole voice exceeds the one-second movie.

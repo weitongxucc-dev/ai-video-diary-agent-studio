@@ -31,7 +31,7 @@ from app.host_resource_probes import (
 )
 from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
-from app.transitions import extend_dissolve_sources, join_picture_filters
+from app.transitions import dissolve_frames, extend_dissolve_sources, join_picture_filters
 from app.graphic_overlays import validate_overlays, write_graphic_overlay
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
@@ -716,6 +716,16 @@ class MontageRenderer:
             sidecar_schedule = subtitle_schedule([replace(track, style={**track.style, "enabled": True}) for track in subtitle_tracks], plan.duration_seconds)
         subtitle_path.write_text(schedule_srt(sidecar_schedule) if sidecar_schedule is not None else _plan_to_srt(plan), encoding="utf-8")
 
+        temporary_disk_bytes = None
+        if isinstance(plan, CreationTaskMontagePlan):
+            resources = scheduler.resources._grant_resources(grant)
+            if resources is None or resources.get("kind") not in {"creation_render", "creation_presenter_render"}:
+                raise PermissionError("成片临时文件缺少同一许可的资源事实")
+            budget = (scheduler.resources.budget.presenter_cpu_render if resources["kind"] == "creation_presenter_render"
+                else scheduler.resources.budget.cpu_render)
+            if budget is None:
+                raise PermissionError("成片临时磁盘预算尚未标定")
+            temporary_disk_bytes = budget.additional_disk_bytes
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)
         try:
@@ -748,10 +758,16 @@ class MontageRenderer:
                         graphic_paths.append(path)
                     subtitle_overlays=graphic_paths
                     intervals=[(item.start_seconds,item.end_seconds) for item in graphics]
+                picture_sequence = None
+                if isinstance(plan, CreationTaskMontagePlan) and len(plan.clips) > 1 and not any(dissolve_frames(plan.clips)):
+                    picture_sequence = self._render_serial_picture_input(plan, Path(overlay_dir) / "pictures",
+                        output_path, temporary_disk_bytes, scheduler=scheduler, grant=grant,
+                        cancel_event=cancel_event, threads=threads,
+                        deadline_monotonic=deadline_monotonic)
                 command = self.build_command(
                     plan, narration_path, output_path, subtitle_overlays,
                     subtitle_intervals=intervals,
-                    subtitle_sequence=subtitle_sequence,
+                    subtitle_sequence=subtitle_sequence, picture_sequence=picture_sequence,
                 )
                 if grant is None:
                     self.runner(command)
@@ -764,8 +780,14 @@ class MontageRenderer:
                     command = bounded_command
                     command[2:2] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
                     command[-1:-1] = ["-threads:v", str(threads), "-fs", str(max_output_bytes)]
+                    temporary_paths = (self._temporary_render_paths(output_path, temporary_disk_bytes)
+                        if temporary_disk_bytes is not None else ())
                     _run_granted_media_command(scheduler, grant, command, timeout_seconds=None,
-                                               cancel_event=cancel_event, deadline_monotonic=deadline_monotonic)
+                        cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
+                        output_paths=(*temporary_paths, output_path),
+                        max_output_file_bytes=temporary_disk_bytes + max_output_bytes if temporary_disk_bytes is not None else max_output_bytes)
+                    if temporary_disk_bytes is not None:
+                        self._temporary_render_paths(output_path, temporary_disk_bytes)
             if max_output_bytes is not None and output_path.stat().st_size > max_output_bytes:
                 raise OSError("成片超出本次受许可输出上限")
             _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920),
@@ -795,6 +817,47 @@ class MontageRenderer:
             plan.message = "带中文字幕的 9:16 初版成片和独立 SRT 已生成，等待检查。"
         return plan
 
+    @staticmethod
+    def _temporary_render_paths(output_path: Path, limit: int) -> tuple[Path, ...]:
+        paths = tuple(path for path in output_path.parent.rglob("*") if path.is_file() and path != output_path)
+        if sum(path.stat().st_size for path in paths) > limit:
+            raise ValueError("成片中间片、混音及字幕临时文件超出同一许可磁盘上限")
+        return paths
+
+    def _render_serial_picture_input(self, plan, directory: Path, output_path: Path, temporary_disk_bytes: int,
+        *, scheduler, grant, cancel_event, threads, deadline_monotonic) -> Path:
+        from app.creation_execution import CpuRenderGrantContext
+        width, height = canvas_size(plan.aspect_ratio)
+        context = CpuRenderGrantContext(scheduler, grant, deadline_monotonic, temporary_disk_bytes, threads, cancel_event)
+        directory.mkdir()
+        lines = ["ffconcat version 1.0"]
+        for index, clip in enumerate(plan.clips):
+            source = Path(clip.source_path).expanduser().resolve()
+            if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+                raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
+            target = directory / f"clip-{index:03}.mp4"
+            frames = round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+            paths = self._temporary_render_paths(output_path, temporary_disk_bytes)
+            remaining_bytes = temporary_disk_bytes - sum(path.stat().st_size for path in paths)
+            if remaining_bytes <= 0:
+                raise ValueError("成片中间文件已耗尽同一许可磁盘上限")
+            command = ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
+                "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
+                "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
+                "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
+                "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "0", "-pix_fmt", "yuv420p",
+                "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(remaining_bytes),
+                "-movflags", "+faststart", str(target)]
+            _run_granted_media_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
+                deadline_monotonic=deadline_monotonic, output_paths=(*paths, target), max_output_file_bytes=temporary_disk_bytes)
+            self._temporary_render_paths(output_path, temporary_disk_bytes)
+            probe_preview_video(target, context, expected_size=(width,height), expected_duration_seconds=frames/30, silent=True)
+            lines.append(f"file {target.name}")
+        manifest = directory / "picture.ffconcat"
+        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._temporary_render_paths(output_path, temporary_disk_bytes)
+        return manifest
+
     def build_command(
         self,
         plan: MontagePlan | CreationTaskMontagePlan,
@@ -804,32 +867,40 @@ class MontageRenderer:
         subtitle_intervals: list[tuple[float,float]] | None = None,
         *,
         subtitle_sequence: tuple[Path, tuple[int, int]] | None = None,
+        picture_sequence: Path | None = None,
     ) -> list[str]:
         width,height = canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920)
         command = ["ffmpeg", "-y"]
         filters: list[str] = []
         labels: list[str] = []
-        render_clips, transitions = extend_dissolve_sources(plan.clips)
-        for index, clip in enumerate(render_clips):
-            source = Path(clip.source_path).expanduser().resolve()
-            if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
-                raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
-            duration = clip.source_end_seconds - clip.source_start_seconds
-            command.extend(
-                ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
-            )
-            filters.append(f"[{index}:v]{clip_video_filters(clip, width=width, height=height)}[v{index}]")
-            labels.append(f"[v{index}]")
+        if picture_sequence is not None:
+            command.extend(["-f", "concat", "-safe", "1", "-protocol_whitelist", "file,pipe", "-i", str(picture_sequence)])
+            filters.append("[0:v]setpts=PTS-STARTPTS[vbase]")
+            output_label = "[vbase]"
+            audio_index = 1
+            command.extend(["-i", str(audio_path)])
+        else:
+            render_clips, transitions = extend_dissolve_sources(plan.clips)
+            for index, clip in enumerate(render_clips):
+                source = Path(clip.source_path).expanduser().resolve()
+                if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+                    raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
+                duration = clip.source_end_seconds - clip.source_start_seconds
+                command.extend(
+                    ["-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
+                )
+                filters.append(f"[{index}:v]{clip_video_filters(clip, width=width, height=height)}[v{index}]")
+                labels.append(f"[v{index}]")
 
-        audio_index = len(plan.clips)
-        command.extend(["-i", str(audio_path)])
-        output_label = "[v0]"
-        if any(transitions):
-            output_label = "[vbase]"
-            filters.extend(join_picture_filters(plan.clips, transitions))
-        elif len(labels) > 1:
-            output_label = "[vbase]"
-            filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
+            audio_index = len(plan.clips)
+            command.extend(["-i", str(audio_path)])
+            output_label = "[v0]"
+            if any(transitions):
+                output_label = "[vbase]"
+                filters.extend(join_picture_filters(plan.clips, transitions))
+            elif len(labels) > 1:
+                output_label = "[vbase]"
+                filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
         for overlay_path in subtitle_overlays:
             command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
         intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
@@ -1584,7 +1655,8 @@ def _srt_time(seconds: float) -> str:
 
 def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,
                                timeout_seconds: float | None, cancel_event: threading.Event | None,
-                               deadline_monotonic: float | None):
+                               deadline_monotonic: float | None,
+                               output_paths=(), max_output_file_bytes: int | None = None):
     from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
 
     if deadline_monotonic is None:
@@ -1596,7 +1668,8 @@ def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command
 
     result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout_seconds,
                                  max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
-                                 cancel_event=cancel_event)
+                                 cancel_event=cancel_event, output_paths=output_paths,
+                                 max_output_file_bytes=max_output_file_bytes)
     if result.returncode:
         raise MontageRenderError(tool=Path(command[0]).name, exit_code=result.returncode,
                                  stderr=result.stderr.decode("utf-8", errors="replace"))

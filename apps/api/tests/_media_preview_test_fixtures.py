@@ -230,7 +230,8 @@ def configure_synthetic_media_budgets(monkeypatch, main):
         runtime_sample_seconds=.1, additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2)
     render = CpuRenderBudget(max_duration_seconds=12, max_pixel_seconds=25_000_000, max_width_px=1920,
         max_height_px=1920, max_input_bytes=32*1024**2, max_clip_count=16, max_overlay_count=8, max_output_bytes=32*1024**2,
-        max_threads=1, max_timeout_seconds=30, additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2)
+        max_threads=1, max_timeout_seconds=30, additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2,
+        max_process_threads=16)  # Synthetic test profile, not a machine default.
     monkeypatch.setattr(member_permits, 'cpu_audio_budget_from_env', lambda: audio)
     monkeypatch.setattr(main, 'cpu_audio_budget_from_env', lambda: audio)
     monkeypatch.setattr(member_permits, 'cpu_render_budget_from_env', lambda **kwargs: render)
