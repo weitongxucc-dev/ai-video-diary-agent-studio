@@ -13,6 +13,10 @@ const TOKEN = 'FAKE-LOCAL-TOKEN-only-synthetic';
 const TASK = 'task_synthetic';
 const PREFIX = `/api/creation-tasks/${TASK}`;
 const query = phase => `${PREFIX}/assistant/edit-requests/${REQUEST}?phase=${phase}`;
+const executionLocator = PREFIX+'/execution';
+const executionInput = {script_id:'script_confirmed',input_digest:'e'.repeat(64),requirements_confirmed:true};
+const executionStatus = (status,jobId='execution_original',videoReady=false) => ({task_id:TASK,
+  job:{id:jobId,task_id:TASK,kind:'creation_task_execution',input_digest:executionInput.input_digest,status},video_ready:videoReady});
 const absent = response => send(response,404,{detail:'not found'});
 const send = (response,status,data) => { response.writeHead(status,{'Content-Type':'application/json'}); response.end(JSON.stringify(data)); };
 
@@ -225,6 +229,124 @@ test('job succeeded needs result and failed remains failed',async t=>{
   result={artifact_id:'actual_fixture'};
   assert.equal((await f.cli('job','inspect',TASK,'job_1')).code,0);
   state='failed'; assert.equal((await f.cli('job','inspect',TASK,'job_1')).code,1);
+});
+
+test('execution preview stays read-only and explicit start relays the confirmed script/digest without fabricated request fields',async t=>{
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===executionLocator+'/preview') return send(res,200,{task_id:TASK,script_id:executionInput.script_id,
+      input_digest:executionInput.input_digest,requirements:{can_continue:true}});
+    if(call.method==='GET') return send(res,200,{task_id:TASK,job:null,video_ready:false});
+    return send(res,202,executionStatus('queued'));
+  });
+  assert.equal((await f.cli('execution','preview',TASK)).code,0);
+  assert.equal((await f.cli('execution','status',TASK)).json.state,'not_started');
+  const file=join(f.directory,'execution.json');await writeFile(file,JSON.stringify(executionInput));
+  const result=await f.cli('execution','start',TASK,'--file',file);
+  assert.equal(result.code,3);assert.equal(result.json.state,'pending');assert.equal(result.json.job_id,'execution_original');
+  const writes=f.calls.filter(call=>call.method==='POST');
+  assert.deepEqual(writes.map(call=>[call.url,call.body]),[[executionLocator+'/start',executionInput]]);
+  assert.ok(!f.calls.some(call=>call.url.includes('/assistant/edit-requests/')));
+});
+
+for (const [status,ready,code] of [['succeeded',true,0],['failed',false,1],['cancelled',false,1],['interrupted',false,3],['succeeded',false,4]]) {
+  test(`execution status maps ${status}/current video ${ready} to ${code}`,async t=>{
+    const f=await fixture(t,(call,res)=>send(res,200,executionStatus(status,'execution_original',ready)));
+    const result=await f.cli('execution','status',TASK);
+    assert.equal(result.code,code);assert.ok(f.calls.every(call=>call.method==='GET'));
+    if(code!==4) assert.equal(result.json.data.job.status,status);
+  });
+}
+
+test('execution start requires actual fields and an explicit true confirmation instead of copying or defaulting from preview',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,200,{}));
+  const file=join(f.directory,'execution.json');
+  for(const input of [{...executionInput,requirements_confirmed:false},{script_id:executionInput.script_id,requirements_confirmed:true}]) {
+    await writeFile(file,JSON.stringify(input));
+    assert.equal((await f.cli('execution','start',TASK,'--file',file)).code,2);
+  }
+  assert.equal(f.calls.length,0);
+});
+
+test('execution start keeps the supplied digest on API CAS rejection and submits only once',async t=>{
+  const f=await fixture(t,(call,res)=>call.method==='GET'?send(res,200,executionStatus('succeeded')):
+    send(res,409,{detail:'script or making requirements changed'}));
+  const file=join(f.directory,'execution.json');await writeFile(file,JSON.stringify(executionInput));
+  const result=await f.cli('execution','start',TASK,'--file',file);
+  assert.equal(result.code,1);assert.equal(result.json.http_status,409);assert.equal(result.json.execution_locator,executionLocator);
+  assert.deepEqual(f.calls.at(-1).body,executionInput);
+  assert.deepEqual(f.calls.map(call=>call.method),['GET','POST']);
+});
+
+test('execution start reports a reused valid existing job without claiming a new job',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,call.method==='POST'?202:200,executionStatus('succeeded','execution_original',true)));
+  const file=join(f.directory,'execution.json');await writeFile(file,JSON.stringify(executionInput));
+  const result=await f.cli('execution','start',TASK,'--file',file);
+  assert.equal(result.code,0);assert.equal(result.json.previous_job_id,'execution_original');assert.equal(result.json.reused_job,true);
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+});
+
+for(const command of ['start','resume']) {
+  test(`unknown execution ${command} reads the original job once but remains unknown and never rePOSTs`,async t=>{
+    let posted=false;
+    const f=await fixture(t,(call,res)=>{
+      if(call.method==='POST') {posted=true;res.destroy();return;}
+      return send(res,200,executionStatus(posted?'succeeded':'failed','execution_original',posted));
+    });
+    const file=join(f.directory,'execution.json');await writeFile(file,JSON.stringify(executionInput));
+    const result=await f.cli('execution',command,TASK,...(command==='start'?['--file',file]:[]));
+    assert.equal(result.code,4);assert.equal(result.json.state,'unknown');assert.equal(result.json.job_id,'execution_original');
+    assert.equal(result.json.query_state,'original_input_observed');assert.equal(result.json.observed_execution.job.status,'succeeded');
+    assert.deepEqual(f.calls.map(call=>[call.method,call.url]),[['GET',executionLocator],['POST',executionLocator+'/'+command],['GET',executionLocator]]);
+  });
+}
+
+test('unknown execution resume does not promote a different latest job into the original request result',async t=>{
+  let posted=false;
+  const f=await fixture(t,(call,res)=>{
+    if(call.method==='POST') {posted=true;return send(res,500,{detail:'lost result'});}
+    return send(res,200,executionStatus(posted?'succeeded':'failed',posted?'execution_foreign':'execution_original',posted));
+  });
+  const result=await f.cli('execution','resume',TASK);
+  assert.equal(result.code,4);assert.equal(result.json.query_state,'different_job');assert.equal(result.json.job_id,'execution_original');
+  assert.ok(!Object.hasOwn(result.json,'observed_execution'));assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+});
+
+test('execution resume returning a different job is unknown even when its digest matches',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,call.method==='POST'?202:200,
+    executionStatus(call.method==='POST'?'queued':'failed',call.method==='POST'?'execution_retry':'execution_original')));
+  const result=await f.cli('execution','resume',TASK);
+  assert.equal(result.code,4);assert.equal(result.json.job_id,'execution_original');assert.equal(result.json.state,'unknown');
+  assert.equal(f.calls.find(call=>call.method==='POST').body,null);
+  assert.deepEqual(f.calls.map(call=>call.method),['GET','POST','GET']);
+});
+
+test('explicit execution start can return a new job with the supplied digest after an existing job',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,call.method==='POST'?202:200,
+    executionStatus(call.method==='POST'?'queued':'failed',call.method==='POST'?'execution_new':'execution_original')));
+  const file=join(f.directory,'execution.json');await writeFile(file,JSON.stringify(executionInput));
+  const result=await f.cli('execution','start',TASK,'--file',file);
+  assert.equal(result.code,3);assert.equal(result.json.job_id,'execution_new');assert.equal(result.json.previous_job_id,'execution_original');
+  assert.equal(result.json.reused_job,false);assert.deepEqual(f.calls.at(-1).body,executionInput);
+  assert.deepEqual(f.calls.map(call=>call.method),['GET','POST']);
+});
+
+test('execution wait is finite and a valid original completed result is the only success',async t=>{
+  let status='queued';
+  const f=await fixture(t,(call,res)=>send(res,200,executionStatus(status,'execution_original',status==='succeeded')));
+  const started=Date.now();
+  const pending=await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','0.03');
+  assert.equal(pending.code,3);assert.ok(Date.now()-started<1000);
+  status='succeeded';assert.equal((await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','0.03')).code,0);
+  assert.ok(f.calls.every(call=>call.method==='GET'&&call.url===executionLocator));
+});
+
+test('execution wait cannot drift to a newer succeeded job after observing the original pending job',async t=>{
+  let reads=0;
+  const f=await fixture(t,(call,res)=>send(res,200,++reads===1?executionStatus('queued'):
+    executionStatus('succeeded','execution_newer',true)));
+  const result=await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','2');
+  assert.equal(result.code,4);assert.equal(result.json.job_id,'execution_original');assert.equal(result.json.observed_job_id,'execution_newer');
+  assert.equal(f.calls.length,2);assert.ok(f.calls.every(call=>call.method==='GET'));
 });
 
 test('timeline binds once, without inventing request/assistant fields',async t=>{

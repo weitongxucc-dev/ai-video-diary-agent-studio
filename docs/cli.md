@@ -115,6 +115,18 @@ node scripts/yaohe.mjs request query TASK APPLY_UUID --phase apply
 
 应用先 GET 原提案的 `/edits/PROPOSAL/result`，从该回执读取 `base_version_id` 和 `input_digest`，再 POST `/edits/PROPOSAL/confirm`。它不会用任务的新版本替换原提案基础，也不会重新编译提案。
 
+音量和画面效果复用这组命令。`EditAudioTimeline` 的 `audio_edit` 使用实际 `action:update|track`、`target_id`、非空 `values`；`AdjustVisualEffects` 使用实际 `clip_ids` 和非空 `effects`。两者只写指定字段，遗漏保持。`gain_db` 是绝对值：原音量 −9dB 降低6dB应提交 −15dB。音频淡入淡出单位是毫秒，画面淡入淡出单位是秒。可用字段、边界与当前可用条件以 `capabilities describe` 返回的共同 schema 为准。
+
+```json
+{"operation_type":"EditAudioTimeline","audio_edit":{"action":"update","target_id":"actual_audio_clip","values":{"gain_db":-15,"fade_out_ms":1000}}}
+```
+
+```json
+{"operation_type":"AdjustVisualEffects","clip_ids":["actual_video_clip"],"effects":{"exposure":0.3,"saturation":0.8}}
+```
+
+这波未开放音量关键点写入、独立音频变速和持久独听；`solo` 仍是临时试听。预览、应用和成片是不同结果，采用草稿后须明确提交下面的制作命令。
+
 每个新的预览或应用都使用调用方提供的 UUID。提交前先查询同一身份：未知时只保留查询定位；已经记录时，当前明确动作仍须经过共同 API 的幂等比较，差异由服务端拒绝。回执的 `submitted_input` 提供原提交的版本与摘要绑定；CLI 只复用这些绑定，当前动作参数或提案仍来自本次命令，不复制助手身份。没有可核验的原绑定时返回未知，不改绑当前任务版本或假冒原请求成功。提交连接丢失或服务端错误时最多回查一次，不自动重 POST。不要换 UUID 来盲重试未知结果。CLI 不持久化另一份成功状态。
 
 ## 作业读取、有限等待和取消
@@ -126,6 +138,24 @@ node scripts/yaohe.mjs job cancel TASK JOB
 ```
 
 沿任务的 `/media-jobs/JOB` 读取；取消沿 `/media-jobs/JOB/cancel`。等待默认 30 秒，可设置正数且至多 300 秒，只轮询 GET，不调用模型、提交后续动作或改变设备排队。期限到达仍排队或运行时返回待完成状态；成功状态缺少结果时返回未知。取消回执为 `cancelled` 时表示取消命令完成；它不表示媒体处理成功。
+
+## 制作与原作业等待
+
+```bash
+node scripts/yaohe.mjs execution preview TASK
+node scripts/yaohe.mjs execution start TASK --file execution.json
+node scripts/yaohe.mjs execution status TASK
+node scripts/yaohe.mjs execution wait TASK ACTUAL_JOB --timeout-seconds 30
+node scripts/yaohe.mjs execution resume TASK
+```
+
+`execution.json` 只含实际制作预览返回的 `script_id`、`input_digest` 和显式 `requirements_confirmed:true`。CLI 不补确认或猜当前文案。`start/resume` 沿普通 `/execution/start`、`/execution/resume`，响应中的 `job` 是制作作业，不能用媒体预览作业的成功代替成片。成功需该作业 `succeeded` 且当前 `video_ready:true`。
+
+```json
+{"script_id":"actual_confirmed_script","input_digest":"actual_64_character_sha256","requirements_confirmed":true}
+```
+
+等待至多300秒，固定传入的作业ID；任务出现新作业时返回未知，不改绑等待。`resume` 保持原作业身份；若服务端创建新作业，需要 `status` 查明后显式等待新ID。明确 `start` 可返回新作业，并标识与此前作业是否相同。提交结果未知只 GET 原制作状态一次，仍返回未知（4），不重复 POST。该制作 API 没有每次提交独立回执，当前任务的作业查询不能证明丢失的提交已经成功。
 
 ## 撤销与重做
 

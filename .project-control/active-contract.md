@@ -15,6 +15,8 @@
 
 本轮API/编辑、Pi/CLI与调研覆盖包已RELEASE；root收回审阅、集成及正常模型/GUI/CLI媒体链验收。新接口只开放audio update/track混音patch，本波gain_points仍只读；其他音频结构动作继续按其实际入口判断。该释放不表示真实闭环通过。
 
+CLI成片消费者必要窄补：Pi/CLI Owner重新独占scripts/yaohe.mjs及yaohe.test.mjs，补已有execution preview/start/status/原job有界wait/resume薄客户端，使本轮CLI采用后能沿普通API生成并回读真实成片。start必须显式提供真实preview/script/digest及requirements_confirmed；unknown只查execution原job，不拿编辑请求locator代替，不重POST；wait绑定真实job身份，任务发生新作业不得混为原作业成功。无新API/状态库、默认授权或完整CLI安装范围。
+
 ## 验收、非目标与实际旧路径
 
 共同typed目录支持真实音频对象音量/静音/淡入淡出/混音参数，以及镜头现有画面效果；未支持独立音频retime/通用关键帧/solo持久化不承诺。既有手动audio/visual入口保持，其执行内核由共同受理入口复用，不建立第二validator/状态机。实际对象必须按当前版本读取；只改指定字段，不把完整效果默认值覆盖其他效果。
