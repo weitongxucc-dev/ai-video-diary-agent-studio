@@ -96,7 +96,12 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const shareRevision = useRef(0);
   const [taskPreview, setTaskPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
   const [taskPreviewOpen, setTaskPreviewOpen] = useState(false);
-  const [undoReady, setUndoReady] = useState(false);
+  const latestTaskFacts = useRef(task);
+  latestTaskFacts.current = task;
+  // A command return is not a task read; retain a read barrier until new immutable facts arrive.
+  const [taskAwaitingRead, setTaskAwaitingRead] = useState<CreationTask | null>(null);
+  const awaitingTaskRead = Boolean(task && taskAwaitingRead === task);
+  const undoAvailable = task?.can_undo === true && !awaitingTaskRead;
   const [modelConfigured, setModelConfigured] = useState(false);
   const [pending, setPending] = useState<"chat" | "confirm" | "undo" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,9 +115,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setRequestBinding(null); setRequestOpen(false);
     setActivePlanTurnId(null);
     shareRevision.current += 1; setShareValue(20); setQualityValue("high"); setShareUpdating(false);
-    setTaskPreview(null); setTaskPreviewOpen(false); setUndoReady(false);
+    setTaskPreview(null); setTaskPreviewOpen(false); setTaskAwaitingRead(null);
     setError(null); setTaskActionStatus(null);
     restoredPlanKey.current = null;
+    return () => { scopeRevision.current += 1; shareRevision.current += 1; };
   }, [task?.id, materialSelectionKey, pageContext?.pathname]);
   useEffect(() => {
     const saved = assistant.conversation;
@@ -227,18 +233,20 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setError(null);
     try {
       const result = await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
-      if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
+      if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
       setTaskPreview(null);
       setTaskPreviewOpen(false);
       const queued = "status" in result;
-      setUndoReady(!queued);
+      if (!queued) setTaskAwaitingRead(latestTaskFacts.current);
       setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : null);
       onTaskUpdated?.();
     } catch (cause) {
-      if (revision === scopeRevision.current) {
+      if (revision === scopeRevision.current && latestTaskFacts.current?.id === task.id) {
         setError(cause instanceof Error ? cause.message : "修改未完成，请重新预览。");
         setTaskPreview(null);
         setTaskPreviewOpen(false);
+        setTaskAwaitingRead(latestTaskFacts.current);
+        onTaskUpdated?.();
       }
     } finally {
       if (revision === scopeRevision.current) setPending(null);
@@ -246,17 +254,21 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   }
 
   async function undoTaskEdit() {
-    if (!task || !undoReady || pending) return;
+    if (!task || !undoAvailable || pending) return;
     const revision = scopeRevision.current;
     setPending("undo");
     setError(null);
     try {
       await undoCreationTaskTimeline(task.id);
-      if (revision !== scopeRevision.current) { onTaskUpdated?.(); return; }
-      setUndoReady(false);
+      if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
+      setTaskAwaitingRead(latestTaskFacts.current);
       onTaskUpdated?.();
     } catch (cause) {
-      if (revision === scopeRevision.current) setError(cause instanceof Error ? cause.message : "撤销未完成，请到任务页查看。");
+      if (revision === scopeRevision.current && latestTaskFacts.current?.id === task.id) {
+        setError(cause instanceof Error ? cause.message : "撤销未完成，请到任务页查看。");
+        setTaskAwaitingRead(latestTaskFacts.current);
+        onTaskUpdated?.();
+      }
     } finally {
       if (revision === scopeRevision.current) setPending(null);
     }
@@ -419,7 +431,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         </div>
       </HomeCardDialog> : null}
       {error ? <div className="home-composer__error" role="alert"><AssistantFailureMessage message={error}/></div> : null}
-      {task && undoReady ? <div className="home-composer__footer"><button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button></div> : null}
+      {awaitingTaskRead ? <p role="status">正在回读当前草稿，撤销暂不可用。</p> : null}
+      {task && undoAvailable ? <div className="home-composer__footer"><button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button></div> : null}
     </div>
   );
 }

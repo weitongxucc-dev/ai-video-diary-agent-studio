@@ -44,6 +44,7 @@ import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
 import { listCreationTasks, listLocalMembers, type LocalMember } from "@/lib/api";
+import { initialTaskListFacts, applyTaskFactUpdates, applyTaskListSnapshot } from "./creation-task/task-list-facts";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
 import { CreationTaskStageIcon } from "@/components/CreationTaskStageIcon";
 import type { CreationTask } from "@/lib/types";
@@ -124,15 +125,6 @@ export type AppShellProps = {
 
 function creationTaskHref(task: CreationTask) {
   return `/tasks/${encodeURIComponent(task.id)}`;
-}
-
-function mergeCreationTasks(...groups: CreationTask[][]): CreationTask[] {
-  const tasks = new Map<string, CreationTask>();
-  for (const task of groups.flat()) {
-    const previous = tasks.get(task.id);
-    if (!previous || Date.parse(task.updated_at) > Date.parse(previous.updated_at)) tasks.set(task.id, task);
-  }
-  return [...tasks.values()].slice(0, 6);
 }
 
 function isActive(pathname: string, href: string, activePath?: string, search?: Pick<URLSearchParams, "get">): boolean {
@@ -250,7 +242,9 @@ export function AppShell({
     return () => { active = false; };
   }, [localAuthMode, identityReady, identityToken, identityError]);
   const [searchParentId, setSearchParentId] = useState<string | undefined>();
-  const [recentTasks, setRecentTasks] = useState<CreationTask[]>(creationTasks ?? []);
+  const [taskListFacts, setTaskListFacts] = useState(() => initialTaskListFacts(creationTasks ?? []));
+  const recentTasks = taskListFacts.items.slice(0, 6);
+  const taskFactsRevision = useRef(0);
   const [taskReadState, setTaskReadState] = useState<"loading" | "ready" | "error">("loading");
   const [taskReadError, setTaskReadError] = useState<string | null>(null);
   const taskReadSequence = useRef(0);
@@ -274,11 +268,12 @@ export function AppShell({
 
   const refreshRecentTasks = useCallback(async (background = false) => {
     const request = ++taskReadSequence.current;
+    const factsRevision = taskFactsRevision.current;
     if (!background) { setTaskReadState("loading"); setTaskReadError(null); }
     try {
       const payload = await listCreationTasks();
       if (request !== taskReadSequence.current) return;
-      setRecentTasks(current => mergeCreationTasks(payload.items, current));
+      setTaskListFacts(current => applyTaskListSnapshot(current, payload.items, factsRevision !== taskFactsRevision.current));
       setTaskReadState("ready");
       setTaskReadError(null);
     } catch (cause) {
@@ -326,10 +321,9 @@ export function AppShell({
   useEffect(() => {
     if (previousTaskProps.current === creationTasks) return;
     previousTaskProps.current = creationTasks;
-    if (creationTasks === undefined) return;
-    ++taskReadSequence.current;
-    setRecentTasks((current) => mergeCreationTasks(creationTasks, current));
-    setTaskReadState("ready"); setTaskReadError(null);
+    if (creationTasks === undefined || creationTasks.length === 0) return;
+    ++taskFactsRevision.current;
+    setTaskListFacts(current => applyTaskFactUpdates(current, creationTasks));
   }, [creationTasks]);
 
   useEffect(() => { setSidebarOpen(false); setDetailsOpen(false); }, [pathname]);

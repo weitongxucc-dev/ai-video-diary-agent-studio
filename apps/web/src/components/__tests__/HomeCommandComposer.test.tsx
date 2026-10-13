@@ -431,7 +431,7 @@ describe("HomeCommandComposer", () => {
       resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
-    const toolSummary = screen.getByText("工具记录 · 1 项 · 已完成");
+    const toolSummary = screen.getByText("工具记录 · 1 项 · 调用已结束");
     expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(toolSummary);
     expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
@@ -440,7 +440,7 @@ describe("HomeCommandComposer", () => {
 
   it("keeps an existing task in the chat, previews a change, confirms and undoes it", async () => {
     configuredModel();
-    const task = { id: "task-1", stage: "montage", name: "产品介绍" } as CreationTask;
+    const task = { id: "task-1", stage: "montage", name: "产品介绍", can_undo: false, current_timeline_version_id: "v1", timeline_sequence: 1 } as CreationTask;
     const onTaskUpdated = vi.fn();
     mocks.editAsk.mockResolvedValue({
       reply: "会调亮这一段。", provider: "minimax", model: "MiniMax-M3",
@@ -451,7 +451,7 @@ describe("HomeCommandComposer", () => {
     });
     mocks.confirmEdit.mockResolvedValue({});
     mocks.undoEdit.mockResolvedValue({});
-    render(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={task} />);
+    const view = render(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={task} />);
 
     fireEvent.change(await readyInput("任务对话要求"), { target: { value: "把画面调亮" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
@@ -459,15 +459,21 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledWith("task-1", {
       conversation_id: expect.any(String), message: "把画面调亮", context_stage: "montage", selected_object_refs: [], playhead_ms: null,
       client_request_id: expect.any(String), expected_draft_version: expect.any(Number),
+      expected_timeline_version_id: "v1", expected_timeline_sequence: 1,
     }, expect.any(Function)));
     expect(await screen.findByRole("dialog", { name: "修改预览" })).toHaveTextContent("调亮画面");
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
     await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1", "proposal-1"));
     expect(onTaskUpdated).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    view.rerender(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: true }} />);
     fireEvent.click(screen.getByRole("button", { name: "撤销修改" }));
     await waitFor(() => expect(mocks.undoEdit).toHaveBeenCalledWith("task-1"));
     expect(onTaskUpdated).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    view.rerender(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={{ ...task, current_timeline_version_id: "v3", timeline_sequence: 3, can_undo: false }} />);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     expect(mocks.ask).not.toHaveBeenCalled();
   });
 
@@ -516,6 +522,86 @@ describe("HomeCommandComposer", () => {
     expect(screen.queryByText("修改已完成。")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     expect(mocks.undoEdit).not.toHaveBeenCalled();
+  });
+
+  it("uses same-task server undo facts while retaining the draft and conversation", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "测试任务", current_timeline_version_id: "v1", timeline_sequence: 1, can_undo: true } as CreationTask;
+    const view = render(<HomeCommandComposer task={task} />);
+    const input = await readyInput("任务对话要求");
+    fireEvent.change(input, { target: { value: "下一轮草稿保持" } });
+    const reads = mocks.saved.size;
+    expect(screen.getByRole("button", { name: "撤销修改" })).toBeEnabled();
+    view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: false }} />);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    expect(input).toHaveValue("下一轮草稿保持");
+    expect(mocks.saved.size).toBe(reads);
+    view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v3", timeline_sequence: 3, can_undo: undefined } as unknown as CreationTask} />);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    expect(input).toHaveValue("下一轮草稿保持");
+  });
+
+  it("waits for a post-command read even when the same task was read during confirmation", async () => {
+    configuredModel();
+    let finish!: (result: unknown) => void;
+    const onTaskUpdated = vi.fn();
+    const task = { id: "task-1", stage: "montage", name: "测试任务", current_timeline_version_id: "v1", can_undo: true } as CreationTask;
+    mocks.editAsk.mockResolvedValue({ reply: "修改待确认", provider: "fixture", model: "fixture", edit_preview: { proposal: {
+      id: "proposal-a", summary: "测试编辑", invalidated_refs: [], external_effects: [],
+      preview: { before: { label: "原稿", detail: "当前版本" }, after: { label: "修改", detail: "待应用" } },
+    } } });
+    mocks.confirmEdit.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const view = render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "测试编辑" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改预览" });
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalled());
+    view.rerender(<HomeCommandComposer task={{ ...task, name: "读取中的同一任务" }} onTaskUpdated={onTaskUpdated} />);
+    await act(async () => finish({ operation: { id: "op-a" } }));
+    expect(onTaskUpdated).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", can_undo: true }} onTaskUpdated={onTaskUpdated} />);
+    expect(screen.getByRole("button", { name: "撤销修改" })).toBeEnabled();
+  });
+
+  it("rechecks task facts after an undo error rather than re-enabling the old undo bit", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "测试任务", current_timeline_version_id: "v1", timeline_sequence: 1, can_undo: true } as CreationTask;
+    const onTaskUpdated = vi.fn();
+    mocks.undoEdit.mockRejectedValueOnce(new Error("当前版本已变化"));
+    const view = render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated} />);
+    await readyInput("任务对话要求");
+    fireEvent.click(screen.getByRole("button", { name: "撤销修改" }));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+    expect(screen.getByText("正在回读当前草稿，撤销暂不可用。")).toBeInTheDocument();
+    view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", can_undo: false }} onTaskUpdated={onTaskUpdated} />);
+    expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+  });
+
+  it.each(["switch", "unmount"])("does not invoke the old task read callback after confirmation and %s", async change => {
+    configuredModel();
+    let finish!: (result: unknown) => void;
+    const onTaskUpdated = vi.fn();
+    const task = { id: "task-1", stage: "montage", name: "测试任务", can_undo: false } as CreationTask;
+    mocks.editAsk.mockResolvedValue({ reply: "修改待确认", provider: "fixture", model: "fixture", edit_preview: { proposal: {
+      id: "proposal-a", summary: "测试编辑", invalidated_refs: [], external_effects: [],
+      preview: { before: { label: "原稿", detail: "当前版本" }, after: { label: "修改", detail: "待应用" } },
+    } } });
+    mocks.confirmEdit.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const view = render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "测试编辑" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改预览" });
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+    await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalled());
+    if (change === "switch") view.rerender(<HomeCommandComposer task={{ ...task, id: "task-2" }} onTaskUpdated={onTaskUpdated} />);
+    else view.unmount();
+    await act(async () => finish({ operation: { id: "op-a" } }));
+    expect(onTaskUpdated).not.toHaveBeenCalled();
   });
 
   it("keeps the old turn in the same conversation after switching tasks without opening its preview", async () => {

@@ -438,7 +438,7 @@ describe("AppShell", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it.each(["success", "failure"])("ignores a late %s after a newer server snapshot arrives", async outcome => {
+  it.each(["success", "failure"])("retains task facts while the in-flight complete collection read settles with %s", async outcome => {
     let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
     let reject!: (cause: Error) => void;
     apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((finish, fail) => { resolve = finish; reject = fail; }));
@@ -452,20 +452,62 @@ describe("AppShell", () => {
     });
     expect(screen.getByRole("link", { name: /新快照任务.*已完成/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /旧快照任务/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    if (outcome === "failure") expect(screen.getByRole("alert")).toBeInTheDocument();
+    else expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
   });
 
-  it("does not let a late failed read replace a newer known-empty snapshot", async () => {
+  it("does not let a late failed read replace a newer complete empty GET snapshot", async () => {
     let reject!: (cause: Error) => void;
-    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((_finish, fail) => { reject = fail; }));
+    apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((_finish, fail) => { reject = fail; }))
+      .mockResolvedValueOnce({ items: [], total_count: 0 });
     const view = render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
-    view.rerender(<AppShell creationTasks={[]} conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    pathname = "/history";
+    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    await screen.findByText("还没有创作任务");
     await act(async () => reject(new Error("过期读取故障")));
     expect(screen.getByText("还没有创作任务")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it.each(["remaining", "empty"])("removes stale task membership after a complete %s GET", async result => {
+    let finish!: (value: { items: CreationTask[]; total_count: number }) => void;
+    const first = creationTask({ id: "task-a", name: "旧可读任务" });
+    const second = creationTask({ id: "task-b", name: "保留任务" });
+    apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [first, second], total_count: 2 })
+      .mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const view = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    await screen.findByRole("link", { name: /旧可读任务/ });
+    pathname = "/history";
+    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    await waitFor(() => expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2));
+    await act(async () => finish({ items: result === "empty" ? [] : [second], total_count: result === "empty" ? 0 : 1 }));
+    expect(screen.queryByRole("link", { name: /旧可读任务/ })).not.toBeInTheDocument();
+    if (result === "empty") expect(screen.getByText("还没有创作任务")).toBeInTheDocument();
+    else expect(screen.getByRole("link", { name: /保留任务/ })).toBeInTheDocument();
+    view.rerender(<AppShell creationTasks={[first]} conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    expect(screen.queryByRole("link", { name: /旧可读任务/ })).not.toBeInTheDocument();
+  });
+
+  it("applies finite task facts without replacing full membership or hiding its read error", async () => {
+    const first = creationTask({ id: "task-a", name: "任务 A" });
+    const second = creationTask({ id: "task-b", name: "任务 B" });
+    apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [first, second], total_count: 2 })
+      .mockRejectedValueOnce(new Error("完整列表读取失败"));
+    const view = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    await screen.findByRole("link", { name: /任务 B/ });
+    pathname = "/history";
+    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    await screen.findByRole("alert");
+    view.rerender(<AppShell creationTasks={[{ ...first, name: "任务 A 新事实", updated_at: "2026-10-14T01:00:00Z" }]} conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    expect(screen.getByRole("link", { name: /任务 A 新事实/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /任务 B/ })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    view.rerender(<AppShell creationTasks={[]} conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    expect(screen.getByRole("link", { name: /任务 B/ })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
   it("turns both search affordances into one real page and task command palette", () => {
