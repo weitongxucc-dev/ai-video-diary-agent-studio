@@ -8,15 +8,19 @@ S2开发遵循用户2026-10-13最新指令：root担任总控，不再调动内�
 
 ## 独占分工与协议
 
-### 当前执行归属（用户最新指令优先，取代下方历史内部Agent分工）
+### 当前执行归属：新总控唯一接管（2026-10-13）
 
-所有内部Agent已HOLD_ACK/RELEASE，不再写入或测试；既有提交和dirty diff保留。当前HEAD=e13a298，PR#124。以下可见线程在同一desktop-v32活动checkout按互斥文件工作，不得使用内部子Agent，也不写original历史checkout。
+用户最新明确要求旧主控01a12cf6-92b6-7793-965b-350a44278473退出，由新开线程01a13575-b39d-7230-acad-b68b09cb3c3d（曜核：新总控与真实交付）接管。新主控已HANDOFF_ACK并重读当前归属，三worker已HOLD/FINAL_RELEASE、原app已恢复。此治理事务commit/push与CONTROL_TRANSFER_COMPLETE发送后，新主控01a13575-b39d-7230-acad-b68b09cb3c3d唯一持有主控/共享权威/Git/Issue/服务租约/验收和打包决策权；旧主控01a12cf6-92b6-7793-965b-350a44278473停止派工及源码/共享权威/Git/Issue修改，只发送最后交接ACK。没有扩大产品、资源、数据或发布授权。
 
-- 可见线程「曜核：调色预览范围修复」（01a13533-b38c-7430-a2de-cb419e2340d6）：唯一编码owner，接手现有dirty的apps/api/app/main.py、tests/test_creation_audio_mix.py、tests/test_task_media_grants.py、tests/test_visual_effects.py（测试均位于apps/api/）。仅完成已核准的调色预览窄修及对应回归；当前6例2pass/4fail，失败为新fixture有效字幕轨缺artifact/transform provenance，须补真实fixture证据，不改生产validator。定位_visual_preview_projection/_task_media_facts/_visual_scope_case。不得改其他源码、共享文档、服务、用户数据、profile或Git；必要新增消费者先报root。完成后提交精确diff、命令/结果、边界与RELEASE供root审核提交。
-- 可见线程「曜核：自动接续与中栏独立审核」（01a13533-cec4-70d2-aa5d-ab5bb6c6aefd）：只读已提交#120/#130代码、现有测试及本轮真实证据；仅写本轮QA目录visible-review.md/json。检查真实提交来源、纯读取、持久接续、失效/中断语义和原320/360中栏结果/失败/范围呈现。明确静态与失败链证据、尚缺成功链证据；不改代码/Issue/Git/服务/用户任务，不操作浏览器。实际成功截图/回执由验收线程提供后再审核。
-- 可见线程「曜核：真实视频闭环与试用打包」（01a13533-e91f-7482-acce-f5968e52fae5）：先只读准备，唯一写入本轮QA验收脚本、回执和媒体输出（不得覆盖旧证据）。root审核代码并给出新SHA后，单独消息转交QA服务、GUI、有限profile、task_93d78477016b正常可撤销编辑验收的操作租约；此前不得启动/终止服务、改用户任务或配置。自然语言音量/clip2调色→实际试听/代表预览→采用→真实115.788秒成片→同版本/hash观察，并验证中断后的原成功Job自动接续、保存/undo/重启和中栏可见状态。禁止raw DB改写、重新TTS、改CPU91门/资源默认。原app暂退已授权，验收后须恢复。打包必须等root确认同候选实际验收通过后才开始；不发布正式Release、不改原private.env直至测量证明并获root具体同机profile租约。
+当前产品基线1a148dacd420975c4a5c2f764f52e602c23f39c2已push，tracked产品clean。所有内部Agent租约已永久结束。以下可见worker的此前源码/设计/服务/GUI/数据租约全部HOLD撤销，完成当前不可中断操作后只报告和做既有授权的安全清理/恢复，等待新主控明确定文件与REBASE_ACK，不得依下方旧分工自启动。
 
-root不编码上述owned文件，不重复执行worker已经充分证明的无关测试；负责review/集成、及时commit/push、#117动态总览及有关Issue/PR、教学同步。可见线程消息出自root并承接用户对本轮派工及报告的授权；worker可向本总控发送ACK/证据/发现/RELEASE。每次切换owner先释放，代码租约完成前API保持停止。下方历史条目只记录既有实现范围，不再给内部Agent写入权。
+- 编码01a13533-b38c-7430-a2de-cb419e2340d6（曜核：调色预览范围修复）：HOLD_ACK，无源码dirty/运行操作；原编码已提交。#142仅有限源码读取，提案文件尚未写出，没有资源编码/新预算权。
+- 独立审核01a13533-cec4-70d2-aa5d-ab5bb6c6aefd（曜核：自动接续与中栏独立审核）：HOLD_ACK，only原visible-review.md/json，无服务/GUI/数据操作；新1a真实可见由QA回报。
+- QA01a13533-e91f-7482-acce-f5968e52fae5（曜核：真实视频闭环与试用打包）：HOLD/FINAL_RELEASE，新Webbuild及旧cal取消320/360已证，新等待请求/Job/采用未发；本人API51252/Web51318/tab2全部结束，原exactapp恢复main54132/API54136:51888/Web54150:3000。正常GET task29/gain0/ready、history29、queue running0/waiting3原历史；交接附件§13及handoff-release.json。没有新包/整片成功验收。
+
+定点启动附件=/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013/主控交接-20261013.md（本机临时附件，不是产品权威）。新主控必须核最后安全状态、HEAD/dirty与用户新动作。user已授权可见线程互相发送交接ACK/证据。当前主交付还未完成：原成功Job自动观察、连续两次真实新片、保存/redo/候选重启及新包欠账；#142短预览准入/同request安全原因是首要阻断，不能把code/test/scope声明/旧输出恢复当交付。#117唯一动态总览，既有DraftPR124不merge/发布。
+
+### 上一阶段已提交实现范围（以下分工/租约均已结束，仅作复用依据）
 
 - continuation Owner（pi_objects）：apps/api/app/main.py、assistant_pi.py、assistant_goal_continuation.py、agent_tools/diary_tools.ts及其直接test_assistant_goal_api.py/test_assistant_goal_continuation.py/test_assistant_pi.py/test_assistant_pi_failures.py/test_assistant_typed_tools.py。必要现有对话repo/DTO变更先向root报告具体路径，核准后独占。真实start/resume回执核验后立即持久既有locator/proof；普通制作Job与TaskMediaJob分别查询；模型中断不丢原作业来源，原成功结果可在未失效目标中继续观察。失败/停止/新指令/撤权/旧版本/unknown保持原语义。已完成的有限制作/观察链与无进展清楚区分，不凭模型、空steps或旧文件宣称任意要求全部完成。向Web发布实际可用的goal/event投影字段及可信错误契约，不发原载荷或隐藏推理。
 - Web Owner（execution_ui）：AssistantConversationPanel.tsx、AssistantConversation.css、useAssistantConversation.ts、AssistantConversationProvider.tsx及直接ConversationPanel/ReadRaces测试；apps/web/src/lib/types.ts/api.ts只允许本轮会话event/goal字段与解析消费者。复用原目标、真实工具事件、提案/版本/作业/观察结果；展示当前目标、真实步骤、产物及等待/失败/恢复原因；读取/提案/采用/排队/运行/完成分开。不新建进度状态库、不改全局三栏、不抢未发送草稿、不显示原始工具载荷/路径/凭据/推理。旧失败历史保留但不充当已恢复后当前阻断。遵循design-md：DESIGN.md完整读一次。缺API字段报告，先用现有真实字段独立实现，不自造成功。
@@ -28,7 +32,7 @@ root不编码上述owned文件，不重复执行worker已经充分证明的无�
 
 已核准同Owner的 schemas.py 仅AssistantStreamEvent可选failure字段，服务器固定reason/repair_action两键安全投影，沿现sanitizer和长度边界；SSE与历史相同，不接原载荷/物理路径/凭据/隐藏推理。completed_output_checkpoint只为同现有goal的宿主核验refs/measurement/unavailable投影，scope固定production_and_output_observation；无新status enum/独立完成事实，不能清除原未完成要求或凭它宣布全部原目标成功。
 
-## 本轮真实验收发现的必要窄修（2026-10-13）
+## 本轮已提交窄修记录（旧文件租约均已结束）
 
 root核准 continuation Owner 独占 assistant_pi.py、conversation_repository.py 及原直接测试：read_creation_execution 必须进入真正工具消费set；纯读取以宿主真实状态说明查询，不采信模型“已提交恢复”，也不凭旧execution结果登记新waiting goal。只有与宿主持久真实提交proof相同Job的执行才登记；先真实提交再读取同Job仍保留write动作归属。不改权限、供应商、validator、重试或状态枚举。
 
@@ -57,10 +61,10 @@ root核准 Web Owner 必要调色预览范围修复：独占main.py及test_creat
 不实现全部#128字段、#129中文OCR/字形、#132–#135通用多轨/监听/变速/关键帧、#136–#140偏好/批量/手机/待定设计/平台外发，不新增广泛研究。已有能力仅为当前真实链路必要故障做窄修，新增范围先报root。全项目状态来自代码、Issue、Git、CI、Release和真实证据，开发计划只维护范围/归属，不记录第二份实时完成率。
 
 
-## 已发生资源阻断后的独立收尾租约（2026-10-13）
+## 上一阶段资源阻断与已提交收尾记录（租约已撤销）
 
 真实候选2dfa9f2的单镜头声明已为1.652秒/360×640/静音，实际admission仍沿既有整片新增2GiB与全机swap上限而拒绝；未产生clip媒体/提案，未通过整片正向。QA已正常取消自己的排队cal，经最新版本和原提案证据以正常CAS仅undo本轮−3dB到v29 ready；旧MP4/SRT实际字节保持及v27/v28历史完整。自有API/Web/进程租约已释放，原0.11test4 app已恢复。未修改原private.env/门限，未打包。资源复核为只读报告，不能凭空给preview更小RSS/线程/timeout数值，当前策略仍有效。
 
-总控确认独立审核所见#130具体可见缺陷，授可见编码线程01a13533-b38c-7430-a2de-cb419e2340d6新窄租约：只写apps/web/src/components/AssistantConversationPanel.tsx、apps/web/src/lib/api.ts及现有直接components/__tests__/AssistantConversationPanel.test.tsx。复用已有taskMediaJobLabel的同一语义，将默认本轮结果中的resource_busy/user_cancelled译为用户可理解状态，取消不伪装处理失败/成功；保留真实Job/步骤/采用/草稿/范围。无CSS/layout/DTO/backend或资源门改动，不用全局其他Job指标/QA日志/猜字段补memory/swap原因。DESIGN/design-md相关要求遵守，最小检查后RELEASE，root审核提交/push；必要真实可见验收由原QA线程在新SHA及新租约后执行，编码线程不得构建/运行服务/改用户数据。
+上一阶段旧总控曾确认独立审核所见#130具体可见缺陷，授可见编码线程01a13533-b38c-7430-a2de-cb419e2340d6新窄租约：只写apps/web/src/components/AssistantConversationPanel.tsx、apps/web/src/lib/api.ts及现有直接components/__tests__/AssistantConversationPanel.test.tsx。复用已有taskMediaJobLabel的同一语义，将默认本轮结果中的resource_busy/user_cancelled译为用户可理解状态，取消不伪装处理失败/成功；保留真实Job/步骤/采用/草稿/范围。无CSS/layout/DTO/backend或资源门改动，不用全局其他Job指标/QA日志/猜字段补memory/swap原因。DESIGN/design-md相关要求遵守，最小检查后RELEASE，root审核提交/push；必要真实可见验收由原QA线程在新SHA及新租约后执行，编码线程不得构建/运行服务/改用户数据。
 
 可见审核线程01a13533-cec4-70d2-aa5d-ab5bb6c6aefd仅写原visible-review.md/json，读取新run真实排队/取消截图与当前消费者，明确API尚未保存/返回同request实际资源拒绝细节。短preview资源profile与同request安全原因投影记录在Issue，不扩大到任意默认、更改整片预算或省略当前检查。后续原Job真正成功自动观察及新试用包仍须实际证明；本轮不得以旧输出恢复、波形成功、scope声明或单测替代。
