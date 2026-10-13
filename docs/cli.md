@@ -2,6 +2,8 @@
 
 `scripts/yaohe.mjs` 是普通业务 API 的独立消费者。使用 Node.js 22 或更高版本及原生 `fetch`，没有额外依赖。当前从源码仓库执行；桌面安装包尚未随包交付 CLI，也没有安装全局 `yaohe` 命令。运行前须已有可用的业务 API 和合法成员或会话身份。
 
+入口与`scripts/yaohe/`子目录一起使用：私有配置、HTTP传输、回执和具体命令分别由该目录内模块拥有，不能只复制入口文件。命令组复用同一身份与未知结果处理边界，不另存制作事实。
+
 业务动作、权限和版本规则引用[架构 §3.8](system-architecture.md#38-editcompiler)、[认证边界](auth-workspace-boundary.md)及[领域模型](domain-model.md)。本页说明实际命令协议；能力与结果由服务端当前回执决定。
 
 ## 私有配置
