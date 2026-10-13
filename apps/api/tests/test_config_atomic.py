@@ -28,6 +28,20 @@ def test_runtime_env_file_path_uses_override(monkeypatch, tmp_path):
     assert config.runtime_env_file_path() == custom
 
 
+def test_catalog_default_root_uses_supplied_mapping_without_reading_dotenv(monkeypatch, tmp_path):
+    ambient = tmp_path / "ambient" / "qa.env"
+    prospective = tmp_path / "prospective" / "qa.env"
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(ambient))
+    candidate_environment = {_ENV_FILE_OVERRIDE_VAR: str(prospective)}
+    candidate = config.model_catalog_configuration(candidate_environment)
+    assert candidate["model_root_path"] == str(prospective.parent / "models")
+    assert config._default_model_root_path() == str(ambient.parent / "models")
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(tmp_path / "different" / "qa.env"))
+    assert config.model_catalog_configuration(candidate_environment) == candidate
+    assert config.model_catalog_configuration({})["model_root_path"] == str(Path.home() / "Movies" / "AI视频日记" / "models")
+    assert not prospective.exists() and not ambient.exists()
+
+
 def test_load_dotenv_files_honours_override(monkeypatch, tmp_path):
     """load_dotenv_files() reads from the override path when set."""
     custom = tmp_path / ".env"

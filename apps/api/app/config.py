@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -214,8 +215,9 @@ def _default_local_whisper_model_path() -> str | None:
     return None
 
 
-def _default_model_root_path() -> str:
-    dotenv_override = os.getenv(_ENV_FILE_OVERRIDE_VAR)
+def _default_model_root_path(environ: Mapping[str, str] | None = None) -> str:
+    values = os.environ if environ is None else environ
+    dotenv_override = values.get(_ENV_FILE_OVERRIDE_VAR)
     if dotenv_override:
         return str(Path(dotenv_override).expanduser().parent / "models")
     return str(Path.home() / "Movies" / "AI视频日记" / "models")
@@ -567,7 +569,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         load_dotenv_files()
-        model_root_path = os.getenv("MODEL_ROOT_PATH") or _default_model_root_path()
+        catalog_configuration = model_catalog_configuration(os.environ)
+        model_root_path = catalog_configuration["model_root_path"]
         return cls(
             llm_provider=os.getenv("LLM_PROVIDER"),
             llm_api_key=os.getenv("LLM_API_KEY"),
@@ -635,18 +638,9 @@ class Settings:
                 "LOCAL_WHISPER_LANGUAGE",
                 cls.local_whisper_language,
             ),
-            model_root_path=model_root_path,
+            **catalog_configuration,
             model_root_path_configured=bool(os.getenv("MODEL_ROOT_PATH")),
             temporary_root_path=os.getenv("TEMPORARY_ROOT_PATH"),
-            model_runtime_python_path=os.getenv("MODEL_RUNTIME_PYTHON_PATH")
-            or _default_model_runtime_python_path(model_root_path),
-            visual_model_worker_path=os.getenv("VISUAL_MODEL_WORKER_PATH")
-            or _default_visual_model_worker_path(),
-            voice_model_worker_path=os.getenv("VOICE_MODEL_WORKER_PATH")
-            or _default_voice_model_worker_path(),
-            understanding_runtime_python_path=os.getenv("UNDERSTANDING_RUNTIME_PYTHON_PATH") or str(Path(model_root_path).parent / "model-runtimes" / "qwen-vl" / ".venv" / "bin" / "python"),
-            understanding_worker_path=os.getenv("UNDERSTANDING_WORKER_PATH")
-            or cls.understanding_worker_path,
             native_ocr_worker_path=os.getenv("NATIVE_OCR_WORKER_PATH"),
             native_portrait_worker_path=os.getenv("NATIVE_PORTRAIT_WORKER_PATH"),
             avatar_model_runtime_python_path=os.getenv(
@@ -962,3 +956,21 @@ class Settings:
             ],
             "status": self.public_status(),
         }
+
+
+def model_catalog_configuration(environ: Mapping[str, str]) -> dict[str, str]:
+    """Resolve the six catalog paths for startup and prospective guarded updates."""
+    root = environ.get("MODEL_ROOT_PATH") or _default_model_root_path(environ)
+    return {
+        "model_root_path": root,
+        "model_runtime_python_path": environ.get("MODEL_RUNTIME_PYTHON_PATH")
+        or _default_model_runtime_python_path(root),
+        "visual_model_worker_path": environ.get("VISUAL_MODEL_WORKER_PATH")
+        or _default_visual_model_worker_path(),
+        "voice_model_worker_path": environ.get("VOICE_MODEL_WORKER_PATH")
+        or _default_voice_model_worker_path(),
+        "understanding_runtime_python_path": environ.get("UNDERSTANDING_RUNTIME_PYTHON_PATH")
+        or str(Path(root).parent / "model-runtimes" / "qwen-vl" / ".venv" / "bin" / "python"),
+        "understanding_worker_path": environ.get("UNDERSTANDING_WORKER_PATH")
+        or Settings.understanding_worker_path,
+    }

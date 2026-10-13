@@ -80,6 +80,7 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.sources import EditSourceVerifier
+from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import (subtitle_display_selection, apply_subtitle_cue)
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
@@ -113,6 +114,7 @@ from app.config import (
     configure_process_temporary_directory,
     record_llm_service_verification,
     runtime_env_file_path,
+    model_catalog_configuration,
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
@@ -140,7 +142,7 @@ from app.llm import (
     script_generator_from_settings,
 )
 from app.model_installer import ModelInstaller, ModelInstallError
-from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT, ModelCatalog
+from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
 from app.models import (
     Episode,
     EpisodeIntakeMode,
@@ -210,12 +212,13 @@ from app.repository import (
     set_auth_enabled,
     set_workspace_context,
 )
-from app.runtime_health import runtime_health
+from app.runtime_health import runtime_health, model_catalog_from_settings
 from app.runtime_settings import (
     WORKSPACE_TEXT_FIELDS,
     apply_runtime_settings_update,
     apply_workspace_runtime_settings_update,
     is_local_client_host,
+    runtime_settings_updates,
 )
 from app.workspace_settings import (
     WORKSPACE_SECRET_FIELDS,
@@ -547,18 +550,18 @@ configure_process_temporary_directory(settings)
 set_auth_enabled(settings.auth_enabled)
 repo = EpisodeRepository(database_path=settings.database_path)
 source_repository = SourceRepository(settings.database_path)
-model_catalog = ModelCatalog(
-    settings.model_root_path,
-    settings.model_runtime_python_path,
-    settings.visual_model_worker_path,
-    settings.voice_model_worker_path,
-    understanding_runtime_python_path=settings.understanding_runtime_python_path,
-    understanding_worker_path=settings.understanding_worker_path,
-)
+model_catalog = model_catalog_from_settings(settings)
 model_installer = ModelInstaller(
     model_catalog,
     on_complete=lambda: _reload_runtime_dependencies(),
 )
+
+
+@app.on_event("startup")
+def recover_model_installations() -> None:
+    model_installer.recover_interrupted_jobs()
+
+
 visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
 voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
 avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)
@@ -3121,7 +3124,7 @@ def _creation_plan_response(
             # 回读列上的当前可见范围：写进去的和读出来的必须是同一个值。
             "visibility": plan.visibility,
             "status": plan.status,
-            "creation_task": task.__dict__,
+            "creation_task": project_task_summary(production_repo, task).summary,
             "created_at": plan.created_at,
             "confirmed_at": plan.confirmed_at,
             "updated_at": plan.updated_at,
@@ -3427,7 +3430,7 @@ def _creation_task_topic_response(
     cloud_egress = route_snapshot["execution_location"] == "cloud"
     return CreationTaskTopicsResponse.model_validate(
         {
-            "task": task.__dict__,
+            "task": project_task_summary(production_repo, task).summary,
             "candidates": [
                 {
                     "id": candidate.id,
@@ -3485,7 +3488,7 @@ def _creation_task_scripts_response(
     route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(workspace_id), latest_run)
     return CreationTaskScriptsResponse.model_validate(
         {
-            "task": task.__dict__,
+            "task": project_task_summary(production_repo, task).summary,
             "scripts": [asdict(script) for script in production_repo.list_creation_task_scripts(workspace_id, task.id)],
             "latest_run": latest_run.__dict__ if latest_run is not None else None,
             "route_preflight": route_snapshot,
@@ -3504,7 +3507,7 @@ def _creation_task_narration_response(
     )
     return CreationTaskNarrationResponse.model_validate(
         {
-            "task": task.__dict__,
+            "task": project_task_summary(production_repo, task).summary,
             "script_id": artifact.script_id,
             "audio_reference": production_repo.narration_artifact_reference(artifact.cache_key),
             "duration_seconds": artifact.duration_seconds,
@@ -5845,16 +5848,8 @@ def _creation_task_workspace_response(
         )
     except KeyError:
         montage = None
-    timeline_versions = production_repo.list_timeline_versions(workspace_id, task.id)
-    current_version = next(
-        (
-            version
-            for version in timeline_versions
-            if version.id == task.current_timeline_version_id
-        ),
-        None,
-    )
-    can_undo = _undo_target_versions(workspace_id, task)[0] is not None
+    task_read = project_task_summary(production_repo, task)
+    current_version = task_read.current_version
     person_provider = _lipsync_provider(plan.lipsync_quality) if plan.presenter_share_target > 0 else None
     person_render_available = bool(person_provider and person_provider.ready)
     subtitle_tracks = _current_subtitle_tracks(
@@ -5896,13 +5891,7 @@ def _creation_task_workspace_response(
     image_capability = unconfigured_image_generation_capability()
     return CreationTaskWorkspaceResponse.model_validate(
         {
-            "task": {
-                **task.__dict__,
-                "timeline_sequence": current_version.sequence if current_version else 0,
-                "can_undo": can_undo,
-                "can_redo": _redo_target_versions(workspace_id, task)[0] is not None,
-                "can_revise_script": task.can_revise_script,
-            },
+            "task": task_read.summary,
             "plan": _creation_plan_preview_response(plan).model_dump(),
             "selected_topic": (
                 {
@@ -6674,9 +6663,12 @@ def _creation_request_response(data: dict) -> CreationRequestResponse:
 
 def _creation_request_item_response(item: dict) -> dict:
     plan = item.get("plan")
+    task_payload = item.get("task")
+    task = production_repo._creation_task_from_payload(task_payload) if task_payload else None
     return {**item, "plan": _creation_plan_preview_response(
         production_repo._creation_plan_from_payload(plan)
-    ).model_dump(mode="json") if plan else None}
+    ).model_dump(mode="json") if plan else None,
+        "task": project_task_summary(production_repo, task).summary if task else None}
 
 
 def _creation_request_or_404(request: Request, request_id: str) -> dict:
@@ -7219,7 +7211,7 @@ def list_creation_tasks(request: Request) -> CreationTasksResponse:
         local_diagnostic=local_diagnostic,
     )
     return CreationTasksResponse(
-        items=[item.__dict__ for item in tasks],
+        items=[project_task_summary(production_repo, item).summary for item in tasks],
         total_count=len(tasks),
     )
 
@@ -10520,47 +10512,6 @@ def _persist_subtitle_cover_edit(
     )
 
 
-def _history_edit_head(workspace_id: str, version_id: str | None, *, for_redo: bool):
-    # Render-only versions have no edit. Control versions point to the exact
-    # restored snapshot, which lets repeated undo/redo walk the existing history.
-    while version_id:
-        version = production_repo.get_timeline_version(workspace_id, version_id)
-        if version.created_by_operation_id is None:
-            version_id = version.parent_version_id
-            continue
-        operation = production_repo.get_edit_operation(workspace_id, version.created_by_operation_id)
-        follow_restore = operation.operation_type == "RedoTimelineVersion" or (
-            not for_redo and operation.operation_type == "UndoTimelineVersion")
-        if follow_restore:
-            version_id = operation.payload.get("restore_version_id")
-            continue
-        return version, operation
-    return None, None
-
-
-def _undo_target_versions(workspace_id: str, task: CreationTask) -> tuple[TimelineVersion | None, TimelineVersion | None]:
-    try:
-        changed, _ = _history_edit_head(workspace_id, task.current_timeline_version_id, for_redo=False)
-        if changed is None or changed.parent_version_id is None:
-            return None, None
-        return changed, production_repo.get_timeline_version(workspace_id, changed.parent_version_id)
-    except KeyError:
-        return None, None
-
-
-def _redo_target_versions(workspace_id: str, task: CreationTask) -> tuple[TimelineVersion | None, TimelineVersion | None]:
-    try:
-        current, operation = _history_edit_head(workspace_id, task.current_timeline_version_id, for_redo=True)
-        if current is None or operation.operation_type != "UndoTimelineVersion":
-            return None, None
-        target_id = operation.payload.get("base_version_id")
-        if not isinstance(target_id, str):
-            return None, None
-        return current, production_repo.get_timeline_version(workspace_id, target_id)
-    except KeyError:
-        return None, None
-
-
 def _edit_material_constraint(command: str) -> str:
     value = command.casefold()
     # Object references and a generic request for another shot are not content
@@ -12370,12 +12321,10 @@ def get_creation_task_edit_controls(task_id: str, request: Request):
     task = _creation_task_or_404(workspace_id, task_id)
     if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="没有找到当前任务。")
-    version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    summary = project_task_summary(production_repo, task).summary
     proposals = production_repo.list_edit_proposals(workspace_id, task_id, base_version_id=task.current_timeline_version_id, limit=8)
-    return {"task_id": task_id, "timeline_version_id": task.current_timeline_version_id,
-        "timeline_sequence": version.sequence if version else 0,
-        "can_undo": _undo_target_versions(workspace_id, task)[1] is not None,
-        "can_redo": _redo_target_versions(workspace_id, task)[1] is not None,
+    return {"task_id": task_id, "timeline_version_id": summary["current_timeline_version_id"],
+        "timeline_sequence": summary["timeline_sequence"], "can_undo": summary["can_undo"], "can_redo": summary["can_redo"],
         "proposals": [{"id": item.id, "summary": item.summary, "operation_type": item.operation["operation_type"],
             "steps": item.operation["payload"].get("steps", [])} for item in proposals]}
 
@@ -14620,7 +14569,7 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (control.expected_timeline_version_id, control.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise HTTPException(status_code=409, detail="历史恢复所依据的时间线已变化，请重新读取当前版本")
-    changed_version, target_version = (_redo_target_versions if redo else _undo_target_versions)(workspace_id, task)
+    changed_version, target_version = (redo_target_versions if redo else undo_target_versions)(production_repo, workspace_id, task)
     operation_type = "RedoTimelineVersion" if redo else "UndoTimelineVersion"
     action_label = "重做" if redo else "撤销"
     if changed_version is None or target_version is None:
@@ -17329,27 +17278,30 @@ def update_runtime_settings(
         )
     workspace_id = current_workspace_id(request)
     submitted = payload.model_dump()
+    device_values = {
+        field: value for field, value in submitted.items()
+        if field not in WORKSPACE_TEXT_FIELDS
+        and field not in WORKSPACE_SECRET_FIELDS and field != "llm_key_action"
+    }
+    _assert_runtime_reload_allowed()
+    prospective_environment = {**os.environ, **runtime_settings_updates(device_values)}
+    prospective_settings = replace(settings, **model_catalog_configuration(prospective_environment))
+    candidate = model_catalog_from_settings(prospective_settings)
+    changed = False
+
+    def request_reload():
+        nonlocal changed
+        changed = True
     try:
-        apply_workspace_runtime_settings_update(
-            workspace_id,
-            submitted,
-            _reload_runtime_dependencies,
-        )
+        with model_installer.guard_catalog_update(candidate):
+            apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
+            apply_runtime_settings_update(runtime_env_path, device_values, request_reload)
+            if changed:
+                _reload_runtime_dependencies()
     except WorkspaceSecretStoreError as exc:
-        # 存储拒绝就说拒绝了，不能当成保存成功。
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    # 文字服务这组已进工作区快照/钥匙串；其余设备级设置仍走原来的 dotenv 路径。
-    apply_runtime_settings_update(
-        runtime_env_path,
-        {
-            field: value
-            for field, value in submitted.items()
-            if field not in WORKSPACE_TEXT_FIELDS
-            and field not in WORKSPACE_SECRET_FIELDS
-            and field != "llm_key_action"
-        },
-        _reload_runtime_dependencies,
-    )
+    except ModelInstallError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return RuntimeSettingsResponse.model_validate(
         _workspace_settings_for(workspace_id).safe_runtime_settings(workspace_id)
     )
@@ -17375,32 +17327,28 @@ async def is_setup():
     }
 
 
+def _assert_runtime_reload_allowed() -> None:
+    if material_execution_mode == "scheduled" or creation_execution_mode == "scheduled":
+        raise HTTPException(status_code=503, detail="整机调度的安全重载尚未接通，现有驱动保持原状态。")
+
+
 def _reload_runtime_dependencies() -> None:
     global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
 
-    if material_execution_mode == "scheduled" or creation_execution_mode == "scheduled":
-        raise RuntimeError("整机调度的安全重载尚未接通，现有驱动保持原状态。")
+    _assert_runtime_reload_allowed()
+    prospective_settings = Settings.from_env()
+    prospective_catalog = model_catalog_from_settings(prospective_settings)
+    model_installer.rebind_catalog(prospective_catalog)
     _stop_execution_worker()
     _stop_material_ingestion()
 
-    settings = Settings.from_env()
+    settings = prospective_settings
     configure_process_temporary_directory(settings)
     set_auth_enabled(settings.auth_enabled)
     auth_context = SupabaseAuthContext(settings)
     repo = EpisodeRepository(database_path=settings.database_path)
     source_repository = SourceRepository(settings.database_path)
-    model_catalog = ModelCatalog(
-        settings.model_root_path,
-        settings.model_runtime_python_path,
-        settings.visual_model_worker_path,
-        settings.voice_model_worker_path,
-        understanding_runtime_python_path=settings.understanding_runtime_python_path,
-        understanding_worker_path=settings.understanding_worker_path,
-    )
-    model_installer = ModelInstaller(
-        model_catalog,
-        on_complete=lambda: _reload_runtime_dependencies(),
-    )
+    model_catalog = prospective_catalog
     visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
     voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
     avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)

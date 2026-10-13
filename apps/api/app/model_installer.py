@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import shutil
-import subprocess
 import threading
-import time
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+
+from app.model_install_jobs import ModelInstallError, InstallJobStore, InstallWriter, _utc_now
+from app.model_install_execution import MODEL_RUNTIME_REQUIREMENTS, ensure_runtime, download_model, download_file, publish_model
 
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
@@ -31,22 +27,6 @@ InstallState = Literal["queued", "running", "ready", "failed", "interrupted"]
 
 _SAFETY_FREE_BYTES = 2 * 1024**3
 _RUNTIME_RESERVE_BYTES = 8 * 1024**3
-_CHUNK_BYTES = 4 * 1024**2
-
-
-MODEL_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    QWEN3_VL_4B_4BIT.id: ("mlx-vlm==0.7.0",),
-    CHINESE_CLIP_VIT_B16.id: (
-        "torch==2.13.0",
-        "transformers==5.15.1",
-        "pillow==12.2.0",
-    ),
-    QWEN3_TTS_06B_BASE_8BIT.id: ("mlx-audio==0.5.0",),
-}
-
-
-class ModelInstallError(RuntimeError):
-    pass
 
 
 class ModelInstaller:
@@ -65,28 +45,59 @@ class ModelInstaller:
     ) -> None:
         self.catalog = catalog
         self._on_complete = on_complete
-        self._guard = threading.Lock()
+        self._guard = threading.RLock()
         self._active_thread: threading.Thread | None = None
-        self._recover_interrupted_jobs()
+        self._jobs = InstallJobStore(catalog.model_root_path)
+        self._writer: InstallWriter | None = None
+
+    def _claim_job(self, spec: ModelSpec) -> dict[str, object]:
+        if self._writer is not None:
+            raise ValueError("已有模型安装任务在运行，请等待完成后再试。")
+        storage = self.storage_preflight(spec)
+        writer = self._jobs.claim_writer()
+        if writer is None:
+            raise ValueError("已有模型安装任务在运行，请等待完成后再试。")
+        self._writer = writer
+        try:
+            job = self._new_job(spec, storage)
+            self._write_job(job)
+            return job
+        except BaseException:
+            self._writer = None
+            writer.close()
+            raise
+
+    def _finish_job(self) -> None:
+        with self._guard:
+            writer = self._writer
+            self._writer = None
+            writer.close()
+
+    def _run_owned_job(self, job_id: str, spec: ModelSpec) -> None:
+        try:
+            self._run_job(job_id, spec)
+        finally:
+            self._finish_job()
 
     def start(self, model_id: str, *, license_accepted: bool) -> dict[str, object]:
         spec = self._spec(model_id)
         if not license_accepted:
             raise ValueError(f"安装前必须确认 {spec.license_name} 许可证。")
         with self._guard:
-            if self._active_thread is not None and self._active_thread.is_alive():
-                raise ValueError("已有模型安装任务在运行，请等待完成后再试。")
-            storage = self.storage_preflight(spec)
-            job = self._new_job(spec, storage)
-            self._write_job(job)
-            thread = threading.Thread(
-                target=self._run_job,
-                args=(job["id"], spec),
-                daemon=True,
-                name=f"model-install-{spec.id}",
-            )
+            job = self._claim_job(spec)
+            thread = threading.Thread(target=self._run_owned_job, args=(str(job["id"]), spec),
+                daemon=True, name=f"model-install-{spec.id}")
             self._active_thread = thread
-            thread.start()
+            try:
+                thread.start()
+            except RuntimeError:
+                try:
+                    self._update_job(str(job["id"]), status="failed", phase="failed", message="模型安装线程未能启动。")
+                finally:
+                    writer = self._writer
+                    self._writer = None
+                    writer.close()
+                raise
         return job
 
     def run_sync(self, model_id: str, *, license_accepted: bool) -> dict[str, object]:
@@ -94,21 +105,57 @@ class ModelInstaller:
         spec = self._spec(model_id)
         if not license_accepted:
             raise ValueError(f"安装前必须确认 {spec.license_name} 许可证。")
-        storage = self.storage_preflight(spec)
-        job = self._new_job(spec, storage)
-        self._write_job(job)
-        self._run_job(job["id"], spec)
-        return self.get_job(str(job["id"]))
+        with self._guard:
+            job = self._claim_job(spec)
+            jobs = self._jobs
+        self._run_owned_job(str(job["id"]), spec)
+        return jobs.get(str(job["id"]))
 
     def get_job(self, job_id: str) -> dict[str, object]:
-        safe_id = _safe_job_id(job_id)
-        path = self.jobs_path / f"{safe_id}.json"
-        if not path.is_file():
-            raise FileNotFoundError(f"找不到模型安装任务：{safe_id}")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ModelInstallError("模型安装任务记录已损坏。")
-        return payload
+        return self._jobs.get(job_id)
+
+    def recover_interrupted_jobs(self) -> list[str]:
+        """Explicit startup recovery; a live writer prevents any recovery write."""
+        with self._guard:
+            if self._writer is not None or not self.jobs_path.is_dir():
+                return []
+            writer = self._jobs.claim_writer()
+            if writer is None:
+                return []
+            try:
+                return self._jobs.recover_interrupted(writer)
+            finally:
+                writer.close()
+
+    def rebind_catalog(self, catalog: ModelCatalog) -> None:
+        """Keep the active install's path snapshot; do not recover on reload."""
+        with self._guard:
+            self._assert_catalog_rebindable(catalog)
+            if self._writer is not None:
+                return
+            self.catalog = catalog
+            self._jobs = InstallJobStore(catalog.model_root_path)
+
+    def _assert_catalog_rebindable(self, catalog: ModelCatalog) -> None:
+        if self._writer is not None and _catalog_paths(catalog) != _catalog_paths(self.catalog):
+            raise ModelInstallError("已有模型安装任务在运行，当前模型目录和运行环境保持原绑定；完成后再修改。")
+
+    def assert_catalog_rebindable(self, catalog: ModelCatalog) -> None:
+        """Read-only prospective-input check; no writer, recovery or file I/O."""
+        with self._guard:
+            self._assert_catalog_rebindable(catalog)
+
+    @contextmanager
+    def guard_catalog_update(self, catalog: ModelCatalog):
+        """Hold admission exclusion across the caller's env write and rebind.
+
+        Build the prospective catalog first. Inside this scope persist accepted
+        config then call rebind_catalog(catalog); do not defer that binding to a
+        background task after the guard has been released.
+        """
+        with self._guard:
+            self._assert_catalog_rebindable(catalog)
+            yield
 
     def storage_preflight(self, spec: ModelSpec) -> dict[str, object]:
         root = self.catalog.model_root_path
@@ -200,164 +247,16 @@ class ModelInstaller:
             )
 
     def _ensure_runtime(self, spec: ModelSpec) -> None:
-        runtime_python = self.catalog.runtime_path(spec)
-        if runtime_python is None:
-            raise ModelInstallError("未配置模型运行环境路径。")
-        runtime_root = runtime_python.parent.parent
-        requirements = set(MODEL_RUNTIME_REQUIREMENTS[spec.id])
-        marker_path = runtime_root / "installed-requirements.json"
-        installed: set[str] = set()
-        if marker_path.is_file():
-            try:
-                payload = json.loads(marker_path.read_text(encoding="utf-8"))
-                installed = set(payload.get("requirements", []))
-            except (OSError, ValueError, json.JSONDecodeError):
-                installed = set()
-        missing = sorted(requirements - installed)
-        if runtime_python.is_file() and not missing:
-            return
+        ensure_runtime(self.catalog, spec)
 
-        runtime_root.parent.mkdir(parents=True, exist_ok=True)
-        if not runtime_python.is_file():
-            base_python = shutil.which("python3")
-            if not base_python:
-                raise ModelInstallError("未找到 Python 3，无法创建本地模型运行环境。")
-            version = subprocess.run(
-                [base_python, "-c", "import sys; print(sys.version_info >= (3, 10))"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if version.returncode != 0 or version.stdout.strip() != "True":
-                raise ModelInstallError("本地模型需要 Python 3.10 或更高版本。")
-            subprocess.run([base_python, "-m", "venv", str(runtime_root)], check=True)
+    def _download_model(self, job_id: str, spec: ModelSpec) -> list[dict[str, object]]:
+        return download_model(self.staging_path, job_id, spec, self._download_file, self._update_job)
 
-        if missing:
-            cache_root = self.catalog.model_root_path / ".cache"
-            env = os.environ.copy()
-            env.update(
-                {
-                    "PIP_CACHE_DIR": str(cache_root / "pip"),
-                    "HF_HOME": str(cache_root / "huggingface"),
-                    "TORCH_HOME": str(cache_root / "torch"),
-                    "XDG_CACHE_HOME": str(cache_root),
-                }
-            )
-            subprocess.run(
-                [str(runtime_python), "-m", "pip", "install", *missing],
-                check=True,
-                env=env,
-            )
-            installed.update(missing)
-            _atomic_json(
-                marker_path,
-                {"schema_version": 1, "requirements": sorted(installed)},
-            )
+    def _download_file(self, job_id: str, spec: ModelSpec, item: DownloadFile, part_path: Path, completed_bytes: int) -> None:
+        download_file(self._update_job, job_id, spec, item, part_path, completed_bytes)
 
-    def _download_model(
-        self, job_id: str, spec: ModelSpec
-    ) -> list[dict[str, object]]:
-        staging = self.staging_path / spec.id
-        staging.mkdir(parents=True, exist_ok=True)
-        files = MODEL_FILES[spec.id]
-        completed_bytes = 0
-        manifest_files: list[dict[str, object]] = []
-        for item in files:
-            destination = staging / item.path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.is_file() and destination.stat().st_size == item.size:
-                completed_bytes += item.size
-            else:
-                part_path = Path(f"{destination}.part")
-                self._download_file(job_id, spec, item, part_path, completed_bytes)
-                if part_path.stat().st_size != item.size:
-                    raise ModelInstallError(f"下载文件大小不匹配：{item.path}")
-                os.replace(part_path, destination)
-                completed_bytes += item.size
-            manifest_files.append(
-                {
-                    "path": item.path,
-                    "size": item.size,
-                    "sha256": _sha256(destination),
-                }
-            )
-            self._update_job(
-                job_id,
-                bytes_downloaded=completed_bytes,
-                progress=min(completed_bytes / spec.approximate_download_bytes, 1.0),
-                message=f"已完成 {item.path}",
-            )
-        return manifest_files
-
-    def _download_file(
-        self,
-        job_id: str,
-        spec: ModelSpec,
-        item: DownloadFile,
-        part_path: Path,
-        completed_bytes: int,
-    ) -> None:
-        offset = part_path.stat().st_size if part_path.is_file() else 0
-        if offset > item.size:
-            raise ModelInstallError(f"断点文件大小异常：{item.path}")
-        url = (
-            f"https://huggingface.co/{spec.repository}/resolve/"
-            f"{spec.revision}/{quote(item.path, safe='/')}"
-        )
-        request = urllib.request.Request(url, headers={"User-Agent": "AI-Video-Diary/1.0"})
-        if offset:
-            request.add_header("Range", f"bytes={offset}-")
-        try:
-            response = urllib.request.urlopen(request, timeout=60)
-        except urllib.error.URLError as exc:
-            raise ModelInstallError(f"下载失败 {item.path}：{exc.reason}") from exc
-        with response:
-            append = offset > 0 and getattr(response, "status", 200) == 206
-            if offset and not append:
-                offset = 0
-            mode = "ab" if append else "wb"
-            last_update = 0.0
-            with part_path.open(mode) as handle:
-                while True:
-                    chunk = response.read(_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-                    offset += len(chunk)
-                    now = time.monotonic()
-                    if now - last_update >= 0.5:
-                        downloaded = completed_bytes + offset
-                        self._update_job(
-                            job_id,
-                            bytes_downloaded=downloaded,
-                            progress=min(
-                                downloaded / spec.approximate_download_bytes, 1.0
-                            ),
-                            message=f"正在下载 {item.path}…",
-                        )
-                        last_update = now
-
-    def _publish_model(
-        self, spec: ModelSpec, manifest_files: list[dict[str, object]]
-    ) -> None:
-        staging = self.staging_path / spec.id
-        target = self.catalog.model_path(spec)
-        if target.exists():
-            raise ModelInstallError(
-                f"目标模型目录已存在：{target}。为避免覆盖用户数据，已保留断点文件。"
-            )
-        _atomic_json(
-            staging / "manifest.json",
-            {
-                "schema_version": 1,
-                "model_id": spec.id,
-                "repository": spec.repository,
-                "revision": spec.revision,
-                "files": manifest_files,
-            },
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging, target)
+    def _publish_model(self, spec: ModelSpec, manifest_files: list[dict[str, object]]) -> None:
+        publish_model(self.catalog, self.staging_path, spec, manifest_files)
 
     def _new_job(
         self, spec: ModelSpec, storage: dict[str, object]
@@ -382,34 +281,10 @@ class ModelInstaller:
         }
 
     def _update_job(self, job_id: str, **updates: object) -> dict[str, object]:
-        job = self.get_job(job_id)
-        job.update(updates)
-        job["updated_at"] = _utc_now()
-        self._write_job(job)
-        return job
+        return self._jobs.update(job_id, self._writer, **updates)
 
     def _write_job(self, job: dict[str, object]) -> None:
-        job_id = _safe_job_id(str(job["id"]))
-        _atomic_json(self.jobs_path / f"{job_id}.json", job)
-
-    def _recover_interrupted_jobs(self) -> None:
-        if not self.jobs_path.is_dir():
-            return
-        for path in self.jobs_path.glob("*.json"):
-            try:
-                job = json.loads(path.read_text(encoding="utf-8"))
-                if job.get("status") in {"queued", "running"}:
-                    job.update(
-                        {
-                            "status": "interrupted",
-                            "phase": "interrupted",
-                            "message": "上次安装被中断；重新安装会从已下载断点继续。",
-                            "updated_at": _utc_now(),
-                        }
-                    )
-                    _atomic_json(path, job)
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+        self._jobs.write(job, self._writer)
 
     @staticmethod
     def _spec(model_id: str) -> ModelSpec:
@@ -435,36 +310,12 @@ def _external_volume(path: Path) -> Path | None:
     return None
 
 
-def _safe_job_id(job_id: str) -> str:
-    if not job_id or any(char not in "0123456789abcdef" for char in job_id.lower()):
-        raise ValueError("模型安装任务 ID 无效。")
-    return job_id.lower()
-
-
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _human_bytes(value: int) -> str:
     return f"{value / 1024**3:.1f} GiB"
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+
+
+def _catalog_paths(catalog: ModelCatalog):
+    return (catalog.model_root_path, catalog.runtime_python_path, catalog.visual_worker_path, catalog.voice_worker_path,
+        catalog.understanding_runtime_python_path, catalog.understanding_worker_path)
