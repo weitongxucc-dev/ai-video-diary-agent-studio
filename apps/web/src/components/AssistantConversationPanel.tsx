@@ -8,10 +8,11 @@ import { Plus, History, Pencil, CircleHelp, ArrowUp, ArrowDown, MessageCircleDas
 import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
+import Link from "next/link";
 import { getAssistantCapabilities } from "@/lib/api";
-import type { AssistantConversationTurn, AssistantScriptToolReceipt } from "@/lib/types";
+import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure } from "@/lib/types";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
-import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest } from "./useAssistantConversation";
+import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
 
 const commandDescriptions: Record<string, { title: string; description: string; icon: typeof Plus }> = {
   "/new": { title: "新对话", description: "保留历史，开始新一段对话", icon: Plus },
@@ -31,7 +32,7 @@ function ReadingDetails({ reading, readingKey, defaultOpen = false, className, c
     onToggle={event => reading?.save(readingKey, event.currentTarget.open)}>{children}</details>;
 }
 
-type TurnBlock = { kind: "tool"; tool_id: number; label: string; state: "running" | "succeeded" | "failed"; summary: string };
+type TurnBlock = { kind: "tool"; tool_id: number; label: string; state: "running" | "succeeded" | "failed" | "unreturned"; summary: string; failure?: AssistantToolFailure };
 
 function turnTools(turn: AssistantConversationTurn): TurnBlock[] {
   const ordered: TurnBlock[] = [];
@@ -47,13 +48,118 @@ function turnTools(turn: AssistantConversationTurn): TurnBlock[] {
       if (item.kind === "tool" && item.tool_id === event.tool_id) { index = candidate; break; }
     }
     if (index < 0) {
-      ordered.push({ kind: "tool", tool_id: event.tool_id, label: event.label, state: event.ok ? "succeeded" : "failed", summary: event.summary });
+      ordered.push({ kind: "tool", tool_id: event.tool_id, label: event.label, state: event.ok ? "succeeded" : "failed", summary: event.summary, failure: event.failure });
     } else {
       const previous = ordered[index];
-      if (previous.kind === "tool") ordered[index] = { ...previous, label: event.label, state: event.ok ? "succeeded" : "failed", summary: event.summary };
+      if (previous.kind === "tool") ordered[index] = { ...previous, label: event.label, state: event.ok ? "succeeded" : "failed", summary: event.summary, failure: event.failure };
     }
   }
-  return ordered;
+  return ordered.map(tool => tool.state === "running" && turn.status !== "running" ? {...tool, state: "unreturned"} : tool);
+}
+
+const toolStateLabels = {running: "进行中", succeeded: "已返回", failed: "未完成", unreturned: "未收到结果"};
+
+function ToolResult({ tool, reading, readingKey }: { tool: TurnBlock; reading?: ReadingState; readingKey: string }) {
+  if (tool.state === "failed" && tool.failure) return <div className="assistant-tool-failure">
+    <p>{tool.failure.reason}</p>{tool.failure.repair_action ? <p>{tool.failure.repair_action}</p> : null}
+  </div>;
+  return <div><AssistantFailureMessage reading={reading} readingKey={readingKey}
+    message={tool.summary || (tool.state === "running" ? "等待此操作返回。"
+      : tool.state === "unreturned" ? "本轮已结束，此操作没有返回结果；不能据此判断后台作业是否完成。" : "操作没有返回摘要。")}/></div>;
+}
+
+const goalStateLabels: Record<string, string> = {
+  running: "正在执行", waiting_result: "等待后台结果", waiting_adoption: "等待查看并采用修改",
+  waiting_identity: "等待核验身份", waiting_unknown: "请求结果待核实", invalidated: "原目标已停止接续",
+  no_progress: "接续未取得新进展", limit_reached: "接续已暂停",
+};
+const goalReasonLabels: Record<string, string> = {
+  await_real_adoption: "实际预览已返回，请查看修改方案后决定是否采用。",
+  await_actual_preview_result: "正在等待原预览作业返回，草稿尚未改变。",
+  read_original_request_result: "先查询原请求的实际结果，避免重复提交。",
+  request_effect_not_verified: "原请求的影响尚未核实，先查询实际结果。",
+  continue_after_real_adoption: "修改已实际采用，继续完成原要求。",
+  original_execution_not_settled: "原制作作业尚未结束，继续等待实际结果。",
+  original_media_job_not_settled: "原媒体作业尚未结束，继续等待实际结果。",
+  interactive_identity_not_available: "当前身份尚未核验，暂不能继续操作。",
+  current_task_or_member_not_authorized: "当前任务或成员权限已改变，原目标不再自动执行。",
+  original_request_authority_or_version_rejected: "原请求的权限或版本核验未通过，需要重新确认当前对象。",
+  original_execution_no_longer_current: "原制作作业已被替代，不能沿旧结果继续执行。",
+  original_media_job_no_longer_authorized: "原媒体作业已不再可访问，不能继续采用它的结果。",
+  unrelated_timeline_change: "剪辑版本已发生其他修改，原目标不再沿旧版本执行。",
+  completed_source_no_longer_authorized_or_current: "原素材结果的权限或版本已改变，需要重新核验。",
+  original_reference_authorization_changed: "原引用的权限已改变，暂不能继续操作。",
+  adoption_result_not_current: "已采用的修改不再是当前版本，需要重新核验。",
+  new_user_turn: "你已发送新要求，原目标停止自动接续。",
+  no_new_business_action: "本轮没有取得新的业务动作；已有结果仍保留。",
+};
+const executionStageLabels: Record<string, string> = {
+  admission: "制作条件", narration: "配音", person_render: "人物画面", montage_plan: "镜头编排", render: "生成成片", cover: "封面",
+};
+const executionStatusLabels: Record<string, string> = {
+  queued: "已排队", pending: "待执行", running: "正在运行", succeeded: "已完成", failed: "未完成",
+  completed: "已完成", not_started: "未开始", cancelled: "已取消", interrupted: "已中断", skipped: "未执行", stale: "旧结果失效",
+};
+
+function completedGoalOutput(value: NonNullable<ReturnType<typeof assistantConversationGoal>>) {
+  return value.goal.status === "no_progress" && value.goal.waiting_reason === "bounded_output_checkpoint_completed"
+    ? value.goal.completed_output_checkpoint : undefined;
+}
+
+function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: {
+  value: NonNullable<ReturnType<typeof assistantConversationGoal>>; reading: ReadingState;
+  refreshPaused: boolean; onRead: () => void; readingResult: boolean;
+}) {
+  const {root, goal, turns} = value;
+  const current = turns.find(turn => turn.id === goal.current_turn_id);
+  const tools = turns.flatMap(turn => turnTools(turn).map(tool => ({turn, tool})));
+  const currentTool = current && turnTools(current).reverse().find(tool => tool.state === "running");
+  const execution = [...turns].reverse().map(turn => assistantTaskTurnResult(turn)?.response?.execution_status).find(Boolean);
+  const job = execution?.job;
+  const videoReady = goal.status !== "invalidated" && execution?.video_ready === true;
+  const media = [...turns].reverse().map(turn => assistantTaskTurnResult(turn)?.response?.media_job).find(Boolean);
+  const reason = goal.waiting_reason && goalReasonLabels[goal.waiting_reason];
+  const completed = completedGoalOutput(value);
+  const active = ["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"].includes(goal.status);
+  const currentStep = currentTool ? `${currentTool.label} · 进行中`
+    : goal.status === "waiting_result" && job ? `${executionStageLabels[execution?.current_stage ?? ""] ?? "制作作业"} · ${executionStatusLabels[job.status] ?? "状态待核实"}`
+      : goal.status === "waiting_result" && media ? `${String(media.result_kind) === "observation" ? "输出检查" : media.result_kind === "graphic_source" ? "准备图片" : "后台预览"} · ${executionStatusLabels[media.status] ?? "状态待核实"}`
+        : current?.status === "running" ? "正在整理回复" : reason;
+  return <ReadingDetails reading={reading} readingKey={`goal:${root.id}`} className="assistant-goal-progress">
+    <summary aria-label="本次目标执行状态"><span>本次目标 · {completed ? "制作与技术检查已完成" : goalStateLabels[goal.status] ?? "状态待核实"}</span>
+      {completed ? <small>检查范围与未检查内容可展开查看</small> : currentStep ? <small>{currentStep}</small> : null}</summary>
+    <div className="assistant-goal-body">
+      <p className="assistant-goal-instruction">{root.user_message}</p>
+      {completed ? <div className="assistant-goal-receipt" aria-label="实际输出检查范围">
+        <p>已核对当前成片与同版本、同文件的实际观察结果。</p>
+        <p>{completed.measurement_scope === "actual_output_bounded_frames"
+          ? "检查范围：实际成片的有限抽帧与媒体参数，未逐帧检查。" : "实际观察已返回；具体检查范围尚不能在这里核实。"}</p>
+        {completed.unavailable.length ? <ul aria-label="本次未检查的内容">{completed.unavailable.map((item, index) => <li key={`${item.scope}:${index}`}>{item.reason}</li>)}</ul> : null}
+        <p>这份技术检查不能替代对全部创作要求的验收。</p>
+        {turns.some(turn => turn.status === "failed" || turnTools(turn).some(tool => tool.state === "failed" || tool.state === "unreturned"))
+          ? <p>此前有中断或未完成调用；制作与技术检查已恢复完成，历史记录保留。</p> : null}
+      </div> : null}
+      {reason && reason !== currentStep ? <p>{reason}</p> : null}
+      {tools.length ? <ol aria-label="本次目标的执行步骤">{tools.map(({turn, tool}, index) => <li key={`${turn.id}:${tool.tool_id}:${index}`} data-state={tool.state}>
+        <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
+        <ToolResult tool={tool} reading={reading} readingKey={`goal:${root.id}:${turn.id}:${tool.tool_id}:diagnostic`}/>
+      </li>)}</ol> : <p>还没有可核实的工具调用记录。</p>}
+      {execution && job ? <div className="assistant-goal-receipt" aria-label="实际制作结果">
+        <p>{job.status === "succeeded" ? videoReady ? "成片已生成，当前输出有效。" : "制作作业已完成，有效成片仍待核实。"
+          : `制作作业 · ${executionStatusLabels[job.status] ?? "状态待核实"}`}</p>
+        {execution.waiting_reason ? <p><AssistantFailureMessage message={execution.waiting_reason}/></p> : null}
+        {job.failure_reason ? <p><AssistantFailureMessage message={job.failure_reason}/></p> : null}
+        {job.repair_action ? <p><AssistantFailureMessage message={job.repair_action}/></p> : null}
+        {execution.stages?.length ? <ul aria-label="实际制作阶段">{execution.stages.map((stage, index) => <li key={`${stage.stage}:${index}`}>
+          {executionStageLabels[stage.stage] ?? "制作步骤"} · {executionStatusLabels[stage.status] ?? "状态待核实"}
+        </li>)}</ul> : null}
+      </div> : null}
+      {completed || videoReady && job?.status === "succeeded"
+        ? <Link className="assistant-text-action" href={`/tasks/${encodeURIComponent(goal.task_id)}`}>查看对应任务与成片</Link> : null}
+      {refreshPaused && active ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
+      {active || job?.status === "interrupted" ? <button className="assistant-text-action" type="button" disabled={readingResult} onClick={onRead}>{readingResult ? "正在查询…" : "查询目标进展"}</button> : null}
+    </div>
+  </ReadingDetails>;
 }
 
 export function AssistantFailureMessage({ message, reading, readingKey = "diagnostic" }: { message: string; reading?: ReadingState; readingKey?: string }) {
@@ -80,13 +186,13 @@ function AssistantText({ text }: { text: string }) {
 function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
   const tools = turnTools(turn);
   const runningTools = tools.some((tool) => tool.state === "running");
-  const failedTools = tools.some((tool) => tool.state === "failed");
+  const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
   return <div className="assistant-markdown-wrap">
     {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running"}>
-      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含未完成操作" : "已完成"}</summary>
+      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含未完成操作" : "调用已结束"}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
-        <strong>{tool.label} · {tool.state === "running" ? "进行中" : tool.state === "succeeded" ? "已完成" : "未完成"}</strong>
-        <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`} message={tool.summary || (tool.state === "running" ? "等待此操作返回。" : "操作没有返回摘要。")}/></div>
+        <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
+        <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
       </li>)}</ol>
     </ReadingDetails> : null}
     {turn.assistant_text ? <div className="assistant-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></div> : null}
@@ -174,8 +280,9 @@ function ReplyActions({ turn, onTransferReply, onCreatePlanFromReply, transferDr
 
 function canOpenTurnProposal(turn: AssistantConversationTurn) {
   const result = assistantTaskTurnResult(turn);
-  if (!result || turn.status !== "completed") return false;
+  if (!result || turn.status === "running" || turn.status === "stopped") return false;
   if (result.continuation) return result.continuation.actionable;
+  if (turn.status !== "completed") return false;
   return result.edit_preview === true && (!result.response?.edit_preview || result.response.edit_preview.proposal.status === "proposed");
 }
 
@@ -196,7 +303,7 @@ function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefine
         : `可复用图片工具${name}${version}已保存；尚未应用图片或生成成片。`;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean }) {
+function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -265,7 +372,8 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}
     </div></ReadingDetails> : null}
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <button className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button> : null}
-    {turn.status === "failed" ? <p role="status">{businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
+    {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
+      : businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
     {(turn.status === "failed" || turn.status === "stopped") && turn.user_message.trim() && !unknownRequest ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
     {turn.status !== "running" && turn.assistant_text.trim() ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined} onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
@@ -348,9 +456,11 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
+  const goalProgress = assistantConversationGoal(conversation);
   const historyContent = JSON.stringify(turns.map(turn => [turn.id, turn.status, turn.updated_at, turn.assistant_text,
     turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
-    assistantTaskTurnResult(turn)?.response?.edit_request?.status]));
+    assistantTaskTurnResult(turn)?.response?.edit_request?.status, assistantTaskTurnResult(turn)?.response?.execution_status,
+    turn.result?.goal_continuation]));
   const latestHistoryContent = useRef(historyContent);
   latestHistoryContent.current = historyContent;
   const isLocalCommand = input.trim().startsWith("/");
@@ -523,6 +633,8 @@ export function AssistantConversationPanel({
   const headerActions = <AssistantConversationHeaderActions state={state} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <button className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></button> : null}</AssistantConversationHeaderActions>;
   return <section ref={panelRef} className={`assistant-conversation-panel${compact ? " is-compact" : ""}`} aria-label={`助手对话：${conversation?.title ?? "新对话"}`}>
     {headerSlot ? createPortal(headerActions, headerSlot) : <div className="assistant-conversation-caption">{headerActions}</div>}
+    {goalProgress ? <GoalProgress value={goalProgress} reading={reading} refreshPaused={state.businessRefreshPaused}
+      onRead={() => void readTurnResult(goalProgress.root)} readingResult={readingResultTurn === goalProgress.root.id}/> : null}
     <div className="assistant-message-scroller">
     <div ref={historyRef} className="assistant-conversation-history" role="region" tabIndex={0} aria-label="持久对话记录" data-conversation-id={conversation?.id}
       onScroll={event => {
@@ -534,7 +646,8 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused} />)}
+        {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused}
+          outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
       {state.loading ? <p role="status">正在恢复对话…</p> : null}
     </div>

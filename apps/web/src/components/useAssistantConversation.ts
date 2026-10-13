@@ -15,6 +15,7 @@ import type {
   AssistantConversation,
   AssistantConversationScope,
   AssistantConversationTurn,
+  AssistantGoalContinuation,
   AssistantStreamEvent,
   AssistantTaskTurnResult,
 } from "@/lib/types";
@@ -35,10 +36,34 @@ function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
   if (value.original_turn_id !== turn.id || typeof value.status !== "string"
     || typeof value.current_turn_id !== "string" || typeof value.conversation_id !== "string"
     || typeof value.workspace_id !== "string" || typeof value.task_id !== "string") return null;
+  const checkpoint = value.completed_output_checkpoint && typeof value.completed_output_checkpoint === "object"
+    ? value.completed_output_checkpoint as Record<string, unknown> : null;
+  const completedOutput = checkpoint?.status === "completed" && checkpoint.scope === "production_and_output_observation"
+    && [checkpoint.job_id, checkpoint.observation_job_id, checkpoint.timeline_version_id, checkpoint.sha256, checkpoint.measurement_scope]
+      .every(field => typeof field === "string" && field.length > 0)
+    && Array.isArray(checkpoint.unavailable) && checkpoint.unavailable.every(item => item && typeof item === "object"
+      && typeof item.scope === "string" && typeof item.reason === "string")
+    ? checkpoint as AssistantGoalContinuation["completed_output_checkpoint"] : undefined;
   return {
+    original_turn_id: turn.id, task_id: value.task_id,
     status: value.status, current_turn_id: value.current_turn_id,
-    conversation_id: value.conversation_id, workspace_id: value.workspace_id, task_id: value.task_id,
-  };
+    conversation_id: value.conversation_id, workspace_id: value.workspace_id,
+    ...(typeof value.waiting_reason === "string" ? {waiting_reason: value.waiting_reason} : {}),
+    ...(Array.isArray(value.unfinished_steps) && value.unfinished_steps.every(step => typeof step === "string")
+      ? {unfinished_steps: value.unfinished_steps as string[]} : {}),
+    ...(completedOutput ? {completed_output_checkpoint: completedOutput} : {}),
+  } satisfies AssistantGoalContinuation;
+}
+
+export function assistantConversationGoal(conversation: AssistantConversation | null) {
+  if (!conversation) return null;
+  const root = [...conversation.turns].reverse().find(turn => turn.user_message.trim() !== "");
+  if (!root) return null;
+  const goal = assistantTurnGoalRefreshState(root);
+  if (!goal || goal.conversation_id !== conversation.id || goal.workspace_id !== conversation.workspace_id) return null;
+  const turns = conversation.turns.filter(turn => turn.id === root.id || turn.events.some(event =>
+    event.type === "goal_continuation_started" && event.original_turn_id === root.id));
+  return {root, goal, turns};
 }
 
 export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {

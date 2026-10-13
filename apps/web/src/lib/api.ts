@@ -322,7 +322,11 @@ async function assistantStreamRequest<T>(
       onEvent({ type: "tool_start", tool_id: value.tool_id, label: value.label });
     } else if (value.type === "tool_end" && typeof value.tool_id === "number"
       && typeof value.label === "string" && typeof value.ok === "boolean" && typeof value.summary === "string") {
-      onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary });
+      const failure = value.failure && typeof value.failure === "object"
+        ? value.failure as Record<string, unknown> : null;
+      onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary,
+        ...(value.ok === false && typeof failure?.reason === "string" ? {failure: {reason: failure.reason,
+          ...(typeof failure.repair_action === "string" ? {repair_action: failure.repair_action} : {})}} : {}) });
     }
   };
 

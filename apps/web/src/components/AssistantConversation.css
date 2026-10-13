@@ -35,6 +35,20 @@
 .assistant-conversation-panel :is(.assistant-turn-tools,.assistant-turn-result) { font-size:11px; line-height:1.6; color:var(--text-3); }
 .assistant-conversation-panel :is(.assistant-turn-tools,.assistant-turn-result) > summary { min-height:22px; line-height:22px; }
 .assistant-conversation-panel .assistant-turn-tools strong { font-weight:500; }
+.assistant-conversation-panel .assistant-goal-progress { flex:0 0 auto; min-width:0; padding:0 0 8px; border-bottom:1px solid var(--border-1); font-size:12px; line-height:18px; color:var(--text-2); }
+.assistant-goal-progress > summary { min-height:32px; cursor:pointer; overflow-wrap:anywhere; }
+.assistant-goal-progress > summary span { font-weight:500; color:var(--text-1); }
+.assistant-goal-progress > summary small { display:block; padding-left:16px; font:inherit; color:var(--text-2); }
+.assistant-goal-body { max-height:240px; min-width:0; padding:4px 0 0 16px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--border-1) transparent; overflow-wrap:anywhere; }
+.assistant-goal-body p,.assistant-tool-failure p { margin:4px 0; }
+.assistant-goal-body .assistant-goal-instruction { margin:0 0 8px; white-space:pre-wrap; color:var(--text-1); }
+.assistant-goal-body ol { margin:8px 0; padding-left:18px; }
+.assistant-goal-body li { padding:0 0 8px; }
+.assistant-goal-body strong { font-weight:500; }
+.assistant-goal-receipt { padding-top:4px; border-top:1px solid var(--border-1); }
+.assistant-goal-receipt ul { margin:4px 0; padding-left:18px; }
+.assistant-goal-body :is(li[data-state="failed"],li[data-state="unreturned"]) > strong { color:var(--danger); }
+.assistant-turn-tools :is(li[data-state="failed"],li[data-state="unreturned"]) > strong { color:var(--danger); }
 .assistant-conversation-panel .assistant-conversation-entry { position:relative; flex:0 0 auto; display:flex; flex-direction:column; gap:0; padding:0; border:1px solid var(--border-1); border-radius:14px; background:var(--surface-1); box-shadow:none; }
 .assistant-conversation-panel .assistant-conversation-entry:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 25%,transparent); }
 .assistant-conversation-panel .assistant-conversation-entry textarea { box-sizing:border-box; width:100%; min-width:0; max-width:100%; min-height:56px; max-height:150px; resize:none; border:0; border-radius:0; padding:12px 12px 4px; margin:0; background:transparent; color:var(--text-1); font:inherit; line-height:20px; outline:none; }

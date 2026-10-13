@@ -1740,24 +1740,55 @@ export type AssistantTaskTurnResult = {
   edit_preview?: boolean;
 };
 
+/** Host checkpoints for one original user instruction; never a model progress estimate. */
+export type AssistantGoalContinuation = {
+  original_turn_id: string;
+  current_turn_id: string;
+  conversation_id: string;
+  workspace_id: string;
+  task_id: string;
+  status: string;
+  waiting_reason?: string;
+  unfinished_steps?: string[];
+  completed_output_checkpoint?: {
+    status: "completed";
+    scope: "production_and_output_observation";
+    job_id: string;
+    observation_job_id: string;
+    timeline_version_id: string;
+    sha256: string;
+    measurement_scope: string;
+    unavailable: {scope: string; reason: string}[];
+  };
+};
+
+export type AssistantToolFailure = { reason: string; repair_action?: string };
+
 export type AssistantStreamEvent =
   | { type: "turn_started"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped"; draft_version?: number }
   | { type: "turn_status"; turn_id: string; turn_state: "running" | "completed" | "failed" | "stopped" }
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; tool_id: number; label: string }
-  | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string };
+  | { type: "tool_end"; tool_id: number; label: string; ok: boolean; summary: string; failure?: AssistantToolFailure };
 
 export type AssistantToolActivity = {
   tool_id: number;
   label: string;
   state: "running" | "succeeded" | "failed";
   summary?: string;
+  failure?: AssistantToolFailure;
+};
+
+export type AssistantBusinessResultEvent = AssistantBusinessContinuation & {
+  video_ready?: boolean;
 };
 
 export type AssistantTurnActivity = {
   text: string;
   tools: AssistantToolActivity[];
-  events: Extract<AssistantStreamEvent, { type: "text_delta" | "tool_start" | "tool_end" }>[];
+  events: (Extract<AssistantStreamEvent, { type: "text_delta" | "tool_start" | "tool_end" }>
+    | AssistantBusinessResultEvent
+    | { type: "goal_continuation_started"; source_kind: "business_event"; original_turn_id: string; source_turn_id: string; event_id: string })[];
 };
 
 export type AssistantConversationTurn = {

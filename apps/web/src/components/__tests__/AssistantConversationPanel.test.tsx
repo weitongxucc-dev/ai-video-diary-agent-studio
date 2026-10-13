@@ -126,7 +126,195 @@ function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "
   return saved;
 }
 
+function goalTaskConversation(status = "waiting_result") {
+  const saved = projectedTaskConversation("queued");
+  saved.turns[0].result = {...saved.turns[0].result, goal_continuation: {
+    original_turn_id: saved.turns[0].id, current_turn_id: saved.turns[0].id, status,
+    workspace_id: saved.workspace_id, conversation_id: saved.id, task_id: "task-one",
+    waiting_reason: status === "waiting_adoption" ? "await_real_adoption" : "read_original_request_result",
+    unfinished_steps: ["observe_actual_result", "complete_original_instruction"],
+  }};
+  return saved;
+}
+
+describe("actual goal progress", () => {
+  it("distinguishes a returned submission, a queued job and an actual video, without adding a completion estimate", () => {
+    const saved = goalTaskConversation();
+    saved.turns[0].events = [{type: "tool_end", tool_id: 1, label: "开始制作", ok: true, summary: "制作请求已返回，当前作业已排队。"}];
+    saved.turns[0].result!.response = {...saved.turns[0].result!.response as Record<string, unknown>,
+      execution_status: {task_id: "task-one", job: {id: "actual-job", status: "queued"}, current_stage: "render",
+        video_ready: false, stages: [{stage: "render", status: "pending"}], waiting_reason: "等待设备空闲"}};
+    const view = render(<AssistantConversationPanel state={state({conversation: saved})} input="下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const summary = screen.getByLabelText("本次目标执行状态");
+    expect(summary).toHaveTextContent("本次目标 · 等待后台结果");
+    expect(summary).toHaveTextContent("生成成片 · 已排队");
+    const details = summary.closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details).getByText("开始制作 · 已返回")).toBeInTheDocument();
+    expect(within(details).getByText("生成成片 · 待执行")).toBeInTheDocument();
+    expect(within(details).queryByText(/成片已生成/)).not.toBeInTheDocument();
+    expect(view.container.querySelector('[role="progressbar"]')).toBeNull();
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    const execution = response.execution_status as Record<string, unknown>;
+    execution.job = {id: "actual-job", status: "succeeded"};
+    view.rerender(<AssistantConversationPanel state={state({conversation: saved})} input="下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(within(details).getByText("制作作业已完成，有效成片仍待核实。")).toBeInTheDocument();
+    execution.video_ready = true;
+    view.rerender(<AssistantConversationPanel state={state({conversation: saved})} input="下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(within(details).getByText("成片已生成，当前输出有效。")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("下一条草稿");
+  });
+
+  it.each(["waiting_adoption", "waiting_unknown"])("shows the actual %s decision and queries without sending or replacing the next draft", async status => {
+    const saved = goalTaskConversation(status);
+    const refresh = vi.fn().mockResolvedValue(saved), send = vi.fn(), input = vi.fn();
+    render(<AssistantConversationPanel state={state({conversation: saved, refresh})} input="先写下一条" onInput={input}
+      onSend={send} busy={false} configured scopeLabel="当前任务"/>);
+    const summary = screen.getByLabelText("本次目标执行状态");
+    expect(summary).toHaveTextContent(status === "waiting_adoption" ? "等待查看并采用修改" : "请求结果待核实");
+    fireEvent.click(summary);
+    fireEvent.click(screen.getByRole("button", {name: "查询目标进展"}));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(send).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("先写下一条");
+  });
+
+  it("shows the safe, concrete tool rejection and its repair action while retaining the failed record", () => {
+    const saved = conversation();
+    saved.turns[0].events = [{type: "tool_end", tool_id: 3, label: "调整画面", ok: false, summary: "这一步没有完成。",
+      failure: {reason: "曝光数值超出允许范围（-2 到 2）。", repair_action: "请使用范围内的曝光值重新准备修改。"}}];
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    fireEvent.click(screen.getByText(/工具记录/));
+    expect(screen.getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
+    expect(screen.getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
+    expect(screen.getByText("调整画面 · 未完成")).toBeVisible();
+    expect(screen.queryByText("这一步没有完成。")).not.toBeInTheDocument();
+  });
+
+  it("does not leave an unreturned tool running after the model turn stops", () => {
+    const saved = conversation();
+    saved.turns[0] = {...saved.turns[0], status: "stopped", events: [{type: "tool_start", tool_id: 5, label: "提交制作"}], result: null};
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText("提交制作 · 未收到结果")).toBeInTheDocument();
+    expect(screen.queryByText("提交制作 · 进行中")).not.toBeInTheDocument();
+    expect(screen.getByText(/不能据此判断后台作业是否完成/)).toBeInTheDocument();
+  });
+
+  it("does not revive an older goal after a newer user instruction or trust another workspace's projection", () => {
+    const saved = goalTaskConversation();
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved})} input="下一条" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    expect(screen.getByLabelText("本次目标执行状态")).toBeInTheDocument();
+    saved.turns.push({...conversation().turns[0], id: "new-instruction", sequence: 2, user_message: "先暂停制作，只读当前资料", result: null});
+    view.rerender(panel());
+    expect(screen.queryByLabelText("本次目标执行状态")).not.toBeInTheDocument();
+    saved.turns.pop();
+    (saved.turns[0].result!.goal_continuation as Record<string, unknown>).workspace_id = "other-workspace";
+    view.rerender(panel());
+    expect(screen.queryByLabelText("本次目标执行状态")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("下一条");
+  });
+
+  it("uses the host's bounded completion proof to mark recovery and explains the actual inspection limits", () => {
+    const saved = goalTaskConversation("no_progress");
+    saved.turns[0].status = "failed";
+    saved.turns[0].events = [{type: "tool_start", tool_id: 8, label: "开始制作"}];
+    const goal = saved.turns[0].result!.goal_continuation as Record<string, unknown>;
+    goal.waiting_reason = "bounded_output_checkpoint_completed";
+    // Empty unfinished steps alone are deliberately not a completion certificate.
+    goal.unfinished_steps = [];
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved})} input="下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    expect(screen.getByLabelText("本次目标执行状态")).toHaveTextContent("接续未取得新进展");
+    expect(screen.queryByText(/制作与技术检查已恢复完成/)).not.toBeInTheDocument();
+    goal.completed_output_checkpoint = {status: "completed", scope: "production_and_output_observation",
+      job_id: "real-creation", observation_job_id: "real-observation", timeline_version_id: "actual-version",
+      sha256: "a".repeat(64), measurement_scope: "actual_output_bounded_frames", unavailable: [
+        {scope: "visual_semantics", reason: "像素测量不代表看懂内容。"},
+        {scope: "speech_and_listening", reason: "本次没有转写或听感检查。"},
+      ]};
+    view.rerender(panel());
+    const summary = screen.getByLabelText("本次目标执行状态");
+    expect(summary).toHaveTextContent("制作与技术检查已完成");
+    expect(screen.getByText("本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。")).toBeVisible();
+    fireEvent.click(summary);
+    const details = summary.closest("details")!;
+    expect(within(details).getByText(/实际成片的有限抽帧与媒体参数，未逐帧检查/)).toBeVisible();
+    expect(within(details).getByText("像素测量不代表看懂内容。")).toBeVisible();
+    expect(within(details).getByText("本次没有转写或听感检查。")).toBeVisible();
+    expect(within(details).getByText("这份技术检查不能替代对全部创作要求的验收。")).toBeVisible();
+    expect(within(details).getByText("开始制作 · 未收到结果")).toBeVisible();
+    expect(within(details).getByRole("link", {name: "查看对应任务与成片"})).toHaveAttribute("href", "/tasks/task-one");
+    expect(saved.turns[0].status).toBe("failed");
+    expect(screen.getByRole("textbox")).toHaveValue("下一条草稿");
+    goal.status = "invalidated";
+    view.rerender(panel());
+    expect(summary).toHaveTextContent("原目标已停止接续");
+    expect(screen.queryByText(/制作与技术检查已恢复完成/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", {name: "查看对应任务与成片"})).not.toBeInTheDocument();
+  });
+
+  it("retains the expanded goal and middle reading while a bound continuation appends real steps", async () => {
+    const saved = goalTaskConversation();
+    const positions = {current: new Map<string, number>()}, following = {current: new Map<string, boolean>()};
+    const expanded = {current: new Map<string, Map<string, boolean>>()};
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved, historyScrollPositions: positions,
+      historyFollowBottom: following, historyExpandedDetails: expanded})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    const summary = screen.getByLabelText("本次目标执行状态");
+    fireEvent.click(summary);
+    await waitFor(() => expect(expanded.current.get(saved.id)?.get("goal:turn-one")).toBe(true));
+    const viewport = screen.getByRole("region", {name: "持久对话记录"});
+    Object.defineProperties(viewport, {scrollHeight: {configurable: true, value: 1400}, clientHeight: {configurable: true, value: 400}});
+    viewport.scrollTop = 200;
+    fireEvent.scroll(viewport);
+    saved.turns.push({...saved.turns[0], id: "real-auto-child", sequence: 2, user_message: "", status: "running", result: null,
+      events: [{type: "goal_continuation_started", source_kind: "business_event", original_turn_id: "turn-one", source_turn_id: "turn-one", event_id: "real-job-finished"},
+        {type: "tool_start", tool_id: 9, label: "检查实际输出"}]});
+    (saved.turns[0].result!.goal_continuation as Record<string, unknown>).current_turn_id = "real-auto-child";
+    (saved.turns[0].result!.goal_continuation as Record<string, unknown>).status = "running";
+    view.rerender(panel());
+    expect(summary.closest("details")).toHaveAttribute("open");
+    expect(summary).toHaveTextContent("检查实际输出 · 进行中");
+    expect(viewport.scrollTop).toBe(200);
+    expect(following.current.get(saved.id)).toBe(false);
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    view.unmount();
+    render(panel());
+    expect(screen.getByLabelText("本次目标执行状态").closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+  });
+});
+
 describe("persisted business result cards", () => {
+  it("allows a failed model turn's host-verified actionable preview to be read, while stopped and unverified failures remain closed", async () => {
+    const saved = projectedTaskConversation("proposed");
+    saved.turns[0].status = "failed";
+    const refresh = vi.fn().mockResolvedValue(saved), open = vi.fn();
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved, refresh})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} onOpenEditProposal={open} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    fireEvent.click(screen.getByRole("button", {name: "查看修改方案"}));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(saved.turns[0]));
+    expect(refresh).toHaveBeenCalledOnce();
+    saved.turns[0].status = "stopped";
+    view.rerender(panel());
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+    saved.turns[0].status = "failed";
+    delete saved.turns[0].result!.continuation;
+    view.rerender(panel());
+    expect(screen.queryByRole("button", {name: "查看修改方案"})).not.toBeInTheDocument();
+  });
+
   it.each([
     ["save", "已保存"], ["query", "已回读原工具"], ["update", "新版本"], ["revoke", "已停用"],
   ] as const)("shows the actual %s tool receipt without offering edit adoption", (action, text) => {
@@ -558,7 +746,7 @@ describe("AssistantConversationPanel", () => {
     const toolDetails = tools.closest("details")!;
     expect(toolDetails).not.toHaveAttribute("open");
     expect(within(toolDetails).getAllByRole("listitem")).toHaveLength(2);
-    expect(within(toolDetails).getByText("读取当前方案 · 已完成")).toBeInTheDocument();
+    expect(within(toolDetails).getByText("读取当前方案 · 已返回")).toBeInTheDocument();
     expect(within(toolDetails).getByText("检查新建方案 · 未完成")).toBeInTheDocument();
     fireEvent.click(tools);
     expect(within(toolDetails).getByText("已读取 1 项方案。")).toBeInTheDocument();
