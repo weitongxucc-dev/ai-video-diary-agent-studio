@@ -21,6 +21,15 @@ from app.env_files import (
     write_dotenv_values as write_dotenv_values,
 )
 
+from app.service_status_projection import (
+    LLM_SERVICE_AVAILABLE as LLM_SERVICE_AVAILABLE,
+    LLM_SERVICE_FAILED as LLM_SERVICE_FAILED,
+    LLM_SERVICE_MISSING as LLM_SERVICE_MISSING,
+    LLM_SERVICE_UNVERIFIED as LLM_SERVICE_UNVERIFIED,
+    project_service_status,
+    service_state,
+)
+
 
 def structured_completion_options(model_id: str) -> dict[str, object]:
     """Keep MiniMax reasoning outside the JSON content parsed by production."""
@@ -159,33 +168,6 @@ def _hermes_radar_status(path: str | None) -> dict[str, Any]:
         "watcha_count": status.watcha_count,
     }
 
-
-# ── 外部文字模型服务状态（0.11 B03）──────────────────────────────────────
-# 四档状态，语义严格按 backlog：已填写 / 未验证 / 可用 / 失败。
-# 「可用」只能由一次**真实发生过**的外部调用产生，绝不由字段是否填好推断。
-LLM_SERVICE_MISSING = "missing"        # 未填写
-LLM_SERVICE_UNVERIFIED = "unverified"  # 已填写，未验证
-LLM_SERVICE_AVAILABLE = "available"    # 可用（真的连通过）
-LLM_SERVICE_FAILED = "failed"          # 失败（真的试过且没成功）
-
-_LLM_SERVICE_LABELS = {
-    LLM_SERVICE_MISSING: "未填写",
-    LLM_SERVICE_UNVERIFIED: "已填写，未验证",
-    LLM_SERVICE_AVAILABLE: "可用",
-    LLM_SERVICE_FAILED: "失败",
-}
-
-# 每种失败原因对应一句日常中文。cause 来自 assistant_pi 的真实观测结果，
-# 未知原因不许编，写「拿不到更具体的原因」。
-_LLM_SERVICE_FAILURE_REASONS = {
-    "key_rejected": "服务拒绝了这把密钥。这一步是真的连到了服务，是密钥没通过。",
-    "address_unreachable": "连不上设置里的服务地址。可能是地址填错，或当前网络到不了这个服务。",
-    "timeout": "等模型回复超时，这一轮没有拿到回复。",
-}
-
-_LLM_SERVICE_DEFAULT_FAILURE_REASON = (
-    "上一次真实尝试没有成功，但日志里没有留下能说明原因的信息，拿不到更具体的原因。"
-)
 
 # 进程内记录「本次运行真的连通过/没通过」。不落盘：重启后我们确实不知道，
 # 就回到「未验证」，而不是沿用一次陈旧的结论。
@@ -377,52 +359,21 @@ class Settings:
         「可用」is only ever reached from a recorded real call — a filled-in
         form can produce 「已填写，未验证」and nothing more.
         """
-        if not self.llm_configured:
-            return LLM_SERVICE_MISSING
-        record = llm_service_verification(self)
-        if record is None:
-            return LLM_SERVICE_UNVERIFIED
-        return LLM_SERVICE_AVAILABLE if record["ok"] else LLM_SERVICE_FAILED
+        fields_filled = self.llm_configured
+        return service_state(
+            fields_filled=fields_filled,
+            verification=llm_service_verification(self) if fields_filled else None,
+        )
 
     def llm_service_status(self, workspace_id: str = "") -> dict[str, Any]:
         """服务状态。带 workspace_id 时只看该工作区自己记录的观测。
 
         一个工作区跑通不会给另一个工作区点亮「可用」：记录按工作区分开存。
         """
-        if workspace_id:
-            record = llm_service_verification(self, workspace_id)
-            if not self.llm_configured:
-                state = LLM_SERVICE_MISSING
-            elif record is None:
-                state = LLM_SERVICE_UNVERIFIED
-            else:
-                state = LLM_SERVICE_AVAILABLE if record["ok"] else LLM_SERVICE_FAILED
-        else:
-            state = self.llm_service_state
-            record = llm_service_verification(self)
-        if state == LLM_SERVICE_MISSING:
-            detail = "服务地址、模型或 API Key 没有填全，现在走不了外部文字模型。"
-        elif state == LLM_SERVICE_UNVERIFIED:
-            detail = (
-                "地址、模型和密钥都填了，但还没有真的连过一次服务；"
-                "能不能用要等下一次真实对话或写稿才知道。"
-            )
-        elif state == LLM_SERVICE_AVAILABLE:
-            detail = "上一次真实调用成功返回了回复，当前这套地址、模型和密钥连得通。"
-        else:
-            detail = record.get("detail") or _LLM_SERVICE_FAILURE_REASONS.get(
-                str(record.get("cause")), _LLM_SERVICE_DEFAULT_FAILURE_REASON
-            )
-        return {
-            "state": state,
-            "label": _LLM_SERVICE_LABELS[state],
-            "detail": detail,
-            "fields_filled": self.llm_configured,
-            "verified": state == LLM_SERVICE_AVAILABLE,
-            "cause": str(record.get("cause")) if record else "",
-            "repair_action": str(record.get("repair_action", "")) if record else "",
-            "observed_at": str(record.get("observed_at")) if record else "",
-        }
+        return project_service_status(
+            fields_filled=self.llm_configured,
+            verification=llm_service_verification(self, workspace_id),
+        )
 
     @property
     def effective_temporary_root_path(self) -> Path:
