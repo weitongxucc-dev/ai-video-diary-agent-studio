@@ -693,10 +693,43 @@ class ConversationRepository:
             turn = conn.execute("SELECT status,result_json FROM assistant_conversation_turns WHERE id=?", (claim["turn_id"],)).fetchone()
             if turn["status"] == "running":
                 raise ValueError("接续回合尚未持久结束")
-            response = json.loads(turn["result_json"] or "{}").get("response", {})
-            if response.get("edit_preview"):
+            result = json.loads(turn["result_json"] or "{}")
+            response = result.get("response", {})
+            source = conn.execute("SELECT result_json FROM assistant_conversation_turns WHERE id=?",
+                                  (claim["source_turn_id"],)).fetchone()
+
+            def receipt_ids(item):
+                return {"media_job": (item.get("media_job") or {}).get("job_id"),
+                        "edit_preview": ((item.get("edit_preview") or {}).get("proposal") or {}).get("id"),
+                        "edit_request": (item.get("edit_request") or {}).get("request_id"),
+                        "execution_status": ((item.get("execution_status") or {}).get("job") or {}).get("id")}
+
+            ids = receipt_ids(response)
+            original_ids = receipt_ids(json.loads(root["result_json"] or "{}").get("response", {}))
+            source_ids = receipt_ids(json.loads(source["result_json"] or "{}").get("response", {}))
+            trigger_ids = {"media_job": claim["event"].get("job_id"),
+                           "edit_preview": claim["event"].get("proposal_id"),
+                           "edit_request": claim["event"].get("request_id"),
+                           "execution_status": claim["event"].get("job_id")}
+            # Only the host writes this proof after reading the actual job /
+            # intent / request source and checking that it belongs to this
+            # child. A model result or another terminal read is not progress.
+            owned = {(item["kind"], item["id"]) for item in result.get("goal_business_actions", [])}
+            linked = {kind: bool(identifier and ((kind, identifier) in owned or identifier in {
+                original_ids[kind], source_ids[kind], trigger_ids[kind]})) for kind, identifier in ids.items()}
+            new_action = any(identifier and (kind, identifier) in owned and identifier != trigger_ids[kind]
+                             for kind, identifier in ids.items())
+            proposal = (response.get("edit_preview") or {}).get("proposal") or {}
+            media = response.get("media_job") or {}
+            execution = (response.get("execution_status") or {}).get("job") or {}
+            request = response.get("edit_request") or {}
+            pending = {"queued", "running", "interrupted"}
+            if proposal.get("status") == "proposed" and linked["edit_preview"]:
                 status, steps = "waiting_adoption", ["await_real_adoption", "complete_original_instruction"]
-            elif response.get("media_job") or response.get("execution_status") or response.get("edit_request"):
+            elif request.get("status") in {"unknown", "result_unknown"} and linked["edit_request"]:
+                status, steps = "waiting_unknown", ["read_original_request_result"]
+            elif (new_action or media.get("status") in pending and linked["media_job"]
+                    or execution.get("status") in pending and linked["execution_status"]):
                 status, steps = "waiting_result", ["observe_actual_result", "complete_original_instruction"]
             elif turn["status"] in {"failed", "stopped"}:
                 status, steps = "waiting_unknown", ["read_original_request_result"]

@@ -36,7 +36,7 @@ def emit(repo, turn, *, status="succeeded", phase="preview", result_kind="graphi
     return event
 
 
-def service(repo, *, response=None, readiness=None, max_rounds=6):
+def service(repo, *, response=None, readiness=None, max_rounds=6, action_refs=None):
     calls = []
     def verify(goal, event):
         return readiness or {"status": "ready", "task_version": {"timeline_version_id": "version:one", "timeline_sequence": 1},
@@ -45,8 +45,14 @@ def service(repo, *, response=None, readiness=None, max_rounds=6):
         calls.append((claim, fresh))
         source = repo.task_turn_source(claim["turn_id"], "workspace", "member", "task")
         assert source["raw_command"] == claim["goal"]["original_instruction"]
+        actual = response if response is not None else {"edit_preview": {"proposal": {"id": "proposal:one", "status": "proposed"}}}
+        proofs = [{"kind": kind, "id": identifier} for kind, identifier in (
+            ("edit_preview", ((actual.get("edit_preview") or {}).get("proposal") or {}).get("id")),
+            ("media_job", (actual.get("media_job") or {}).get("job_id")),
+            ("edit_request", (actual.get("edit_request") or {}).get("request_id")),
+            ("execution_status", ((actual.get("execution_status") or {}).get("job") or {}).get("id"))) if identifier]
         repo.finish_turn(claim["turn_id"], "completed", "下一步已核验。", result={"kind": "task_turn",
-            "response": response if response is not None else {"edit_preview": {"proposal": {"id": "proposal:one"}}}})
+            "response": actual, "goal_business_actions": proofs if action_refs is None else action_refs})
     return GoalContinuationService(repo, verify_current_goal=verify, run_goal_turn=run, max_rounds=max_rounds), calls
 
 
@@ -87,7 +93,7 @@ def test_proposal_waits_real_adoption_then_new_version_drives_remaining_goal(rep
     assert svc.reconcile() == 1 and calls == []
     assert repo.get_task_goal(turn["id"])["status"] == "waiting_adoption"
     event = emit(repo, turn, status="confirmed", phase="apply", result_version_id="version:two")
-    svc, calls = service(repo, response={"execution_status": {"job_id": "render:one", "status": "queued"}},
+    svc, calls = service(repo, response={"execution_status": {"job": {"id": "render:one", "status": "queued"}}},
         readiness={"status": "ready", "task_version": {"timeline_version_id": "version:two", "timeline_sequence": 2}})
     assert svc.reconcile() == 1
     assert calls[0][0]["event"] == event
@@ -152,7 +158,7 @@ def test_no_progress_and_round_cap_end_automatic_model_calls(repo):
     assert svc.reconcile() == 0 and len(calls) == 1
     _, bounded, _, _ = original(repo)
     emit(repo, bounded)
-    svc, calls = service(repo, response={"media_job": {"job_id": "observation:one"}}, max_rounds=1)
+    svc, calls = service(repo, response={"media_job": {"job_id": "observation:one", "status": "queued"}}, max_rounds=1)
     assert svc.reconcile() == 1
     child = {"id": calls[0][0]["turn_id"]}
     emit(repo, child, result_kind="output_observation")
@@ -183,3 +189,44 @@ def test_cannot_claim_an_event_from_another_goal(repo):
     with pytest.raises(ValueError, match="持久化的业务事件"):
         repo.claim_goal_event(candidate, {}, max_rounds=6)
     assert len(repo.list_turns(chat["id"])) == len(repo.list_turns(other_chat["id"])) == 1
+
+
+@pytest.mark.parametrize("kind,receipt,event_fields", [
+    ("media_job", {"job_id": "png:one", "status": "succeeded"}, {"job_id": "png:one"}),
+    ("media_job", {"job_id": "unrelated:old", "status": "succeeded"}, {"job_id": "png:one"}),
+    ("edit_preview", {"proposal": {"id": "proposal:old", "status": "confirmed"}}, {"proposal_id": "proposal:old"}),
+    ("edit_request", {"request_id": "request:old", "status": "recorded"}, {"request_id": "request:old"}),
+    ("execution_status", {"job": {"id": "render:old", "status": "succeeded"}}, {"job_id": "render:old"}),
+])
+def test_reading_settled_old_receipts_does_not_wait_for_an_event_that_will_never_arrive(repo, kind, receipt, event_fields):
+    _, turn, _, _ = original(repo)
+    event = emit(repo, turn, **event_fields)
+    before = list(repo.get_turn(turn["id"])["events"])
+    svc, calls = service(repo, response={kind: receipt}, action_refs=[])
+    assert svc.reconcile() == 1 and len(calls) == 1
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == "no_progress" and goal["unfinished_steps"] == []
+    assert event in repo.get_turn(turn["id"])["events"] == before
+    assert svc.reconcile() == 0
+
+
+def test_new_child_action_already_finished_still_waits_for_its_own_actual_event(repo):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    svc, calls = service(repo, response={"media_job": {"job_id": "observation:new", "status": "succeeded"}})
+    assert svc.reconcile() == 1
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
+    child = {"id": calls[0][0]["turn_id"]}
+    emit(repo, child, job_id="observation:new", result_kind="observation")
+    readonly, reads = service(repo, response={"media_job": {"job_id": "observation:new", "status": "succeeded"}}, action_refs=[])
+    assert readonly.reconcile() == 1 and len(reads) == 1
+    assert repo.get_task_goal(turn["id"])["status"] == "no_progress"
+
+
+@pytest.mark.parametrize("job_id,expected", [("png:one", "waiting_result"), ("unrelated:pending", "no_progress")])
+def test_pending_work_must_belong_to_the_original_goal_or_a_new_child_action(repo, job_id, expected):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, job_id="png:one")
+    svc, _ = service(repo, response={"media_job": {"job_id": job_id, "status": "running"}}, action_refs=[])
+    assert svc.reconcile() == 1
+    assert repo.get_task_goal(turn["id"])["status"] == expected

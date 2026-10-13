@@ -26,6 +26,20 @@ export function assistantTaskTurnResult(turn: AssistantConversationTurn) {
 }
 
 const settledBusinessStatuses = new Set(["confirmed", "rejected", "cancelled", "failed", "stale", "stopped", "expired"]);
+const activeGoalStatuses = new Set(["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"]);
+
+function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
+  const goal = turn.result?.goal_continuation;
+  if (!goal || typeof goal !== "object") return null;
+  const value = goal as Record<string, unknown>;
+  if (value.original_turn_id !== turn.id || typeof value.status !== "string"
+    || typeof value.current_turn_id !== "string" || typeof value.conversation_id !== "string"
+    || typeof value.workspace_id !== "string") return null;
+  return {
+    status: value.status, current_turn_id: value.current_turn_id,
+    conversation_id: value.conversation_id, workspace_id: value.workspace_id,
+  };
+}
 
 export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {
   const result = assistantTaskTurnResult(turn);
@@ -36,6 +50,9 @@ export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) 
 
 export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn) {
   if (turn.status === "stopped") return false;
+  const goal = assistantTurnGoalRefreshState(turn);
+  if (goal) return activeGoalStatuses.has(goal.status);
+  if (turn.status === "running") return true;
   const result = assistantTaskTurnResult(turn);
   if (!result) return false;
   const continuation = result.continuation;
@@ -43,7 +60,24 @@ export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn)
   const response = result.response;
   return assistantTurnHasUnknownRequest(turn) || continuation?.actionable === true
     || Boolean(response?.media_job && ["queued", "running"].includes(response.media_job.status))
+    || Boolean(response?.execution_status?.job && ["queued", "running", "interrupted"].includes(response.execution_status.job.status))
     || (!continuation && response?.edit_preview?.proposal.status === "proposed");
+}
+
+function assistantConversationRefreshTurns(conversation: AssistantConversation | null) {
+  if (!conversation) return [];
+  const latestUser = [...conversation.turns].reverse().find(turn => turn.user_message.trim() !== "");
+  if (latestUser?.result?.goal_continuation) {
+    const goal = assistantTurnGoalRefreshState(latestUser);
+    if (!goal || goal.conversation_id !== conversation.id || goal.workspace_id !== conversation.workspace_id
+      || !assistantTurnNeedsResultRefresh(latestUser)) return [];
+    // A root may remain completed while the driver claims its next child.
+    // Keep that root observable without reviving older goals in this history.
+    return conversation.turns.filter(turn => turn.id === latestUser.id || turn.id === goal.current_turn_id)
+      .filter(assistantTurnNeedsResultRefresh);
+  }
+  const latest = conversation.turns.at(-1);
+  return latest && assistantTurnNeedsResultRefresh(latest) ? [latest] : [];
 }
 
 function localTurn(message: string): AssistantConversationTurn {
@@ -612,9 +646,11 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   }, [refresh, isCurrentConversation]);
 
   const running = conversation?.turns.at(-1)?.status === "running";
-  const pendingResults = (conversation?.turns ?? []).filter(assistantTurnNeedsResultRefresh)
-    .map(turn => [turn.id, assistantTaskTurnResult(turn)?.continuation?.status,
-      assistantTaskTurnResult(turn)?.response?.media_job?.status, assistantTaskTurnResult(turn)?.response?.edit_request?.status]);
+  const pendingResults = assistantConversationRefreshTurns(conversation)
+    .map(turn => [turn.id, assistantTurnGoalRefreshState(turn)?.status,
+      assistantTurnGoalRefreshState(turn)?.current_turn_id, assistantTaskTurnResult(turn)?.continuation?.status,
+      assistantTaskTurnResult(turn)?.response?.media_job?.status, assistantTaskTurnResult(turn)?.response?.edit_request?.status,
+      assistantTaskTurnResult(turn)?.response?.execution_status?.job?.status]);
   const pendingKey = JSON.stringify(pendingResults);
   const hasPendingResults = pendingResults.length > 0;
   useEffect(() => {

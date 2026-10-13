@@ -78,7 +78,109 @@ function scriptToolConversation(action: AssistantScriptToolReceipt["action"], st
   return initial;
 }
 
+function goalConversation(status = "waiting_adoption", currentTurnId = "turn-business") {
+  const current = businessConversation("confirmed");
+  current.turns[0].result = {...current.turns[0].result, goal_continuation: {
+    original_turn_id: "turn-business", current_turn_id: currentTurnId, status,
+    conversation_id: current.id, workspace_id: current.workspace_id, task_id: "task-one",
+  }};
+  return current;
+}
+
 describe("same-turn business result reads", () => {
+  it("keeps reading after real adoption, shows the running child, then stops at the persisted goal terminal", async () => {
+    const adopted = goalConversation();
+    const running = goalConversation("running", "turn-auto");
+    running.turns.push({id: "turn-auto", sequence: 2, user_message: "", assistant_text: "正在继续原要求",
+      status: "running", events: [], result: null, created_at: running.created_at, updated_at: running.updated_at});
+    const terminal = goalConversation("no_progress", "turn-auto");
+    terminal.turns.push({...running.turns[1], status: "completed", assistant_text: "实际结果已回读"});
+    api.getCurrentAssistantConversation.mockResolvedValue(adopted);
+    api.getAssistantConversation.mockResolvedValueOnce(running).mockResolvedValue(terminal);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.conversation?.turns.at(-1)).toMatchObject({id: "turn-auto", user_message: "", status: "running"});
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(result.current.conversation?.turns.at(-1)).toMatchObject({id: "turn-auto", status: "completed"});
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it.each(["invalidated", "no_progress", "limit_reached"])("does not poll a %s goal despite an old queued receipt", async status => {
+    const initial = goalConversation(status);
+    initial.turns[0].result!.response = businessConversation().turns[0].result!.response;
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does not revive an older active goal after a new real instruction", async () => {
+    const initial = goalConversation("waiting_result");
+    initial.turns.push({...initial.turns[0], id: "turn-new-user", sequence: 2, user_message: "只查看这个结果",
+      status: "completed", result: null});
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does not poll a goal bound to another conversation or a stopped root", async () => {
+    const initial = goalConversation();
+    initial.turns[0].result!.goal_continuation = {...initial.turns[0].result!.goal_continuation as Record<string, unknown>,
+      conversation_id: "unrelated-conversation"};
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    const stopped = goalConversation("waiting_result");
+    stopped.turns[0].status = "stopped";
+    api.getAssistantConversation.mockResolvedValue(stopped);
+    await act(async () => { await result.current.refresh(); });
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it.each([true, false])("bounds pending execution reads with persisted goal=%s without re-submitting production", async withGoal => {
+    const initial = goalConversation("waiting_result");
+    if (!withGoal) {
+      delete initial.turns[0].result!.goal_continuation;
+      delete initial.turns[0].result!.continuation;
+    }
+    initial.turns[0].result!.response = {...initial.turns[0].result!.response as CreationTaskAssistantTurnResponse,
+      media_job: null, execution_status: {task_id: "task-one", job: {id: "render-job", kind: "creation_execution",
+        status: "queued", progress: 0, failure_reason: null, impact: null, repair_action: null}, stages: [],
+        current_stage: "render", waiting_reason: null, status_updated_at: null, video_ready: false,
+        cover_status: "pending", cover_message: null}};
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(24);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it.each(["save", "update", "revoke"] as const)("bounds unknown tool %s reads without repeating writes", async action => {
     const initial = scriptToolConversation(action);
     api.getCurrentAssistantConversation.mockResolvedValue(initial);
