@@ -2,7 +2,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 import app.main as main_module
+from app import env_files
 from app.runtime_settings import runtime_settings_updates
+
+
+@pytest.fixture(autouse=True)
+def synthetic_env_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(env_files, "_repo_root", lambda: tmp_path / "repo")
 
 
 def test_runtime_settings_updates_maps_known_fields_and_skips_blank_values():
@@ -239,13 +245,11 @@ def test_runtime_settings_response_includes_bgm_path_when_unconfigured(tmp_path,
 def test_runtime_settings_endpoint_persists_and_returns_bgm_path(tmp_path, monkeypatch):
     """POST /api/settings/runtime accepts draft_background_music_path,
     persists it to the runtime env file, and returns it in the response."""
-    from app import config as config_module
-
     env_path = tmp_path / ".env"
 
-    # Make the config module use our temp env file for both read and write
+    # Bind the actual IO owner to the synthetic file for both read and write.
     monkeypatch.setattr(main_module, "runtime_env_path", env_path)
-    monkeypatch.setattr(config_module, "_resolve_dotenv_path", lambda: env_path)
+    monkeypatch.setattr(env_files, "_resolve_dotenv_path", lambda: env_path)
 
     client = TestClient(main_module.app, client=("127.0.0.1", 50000))
 

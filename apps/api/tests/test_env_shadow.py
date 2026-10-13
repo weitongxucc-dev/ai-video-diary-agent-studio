@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app import env_files
 from app.config import (
     LLM_SERVICE_AVAILABLE,
     LLM_SERVICE_UNVERIFIED,
@@ -35,6 +36,7 @@ def dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for key in OWNED_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("AI_VIDEO_DIARY_DOTENV", str(path))
+    monkeypatch.setattr(env_files, "_repo_root", lambda: tmp_path / "repo")
     return path
 
 

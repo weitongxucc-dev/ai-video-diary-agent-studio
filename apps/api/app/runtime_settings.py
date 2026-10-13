@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
-from app.config import write_dotenv_values
+from app.env_files import write_dotenv_values
 from app.workspace_settings import (
     WORKSPACE_SECRET_FIELDS,
     delete_workspace_secret,

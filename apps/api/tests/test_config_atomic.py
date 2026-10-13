@@ -1,7 +1,27 @@
 from pathlib import Path
 
-from app import config
+import pytest
+
+from app import config, env_files, runtime_settings
 from app.config import _ENV_FILE_OVERRIDE_VAR, _resolve_dotenv_path, write_dotenv_values
+
+
+@pytest.fixture(autouse=True)
+def synthetic_env_root(tmp_path, monkeypatch):
+    original_owner_root = env_files._repo_root
+    monkeypatch.setattr(env_files, "_repo_root", lambda: tmp_path / "repo")
+    yield original_owner_root
+
+
+def test_config_exports_the_io_owner_and_settings_writer_consumes_it(synthetic_env_root):
+    for name in (
+        "_ENV_FILE_OVERRIDE_VAR", "SETTINGS_OWNED_ENV_KEYS",
+        "_resolve_dotenv_path", "runtime_env_file_path", "load_dotenv_files",
+        "write_dotenv_values",
+    ):
+        assert getattr(config, name) is getattr(env_files, name)
+    assert config._repo_root is synthetic_env_root
+    assert runtime_settings.write_dotenv_values is env_files.write_dotenv_values
 
 
 def test_resolve_dotenv_path_defaults_to_repo_root(monkeypatch):
@@ -63,7 +83,7 @@ def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     replacements: list[tuple[Path, Path]] = []
-    real_replace = config.os.replace
+    real_replace = env_files.os.replace
 
     def capture_replace(source, target):
         source_path = Path(source)
@@ -79,7 +99,7 @@ def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
         replacements.append((source_path, target_path))
         real_replace(source_path, target_path)
 
-    monkeypatch.setattr(config.os, "replace", capture_replace)
+    monkeypatch.setattr(env_files.os, "replace", capture_replace)
 
     write_dotenv_values(
         env_path,
@@ -96,3 +116,42 @@ def test_write_dotenv_values_replaces_file_atomically(tmp_path, monkeypatch):
         "UNCHANGED=yes\n"
         "DEEPSEEK_API_KEY=secret\n"
     )
+
+
+def test_load_preserves_primary_secondary_and_inherited_value_rules(tmp_path, monkeypatch):
+    primary = tmp_path / "primary.env"
+    secondary = env_files._repo_root() / "apps/api/.env"
+    secondary.parent.mkdir(parents=True)
+    primary.write_text("DEEPSEEK_MODEL=primary\nENV_IO_SYNTHETIC=in-primary\n")
+    secondary.write_text("DEEPSEEK_MODEL=secondary\nENV_IO_SYNTHETIC=in-secondary\n")
+    monkeypatch.setenv(_ENV_FILE_OVERRIDE_VAR, str(primary))
+    monkeypatch.setenv("DEEPSEEK_MODEL", "inherited")
+    monkeypatch.setenv("ENV_IO_SYNTHETIC", "inherited")
+    env_files.load_dotenv_files()
+    assert env_files.os.environ["DEEPSEEK_MODEL"] == "secondary"
+    assert env_files.os.environ["ENV_IO_SYNTHETIC"] == "inherited"
+
+
+def test_failed_atomic_replace_keeps_file_environment_and_reload_unchanged(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    original = b"# synthetic configuration\nDEEPSEEK_MODEL=original\n"
+    env_path.write_bytes(original)
+    monkeypatch.setenv("DEEPSEEK_MODEL", "original")
+    reloads = []
+    failure = PermissionError("synthetic replacement refused")
+
+    def refuse_replace(source, target):
+        assert Path(source).read_text().endswith("DEEPSEEK_MODEL=updated\n")
+        assert Path(target) == env_path
+        raise failure
+
+    monkeypatch.setattr(env_files.os, "replace", refuse_replace)
+    with pytest.raises(PermissionError) as caught:
+        runtime_settings.apply_runtime_settings_update(
+            env_path, {"deepseek_model": "updated"}, lambda: reloads.append(True),
+        )
+    assert caught.value is failure
+    assert env_path.read_bytes() == original
+    assert env_files.os.environ["DEEPSEEK_MODEL"] == "original"
+    assert list(tmp_path.glob(".env.*.tmp")) == []
+    assert reloads == []
