@@ -12,11 +12,17 @@ S2开发遵循用户2026-10-13最新指令：root担任总控，不再调动内�
 
 用户最新明确要求旧主控01a12cf6-92b6-7793-965b-350a44278473退出，由新开线程01a13575-b39d-7230-acad-b68b09cb3c3d（曜核：新总控与真实交付）接管。新主控已HANDOFF_ACK并重读当前归属，三worker已HOLD/FINAL_RELEASE、原app已恢复。此治理事务commit/push与CONTROL_TRANSFER_COMPLETE发送后，新主控01a13575-b39d-7230-acad-b68b09cb3c3d唯一持有主控/共享权威/Git/Issue/服务租约/验收和打包决策权；旧主控01a12cf6-92b6-7793-965b-350a44278473停止派工及源码/共享权威/Git/Issue修改，只发送最后交接ACK。没有扩大产品、资源、数据或发布授权。
 
-当前产品基线1a148dacd420975c4a5c2f764f52e602c23f39c2已push，tracked产品clean。所有内部Agent租约已永久结束。以下可见worker的此前源码/设计/服务/GUI/数据租约全部HOLD撤销，完成当前不可中断操作后只报告和做既有授权的安全清理/恢复，等待新主控明确定文件与REBASE_ACK，不得依下方旧分工自启动。
+当前产品基线1a148dacd420975c4a5c2f764f52e602c23f39c2已push；主控归属提交47adb27e7dd5c69e10900868bb3f6ccc968b4028已核，工作树干净。所有内部Agent租约永久结束，三个可见worker此前所有租约撤销。新总控正常GET原API确认task29/gain0/ready、history29及running0/waiting3与交接回执一致；原app保持运行。下方历史记录不给写权。
 
-- 编码01a13533-b38c-7430-a2de-cb419e2340d6（曜核：调色预览范围修复）：HOLD_ACK，无源码dirty/运行操作；原编码已提交。#142仅有限源码读取，提案文件尚未写出，没有资源编码/新预算权。
-- 独立审核01a13533-cec4-70d2-aa5d-ab5bb6c6aefd（曜核：自动接续与中栏独立审核）：HOLD_ACK，only原visible-review.md/json，无服务/GUI/数据操作；新1a真实可见由QA回报。
-- QA01a13533-e91f-7482-acce-f5968e52fae5（曜核：真实视频闭环与试用打包）：HOLD/FINAL_RELEASE，新Webbuild及旧cal取消320/360已证，新等待请求/Job/采用未发；本人API51252/Web51318/tab2全部结束，原exactapp恢复main54132/API54136:51888/Web54150:3000。正常GET task29/gain0/ready、history29、queue running0/waiting3原历史；交接附件§13及handoff-release.json。没有新包/整片成功验收。
+### 当前有限工作：#142接口与实测方法（CONTROL-142-DESIGN）
+
+本阶段只收敛已批准主交付的必要阻断，不改变产品范围、预算数值、原配置、服务或用户任务。绑定上述产品源码与架构§3.12/3.13、领域§6/7、产品§2.5/2.6及DESIGN§4.4/7。QA根为/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013。以下新租约须先REBASE_ACK；ACK符合时可直接开始所列只读工作，源码/媒体/服务/HOLD仍未解除。
+
+- 编码01a13533-b38c-7430-a2de-cb419e2340d6（曜核：调色预览范围修复）：只读目标源码，唯一写QA根resource-wait-implementation-proposal.md/json。先交付同request的admission原始决定→同事务既有持久入口→安全DTO→GET及会话消费者的最小精确接口；再给sealed单clip≤5秒/silent/0overlay专属preview的facts/admission/runtime/producer一致选链与完整进程组/临时盘/时限/主机趋势标定方法。初次未grant的generation为null；禁止借日志、全局latest、其它Job或resources_json封存输入当回退。未知标定保持拒绝，不填猜测预算。列明实际源码/直接测试文件供总控冻结后另授实现租约。本阶段不写源码、不跑测试/构建、不import main、不启服务/GUI、不操作DB/任务/env/Git/Issue。
+- 独立审核01a13533-cec4-70d2-aa5d-ab5bb6c6aefd（曜核：自动接续与中栏独立审核）：只读1a中文状态窄diff和最新1a真实320/360取消截图/回执，唯一写QA根visible-review-1a148da.md/json，原visible-review证据保留。分清取消已证与等待/成功scope未证。上述proposal产出后可直接只读审核请求/输入版本/attempt/时点/身份绑定、同事务、历史及取消/失效/重启语义；提出具体阻断，不代替总控冻结接口。不重复已充分的108/18项检查，不写源码/共享文档/Git/Issue、不启服务或操作GUI/数据。
+- QA01a13533-e91f-7482-acce-f5968e52fae5（曜核：真实视频闭环与试用打包）：唯一写QA根host-resource-readonly-trend.json及preview-calibration-plan.md。仅做一次低负载约60秒的聚合主机数值观察，并核操作系统只读压力指标的语义；原app保持运行，记录CPU/可用内存/swap存量与可得换入换出增量/压力/IO及采样窗口，缺指标标unknown。不给当前Job制造admission，不运行媒体或benchmark，不退出app/启动服务，不读或复制凭据/DB/env，不改任务/门/profile/Git/Issue。计划使用现有许可入口与完整身份进程组测量，写清现门若拒绝如何停、需要什么有依据的政策决定；不得shell绕许可或把本次闲置趋势称为preview标定。
+
+总控唯一负责精确接口及共享权威冻结、Git/Issue/PR同步、后续源码/服务/真实任务租约和验收放行；只读阶段完成后继续已授权实现，不另问是否开始。四项主交付欠账保持，打包仍须同候选真实验收通过。
 
 定点启动附件=/Volumes/Dujiangyan-VM/AI视频日记/test-runs/pi-cont-120-130-20261013/主控交接-20261013.md（本机临时附件，不是产品权威）。新主控必须核最后安全状态、HEAD/dirty与用户新动作。user已授权可见线程互相发送交接ACK/证据。当前主交付还未完成：原成功Job自动观察、连续两次真实新片、保存/redo/候选重启及新包欠账；#142短预览准入/同request安全原因是首要阻断，不能把code/test/scope声明/旧输出恢复当交付。#117唯一动态总览，既有DraftPR124不merge/发布。
 
