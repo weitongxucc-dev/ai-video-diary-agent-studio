@@ -1,4 +1,3 @@
-from dataclasses import dataclass, field
 from contextlib import nullcontext
 import hashlib
 import json
@@ -8,27 +7,11 @@ from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 from threading import Lock
-from typing import Literal
 
 from app.model_runtime import ModelCatalog, QWEN3_VL_4B_4BIT
+from app.media_observations import SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE
 
-OCR_RETRIEVAL_MIN_CONFIDENCE = 0.8
 _vlm_execution_lock = Lock()
-
-
-@dataclass
-class SegmentUnderstanding:
-    status: Literal["ready", "blocked", "failed"]
-    fingerprint: str = ""
-    model_id: str = ""
-    sample_times: list[float] = field(default_factory=list)
-    summary: str = ""
-    facts: list[dict] = field(default_factory=list)
-    unknowns: list[str] = field(default_factory=list)
-    ocr_status: Literal["ready", "blocked", "failed"] = "blocked"
-    ocr_model_id: str = ""
-    ocr_frames: list[dict] = field(default_factory=list)
-    message: str = ""
 
 
 def searchable_ocr_text(understanding: SegmentUnderstanding | None) -> str:

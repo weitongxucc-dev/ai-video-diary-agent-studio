@@ -1,0 +1,371 @@
+"""Real SQLite checks for the asset aggregate, independent of production setup."""
+
+from copy import deepcopy
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
+from app.materials import assets as asset_storage
+from app.materials.assets import MaterialAssetStore
+from app.materials.contracts import MaterialAsset, MaterialSegment
+from app.media_observations import MaterialSpeechAnalysis, SegmentUnderstanding, SubtitleSegment
+from app.persistence_json import _json_payload
+
+
+WHEN = datetime(2026, 10, 14, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def database(tmp_path):
+    path = tmp_path / "assets.sqlite3"
+    traces = []
+
+    def connect():
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        conn.set_trace_callback(traces.append)
+        return conn
+
+    # Existing migrated table shapes. The store owns no database initialization.
+    with connect() as conn:
+        conn.executescript("""
+            CREATE TABLE material_assets (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, file_path TEXT NOT NULL,
+                payload TEXT NOT NULL, updated_at TEXT NOT NULL, visibility TEXT NOT NULL,
+                UNIQUE(workspace_id, file_path)
+            );
+            CREATE TABLE material_unmatched_corrections (
+                workspace_id TEXT NOT NULL, asset_id TEXT NOT NULL, segment_id TEXT NOT NULL,
+                payload TEXT NOT NULL, preserved_at TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, asset_id, segment_id)
+            );
+        """)
+    traces.clear()
+    return connect, traces
+
+
+def _asset(asset_id="asset", *, workspace="workspace-a", owner="owner-a", visibility="private"):
+    return MaterialAsset(
+        asset_id, workspace, f"{asset_id}.mp4", f"fixture://{asset_id}", 10, WHEN,
+        owner_user_id=owner, visibility=visibility,
+        segments=[MaterialSegment(
+            f"{asset_id}-segment", asset_id, 0, 2,
+            system_tags=["既有标记"], created_at=WHEN, updated_at=WHEN,
+        )],
+        created_at=WHEN, updated_at=WHEN,
+    )
+
+
+def _insert(conn, asset, *, column_visibility=None, payload=None):
+    conn.execute("INSERT INTO material_assets VALUES (?, ?, ?, ?, ?, ?)", (
+        asset.id, asset.workspace_id, asset.path,
+        _json_payload(asset) if payload is None else json.dumps(payload, ensure_ascii=False),
+        asset.updated_at.isoformat(),
+        asset.visibility if column_visibility is None else column_visibility,
+    ))
+
+
+def _snapshot(connect):
+    with connect() as conn:
+        return {
+            table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in ("material_assets", "material_unmatched_corrections")
+        }
+
+
+def test_store_construction_does_not_open_or_initialize_a_database():
+    def forbidden():
+        raise AssertionError("construction must not request a connection")
+
+    MaterialAssetStore(forbidden)
+
+
+def test_store_import_and_construction_do_not_load_analysis_or_application_runtime(tmp_path):
+    script = textwrap.dedent("""
+        import importlib.abc
+        import sqlite3
+        import socket
+        import subprocess
+        import sys
+        class RejectRuntime(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                blocked = {'app.production', 'app.main', 'app.repository', 'app.model_runtime',
+                    'app.asr', 'app.material_speech', 'app.visual_understanding',
+                    'app.device_runtime', 'app.device_scheduler'}
+                if any(fullname == name or fullname.startswith(name + '.') for name in blocked):
+                    raise AssertionError('runtime dependency: ' + fullname)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('value import or store constructor attempted runtime work')
+        sys.meta_path.insert(0, RejectRuntime())
+        sqlite3.connect = forbidden
+        socket.socket = forbidden
+        subprocess.Popen = forbidden
+        from app.materials.assets import MaterialAssetStore
+        MaterialAssetStore(forbidden)
+    """)
+    script = f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n" + script
+    completed = subprocess.run([sys.executable, "-c", script], cwd=tmp_path, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_ordinary_save_returns_original_aggregate_and_reopen_preserves_nested_values(database, monkeypatch):
+    connect, _traces = database
+    store = MaterialAssetStore(connect)
+    value = _asset()
+    value.segments[0].description = "人工说明"
+    value.segments[0].transcript = "人工纠正的语音"
+    value.segments[0].collection_ids = ["collection-a"]
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: WHEN + timedelta(seconds=1))
+    assert store.save_asset(value) is value
+    assert value.updated_at == WHEN + timedelta(seconds=1)
+    reopened = MaterialAssetStore(connect)
+    assert asdict(reopened.get_asset("workspace-a", value.id)) == asdict(value)
+    assert reopened.list_assets("workspace-a") == [value]
+    assert reopened.list_assets("workspace-b") == []
+    with pytest.raises(KeyError) as failure:
+        reopened.get_asset("workspace-b", value.id)
+    assert failure.value.args == (value.id,)
+
+
+def test_explicit_connection_reads_uncommitted_asset_without_committing_or_opening_another(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("supplied connection must be used")
+
+    store = MaterialAssetStore(forbidden)
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        value = _asset()
+        _insert(conn, value)
+        assert asdict(store.get_asset("workspace-a", value.id, connection=conn)) == asdict(value)
+        assert conn.in_transaction
+        conn.execute("SELECT 1")  # The caller still owns an open connection.
+        conn.rollback()
+    assert _snapshot(connect) == {"material_assets": [], "material_unmatched_corrections": []}
+
+
+@pytest.mark.parametrize("viewer,include_private,diagnostic,list_ids,page_ids", [
+    (None, True, False, {"own", "other", "unowned", "shared", "revoked"}, {"own", "other", "unowned", "shared", "revoked"}),
+    (None, False, False, {"shared"}, set()),
+    ("owner-a", True, False, {"own", "shared"}, {"own", "shared"}),
+    ("owner-a", False, False, {"own", "shared"}, {"own", "shared"}),
+    ("owner-b", True, False, {"other", "shared", "revoked"}, {"other", "shared", "revoked"}),
+    ("owner-a", True, True, {"own", "other", "unowned", "shared", "revoked"}, {"own", "other", "unowned", "shared", "revoked"}),
+    ("owner-a", False, True, {"shared"}, {"shared"}),
+])
+def test_column_visibility_owner_scope_and_missing_viewer_modes_precede_paging(
+    database, viewer, include_private, diagnostic, list_ids, page_ids,
+):
+    connect, _traces = database
+    with connect() as conn:
+        for number, value in enumerate([
+            _asset("own"), _asset("other", owner="owner-b"), _asset("unowned", owner=None),
+            _asset("shared", owner="owner-b"), _asset("revoked", owner="owner-b", visibility="shared"),
+            _asset("foreign", workspace="workspace-b", visibility="shared"),
+        ]):
+            value.updated_at = WHEN + timedelta(seconds=number)
+            column = "shared" if value.id in {"shared", "foreign"} else "private"
+            _insert(conn, value, column_visibility=column)
+    store = MaterialAssetStore(connect)
+    flags = {"viewer_user_id": viewer, "include_private": include_private, "local_diagnostic": diagnostic}
+    assert {item.id for item in store.list_assets("workspace-a", **flags)} == list_ids
+    found = []
+    for offset in range(len(page_ids) + 1):
+        page, total = store.list_assets_page("workspace-a", limit=1, offset=offset, **flags)
+        assert total == len(page_ids)
+        assert len(page) == (1 if offset < len(page_ids) else 0)
+        found.extend(page)
+    assert {item.id for item in found} == page_ids
+    assert [item.updated_at for item in found] == sorted((item.updated_at for item in found), reverse=True)
+    assert store.get_asset("workspace-a", "shared").visibility == "shared"
+    assert store.get_asset("workspace-a", "revoked").visibility == "private"
+
+
+def test_query_exact_tag_review_and_legacy_media_type_share_filter_and_count(database):
+    connect, _traces = database
+    with connect() as conn:
+        for asset_id, tag, media in [
+            ("legacy-video", "红烧肉", None), ("similar-tag", "红烧肉特写", "video"),
+            ("audio", "红烧肉", "audio"),
+        ]:
+            value = _asset(asset_id)
+            value.user_tags = [tag]
+            value.review_status = "approved"
+            value.segments[0].description = "办公键盘"
+            payload = json.loads(_json_payload(value))
+            if media is None:
+                payload.pop("media_type")
+            else:
+                payload["media_type"] = media
+            _insert(conn, value, payload=payload)
+    store = MaterialAssetStore(connect)
+    filters = {"query": "办公", "tag": "红烧肉", "review_status": "approved", "media_type": "video"}
+    page, total = store.list_assets_page("workspace-a", limit=1, offset=0, **filters)
+    assert (total, [item.id for item in page]) == (1, ["legacy-video"])
+    assert page[0].media_type == "video"
+    assert store.list_assets_page("workspace-a", limit=1, offset=1, **filters) == ([], 1)
+    assert store.list_assets_page("workspace-b", limit=1, offset=0, **filters) == ([], 0)
+
+
+def test_ocr_confidence_filter_keeps_count_and_paged_rows_in_the_same_set(database):
+    connect, _traces = database
+    store = MaterialAssetStore(connect)
+    for asset_id, confidence in [("below", 0.79), ("qualified", 0.8)]:
+        value = _asset(asset_id)
+        value.segments[0].understanding = SegmentUnderstanding(
+            "ready", ocr_status="ready",
+            ocr_frames=[{"time": 0.5, "observations": [{"text": "价目", "confidence": confidence}]}],
+        )
+        store.save_asset(value)
+    page, total = store.list_assets_page("workspace-a", limit=1, offset=0, query="价目")
+    assert (total, [item.id for item in page]) == (1, ["qualified"])
+    assert store.list_assets_page("workspace-a", limit=1, offset=1, query="价目") == ([], 1)
+
+
+def _analysis_pair(connect):
+    current = _asset()
+    current.segments.extend([
+        MaterialSegment("removed-manual", current.id, 2, 4, description="旧人工纠正", created_at=WHEN, updated_at=WHEN),
+        MaterialSegment("removed-raw", current.id, 4, 6, created_at=WHEN, updated_at=WHEN),
+    ])
+    with connect() as conn:
+        _insert(conn, current)
+    analyzed = deepcopy(current)
+    analyzed.segments = [analyzed.segments[0]]
+    analyzed.analysis_status = "ready"
+    analyzed.analysis_message = "新的分析结果"
+    return current, analyzed
+
+
+def test_late_analysis_preserves_latest_manual_facts_and_saves_removed_correction_in_same_transaction(database):
+    connect, traces = database
+    latest, analyzed = _analysis_pair(connect)
+    latest.visibility = "shared"
+    latest.owner_user_id = "latest-owner"
+    latest.use_state = "excluded"
+    latest.review_status = "approved"
+    latest.user_tags = ["人工资产标签"]
+    latest.user_description = "最新资料说明"
+    latest.upload_context = "最新批次背景"
+    segment = latest.segments[0]
+    segment.description = "人工办公说明"
+    segment.transcript = "最新人工语音纠正"
+    segment.user_tags = ["人工片段标签"]
+    segment.collection_ids = ["latest-collection"]
+    segment.usage_role = "a_roll"
+    segment.review_status = "approved"
+    segment.usage_count = 3
+    segment.last_used_at = WHEN
+    segment.updated_at = WHEN + timedelta(seconds=1)
+    with connect() as conn:
+        conn.execute("UPDATE material_assets SET payload=?, visibility=? WHERE id=?", (_json_payload(latest), "shared", latest.id))
+    analyzed.duration_seconds = 12.0
+    analyzed.speech_analysis = MaterialSpeechAnalysis("ready", observations=[SubtitleSegment(0, 1000, "模型语音")])
+    analyzed.segments[0].visual_status = "ready"
+    analyzed.segments[0].understanding = SegmentUnderstanding("ready", summary="新的画面观察")
+    traces.clear()
+    store = MaterialAssetStore(connect)
+    saved = store.save_asset(analyzed, analysis_only=True)
+    for name in ("visibility", "owner_user_id", "use_state", "review_status", "user_tags", "user_description", "upload_context"):
+        assert getattr(saved, name) == getattr(latest, name)
+    for name in ("description", "transcript", "user_tags", "collection_ids", "usage_role", "review_status", "usage_count", "last_used_at", "updated_at"):
+        assert getattr(saved.segments[0], name) == getattr(segment, name)
+    assert saved.segments[0].understanding.summary == "新的画面观察"
+    assert (saved.duration_seconds, saved.speech_analysis.observations[0].text) == (12.0, "模型语音")
+    assert [item.id for item in saved.segments] == [segment.id]
+    statements = [" ".join(sql.split()) for sql in traces]
+    assert statements[0] == "BEGIN IMMEDIATE"
+    correction_index = next(i for i, sql in enumerate(statements) if sql.startswith("INSERT OR IGNORE INTO material_unmatched_corrections"))
+    asset_index = next(i for i, sql in enumerate(statements) if sql.startswith("INSERT INTO material_assets"))
+    assert correction_index < asset_index < statements.index("COMMIT")
+    reopened = MaterialAssetStore(connect)
+    assert asdict(reopened.get_asset("workspace-a", latest.id)) == asdict(saved)
+    with connect() as conn:
+        rows = conn.execute("SELECT segment_id, payload FROM material_unmatched_corrections").fetchall()
+    assert [row["segment_id"] for row in rows] == ["removed-manual"]
+    assert json.loads(rows[0]["payload"])["description"] == "旧人工纠正"
+
+
+@pytest.mark.parametrize("failure_kind", ["sql", "serialization"])
+def test_failure_after_unmatched_correction_insert_rolls_back_both_tables(database, failure_kind):
+    connect, traces = database
+    _current, analyzed = _analysis_pair(connect)
+    if failure_kind == "sql":
+        with connect() as conn:
+            conn.execute("""
+                CREATE TRIGGER reject_asset_update BEFORE UPDATE ON material_assets
+                BEGIN SELECT RAISE(ABORT, 'asset-write-rejected'); END
+            """)
+        error, message = sqlite3.IntegrityError, "asset-write-rejected"
+    else:
+        analyzed.speech_analysis = object()
+        error, message = TypeError, "cannot serialize object"
+    before = _snapshot(connect)
+    traces.clear()
+    with pytest.raises(error, match=message):
+        MaterialAssetStore(connect).save_asset(analyzed, analysis_only=True)
+    assert any(sql.lstrip().startswith("INSERT OR IGNORE INTO material_unmatched_corrections") for sql in traces)
+    assert "ROLLBACK" in traces
+    assert _snapshot(connect) == before
+
+
+@pytest.mark.parametrize("changed", ["missing", "size", "modified"])
+def test_removed_or_changed_source_rejects_analysis_without_persisting_anything(database, changed):
+    connect, _traces = database
+    _current, analyzed = _analysis_pair(connect)
+    if changed == "missing":
+        analyzed.id = "missing"
+    elif changed == "size":
+        analyzed.size_bytes += 1
+    else:
+        analyzed.modified_at += timedelta(seconds=1)
+    before = _snapshot(connect)
+    with pytest.raises(ValueError, match="素材已移除|素材文件发生变化"):
+        MaterialAssetStore(connect).save_asset(analyzed, analysis_only=True)
+    assert _snapshot(connect) == before
+
+
+@pytest.mark.parametrize("date_field", ["asset", "segment"])
+def test_decoder_strict_dates_and_legacy_proof_removal_keep_existing_rules(date_field):
+    payload = json.loads(_json_payload(_asset()))
+    payload.pop("media_type")
+    payload.pop("use_state")
+    payload.update(review_status="rejected", rights_confirmed=True, brand_safe=True)
+    decoded = MaterialAssetStore._asset_from_payload(payload)
+    assert (decoded.media_type, decoded.use_state) == ("video", "excluded")
+    assert not hasattr(decoded, "rights_confirmed")
+    assert not hasattr(decoded, "brand_safe")
+    if date_field == "asset":
+        payload["modified_at"] = "not-a-date"
+    else:
+        payload["segments"][0]["last_used_at"] = "not-a-date"
+    with pytest.raises(ValueError, match="Invalid isoformat string"):
+        MaterialAssetStore._asset_from_payload(payload)
+
+
+def test_actual_observations_round_trip_through_sqlite_json_and_response_schema(database):
+    from app.schemas import MaterialAssetResponse
+
+    connect, _traces = database
+    value = _asset()
+    value.speech_analysis = MaterialSpeechAnalysis("ready", observations=[SubtitleSegment(0, 1000, "原始语音")])
+    value.segments[0].understanding = SegmentUnderstanding("ready", summary="画面事实", sample_times=[0.5])
+    store = MaterialAssetStore(connect)
+    store.save_asset(value)
+    loaded = store.get_asset("workspace-a", value.id)
+    assert type(loaded.speech_analysis) is MaterialSpeechAnalysis
+    assert type(loaded.speech_analysis.observations[0]) is SubtitleSegment
+    assert type(loaded.segments[0].understanding) is SegmentUnderstanding
+    assert asdict(loaded) == asdict(value)
+    response = MaterialAssetResponse.model_validate(loaded, from_attributes=True).model_dump(mode="json")
+    assert response["speech_analysis"]["observations"] == [{"start_ms": 0, "end_ms": 1000, "text": "原始语音"}]
+    assert response["segments"][0]["understanding"]["summary"] == "画面事实"
+    assert response["modified_at"] == "2026-10-14T00:00:00Z"

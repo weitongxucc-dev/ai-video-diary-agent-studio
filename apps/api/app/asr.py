@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 
 from app.config import Settings
+from app.media_observations import SubtitleSegment
 
 
 class ASRConfigurationError(RuntimeError):
@@ -29,13 +30,6 @@ class ASRAudioTooLargeError(ASRTranscriptionError):
 
 class ASRTimeoutError(ASRTranscriptionError):
     pass
-
-
-@dataclass(frozen=True)
-class SubtitleSegment:
-    start_ms: int
-    end_ms: int
-    text: str
 
 
 @dataclass(frozen=True)

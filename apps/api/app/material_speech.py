@@ -1,23 +1,13 @@
 """Local, time-anchored speech evidence for the existing material repository."""
 
-from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
-from typing import Literal
 
-from app.asr import ASRConfigurationError, ASRTranscriptionError, LocalWhisperTranscriber, SubtitleSegment
+from app.asr import ASRConfigurationError, ASRTranscriptionError, LocalWhisperTranscriber
+from app.media_observations import MaterialSpeechAnalysis, SubtitleSegment
 from app.config import Settings
-
-
-@dataclass
-class MaterialSpeechAnalysis:
-    status: Literal["ready", "blocked", "failed"]
-    source_fingerprint: str = ""
-    model_id: str = ""
-    observations: list[SubtitleSegment] = field(default_factory=list)
-    message: str = ""
 
 
 class LocalMaterialSpeechAnalyzer:
