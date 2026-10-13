@@ -87,7 +87,108 @@ function goalConversation(status = "waiting_adoption", currentTurnId = "turn-bus
   return current;
 }
 
+function adoptionConversation(): AssistantConversation {
+  const current = goalConversation();
+  current.turns[0].result!.response = {...current.turns[0].result!.response as CreationTaskAssistantTurnResponse,
+    edit_preview: {proposal: {id: "proposal-adopted", task_id: "task-one", workspace_id: current.workspace_id,
+      status: "proposed"}} as CreationTaskAssistantTurnResponse["edit_preview"]};
+  return current;
+}
+
+const actualAdoption = {conversation_id: "conversation-one", original_turn_id: "turn-business",
+  task_id: "task-one", proposal_id: "proposal-adopted"};
+
 describe("same-turn business result reads", () => {
+  it("immediately reads actual adoption after pausing, preserves the new draft, and reopens only one bounded window", async () => {
+    const initial = adoptionConversation();
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(24);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    act(() => result.current.setDraftText("采用之后继续写的新草稿"));
+    await act(async () => { await result.current.refreshAfterTaskAdoption(actualAdoption); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(25);
+    expect(result.current.businessRefreshPaused).toBe(false);
+    expect(result.current.draftText).toBe("采用之后继续写的新草稿");
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(49);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(49);
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it.each(["task_id", "proposal_id", "original_turn_id", "conversation_id"] as const)("does not wake an adoption for another %s", async key => {
+    const initial = adoptionConversation();
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await result.current.refreshAfterTaskAdoption({...actualAdoption, [key]: "foreign"}); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    expect(result.current.businessRefreshPaused).toBe(true);
+    unmount();
+  });
+
+  it("does not let an adoption's old read wake the re-entered scope or replace a newer draft", async () => {
+    const initial = {...adoptionConversation(), scope_kind: "task" as const, scope_id: "task-one"};
+    api.getCurrentAssistantConversation.mockImplementation(async ({scope_id}: {scope_id: string}) => scope_id === "task-one"
+      ? initial : conversation({id: "conversation-two", scope_kind: "task", scope_id: "task-two"}));
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, rerender, unmount} = renderHook(({id}) => useAssistantConversation({scope_kind: "task", scope_id: id}),
+      {initialProps: {id: "task-one"}});
+    await act(async () => { await Promise.resolve(); });
+    const late = deferred<AssistantConversation>();
+    api.getAssistantConversation.mockReturnValueOnce(late.promise);
+    let adopting!: Promise<AssistantConversation | null>;
+    act(() => { adopting = result.current.refreshAfterTaskAdoption(actualAdoption); });
+    await act(async () => { rerender({id: "task-two"}); });
+    await act(async () => { rerender({id: "task-one"}); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
+    expect(result.current.businessRefreshPaused).toBe(true);
+    act(() => result.current.setDraftText("返回后写的新草稿"));
+    const reads = api.getAssistantConversation.mock.calls.length;
+    await act(async () => { late.resolve({...initial, title: "旧采用回包", draft_text: "旧草稿"}); await adopting; });
+    expect(result.current.conversation?.title).not.toBe("旧采用回包");
+    expect(result.current.draftText).toBe("返回后写的新草稿");
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).toHaveBeenCalledTimes(reads);
+    expect(result.current.businessRefreshPaused).toBe(true);
+    unmount();
+  });
+
+  it("does not let a late adoption read replace or restart a new human goal", async () => {
+    const initial = adoptionConversation();
+    const newer = {...initial, turns: [...initial.turns, {...initial.turns[0], id: "new-human", sequence: 2,
+      user_message: "只解释现在的结果", result: null}]};
+    api.getCurrentAssistantConversation.mockResolvedValue(initial);
+    api.getAssistantConversation.mockResolvedValue(initial);
+    vi.useFakeTimers();
+    const {result, unmount} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await Promise.resolve(); });
+    const late = deferred<AssistantConversation>();
+    api.getAssistantConversation.mockReturnValueOnce(late.promise).mockResolvedValue(newer);
+    let adopting!: Promise<AssistantConversation | null>;
+    act(() => { adopting = result.current.refreshAfterTaskAdoption(actualAdoption); });
+    await act(async () => { await result.current.refresh(); });
+    await act(async () => { late.resolve(initial); await adopting; });
+    expect(result.current.conversation?.turns.at(-1)?.id).toBe("new-human");
+    api.getAssistantConversation.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180000); });
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("keeps reading after real adoption, shows the running child, then stops at the persisted goal terminal", async () => {
     const adopted = goalConversation();
     const running = goalConversation("running", "turn-auto");

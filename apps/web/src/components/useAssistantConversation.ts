@@ -34,10 +34,10 @@ function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
   const value = goal as Record<string, unknown>;
   if (value.original_turn_id !== turn.id || typeof value.status !== "string"
     || typeof value.current_turn_id !== "string" || typeof value.conversation_id !== "string"
-    || typeof value.workspace_id !== "string") return null;
+    || typeof value.workspace_id !== "string" || typeof value.task_id !== "string") return null;
   return {
     status: value.status, current_turn_id: value.current_turn_id,
-    conversation_id: value.conversation_id, workspace_id: value.workspace_id,
+    conversation_id: value.conversation_id, workspace_id: value.workspace_id, task_id: value.task_id,
   };
 }
 
@@ -126,6 +126,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const loadEpoch = useRef(0);
   const activeReads = useRef({ epoch: 0, count: 0 });
   const [businessRefreshPaused, setBusinessRefreshPaused] = useState(false);
+  const [businessRefreshWake, setBusinessRefreshWake] = useState(0);
   const navigationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const navigationRevision = useRef(0);
   const renameRevision = useRef(0);
@@ -314,6 +315,36 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
       return null;
     } finally { reads.count -= 1; }
   }, [replace, matchesScope, restoreSubmittedDraft, scopeKey]);
+
+  const refreshAfterTaskAdoption = useCallback(async (adoption: {
+    conversation_id: string; original_turn_id: string; task_id: string; proposal_id: string;
+  }) => {
+    const adoptionEpoch = loadEpoch.current;
+    const adoptionNavigation = navigationRevision.current;
+    const ownsGoal = () => {
+      const current = conversationRef.current;
+      const root = [...(current?.turns ?? [])].reverse().find(turn => turn.user_message.trim() !== "");
+      const goal = root && assistantTurnGoalRefreshState(root);
+      return activeScopeKey.current === scopeKey && loadEpoch.current === adoptionEpoch
+        && navigationRevision.current === adoptionNavigation && current?.id === adoption.conversation_id
+        && root?.id === adoption.original_turn_id && root.status !== "stopped"
+        && goal?.task_id === adoption.task_id && goal.conversation_id === current.id
+        && goal.workspace_id === current.workspace_id && activeGoalStatuses.has(goal.status)
+        ? {current, root, goal} : null;
+    };
+    const owned = ownsGoal();
+    if (!owned || !owned.current.turns.some(turn => {
+      if (turn.id !== owned.root.id && turn.id !== owned.goal.current_turn_id) return false;
+      const proposal = assistantTaskTurnResult(turn)?.response?.edit_preview?.proposal;
+      return proposal?.id === adoption.proposal_id && proposal.task_id === adoption.task_id
+        && proposal.workspace_id === owned.current.workspace_id;
+    })) return null;
+    // The caller has received the real adoption response. Read immediately,
+    // then reopen one bounded result window even if the projection is unchanged.
+    const fresh = await refresh();
+    if (ownsGoal()) setBusinessRefreshWake(value => value + 1);
+    return fresh;
+  }, [refresh, scopeKey]);
 
   useEffect(() => {
     loadEpoch.current += 1;
@@ -678,12 +709,12 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     };
     const timer = setInterval(() => { void tick(); }, running ? 1500 : 5000);
     return () => { active = false; clearInterval(timer); };
-  }, [conversation?.id, running, pendingKey, hasPendingResults, loading, refresh, scopeKey]);
+  }, [conversation?.id, running, pendingKey, hasPendingResults, loading, refresh, scopeKey, businessRefreshWake]);
 
   return {
     conversation, conversations, draftText, setDraftText, loading, error, setError,
     beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn,
-    flushDraft, refresh, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
+    flushDraft, refresh, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
     businessRefreshPaused,
   };
 }

@@ -42,3 +42,5 @@ API最终集成包及main.py/test_assistant_goal_api.py窄重绑均已RELEASE。
 正常GUI验收追加Web窄包：OBJECTS独占useAssistantConversation.ts、CreationTaskWorkspace.tsx及各自直接测试useAssistantConversationReadRaces.test.tsx、CreationTaskWorkspace.test.tsx。已确认后台采用→新版本出片→最终观察真实发生，但中栏24次业务查询暂停后，实际采用消费者只刷新工作区，未唤醒当前会话。修复按捕获的会话/任务/提案绑定刷新并重新启用原有界查询，保留输入草稿、scope/identity及晚回包保护，不新增无限轮询、授权或队列。root保留合同、Git及真实验收，其他产品文件无新增lease。
 
 CI窄包：OBSERVATION/API仅重新取得main.py和test_assistant_goal_api.py，修复38344749382已报告的两处Ruff未使用异常变量/导入fixture重定义；保持原行为及fixture约束。其余文件无授权写入；修复后做相同Ruff及直接回归并RELEASE。
+
+Web和CI窄包现均RELEASE。root审阅收回；直接Web检查、类型及lint和API窄回归已通过，实际暂停后采用→可见后台出片/观察仍由root验收。保留未完成的逐项PNG检查、内容/听感及长片验收，不以局部检查数收口整体目标。

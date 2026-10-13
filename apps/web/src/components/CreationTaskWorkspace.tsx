@@ -2166,24 +2166,42 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (!editPreview) return;
     const proposal = editPreview.proposal;
     const preserveNextDraft = assistantPreview;
+    const conversationId = preserveNextDraft ? assistantConversation.conversation?.id : undefined;
+    const originalTurnId = preserveNextDraft
+      ? [...(assistantConversation.conversation?.turns ?? [])].reverse().find(turn => turn.user_message.trim() !== "")?.id
+      : undefined;
+    const assistantOwner = assistantRequestSequence.current;
+    const previewOwner = previewRequestSequence.current;
+    const taskIsCurrent = () => currentTaskId.current === task.id;
+    const conversationIsCurrent = () => !conversationId || assistantConversation.isCurrentConversation(conversationId);
+    const ownsBusy = () => taskIsCurrent() && assistantRequestSequence.current === assistantOwner
+      && previewRequestSequence.current === previewOwner;
     setBusy("edit-confirm");
     setError(null);
     setNotice(null);
     try {
       const result = await confirmCreationTaskEdit(task.id, proposal.id);
-      if ("status" in result) {
-        setPendingLocalEdit({ taskId: task.id, jobId: result.job_id,
-          operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
-        setNotice(queuedEditNotice(proposal.operation.operation_type));
+      if (!taskIsCurrent()) return;
+      if (conversationIsCurrent()) {
+        if ("status" in result) {
+          setPendingLocalEdit({ taskId: task.id, jobId: result.job_id,
+            operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
+          setNotice(queuedEditNotice(proposal.operation.operation_type));
+        }
+        invalidateEditPreview();
+        if (!preserveNextDraft) setEditCommand("");
+        if (conversationId && originalTurnId) await assistantConversation.refreshAfterTaskAdoption({
+          conversation_id: conversationId, original_turn_id: originalTurnId, task_id: task.id, proposal_id: proposal.id,
+        });
       }
-      invalidateEditPreview();
-      if (!preserveNextDraft) setEditCommand("");
-      await refresh(true);
+      if (taskIsCurrent()) await refresh(true, () => taskIsCurrent());
     } catch (cause) {
-      setError(errorDetails(cause));
-      await refresh(true).catch(() => undefined);
+      if (taskIsCurrent()) {
+        if (ownsBusy()) setError(errorDetails(cause));
+        await refresh(true, () => taskIsCurrent()).catch(() => undefined);
+      }
     } finally {
-      setBusy(null);
+      if (ownsBusy()) setBusy(null);
     }
   }
 

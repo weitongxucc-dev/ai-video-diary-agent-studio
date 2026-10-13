@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace as ActualCreationTaskWorkspace, FinalVideoQualityCheck, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
-import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources } from "@/lib/api";
+import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -4296,4 +4296,62 @@ it.each(["denied", "stale"])("does not expose a recovered player after an API %s
   else expect(await screen.findByText("这次预览已不符合当前输入与选择，未恢复；请重新预览。")).toBeInTheDocument();
   expect(screen.queryByLabelText("恢复的音频试听")).not.toBeInTheDocument();
   expect(mocks.confirmEdit).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("refreshes the saved task after actual adoption and wakes only its original chat (switched=%s)", async switched => {
+  const initial = recoveryWorkspace();
+  const preview = exactPreview(initial.task, "ChangeCrop");
+  const reply = {reply: "修改待采用", provider: "test", model: "test", edit_preview: preview,
+    script_draft: null, execution_action: null, execution_status: null, topic_candidates: null};
+  mocks.getWorkspace.mockResolvedValue(initial);
+  mocks.askAssistant.mockResolvedValue(reply);
+  let finishAdoption!: (value: unknown) => void;
+  mocks.confirmEdit.mockReturnValueOnce(new Promise(resolve => { finishAdoption = resolve; }));
+  const view = render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+  fireEvent.click(screen.getByRole("tab", {name: /^视频剪辑：/}));
+  fireEvent.click(screen.getByRole("button", {name: "选择镜头 1"}));
+  const input = await screen.findByLabelText("局部修改要求");
+  await waitFor(() => expect(input).toBeEnabled());
+  fireEvent.change(input, {target: {value: "改好这个镜头后生成成片"}});
+  await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", {name: "发送"}));
+  await screen.findByRole("button", {name: "应用到草稿"});
+  const state = mocks.assistantActions!.assistantState;
+  const saved = mocks.assistantConversations.get(state.conversation!.id)!;
+  const root = saved.turns.at(-1)!;
+  const goal = {original_turn_id: root.id, current_turn_id: root.id, status: "waiting_adoption",
+    conversation_id: saved.id, workspace_id: saved.workspace_id, task_id: initial.task.id};
+  const waiting = {...saved, turns: [...saved.turns.slice(0, -1), {...root,
+    result: {...root.result, response: reply, goal_continuation: goal}}]};
+  mocks.assistantConversations.set(saved.id, waiting);
+  await act(async () => { await state.refresh(); });
+  fireEvent.click(screen.getByRole("button", {name: "应用到草稿"}));
+  await waitFor(() => expect(mocks.confirmEdit).toHaveBeenCalledWith(initial.task.id, preview.proposal.id));
+  if (switched) await act(async () => { await mocks.assistantActions!.assistantState.createNew(); });
+  act(() => mocks.assistantActions!.assistantState.setDraftText(switched ? "新对话的草稿" : "下一条未发送草稿"));
+  const currentChat = mocks.assistantActions!.assistantState.conversation!.id;
+  const reads = vi.mocked(getAssistantConversation).mock.calls.length;
+  const workspaceReads = mocks.getWorkspace.mock.calls.length;
+  const latest = {...initial, task: {...initial.task, current_timeline_version_id: "adopted-version", timeline_sequence: 7}};
+  mocks.getWorkspace.mockResolvedValue(latest);
+  mocks.assistantConversations.set(saved.id, {...waiting, turns: [
+    {...waiting.turns[0], result: {...waiting.turns[0].result,
+      goal_continuation: {...goal, current_turn_id: "actual-auto-child", status: "running"}}},
+    {id: "actual-auto-child", sequence: root.sequence + 1, user_message: "", assistant_text: "实际采用后的后台回合",
+      status: "running", events: [], result: null, created_at: root.created_at, updated_at: root.updated_at},
+  ]});
+  await act(async () => { finishAdoption({operation: {id: "actual-applied-operation"}, montage: initial.montage}); });
+  await waitFor(() => expect(mocks.getWorkspace.mock.calls.length).toBeGreaterThan(workspaceReads));
+  await waitFor(() => expect(screen.getByLabelText("局部修改要求")).toBeEnabled());
+  expect(mocks.assistantActions!.assistantState.draftText).toBe(switched ? "新对话的草稿" : "下一条未发送草稿");
+  expect(mocks.assistantActions!.assistantState.conversation?.id).toBe(currentChat);
+  if (switched) {
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    expect(vi.mocked(getAssistantConversation).mock.calls.length).toBe(reads);
+    expect(screen.queryByText("实际采用后的后台回合")).not.toBeInTheDocument();
+  } else {
+    expect(vi.mocked(getAssistantConversation).mock.calls.length).toBe(reads + 1);
+    expect(screen.getByText("实际采用后的后台回合")).toBeInTheDocument();
+  }
+  view.unmount();
 });
