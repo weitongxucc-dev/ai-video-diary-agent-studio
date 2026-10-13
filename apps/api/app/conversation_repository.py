@@ -825,7 +825,13 @@ class ConversationRepository:
             result = json.loads(row["result_json"]) if row["result_json"] else {}
             result["continuation"] = event
             text = row["assistant_text"]
-            if row["status"] == "completed":
+            shutdown_goal = self._goal_root(conn, turn_id) if row["status"] == "failed" and result.get("reason") == "api_shutdown" else None
+            shutdown_result = bool(shutdown_goal
+                and shutdown_goal["goal"]["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"}
+                and shutdown_goal["goal"]["current_turn_id"] == turn_id
+                and (shutdown_goal["goal"]["workspace_id"], shutdown_goal["goal"]["member_id"], shutdown_goal["goal"]["task_id"]) == (
+                    workspace_id, member_id, event.get("task_id")))
+            if row["status"] == "completed" or shutdown_result:
                 response = {**result.get("response", {}), **response_patch}
                 text = text + ("\n\n" if text else "") + message
                 response["reply"] = text

@@ -230,3 +230,73 @@ def test_pending_work_must_belong_to_the_original_goal_or_a_new_child_action(rep
     svc, _ = service(repo, response={"media_job": {"job_id": job_id, "status": "running"}}, action_refs=[])
     assert svc.reconcile() == 1
     assert repo.get_task_goal(turn["id"])["status"] == expected
+
+
+def shutdown_child(repo, *, status="failed", reason="api_shutdown"):
+    chat, turn, request_id, context = original(repo)
+    emit(repo, turn, job_id="png:one")
+    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    repo.finish_turn(claim["turn_id"], status, "接续中断。", result={"reason": reason})
+    repo.settle_goal_round(claim)
+    return chat, turn, request_id, context, claim
+
+
+def test_actual_shutdown_result_can_be_adopted_without_rewriting_failed_turn_or_original_instruction(repo):
+    chat, turn, request_id, context, claim = shutdown_child(repo)
+    original_events = list(repo.get_turn(turn["id"])["events"])
+    event = {"type": "business_result", "event_id": str(uuid4()), "task_id": "task",
+             "phase": "preview", "status": "proposed", "proposal_id": "proposal:shutdown", "actionable": True}
+    patch = {"edit_preview": {"proposal": {"id": "proposal:shutdown", "status": "proposed"}}}
+    assert repo.project_business_result(claim["turn_id"], "workspace", "member", event,
+        response_patch=patch, message="实际修改预览已完成，可以决定是否采用。")
+    child = repo.get_turn(claim["turn_id"])
+    assert child["status"] == "failed" and child["result"]["reason"] == "api_shutdown"
+    assert child["result"]["response"]["edit_preview"] == patch["edit_preview"]
+    assert child["user_message"] == "" and repo.get_turn(turn["id"])["user_message"] == turn["user_message"]
+    assert repo.get_turn(turn["id"])["events"] == original_events
+    assert repo.request_context(request_id, chat["id"], "workspace", "member") == context
+    assert repo.project_business_result(claim["turn_id"], "workspace", "member", event,
+        response_patch=patch, message="实际修改预览已完成，可以决定是否采用。")
+    assert repo.get_turn(claim["turn_id"])["events"] == child["events"]
+    assert repo.get_turn(claim["turn_id"])["assistant_text"] == child["assistant_text"]
+    svc, calls = service(repo)
+    assert svc.reconcile() == 1 and calls == []
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_adoption"
+
+
+@pytest.mark.parametrize("status,reason,goal_status", [
+    ("stopped", "api_shutdown", "waiting_unknown"),
+    ("failed", "tool_failed", "waiting_unknown"),
+    ("failed", "api_shutdown", "invalidated"),
+    ("failed", "api_shutdown", "waiting_identity"),
+    ("failed", "api_shutdown", "no_progress"),
+    ("failed", "api_shutdown", "limit_reached"),
+])
+def test_shutdown_patch_does_not_reopen_user_stop_other_failure_or_an_inactive_goal(repo, status, reason, goal_status):
+    _, turn, _, _, claim = shutdown_child(repo, status=status, reason=reason)
+    if goal_status == "invalidated":
+        repo.invalidate_task_goal(turn["id"], "user_stopped_or_membership_revoked")
+    else:
+        repo.update_goal_checkpoint(turn["id"], status=goal_status, waiting_reason="test_actual_lifecycle_state")
+    event = {"type": "business_result", "event_id": str(uuid4()), "task_id": "task", "status": "proposed"}
+    assert repo.project_business_result(claim["turn_id"], "workspace", "member", event,
+        response_patch={"edit_preview": {"proposal": {"id": "proposal:shutdown", "status": "proposed"}}},
+        message="实际修改已返回。")
+    child = repo.get_turn(claim["turn_id"])
+    assert child["status"] == status and child["result"]["reason"] == reason
+    assert not child["result"].get("response", {}).get("edit_preview")
+
+
+def test_late_shutdown_proposal_does_not_patch_an_old_source_after_goal_moved_to_another_child(repo):
+    _, turn, _, _, old = shutdown_child(repo)
+    emit(repo, {"id": old["turn_id"]}, job_id="observation:old", result_kind="observation")
+    current = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    repo.finish_turn(current["turn_id"], "completed", "新检查已排队。", result={"response": {
+        "media_job": {"job_id": "observation:new", "status": "queued"}},
+        "goal_business_actions": [{"kind": "media_job", "id": "observation:new"}]})
+    repo.settle_goal_round(current)
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
+    event = {"type": "business_result", "event_id": str(uuid4()), "task_id": "task", "status": "proposed"}
+    assert repo.project_business_result(old["turn_id"], "workspace", "member", event,
+        response_patch={"edit_preview": {"proposal": {"id": "proposal:old", "status": "proposed"}}}, message="旧结果已保留。")
+    assert not repo.get_turn(old["turn_id"])["result"].get("response", {}).get("edit_preview")

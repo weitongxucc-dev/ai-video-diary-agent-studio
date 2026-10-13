@@ -32,3 +32,5 @@ root沿既有文字连接使用正常模型；验收在独立合成库，不复�
 ## 集成审阅绑定
 
 OBJECTS与CONTINUATION包均已RELEASE；追加的conversation_repository.py直接接续修复、useAssistantConversation.ts直接刷新修复及各自测试也已RELEASE，分别解决旧成功回执假进展和采用后停止查询造成后台回合不可见。API Owner仍独占main等原文件，整合实际制作JobRun终态消费者、真实采用后的合法阶段重绑、仅422无副作用参数纠正、主机关机与真人stop分开、成片发现不依赖质量检查，以及运行中观察输出文件限额。均属当前纵向目标的必要集成修正，无新增执行器/队列或授权语义。
+
+API最终集成包及main.py/test_assistant_goal_api.py窄重绑均已RELEASE。已采用DeleteClip的真实删除证明随同已核验版本链保留，后续渲染结果不会恢复已删除选择；正常API双接续直接回归已纳入同候选检查。root收回这些文件用于审阅、提交与正常模型/GUI验收，实施Owner只读待命。

@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import fields
 from pathlib import Path
 from typing import Callable, Mapping
@@ -39,6 +40,7 @@ from app.host_resource_probes import (
     CpuRenderBudget,
     CpuAudioBudget,
     MediaScriptBudget,
+    ObservationBudget,
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
@@ -415,3 +417,17 @@ def media_script_budget_from_env(env: Mapping[str, str] | None = None) -> MediaS
             else int(environment[name]) for field, name in names.items()})
     except ValueError as exc:
         raise HostBudgetUncalibrated(str(exc)) from None
+
+
+def observation_budget_from_env(env: Mapping[str, str] | None = None) -> ObservationBudget | None:
+    environment = os.environ if env is None else env
+    raw = environment.get("TASK_OUTPUT_OBSERVATION_BUDGET_JSON", "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {item.name for item in fields(ObservationBudget)}:
+            raise ValueError("观察预算必须包含全部显式校准字段")
+        return ObservationBudget(**payload)
+    except (TypeError, ValueError) as exc:
+        raise HostBudgetUncalibrated(f"本地输出观察预算无效：{exc}") from None

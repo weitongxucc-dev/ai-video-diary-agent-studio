@@ -41,6 +41,17 @@ class QualityCheckRepository:
                     PRIMARY KEY (workspace_id, task_id)
                 )
             """)
+            # The GUI's current row is intentionally replaceable. Agent history
+            # needs each check's original version/hash, including late finishes.
+            conn.execute("""CREATE TABLE IF NOT EXISTS creation_task_quality_history (
+                workspace_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                check_id TEXT NOT NULL, timeline_version_id TEXT,
+                source_ref TEXT, render_ref TEXT, check_state TEXT NOT NULL,
+                result_status TEXT, evidence TEXT NOT NULL DEFAULT '{}',
+                error TEXT, checked_at TEXT, updated_at TEXT NOT NULL,
+                PRIMARY KEY(workspace_id, task_id, check_id))""")
+            conn.execute("""INSERT OR IGNORE INTO creation_task_quality_history
+                SELECT * FROM creation_task_quality_checks""")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path)
@@ -63,6 +74,10 @@ class QualityCheckRepository:
                     check_state='checking', result_status=NULL, evidence='{}',
                     error=NULL, checked_at=NULL, updated_at=excluded.updated_at
             """, (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, now))
+            conn.execute("""INSERT INTO creation_task_quality_history
+                (workspace_id,task_id,check_id,timeline_version_id,source_ref,render_ref,check_state,updated_at)
+                VALUES (?,?,?,?,?,?,'checking',?)""",
+                (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, now))
         return check_id
 
     def finish(self, workspace_id: str, task_id: str, check_id: str, *,
@@ -77,6 +92,11 @@ class QualityCheckRepository:
                   None if error is not None else evidence["status"],
                   json.dumps(evidence or {}, ensure_ascii=False), error, now, now,
                   workspace_id, task_id, check_id))
+            conn.execute("""UPDATE creation_task_quality_history SET check_state=?,result_status=?,
+                evidence=?,error=?,checked_at=?,updated_at=?
+                WHERE workspace_id=? AND task_id=? AND check_id=?""",
+                ("failed" if error is not None else "done", None if error is not None else evidence["status"],
+                 json.dumps(evidence or {}, ensure_ascii=False), error, now, now, workspace_id, task_id, check_id))
 
     def get(self, workspace_id: str, task_id: str) -> dict | None:
         with self._connect() as conn:
@@ -89,6 +109,15 @@ class QualityCheckRepository:
         result["evidence"] = json.loads(result["evidence"])
         return result
 
+    def history(self, workspace_id: str, task_id: str, *, limit: int = 5) -> list[dict]:
+        if not 1 <= limit <= 20:
+            raise ValueError("检查历史最多读取 20 条")
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT * FROM creation_task_quality_history
+                WHERE workspace_id=? AND task_id=? ORDER BY updated_at DESC,check_id DESC LIMIT ?""",
+                (workspace_id, task_id, limit)).fetchall()
+        return [{**dict(row), "evidence": json.loads(row["evidence"])} for row in rows]
+
     def recover_interrupted(self) -> None:
         """Called once on service startup, before new inspection requests arrive."""
         now = datetime.now(timezone.utc).isoformat()
@@ -99,6 +128,9 @@ class QualityCheckRepository:
                     error='服务中断，检查未完成，请重新检查当前成片。',
                     checked_at=?, updated_at=? WHERE check_state='checking'
             """, (now, now))
+            conn.execute("""UPDATE creation_task_quality_history SET check_state='failed',
+                result_status=NULL,evidence='{}',error='服务中断，检查未完成，请重新检查当前成片。',
+                checked_at=?,updated_at=? WHERE check_state='checking'""", (now, now))
 
 
 def _inspect_and_finalize(repo: QualityCheckRepository, workspace_id: str, task_id: str,

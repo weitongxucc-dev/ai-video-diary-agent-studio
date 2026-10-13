@@ -1403,6 +1403,58 @@ class CreationTaskQualityCheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CreationTaskObservationTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["final", "media_job"]
+    job_id: str | None = Field(default=None, min_length=1, max_length=120)
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.kind == "final" and (self.job_id is not None or self.artifact_id is not None):
+            raise ValueError("当前成片观察不得带其他作业或产物标识")
+        if self.kind == "media_job" and (self.job_id is None or self.artifact_id is None):
+            raise ValueError("媒体作业观察须指定真实作业和输出产物")
+        return self
+
+
+class CreationTaskObservationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_timeline_version_id: str | None
+    expected_timeline_sequence: int = Field(ge=0)
+    target: CreationTaskObservationTarget
+    sample_times_seconds: list[float] = Field(default_factory=list, max_length=3)
+    assistant_turn_id: UUID | None = None
+    request_id: UUID | None = None
+
+    @field_validator("sample_times_seconds")
+    @classmethod
+    def validate_sample_times(cls, values):
+        import math
+        if len(set(values)) != len(values) or any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("采样须为不重复的非负有限时间")
+        return values
+
+
+class KnowledgeSearchItemResponse(BaseModel):
+    id: str
+    title: str
+    version: str
+    content_hash: str | None
+    excerpt: str
+    use_state: ContentUseState
+    relevance: float
+    matched_terms: list[str]
+
+
+class KnowledgeSearchResponse(BaseModel):
+    items: list[KnowledgeSearchItemResponse]
+    total_count: int
+    offset: int
+    limit: int
+    next_offset: int | None
+
+
 class CreationTaskMontagePlanResponse(BaseModel):
     graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
@@ -1879,7 +1931,7 @@ class TaskMediaJobResponse(BaseModel):
     created_at: datetime
     job_id: str
     status: Literal["queued", "running", "interrupted", "succeeded", "failed", "cancelled", "stale"]
-    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform", "graphic_source"]
+    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform", "graphic_source", "observation"]
     result_url: str
     device_request_id: str | None = None
     waiting_reason: str | None = None
@@ -1969,7 +2021,7 @@ class AssistantEditRequestLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: str = Field(min_length=1, max_length=120)
     request_id: UUID
-    phase: Literal["preview", "script"] = "preview"
+    phase: Literal["preview", "script", "observation"] = "preview"
     status: Literal["recorded", "unknown", "rejected", "not_submitted"]
     query_url: str
     input_digest: str | None = None

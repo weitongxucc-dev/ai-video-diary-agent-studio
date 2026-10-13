@@ -247,6 +247,41 @@ class MediaScriptBudget:
 
 
 @dataclass(frozen=True)
+class ObservationBudget:
+    """Measured local FFmpeg + Apple Vision envelope; no inferred defaults."""
+    worker_sha256: str
+    max_samples: int
+    max_width_px: int
+    max_height_px: int
+    max_input_bytes: int
+    max_source_pixels: int
+    max_output_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        if (not isinstance(self.worker_sha256, str) or len(self.worker_sha256) != 64
+                or any(value not in "0123456789abcdef" for value in self.worker_sha256)):
+            raise ValueError("Output observation needs the measured OCR worker digest")
+        for name, value in vars(self).items():
+            if name == "worker_sha256":
+                continue
+            if name.endswith("seconds"):
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Observation timings must be explicitly finite and positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Observation limits must be explicitly positive integers")
+        if (self.max_samples > 3 or self.max_width_px > 1280 or self.max_height_px > 1280
+                or self.additional_memory_bytes < self.max_process_rss_bytes or self.runtime_sample_seconds > .25):
+            raise ValueError("Observation needs bounded frames, reserved process memory and bounded sampling")
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -263,6 +298,7 @@ class HostBudget:
     presenter_cpu_render: CpuRenderBudget | None = None
     cpu_audio: CpuAudioBudget | None = None
     media_script: MediaScriptBudget | None = None
+    observation: ObservationBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -281,6 +317,8 @@ class HostBudget:
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
         ):
             raise ValueError("Media script requires explicit host memory and disk headroom")
+        if self.observation is not None and (self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
+            raise ValueError("Output observation requires explicit host memory and disk headroom")
 
 
 # Per-kind static caps. These are the device-calibrated upper bounds a declared
@@ -663,6 +701,26 @@ class HostResourceProbe:
             required_memory = self.budget.min_available_memory_bytes + render.additional_memory_bytes
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes
                              + resources["max_output_bytes"])
+        elif kind == "task_output_observation":
+            observation = self.budget.observation
+            if observation is None or resources.get("execution_mode") != "local_ffmpeg_apple_vision":
+                return decision(None, "observation_budget_or_execution_mode_unavailable")
+            if resources.get("worker_sha256") != observation.worker_sha256:
+                return decision(False, "observation_worker_not_calibrated")
+            bounds = {"sample_count": "max_samples", "width_px": "max_width_px", "height_px": "max_height_px",
+                      "source_pixels": "max_source_pixels",
+                      "input_bytes": "max_input_bytes", "max_output_bytes": "max_output_bytes",
+                      "threads": "max_threads", "timeout_seconds": "max_timeout_seconds"}
+            for name, cap in bounds.items():
+                value = resources.get(name)
+                if (type(value) not in ({int, float} if name == "timeout_seconds" else {int})
+                        or not math.isfinite(value) or value <= 0):
+                    return decision(None, "observation_resource_fields_invalid")
+                if value > getattr(observation, cap):
+                    return decision(False, "declared_resources_exceed_budget")
+            checks["observation_budget"] = {"limits": asdict(observation)}
+            required_memory = self.budget.min_available_memory_bytes + observation.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes + observation.additional_disk_bytes + resources["max_output_bytes"]
         elif kind == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
@@ -948,6 +1006,12 @@ class HostResourceProbe:
                 raise RecoveryBlocked("隔离脚本进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(script.max_process_rss_bytes, script.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, script.runtime_sample_seconds)
+        if resources.get("kind") == "task_output_observation":
+            observation = self.budget.observation
+            if observation is None or resources.get("execution_mode") != "local_ffmpeg_apple_vision":
+                raise RecoveryBlocked("本地输出 OCR 进程预算尚未标定")
+            return SceneRuntimeLimits(observation.max_process_rss_bytes, observation.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, observation.runtime_sample_seconds)
         if resources.get("kind") == "task_audio":
             audio = self.budget.cpu_audio
             if audio is None:
@@ -985,6 +1049,9 @@ class HostResourceProbe:
             return None
         if resources.get("kind") in self._SUPPORTED_KINDS:
             return True
+        if (resources.get("kind") == "task_output_observation"
+                and resources.get("execution_mode") == "local_ffmpeg_apple_vision"):
+            return True  # Scheduler proves registered decode/OCR child groups exited.
         if resources.get("kind") == "creation_narration" and resources.get("execution_mode") == "isolated_qwen3_tts":
             # The scheduler first proves every registered child group exited.
             # MLX exists only inside that group, never the API process.
