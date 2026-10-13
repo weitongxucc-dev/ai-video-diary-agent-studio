@@ -93,6 +93,8 @@ R7首批源码释放后，由同一可见线程01a13610-8970-7a50-96f9-244e1e37d
 
 IO六源集成后，R6接续已定位的服务状态解释小片：独占新增app/service_status_projection.py、test_llm_service_state.py，以及config.py中四档状态常量/文案、Settings.llm_service_state和llm_service_status的迁出与薄委托。新模块只接收字段齐全布尔值和该工作区已有观测，唯一维护既有四档判定、标签、原因及八字段结果；config同对象导出公共常量，旧规则/文案body删除。registry、锁、记录函数、配置指纹、public_status本地探测、safe_runtime_settings脱敏投影、六路径规则和IO实现保持，不把可变全局搬进新文件，也不新增状态框架或默认可用。API继续对config整文件只读，main无需接线。验证涵盖四档、密钥/模型变化失效、工作区隔离、未知原因、字段兼容及秘密不外露；Settings测试输入绑定合成路径，不探测用户默认目录、私人dotenv或真实模型。此片不代替显式启动组装和整体配置职责收敛。
 
+服务状态三源集成后，API已FILE_RELEASE_ACK确认runtime_health.py干净无WIP，R6接续本地观测边界：独占新增app/local_runtime_status.py、tests/test_local_runtime_status.py，以及config.py的_pending_video_count/_hermes_radar_status和public_status本地观测接线、runtime_health.py的两个ffmpeg消费点及tests/test_runtime_health.py的最小相关调整。新模块只收Obsidian、Hermes、视频输入/输出、数据库五个明确路径，返回既有obsidian/hermes_radar/video/storage固定分区；视频只统计原当前目录扩展名，Obsidian不递归读内容，Hermes继续消费原HermesRadarSourceClient.status唯一解析实现，ffmpeg布尔探测只有一个实现供public_status、健康项和功能门调用。config旧探测body删除，LLM/平台/URL/ASR/auth值投影和秘密表达保持；runtime_health的模型catalog/组装、目录诊断及健康文案不改。API对config/runtime_health整文件只读，main无需接线。其余Config派生/registry/IO、local_whisper与ASR探测不属于本片；不得传整个Settings/万能依赖包、添加缓存或新可用策略。验证仅用合成路径/报告与受控PATH，覆盖原计数/缺失/报告字段与正文不外露、ffmpeg两种环境、实际schema和safe/public嵌套消费者；R4的Hermes/Obsidian原测试保持只读，确需修其Settings样例先报具体函数由主控绑定。此片不代替整体启动或真实模型验收。
+
 ### R5 Web负责人
 
 可见线程为01a13626-c206-74f1-a258-ae4d9d86c7a8，host为local。
@@ -104,6 +106,8 @@ IO六源集成后，R6接续已定位的服务状态解释小片：独占新增a
 布局集成后的只读探针已复现成功完整任务回读仍保留旧缓存入口、同任务can_undo=false回读后首页撤销仍可点击。追加AppShell.tsx、HomeCommandComposer.tsx、其直接必要的有限只读任务事实/事件模块，以及对应AppShell/HomeCommandComposer定向测试独占修复权。完整成功快照更新当前可读集合，失败保留最后确认记录，局部任务事件不得冒充完整快照；命令状态以当前服务器版本/事实为准，草稿、对话与导航保持。复用已有任务/版本协议，不改认证/权限、持久格式或首启业务规则，不新增通用状态库。源和截图接受后继续核对剩余外围消费者。
 
 此批集成后已证实无生产消费者的CreationTaskTopicWorkspace.tsx、其module.css和旧同名测试，由本线程独占退役。保留workflow-contract-check.mjs对旧入口的负向防回流检查，当前CreationTaskWorkspace选题消费者不改；最小活跃选题/工作流检查与生产导入不存在证明完成后标RETIRED，不删除用户历史或运行数据。
+
+R5在固定c9aac57真实浏览器→Next→FastAPI→合成SQLite验收中发现两项客户端BLOCK：镜头参数入口同时打开快捷与完整详情卡；显式删除提案采用清空并持久保存无关对话草稿。另有2倍关联变速后源区间输出误用timeline跨度的实际DOM/数据库反例。现ISSUE_REOPEN由原Web线程独占AppShell.tsx、CreationTaskWorkspace.tsx、VideoEditor.tsx及__tests__/AppShell.test.tsx、CreationTaskWorkspaceSaveFeedback.test.tsx、VideoEditorMedia.test.tsx的最小相关修复/回归。AppShell已有两卡入口与渲染门保持互斥、快捷→详情转换及提案确认承接；编辑提案记录其实际输入归属，只能清理该操作确实消费且未被后续输入替换的草稿，参数按钮/晚回包不得改无关会话草稿，保留task/会话/请求序列保护及真正对话提交的原语义。源区间使用既有源事实，裁剪起点草稿与原TrimClip行为先核实，不猜新速度/裁剪协议或改后端。只用现有有限状态/输入输出，不新建状态框架、通用setter包、视觉设计或持久格式。其余Web/API/共享docs及useAssistantConversation保持只读，确需额外文件先报符号由主控绑定。固定新候选验证实际草稿PATCH及SQL前后、等待期间后来输入/409/task切换不被覆盖、两卡单入口/转换/确认和2倍后的真实源区间显示；旧c9后端四动作及CAS成功证据保留，绕过或旧成功不得替代这三项修复的同候选可见接受。
 
 主控独占AGENTS.md、docs中的活动权威、.project-control中的合同/计划；可直接实现尚未分配的模块，但必须先登记文件。可见实施线程身份在创建回执后补入本合同，只有当前角色独占范围有效。
 
