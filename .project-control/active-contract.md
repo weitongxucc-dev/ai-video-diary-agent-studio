@@ -15,7 +15,7 @@
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；先接字幕五源 WIP 与 None 夹具/float 回读边界，再接 R4 三 production 消费者、完整 R2/R3/bootstrap。R4/R6 整文件例外继续排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；先审核冻结 Web 六源及最少独立反例，后核 R4 联合公开候选；旧已过门与准备脚本只读复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；本批产品只读，只写 `test-runs/refactor-20261014/fresh-runtime-reload/**`，先实证五 DB 服务重载遗漏与失败半切换风险，再由 API 唯一 bootstrap owner 修复。 |
-| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；现六源发布候选冻结，先核字节/限定 GUI 证据及稳定消费者，QA/集成前不改六源，待 SOURCE_INTEGRATED/WRITE_LEASE_RETURN 或明确 ISSUE_REOPEN 后续写。 |
+| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源租约已归还，本批独占下方新增的执行回读 hook、字幕输入组件及两定向测试，修复三个已复现消费者反例；新 SOURCE_RELEASE 再冻结对应准确文件。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；本批独占 `materials/assets.py` 与 `test_material_asset_review_and_usage_store.py` 两 WIP，复用 26 模块检查并交 SOURCE_RELEASE；production 三薄委托归 API，联合公开门未过不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
