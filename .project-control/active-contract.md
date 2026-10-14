@@ -12,14 +12,18 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | speed恢复wake修复candidate02 c96bc424…五源SOURCE_RELEASE冻结；仅main恢复保存区段和一个HTTP测试body变化，其余三源不变，首次应用通知保持，1定向自测PASS。现产品只读等R6原失败case差额门，不复测16/扩改shared helper/parser。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | speed五源c96bc424…已b54f435集成/WRITE_LEASE_RETURN。现REF-R2-LINKED-CLIP-PREPARATION-20261014产品只读，定向其余linked clip预览/确认/原结果/直接消费者与已有计算/metadata入口，仅写fresh-api-r2r3-readonly/linked-clip-use-case-preparation的一份具体绑定建议；不全清点/建快照/测试或恢复旧写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，现只写fresh-qa/remaining-asset-writes-independent；核54a897b3…三源两个late scene/adoption实际caller写拒绝/全回滚门，source/fixture/scripts/actualimports前后绑定，不复测module3/normal3。Web旧门归还、不重跑GUI；speed归R6。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R2-SPEED-RECOVERY-INDEPENDENT-20261014：产品/旧门只读，仅写fresh-runtime-reload/linked-speed-recovery-independent，核candidate02 c96bc424…并只复验原失败HTTP恢复case。晚权限PASS及16自测按AST/字节审计复用，不执行第三矩阵或重复首应用完整用例。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | speed失败差额1实际PASS3.70s、wake3→3/首应用+2，171实际imports及461map无漂移，已随b54f435 SOURCE_INTEGRATED/WRITE_LEASE_RETURN。产品/证据只读待下个关键组，不重跑旧16/晚权限/第三矩阵/配置安装资源门。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 剩余asset七methods/两rules两源1de73eb1…已SOURCE_RELEASE冻结、3首次actualPASS/60静态，与主控production形成三源54a897b3…待QA联合门，现产品只读，不复测旧门或恢复写权。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 剩余asset三源54a897b3…SOURCE_RELEASE准确冻结，七DML/两helper退役及3普通消费者差额通过；当前无新增产品修改，审核QA两late写门后精确集成/归还。speed仅API指定wake恢复修复，不形成双writer。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+speed五源c96bc424…已 `b54f435a336bbb715dee93981cd9caa26a0e4b56` 精确集成并即时归还API/R6租约；新独立门 `fresh-runtime-reload/linked-speed-recovery-independent/SOURCE_GATE.json` SHA1a7979577abf2d1e53c71dd92e3a3ffca9b1176d141b8228085dac0d553fb190，原失败恢复1实际PASS3.70s。主控核16artifact、与作者一致461map/171actualimports前后hash、原操作/固定版本/后来HEAD/回执shape及无第二编辑，wake3→3；旧权限PASS与16自测只复用，原失败/observer错误保存，driver真实通知/生产媒体/整体R2/R3/R9未接受。下文candidate02冻结/复验要求至此履行，不按旧段重派。
+
+下一组 `REF-R2-LINKED-CLIP-PREPARATION-20261014` 只给API证据写权 `fresh-api-r2r3-readonly/linked-clip-use-case-preparation/**`，产品全部只读。仅核main的 `_preview_linked_clip_edit`、`_linked_proposal_source_command`、`_confirm_creation_task_edit` 其它linked clip分支及其准确预览/NL/直接应用/固定结果消费者；对应 `creation/editing/linked.py` 现实际计算器、metadata_use_case.py公共保存/base/narration与sources.py/transactions.py/production已公开入口；定位实际最小已有linked/typed消费者夹具。以已定位closure-01/proposal-use-case-preparation为入口但只核当前目标符号，不重复旧R2/R3总清点、speed/metadata/asset门或读取全main/production。交一份短REPORT含活跃动作集合、必要确切files/symbols/new concrete use-case接口、同caller事务/source/actor/version/固定结果/失回执和旧目标、不变计算器/fixture与最小合并验证建议；不导入产品/建源snapshot/跑测试/准备空模块，不复制speed实现造成第二保存或旁白规则。不扩到compound/undo/制作/media/parser/共享协议/用户数据。按新分层QA条款语义ACK后直接只读定位，主控随后绑定真实独占源；未获新源绑定不得施工。
 
 speed恢复candidate02 `fresh-api-linked-speed/linked-speed-candidate-02/SOURCE_RELEASE.json` 回执SHA eff15bb425b9a4dfd78c2221b5bb2590d22d6606d6215024f17fe0bbd4efd0d7、五源TAB摘要c96bc42496dfe92a2d549e633c8ea2900f44405695562d35e7264b567058214f，仍base3b0b2a1＋五overlay，不混asset三源或其他WIP。主控核五live/副本、19artifact及局部patch；main只有record_projection恢复分支改用原仓储纯保存，不改首次newly_applied helper及显式wake/shared helper/parser。typed HTTP仅原一个test body加原函数委托的wake计数和回执shape；其余三源字节及461依赖两源之外原样。新producer仅1实际PASS2.68s，另1 collect-only import/owner绑定零额外执行，旧16/晚权限/firstfailure只审计复用。现REF-R2-SPEED-RECOVERY-INDEPENDENT-20261014只给R6证据写权 `fresh-runtime-reload/linked-speed-recovery-independent/**`：复用原合法HTTP恢复fixture和原独立observer修正，实际preview/confirm→后来HEAD→删除原projection→同request恢复，验证原operation/result_version/response、编辑行无重复、wake计数恢复前后不变；首次真实应用沿原两处通知仅作为该case前置观察，不独立增加矩阵。执行前封存准确五source/fixture/script、actualimports及前后hash，原SOURCE_BLOCK/observer错误/晚邻居权限PASS证据不覆盖；相关业务与夹具字节/AST未变的已过权限门不重跑，未执行第三lateSQL不计PASS。本门只对原产品失败差额接受，不接受原生driver通知执行、生产媒体、全R2/R3/R9。真正缺陷只交API原精确两源ISSUE_REOPEN，独立者不改产品；门通过后主控精确集成五源并即时归还。
 
