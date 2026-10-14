@@ -6917,27 +6917,59 @@ class ProductionRepository:
                 "ctime_ns":stat.st_ctime_ns, "inode":stat.st_ino, "device":stat.st_dev})
         return facts
 
-    def confirm_direct_edit(self, command, intent: EditIntent, proposal: EditProposal, change, *, verify_sources):
-        """A deterministic control saves its lineage and full change in one CAS transaction."""
+    def claim_edit_request(self, task, member_id, request_id, phase, inputs):
+        identity = hashlib.sha256(json.dumps(
+            [task.workspace_id, member_id, str(request_id), phase], sort_keys=True,
+            ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
+        event_id = f"event_edit_request_{identity}"
+        digest = hashlib.sha256(json.dumps([task.id, inputs], sort_keys=True,
+            ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = self._require_creation_task(conn, command.workspace_id, command.task_id)
-            if task.current_timeline_version_id != command.base_version_id:
-                raise TimelineVersionConflict("当前时间线已变化，未保存这项修改")
-            member = command.actor_identity.get("user_id") or command.actor_identity["member_id"]
-            if task.owner_user_id and task.owner_user_id != member and not command.actor_identity.get("local_diagnostic"):
-                raise PermissionError("当前成员不能修改此任务")
-            if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (
-                    command.workspace_id, command.task_id, intent.id, proposal.id):
-                raise ValueError("直接编辑命令与变更谱系不一致")
-            verify_sources(command, conn)
-            self.create_edit_intent(intent, connection=conn, source=None)
-            self.create_edit_proposal(proposal, connection=conn)
-            result = self.confirm_edit_proposal(command.workspace_id, command.task_id, proposal.id,
-                operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id,
-                montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks,
-                cover_asset=change.cover_asset, narration_segments=change.narration_segments,
-                narration_artifact=change.narration_artifact, connection=conn)
+            row = conn.execute("SELECT payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
+            if row:
+                previous = json.loads(row["payload_json"])
+                if previous["input_digest"] != digest:
+                    raise ValueError("请求身份已绑定不同编辑输入")
+                return event_id, False
+            self.append_task_event(TaskEvent(id=event_id, workspace_id=task.workspace_id,
+                task_id=task.id, job_id=None, event_type="edit_request_claimed",
+                payload={"member_id": member_id, "request_id": str(request_id), "phase": phase,
+                         "input_digest": digest, "inputs": inputs}, created_at=utc_now()), connection=conn)
+        return event_id, True
+
+    def save_edit_request_result(self, task, event_id, *, status_code, response):
+        return self.append_task_event(TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
+            task_id=task.id, job_id=None, event_type="edit_request_result",
+            payload={"status_code": status_code, "response": response}, created_at=utc_now()))
+
+    def read_edit_request_result(self, task, event_id):
+        try:
+            event = self.get_task_event(task.workspace_id, event_id + "_result")
+        except KeyError:
+            return None
+        return event.payload
+
+    def confirm_direct_edit(self, command, intent: EditIntent, proposal: EditProposal, change, *, verify_sources, connection=None):
+        """Save lineage and full change in the caller transaction or one owned CAS."""
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                return self.confirm_direct_edit(command, intent, proposal, change,
+                    verify_sources=verify_sources, connection=conn)
+        conn = connection
+        task = self._require_creation_task(conn, command.workspace_id, command.task_id)
+        if task.current_timeline_version_id != command.base_version_id:
+            raise TimelineVersionConflict('当前时间线已变化，未保存这项修改')
+        member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
+        if task.owner_user_id and task.owner_user_id != member and (not command.actor_identity.get('local_diagnostic')):
+            raise PermissionError('当前成员不能修改此任务')
+        if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (command.workspace_id, command.task_id, intent.id, proposal.id):
+            raise ValueError('直接编辑命令与变更谱系不一致')
+        verify_sources(command, conn)
+        self.create_edit_intent(intent, connection=conn, source=None)
+        self.create_edit_proposal(proposal, connection=conn)
+        result = self.confirm_edit_proposal(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_artifact=change.narration_artifact, connection=conn)
         return result
 
     def confirm_edit_proposal(

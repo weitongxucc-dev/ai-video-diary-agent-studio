@@ -86,5 +86,6 @@ def commit_change_set(repository, change: EditChangeSet, *, connection=None, ver
         narration_artifact=change.narration_artifact, connection=connection, verify_sources=verify_sources)
 
 
-def commit_direct_change(repository, command, intent, proposal, change, *, verify_sources):
-    return repository.confirm_direct_edit(command, intent, proposal, change, verify_sources=verify_sources)
+def commit_direct_change(repository, command, intent, proposal, change, *, verify_sources, connection=None):
+    return repository.confirm_direct_edit(command, intent, proposal, change,
+        verify_sources=verify_sources, connection=connection)

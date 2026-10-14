@@ -1,5 +1,6 @@
 """Typed edits through isolated domain/API state; no live model or service."""
 import json
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -13,8 +14,11 @@ from test_linked_timeline_reorder import _build_linked_state
 
 
 @pytest.fixture(autouse=True)
-def typed_settings(material_edit_state, monkeypatch):
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(material_edit_state.production.video_library_path), raising=False)
+def typed_settings(request, monkeypatch):
+    if "material_edit_state" in request.fixturenames:
+        material_edit_state = request.getfixturevalue("material_edit_state")
+        monkeypatch.setattr(main, "settings", replace(main.settings,
+            video_inbox_path=str(material_edit_state.production.video_library_path)))
 
 
 def bound(state, **action):
@@ -27,6 +31,93 @@ def bound(state, **action):
 def replace_action(state):
     return {"operation_type": "ReplaceClip", "clip_id": state.clip.id,
             "asset_id": state.asset.id, "segment_id": state.asset.segments[0].id}
+
+
+@pytest.fixture
+def metadata_http_state(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from test_metadata_edit_use_case import metadata_state
+    state = metadata_state(tmp_path)
+    monkeypatch.setattr(main, "production_repo", state.repo)
+    monkeypatch.setattr(main, "artifact_store", state.store)
+    monkeypatch.setattr(main, "local_members_service", state.members)
+    monkeypatch.setattr(main, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", "ws"))
+    monkeypatch.setattr(main, "settings", replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path / "outputs")))
+    state.client = TestClient(main.app, headers={"X-Local-Member-Token": state.token})
+    state.url = f"/api/creation-tasks/{state.task.id}"
+    return state
+
+
+def metadata_payload(state):
+    return {"operation_type": "ChangeCrop", "clip_id": "clip", "fit_mode": "fit", "crop_x": .3, "crop_y": .7,
+        "request_id": str(uuid4()), "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": 1}
+
+
+def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http_state, monkeypatch):
+    state = metadata_http_state
+    wakes = []
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: wakes.append('notified'))
+    payload = metadata_payload(state)
+    response = state.client.post(state.url + "/edits/exact", json=payload)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert len(wakes) == 1
+    assert state.client.post(state.url + "/edits/exact", json=payload).json() == saved
+    assert len(wakes) == 1
+    assert state.client.post(state.url + "/edits/exact", json={**payload, "crop_x": .9}).status_code == 409
+    with state.repo._connect() as conn:
+        conn.execute("DELETE FROM task_events WHERE event_type='edit_request_result'")
+    recovered = state.client.post(state.url + "/edits/exact", json=payload)
+    assert recovered.status_code == 200, recovered.text
+    assert len(wakes) == 2
+    assert recovered.json()["operation"] == saved["operation"]
+    assert state.repo.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
+    assert state.repo.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+
+
+def test_metadata_patch_preserves_no_change_and_missing_target_responses(metadata_http_state):
+    state = metadata_http_state
+    unchanged = state.client.patch(state.url + '/montage/cues/cue', json={'text': '原字幕'})
+    assert unchanged.status_code == 409, unchanged.text
+    assert unchanged.json()['detail'] == {'error': 'edit_no_change', 'reason': '字幕文字、时轴和样式没有变化。',
+        'impact': '没有创建新的时间线版本。', 'repair_action': '修改文字、断行、强调词或字幕样式后再预览。', 'retryable': False}
+    missing = state.client.patch(state.url + '/montage/cues/missing', json={'text': '新字幕'})
+    assert missing.status_code == 404, missing.text
+    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.list_edit_operations('ws', state.task.id) == []
+
+
+def test_metadata_patch_routes_consume_use_case_without_route_reentry(metadata_http_state, monkeypatch):
+    state = metadata_http_state
+    def forbidden(*args, **kwargs):
+        pytest.fail("metadata PATCH must not invoke another HTTP route")
+    monkeypatch.setattr(main, "apply_creation_task_exact_edit", forbidden)
+    clip = state.client.patch(state.url + "/montage/clips/clip", json={"locked": True})
+    assert clip.status_code == 200, clip.text
+    subtitle = state.client.patch(state.url + "/montage/cues/cue", json={"text": "只更新这句字幕"})
+    assert subtitle.status_code == 200, subtitle.text
+    current = state.repo.get_creation_task('ws', state.task.id)
+    plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    assert plan['clips'][0]['locked'] is True
+    assert plan['cues'][0]['text'] == "只更新这句字幕"
+    assert plan['narration_audio_path'] == state.plan.narration_audio_path
+    assert current.narration_cache_key == state.narration.cache_key
+    assert len(state.repo.list_timeline_versions('ws', state.task.id)) == 3
+
+
+def test_metadata_http_refuses_stale_or_foreign_inputs(metadata_http_state):
+    state = metadata_http_state
+    payload = metadata_payload(state)
+    assert state.client.post(state.url + "/edits/exact", json={**payload, "expected_timeline_sequence": 2}).status_code == 409
+    assert state.client.post(state.url + "/edits/exact", headers={"x-test-workspace": "foreign"}, json=metadata_payload(state)).status_code == 404
+    assert state.client.post("/api/creation-tasks/foreign/edits/exact", json=metadata_payload(state)).status_code == 404
+    _, token = state.members.join(state.members.create_invite_code(), "other metadata member")
+    denied = state.client.post(state.url + "/edits/exact", headers={"X-Local-Member-Token": token}, json=metadata_payload(state))
+    assert denied.status_code in {403, 404}, denied.text
+    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.list_edit_operations('ws', state.task.id) == []
 
 
 def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(material_edit_state):
