@@ -3857,7 +3857,7 @@ class ProductionRepository:
             if not self._valid_scene_checkpoint(row, unit_key, window):
                 raise ValueError("镜头检查点损坏，不能装配片段")
             boundaries.extend(SceneWindowFacts.from_checkpoint_json(row["result_json"]).boundaries_seconds)
-        row = self._material_assets._scene_asset_source_row(
+        row = self._material_assets._asset_payload_row_by_id(
             conn, candidate.workspace_id, candidate.asset_id,
         )
         if row is None:
@@ -3884,7 +3884,7 @@ class ProductionRepository:
             candidate.unit_key, conn,
         ) != candidate):
             raise ValueError("镜头失败来源已变化")
-        row = self._material_assets._scene_asset_source_row(
+        row = self._material_assets._asset_payload_row_by_id(
             conn, candidate.workspace_id, candidate.asset_id,
         )
         self._material_assets.mark_scene_failed(conn, str(row["payload"]), reason)
@@ -4378,15 +4378,9 @@ class ProductionRepository:
         model_id: str,
     ) -> list[float] | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT a.payload FROM material_assets a
-                JOIN material_segment_features f
-                    ON a.workspace_id = f.workspace_id AND a.id = f.asset_id
-                WHERE f.workspace_id = ? AND f.segment_id = ? AND f.model_id = ?
-                """,
-                (workspace_id, segment_id, model_id),
-            ).fetchone()
+            row = self._material_assets._visual_feature_asset_payload_row(
+                conn, workspace_id, segment_id, model_id,
+            )
         if row is None:
             return None
         asset = self._asset_from_payload(json.loads(str(row["payload"])))
@@ -4988,7 +4982,9 @@ class ProductionRepository:
                 task = self._creation_task_from_payload(json.loads(item["task_payload"]))
                 plan,task = self._prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=owner,local_diagnostic=local_diagnostic)
                 for match in plan.material_matches:
-                    asset_row = conn.execute("SELECT payload,visibility FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id,match.asset_ref.removeprefix("asset:"))).fetchone()
+                    asset_row = self._material_assets._asset_payload_visibility_row_by_id(
+                        conn, workspace_id, match.asset_ref.removeprefix("asset:"),
+                    )
                     if asset_row is None:
                         raise ValueError("规划窗口引用的素材已不存在")
                     asset = self._asset_from_payload(json.loads(asset_row["payload"]))
@@ -5170,10 +5166,9 @@ class ProductionRepository:
         for match in plan.material_matches:
             asset_id = match.asset_ref.removeprefix("asset:")
             segment_id = match.segment_ref.removeprefix("segment:")
-            asset_row = conn.execute(
-                "SELECT payload FROM material_assets WHERE workspace_id = ? AND id = ?",
-                (plan.workspace_id, asset_id),
-            ).fetchone()
+            asset_row = self._material_assets._asset_payload_row_by_id(
+                conn, plan.workspace_id, asset_id,
+            )
             if asset_row is None:
                 raise ValueError("创作方案引用的素材不属于当前工作区")
             asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))

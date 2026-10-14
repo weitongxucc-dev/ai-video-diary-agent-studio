@@ -629,9 +629,9 @@ def test_remaining_scene_rules_manual_corrections_and_failure_keep_caller_transa
     before = _snapshot(connect)
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        source = store._scene_asset_source_row(conn, value.workspace_id, value.id)
+        source = store._asset_payload_row_by_id(conn, value.workspace_id, value.id)
         assert source.keys() == ["payload"]
-        assert store._scene_asset_source_row(conn, "foreign", value.id) is None
+        assert store._asset_payload_row_by_id(conn, "foreign", value.id) is None
         traces.clear()
         assembled = store.assemble_scene_segments(conn, source["payload"], [5], 10)
         assert len(traces) == 2
@@ -646,7 +646,7 @@ def test_remaining_scene_rules_manual_corrections_and_failure_keep_caller_transa
         correction = conn.execute("SELECT * FROM material_unmatched_corrections").fetchone()
         assert correction["segment_id"] == vanished.id
         assert json.loads(correction["payload"])["user_tags"] == vanished.user_tags
-        current_payload = store._scene_asset_source_row(conn, value.workspace_id, value.id)["payload"]
+        current_payload = store._asset_payload_row_by_id(conn, value.workspace_id, value.id)["payload"]
         traces.clear()
         failed = store.mark_scene_failed(conn, current_payload, "synthetic_failure")
         assert len(traces) == 1 and traces[0].startswith("UPDATE material_assets")
@@ -655,7 +655,7 @@ def test_remaining_scene_rules_manual_corrections_and_failure_keep_caller_transa
         assert failed.segments == assembled.segments
         assert conn.execute("SELECT visibility FROM material_assets").fetchone()[0] == "shared"
         with connect() as observer:
-            assert store._scene_asset_source_row(observer, value.workspace_id, value.id)["payload"] == source["payload"]
+            assert store._asset_payload_row_by_id(observer, value.workspace_id, value.id)["payload"] == source["payload"]
             assert observer.execute("SELECT * FROM material_unmatched_corrections").fetchall() == []
         assert conn.in_transaction
         conn.rollback()
@@ -911,3 +911,68 @@ def test_discovery_save_consumes_supplied_stat_without_filesystem_io_and_keeps_r
     assert result.file_name == "registered.wav" and result.size_bytes == stat.st_size
     assert "BEGIN IMMEDIATE" not in traces
     assert not any(sql.lstrip().startswith("SELECT") for sql in traces)
+
+
+def test_asset_read_projections_keep_raw_rows_join_scope_and_caller_rollback(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("projection readers must use the caller connection")
+
+    store = MaterialAssetStore(forbidden)
+    foreign = _asset("foreign", workspace="workspace-b")
+    with connect() as conn:
+        conn.execute("""CREATE TABLE material_segment_features (
+            workspace_id TEXT NOT NULL, asset_id TEXT NOT NULL,
+            segment_id TEXT NOT NULL, model_id TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, asset_id, segment_id, model_id)
+        )""")
+        _insert(conn, foreign)
+        conn.execute("INSERT INTO material_segment_features VALUES (?, ?, ?, ?)", (
+            foreign.workspace_id, foreign.id, "same-segment", "same-model",
+        ))
+    before = _snapshot(connect)
+    value = _asset("uncommitted")
+    payload = json.loads(_json_payload(value))
+    payload["opaque_original_fact"] = {"keep": [1, "原始字段"]}
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _insert(conn, value, column_visibility="shared", payload=payload)
+        conn.executemany("INSERT INTO material_segment_features VALUES (?, ?, ?, ?)", [
+            (value.workspace_id, value.id, "same-segment", "same-model"),
+            (value.workspace_id, value.id, "same-segment", "other-model"),
+            (foreign.workspace_id, value.id, "cross-workspace", "same-model"),
+        ])
+        raw = json.dumps(payload, ensure_ascii=False)
+        only_payload = store._asset_payload_row_by_id(conn, value.workspace_id, value.id)
+        visibility = store._asset_payload_visibility_row_by_id(conn, value.workspace_id, value.id)
+        feature = store._visual_feature_asset_payload_row(conn, value.workspace_id, "same-segment", "same-model")
+        assert isinstance(only_payload, sqlite3.Row) and only_payload.keys() == ["payload"]
+        assert isinstance(visibility, sqlite3.Row) and visibility.keys() == ["payload", "visibility"]
+        assert isinstance(feature, sqlite3.Row) and feature.keys() == ["payload"]
+        assert only_payload["payload"] == visibility["payload"] == feature["payload"] == raw
+        assert visibility["visibility"] == "shared" and json.loads(raw)["visibility"] == "private"
+        for reader in (store._asset_payload_row_by_id, store._asset_payload_visibility_row_by_id):
+            assert reader(conn, foreign.workspace_id, value.id) is None
+            assert reader(conn, value.workspace_id, "missing") is None
+        assert store._visual_feature_asset_payload_row(conn, value.workspace_id, "same-segment", "missing-model") is None
+        assert store._visual_feature_asset_payload_row(conn, value.workspace_id, "missing-segment", "same-model") is None
+        assert store._visual_feature_asset_payload_row(conn, "missing-workspace", "same-segment", "same-model") is None
+        # An asset id alone cannot join a feature from another workspace.
+        assert store._visual_feature_asset_payload_row(conn, foreign.workspace_id, "cross-workspace", "same-model") is None
+        foreign_row = store._visual_feature_asset_payload_row(conn, foreign.workspace_id, "same-segment", "same-model")
+        assert json.loads(foreign_row["payload"])["id"] == foreign.id
+        with connect() as observer:
+            assert store._asset_payload_row_by_id(observer, value.workspace_id, value.id) is None
+            assert store._asset_payload_visibility_row_by_id(observer, value.workspace_id, value.id) is None
+            assert store._visual_feature_asset_payload_row(observer, value.workspace_id, "same-segment", "same-model") is None
+        assert conn.in_transaction
+        conn.rollback()
+    assert _snapshot(connect) == before
+    with connect() as conn:
+        assert store._asset_payload_row_by_id(conn, value.workspace_id, value.id) is None
+        assert store._asset_payload_visibility_row_by_id(conn, value.workspace_id, value.id) is None
+        assert store._visual_feature_asset_payload_row(conn, value.workspace_id, "same-segment", "same-model") is None
+        assert [tuple(row) for row in conn.execute("SELECT * FROM material_segment_features")] == [
+            (foreign.workspace_id, foreign.id, "same-segment", "same-model"),
+        ]

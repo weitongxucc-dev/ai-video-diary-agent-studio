@@ -114,12 +114,33 @@ class MaterialAssetStore:
                 existing.source_url = source_url
         return self.save_asset(existing)
 
-    def _scene_asset_source_row(
+    def _asset_payload_row_by_id(
         self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
     ) -> sqlite3.Row | None:
         return conn.execute(
             "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
             (workspace_id, asset_id),
+        ).fetchone()
+
+    def _asset_payload_visibility_row_by_id(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT payload,visibility FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+
+    def _visual_feature_asset_payload_row(
+        self, conn: sqlite3.Connection, workspace_id: str, segment_id: str, model_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+                """
+                SELECT a.payload FROM material_assets a
+                JOIN material_segment_features f
+                    ON a.workspace_id = f.workspace_id AND a.id = f.asset_id
+                WHERE f.workspace_id = ? AND f.segment_id = ? AND f.model_id = ?
+                """,
+                (workspace_id, segment_id, model_id),
         ).fetchone()
 
     def assemble_scene_segments(
