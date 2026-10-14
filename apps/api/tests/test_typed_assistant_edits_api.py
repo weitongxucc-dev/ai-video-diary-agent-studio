@@ -574,3 +574,158 @@ def test_linked_insert_permission_and_range_keep_original_error_projection(linke
     out_of_range = state.client.post(state.url + '/edits/exact/preview', json={**action, 'source_start_seconds': 4})
     assert out_of_range.status_code == 400 and out_of_range.json()['detail'] == '插入起点须在 0.0–4.0 秒之间。'
     assert not state.repo.list_edit_operations('ws', state.task.id)
+
+
+@pytest.fixture
+def subtitle_http_state(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from test_subtitle_application import subtitle_state
+    state = subtitle_state(tmp_path)
+    monkeypatch.setattr(main, 'production_repo', state.repo)
+    monkeypatch.setattr(main, 'artifact_store', state.store)
+    monkeypatch.setattr(main, 'local_members_service', state.members)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(state.case.output_root)))
+    state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
+    state.url = f'/api/creation-tasks/{state.task.id}'
+    return state
+
+
+def subtitle_action(state, operation):
+    if operation == 'ConfigureSubtitleTrack':
+        return {'operation_type': operation, 'style': {'font_size': 64}}
+    if operation == 'ReplaceSubtitleText':
+        return {'operation_type': operation, 'track_id': state.zh.id, 'find_text': '原', 'replacement_text': '新'}
+    return {'operation_type': operation, 'track_id': state.zh.id, 'cue_id': 'cue', 'end_seconds': 1.5}
+
+
+@pytest.mark.parametrize('operation', ['ReplaceSubtitleText', 'ConfigureSubtitleTrack', 'UpdateSubtitleCue'])
+def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts(subtitle_http_state, monkeypatch, operation):
+    state = subtitle_http_state
+    before_plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    preview = state.client.post(state.url + '/edits/exact/preview?draft=true', json={**subtitle_action(state, operation),
+        'request_id': str(uuid4()), 'expected_timeline_version_id': state.base.id, 'expected_timeline_sequence': 2})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    result_url = state.url + f'/edits/{proposal_id}/result'
+    original = state.client.get(result_url)
+    assert original.status_code == 200 and original.json()['result'] is None
+    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('subtitle reads must consume durable business facts'))
+    request = {'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
+        'expected_input_digest': original.json()['input_digest']}
+    null_base = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={**request, 'expected_base_version_id': None})
+    assert null_base.status_code == 409
+    accepted = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert accepted.status_code == 200, accepted.text
+    result = state.client.get(result_url)
+    assert result.status_code == 200 and result.json()['result']['operation'] == accepted.json()['operation']
+    current = state.repo.get_creation_task('ws', state.task.id)
+    version = state.repo.get_timeline_version('ws', current.current_timeline_version_id)
+    after_plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    assert after_plan['clips'] == before_plan['clips'] and after_plan['audio_timeline'] == before_plan['audio_timeline']
+    assert current.narration_cache_key == state.narration.cache_key
+    assert (state.case.output_root / state.narration.audio_path).read_bytes() == state.voice_bytes
+    cover = state.repo.get_cover_asset('ws', state.task.id, version.snapshot['cover_asset_id'])
+    assert cover.title == state.cover.title and cover.artifact_ref == state.cover.artifact_ref
+    tracks = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    if operation == 'ReplaceSubtitleText':
+        assert len(tracks) == 1 and tracks[0].cues[0].text == '新字幕'
+    elif operation == 'ConfigureSubtitleTrack':
+        assert [track.style['font_size'] for track in tracks] == [64, 64]
+        assert next(track for track in tracks if track.language == 'en-US').style['enabled'] is False
+    else:
+        assert len(tracks) == 2 and all(track.cues[0].end_seconds == 1.5 for track in tracks)
+        assert next(track for track in tracks if track.language == 'en-US').cues[0].text == 'Original caption'
+
+
+def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snapshot(subtitle_http_state):
+    state = subtitle_http_state
+    # This structure inlet uses an independent English track; bilingual merge mapping is a separate boundary.
+    from app.creation.contracts import TimelineVersion
+    from app.creation.transactions import clone_subtitle_track, clone_cover_asset
+    zh = clone_subtitle_track(state.zh, timeline_version_id='structure-start', track_id='structure-zh')
+    en = replace(clone_subtitle_track(state.en, timeline_version_id='structure-start', track_id='structure-en'),
+        source_language=None, generation_method='timeline')
+    cover = clone_cover_asset(state.cover, timeline_version_id='structure-start')
+    state.repo.create_timeline_version(TimelineVersion('structure-start', 'ws', state.task.id, state.base.id, 3,
+        {**state.base.snapshot, 'subtitle_track_ids': [zh.id, en.id], 'cover_asset_id': cover.id}, None))
+    state.repo.create_subtitle_track(zh)
+    state.repo.create_subtitle_track(en)
+    state.repo.create_cover_asset(cover)
+    def preview_confirm(operation, **values):
+        task = state.repo.get_creation_task('ws', state.task.id)
+        track = next(item for item in state.repo.list_subtitle_tracks('ws', task.id,
+            timeline_version_id=task.current_timeline_version_id) if item.language == 'en-US')
+        preview = state.client.post(state.url + '/edits/exact/preview', json={
+            'operation_type': operation, 'track_id': track.id, 'cue_id': track.cues[0].id, **values})
+        assert preview.status_code == 200, preview.text
+        proposal_id = preview.json()['proposal']['id']
+        accepted = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={'request_id': str(uuid4())})
+        assert accepted.status_code == 200, accepted.text
+        fixed = state.client.get(state.url + f'/edits/{proposal_id}/result')
+        assert fixed.status_code == 200 and fixed.json()['result']['operation'] == accepted.json()['operation']
+    preview_confirm('SplitSubtitleCue', split_offset=8, split_time_seconds=1)
+    preview_confirm('MergeSubtitleCue')
+    preview_confirm('DeleteSubtitleCue')
+    preview_confirm('DeleteSubtitleCue')
+    task = state.repo.get_creation_task('ws', state.task.id)
+    tracks = state.repo.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)
+    assert len(tracks) == 1 and tracks[0].language == 'zh-CN'
+    preview = state.client.post(state.url + '/edits/exact/preview', json={
+        'operation_type': 'DeleteSubtitleCue', 'track_id': tracks[0].id, 'cue_id': tracks[0].cues[0].id})
+    assert preview.status_code == 200, preview.text
+    assert state.client.post(state.url + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
+    task = state.repo.get_creation_task('ws', task.id)
+    remaining = state.repo.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)[0]
+    direct = state.client.post(state.url + '/edits/exact', json={
+        'operation_type': 'DeleteSubtitleCue', 'track_id': remaining.id, 'cue_id': remaining.cues[0].id})
+    assert direct.status_code == 200, direct.text
+    task = state.repo.get_creation_task('ws', task.id)
+    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    assert version.snapshot['subtitle_track_ids'] == []
+    assert state.case.current_subtitle_tracks('ws', task, current_version=version, montage=state.plan) == []
+
+
+@pytest.mark.parametrize('operation,raw_command,refs', [
+    ('ReplaceSubtitleText', '全文把“原”替换成“新”', ['subtitle-track:family-zh']),
+    ('ConfigureSubtitleTrack', '字幕字号改成64', []),
+    ('UpdateSubtitleCue', '当前字幕时间改成0到1.5秒', ['cue:cue', 'subtitle-track:family-zh'])])
+def test_subtitle_direct_and_natural_consumers_use_real_family(subtitle_http_state, monkeypatch, operation, raw_command, refs):
+    from app.creation.editing.subtitle_use_case import SubtitleEditUseCase
+    state = subtitle_http_state
+    calls = []
+    prepare = SubtitleEditUseCase.prepare_preview
+    def observed(self, command):
+        assert self.repository is self.montage_edits.repository is state.repo
+        calls.append(command)
+        return prepare(self, command)
+    monkeypatch.setattr(SubtitleEditUseCase, 'prepare_preview', observed)
+    monkeypatch.setattr(main, '_publish_task_picture_preview', lambda *args, **kwargs: pytest.fail('draft preview must not generate media'))
+    natural = state.client.post(state.url + '/edits/preview?draft=true', json={
+        'raw_command': raw_command, 'context_stage': 'subtitle_cover', 'selected_object_refs': refs})
+    assert natural.status_code == 200, natural.text
+    assert natural.json()['proposal']['operation']['operation_type'] == operation
+    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter HTTP preview'))
+    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter HTTP confirm'))
+    direct = state.client.post(state.url + '/edits/exact', json=subtitle_action(state, operation))
+    assert direct.status_code == 200, direct.text
+    assert direct.json()['operation']['operation_type'] == operation
+    assert len(calls) == 2 and all(item.operation_type == operation for item in calls)
+
+
+def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(subtitle_http_state):
+    from app.task_audio import media_digest
+    state = subtitle_http_state
+    preview = state.client.post(state.url + '/edits/exact/preview', json=subtitle_action(state, 'ReplaceSubtitleText'))
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    fixed = state.client.get(state.url + f'/edits/{proposal_id}/result').json()
+    request = {'request_id': str(uuid4())}
+    event, fresh = state.repo.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
+        {'proposal_id': proposal_id, 'base_version_id': state.base.id, 'input_digest': fixed['input_digest'], 'request': request})
+    assert fresh
+    state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'a transport projection'})
+    refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert refused.status_code == 409 and '尚未确定' in refused.text
+    assert not state.repo.list_edit_operations('ws', state.task.id)

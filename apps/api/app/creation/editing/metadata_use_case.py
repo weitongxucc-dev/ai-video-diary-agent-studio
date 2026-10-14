@@ -375,6 +375,30 @@ class MetadataEditUseCase:
         rows = [dict(row, narration_segment_id=next((cue.narration_segment_id for cue in plan.cues if cue.id == row['cue_id']))) for row in linkage]
         return (rows, edited_tracks)
 
+    def persist_subtitle_edit(self, *, workspace_id: str, task, proposal, base_version,
+            result_version_id: str, operation_type: str, operation_payload: dict, subtitle_tracks,
+            cover_asset=None, updated_plan=None, snapshot_source=None, narration_segments=None,
+            narration_artifact=None) -> MetadataEditResult:
+        montage_payload = creation_task_montage_plan_to_payload(updated_plan) if updated_plan is not None else None
+        change = prepare_change_set(proposal=proposal, base_version=base_version,
+            operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id,
+            montage_plan_id=updated_plan.id if updated_plan is not None else None, montage_payload=montage_payload,
+            subtitle_tracks=subtitle_tracks, cover_asset=cover_asset, snapshot_source=snapshot_source,
+            narration_segments=narration_segments, narration_artifact=narration_artifact)
+        try:
+            _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change)
+        except ValueError as exc:
+            raise EditConflict(str(exc)) from exc
+        persisted_plan = creation_task_montage_plan_from_payload(
+            self.repository.get_creation_task_montage_plan(workspace_id, task.id)
+        )
+        narration = (
+            self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key)
+            if current_task.narration_cache_key
+            else None
+        )
+        return MetadataEditResult(persisted_operation, persisted_plan, current_task, narration)
+
     def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None):
         try:
             dissolve_frames(updated_plan.clips)
