@@ -40,6 +40,8 @@ from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
+from app.materials.analysis import MaterialAnalysisUseCase, _material_analysis_public_error
+from app.materials.source_files import MaterialSourceFileAccess
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
     _required_text, _optional_string_tuple, _required_datetime, _optional_datetime,
@@ -74,9 +76,7 @@ from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnaly
 # (SUPPORTED_VIDEO_EXTENSIONS) is unchanged: nothing else starts watching these.
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
-    SegmentWindow,
     UnavailableVisualSemanticProvider,
-    VisualSemanticError,
     VisualSemanticProvider,
 )
 from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
@@ -148,17 +148,6 @@ BatchItemStatus = Literal[
 MediaPreviewType = Literal["voice", "avatar_lipsync"]
 MediaPreviewStatus = Literal["queued", "running", "succeeded", "unavailable", "blocked", "failed", "cancelled"]
 
-_A_ROLL_PROMPTS = (
-    "一个人面对摄像头说话的自拍视频",
-    "人物面部特写口播",
-    "主播面对镜头讲话",
-)
-_B_ROLL_PROMPTS = (
-    "没有人脸的风景环境补充镜头",
-    "产品特写或软件界面操作演示",
-    "城市街景、办公环境或物品的空镜头",
-)
-_ROLE_SUGGESTION_MARGIN = 0.02
 DEFAULT_MATERIAL_TAXONOMY = (
     "场景:办公",
     "场景:户外",
@@ -318,20 +307,6 @@ def automatic_segment_eligible(asset, segment, workspace_id):
     return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
 
 
-def _material_analysis_public_error(error: Exception) -> str:
-    if isinstance(error, PermissionError):
-        return "素材文件没有读取权限"
-    if isinstance(error, FileNotFoundError):
-        return "素材文件已移动或外接盘暂不可用"
-    if isinstance(error, OSError):
-        return "素材文件无法读取"
-    if isinstance(error, subprocess.SubprocessError):
-        return "媒体探测或解码失败，请检查文件格式"
-    if isinstance(error, VisualSemanticError):
-        return "画面分析模型不可用或执行失败"
-    if isinstance(error, ValueError):
-        return "媒体格式或内容无效"
-    return "分析服务未能完成，请查看本机日志"
 
 
 @dataclass
@@ -912,19 +887,44 @@ class ProductionRepository:
         visual_understanding: LocalVisualUnderstanding | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser()
-        self.video_library_path = Path(video_library_path).expanduser()
-        self.duration_reader = duration_reader or self._probe_duration
-        self.scene_reader = scene_reader or self._detect_scene_boundaries
-        self.visual_provider = visual_provider or UnavailableVisualSemanticProvider()
-        self.speech_analyzer = speech_analyzer
-        self.visual_understanding = visual_understanding
-        self._usage_role_prompt_vectors: list[list[float]] | None = None
+        self._material_source_files = MaterialSourceFileAccess(self._connect, Path(video_library_path).expanduser())
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
         self._material_assets = MaterialAssetStore(self._connect)
+        self._material_analysis = MaterialAnalysisUseCase(
+            self._material_assets, self._material_source_files, connection_factory=self._connect,
+            duration_reader=duration_reader or self._probe_duration,
+            scene_reader=scene_reader or self._detect_scene_boundaries,
+            visual_provider=visual_provider or UnavailableVisualSemanticProvider(),
+            speech_analyzer=speech_analyzer, visual_understanding=visual_understanding,
+        )
         self._initialize_profile_stores()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
+
+    @property
+    def video_library_path(self) -> Path:
+        return self._material_source_files.video_library_path
+
+    @video_library_path.setter
+    def video_library_path(self, value: Path) -> None:
+        self._material_source_files.video_library_path = value
+
+    @property
+    def duration_reader(self) -> Callable[[Path], float]:
+        return self._material_analysis.duration_reader
+
+    @duration_reader.setter
+    def duration_reader(self, value: Callable[[Path], float]) -> None:
+        self._material_analysis.duration_reader = value
+
+    @property
+    def visual_understanding(self) -> LocalVisualUnderstanding | None:
+        return self._material_analysis.visual_understanding
+
+    @visual_understanding.setter
+    def visual_understanding(self, value: LocalVisualUnderstanding | None) -> None:
+        self._material_analysis.visual_understanding = value
 
     def _initialize_profile_stores(self) -> None:
         """Bind only profile owners; do not open connections or provision schema."""
@@ -2801,17 +2801,9 @@ class ProductionRepository:
         return str(row["intake_owner_user_id"] or "").strip() or None
 
     def get_material_ingestion_binding(self) -> tuple[str, str] | None:
-        with self._connect() as conn:
-            row = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id = 1").fetchone()
-        return (str(row["workspace_id"]), str(row["library_path"])) if row else None
+        return self._material_source_files.get_material_ingestion_binding()
 
-    @staticmethod
-    def material_copy_revision(stat: os.stat_result) -> dict[str, str]:
-        """Decimal strings preserve nanosecond precision in desktop/browser JSON."""
-        return {
-            "size_bytes": str(stat.st_size), "mtime_ns": str(stat.st_mtime_ns),
-            "ctime_ns": str(stat.st_ctime_ns), "inode": str(stat.st_ino),
-        }
+    material_copy_revision = staticmethod(MaterialSourceFileAccess.material_copy_revision)
 
     def confirm_material_copy_complete(
         self, workspace_id: str, *, relative_path: str,
@@ -2864,16 +2856,7 @@ class ProductionRepository:
             )
 
     def _require_material_copy_confirmation(self, workspace_id: str, path: Path) -> None:
-        if self.get_material_ingestion_binding() != (workspace_id, str(self.video_library_path.resolve())):
-            raise ValueError("当前工作区未绑定此素材目录")
-        revision = json.dumps(self.material_copy_revision(path.stat()), sort_keys=True)
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT confirmed_revision FROM material_ingestion_files WHERE workspace_id=? AND file_path=?",
-                (workspace_id, str(path)),
-            ).fetchone()
-        if row is None or row["confirmed_revision"] != revision:
-            raise ValueError("请先确认此文件已复制完成，再开始接收或重试")
+        return self._material_source_files.require_material_copy_confirmation(workspace_id, path)
 
     def pending_material_copies(self, workspace_id: str) -> list[dict[str, object]]:
         if (not self._material_library_available() or self.get_material_ingestion_binding()
@@ -4309,67 +4292,7 @@ class ProductionRepository:
         return self._material_assets.get_asset_by_path(workspace_id, file_path)
 
     def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
-        asset = self.get_asset(workspace_id, asset_id)
-        if asset.use_state == "excluded":
-            raise ValueError("素材已设为不使用，请先修改使用状态再分析")
-        path = self._validated_library_file(asset.path)
-        self._require_material_copy_confirmation(workspace_id, path)
-        source_stat = path.stat()
-        try:
-            duration = float(self.duration_reader(path))
-            if duration <= 0:
-                raise ValueError("视频时长无效")
-            boundaries = self.scene_reader(path, duration)
-            ranges = _scene_ranges(boundaries, duration)
-            old_segments = {segment.id: segment for segment in asset.segments}
-            segments: list[MaterialSegment] = []
-            for start, end in ranges:
-                segment_id = _segment_id(asset.id, start, end)
-                previous = old_segments.get(segment_id)
-                segments.append(
-                    previous
-                    or MaterialSegment(
-                        id=segment_id,
-                        asset_id=asset.id,
-                        start_seconds=start,
-                        end_seconds=end,
-                    )
-                )
-            asset.duration_seconds = round(duration, 3)
-            asset.segments = segments
-            asset.analysis_status = "ready"
-            source_fingerprint = None
-            if self.visual_understanding is not None:
-                with path.open("rb") as source:
-                    source_fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
-            if self.speech_analyzer is not None:
-                asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis, source_fingerprint)
-            if self.visual_understanding is not None:
-                observations = self.visual_understanding.analyze(path, segments, source_fingerprint)
-                for segment in segments:
-                    segment.understanding = observations[segment.id]
-            visual_message = self._analyze_visual_semantics(asset, path)
-            role_message = self._suggest_usage_roles(asset)
-            for segment in asset.segments:
-                segment.system_tags = _infer_system_tags(asset, segment)
-            asset.analysis_message = (
-                f"已拆分 {len(segments)} 个镜头；{visual_message} {role_message} "
-                f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'} "
-                f"画面观察 {sum(bool(item.understanding and item.understanding.status == 'ready') for item in segments)}/{len(segments)} 个片段。"
-            ).strip()
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            logger.exception("Material analysis failed for asset %s", asset_id)
-            asset.analysis_status = "failed"
-            asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
-        final_stat = path.stat()
-        if self.material_copy_revision(source_stat) != self.material_copy_revision(final_stat):
-            raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
-        if expected_source_digest is not None:
-            with path.open("rb") as source:
-                final_digest = hashlib.file_digest(source, "sha256").hexdigest()
-            if final_digest != expected_source_digest:
-                raise ValueError("分析期间原片内容发生变化，未保存本次结果，请重新分析。")
-        return self._save_asset(asset, analysis_only=True)
+        return self._material_analysis.analyze_asset(workspace_id, asset_id, expected_source_digest=expected_source_digest)
 
     def get_visual_feature(
         self,
@@ -4377,37 +4300,8 @@ class ProductionRepository:
         segment_id: str,
         model_id: str,
     ) -> list[float] | None:
-        with self._connect() as conn:
-            row = self._material_assets._visual_feature_asset_payload_row(
-                conn, workspace_id, segment_id, model_id,
-            )
-        if row is None:
-            return None
-        asset = self._asset_from_payload(json.loads(str(row["payload"])))
-        segment = next((item for item in asset.segments if item.id == segment_id), None)
-        if segment is None:
-            return None
-        return self._visual_feature_for_segment(asset, segment, model_id)
+        return self._material_analysis.get_visual_feature(workspace_id, segment_id, model_id)
 
-    def _visual_feature_for_segment(
-        self, asset: MaterialAsset, segment: MaterialSegment, model_id: str
-    ) -> list[float] | None:
-        # Analysis also calls this before newly detected segments are persisted.
-        try:
-            path = self._validated_library_file(asset.path)
-            fingerprint = _visual_fingerprint(path, segment, model_id)
-        except (OSError, ValueError):
-            return None
-        with self._connect() as conn:
-            row = self._material_assets._visual_feature_vector_row(
-                conn, asset.workspace_id, asset.id, segment.id, model_id, fingerprint,
-            )
-        if row is None:
-            return None
-        payload = json.loads(str(row["vector_json"]))
-        if not isinstance(payload, list):
-            return None
-        return [float(value) for value in payload]
 
     def set_asset_visibility(
         self, workspace_id: str, asset_id: str, visibility: ContentVisibility
@@ -9527,200 +9421,11 @@ class ProductionRepository:
     def _save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
         return self._material_assets.save_asset(asset, analysis_only=analysis_only)
 
-    def _analyze_visual_semantics(self, asset: MaterialAsset, path: Path) -> str:
-        provider = self.visual_provider
-        if not provider.ready:
-            for segment in asset.segments:
-                if not segment.visual_model_id:
-                    segment.visual_status = "blocked"
-            return f"{provider.message} 可先人工补充画面描述并审核。"
 
-        fingerprints = {
-            segment.id: _visual_fingerprint(path, segment, provider.model_id)
-            for segment in asset.segments
-        }
-        cached_ids = self._cached_visual_segment_ids(
-            asset.workspace_id,
-            provider.model_id,
-            fingerprints,
-        )
-        pending = [segment for segment in asset.segments if segment.id not in cached_ids]
-        for segment in asset.segments:
-            if segment.id in cached_ids:
-                segment.visual_status = "ready"
-                segment.visual_model_id = provider.model_id
-        if not pending:
-            return f"已复用 {len(cached_ids)} 个镜头的画面语义缓存，等待审核。"
 
-        try:
-            embeddings = provider.embed_segments(
-                path,
-                [
-                    SegmentWindow(
-                        segment_id=segment.id,
-                        start_seconds=segment.start_seconds,
-                        end_seconds=segment.end_seconds,
-                    )
-                    for segment in pending
-                ],
-            )
-            embedding_by_id = {item.segment_id: item for item in embeddings}
-            with self._connect() as conn:
-                for segment in pending:
-                    embedding = embedding_by_id[segment.id]
-                    self._material_assets.write_visual_segment_feature(
-                        conn,
-                        asset.workspace_id,
-                        asset.id,
-                        segment.id,
-                        provider.model_id,
-                        fingerprints[segment.id],
-                        json.dumps(embedding.vector),
-                        embedding.sample_count,
-                        utc_now().isoformat(),
-                    )
-                    segment.visual_status = "ready"
-                    segment.visual_model_id = provider.model_id
-                    segment.visual_sample_count = embedding.sample_count
-        except (KeyError, OSError, ValueError, VisualSemanticError) as exc:
-            for segment in pending:
-                segment.visual_status = "failed"
-                segment.visual_model_id = provider.model_id
-                segment.visual_sample_count = 0
-            return f"画面语义分析失败：{exc}；可重试或人工补充描述。"
-        return (
-            f"已生成 {len(pending)} 个镜头的画面语义向量"
-            f"并复用 {len(cached_ids)} 个缓存，等待审核。"
-        )
-
-    def _suggest_usage_roles(self, asset: MaterialAsset) -> str:
-        asset.suggested_usage_role = "unassigned"
-        asset.usage_role_confidence = 0.0
-        asset.usage_role_reason = ""
-        for segment in asset.segments:
-            segment.suggested_usage_role = "unassigned"
-            segment.usage_role_confidence = 0.0
-            segment.usage_role_reason = ""
-
-        provider = self.visual_provider
-        if not provider.ready:
-            return "画面模型未就绪，未生成素材用途建议。"
-        try:
-            if self._usage_role_prompt_vectors is None:
-                self._usage_role_prompt_vectors = provider.embed_texts(
-                    [*_A_ROLL_PROMPTS, *_B_ROLL_PROMPTS]
-                )
-            prompt_vectors = self._usage_role_prompt_vectors
-            if len(prompt_vectors) != len(_A_ROLL_PROMPTS) + len(_B_ROLL_PROMPTS):
-                raise ValueError("素材用途提示向量数量不正确")
-
-            scored_segments: list[MaterialSegment] = []
-            for segment in asset.segments:
-                vector = self._visual_feature_for_segment(asset, segment, provider.model_id)
-                if not vector:
-                    continue
-                scores = [
-                    _cosine_similarity(vector, prompt_vector)
-                    for prompt_vector in prompt_vectors
-                ]
-                a_roll_score = max(scores[: len(_A_ROLL_PROMPTS)])
-                b_roll_score = max(scores[len(_A_ROLL_PROMPTS) :])
-                margin = abs(a_roll_score - b_roll_score)
-                if margin < _ROLE_SUGGESTION_MARGIN:
-                    segment.usage_role_reason = (
-                        "人物口播与补充画面得分接近，保留人工判断"
-                        f"（A {a_roll_score:.2f} / B {b_roll_score:.2f}）"
-                    )
-                else:
-                    segment.suggested_usage_role = (
-                        "a_roll" if a_roll_score > b_roll_score else "b_roll"
-                    )
-                    segment.usage_role_confidence = round(
-                        min(0.99, 0.5 + margin * 5),
-                        3,
-                    )
-                    label = (
-                        "人物面对镜头口播"
-                        if segment.suggested_usage_role == "a_roll"
-                        else "补充画面或环境空镜"
-                    )
-                    segment.usage_role_reason = (
-                        f"画面更接近{label}"
-                        f"（A {a_roll_score:.2f} / B {b_roll_score:.2f}）"
-                    )
-                scored_segments.append(segment)
-        except (OSError, ValueError, VisualSemanticError) as exc:
-            return f"素材用途建议失败：{exc}；请人工判断。"
-
-        if not scored_segments:
-            return "没有可用于判断素材用途的画面向量。"
-        coverage = len(scored_segments) / max(1, len(asset.segments))
-        if coverage < 0.75:
-            asset.usage_role_reason = (
-                f"仅完成 {len(scored_segments)}/{len(asset.segments)} 个镜头的用途判断"
-            )
-            return "画面分析覆盖不足，请重试后再确认素材用途。"
-        counts = {
-            role: sum(segment.suggested_usage_role == role for segment in scored_segments)
-            for role in ("a_roll", "b_roll")
-        }
-        dominant_role = max(counts, key=counts.get)
-        dominant_segments = [
-            segment
-            for segment in scored_segments
-            if segment.suggested_usage_role == dominant_role
-        ]
-        dominant_ratio = len(dominant_segments) / len(scored_segments)
-        if dominant_ratio >= 0.75 and dominant_segments:
-            asset.suggested_usage_role = dominant_role
-            asset.usage_role_confidence = round(
-                dominant_ratio
-                * sum(segment.usage_role_confidence for segment in dominant_segments)
-                / len(dominant_segments),
-                3,
-            )
-            label = "人物主镜头" if dominant_role == "a_roll" else "B-roll"
-            asset.usage_role_reason = (
-                f"{len(dominant_segments)}/{len(scored_segments)} 个镜头建议为{label}"
-            )
-            return (
-                f"用途建议：{label}"
-                f"（置信度 {round(asset.usage_role_confidence * 100)}%）。"
-            )
-
-        asset.usage_role_reason = (
-            f"镜头用途混合或不确定：人物主镜头 {counts['a_roll']} 个，"
-            f"B-roll {counts['b_roll']} 个"
-        )
-        return "素材包含混合或不确定镜头，请逐段确认用途。"
-
-    def _cached_visual_segment_ids(
-        self,
-        workspace_id: str,
-        model_id: str,
-        fingerprints: dict[str, str],
-    ) -> set[str]:
-        if not fingerprints:
-            return set()
-        with self._connect() as conn:
-            rows = self._material_assets._visual_feature_cache_rows(
-                conn, workspace_id, model_id,
-            )
-        return {
-            str(row["segment_id"])
-            for row in rows
-            if fingerprints.get(str(row["segment_id"])) == str(row["fingerprint"])
-        }
 
     def _validated_library_file(self, raw_path: str) -> Path:
-        path = Path(raw_path).expanduser().resolve()
-        try:
-            path.relative_to(self.video_library_path.resolve())
-        except ValueError as exc:
-            raise ValueError("素材文件不在配置的素材库中") from exc
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
-            raise ValueError("素材文件不存在或格式不支持")
-        return path
+        return self._material_source_files.validated_library_file(raw_path)
 
     def _probe_duration(self, path: Path) -> float:
         completed = subprocess.run(
@@ -10334,7 +10039,7 @@ def _local_adoption_repository(cls, database_path, media_root):
     # Maintenance deliberately bypasses __init__: even dry-run must not provision.
     repository = cls.__new__(cls)
     repository.database_path = Path(database_path).expanduser()
-    repository.video_library_path = Path(media_root).expanduser()
+    repository._material_source_files = MaterialSourceFileAccess(repository._connect, Path(media_root).expanduser())
     repository._material_assets = MaterialAssetStore(repository._connect)
     repository._initialize_profile_stores()
     return repository
@@ -11280,16 +10985,6 @@ def _string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
 
 
 
-def _cosine_similarity(left: list[float], right: list[float]) -> float:
-    if len(left) != len(right) or not left:
-        raise ValueError("画面与提示向量维度不一致")
-    left_norm = sum(value * value for value in left) ** 0.5
-    right_norm = sum(value * value for value in right) ** 0.5
-    if left_norm <= 1e-12 or right_norm <= 1e-12:
-        raise ValueError("素材用途向量无效")
-    return sum(a * b for a, b in zip(left, right, strict=True)) / (
-        left_norm * right_norm
-    )
 
 
 def _material_contains_text(text: str, phrase: str) -> bool:
@@ -11426,19 +11121,3 @@ def _material_query_reasons(
     ):
         reasons.append(f"自然语言匹配用途 {role}")
     return reasons
-
-
-
-
-
-def _visual_fingerprint(
-    path: Path,
-    segment: MaterialSegment,
-    model_id: str,
-) -> str:
-    stat = path.stat()
-    raw = (
-        f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:"
-        f"{segment.start_seconds:.3f}:{segment.end_seconds:.3f}:{model_id}"
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
