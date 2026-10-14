@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 关联四动作六路径5e267f78…已冻结SOURCE_RELEASE，旧speed模块删、五现源固定，10最小PASS含仅1受影响旧speed HTTP；首新cue断言错1FAIL保留/只改该断言，产品不改。产品只读等R6一个关键族门，不复测10/旧16或接下一组写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 关联四动作六路径5e267f78…已冻结SOURCE_RELEASE，旧speed模块删、五现源固定，10最小PASS含仅1受影响旧speed HTTP；首新cue断言错1FAIL保留/只改该断言，产品不改。产品只读等R6一个关键族门；仅可写fresh-api-subtitle-family-preparation只读准备证据，不复测10/旧16或接下一组产品写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | discovery三源24f3eb18…已312636f精确集成/WRITE_LEASE_RETURN；首次独立2PASS0.86s验证原分阶段提交，当前产品/证据只读待下个关键组，不重跑module3/normal2/旧已过矩阵。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R2-LINKED-TIMELINE-INDEPENDENT-20261014产品只读，只写fresh-runtime-reload/linked-timeline-independent，核五现源+一删5e267f78…三个代表恢复/晚权限/lateSQL族反例；10作者/旧16审计复用。短预览实际标定保持unknown，原资源准备门不重跑。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -20,6 +20,8 @@
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | discovery三源24f3eb18…已312636f精确集成/WRITE_LEASE_RETURN，当前无产品写权；审核R6关联族独立门后含一删六路径集成，再绑定依赖已满足后续。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+`REF-R2-SUBTITLE-FAMILY-PREPARATION-20261014` 仅给当前API只读准备及新证据目录 `test-runs/refactor-20261014/fresh-api-subtitle-family-preparation/**` 写权，产品和所有冻结证据仍只读。定向定位剩余纯字幕内容/结构/样式的实际preview、confirm、固定结果、直接/自然语言消费者，区分已接受metadata动作与媒体对齐/生成/cover，列出最小同职责下一组的精确旧body、既有calculator/公共事务复用、拟新增有限usecase和受影响既有测试node。准备不执行或collect测试、不全仓清点/读旧矩阵、不修改任何源或重写已冻结回执；只给依赖、退役目标、最小自测和一个关键族独立反例建议。关联族独立门与当前五源一删tuple不变，无需其他线程空ACK/HOLD；通过精确集成及原lease归还后主控另绑定产品范围。
 
 discovery三源24f3eb18…已 `312636f28dd14ba4f19d40b71b5f4699df3b2117` 精确集成，R4/QA及root production写租约已即时归还。冻结 `fresh-qa/discovery-asset-staged-independent/SOURCE_GATE.json` SHAb61b1b01b62f4dcd670a7dddd2145f7ff28c9b64b8ad08b414e08249cef04a5c，首次actual2PASS0.86s，173map/43actualimports/执行期script与fixture无漂移，33artifact及原body/普通门审计；真实事务序列observation COMMIT→asset ROLLBACK、ingestion COMMIT→first asset COMMIT→later asset ROLLBACK，failed/foreign/未到后续行与媒体bytes保持。五methods与四薄消费者归属已收敛，原store3/rootnormal2不重跑，下文该候选冻结/独立要求已履行不重派；该组不接受其他material/profile/analysis消费者、全R4/R9、真实媒体/账户/资源或跨原分阶段的全DB/FS原子性。当前关联族仍按其独立固定tuple审核，不混入此三源做新旧门重测。
 
