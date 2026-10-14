@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-PREPARATION-20261015仅fresh-runtime/output-observation-trim-last-frame-preparation/**新只读证据；核一条trim整数截止＋最后PNG覆盖输出的具体假设，不重复ffprobe16包研究/原型。零native/app/test/产品/预算，字段与可执行候选尚未批准。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白读取三源已df1dd384精确集成/WRITE_LEASE_RETURN。本批REF-R4-NARRATION-WRITE-PREPARATION-20261015仅fresh-r4-authorizations/narration-write-preparation/**新只读证据：原旁白分段唯一写body、所有sameconn调用与共同不变量；最多8精准源，零产品/import/test/native。准备不授予产品写权，不复跑旧批。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -49,7 +49,17 @@
 
 `REF-R4-NARRATION-READS-20261015` 三源已df1dd384b42e8aa135f92390fb026d2c5dd302c6精确集成，cached/committed字节等SOURCE_RELEASE SHA36ad19d7d21e79f9fa164ce960cf92d402c2ae1aa9b3eac88986d86e2607f6f9；即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN已发资料。root narration-reads-release-reviewed.json SHAd552ad15f2d7ec35ad3ed80ea854d2b61fdd9858ef13b2bc7ccf5b924522be19核29artifact、51源48固定Git、2attempt全prepost/7脚本/2fixtureAST、50→51真实imports/49源与2namespace loader守卫，whole Production只两导入与sameconn读表达式、raw module只两原SQL/参数/fetch/signature，原selector/None-only/after-with错误DTO、所有写及旧测试AST/bytes保留。首次namespace origin=None收集错误新node未执行；证据守卫修正后仅该node1PASS0.50s。root新产品测试0、普通读取不另加QA；全旁白仓储/R4/R9未接受。原三源/证据冻结不复跑，root集成记录narration-reads-integrated.json SHA39aaf43383ee7bd0e678b85c363d2532e78fd9e21b0461acc498171cd3e8dde5。API正在实施六源仍固定80c76a7d加自身overlay，资料独立集成差额单列，不要求它混入另批live源码或重复ACK/normal；全HEAD同候选接受仍在后续。
 
-### 本批最后帧具体假设只读准备
+### 本批最后帧假设有限实测
+
+`REF-R3-TRIM-LAST-FRAME-NATIVE-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-trim-last-frame-native/**原型/脚本/夹具/证据。产品、字段、请求语义、预算/profile与旧包全部只读；不先部署采样修复。前述只读release4cc34dc6011efbaed978103a97d6bf76cdfedb77f3324f1f8c6e0be433b14055已root output-observation-trim-last-frame-preparation-reviewed.json SHAed8026c40a8910b290ae7c59bd59b6514e48e1eeaf6083295d2c475e341e8996核5artifact/3源等起始Git/4完整AST/封存prepost/两个官方来源，FIRST未证明前提而非真实媒体失败，WRITE_LEASE_RETURN已即时发。root决定只进行有限可推翻实验，不再要求先用静态资料证明任意解码器/输入；一般呈现前缀与真实EOF仍须按实际证据保留未知。
+
+单一原型仍为noaccurate/copyts keyseek→整数PTS/timebase showinfo→trim仅end_pts=floor(absolute T/q)+1→scale/同帧identity→image2 update=1/atomic_writing/passthrough最后PNG；不引入其他算法、frames:v=1、reverse缓存、机械增加16窗口或从头反复全片解码。先只读REBASE_ACK final核当前精确合同/执行前source与script封存/原grant与原synthetic资源fixture完整AST/产品与API六WIP排除、该假设无普适证明；root核后发START才运行本node。只从已冻结191-source闭包及原资源fixture取实际必要有限源，原创建/许可/登记子进程/exec ACK/remaining totaldeadline/单线程/stdout stderr输出限额/取消与释放保持，全部actual imports/脚本/fixture前后绑定。原fixture caps仅实验域，不变资源门或用budget=None、猜RSS/配置放行；若旧fixture无法在不放宽门情况下支持新命令，记录该精确停止条件，不临时添加无依据profile。未用profile/真实HostResourceProbe/full inflightPGID不记生产接受。
+
+一个合并node：精确字节复用自有旧短源（.17）与longGOP源（.93/1.87）及旧独立PTS/unique PNG参照，旧候选算法/已过node/源生成零复跑；针对新机制的这些未通过目标执行才计新实验。必要时只新建一个自有≤2s/≤64可见帧的H264、非零起点＋B重排＋VFR有限源，两个中间/尾部目标及一项明确deadline/cancel停止同node；用一次有限独立参照核新源全帧PTS/同帧PNG，不拿参照选产品帧或扩展任意媒体扫描。所有源必须在自己的已授权证据域，不读用户媒体/DB/env/账号；原型实际源start/time_base/integer PTS按原探针测量，不能用请求T、packet DTS或猜fps代填。CLI整数与origin映射、filter pad与encoder timebase、last PNG与最后实际提交PTS、一对一/同步/临时文件写路径如实登记。final和实际atomic临时路径均纳入原output_paths/总量，不绕过临时写资源门。允许同原grant先最多3条已存在binary的version/必要trim和image2 help作为实际构建/选项元数据，所有命令同样登记与限额，不装新依赖/下载/换执行器。
+
+候选与参照比较的是实际呈现PTS及可区分PNG。出现首后继不自动等同完整前缀，实际观察单调不升级任意输入证明；尾部没有后继时，rc0或trim EOF不替代真实demux EOF＋decoder drain，没有准确见证则该项UNKNOWN。错误/缺PTS/重写/超时/cancel/byte cap/未释放必须真实拒绝或未完成，不用诊断node绿号掩盖。先保留首次实际失败与原脚本；只修精确fixture/binding观察错误时重验失败节点，不改变mechanism/门限求PASS；真机制或资源失败保留并release结果，root判断后续，不盲重试。有限通过、原型可行性与产品修复/生产资源/GUI/全R3/R9分别记录。READONLY_NATIVE_EXPERIMENT_RELEASE封存后全部冻结即时归还；root据实测再决定产品差额与独立门，不把本原型当产品实施授权。资料与API授权、已核ACK不撤销/复跑。
+
+### 已履行最后帧具体假设只读准备（冻结规约）
 
 `REF-R3-TRIM-LAST-FRAME-PREPARATION-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-trim-last-frame-preparation/**。上一策略release672480be3521d3ee8cd42c92a09057fcd5cfcefd3ec194b310bc8a06c16369fe已root output-observation-frame-sampling-strategy-preparation-reviewed.json SHA88d8ca01b262432988c0345b4196d441d33f787cbd02a3a4454c8f764fe43368核5artifact/8逻辑源7当前Git/2冻结main函数/15完整AST/6旧证据和最终封存区间；零app/native/test，ATOMIC_FRAME_IDENTITY_AND_STOP_WITNESS缺口保留，WRITE_LEASE_RETURN即时已发，旧包冻结。原资源门、请求消费者、字段提案与未知生产验收沿上一报告，不重抄/重查。
 
