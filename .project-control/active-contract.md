@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | settings六源97815d98…保持准确冻结等R6，不混批；R2proposal只读建议可先结束，现另沿REF-R4-ASSET-RAW-CONSUMERS-20261014独占production两已清点消费者与必要维护轻组装、实际新增material raw消费者测试，接R4两准确冻结源。main/settings/R4模块只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | settings六源97815d98…已2e208b7按有限同步持久窗口准确集成/WRITE_LEASE_RETURN，不复测；当前只按REF-R4-ASSET-RAW-CONSUMERS-20261014写production两消费者/轻组装与新测试，不自动恢复其它main/driver旧写权。R2proposal只读建议已请求简短定位，完成后据具体接口给下一源。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；当前合并核Web八源4d036e4a…退役静态及R5当前真实Shell三尺寸可见差额，明确API base19a8b94＋八Web overlay，3447/9447隔离端口；审计复用6自测/类型，不重复旧51/10/全文矩阵。settings实际HTTP独立门归R6。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品全部只读；现沿准确settings六源97815d98…与原PREPARED_GATE执行原三HTTP输入、成功control和一项必要恢复拒绝独立差额，有限快照base ee1cf4b+六overlay，不混其它WIP。原驱动/DB/tmp/预算门不重复，核原存储/cache及实际旧owner后续工作；完整activation/crash/native尚未接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品全部只读；settings独立5场景有限持久窗口已通过并2e208b7集成归还，不重复5/20。仅从现success证据及_start_device_runtime直接条件给新Device不可用首实际decision/fixture缺口简注，未记录就unknown，不新测/猜预算。完整activation/crash/native仍未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5八源死kind/五client退役已SOURCE_RELEASE4d036e4a…准确冻结；6实际PASS/33SKIP与类型/lint分别记录，待同tuple真实Shell可见差额和联合门，产品只读，不复测/重跑旧门。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | asset raw两源346e0e02…已SOURCE_RELEASE准确冻结，3实际PASS/42静态保持，当前产品只读；API接五消费者及轻组装后联合差额，不重复旧模块/维护门，不以module-only接受。profiles原四已19a8b94归还。 |
 
@@ -85,6 +85,8 @@ producer仅补3个必要模块边界：raw字段/空白/列visibility/None与作
 R4 asset raw两源346e0e022849a8c852c334bfe6b0396d1666e16cd1bb5b4fbe1f140aa010d06f已准确释放，现绑定独立 `REF-R4-ASSET-RAW-CONSUMERS-20261014`：API仅独占现Git干净的 `apps/api/app/production.py` 中 `_profile_reference_source` material-by-path SELECT与 `_local_adoption_plan` 四material SELECT的薄接线/旧body删除，以及 `_local_adoption_repository` 必要轻 `MaterialAssetStore` 组装；实际新增 `apps/api/tests/test_material_raw_reader_consumers.py`（绑定时不存在）。现production字节等19a8b94/base bc3dd11d…，无其它writer；R4 assets/test_material_asset_store两源只读准确冻结，其余main/settings/profiles/DDL/维护DML及既有local adoption测试只读。用五已释放方法保留caller conn、原payload/visibility/full row/None/foreign rows及global path/ID冲突；无新ORDER BY/过滤/去重，raw摘要/dict/path/权限/manifest/CAS/采用事务决策保持API原位，源fallback继续同一decoder用column visibility。轻维护组装不调用full repo ctor/初始化/模型/文件预备，原profile owner两绑定不改。
 
 本批producer只跑实际source fallback/列visibility、foreign/global collision拒绝、raw digest/caller未提交与rollback的最小consumer差额，必要一个现readonly dryrun仅用于新轻组装门；原3模块与既有profile/asset/adoption矩阵审计复用、不全重跑。精确joint SOURCE_RELEASE为本批实际API源＋R4两源，列actual imports/commands/exits/原两个消费者五SQL不存在及其它production AST保持，不混settings六源或Web八源。随后一次联合独立反例核global范围/foreign row与事务，不能逐reader另开复杂QA或把源码/合成SQLite当真实用户维护/模型/全R4。语义REBASE_ACK后直接实施；当前R2只读建议完成即可先交，不重读旧总清单或等待用户继续。
+
+settings有限同步持久窗口独立门已以97815d98…准确六源接受并集成2e208b7、即时归还：原3失败保全/确认恢复，恢复拒绝明确503且affected cache失效，失败时旧三个owner完成实际后续工作；成功对照委托原activation一次，新worker/automation及continuation确实工作。但success记录new_device_runtime_available=false；不得将5场景PASS升级为完整safe reload、DeviceRuntime生产可用、activation失败恢复、crash/scheduled/native/keychain/media。R6仅从现同case/脚本及必要直接条件给 `post-persistence-fixed-independent/DEVICE_AVAILABILITY_NOTE.json` 简注首实际decision或fixture差额；没有记录原因就unknown，不运行新探针/校准、不猜或放宽resource预算、不扩大读取/写权。这一缺口单列，其他独立已授权批继续。
 
 ## 用户决定、入口与范围
 
