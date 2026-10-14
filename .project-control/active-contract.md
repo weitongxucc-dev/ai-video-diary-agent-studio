@@ -12,20 +12,32 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频编辑替换五源d28552de…/SOURCE_RELEASE9aa0612a…冻结只读，原声资源差额已root审阅解决；当前无产品/新增证据写权，待一个独立族，不重跑作者或旧门。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-AUDIO-EDIT-INDEPENDENT-20261015仅新fresh-qa/audio-edit-independent/**证据写权，固定3d3eb08加准确五overlay，三个实际base/after新增来源/final事务反例，产品与全部旧证据只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频编辑五源d28552de…已75642af准确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发送；当前无产品/新增证据写权，冻结旧作者与资源修正证据，不重跑已过族。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-PERSON-RENDER-STORE-PREPARATION-20261015仅新fresh-r4-authorizations/person-render-store-preparation/**证据写权，定向人物片段七存储/状态/产物方法与直接类型/owner依赖，只读给一个可实施仓储包或精准依赖；所有产品/旧注册门冻结，不执行测试媒体。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-TASK-INPUT-READS-20261015独占production.py、creation/contracts.py及NEW creation/task_input_reads.py、tests/test_creation_task_input_reads.py四路径，75642af基线；只完成同conn完整任务/配音读取前置与canonical类型，普通拆分一个合并自测，旧人物准备和全部已过证据冻结。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
-### 当前恢复与档案注册两个互斥实施包
+### 当前任务与配音读取前置实施包
 
-### 当前音频编辑独立关键族门
+`REF-R4-TASK-INPUT-READS-20261015` 只给当前资料/档案线程上述准确四源及新 `test-runs/refactor-20261014/fresh-r4-authorizations/task-input-reads/**` 证据写权。固定产品基线75642af2574e2c7d2e085f7ba56098454c9dca4f；准确初始SHA、两个NEW不存在与空index/四路径干净见 `fresh-root-review/task-input-reads-implementation-binding.json` SHA132575a3f69878de4dc63200103f643a85dda96e01b3c65bfe75b7b3c51b0e14。人物仓储只读准备SOURCE_RELEASE SHA18334bc4b8184fe073ac40b0df387188b7d49bc3b9c5b4eeba0cde8e2fa08dfc及root审阅9d1442ed…已核6artifact、21完整目标AST、8直接文件读期不变，零产品/import/test/media；它准确发现现get_narration_segment新开conn/再核task/不同缺失错误，不能替代人物create的同conn完整decoder读取。准备证据冻结，不重做旧注册/授权或整个production清点。
+
+仅将CreationTask、NarrationSegment、NarrationSegmentStatus完整原定义和纯_validate_logical_reference原规则唯一归属creation/contracts.py；production保留原公开/私有名称直接alias，类identity、全部字段/default/property及URI/Path错误规则不变，不加新类型/政策。NEW creation/task_input_reads.py有限公开require_creation_task(conn,workspace_id,task_id)、creation_task_from_payload(data)、narration_segment_from_row(row)原body完整迁移；production原三个静态helper仅明确delegate。保留原完整CreationTask SELECT/decode、narration全部字段/date/default/错误顺序，不替换为EXISTS或现新conn getter。调用方显式传原conn，读取模块不构造factory、不打开/提交/回滚连接，不反向import production/main，不加callback/deps袋或新任务CRUD/配音生成。其它production业务、schema、资格/授权、profile/voice版本、人物状态/产物、执行/resource/model/API/Web皆原样只读。
+
+本包为原body、身份、同conn、完整decoder与错误契约不变的普通拆分，NEW tests/test_creation_task_input_reads.py只一个合并native SQLite selftest，验证canonical alias identity、完整任务/配音字段/原缺失与logical-ref规则、使用caller未提交数据同conn且不自行commit；根控做完整目标AST/旧入口委托与所有非目标源审核，不派每方法独立QA或重跑旧族/媒体/模型。相关source/实际import/直接fixture/执行脚本先seal并记prepost，有限实际owner组装，首次失败如实只复验失败或确实受影响项；SOURCE_RELEASE提供准确四源/TAB摘要、基线差额、唯一类型/helper退役及一个真实执行记录。若发现实际身份/状态/事务或其它路径必须改变，先停在一个精准依赖交根控，不自行扩大或以本自测冒充关键验收。语义REBASE_ACK后直接实施，无第二START；人物PersonRenderStore主体尚无写权，必须等此前置精确集成后另绑。
+
+### 音频编辑关键族已集成与写权归还
+
+音频编辑准确五源已75642af2574e2c7d2e085f7ba56098454c9dca4f集成，index/committed路径及五blob与d28552de…一致；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。独立SOURCE_GATE SHAe35bc215544f257557840f92e4b44a55f810e21cd87dbba4697a890a4a8fb150首次3PASS6.94s/3实际执行无失败，作者和旧门0新执行。root审阅 `fresh-root-review/audio-edit-independent-reviewed.json` SHA7cd90b604dd62c687fca9d8adc26b2a67723918a97e6a448015e438df0dededd核44artifact/107复用/13合成final文件、486冻结源、185实际imports前后、2child脚本/6直接fixture prepost、8factory/3实际runtime图及28实际grant工具/28登记child exited；root产品测试0。集成回执 `fresh-root-review/audio-edit-source-integrated.json` 记录精确五blob，旧作者6实际/4失败与原声修正1PASS如实冻结，不用通过数替代层级。
+
+真实公开非draft试听两文件及三联登记后，外部native CAS推进base，原最后核验409拒绝，外部HEAD及预发布事实保留，无intent/proposal/op/result/verified；实际新after来源不在before graph，确认precheck后外部native转移其owner，最终AudioEditSourceGuard委托真实TaskAudio ACL403拒绝，外部变更/outer claim保留且editorial不应用。真实合法source guard通过后，第二字幕INSERT native晚trigger在op/version/首轨已SQL后拒绝，同conn ROLLBACK/observer确认联合editorial十表恢复，cover等后续未到达不称已写；先前media/input/result/verified/intent/proposal及outer claim如实保留，无apply result/wake。本代表原IntegrityError传播TestClient，未形成HTTP响应，不新增或伪称错误映射。完整audio_source_facts缺失旧提案仍409重预览，未接受全部历史提案迁移；fixture资源准入/字幕替身、真实生产预算/default mode/RSS/fullPGID、模型/GUI/native与剩余七非音频载体及全R0–R9同候选真实接受均未验证。下列旧音频实施与门规约仅冻结证据，不再授予写权。
+
+### 已履行音频编辑独立关键族门（冻结规约）
 
 `REF-R3-AUDIO-EDIT-INDEPENDENT-20261015` 仅给当前独立QA新 `test-runs/refactor-20261014/fresh-qa/audio-edit-independent/**` 证据写权，所有产品、作者、已过门和旧失败冻结只读。使用修正后准确SOURCE_RELEASE `fresh-api-audio-edit-resource-parity/SOURCE_RELEASE.json` SHA9aa0612aed5d7498edd886e52f6d40f960fb33096a0895db61359631fcc1ab44、五源TABd28552de4e7696ae0eab652f23f8ee7835221017349879f37cd1b2772ea6d0bc，固定3d3eb088a33154f60dc1a3406fa245349022f831加五overlay，486 source map69c11ef444c91cf6585100a7acbca24525a622cd8ddb0c40e6dc9c38b35d8108。准确每源SHA/同候选snapshot从该回执及其source_binding取；旧9fd138b8/e966包仅复用，不能作为当前执行tuple。root预审 `fresh-root-review/audio-edit-resource-parity-pre-independent-reviewed.json` SHAaa799cfbcf06b79972f2de82937a3576cb35e372511146093577f6619535e960已核31新artifact/72旧只读复用、五live/486snapshot、与原预审7a2965cc…481Git同一仅单文件差额、182实际imports前后/四scripts/一原测试prepost/八组装、唯一受影响载体节点首次1PASS7.05s/34真实grant工具34登记child。90原声seal/122非原声mix是同节点观测次数，不算代表或生产decision；原声15字段及原条件/顺序/错误AST、非原声mix与所有其它module/四源保持均已核。此前direct正常PASS只按旧503重抛/空输入静态限制复用，不重跑；旧历史6实际含4失败、本次1实际PASS如实，只有两个不同作者normal node。本族仍未通过，生产资源/default mode/RSS/fullPGID/整体未接受。
 
