@@ -332,14 +332,14 @@ def test_apply_request_identity_is_not_reusable_for_another_proposal(material_ed
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == version
 
 
-def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(material_edit_state):
-    state = material_edit_state
+def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(tmp_path, monkeypatch):
+    from test_timeline_restore_application import restore_http_state
+    state = restore_http_state(tmp_path, monkeypatch)
     original = state.production.get_creation_task(state.workspace_id, state.task.id)
     original_version = state.production.get_timeline_version(state.workspace_id, original.current_timeline_version_id)
-    preview = state.client.post(state.base_url + "/edits/exact/preview", json=bound(state, **replace_action(state)))
-    assert preview.status_code == 200, preview.text
-    proposal_id = preview.json()["proposal"]["id"]
-    assert state.client.post(state.base_url + f"/edits/{proposal_id}/confirm", json={"request_id": str(uuid4())}).status_code == 200
+    saved = state.client.post(state.base_url + "/edits/exact", json=bound(state,
+        operation_type="ChangeCrop", clip_id="clip", fit_mode="fit", crop_x=.3, crop_y=.7))
+    assert saved.status_code == 200, saved.text
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     undo = state.base_url + "/timeline/undo"
@@ -348,6 +348,8 @@ def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(m
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == version.id
     assert state.client.post(undo, json={"expected_timeline_version_id": version.id}).status_code == 422
     assert state.client.post(undo, json={"expected_timeline_sequence": version.sequence}).status_code == 422
+    assert state.client.post(undo, json={"expected_timeline_version_id": None, "expected_timeline_sequence": None}).status_code == 422
+    assert state.client.post(undo, json={"expected_timeline_version_id": None, "expected_timeline_sequence": version.sequence}).status_code == 409
     _other, token = state.members.join(state.members.create_invite_code(), "other history caller")
     expected = {"expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
     assert state.client.post(undo, json=expected, headers={"X-Local-Member-Token": token}).status_code in {403, 404}
@@ -359,6 +361,11 @@ def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(m
         "expected_timeline_version_id": undo_version.id, "expected_timeline_sequence": undo_version.sequence})
     assert redone.status_code == 200, redone.text
 
+
+    legacy = state.client.post(undo, json={})
+    assert legacy.status_code == 200, legacy.text
+    unavailable = state.client.post(undo, json={})
+    assert unavailable.status_code == 409 and unavailable.json()["detail"]["error"] == "timeline_undo_unavailable"
 
 def test_other_member_cannot_read_or_replay_private_typed_edit(material_edit_state):
     state = material_edit_state

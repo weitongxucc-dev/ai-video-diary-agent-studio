@@ -84,6 +84,8 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
     prepare_clip_command, apply_clip_proposal, prepare_subtitle_display_command)
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
+from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCase, TimelineRestoreCommand,
+    TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
     LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError)
@@ -10009,19 +10011,7 @@ def _current_narration_snapshot(workspace_id: str, task: CreationTask) -> dict[s
 def _narration_segments_from_snapshot(
     snapshot: dict[str, object],
 ) -> list[NarrationSegment] | None:
-    raw_segments = snapshot.get("narration_segments")
-    if not isinstance(raw_segments, list):
-        return None
-    segments: list[NarrationSegment] = []
-    for item in raw_segments:
-        if not isinstance(item, dict):
-            raise ValueError("时间线中的配音片段快照无效")
-        payload = dict(item)
-        for key in ("created_at", "updated_at"):
-            if isinstance(payload.get(key), str):
-                payload[key] = datetime.fromisoformat(str(payload[key]))
-        segments.append(NarrationSegment(**payload))
-    return segments
+    return MetadataEditUseCase.narration_segments_from_snapshot(snapshot)
 
 
 def _ensure_montage_base_version(
@@ -13894,199 +13884,26 @@ def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: boo
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (control.expected_timeline_version_id, control.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise HTTPException(status_code=409, detail="历史恢复所依据的时间线已变化，请重新读取当前版本")
-    changed_version, target_version = (redo_target_versions if redo else undo_target_versions)(production_repo, workspace_id, task)
-    operation_type = "RedoTimelineVersion" if redo else "UndoTimelineVersion"
-    action_label = "重做" if redo else "撤销"
-    if changed_version is None or target_version is None:
-        raise _topic_failure_response(
-            status_code=409,
-            error="timeline_redo_unavailable" if redo else "timeline_undo_unavailable",
-            reason=f"当前没有可{action_label}的内容修改。",
-            impact="任务和时间线保持不变。",
-            repair_action="先撤销一次修改，再使用重做。" if redo else "先完成一次镜头、配音或字幕修改，再使用撤销。",
-            retryable=False,
-        )
+    case = _timeline_restore_use_case()
     try:
-        changed_operation = production_repo.get_edit_operation(
-            workspace_id, changed_version.created_by_operation_id or ""
+        prepared = case.prepare_restore(TimelineRestoreCommand(workspace_id, task, redo))
+        restore_output = _creation_render_is_valid(
+            workspace_id, task_id, verify_media=False, timeline_version=prepared.target_version,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=409, detail="timeline undo operation is unavailable") from exc
-    subtitle_cover_undo = redo or changed_operation.operation_type in {
-        "RedoTimelineVersion",
-        "ConfigureSubtitleTrack",
-        "GenerateCoverFromFrame",
-        "UpdateSubtitleCue",
-        "ReplaceSubtitleText",
-        "SplitSubtitleCue",
-        "MergeSubtitleCue",
-        "DeleteSubtitleCue",
-        "ChangeCanvas",
-        "SetClipTransition",
-        "EditGraphicOverlay",
-        "EditCompoundTimeline",
-        "RemoveSilence",
-        "AlignSubtitleTiming",
-        "ReorderClip",
-        "ReorderTimelineItems",
-    }
-    montage_snapshot = target_version.snapshot.get("montage")
-    if not isinstance(montage_snapshot, dict):
-        raise HTTPException(status_code=409, detail="timeline undo snapshot is unavailable")
-    try:
-        current_plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-        )
-        restored_plan = creation_task_montage_plan_from_payload(montage_snapshot)
-        restored_segments = _narration_segments_from_snapshot(target_version.snapshot)
-        if restored_segments is not None:
-            restored_at = utc_now()
-            restored_segments = [replace(segment, updated_at=restored_at) for segment in restored_segments]
-        restored_narration = None
-        restored_cache_key = target_version.snapshot.get("narration_cache_key")
-        if isinstance(restored_cache_key, str) and restored_cache_key:
-            restored_narration = production_repo.get_narration_artifact(
-                workspace_id, restored_cache_key
-            )
-            if restored_narration is None:
-                raise ValueError("时间线引用的配音总轨已丢失")
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail="timeline undo snapshot is invalid") from exc
-    restore_output = _creation_render_is_valid(
-        workspace_id, task_id, verify_media=False, timeline_version=target_version,
-    )
-    if not restore_output:
-        restored_plan, _ = _prepare_changed_montage(
-            restored_plan, message="草稿已恢复；原成片依赖或产物已失效，请明确重新生成。",
-        )
-    current_version = production_repo.get_timeline_version(
-        workspace_id, task.current_timeline_version_id or ""
-    )
-    restored_tracks: list[SubtitleTrack] = []
-    restored_cover: CoverAsset | None = None
-    result_version_id: str | None = None
-    if subtitle_cover_undo:
-        result_version_id = f"timeline_{uuid4().hex}"
-        target_tracks = _current_subtitle_tracks(
-            workspace_id,
-            task,
-            current_version=target_version,
-            montage=restored_plan,
-        )
-        restored_tracks = [
-            _clone_subtitle_track(track, timeline_version_id=result_version_id)
-            for track in target_tracks
-        ]
-        target_cover = _cover_asset_for_version(workspace_id, task.id, target_version)
-        restored_cover = (
-            _clone_cover_asset(target_cover, timeline_version_id=result_version_id)
-            if target_cover is not None
-            else None
-        )
-        current_tracks = _current_subtitle_tracks(
-            workspace_id,
-            task,
-            current_version=current_version,
-            montage=current_plan,
-        )
-        current_cover = _cover_asset_for_version(workspace_id, task.id, current_version)
-        restored_refs = {
-            *_logical_montage_output_refs(restored_plan),
-            *(track.artifact_ref for track in target_tracks if track.artifact_ref),
-            *([target_cover.artifact_ref] if target_cover and target_cover.artifact_ref else []),
-        }
-        current_refs = [
-            *_logical_montage_output_refs(current_plan),
-            *(track.artifact_ref for track in current_tracks if track.artifact_ref),
-            *([current_cover.artifact_ref] if current_cover and current_cover.artifact_ref else []),
-        ]
-        invalidated_refs = [reference for reference in current_refs if reference not in restored_refs]
-    else:
-        invalidated_refs = _logical_montage_output_refs(current_plan)
-        if not restore_output:
-            restored_plan, _montage_payload = _prepare_changed_montage(
-                restored_plan, message="草稿已恢复，可以重新生成。",
-            )
-    now = utc_now()
-    intent = production_repo.create_edit_intent(
-        EditIntent(
-            id=f"intent_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            raw_command=f"{action_label}上一次内容修改",
-            context_stage="subtitle_cover" if subtitle_cover_undo else "montage",
-            selected_object_refs=[],
-            playhead_ms=None,
-            intent_type="redo_timeline" if redo else "undo_timeline",
-            scope={"kind": "timeline", "version_id": changed_version.id},
-            constraints={},
-            confidence=1.0,
-            status="interpreted",
-            created_at=now,
-        )
-    )
-    proposal = production_repo.create_edit_proposal(
-        EditProposal(
-            id=f"proposal_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            intent_id=intent.id,
-            summary="重新应用刚才撤销的修改。" if redo else "恢复到上一次内容修改之前的版本。",
-            target_refs=[f"timeline:{changed_version.id}"],
-            operation={
-                "operation_type": operation_type,
-                "payload": {
-                    "changed_version_id": changed_version.id,
-                    "restore_version_id": target_version.id,
-                    "base_version_id": task.current_timeline_version_id,
-                },
-            },
-            invalidated_refs=invalidated_refs,
-            preview={
-                "before": {
-                    "ref": f"timeline:{task.current_timeline_version_id}",
-                    "label": "当前版本",
-                    "detail": f"版本 {production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id or '').sequence}",
-                },
-                "after": {
-                    "ref": f"timeline:{target_version.id}",
-                    "label": "恢复的任务状态",
-                    "detail": f"来源版本 {target_version.sequence}",
-                },
-            },
-            external_effects=[f"{action_label}会创建新的历史版本，不会删除原版本。"],
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    if subtitle_cover_undo and result_version_id is not None:
-        return _persist_subtitle_cover_edit(
-            workspace_id=workspace_id,
-            task=task,
-            proposal=proposal,
-            base_version=current_version,
-            result_version_id=result_version_id,
-            operation_type=operation_type,
-            operation_payload=dict(proposal.operation["payload"]),
-            subtitle_tracks=restored_tracks,
-            cover_asset=restored_cover,
-            updated_plan=restored_plan,
-            snapshot_source=target_version.snapshot,
-            narration_segments=restored_segments,
-            narration_artifact=restored_narration,
-        )
-    return _persist_typed_montage_edit(
-        workspace_id=workspace_id,
-        task=task,
-        proposal=proposal,
-        base_version=current_version,
-        updated_plan=restored_plan,
-        operation_type=operation_type,
-        operation_payload=dict(proposal.operation["payload"]),
-        narration_segments=restored_segments,
-        narration_artifact=restored_narration,
-        subtitle_source_version=target_version,
-    )
+        outcome = case.apply_restore(prepared, TimelineOutputQualification(prepared, restore_output))
+    except (TimelineRestoreUnavailable, LegacyMontageReference) as exc:
+        raise _topic_failure_response(**exc.details) from exc
+    except InvalidMontage as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _metadata_edit_response(outcome)
+
+
+def _timeline_restore_use_case():
+    return TimelineRestoreUseCase(production_repo, _metadata_edit_use_case())
 
 
 def _apply_creation_task_montage_clip_update(workspace_id, task_id, plan, clip_id, payload, *, request):

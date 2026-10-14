@@ -151,6 +151,27 @@ class MetadataEditUseCase:
         segments = self.repository.list_narration_segments(workspace_id, task.id, task.confirmed_script_id)
         return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False, default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value))) for segment in segments], 'narration_cache_key': task.narration_cache_key}
 
+    @staticmethod
+    def narration_segments_from_snapshot(
+        snapshot: dict[str, object],
+    ) -> list[NarrationSegment] | None:
+        from app.production import NarrationSegment
+
+        raw_segments = snapshot.get("narration_segments")
+        if not isinstance(raw_segments, list):
+            return None
+        segments: list[NarrationSegment] = []
+        for item in raw_segments:
+            if not isinstance(item, dict):
+                raise ValueError("时间线中的配音片段快照无效")
+            payload = dict(item)
+            for key in ("created_at", "updated_at"):
+                if isinstance(payload.get(key), str):
+                    payload[key] = datetime.fromisoformat(str(payload[key]))
+            segments.append(NarrationSegment(**payload))
+        return segments
+
+
     def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan) -> TimelineVersion:
         if task.current_timeline_version_id is not None:
             return self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
