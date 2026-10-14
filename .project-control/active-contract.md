@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期候选已 SOURCE_RELEASE 按准确六源冻结供 R6，当前接 production 人物/声音 records 消费者，两个精确候选互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；核稳定新 Web 消费者、API bootstrap 及 R4 授权联合候选；已过 Web/字幕/usage 门与原脚本只读复用。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，按生命周期准确六源 SOURCE_RELEASE 独立复验三个忙拒绝与必要失败/成功恢复五输入；原 DB/tmp 两门不重复，有限门不能算全安全重载或真实媒体接受。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期六源被许可异常窗口反例 SOURCE_BLOCK，仅 DeviceRuntime 与其既有测试重开修复，其他四源保持准确冻结。production 人物/声音 records 接线及下方只读维护轻组装为独立子片，互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；人物 records 联合门已准备，维护 dry-run 实际缺 owner 反例已交唯一 API 修复，待准确释放复验；已过门原脚本只读复用。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，保留生命周期原五输入通过及实际许可异常窗口失败，待新准确六源仅复验失败反例与必要受影响差额；原 DB/tmp 两门不重复，有限门不能算全安全重载或真实媒体接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源与执行回读/字幕四源均已 WRITE_LEASE_RETURN，当前独占下方 MaterialLibraryWorkspace 与既有同名测试的分页/查询归属修复；API 客户端与其他编辑子模块只读。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源已 WRITE_LEASE_RETURN，人物/声音 records 两源继续 SOURCE_RELEASE 冻结待 API 接线；当前产品只读，未接线模块不接受。 |
 
@@ -35,6 +35,8 @@ R4 已完成 `fresh-r4-authorizations/profile-records-readonly-01/REVIEW.json` �
 API 停止/持久化组依据现三个真实 stop-failure states 追加独占 `apps/api/app/device_runtime.py`、`apps/api/app/automation_runtime.py` 中实际需要的暂停/恢复生命周期入口及其直接 `_run`/`run_once`/`drive`/`start`/`stop` 接线；独占既有 `tests/test_device_runtime.py` 的最小对应验证与实际新增 `tests/test_automation_runtime.py`。当前两源与既有测试 Git 干净、新测试不存在，无其他 owner/WIP。main/bootstrap 与 `test_runtime_bootstrap.py` 仍同一 API 负责人：先可恢复地静止旧 owner、确认安全边界，再持久化与最终关闭/发布；暂停失败必须不先写 device/env/workspace/secret，已暂停的旧 owner 按原 graph 恢复，不能以旧 legacy pool 可用冒充所有旧驱动可用。新暂停不得触发已获准单元的终止分支、伪造许可释放、关闭仍活跃 scheduler 或创建第二协调者；正常终止/失败可见/停止恢复规则保持，实际并发与晚退出由生命周期 owner 负责。仅改本次实际生命周期符号，不迁入自动化业务、改变队列/准入/恢复政策、预算、权限、表或持久格式，不建通用状态框架。三个原反例及必要成功/失败恢复、已获准单元保持和原 driver 幂等/terminal-stop 最小验证分别留证；其他持久化错误或不能恢复的事实明确标项，不以这一片宣称跨 env/workspace/secret 全事务或完整 import 期组装退役。稳定 SOURCE_RELEASE 后 R6 在准确候选独立复验，当前 production/records 子片不与此生命周期组混合冻结。
 
 Web 素材库公开组件只读探针在 `fresh-web-consumers/materials-readonly/attempt-03` 复现 READ1–READ3 三个行为反例、源字节前后未变。现独占 `apps/web/src/components/MaterialLibraryWorkspace.tsx` 与 `apps/web/src/components/__tests__/MaterialLibraryWorkspace.test.tsx`，当前两文件 Git 干净、无其他 WIP/owner。仅修改 `loadMore`、查询首屏回读与其实际列表/error/total/hasMore/busy/assetWriteRevision 的请求归属接线和必要分页按钮门：旧分页成功/错误/完成不能覆盖后来查询的已接受或正在回读事实；新查询未接受自己的首屏时不得用旧列表数量或偏移发分页，返回相同参数的新请求轮次也不继承旧完成权。保留搜索失败最后可用集合、正常分页去重/总数/URL tag、现背景回读、明确选择和素材/片段/笔记草稿，未接受请求不得伪增写修订。不改变 API/类型/权限/持久格式、布局/CSS/视觉命名或现独立编辑 owner，不建通用状态层；实际必要其他符号/文件先报依赖。原三反例和正常分页、焦点/选择/草稿、必要现 tag/背景读最小回归及同候选真实浏览器单一查询/分页交错差额分别留证，不全重跑旧素材库/GUI矩阵。稳定准确 SOURCE_RELEASE 冻结后独立 QA 核同候选，组件/合成HTTP浏览器不能算 SQL/模型/媒体或整体产品接受。
+
+QA 在固定已提交候选的原 `test_local_adoption.py::test_dry_run_is_read_only_and_manifest_has_no_private_bodies` 实际复现轻构造遗漏 `_media_authorizations`，数据库和合成媒体字节前后相同。API 当前 production/records 子片追加 `production.py::_local_adoption_repository` 及实际必要的同文件有限 owner 组装接线；独占既有 `apps/api/tests/test_local_adoption.py` 的最小轻组装/只读回归，绑定时该测试 Git 干净且无其他 owner。维护轻构造只显式组装无 IO 的授权/人物仓储，不调用完整 `__init__`、startup、DDL、provision 或模型；原只读 URI、调用方事务、CAS、摘要和维护政策保持。授权已集成源与 R4 两冻结源只读；如需其他文件先报主控。按准确联合 release 执行原失败单用例及 records 必要公开门，不运行真实数据维护 apply 或无关矩阵。
 
 ## 用户决定、入口与范围
 
