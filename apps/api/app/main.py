@@ -99,7 +99,8 @@ from app.creation.editing.metadata_use_case import (
     prepare_changed_montage as metadata_prepare_changed_montage,
     logical_montage_output_refs as metadata_logical_montage_output_refs,
 )
-from app.creation.editing.compound import calculate_compound_edit, prepare_compound_proposal, apply_compound_proposal
+from app.creation.editing.compound_use_case import (CompoundEditUseCase, CompoundPreviewCommand,
+    CompoundSelectionCommand, CompoundProposalMissing, CompoundSelectionInputError)
 from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, SubtitlePreviewFailed, is_subtitle_edit)
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation.editing.affected import affected_source_clip_ids
@@ -12106,6 +12107,16 @@ def get_creation_task_edit_result(task_id: str, proposal_id: str, request: Reque
         return {"proposal_id": proposal.id, "base_version_id": proposal.operation["payload"].get("base_version_id"),
             "input_digest": digest, "status": proposal.status,
             "result": _metadata_edit_response(outcome).model_dump(mode="json") if outcome is not None else None}
+    if proposal.operation.get("operation_type") == "EditCompoundTimeline":
+        try:
+            outcome = _compound_edit_use_case().read_result(_compound_proposal_command(task, proposal, request), proposal.id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"proposal_id": proposal.id, "base_version_id": proposal.operation["payload"].get("base_version_id"),
+            "input_digest": digest, "status": proposal.status,
+            "result": _metadata_edit_response(outcome).model_dump(mode="json") if outcome is not None else None}
     result = _original_edit_result(task, proposal)
     return {"proposal_id": proposal.id, "base_version_id": proposal.operation.get("payload", {}).get("base_version_id"),
             "input_digest": digest, "status": proposal.status,
@@ -12149,6 +12160,14 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         previous = (previous if previous is not None else _metadata_edit_response(outcome)) if outcome is not None else None
+    elif proposal.operation.get("operation_type") == "EditCompoundTimeline":
+        try:
+            outcome = _compound_edit_use_case().read_result(_compound_proposal_command(task, proposal, request), proposal.id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        previous = (previous if previous is not None else _metadata_edit_response(outcome)) if outcome is not None else None
     else:
         if previous is not None and "job_id" not in json.loads(previous.body):
             return previous
@@ -12182,6 +12201,8 @@ def _confirm_creation_task_edit(
         return _confirm_linked_timeline_response(task, proposal, request)
     if is_subtitle_edit(proposal.operation.get("operation_type"), proposal.operation.get("payload", {})):
         return _confirm_subtitle_response(task, proposal, request)
+    if proposal.operation.get("operation_type") == "EditCompoundTimeline":
+        return _confirm_compound_response(task, proposal, request)
     source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source")
     if source is not None and source["source_facts"] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source["action"]), request):
         raise HTTPException(status_code=409, detail="预览后的源文件或片段修订已变化，请重新预览")
@@ -12243,32 +12264,6 @@ def _confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=montage, operation_type="AlignSubtitleTiming", operation_payload=operation_payload,
             edited_subtitle_tracks=changed_tracks)
-    if operation_type == "EditCompoundTimeline" and isinstance(operation_payload,dict):
-        if task.current_timeline_version_id!=operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409,detail="时间线已变化，请重新预览全部修改")
-        montage=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-        base=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id)
-        tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=montage)
-        bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("affected_source_scope")
-        if bound is None:
-            raise HTTPException(status_code=409, detail="原复合提案未封存实际影响的来源范围，请为当前版本重新预览")
-        command = _metadata_edit_command(task, request, "EditCompoundTimeline", operation_payload, source=source)
-        command = EditSourceVerifier.restore_scope(command, bound)
-        service = _task_audio()
-        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity,
-            audio_service=service, audio_actor=CreationExecutionActor(workspace_id, command.actor_identity["member_id"]))
-        try:
-            candidate, changed_tracks = apply_compound_proposal(task, montage, tracks, command,
-                validate_audio=lambda graph, duration: service.validate(workspace_id, task_id, graph, duration, draft_only=True))
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except (ValueError,OSError,subprocess.SubprocessError) as exc:
-            raise HTTPException(status_code=409,detail="音频来源已变化，请重新预览") from exc
-        _prepare_changed_montage(candidate,message="复合修改已应用，可重新渲染；一次撤销恢复全部修改。")
-        return _persist_typed_montage_edit(workspace_id=workspace_id,task=task,proposal=proposal,
-            base_version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id),updated_plan=candidate,
-            operation_type="EditCompoundTimeline",operation_payload=operation_payload,edited_subtitle_tracks=changed_tracks,
-            proposal_source_command=command, proposal_source_verifier=verifier)
     if operation_type in CLIP_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
@@ -13197,76 +13192,83 @@ def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind
 @app.post("/api/creation-tasks/{task_id}/edits/{proposal_id}/selection/preview")
 @_task_media_route("compound_selection_preview", "edit_preview")
 def preview_compound_selection(task_id:str,proposal_id:str,request:Request,payload:CompoundEditSelectionRequest):
-    workspace_id=current_workspace_id(request)
-    task=_creation_task_or_404(workspace_id,task_id)
+    task = _creation_task_or_404(current_workspace_id(request), task_id)
+    actor = _metadata_edit_command(task, request, "EditCompoundTimeline", {"base_version_id": task.current_timeline_version_id}).actor_identity
+    control = CompoundSelectionCommand(task.workspace_id, task.id, proposal_id, actor,
+        payload.included_step_indices, payload.raw_command)
+    case = _compound_edit_use_case()
     try:
-        proposal=production_repo.get_edit_proposal(workspace_id,proposal_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404,detail="修改提案不存在") from exc
-    if proposal.task_id!=task_id:
-        raise HTTPException(status_code=404,detail="修改提案不属于当前任务")
-    data=proposal.operation.get("payload",{})
-    if proposal.status!="proposed" or proposal.operation.get("operation_type")!="EditCompoundTimeline" or not data.get("selection_enabled"):
-        raise HTTPException(status_code=409,detail="当前提案不能重新选择，请重新预览原始要求")
-    if task.current_timeline_version_id!=data.get("base_version_id"):
-        raise HTTPException(status_code=409,detail="时间线已变化，请重新预览原始要求")
-    if (payload.included_step_indices is None)==(payload.raw_command is None):
-        raise HTTPException(status_code=422,detail="请提供保留项或调整要求，不能同时提供两种")
-    try:
-        included=payload.included_step_indices if payload.raw_command is None else compile_compound_selection(payload.raw_command,data["steps"])
-    except ValueError as exc:
-        raise HTTPException(status_code=422,detail=str(exc)) from exc
-    intent=production_repo.get_edit_intent(workspace_id,proposal.intent_id)
-    return _preview_compound_edit(task,request,CreationTaskEditPreviewRequest(raw_command=intent.raw_command,
-        context_stage=intent.context_stage,selected_object_refs=intent.scope["context_refs"],playhead_ms=intent.playhead_ms),included,selection_command=payload.raw_command)
-
-
-def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    workspace_id = current_workspace_id(request)
-    if not is_indexed_subtitle_command(payload.raw_command) and not re.search(r'[，,；;]|同时|并且|然后', payload.raw_command):
-        return None
-    if not re.search(r'音乐|配音|原声|音效|字幕|英文放在中文', payload.raw_command):
-        return None
-    try:
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-        current = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=current, montage=plan)
-        calculated = calculate_compound_edit(plan, tracks, _effective_audio_timeline(plan),
-            raw_command=payload.raw_command, selected_refs=payload.selected_object_refs,
-            base_version_id=task.current_timeline_version_id, playhead_ms=payload.playhead_ms,
-            included_step_indices=included_step_indices)
-        if calculated is None:
-            return None
-        service = _task_audio()
-        service.validate(workspace_id, task.id, calculated.plan.audio_timeline, calculated.plan.duration_seconds, draft_only=True)
-        base = _ensure_montage_base_version(workspace_id, task, plan)
-        task = production_repo.get_creation_task(workspace_id, task.id)
-        command = _metadata_edit_command(task, request, "EditCompoundTimeline", {"base_version_id": base.id})
-        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity,
-            audio_service=service, audio_actor=CreationExecutionActor(workspace_id, command.actor_identity["member_id"]))
-        command, intent, proposal = prepare_compound_proposal(task, plan, command, calculated,
-            raw_command=payload.raw_command, context_stage=payload.context_stage,
-            selected_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms,
-            selection_command=selection_command, verifier=verifier, output_refs=_logical_montage_output_refs(plan))
-        records = []
-        if not draft_only:
-            records = [_publish_task_picture_preview(workspace_id, task, base, item, captions,
-                kind="compound_preview", parameters={"steps": calculated.steps, "side": side})
-                for side, item, captions in (("before", plan, tracks), ("after", calculated.plan, calculated.subtitle_tracks))]
-        proposal = replace(proposal, preview={**proposal.preview, **{
-            side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else proposal.summary,
-                "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
-                "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
-            for side, record in zip(("before", "after"), records)}})
-        intent, proposal = production_repo.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)
+        prepared = case.prepare_selection(control)
+        return _save_compound_preview(case, prepared, request)
+    except CompoundProposalMissing as exc:
+        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+    except CompoundSelectionInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (EditConflict, TimelineVersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc,ValueError) else "复合修改预览失败，请检查来源后重试") from exc
+    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
+
+
+def _compound_edit_use_case():
+    return CompoundEditUseCase(production_repo, _metadata_edit_use_case())
+
+
+def _compound_proposal_command(task, proposal, request):
+    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
+    return _metadata_edit_command(task, request, "EditCompoundTimeline", proposal.operation["payload"], source=source)
+
+
+def _confirm_compound_response(task, proposal, request):
+    try:
+        outcome = _compound_edit_use_case().confirm(_compound_proposal_command(task, proposal, request), proposal.id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _metadata_edit_response(outcome)
+
+
+def _save_compound_preview(case, prepared, request):
+    if prepared is None:
+        return None
+    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
+    task, base, plan, tracks = prepared.task, prepared.base, prepared.before, prepared.original_tracks
+    calculated = prepared.candidate
+    workspace_id = task.workspace_id
+    proposal = prepared.proposal
+    records = []
+    if not draft_only:
+        records = [_publish_task_picture_preview(workspace_id, task, base, item, captions,
+            kind="compound_preview", parameters={"steps": calculated.steps, "side": side})
+            for side, item, captions in (("before", plan, tracks), ("after", calculated.plan, calculated.subtitle_tracks))]
+    proposal = replace(proposal, preview={**proposal.preview, **{
+        side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else proposal.summary,
+            "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
+            "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
+        for side, record in zip(("before", "after"), records)}})
+    intent, proposal = case.save_preview(replace(prepared, proposal=proposal))
     return _edit_preview_response(intent, proposal)
+
+
+def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
+    if not CompoundEditUseCase.applicable(payload.raw_command):
+        return None
+    actor = _metadata_edit_command(task, request, "EditCompoundTimeline", {"base_version_id": task.current_timeline_version_id}).actor_identity
+    control = CompoundPreviewCommand(task.workspace_id, task.id, actor, task.current_timeline_version_id,
+        payload.raw_command, payload.context_stage, payload.selected_object_refs, payload.playhead_ms,
+        included_step_indices, selection_command)
+    case = _compound_edit_use_case()
+    try:
+        return _save_compound_preview(case, case.prepare_preview(control), request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (EditConflict, TimelineVersionConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
 
 
 def _graphic_overlay_candidate(plan, payload):

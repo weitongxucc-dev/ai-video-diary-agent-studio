@@ -729,3 +729,100 @@ def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(su
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
     assert not state.repo.list_edit_operations('ws', state.task.id)
+
+
+@pytest.fixture
+def compound_http_state(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from test_compound_application import compound_state
+    state = compound_state(tmp_path)
+    monkeypatch.setattr(main, 'production_repo', state.repo)
+    monkeypatch.setattr(main, 'artifact_store', state.store)
+    monkeypatch.setattr(main, 'local_members_service', state.members)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(state.case.output_root)))
+    state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
+    state.url = f'/api/creation-tasks/{state.task.id}'
+    return state
+
+
+def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_edit(compound_http_state, monkeypatch):
+    from test_compound_application import COMPOUND_TEXT
+    from app.task_audio import TaskAudio
+    state = compound_http_state
+    validations = []
+    validate = TaskAudio.validate
+    def observed(self, *args, **kwargs):
+        assert self.repository is state.repo
+        validations.append(kwargs.get('draft_only'))
+        return validate(self, *args, **kwargs)
+    monkeypatch.setattr(TaskAudio, 'validate', observed)
+    monkeypatch.setattr(main, '_publish_task_picture_preview', lambda *args, **kwargs: pytest.fail('draft must not publish video'))
+    before = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    full = state.client.post(state.url + '/edits/preview?draft=true', json={
+        'raw_command': COMPOUND_TEXT, 'context_stage': 'montage', 'selected_object_refs': ['clip:clip'], 'playhead_ms': 750})
+    assert full.status_code == 200, full.text
+    original = full.json()['proposal']
+    assert original['operation']['operation_type'] == 'EditCompoundTimeline'
+    assert [step['enabled'] for step in original['operation']['payload']['steps']] == [True, True, True]
+    selection_url = state.url + f"/edits/{original['id']}/selection/preview?draft=true"
+    invalid = state.client.post(selection_url, json={'included_step_indices': [99]})
+    assert invalid.status_code == 422
+    partial = state.client.post(selection_url, json={'included_step_indices': [0, 2]})
+    assert partial.status_code == 200, partial.text
+    selected = partial.json()['proposal']
+    assert [step['index'] for step in selected['operation']['payload']['steps']] == [0, 1, 2]
+    assert [step['enabled'] for step in selected['operation']['payload']['steps']] == [True, False, True]
+    assert selected['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == 0
+    restored = state.client.post(state.url + f"/edits/{selected['id']}/selection/preview?draft=true",
+        json={'raw_command': '恢复第2项'})
+    assert restored.status_code == 200, restored.text
+    proposal = restored.json()['proposal']
+    assert [step['enabled'] for step in proposal['operation']['payload']['steps']] == [True, True, True]
+    assert proposal['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
+    assert state.repo.get_edit_proposal('ws', original['id']).status == 'proposed'
+    assert state.repo.get_edit_proposal('ws', selected['id']).status == 'proposed'
+    assert state.repo.get_creation_task_montage_plan('ws', state.task.id) == before
+    result_url = state.url + f"/edits/{proposal['id']}/result"
+    fixed = state.client.get(result_url)
+    assert fixed.status_code == 200 and fixed.json()['result'] is None
+    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('compound must read durable business results'))
+    accepted = state.client.post(state.url + f"/edits/{proposal['id']}/confirm", json={
+        'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
+        'expected_input_digest': fixed.json()['input_digest']})
+    assert accepted.status_code == 200, accepted.text
+    task = state.repo.get_creation_task('ws', state.task.id)
+    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    assert version.sequence == 4 and len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+    after = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    assert after['clips'][0]['visual_effects']['exposure'] == .25 and after['clips'][1] == before['clips'][1]
+    assert after['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
+    tracks = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    assert len(tracks) == 2 and all(track.style['font_size'] == 64 for track in tracks)
+    assert next(track for track in tracks if track.language == 'en-US').style['enabled'] is False
+    assert {track.language: [cue.text for cue in track.cues] for track in tracks} == {
+        'zh-CN': ['原字幕', '后续字幕'], 'en-US': ['Original caption', 'Next caption']}
+    fixed = state.client.get(result_url)
+    assert fixed.status_code == 200 and fixed.json()['result']['operation'] == accepted.json()['operation']
+    assert len(validations) >= 4 and all(validations)
+
+
+def test_compound_unknown_claim_with_projection_has_no_durable_edit_and_no_exact_API(compound_http_state):
+    from test_compound_application import COMPOUND_TEXT
+    state = compound_http_state
+    exact = state.client.post(state.url + '/edits/exact', json={'operation_type': 'EditCompoundTimeline'})
+    assert exact.status_code == 422
+    preview = state.client.post(state.url + '/edits/preview?draft=true', json={
+        'raw_command': COMPOUND_TEXT, 'context_stage': 'montage', 'selected_object_refs': ['clip:clip']})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    fixed = state.client.get(state.url + f'/edits/{proposal_id}/result').json()
+    request = {'request_id': str(uuid4())}
+    event, fresh = state.repo.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
+        {'proposal_id': proposal_id, 'base_version_id': state.base.id, 'input_digest': fixed['input_digest'], 'request': request})
+    assert fresh
+    state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'transport projection'})
+    refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert refused.status_code == 409 and '尚未确定' in refused.text
+    assert not state.repo.list_edit_operations('ws', state.task.id)
