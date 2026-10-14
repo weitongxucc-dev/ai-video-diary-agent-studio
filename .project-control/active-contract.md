@@ -14,10 +14,10 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | asset raw联合四源5f0adbdf…已f3ca186准确集成并WRITE_LEASE_RETURN，一项独立实际apply重检通过；production/本组test租约归还，不复测。settings六源已2e208b7归还。当前已语义ACK，仅按REF-R2-LINKED-SPEED-APPLICATION-20261014独占下文main/metadata两个有限符号组及三对应实施/测试文件；不恢复其它main/production/driver旧租约。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；当前合并核Web八源4d036e4a…退役静态及R5当前真实Shell三尺寸可见差额，明确API base19a8b94＋八Web overlay，3447/9447隔离端口；审计复用6自测/类型，不重复旧51/10/全文矩阵。settings实际HTTP独立门归R6。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品只读；现仅写fresh-runtime-reload/probe-outcome-joint-independent，对bd1d93c2…准确三源核两个实际scheduler晚写失败回滚，不复测module3/consumer2。原asset独立门已f3ca186归还、settings门已2e208b7归还；Device synthetic六缺字段/生产标定unknown及完整reload未接受保持。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品/现证据只读；probe独立门3a5dd7ba…两项actual晚写全回滚已PASS并fff80d3准确集成归还，module3/normal2只审计复用，不复测。原asset/settings门已分别归还；Device synthetic六缺字段/生产标定unknown与完整reload未接受保持，待后续精确派工。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5八源死kind/五client退役已SOURCE_RELEASE4d036e4a…准确冻结；6实际PASS/33SKIP与类型/lint分别记录，待同tuple真实Shell可见差额和联合门，产品只读，不复测/重跑旧门。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 原asset raw两源已f3ca186归还；probe outcome两源9664a0f8…已SOURCE_RELEASE冻结、3首次实际PASS/50静态保持，现产品只读，随主控三源bd1d93c2…待R6联合晚写门，不复测/恢复旧权。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | REF-R4-PROBE-OUTCOME-STORAGE的production两消费者已接线，准确三源bd1d93c2…SOURCE_RELEASE冻结、原两个正常scheduler门首次PASS；现不新增产品修改，审核R6晚写差额后精确集成/归还。API五R2源仍独占，test_material_probe只读；根证据fresh-root-probe-outcomes。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | probe outcome两源9664a0f8…连主控production已fff80d3三源集成归还，原asset raw亦已归还，不复测/恢复旧权。当前产品只读，仅写fresh-r4-authorizations/remaining-asset-write-closure下≤80行scene/hash/adoption/repoint的有限归属与合并接续接口建议，不新总清点/测试/快照。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | probe三源bd1d93c2…已fff80d3准确集成/WRITE_LEASE_RETURN，独立2actual晚写门通过；当前无产品写租约，先审核R4剩余asset事实写接口再精确绑定。API五R2源仍独占；已过probe/asset门不复测。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
