@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；records/维护与 Web 素材分页已通过并归还，不重复已过门；当前只准备 CLOSE1/CLOSE2 原反例及拒绝旧回读后继续重读差额，待 Web 精确 SOURCE_RELEASE 执行。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；既有候选均已 WRITE_LEASE_RETURN，当前按下方 CLOSE1/CLOSE2 精确六文件独占修复扫描列表归属和任务事实回执接受；其他静态完整 workspace 输入残留另项后续，不重跑旧矩阵。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；既有集成候选已 WRITE_LEASE_RETURN，profile/voice raw reader 候选 03 两源已 SOURCE_RELEASE 准确冻结待 API 接线；当前另独占下方 authorizations 与既有测试的唯一 raw history reader，不延长前一冻结，production 只读。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；既有集成候选已 WRITE_LEASE_RETURN，profile/voice raw reader 候选 03 两源与 authorization raw history 候选 04 两源分别 SOURCE_RELEASE 准确冻结，产品只读；等 API metadata production 候选集成归还后顺序接五 raw SELECT 消费者，未接线不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
