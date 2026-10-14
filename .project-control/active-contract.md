@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频五源52754a66…/SOURCE_RELEASE 37342bd9…已冻结，产品及作者证据只读待一个独立关键族；无新增施工权，不复测作者两节点、旧八分支或已过门。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频五源52754a66…/SOURCE_RELEASE 37342bd9…继续冻结只读；REF-R3-AUDIO-EDIT-EXECUTION-PREPARATION-20261014仅新fresh-api-audio-edit-execution-preparation/**只读准备证据写权，定位下一audio_edit_preview与有限调用点，不施工/执行或复测旧门。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-AUDIO-INGRESS-INDEPENDENT-20261014仅新fresh-qa/audio-ingress-independent/**证据写权；固定9dfd4c6加五音频overlay，最多三个取消/迟到版本/晚SQL及原重试代表，所有产品/作者/旧门只读。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -24,6 +24,12 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+### 当前音频编辑执行只读准备
+
+`REF-R3-AUDIO-EDIT-EXECUTION-PREPARATION-20261014` 仅当前API新 `test-runs/refactor-20261014/fresh-api-audio-edit-execution-preparation/**` 证据写权；正在QA的音频五源52754a66…/作者37342bd9…及所有产品/原证据冻结只读，QA b8d4617绑定的三代表、source/fixture/grant/端口与独占证据范围均不改变，无需QA重复ACK/重封/重跑。主控已定向核现旧桥尚余八action，下一只读准备只取 `audio_edit_preview` 的 `preview_creation_task_audio` 及其实际直接/自然语言/command/exact/compound有限音频调用点、`_preview_clip_original_audio` 原声音频处理调用、原TaskAudio/TaskMediaJobs/facts/execute/result该动作、实际calculator/metadata公共事务和直接测试helper；不重新清点全13、全main、整个编辑族或旧已过包。
+
+以实时main精确五overlay与固定9dfd4c6已集成直接依赖分列源码事实，只交一个可实现的有限音频编辑/执行纵向包：准确必要paths/symbols/契约输入输出、原可信actor/job/request/grant/expected/base/录音script-digest与最终来源校验、draft与真实媒体预发布/提案保存及现事务/结果回读、原replace_narration scheduled=503限制和原声提取阶段；复用现calculator/TaskAudio/metadata事务，不新通用registry、journal、兼容层或反向HTTP。判断能否单独退出audio_edit_preview旧反射桥，明确尚依赖旧command/exact/compound入口的边界；如不能，给一个最小实际不可满足依赖和准确后续范围，不猜接口/先扩写其余七action。不实施、import/collect或执行任何测试/媒体/模型/GUI/native/env/账号/用户DB/宿主标定，不生成全仓snapshot；只提交bounded只读REPORT/PACKAGE和READONLY_PREPARATION_RELEASE、目标当前字节及直接符号AST/读期prepost、最小作者验证和一个关键族最多三必要反例建议。产品独占租约和执行tuple由音频QA/集成后主控另绑，准备不能放行当前QA或算R2/R3接受。语义REBASE_ACK后直接只读准备，无第二START。
 
 ### 当前音频输入独立关键族门
 
