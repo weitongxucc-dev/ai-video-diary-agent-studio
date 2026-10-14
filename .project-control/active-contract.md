@@ -12,14 +12,20 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R2-LINKED-TIMELINE-APPLICATION-20261014：按bcc252c9…报告将speed骨架迁单一封闭linked timeline族，接Delete/Duplicate/Insert完整预览/确认/原结果/direct/NL消费者。只独占main指定分支、旧speed模块退役、NEW linked_timeline_use_case.py、两现tests的有限接线及NEW test_linked_clip_application.py；metadata/linked/sources/transactions/production等只读。稳定后一个关键族独立门，不重跑旧16。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 关联四动作六路径5e267f78…已冻结SOURCE_RELEASE，旧speed模块删、五现源固定，10最小PASS含仅1受影响旧speed HTTP；首新cue断言错1FAIL保留/只改该断言，产品不改。产品只读等R6一个关键族门，不复测10/旧16或接下一组写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R4-DISCOVERY-STAGED-INDEPENDENT-20261014：产品只读，只写fresh-qa/discovery-asset-staged-independent，核24f3eb18…三源原分阶段保存的两个late asset写拒绝；observation/ingestion及先前成功资产保留。module3/normal2审计复用，不重跑已过矩阵。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短预览静态REPORT已核13专用键/独立kind/profile、双侧/探测/发布/PGID闭包；13只读源与main两保护函数AST绑定。真实profile值/同生命周期、成功startup/run/release峰值记录和首次合法测量启动边界仍unknown。准备租约归还，产品/证据只读待后续实际测量或linked关键门，不重复旧测试/私有配置读取。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R2-LINKED-TIMELINE-INDEPENDENT-20261014产品只读，只写fresh-runtime-reload/linked-timeline-independent，核五现源+一删5e267f78…三个代表恢复/晚权限/lateSQL族反例；10作者/旧16审计复用。短预览实际标定保持unknown，原资源准备门不重跑。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | discovery两源09b65961…SOURCE_RELEASE冻结，五methods/69静态/首次module3PASS0.29s，已与root四consumer接线形成三源24f3eb18…；当前产品只读待独立分阶段门/集成，不再测试或恢复旧writer。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | discovery联合三源24f3eb18…已SOURCE_RELEASE冻结，四consumer AST范围及首次正常2PASS0.73s；当前无新增产品修改，审核QA分阶段两个lateasset拒绝后精确集成/归还。API main/linked族源保持互斥。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+关联时轴四动作当前六路径 `fresh-api-linked-timeline/SOURCE_RELEASE.json` 已冻结，回执SHAaf950391e08f7a6f7b0fdab4fd9d273e57fbaaf0f62e5532be61c7d54012e4c2、含删除的摘要5e267f78c06904f1afce6f20dc82ada2c88789165683bb7e07d2f70da5bed02d（sorted path TAB value LF，删除值为DELETE:original_sha256）；basefc0dc38＋五现overlay减旧speed模块。主控核五live/副本/冻结source、一删原hash/不存在、18artifact、462非overlay Git及172actualimports前后/八实际组装绑定；615无关main AST、旧speed/typed原测试有限改名后同body、DTO与fixed结果/claim恢复骨架单一迁移、插入原构造关键词保持。初次新test空cue断言与未变calculator的anchor cue不符：1FAIL、余9未执行，仅改该新断言、产品字节不变；后同族10distinct实际PASS5.61s（总11执行）含仅一旧speed受影响HTTP node，旧16/其它门不跑。InsertClip新增有限material_reader_identity只由main原_content_reader可信投影，保留旧请求素材reader与编辑/source actor不同职责，不接受调用方自报权限或改共享schema。四动作业务不HTTP/Request、保存/原版本/恢复唯一，真实媒体/GUI/当前不同R4生产tuple及全R2/R3/R9未接受。
+
+现 `REF-R2-LINKED-TIMELINE-INDEPENDENT-20261014` 仅给R6证据写权 `fresh-runtime-reload/linked-timeline-independent/**`，产品及旧门全部只读。固定该462source/五overlay/一删，删除模块不得由宿主/sys.path/旧证据偷偷回流；不混入root discovery三source/其他WIP。复用原合法合成speed/linked_clip/typedHTTP source、actual SQLite/原公开FastAPI/本次有限可信reader，先seal实际source/fixture/child script及记录actualimports/prepost，不事后补hash冒充preseal。一个族最多三个代表实际case：①Duplicate等已应用，后来HEAD变化、丢原projection、同request恢复，原operation/result_version/shape、无第二编辑/wake，首应用通知仅case前置按原行为观察；②Insert的新素材或实际移动邻居先通过预检，提交前真实外部事务改其permission/revision，原caller最后verify_change拒绝编辑行且保留外部变化，不能在前门就拒绝代晚门，也不能混淆request reader与原source actor；③一个非speed代表编辑的真实late operation或subtitle INSERT触发器拒绝，联合editorial task/version/proposal/op/字幕全回滚，原claim/result与已发布SRT/artifact/job仍分阶段，原媒体byte/published文件明确记。不要mock业务失败、扩大语法/预算/权限；首次失败保留、真正缺陷交唯一API精确reopen。
+
+10作者门/首cue错误/旧16与旧speed恢复/metadata/asset各门只审计复用，不重跑或再collect完整族、不为凑数增加cases。模型/实际媒体/host测量/用户DB/env/账号/GUI/native均不执行，不将资源/钥匙串/媒体边界替身算生产通过。稳定准确SOURCE_GATE后主控精确stage/commit含一删六路径并即时归还；该独立者不改产品，不把源集成当整体R2/R3/R9。source属迁移门，旧模块/类/DTO/Request构造body实际消费不存在证明与新路径同候选保持。语义ACK后直接执行，无需第二START或用户重复批准。
 
 短预览准备 `fresh-runtime-reload/clip-preview-calibration-preparation/REPORT.md` 为零执行的静态定位，主控核13个非main目标源当前字节与报告一致；main整文件指纹来自并行linked WIP不作为冻结候选，但 `_clip_preview_use_case` / `_build_device_components` 两保护函数AST与3395dd6相同（定向复核见fresh-root-review/clip-preview-static-locator-review.json），不重读/重跑该报告。当前task_clip_preview已独立profile，不沿旧“整片预算”结论；两输出共享总deadline/output额度，profile的13键与整机6键均只列名称未读用户值。每seal再读profile而runtime捕获组装时profile，实际同生命周期值尚未验证；登记ACK前启动峰值与完整成功采样/探测/发布/临时盘/释放记录尚未取得，不能用源码或通用模拟边界通过当标定。下次合法实际测量必须先绑定来源明确的初始启动边界、固定profile/身份/真实输入与测量记录；无该事实保持unknown，不填猜值/改真探针/放宽准入，不因此阻塞当前独立编辑与仓储施工。该只读准备租约至此归还，实际R1/R9与生产媒体未接受。
 
