@@ -21,7 +21,13 @@ from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 from app.avatar_lipsync import (AvatarAndLipSyncRequest)
-from app.creation.contracts import ClipSourceSelection
+from app.creation.contracts import (
+    ClipSourceSelection, CreationTask, NarrationSegment, NarrationSegmentStatus,
+    validate_logical_reference as _validate_logical_reference,
+)
+from app.creation.task_input_reads import (
+    require_creation_task, creation_task_from_payload, narration_segment_from_row,
+)
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
@@ -329,32 +335,8 @@ class NarrationArtifactRecord:
     created_at: datetime = field(default_factory=utc_now)
 
 
-NarrationSegmentStatus = Literal["pending", "generating", "ready", "failed"]
 
 
-@dataclass(frozen=True)
-class NarrationSegment:
-    id: str
-    workspace_id: str
-    task_id: str
-    script_id: str
-    source_section_id: str
-    text: str
-    audio_reference: str | None
-    duration_seconds: float | None
-    sample_rate: int | None
-    model_id: str | None
-    voice_profile_id: str | None
-    voice_version: str | None
-    language: str
-    pronunciation_version: str
-    status: NarrationSegmentStatus
-    source_kind: Literal["generated", "recorded"] = "generated"
-    source_artifact_ref: str | None = None
-    source_sha256: str | None = None
-    source_script_digest: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
 
 
 PersonRenderStatus = Literal["pending", "running", "ready", "failed"]
@@ -559,52 +541,6 @@ class VideoTemplate:
     created_at: datetime = field(default_factory=utc_now)
 
 
-@dataclass
-class CreationTask:
-    id: str
-    workspace_id: str
-    plan_id: str
-    name: str
-    scenario: str
-    stage: Literal["topic", "script", "narration", "montage", "review"] = "topic"
-    stage_status: Literal[
-        "not_started", "running", "waiting_for_user", "completed", "failed"
-    ] = "not_started"
-    status: Literal["created", "running", "waiting_for_user", "completed", "failed"] = "created"
-    progress: int = 0
-    recovery_point: str = "topic"
-    current_timeline_version_id: str | None = None
-    selected_topic_id: str | None = None
-    confirmed_script_id: str | None = None
-    narration_cache_key: str | None = None
-    montage_plan_id: str | None = None
-    output_ready: bool = False
-    stage_reason: str | None = None
-    stage_impact: str | None = None
-    stage_repair_action: str | None = None
-    stage_retryable: bool | None = None
-    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
-    owner_user_id: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-    @property
-    def needs_script_duration_repair(self) -> bool:
-        return (
-            self.stage == "narration" and self.stage_status == "failed"
-            and self.stage_reason == "narration_generation_failed"
-            and "压缩" in (self.stage_repair_action or "")
-            and "文案" in (self.stage_repair_action or "")
-        )
-
-    @property
-    def can_revise_script(self) -> bool:
-        return bool(
-            self.confirmed_script_id and not self.narration_cache_key
-            and not self.montage_plan_id and not self.current_timeline_version_id
-            and ((self.stage == "script" and self.stage_status == "failed")
-                 or self.needs_script_duration_repair)
-        )
 
 
 TopicGenerationRunStatus = Literal["running", "succeeded", "failed"]
@@ -6853,15 +6789,7 @@ class ProductionRepository:
     def _require_creation_task(
         conn: sqlite3.Connection, workspace_id: str, task_id: str
     ) -> CreationTask:
-        row = conn.execute(
-            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-            (workspace_id, task_id),
-        ).fetchone()
-        if row is None:
-            raise KeyError(task_id)
-        return ProductionRepository._creation_task_from_payload(
-            json.loads(str(row["payload"]))
-        )
+        return require_creation_task(conn, workspace_id, task_id)
 
     def _upsert_narration_segments(
         self,
@@ -9100,7 +9028,7 @@ class ProductionRepository:
 
     @staticmethod
     def _creation_task_from_payload(data: dict[str, object]) -> CreationTask:
-        return CreationTask(**_with_datetime(data, "created_at", "updated_at"))
+        return creation_task_from_payload(data)
 
     @staticmethod
     def _timeline_version_from_row(row: sqlite3.Row) -> TimelineVersion:
@@ -9178,43 +9106,7 @@ class ProductionRepository:
 
     @staticmethod
     def _narration_segment_from_row(row: sqlite3.Row) -> NarrationSegment:
-        return NarrationSegment(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            script_id=str(row["script_id"]),
-            source_section_id=str(row["source_section_id"]),
-            text=str(row["text"]),
-            audio_reference=(
-                str(row["audio_reference"])
-                if row["audio_reference"] is not None
-                else None
-            ),
-            duration_seconds=(
-                float(row["duration_seconds"])
-                if row["duration_seconds"] is not None
-                else None
-            ),
-            sample_rate=(
-                int(row["sample_rate"]) if row["sample_rate"] is not None else None
-            ),
-            model_id=str(row["model_id"]) if row["model_id"] is not None else None,
-            voice_profile_id=(str(row["voice_profile_id"])
-                              if row["voice_profile_id"] is not None else None),
-            voice_version=str(row["voice_version"]) if row["voice_version"] is not None else None,
-            language=str(row["language"]),
-            pronunciation_version=str(row["pronunciation_version"]),
-            status=str(row["status"]),  # type: ignore[arg-type]
-            source_kind=str(row["source_kind"]),  # type: ignore[arg-type]
-            source_artifact_ref=(str(row["source_artifact_ref"])
-                                 if row["source_artifact_ref"] is not None else None),
-            source_sha256=(str(row["source_sha256"])
-                           if row["source_sha256"] is not None else None),
-            source_script_digest=(str(row["source_script_digest"])
-                                  if row["source_script_digest"] is not None else None),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
-        )
+        return narration_segment_from_row(row)
 
     @staticmethod
     def _person_render_from_row(row: sqlite3.Row) -> PersonRender:
@@ -10323,11 +10215,6 @@ def _validate_edit_operation(operation: EditOperation) -> None:
         raise ValueError("编辑操作状态无效")
 
 
-def _validate_logical_reference(reference: str, label: str) -> None:
-    if not reference.strip():
-        raise ValueError(f"{label}不能为空")
-    if Path(reference).is_absolute() or reference.startswith("file://"):
-        raise ValueError(f"{label}不能是绝对路径")
 
 
 

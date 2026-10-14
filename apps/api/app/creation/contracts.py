@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
+from pathlib import Path
+from app.database_migrations import CONTENT_VISIBILITY_DEFAULT
+from app.materials.contracts import ContentVisibility
 from app.models import utc_now
 
 JobRunStatus = Literal[
@@ -337,3 +340,86 @@ class CreationPlanPersonReference:
     def __post_init__(self) -> None:
         if not self.profile_id.strip() or not self.version.strip():
             raise ValueError("人物选择必须固定档案ID与版本")
+
+
+NarrationSegmentStatus = Literal["pending", "generating", "ready", "failed"]
+
+
+@dataclass(frozen=True)
+class NarrationSegment:
+    id: str
+    workspace_id: str
+    task_id: str
+    script_id: str
+    source_section_id: str
+    text: str
+    audio_reference: str | None
+    duration_seconds: float | None
+    sample_rate: int | None
+    model_id: str | None
+    voice_profile_id: str | None
+    voice_version: str | None
+    language: str
+    pronunciation_version: str
+    status: NarrationSegmentStatus
+    source_kind: Literal["generated", "recorded"] = "generated"
+    source_artifact_ref: str | None = None
+    source_sha256: str | None = None
+    source_script_digest: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class CreationTask:
+    id: str
+    workspace_id: str
+    plan_id: str
+    name: str
+    scenario: str
+    stage: Literal["topic", "script", "narration", "montage", "review"] = "topic"
+    stage_status: Literal[
+        "not_started", "running", "waiting_for_user", "completed", "failed"
+    ] = "not_started"
+    status: Literal["created", "running", "waiting_for_user", "completed", "failed"] = "created"
+    progress: int = 0
+    recovery_point: str = "topic"
+    current_timeline_version_id: str | None = None
+    selected_topic_id: str | None = None
+    confirmed_script_id: str | None = None
+    narration_cache_key: str | None = None
+    montage_plan_id: str | None = None
+    output_ready: bool = False
+    stage_reason: str | None = None
+    stage_impact: str | None = None
+    stage_repair_action: str | None = None
+    stage_retryable: bool | None = None
+    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
+    owner_user_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def needs_script_duration_repair(self) -> bool:
+        return (
+            self.stage == "narration" and self.stage_status == "failed"
+            and self.stage_reason == "narration_generation_failed"
+            and "压缩" in (self.stage_repair_action or "")
+            and "文案" in (self.stage_repair_action or "")
+        )
+
+    @property
+    def can_revise_script(self) -> bool:
+        return bool(
+            self.confirmed_script_id and not self.narration_cache_key
+            and not self.montage_plan_id and not self.current_timeline_version_id
+            and ((self.stage == "script" and self.stage_status == "failed")
+                 or self.needs_script_duration_repair)
+        )
+
+
+def validate_logical_reference(reference: str, label: str) -> None:
+    if not reference.strip():
+        raise ValueError(f"{label}不能为空")
+    if Path(reference).is_absolute() or reference.startswith("file://"):
+        raise ValueError(f"{label}不能是绝对路径")
