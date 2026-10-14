@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；当前合并核Web八源4d036e4a…退役静态及R5当前真实Shell三尺寸可见差额，明确API base19a8b94＋八Web overlay，3447/9447隔离端口；审计复用6自测/类型，不重复旧51/10/全文矩阵。settings实际HTTP独立门归R6。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品全部只读；现沿准确settings六源97815d98…与原PREPARED_GATE执行原三HTTP输入、成功control和一项必要恢复拒绝独立差额，有限快照base ee1cf4b+六overlay，不混其它WIP。原驱动/DB/tmp/预算门不重复，核原存储/cache及实际旧owner后续工作；完整activation/crash/native尚未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5八源死kind/五client退役已SOURCE_RELEASE4d036e4a…准确冻结；6实际PASS/33SKIP与类型/lint分别记录，待同tuple真实Shell可见差额和联合门，产品只读，不复测/重跑旧门。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw/history四源随fa0联合六源已19a8b94准确集成并WRITE_LEASE_RETURN，原冻结结束；当前产品全部只读，继续REF-R4-ASSET-RAW-READONLY限定定位，核source-reference/local adoption剩余material raw SELECT与assets owner最窄接线，不复跑已过门。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw/history已19a8b94集成归还；asset raw只读建议已审，现沿REF-R4-ASSET-RAW-READERS-20261014独占现materials/assets.py五个caller conn原样raw reader及直接test_material_asset_store最小用例。production/API consumers、其它模块只读，模块释放后由API薄接线，再联合接受，不作未接线完成。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
@@ -77,6 +77,10 @@ Web八源释放后，独立QA现绑定合并 `REF-R5-COMBINED-SHELL-GATE-2026101
 把八源有限静态退役/原title和现代拒绝投影审计与当前R5界面差额放在一个门，不另开逐文件QA或重跑6/33SKIP/旧51/旧10门。先核五旧definition/export/生产调用与kind消费不存在、现代请求/label和既有负向断言保持，复用原实际6与类型/lint。GUI三个尺寸核完整Shell当前选/播、三轨同尺可见和一导入/试听控制、两卡入口/转换互斥、未提交会话/字幕草稿与焦点保持、原label/title及真实等待/失败。仅代表1280×720做一次必要实际metadata PATCH/SQL/版本回读与可用撤销事实验证；另两尺寸复用这套接受事实，补可见边界/交互，不重复整业务矩阵。真实字幕/试听模型、范围mix或生产媒体未执行明确分列。抓actual HTTP/DOM/SQL和当前源码一致的截图，不用构建数代替可见事实。
 
 稳定准确SOURCE_GATE列同tuple/依赖/真实命令exit/首失败、各尺寸截图与具体验证、外部边界替身/未验证项；合成界面门不等于R7启动/真实账户权限/生产媒体或整体R5/R9。出现真实产品缺陷由主控给唯一Web owner最小ISSUE_REOPEN及需要的精确文件，QA始终产品只读，不改CSS或组件；只清本次已验证PID/cwd和浏览器session，保留用户4311进度图与原应用。语义REBASE_ACK后直接做合并门，不等待第二批准。
+
+依 `fresh-r4-authorizations/asset-raw-consumers-readonly/REVIEW.json` 的五个实际SELECT，现绑定 `REF-R4-ASSET-RAW-READERS-20261014`：R4独占 `apps/api/app/materials/assets.py` 中新增五个具体caller conn reader和既有 `apps/api/tests/test_material_asset_store.py` 的最小对应用例；两源现Git干净、无其它writer，assets字节等清点207e914c…，主控已核。有限方法分别返回workspace＋exact path的原payload/visibility Row或None、workspace!=excluded的原file_path Rows、workspace＋ID的完整raw Row或None、仅global path及仅global ID的原SELECT1 Row或None。五原查询都无ORDER BY，保持字段、None/Rows、rawstring、未排序/不去重/不额外visibility/成员过滤；原glob碰撞不缩成当前workspace，不解码、解析路径或改摘要。每个方法只用显式caller conn，不开factory/commit/rollback、不新增DDL/SQL门面/通用参数框架；原get/list/page/decoder与其它资产业务AST保持，不造新模块或第二事实源。
+
+producer仅补3个必要模块边界：raw字段/空白/列visibility/None与作用域、外workspace的global path/ID命中及foreign rows不去重、caller未提交可见/observer隔离/全rollback且factory禁开，原全部资产/档案/维护门不重跑。两源稳定准确SOURCE_RELEASE＋digest/定向actualexit/旧方法不变证明后，API在另行精确production绑定下接这五读取及 `_local_adoption_repository` 必要轻资产store组装（ctor无IO），原权限、physical path校验/manifest/raw摘要/CAS与采用事务仍原位；R4不改production/main/settings或原local adoption消费者测试。先 module release后紧接consumer联合门，未接线模块不集成/算完成；关键global冲突/外workspace及事务否定用联合差额验证，不逐方法开复杂QA。语义REBASE_ACK后直接实施，不需第二批准。
 
 ## 用户决定、入口与范围
 
