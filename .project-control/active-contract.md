@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；既有候选均已 WRITE_LEASE_RETURN，当前按下方 R2 metadata application/journal 竖向批精确独占 main/production/transactions、实际新 use case 与定向测试；R4 raw reader 模块先接续，消费者仍唯一 API，未释放模块不混入本批。R4/R6 整文件例外排除。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；Web CLOSE1/CLOSE2 六源已独立接受并归还，不重复旧门；当前只准备 metadata HTTP/SQL 反例，未知新用例签名不猜，不执行未释放 source 或混入其它 WIP。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；R2 metadata application/journal 六源已 SOURCE_RELEASE 准确冻结，摘要 160c31a6…，待独立接受、集成及 WRITE_LEASE_RETURN，不再写本批。后续五 raw SELECT 消费者仍唯一 API，R4/R6 整文件例外排除；未授 settings 新写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；当前接准确 metadata-candidate-01 六源 release，沿原准备 HTTP/SQL 反例和丢回执唤醒差额执行独立门；以 e7763ed Git 基线加六源、准确封存依赖绑定，排除其它 WIP，不导入 live main。验证明确限定 metadata，不重跑已接受 Web/资产或整 typed-edit 矩阵。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；CLOSE1/CLOSE2 六源已 WRITE_LEASE_RETURN，当前按下方 R5 有限 props 批独占三个编辑文件、必要 parent、活跃 NarrationWaveformTrack fallback 与五个直接测试，共十源；GraphicOverlayEditor 已有限不顺带改。新批语义 REBASE_ACK 后实施。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；既有集成候选已 WRITE_LEASE_RETURN，profile/voice raw reader 候选 03 两源与 authorization raw history 候选 04 两源分别 SOURCE_RELEASE 准确冻结，产品只读；等 API metadata production 候选集成归还后顺序接五 raw SELECT 消费者，未接线不接受。 |
