@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | asset raw联合四源5f0adbdf…已SOURCE_RELEASE准确冻结，production/两R4依赖/新测试只读待R6一项联合门。settings六源已2e208b7归还，不复测。现仅按REF-R2-LINKED-SPEED-APPLICATION-20261014独占下文main/metadata两个有限符号组及三对应实施/测试文件；不恢复其它main/production/driver旧租约。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | asset raw联合四源5f0adbdf…已f3ca186准确集成并WRITE_LEASE_RETURN，一项独立实际apply重检通过；production/本组test租约归还，不复测。settings六源已2e208b7归还。当前已语义ACK，仅按REF-R2-LINKED-SPEED-APPLICATION-20261014独占下文main/metadata两个有限符号组及三对应实施/测试文件；不恢复其它main/production/driver旧租约。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；当前合并核Web八源4d036e4a…退役静态及R5当前真实Shell三尺寸可见差额，明确API base19a8b94＋八Web overlay，3447/9447隔离端口；审计复用6自测/类型，不重复旧51/10/全文矩阵。settings实际HTTP独立门归R6。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品全部只读；settings有限持久门已2e208b7归还，Device不可用简注已核实际HostBudgetUncalibrated/六缺字段，生产标定仍unknown。现只写fresh-runtime-reload/asset-raw-joint-independent，核5f0adbdf…准确冻结四源的一项维护apply重检反例，审计复用8/3，不重复旧门或标定。完整activation/crash/native未接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品/现证据只读；asset独立门a39a17ba…一项actual apply反例已PASS并f3ca186集成归还，8/3仅审计复用，不复测。settings有限持久门已2e208b7归还，Device不可用简注已核实际HostBudgetUncalibrated/六缺字段，生产标定仍unknown；待后续精确派工，不新探测/标定。完整activation/crash/native未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5八源死kind/五client退役已SOURCE_RELEASE4d036e4a…准确冻结；6实际PASS/33SKIP与类型/lint分别记录，待同tuple真实Shell可见差额和联合门，产品只读，不复测/重跑旧门。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | asset raw两源346e0e02…已SOURCE_RELEASE准确冻结，3实际PASS/42静态保持，当前产品只读；API接五消费者及轻组装后联合差额，不重复旧模块/维护门，不以module-only接受。profiles原四已19a8b94归还。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | asset raw两源346e0e02…连API两源已f3ca186联合集成归还，3/8门只审计复用；profiles原四已19a8b94归还。当前产品只读，仅写fresh-r4-authorizations/asset-write-residual-readonly的约60行剩余asset DML/caller事务建议，不复制快照/测试/恢复旧源写权，不以本组接受当整体R4结束。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
