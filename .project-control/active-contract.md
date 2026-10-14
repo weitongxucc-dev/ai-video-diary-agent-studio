@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-AUDIO-INGRESS-20261014独占下述五路径有限五音频action/明确actor-job-grant/原回执接线与必要测试；基线9dfd4c6加五overlay，旧已过门/准备证据只读。不改其它八action、生产预算或HTTP/持久语义。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 恢复一个关键族门首次3PASS3.51s，五源已30945f5准确集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，冻结证据只读，等下一准确稳定包差额，不重跑已过注册/恢复/编辑门。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频五源52754a66…/SOURCE_RELEASE 37342bd9…已冻结，产品及作者证据只读待一个独立关键族；无新增施工权，不复测作者两节点、旧八分支或已过门。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-AUDIO-INGRESS-INDEPENDENT-20261014仅新fresh-qa/audio-ingress-independent/**证据写权；固定9dfd4c6加五音频overlay，最多三个取消/迟到版本/晚SQL及原重试代表，所有产品/作者/旧门只读。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 注册九源271e41aa…已c74be46准确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续具体存储/执行边界绑定，作者/独立门不重跑，原源清单漏项限制保留。 |
@@ -24,6 +24,14 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+### 当前音频输入独立关键族门
+
+`REF-R3-AUDIO-INGRESS-INDEPENDENT-20261014` 给当前独立QA仅新 `test-runs/refactor-20261014/fresh-qa/audio-ingress-independent/**` 证据写权，所有产品、作者与旧门冻结只读。作者 `fresh-api-audio-ingress/SOURCE_RELEASE.json` SHA37342bd93fbaaec1ca04e7d5f3c09ae4a79d4bfe6db24cbc338b99a7463069fd，准确五源TAB摘要52754a66fbc76d97f4994cac023fe2d72ac3a657d7d08bd94bbc3ff13fc1edf5，固定9dfd4c6f3c5edc2c680eff626b1329dcd34f8b77加五overlay；484冻结map09ed781036827d8b0bf308e862af0723dfd7cc74fa15fa73579ad8a2ceabb06d及479非overlay Git，准确路径/各SHA/同候选snapshot取该回执。主控预审 `fresh-root-review/audio-ingress-pre-independent-reviewed.json` SHAe9d536be3446a70897f7d09752a1eb0a252a259dd97074a0dbb47bd8a69470c5已核55artifact/五live-released-snapshot/484源及479Git、180真实imports前后/四实际child脚本及一测试prepost/八实际组装、16真实受原grant保护工具调用与16注册child。作者当前2PASS4.98s/2不同case；历史6实际含1夹具失败保留，旧矩阵/旧上传node0新执行。619无关main函数、旧八分支、五worker body显式rebind与同作用域staging/cleanup、原TaskAudio发布与TaskMediaJobs阶段AST已核；root静态helper初次把实际Resources替身标签误要求字面fixture，只修该predicate，零产品/测试重跑。上述是源码及合成自测证据，不是独立门或生产资源接受。
+
+一个关键族最多三新增代表：①实际公开音频任务与原真实request/grant在publication之前取消，用原取消入口/check拒绝；明确原queued/start/input event、partial/staged/已处理临时文件、child是否实际启动/是否确实退出和最终job/request/permit，不用假RenderCancelled或mock scheduler成功，不将发布前取消称运行中全PGID取消。②实际listen/source预检后从另一连接推进该任务timeline，再经原caller最终check拒绝旧成功且外部版本保留；文件publication/三联登记/result event是否先发生均按实证分列，不假Boolean/改sealed version或要求全DB无痕。③原immutable文件publish后，真实SQLite transform INSERT trigger晚拒绝，确认原artifact已INSERT、transform/edges到达阶段及三联事务回滚，独立input event/发布文件/原failed回执保留；随后仅按现有显式failed→interrupted→同job重试路径恢复，保留原actor/input/request身份规则和同发布bytes，真实观察是否重启处理/探测/登记，不造新恢复协议或假不重渲染。
+
+复用最后family-candidate-04的合法自有0.2s PCM/必要MP4、完整recorded narration/task_recording/script-digest/原queued→claim→publish→transform→finish谱系与真实LocalMemberService/MemberDeviceAccess、原CpuRenderGrantContext/run_granted_command/HostProcessProbe；可复用有限helper字节但不collect/执行作者两个正常nodes、历史六nodes或已过R2/R4/资源基础矩阵。业务、资格、身份、存储、事务、结果回执保持实际owner不替代；仅现test_device_runtime.Resources和明确原fixture限额为端口替身，准入/RSS/生产mode及完整资源取消继续unknown。真实工具只该自有合成输入与现合法fixture grant，不能猜/改生产预算、标定宿主、读私人env账号用户DB、跑模型/GUI/native。先封准确来源/实际scripts/直接fixtures，记录actualimports/path/hash与source/fixture/script prepost、真实组装、真实执行节点数和首失败；失败仅复验真正失败/受影响代表，QA不修产品，必要缺陷交唯一API ISSUE_REOPEN。准确冻结SOURCE_GATE后主控审反例并精确五源集成/即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN；本门只退役五段，不算全13/R1/R3/R9、同候选整体接受。语义REBASE_ACK后直接执行，无第二START或用户复批。
 
 ### 当前音频输入与事实执行包
 
