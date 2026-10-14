@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 媒体脚本四源已SOURCE_RELEASE，TAB bf149328…；主控已预审，当前四源及fresh-api-media-script-execution/**全部冻结只读，等待独立族，不新增修改或复跑。精确集成前不归还产品租约。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 媒体脚本四源/TAB bf149328…及作者包冻结只读待独立族，精确集成前不归还产品租约。另绑REF-R3-VISUAL-EDIT-EXECUTION-PREPARATION-20261015仅fresh-api-visual-edit-execution-preparation/**新静态证据；所有产品只读，不与QA冻结192 tuple混写。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015：产品/作者/旧包只读，仅fresh-qa/media-script-independent/**新证据写权；固定2b9a5e1e＋四overlay及192源tuple，一个最多三代表关键族，作者normal及已通过族零重跑。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短源decoder实证已审核/归还。REF-R3-OUTPUT-OBSERVATION-FRAME-LOOKUP-FEASIBILITY-20261015仅fresh-runtime/output-observation-frame-lookup-feasibility/**新有界帧选择证据，所有产品/旧包只读；一个组合prototype node核单一有界候选的实际被采PTS/PNG身份，未授权产品采样规则或资源标定。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 单一有界实际选帧六目标可行性证据已审核/WRITE_LEASE_RETURN，原型及本域全部冻结；当前无产品/新证据写权。请求/实际时间、去重、引用及拒绝契约待明确绑定，产品修复/任意源/生产资源尚未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前媒体脚本显式执行实施包
+### 当前画面编辑执行只读准备
+
+`REF-R3-VISUAL-EDIT-EXECUTION-PREPARATION-20261015` 是API单独的新只读准备，写权仅test-runs/refactor-20261014/fresh-api-visual-edit-execution-preparation/**。媒体脚本四源release8b496782…/TAB bf149328…、作者包和QA当前192 tuple全部只读不变，QA继续其6aabe9e9关键族，不撤销或复跑。定向追踪唯一剩余visual_edit_preview入口、_preview_visual_request的完整业务及before/after发布路径、_visual_preview_projection、_publish_task_picture_preview、_task_media_facts/execute/validate的该action分支和原TaskMediaJobs/short clip owner依赖。首读main.py、visual_effects.py、creation/clip_preview.py、creation/output_observation_use_case.py、task_audio.py及直接命中render/store/transaction模块与现visual tests，按必要定义最多16精准源文件登记当前SHA与固定2b9a5e1e Git差额；main/task_audio只能是已释放四overlay字节，不能从旧main摘要推断。只给完整相关AST/有限消费者调用与最小显式输入、public端口、身份/版本/资格/renderer/事务/错误/恢复归属、应退役的活路径、下一批确实必要的互斥文件及一个正常行为/最多三关键反例提案；不预定通用抽象，不执行app import/pytest/native/build/模型/服务，不新增产品/共享权威或复制全仓/旧矩阵。先语义REBASE_ACK后直接准备，READONLY_PREPARATION_RELEASE即冻结，主控审核后另绑具体产品写权。只读准备结束不是R3接受。
+
+有界选帧release56cf50c82b2ea590f3ae5b5ca37b40c8241d96d7d223a2e62a9d3f9247ab3703已主控proof output-observation-frame-lookup-feasibility-reviewed.json SHAc9a21a5079fc846022d5a1c94bac9a678b429b6ed20f6ce04ff49ea2dfb58abe核22artifact、191只读源完整=2b9a5e1e Git、9source/3fixture/3script prepost、15→78实际origin/63later预绑定、30媒体/19登记命令及后释放。短.17→.10、distinct .03→0/.17→.10/1.97→1.9的原PTS和独立唯一PNG同一；原synthetic cap完整AST相同，首次绑定错误保留。16 demux packet与16 filter可见帧只是单视频零start/CFR10fps/mpeg4夹具机制；codec内部read-ahead、音频/多流EOF、VFR/精度/nonzero/longGOP/任意源与生产资源未验。所有产品差额0，NATIVE_FEASIBILITY_REVIEWED/WRITE_LEASE_RETURN已即时发Runtime，下一产品采样契约及写权尚未授予。
+
+### 已释放媒体脚本显式执行实施包
 
 `REF-R3-MEDIA-SCRIPT-EXECUTION-20261015` 只给当前API准确四源apps/api/app/main.py、apps/api/app/task_audio.py、apps/api/app/media_script_jobs.py、NEW apps/api/tests/test_media_script_application.py及test-runs/refactor-20261014/fresh-api-media-script-execution/**新证据写权。固定产品2b9a5e1eea3a96fe33c82646ab0b4e995faa1299，初始准确3源SHA与NEW不存在/空index见fresh-root-review/media-script-execution-implementation-binding.json SHA7706e1c73dad3841c341c6344267c7b489e3cb7550d2e9a79d13bb3eaac4e1ee。准备release SHAee6ee6a61c16f2889878bc9df8a08c5c78b2ae67aea2817d7c43b5a6527dc527已root media-script-execution-preparation-reviewed.json SHA9f583a4868e309b20fc74e05bb7ddb567927082c9fc2d4413b1dc9ca931db617核11artifact、16当前/固定Git/read-window、70完整AST（66定义+4精准Assign/If）、5excerpt及package/report相对链接；API Python3.11.15核同producer，system3.14差额先识别，definition-only locator两次误认statement只修rootobserver，零产品/执行。prep证据WRITE_LEASE_RETURN已即时发API，全部旧证据冻结。
 
