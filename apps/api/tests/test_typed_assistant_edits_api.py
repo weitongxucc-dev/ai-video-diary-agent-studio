@@ -371,3 +371,96 @@ def test_other_member_cannot_read_or_replay_private_typed_edit(material_edit_sta
     assert state.client.post(state.base_url + "/edits/exact/preview", json=payload, headers=headers).status_code in {403, 404}
     proposal = preview.json()["proposal"]
     assert state.client.post(state.base_url + f"/edits/{proposal['id']}/confirm", json={"request_id": str(uuid4())}, headers=headers).status_code in {403, 404}
+
+
+@pytest.fixture
+def linked_speed_http_state(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from test_linked_speed_application import speed_state
+    state = speed_state(tmp_path)
+    monkeypatch.setattr(main, 'production_repo', state.repo)
+    monkeypatch.setattr(main, 'artifact_store', state.store)
+    monkeypatch.setattr(main, 'local_members_service', state.members)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path / 'outputs')))
+    state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
+    state.url = f'/api/creation-tasks/{state.task.id}'
+    return state
+
+
+def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(linked_speed_http_state, monkeypatch):
+    state = linked_speed_http_state
+    wakes = []
+    wake = main._wake_assistant_continuations
+    def observed_wake():
+        wakes.append(True)
+        return wake()
+    monkeypatch.setattr(main, '_wake_assistant_continuations', observed_wake)
+    preview = state.client.post(state.url + '/edits/exact/preview', json={
+        'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2,
+        'request_id': str(uuid4()), 'expected_timeline_version_id': state.base.id, 'expected_timeline_sequence': 2})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    result_url = state.url + f'/edits/{proposal_id}/result'
+    original = state.client.get(result_url).json()
+    request = {'request_id': str(uuid4()), 'expected_base_version_id': state.base.id, 'expected_input_digest': original['input_digest']}
+    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('speed must recover durable facts directly'))
+    before_confirm = len(wakes)
+    accepted = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert accepted.status_code == 200, accepted.text
+    # Preserve the existing first-save helper wake and explicit fresh-apply wake.
+    assert len(wakes) == before_confirm + 2
+    operation = accepted.json()['operation']
+    # A later real direct edit changes HEAD; the original result must stay fixed.
+    later = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
+    assert later.status_code == 200, later.text
+    from app.task_audio import media_digest
+    event = 'event_edit_request_' + media_digest(['ws', state.member.member_id, request['request_id'], 'apply'])
+    recorded = state.repo.read_edit_request_result(state.task, event)
+    assert recorded['status_code'] == 200 and recorded['response'] == accepted.json()
+    with state.repo._connect() as conn:
+        conn.execute('DELETE FROM task_events WHERE id=?', (event + '_result',))
+    before_recovery = len(wakes)
+    replay = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert replay.status_code == 200 and replay.json()['operation']['id'] == operation['id']
+    assert len(wakes) == before_recovery
+    restored = state.repo.read_edit_request_result(state.task, event)
+    assert restored['status_code'] == 200 and restored['response'] == replay.json()
+    read = state.client.get(result_url)
+    assert read.status_code == 200 and read.json()['result']['operation']['result_version_id'] == operation['result_version_id']
+    assert read.json()['result']['montage']['duration_seconds'] == 3
+    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 2
+
+
+def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_speed_http_state, monkeypatch):
+    from app.creation.editing.linked_speed_use_case import LinkedSpeedEditUseCase
+    state = linked_speed_http_state
+    calls = []
+    preview = LinkedSpeedEditUseCase.preview
+    def observed(self, command):
+        assert self.repository is state.repo
+        calls.append(command)
+        return preview(self, command)
+    monkeypatch.setattr(LinkedSpeedEditUseCase, 'preview', observed)
+    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
+    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
+    applied = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
+    assert applied.status_code == 200, applied.text
+    natural = state.client.post(state.url + '/edits/preview', json={'raw_command': '这个镜头改成2倍速 同步声音和字幕',
+        'context_stage': 'montage', 'selected_object_refs': ['clip:clip']})
+    assert natural.status_code == 200, natural.text
+    assert natural.json()['proposal']['operation']['operation_type'] == 'ChangeLinkedSpeed'
+    assert len(calls) == 2 and all(command.actor_identity['member_id'] == state.member.member_id for command in calls)
+
+
+def test_linked_speed_apply_control_preserves_unsubmitted_and_explicit_null(linked_speed_http_state):
+    state = linked_speed_http_state
+    preview = state.client.post(state.url + '/edits/exact/preview', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    url = state.url + f'/edits/{proposal_id}/confirm'
+    refused = state.client.post(url, json={'request_id': str(uuid4()), 'expected_base_version_id': None})
+    assert refused.status_code == 409 and '基础版本' in refused.text
+    accepted = state.client.post(url, json={'request_id': str(uuid4())})
+    assert accepted.status_code == 200, accepted.text

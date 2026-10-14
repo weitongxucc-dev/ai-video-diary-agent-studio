@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from copy import deepcopy
@@ -11,7 +12,7 @@ import hashlib
 import json
 
 from app.creation.contracts import (EditCommand, EditIntent, EditProposal, SubtitleTrack,
-    SubtitleCue, JobRun, ArtifactRecord, TransformRun, DependencyEdge)
+    SubtitleCue, JobRun, ArtifactRecord, TransformRun, DependencyEdge, TimelineVersion)
 from app.creation.transactions import (clone_subtitle_track, clone_cover_asset,
     prepare_change_set, commit_direct_change, commit_change_set)
 from app.creation.editing.metadata import (check_command, prepare_subtitle_display_command,
@@ -143,6 +144,21 @@ class MetadataEditUseCase:
         self.artifact_store = artifact_store
         self.output_root = output_root
         self.audio_service = audio_service
+
+    def current_narration_snapshot(self, workspace_id: str, task: CreationTask) -> dict[str, object]:
+        if not task.confirmed_script_id:
+            return {}
+        segments = self.repository.list_narration_segments(workspace_id, task.id, task.confirmed_script_id)
+        return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False, default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value))) for segment in segments], 'narration_cache_key': task.narration_cache_key}
+
+    def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan) -> TimelineVersion:
+        if task.current_timeline_version_id is not None:
+            return self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        versions = self.repository.list_timeline_versions(workspace_id, task.id)
+        if versions:
+            return versions[-1]
+        version = TimelineVersion(id=f'timeline_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, parent_version_id=None, sequence=1, snapshot={'montage': creation_task_montage_plan_to_payload(plan), **self.current_narration_snapshot(workspace_id, task)}, created_by_operation_id=None)
+        return self.repository.create_timeline_version(version)
 
     def begin(self, task, member_id, request_id, inputs):
         if request_id is None:
