@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 输出观察四源2b9a5e1e已集成归还。REF-R3-MEDIA-SCRIPT-EXECUTION-PREPARATION-20261015仅fresh-api-media-script-execution-preparation/**新只读准备证据写权；精准两个脚本action及必要依赖，不改产品/执行/重跑旧门。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-MEDIA-SCRIPT-EXECUTION-20261015独占main.py、task_audio.py、media_script_jobs.py、NEW tests/test_media_script_application.py四源及fresh-api-media-script-execution/**新证据；2b9a5e1e基线，两个script action显式执行，一个明确fixture层normal后另绑关键独立族，原leaf/resource门不改。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 输出观察三个代表已审核、准确四源2b9a5e1e已集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧门及本族冻结只读。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短源只读诊断已审核归还。REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-DECODER-EVIDENCE-20261015仅fresh-runtime/output-observation-short-source-decoder-evidence/**新有界decoder证据写权；产品/旧证据只读，一个新组合诊断node核原.2s失败和2s对照的实际PTS/文件/原错误，不定采样修复或资源标定。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短源decoder实证已审核/归还。REF-R3-OUTPUT-OBSERVATION-FRAME-LOOKUP-FEASIBILITY-20261015仅fresh-runtime/output-observation-frame-lookup-feasibility/**新有界帧选择证据，所有产品/旧包只读；一个组合prototype node核单一有界候选的实际被采PTS/PNG身份，未授权产品采样规则或资源标定。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -35,17 +35,41 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前媒体脚本显式执行只读准备
+### 当前媒体脚本显式执行实施包
 
-`REF-R3-MEDIA-SCRIPT-EXECUTION-PREPARATION-20261015` 只给当前API test-runs/refactor-20261014/fresh-api-media-script-execution-preparation/**新证据写权，固定产品2b9a5e1eea3a96fe33c82646ab0b4e995faa1299。输出观察/音频等全部已过包冻结，所有产品/旧证据只读，零产品import/collect/test/native/model/GUI/env/account。只跟踪仍经_TASK_MEDIA_HANDLERS/signature.bind/TASK_MEDIA_CONTEXT的media_script_preview和media_script_tool_preview，两者实际共享media_script_jobs原PNG执行/封存，而后者又走preview_media_script.__wrapped__。
+`REF-R3-MEDIA-SCRIPT-EXECUTION-20261015` 只给当前API准确四源apps/api/app/main.py、apps/api/app/task_audio.py、apps/api/app/media_script_jobs.py、NEW apps/api/tests/test_media_script_application.py及test-runs/refactor-20261014/fresh-api-media-script-execution/**新证据写权。固定产品2b9a5e1eea3a96fe33c82646ab0b4e995faa1299，初始准确3源SHA与NEW不存在/空index见fresh-root-review/media-script-execution-implementation-binding.json SHA7706e1c73dad3841c341c6344267c7b489e3cb7550d2e9a79d13bb3eaac4e1ee。准备release SHAee6ee6a61c16f2889878bc9df8a08c5c78b2ae67aea2817d7c43b5a6527dc527已root media-script-execution-preparation-reviewed.json SHA9f583a4868e309b20fc74e05bb7ddb567927082c9fc2d4413b1dc9ca931db617核11artifact、16当前/固定Git/read-window、70完整AST（66定义+4精准Assign/If）、5excerpt及package/report相对链接；API Python3.11.15核同producer，system3.14差额先识别，definition-only locator两次误认statement只修rootobserver，零产品/执行。prep证据WRITE_LEASE_RETURN已即时发API，全部旧证据冻结。
+
+在现media_script_jobs.py一个具体MediaScriptPreviewUseCase复用唯一原seal_script/execute_script与现MediaScriptTools。零IO构造，显式有限actor、job/event/context、repo/store/temporary_root及原配置；唯一execute_script现接口差额是keyword-only context/job/event/actor，删TASK_MEDIA_CONTEXT读取及missing-ambient guard，完整原PNG/definition/transform/edges body、known partial recovery和错误分类保留。owner不依赖main/Request/principal/ambient，不另造runner/ACL/store/manifest/DTO/schema、通用dispatcher/deps袋或兼容fallback。两个route仅原认证/请求/来源/journal/配置/HTTP映射，TaskMediaJobs在ambient/反射前具体owner.execute/validate；退役两decorator/handler、__wrapped__重入和execute_script ambient，旧execute/result桥明确拒绝两action。其它四action、已过audio/output owner及公共check/submit/claim/result/checkpoint/cancel/retry/permit/wake不变。
+
+原phase=script claim及tool_id输入digest先于prepare/config，同request query/result/unknown不盲再POST；completed-source200复用先于配置/排队。recipe通过原get/instantiate_request固定version/current active head/owner/登记provenance/闭合参数/slots，worker再核_recipe_ref；撤销只阻止未来调用，旧PNG/历史保留。typed_source五身份/版本字段、payload版本、descriptor精确封存/source stat/revision/SHA、resource facts/definition_bytes预算原字段和校验时点保持。_script_configuration原read_script_toolchain→专用budget/None错误及前台503 preflight、queue descriptor/ref、facts再核各自阶段不合并/提前，CPU等其它配置不碰。
+
+持久阶段不合并：started先独立持久；started无唯一登记PNG时unknown禁止自动重跑；原leaf完成后publish PNG→PNG ArtifactRecord→definition文件/ArtifactRecord→TransformRun→edges为原分阶段公开仓储。已有唯一PNG且digest/slot/SHA-size/nlink/单帧尺寸匹配可补metadata不重跑Python；不能称DB/FS联合原子或删除早期阶段。result事件之后才原file/definition/PNG验证/current facts/成功checkpoint；原nlink/工具链/control/input执行后SHA、darwin Seatbelt、真实HostResourceProbe/_grant_resources/media_script场景许可、同grant script_digest及stdout/output/deadline/cancel门完全不改、不加不受限fallback。source_ref/artifact_id/sha/size/name/width/height/applied=False原结果与timeline不应用保持。
+
+只一个新组合正常节点：raw合法输入→PNG/definition真实公开仓储/文件发布→原API从成功source注册配方→固定version的新input/request调用→两job固定query/result/replay不二次执行及不应用timeline。允许本节点在测试域明确替换原外部prepare_media_script/run_media_script端口，沿已存在test_media_script_api helper的有限synthetic descriptor/ControlledResources与原typed payload/真实actor/TaskMediaJobs/recipe/store/SQLite/PNG资格；helper旧ambient断言可在新测试重绑该两个端口的观察器，不改旧helper/产品leaf，也不得mock identity/qualification/journal/metadata/unknown guard。所有替身列清，所谓Python次数只是外部端口调用次数，native script/Seatbelt/profile/真实资源接受为0/unknown，不以绿normal冒充原leaf通过。真实leaf仅在以后绑定实际条件时接受，未知继续原503/RecoveryBlocked/refusal，不能临时猜配置预算或绕门。
+
+source/actual scripts/直接fixture执行前seal、prepost、actual module origins/after-run SHA与具体factory/runtime绑定，复用未改变固定Git/source证据，不复制无关旧测试/全仓，不旧门collect。首失败保留，仅失败/受影响项复验。四源SOURCE_RELEASE后主控审核再另绑一个关键独立族最多三代表：真实recipe revoke或input revision变化拒绝未来success；started已持久但无PNG的受控外部失败后query/explicit retry维持unknown且不二次执行；PNG/record先存后native late definition/transform SQL拒绝，早阶段保留、只修自身trigger后原retry同PNG补metadata不再调用外部执行端口。上述仍只业务/持久接线层，native不自动接受。语义REBASE_ACK后直接实施，无第二START；实际增加文件/状态/预算/资格规则先报一个精准差额。
+
+### 当前有界实际帧选择可行性证据
+
+`REF-R3-OUTPUT-OBSERVATION-FRAME-LOOKUP-FEASIBILITY-20261015` 只给当前Runtime test-runs/refactor-20261014/fresh-runtime/output-observation-frame-lookup-feasibility/**新证据写权，所有产品/已过作者QA/两轮诊断冻结只读。原decoder release SHAa66c0d0abf71590ba1140566a850f3255595aa13dd50e00c23483e7c276828f1已root output-observation-decoder-evidence-reviewed.json SHA6f3e42b5fa25e740d9f5a8104da4a35da771a0db0dfbb95483ed8841c5055d12核13artifact/191精确复用/9source/3fixture/3scripts、实际origins16→79/63后加预绑定、原runner及synthetic cap完整AST、一个新node首轮1PASS2.30s/12真实原grant命令与登记/命令后组释放。新短源确测PTS[0,.1]/.17无PNG/原stat真实缺失栈，2s20帧/三PNG；只属于新输入，不补旧candidate03原栈。DECODER_EVIDENCE_REVIEWED/WRITE_LEASE_RETURN即时发Runtime，诊断PASS非短观察成功/采样修复/原生生产资源。root exploratory actual-commands list解析误判仅修observer、不生产或测试重跑。
+
+仅一个新组合prototype node，复用已核准确新短红色MP4（按记录SHA定向只读，不遍历旧pytest-tmp）及一个本域新2s/10fps、1920×1080有可区分帧的自有对照。只评一个具体有界候选，目标T对应不晚于T的最近实际可解码PTS，记录目标T/被选PTS/实际PNG身份（用有界已知2s来源的独立PTS/reference PNG校验，不以红色相同SHA证明帧身份）。正常、tail .17和非帧时点均在同node中；duplicate默认目标如何去重仅提案，产品sample.timestamp/explicit请求/clip映射规则尚未改变。
+
+可先核本机实际ffmpeg有限help/一次候选的seek/保留PTS/首帧选择组合；候选不得每个目标完整列任意视频所有frame或从帧率猜PTS/无界decode/盲fallback试多算法。必须给实际decoder停止点、有限stdout/stderr/output、同原grant/deadline/线程和原synthetic cap，所有command登记child/真实HostProcessProbe，未支持则如实有限拒绝不放宽。源仍精确复用冻结191 map，新prototype/观察器直接脚本/fixture执行前封存与后核/actual origins，源码/预算/当前API并行四源完全不写，不在旧snapshot写cache。reference从已知2s源取帧只是本域诊断，不作任意source生产算法。首失败保留，必要修正只复验失败case，不复跑原两诊断/已过门；一个真实可实施策略或真实阻断后即冻结交回，不无界方案搜索。
+
+READONLY_NATIVE_FEASIBILITY_RELEASE须区分原短源、distinct-frame对照、PNG实际PTS身份、任意source/非零start time/VFR/长GOP未验及资源层级，给精准拟文件与时间/字段/引用语义差额。当前只证明算法可行性，不能声称已修产品或发布新sampling policy；后续具体产品写权/独立接受由root另绑，语义REBASE_ACK后直接有限实证，无第二START。
+
+### 已审核媒体脚本显式执行只读准备（冻结规约）
+
+下述`REF-R3-MEDIA-SCRIPT-EXECUTION-PREPARATION-20261015`已审核/归还，API test-runs/refactor-20261014/fresh-api-media-script-execution-preparation/**证据冻结，不恢复写权；固定产品2b9a5e1eea3a96fe33c82646ab0b4e995faa1299。输出观察/音频等全部已过包冻结，所有产品/旧证据只读，零产品import/collect/test/native/model/GUI/env/account。原只跟踪仍经_TASK_MEDIA_HANDLERS/signature.bind/TASK_MEDIA_CONTEXT的media_script_preview和media_script_tool_preview，两者实际共享media_script_jobs原PNG执行/封存，而后者又走preview_media_script.__wrapped__。
 
 只读main这两个route、_task_media_route两action的输入/原request journal/配置与arguments、_task_media_facts/result的精准两个branch、_script_configuration/_instantiate_script_tool/_media_script_tools及TaskMediaJobs现dispatch；media_script_jobs的seal_script/execute_script、必要media_script/media_script_tools/schema/graphic/artifact所属规则及一个直接旧helper。先复用已存在隔离执行、canonical配方版本/授权/任务来源、原预算/资格、登记artifact-transform-event与重试阶段，不能另造脚本运行器/通用dispatcher/ACL/store/manifest/兼容层。只保留一条自然输入到登记PNG/原query回读的垂直边界，准备具体owner如何显式接收actor/job/event/context和有限配置、去除两个ambient/decorator/反射/__wrapped__入口；其余四action及已过owner保持，原共享阶段/permit/wake不变。配置描述/运行时校准未知不能猜权限或预算。
 
 READONLY_PREPARATION_RELEASE给准确目标AST/现SHA与2b9固定Git、必要有限依赖/读窗口、一个最小可实施包的拟路径/旧消费者退役与拟一个normal及关键独立族（不实际执行、不先建空owner）。若原现有规则或执行条件导致真实受阻，交一个精准缺口，不全main/其它action清点或重复所有旧脚本测试。语义REBASE_ACK后直接只读准备，无第二START；实施写权另绑。
 
-### 当前原短源有界decoder实证
+### 已审核原短源有界decoder实证（冻结规约）
 
-`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-DECODER-EVIDENCE-20261015` 只给当前Runtime test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-decoder-evidence/**新诊断执行证据写权。固定产品2b9a5e1e；复用输出观察作者/QA已封存的191源同一tuple与原实际grant/helper，源码/既有fixture只读，不修改任何产品或旧证据，不在只读snapshot写pycache/pytest cache。只封本次实际脚本/直接fixture执行前后SHA和实际module origins，不重复制无关源码/全仓或执行旧normal/门。
+下述`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-DECODER-EVIDENCE-20261015`已审核/归还，Runtime test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-decoder-evidence/**证据冻结，不恢复执行/新写权。固定产品2b9a5e1e；原复用输出观察作者/QA已封存的191源同一tuple与原实际grant/helper，源码/既有fixture只读，不修改任何产品或旧证据，不在只读snapshot写pycache/pytest cache。只封本次实际脚本/直接fixture执行前后SHA和实际module origins，不重复制无关源码/全仓或执行旧normal/门。
 
 只一个新组合diagnostic node，生成原1920×1080/10fps/.2s、mpeg4的自有原失败输入及2s同参数对照；执行原observe_output默认采样不改参数/比例/worker，捕获原异常类型/正文/真实到达点/清理，观察每次真实命令后的必需PNG存在/size/SHA。另一个有限原grant ffprobe获取每源实际frame PTS/count，严格有界stdout、timeout/threads/输出，走原registered grant runner和HostProcessProbe；所有生成/采样/probe都绑定实际child/原许可，并沿已准确封存的Resources/synthetic render caps，不猜生产profile或宽门。若原grant不支持该有限probe，报精确拒绝而不绕过；这是诊断实证，不接受生产资源/OCR/完整PGID、来源资格/public API全部再验或整体产品。
 
