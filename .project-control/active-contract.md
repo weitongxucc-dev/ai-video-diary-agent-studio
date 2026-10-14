@@ -13,10 +13,10 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 复合四源已9b64d8a精确集成/归还；REF-R2-TIMELINE-RESTORE-20261014独占下述五路径有限恢复body、decoder薄委托与必要测试，固定9b64d8a加五overlay。关键门待新SOURCE_RELEASE，旧复合/字幕/关联门不重跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R4-PROFILE-REGISTRATION-INDEPENDENT-20261014仅新fresh-qa/profile-registration-independent证据写权；固定注册九源271e41aa…/相关49源，独立一个关键族三个反例。作者两node/复合/旧门只读复用，产品无写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 注册一个关键族门首次3PASS0.69s，九源已c74be46准确集成/WRITE_LEASE_RETURN；产品/冻结证据只读，当前无新增证据租约，等恢复新SOURCE_RELEASE后绑定独立差额，不重复旧门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 注册九源271e41aa…已SOURCE_RELEASE冻结，作者首两node通过、源清单首漏项保留并继承既有封存补充；产品/证据只读等独立一个关键族门。不得修改九源或重跑作者/旧门，准确缺陷由主控单一reopen。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 注册九源271e41aa…已c74be46准确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续具体存储/执行边界绑定，作者/独立门不重跑，原源清单漏项限制保留。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -24,6 +24,8 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+注册九源已 `c74be46346ebffaa9b5fc05c265e800cafe89d87` 准确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给R4和QA。独立 `fresh-qa/profile-registration-independent/SOURCE_GATE.json` SHAbe834bfbc498e198db44519c27357ce34c1e1ffaa62fd77e1e514efa4637d6ed为首次3PASS0.69s/3actual，无探针或产品首失败。主控核39artifact/17原复用/9合成终态、49本轮完整preseal/40固定Git、49→50实际after-run imports、两child/两fixture prepost与7组真实有限owner图；root复核fc9c21ee…零新测试。shared来源原资格后foreign真实同ID注册并commit，原finalowner在写事务开始前拒绝，外部行保留；真实同conn授权/新claim写后，versioned_voice_profiles INSERT由晚trigger拒绝并原ROLLBACK，voice行尚未落库，不称其已写后回滚；全59表schema/rows及文件事实保持。历史revoked v1与新active v2同授权ID/新版voice保持固定拒绝和原default v1，合法v2仅必要对照；该历史状态门不是外部撤销UI/变更流程。原作者48本轮+1继承封存和首wrapper1/child0保持、不倒写或重跑；直接repo可信member、HTTP/cloud认证未验、inline whole-file prestart unknown分列。cached/committed准确九blob、不含API恢复WIP；全R4/R9、真实生成/媒体/资源/GUI/native及所有组同候选旅程仍未完成。
 
 注册九源已沿 `fresh-r4-authorizations/profile-registration/SOURCE_RELEASE.json` SHAbe1728223035b09f892686d0b21e8c58cd229f22531a9419605fe2a4d26d1954 / TAB271e41aa036077ac346c5142025e48e55b3e6fa6d5872bbce2bd189b422980cf冻结，基线9b64d8a加九overlay；相关49map998a6b58025f2fda1b8f5da23c5e8f83371e7bf5c53ea66542374a8133ce0bcf，40非overlay全部固定Git，不含API恢复WIP。作者首次2PASS0.52s/2实际执行+56静态、pytest subprocess事件0、无格式探测替身；原wrapper首源门失败保留：本轮PRE_RUN48漏analysis_execution一源，child pytest0但wrapper1。主控核17artifact/49实际after-run import、48本轮prepost/6script-config，漏项以更早R6 binding/release/3bc8900/9b64d8a/actual-current同字节继承封存，不称其有本轮单独prepost、不重跑测试。root预审e9e5b69b…核15迁出完整method AST、293无关repo methods/79globals同AST、三owner构造/本地接管唯一绑定及共享规范同体迁出；首root normalizer按两参数误判原单profile getter已修helper，零产品/测试重跑。
 
