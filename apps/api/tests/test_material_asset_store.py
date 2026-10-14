@@ -761,3 +761,153 @@ def test_adoption_asset_commands_keep_raw_private_update_insert_and_parent_rollb
         assert conn.in_transaction
         conn.rollback()
     assert _snapshot(connect) == before
+
+
+def test_discovery_readers_keep_workspace_missing_results_and_distinct_visibility_decoders(database):
+    connect, _traces = database
+    opened = []
+
+    def owned_connection():
+        opened.append(True)
+        return connect()
+
+    store = MaterialAssetStore(owned_connection)
+    older = _asset("older")
+    newer = _asset("newer", visibility="shared")
+    newer.updated_at = WHEN + timedelta(seconds=1)
+    foreign = _asset("foreign", workspace="workspace-b")
+    foreign.path = newer.path
+    foreign.updated_at = WHEN + timedelta(seconds=2)
+    for value in (older, newer, foreign):
+        value.source_url = "https://fixture.invalid/original"
+    with connect() as conn:
+        _insert(conn, older)
+        _insert(conn, newer, column_visibility="private")
+        _insert(conn, foreign)
+
+    # The path reader deliberately reads payload only; the source reader uses the column.
+    by_path = store.get_asset_by_path(newer.workspace_id, newer.path)
+    assert by_path.id == newer.id and by_path.visibility == "shared"
+    with pytest.raises(KeyError) as missing:
+        store.get_asset_by_path("missing-workspace", newer.path)
+    assert missing.value.args == (newer.path,)
+    by_source = store.find_asset_by_source_url(newer.workspace_id, newer.source_url)
+    assert by_source.id == newer.id and by_source.visibility == "private"
+    assert store.find_asset_by_source_url(foreign.workspace_id, newer.source_url).id == foreign.id
+    assert store.find_asset_by_source_url("missing-workspace", newer.source_url) is None
+    assert store.find_asset_by_source_url(newer.workspace_id, "https://fixture.invalid/missing") is None
+    assert len(opened) == 6
+
+
+def test_disk_missing_reader_keeps_caller_transaction_and_loop_uses_separate_plain_saves(database, monkeypatch):
+    connect, traces = database
+    pending = _asset("pending")
+    failed = _asset("failed")
+    failed.analysis_status = "failed"
+    failed.analysis_message = "原失败信息"
+    foreign = _asset("foreign", workspace="workspace-b")
+    with connect() as conn:
+        _insert(conn, pending, column_visibility="shared")
+        _insert(conn, failed)
+        _insert(conn, foreign)
+    before = _snapshot(connect)
+
+    def forbidden():
+        raise AssertionError("disk reader must use the caller connection")
+
+    reader = MaterialAssetStore(forbidden)
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        uncommitted = _asset("uncommitted")
+        _insert(conn, uncommitted)
+        rows = reader._disk_missing_asset_rows(conn, pending.workspace_id)
+        assert all(row.keys() == ["payload"] for row in rows)
+        assert {json.loads(row["payload"])["id"] for row in rows} == {pending.id, failed.id, uncommitted.id}
+        assert reader._disk_missing_asset_rows(conn, "missing-workspace") == []
+        assert conn.in_transaction
+        with connect() as observer:
+            assert observer.execute("SELECT 1 FROM material_assets WHERE id=?", (uncommitted.id,)).fetchone() is None
+        conn.rollback()
+    assert _snapshot(connect) == before
+    with connect() as conn:
+        rows = reader._disk_missing_asset_rows(conn, pending.workspace_id)
+
+    opened = []
+
+    def owned_connection():
+        opened.append(True)
+        return connect()
+
+    stamp = WHEN + timedelta(hours=2)
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: stamp)
+    traces.clear()
+    assert MaterialAssetStore(owned_connection).mark_disk_missing_assets(rows) is None
+    assert len(opened) == 1
+    assert "BEGIN IMMEDIATE" not in traces
+    assert traces.count("COMMIT") == 1
+    after = _snapshot(connect)
+    assert after["material_assets"][1:] == before["material_assets"][1:]
+    changed = after["material_assets"][0]
+    payload = json.loads(changed[3])
+    assert payload["analysis_status"] == "blocked"
+    assert payload["analysis_message"] == "外接盘或素材目录不可用；连接原盘后会继续补扫。"
+    assert changed[4] == stamp.isoformat()
+    assert payload["visibility"] == "private" and changed[5] == "shared"
+
+
+def test_discovery_save_consumes_supplied_stat_without_filesystem_io_and_keeps_recorded_owner(database, tmp_path, monkeypatch):
+    connect, traces = database
+    store = MaterialAssetStore(connect)
+    source = tmp_path / "stat-fixture"
+    source.write_bytes(b"synthetic file metadata")
+    stat = source.stat()
+    stamp = WHEN + timedelta(hours=3)
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: stamp)
+    # These paths have no files. The caller already acquired and validated the source stat.
+    resolved = tmp_path / "already-validated.png"
+    confirmed_path = tmp_path / "already-validated-confirmed.mp4"
+    unknown_path = tmp_path / "already-validated-unknown.mp4"
+    assert not resolved.exists()
+    created = store.save_discovered_asset(
+        None, "workspace-a", resolved, stat, media_type=None,
+        source_url="https://fixture.invalid/original", owner_user_id=" explicit-member ",
+        copy_uploader_user_id="confirmed-member",
+    )
+    confirmed = store.save_discovered_asset(
+        None, "workspace-a", confirmed_path, stat, media_type=None,
+        source_url="", owner_user_id="  ", copy_uploader_user_id="confirmed-member",
+    )
+    unknown = store.save_discovered_asset(
+        None, "workspace-a", unknown_path, stat, media_type=None,
+        source_url="", owner_user_id=None, copy_uploader_user_id=None,
+    )
+    assert created.owner_user_id == "explicit-member" and created.visibility == "private"
+    assert created.media_type == "image" and created.source_url == "https://fixture.invalid/original"
+    assert created.size_bytes == stat.st_size and created.updated_at == stamp
+    assert confirmed.owner_user_id == "confirmed-member" and unknown.owner_user_id is None
+    assert store.get_asset(created.workspace_id, created.id).owner_user_id == created.owner_user_id
+
+    existing = _asset("original", owner="original-member", visibility="shared")
+    existing.path = str(tmp_path / "registered.wav")
+    existing.file_name = "old-name.wav"
+    existing.media_type = "audio"
+    existing.source_url = "https://fixture.invalid/recorded"
+    existing.user_tags = ["人工标签"]
+    existing.user_description = "原说明"
+    with connect() as conn:
+        _insert(conn, existing)
+    segments = deepcopy(existing.segments)
+    traces.clear()
+    result = store.save_discovered_asset(
+        existing, "workspace-a", Path(existing.path), stat, media_type=None,
+        source_url="https://fixture.invalid/later", owner_user_id="another-member",
+        copy_uploader_user_id="another-uploader",
+    )
+    assert result is existing and result.id == "original"
+    assert result.owner_user_id == "original-member" and result.visibility == "shared"
+    assert result.user_tags == ["人工标签"] and result.user_description == "原说明"
+    assert result.segments == segments
+    assert result.media_type == "audio" and result.source_url == "https://fixture.invalid/recorded"
+    assert result.file_name == "registered.wav" and result.size_bytes == stat.st_size
+    assert "BEGIN IMMEDIATE" not in traces
+    assert not any(sql.lstrip().startswith("SELECT") for sql in traces)

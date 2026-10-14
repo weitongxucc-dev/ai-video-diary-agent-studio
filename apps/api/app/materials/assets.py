@@ -9,6 +9,8 @@ from datetime import datetime
 import hashlib
 import json
 from itertools import pairwise
+from os import stat_result
+from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
@@ -19,8 +21,10 @@ from app.materials.contracts import (
     ContentVisibility,
     MaterialAsset,
     MaterialAssetNote,
+    MaterialMediaType,
     MaterialSegment,
     effective_segment_usage_role,
+    material_media_type_for,
 )
 from app.media_observations import (
     MaterialSpeechAnalysis,
@@ -40,6 +44,75 @@ class MaterialVersionConflict(ValueError):
 class MaterialAssetStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
+
+    def _disk_missing_asset_rows(
+        self, conn: sqlite3.Connection, workspace_id: str,
+    ) -> list[sqlite3.Row]:
+        return conn.execute("SELECT payload FROM material_assets WHERE workspace_id=?", (workspace_id,)).fetchall()
+
+    def mark_disk_missing_assets(self, rows: list[sqlite3.Row]) -> None:
+        for row in rows:
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            if asset.analysis_status != "failed":
+                asset.analysis_status = "blocked"
+                asset.analysis_message = "外接盘或素材目录不可用；连接原盘后会继续补扫。"
+                self.save_asset(asset)
+
+    def get_asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND file_path=?", (workspace_id, file_path)).fetchone()
+        if row is None:
+            raise KeyError(file_path)
+        return self._asset_from_payload(json.loads(str(row["payload"])))
+
+    def find_asset_by_source_url(self, workspace_id: str, source_url: str) -> MaterialAsset | None:
+        """Find the material already registered for one original direct link."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload, visibility FROM material_assets
+                WHERE workspace_id = ? AND json_extract(payload, '$.source_url') = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (workspace_id, source_url),
+            ).fetchone()
+        return (
+            self._asset_from_row(row)
+            if row is not None
+            else None
+        )
+
+    def save_discovered_asset(
+        self, existing: MaterialAsset | None, workspace_id: str, resolved: Path, stat: stat_result,
+        *, media_type: MaterialMediaType | None, source_url: str,
+        owner_user_id: str | None, copy_uploader_user_id: str | None,
+    ) -> MaterialAsset:
+        if existing is None:
+            digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
+            existing = MaterialAsset(
+                id=f"asset_{digest}",
+                workspace_id=workspace_id,
+                owner_user_id=(
+                    str(owner_user_id or "").strip()
+                    or copy_uploader_user_id
+                ) or None,
+                file_name=resolved.name,
+                path=str(resolved),
+                size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo),
+                media_type=media_type or material_media_type_for(resolved) or "video",
+                source_url=source_url,
+            )
+        else:
+            existing.file_name = resolved.name
+            existing.size_bytes = stat.st_size
+            existing.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
+            # A later scan must not erase a recorded media type or provenance.
+            if media_type is not None:
+                existing.media_type = media_type
+            if source_url and not existing.source_url:
+                existing.source_url = source_url
+        return self.save_asset(existing)
 
     def _scene_asset_source_row(
         self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,

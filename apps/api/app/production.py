@@ -4069,13 +4069,8 @@ class ProductionRepository:
                 "UPDATE material_ingestion_files SET state='blocked_disk' WHERE workspace_id=? AND state='ready'",
                 (workspace_id,),
             )
-            rows = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=?", (workspace_id,)).fetchall()
-        for row in rows:
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
-            if asset.analysis_status != "failed":
-                asset.analysis_status = "blocked"
-                asset.analysis_message = "外接盘或素材目录不可用；连接原盘后会继续补扫。"
-                self._save_asset(asset)
+            rows = self._material_assets._disk_missing_asset_rows(conn, workspace_id)
+        self._material_assets.mark_disk_missing_assets(rows)
 
     def _reset_changed_material_asset(self, asset: MaterialAsset) -> None:
         self._preserve_unmatched_corrections(asset, asset.segments)
@@ -4311,11 +4306,7 @@ class ProductionRepository:
         return self._material_assets.get_asset(workspace_id, asset_id, connection=connection)
 
     def _asset_by_path(self, workspace_id: str, file_path: str) -> MaterialAsset:
-        with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND file_path=?", (workspace_id, file_path)).fetchone()
-        if row is None:
-            raise KeyError(file_path)
-        return self._asset_from_payload(json.loads(str(row["payload"])))
+        return self._material_assets.get_asset_by_path(workspace_id, file_path)
 
     def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
         asset = self.get_asset(workspace_id, asset_id)
@@ -9371,20 +9362,14 @@ class ProductionRepository:
         except ValueError as exc:
             raise ValueError("素材文件不在配置的素材库中") from exc
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload, visibility
-                FROM material_assets
-                WHERE workspace_id = ? AND file_path = ?
-                """,
-                (workspace_id, str(resolved)),
-            ).fetchone()
+            row = self._material_assets._asset_payload_row_by_path(conn, workspace_id, str(resolved))
         existing = (
             self._asset_from_row(row)
             if row is not None
             else None
         )
         stat = resolved.stat()
+        copy_uploader_user_id = None
         if existing is None:
             # 可信接收身份随这一文件修订的确认持久化；无身份外部文件不猜上传者。
             with self._connect() as conn:
@@ -9393,31 +9378,11 @@ class ProductionRepository:
                     "WHERE workspace_id=? AND file_path=? AND confirmed_revision=?",
                     (workspace_id, str(resolved), json.dumps(self.material_copy_revision(stat), sort_keys=True)),
                 ).fetchone()
-            digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
-            existing = MaterialAsset(
-                id=f"asset_{digest}",
-                workspace_id=workspace_id,
-                owner_user_id=(
-                    str(owner_user_id or "").strip()
-                    or (confirmation["copy_uploader_user_id"] if confirmation is not None else None)
-                ) or None,
-                file_name=resolved.name,
-                path=str(resolved),
-                size_bytes=stat.st_size,
-                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo),
-                media_type=media_type or material_media_type_for(resolved) or "video",
-                source_url=source_url,
-            )
-        else:
-            existing.file_name = resolved.name
-            existing.size_bytes = stat.st_size
-            existing.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
-            # A later scan must not erase a recorded media type or provenance.
-            if media_type is not None:
-                existing.media_type = media_type
-            if source_url and not existing.source_url:
-                existing.source_url = source_url
-        return self._save_asset(existing)
+            copy_uploader_user_id = confirmation["copy_uploader_user_id"] if confirmation is not None else None
+        return self._material_assets.save_discovered_asset(
+            existing, workspace_id, resolved, stat, media_type=media_type, source_url=source_url,
+            owner_user_id=owner_user_id, copy_uploader_user_id=copy_uploader_user_id,
+        )
 
     def material_link_target(self, workspace_id: str) -> Path:
         """Return the intake directory a direct link may write into, or refuse.
@@ -9438,20 +9403,7 @@ class ProductionRepository:
 
     def _asset_by_source_url(self, workspace_id: str, source_url: str) -> MaterialAsset | None:
         """Find the material already registered for one original direct link."""
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload, visibility FROM material_assets
-                WHERE workspace_id = ? AND json_extract(payload, '$.source_url') = ?
-                ORDER BY updated_at DESC LIMIT 1
-                """,
-                (workspace_id, source_url),
-            ).fetchone()
-        return (
-            self._asset_from_row(row)
-            if row is not None
-            else None
-        )
+        return self._material_assets.find_asset_by_source_url(workspace_id, source_url)
 
     def _material_file_intact(self, asset: MaterialAsset) -> bool:
         """原文件是否仍完整可读——大小相等只是其中一条。
