@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata 六源35e0c7e8…已于16e6663准确集成并WRITE_LEASE_RETURN，原12实际PASS与仅文档空白等价差额分别保留；现按下方R4五raw SELECT消费者批独占production两明确消费者、既有local adoption测试和新增raw消费者测试。R4四模块只读冻结，main/metadata/R6 IO与settings本批只读，不混下一批。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；metadata与Web有限props已准确集成、归还，不重复原门。下一门为API五raw消费者与R4四冻结仓储源的准确联合候选，收到SOURCE_RELEASE后核同conn/raw row/摘要/回滚及实际消费者；当前等待准确候选，不执行猜测测试。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata已16e6663准确集成归还；R4五raw SELECT消费者与四仓储源现联合SOURCE_RELEASE fa0ebcb2…六源准确冻结，既有local adoption测试未修改。等待独立联合门；当前仅按post-persistence段只读准备settings有限协调方案，不获得main/metadata/R6 IO或settings新写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；metadata与Web有限props已集成归还，不复测。当前独立核R4五raw消费者及四仓储源联合六源fa0ebcb2…，沿准确release/快照审计复用原6实际消费者与模块4+2，补必要原权限/原始行摘要/同conn事务独立反例；不运行用户维护、旧全矩阵或宣称完整R4/R9。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 有限props十源97cee333…已于9aded56准确集成并WRITE_LEASE_RETURN，原51与代表浏览器审计、独立2PASS分别保留；现只读核R5剩余实际消费者/职责与三尺寸证据缺口，只写fresh-web-consumers/r5-remainder-readonly；产品不自动获得新写权，不重复旧全矩阵。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；profile/voice raw reader候选03两源和authorization raw history候选04两源分别SOURCE_RELEASE准确冻结且产品只读。metadata已集成归还，API现接五raw SELECT消费者；两模块待联合独立门与准确集成后即时归还，不把单模块释放当接受。 |
