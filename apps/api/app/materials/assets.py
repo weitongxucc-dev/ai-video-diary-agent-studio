@@ -334,6 +334,14 @@ class MaterialAssetStore:
         )
         return asset
 
+    def _asset_id_row_by_path(
+        self, conn: sqlite3.Connection, workspace_id: str, file_path: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT id FROM material_assets WHERE workspace_id=? AND file_path=?",
+            (workspace_id, file_path),
+        ).fetchone()
+
     def _asset_payload_row_by_path(
         self, conn: sqlite3.Connection, workspace_id: str, file_path: str,
     ) -> sqlite3.Row | None:

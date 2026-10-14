@@ -1859,8 +1859,8 @@ class ProductionRepository:
             if voice.reference.asset_id is None:
                 path = self.resolve_workspace_media_reference(voice.workspace_id, voice.reference_audio_path)
                 with self._connect() as conn:
-                    row = conn.execute("SELECT id FROM material_assets WHERE workspace_id=? AND file_path=?",
-                                       (voice.workspace_id, str(path))).fetchone()
+                    row = self._material_assets._asset_id_row_by_path(
+                        conn, voice.workspace_id, str(path))
                 if row is not None:
                     voice = replace(voice, reference=replace(voice.reference, asset_id=str(row["id"])))
         with self._connect() as conn:
