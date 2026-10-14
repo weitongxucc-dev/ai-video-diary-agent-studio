@@ -26,6 +26,7 @@ from app.profiles.contracts import (Authorization, PersonProfile, ProfileReferen
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
 from app.profiles.legacy_voice import LegacyVoiceProfileStore, VoiceProfile
+from app.profiles.workspace_profile import WorkspaceProductionProfileStore, ProductionProfile
 from app.profiles.records import (
     ProfileRecordStore, _person_profile_payload, _versioned_voice_profile_payload,
     _profile_reference_payload, _profile_reference_fields,
@@ -306,39 +307,6 @@ def material_segment_eligible(asset, segment, workspace_id, *, automation_only=F
 
 def automatic_segment_eligible(asset, segment, workspace_id):
     return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
-
-
-
-
-@dataclass
-class ProductionProfile:
-    workspace_id: str
-    workspace_name: str = "AI 视频日记"
-    brand_name: str = ""
-    primary_platform: str = "douyin"
-    aspect_ratio: str = "9:16"
-    target_duration_min_seconds: int = 30
-    target_duration_max_seconds: int = 90
-    brand_template_name: str = ""
-    brand_colors: list[str] = field(default_factory=list)
-    subtitle_style: str = ""
-    intro_text: str = ""
-    outro_text: str = ""
-    background_music_path: str | None = None
-    default_voice_profile_id: str | None = None
-    default_voice_version: str | None = None
-    voice_name: str = ""
-    voice_reference_path: str | None = None
-    voice_reference_text: str = ""
-    voice_consent_confirmed: bool = False
-    voice_model_status: AnalysisStatus = "blocked"
-    voice_model_message: str = "请先下载本地声音模型并确认声音授权。"
-    source_urls: list[str] = field(default_factory=list)
-    use_obsidian: bool = True
-    use_hermes: bool = True
-    factuality_gate_enabled: bool = True
-    cloud_enhancement_enabled: bool = False
-    updated_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass
@@ -885,6 +853,7 @@ class ProductionRepository:
         )
         self._initialize_profile_stores()
         self._legacy_voice_profiles = LegacyVoiceProfileStore(self._connect)
+        self._workspace_profiles = WorkspaceProductionProfileStore(self._connect)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
 
@@ -2273,30 +2242,10 @@ class ProductionRepository:
         return self._profile_records._get_versioned_voice_profile(conn, workspace_id, voice_profile_id, version)
 
     def get_profile(self, workspace_id: str) -> ProductionProfile:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM production_profiles WHERE workspace_id = ?",
-                (workspace_id,),
-            ).fetchone()
-        if row is None:
-            return ProductionProfile(workspace_id=workspace_id)
-        return self._profile_from_payload(json.loads(str(row["payload"])))
+        return self._workspace_profiles.get_profile(workspace_id)
 
     def save_profile(self, profile: ProductionProfile) -> ProductionProfile:
-        profile.updated_at = utc_now()
-        payload = _json_payload(profile)
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO production_profiles (workspace_id, payload, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(workspace_id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (profile.workspace_id, payload, profile.updated_at.isoformat()),
-            )
-        return profile
+        return self._workspace_profiles.save_profile(profile)
 
     def list_voice_profiles(self, workspace_id: str) -> list[VoiceProfile]:
         return self._legacy_voice_profiles.list_voice_profiles(workspace_id)
@@ -9412,11 +9361,6 @@ class ProductionRepository:
             for match in re.finditer(r"pts_time:([0-9]+(?:\.[0-9]+)?)", completed.stderr)
         ]
         return [value for value in boundaries if 0 < value < duration]
-
-    @staticmethod
-    def _profile_from_payload(data: dict[str, object]) -> ProductionProfile:
-        data = _with_datetime(data, "updated_at")
-        return ProductionProfile(**data)
 
     _authorization_from_payload = staticmethod(_authorization_from_payload)
 
