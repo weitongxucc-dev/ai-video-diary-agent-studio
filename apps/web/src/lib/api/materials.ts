@@ -44,11 +44,6 @@ export function createMaterialCollection(input: {
         body: JSON.stringify(input),
     });
 }
-export function scanProductionMaterials(): Promise<MaterialLibrary> {
-    return request<MaterialLibrary>("/api/production/materials/scan", {
-        method: "POST",
-    });
-}
 export function getMaterialIntakeStatus(): Promise<MaterialIntakeStatus> {
     return request("/api/production/materials/intake");
 }
@@ -75,13 +70,6 @@ export function retryMaterialIntake(assetId: string): Promise<MaterialAsset> {
 export function updateMaterialAssetTags(assetId: string, userTags: string[]): Promise<MaterialAsset> {
     return request(`/api/production/materials/${encodeURIComponent(assetId)}/tags`, {
         method: "PUT", body: JSON.stringify({ user_tags: userTags }),
-    });
-}
-export function updateMaterialAssetTagsBatch(assetIds: string[], add: string[], remove: string[]): Promise<{
-    assets: MaterialAsset[];
-}> {
-    return request("/api/production/materials/tags/batch", {
-        method: "POST", body: JSON.stringify({ asset_ids: assetIds, add, remove }),
     });
 }
 export function updateMaterialNotes(items: MaterialAssetNote[]): Promise<{

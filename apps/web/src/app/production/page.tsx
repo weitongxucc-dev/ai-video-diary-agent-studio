@@ -96,7 +96,7 @@ export default async function ProductionPage({
 
   if (params.view === "automations") {
     return (
-      <AppShell creationTasks={creationTasks} workspaceStatus={{ kind: "attention", label: "定时安排到期建立运行，逐次确认后沿创作任务继续" }}>
+      <AppShell creationTasks={creationTasks} workspaceStatus={{ label: "定时安排到期建立运行，逐次确认后沿创作任务继续" }}>
         <ScheduledTasksWorkspace />
       </AppShell>
     );
@@ -217,8 +217,8 @@ export default async function ProductionPage({
       inspector={defaultInspector}
       inspectorTitle="任务运行情况"
       workspaceStatus={readiness.ready
-        ? { kind: "connected", label: "工作区已就绪" }
-        : { kind: "attention", label: "工作区存在阻断" }}
+        ? { label: "工作区已就绪" }
+        : { label: "工作区存在阻断" }}
     >
       <div className="modern-queue">
         {!readiness.ready ? (

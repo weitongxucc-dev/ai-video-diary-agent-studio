@@ -3,8 +3,8 @@ import {
   confirmCreationTaskTopic,
   CreationPlanApiError,
   generateCreationTaskTopics,
-  generateCreationTaskNarration,
   getCreationTaskTopics,
+  previewCreationExecution,
   selectCreationTaskNarrationVoice,
 } from "../api";
 
@@ -61,7 +61,7 @@ describe("creation-task topic API", () => {
     } satisfies Partial<CreationPlanApiError>);
   });
 
-  it("explains a missing authorized voice in user language", async () => {
+  it("projects a synthetic missing-authorized-voice refusal through execution preview", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: {
         error: "voice_identity_missing",
@@ -73,13 +73,14 @@ describe("creation-task topic API", () => {
     }), { status: 503 }));
     vi.stubGlobal("fetch", fetch);
 
-    await expect(generateCreationTaskNarration("task-1")).rejects.toMatchObject({
+    await expect(previewCreationExecution("task-1")).rejects.toMatchObject({
       status: 503,
       code: "voice_identity_missing",
       message: "缺少已授权的声音版本",
       impact: "当前创作任务未生成配音，未调用声音模型。",
       repairAction: "重新预检并选择已授权的中文声音版本。",
     } satisfies Partial<CreationPlanApiError>);
+    expect(fetch).toHaveBeenCalledWith("/api/creation-tasks/task-1/execution/preview", expect.objectContaining({ cache: "no-store" }));
   });
 
   it("binds an explicit versioned voice without sending a local path", async () => {

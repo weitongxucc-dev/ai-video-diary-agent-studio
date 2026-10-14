@@ -101,6 +101,17 @@ afterEach(() => {
 
 describe("AppShell", () => {
 
+  it("keeps workspace labels in the device settings title and restores its default", () => {
+    const view = render(<AppShell workspaceStatus={{ label: "需要处理" }}><p>当前工作区</p></AppShell>);
+    const settings = screen.getByRole("link", { name: "设备设置" });
+    expect(settings).toHaveAttribute("href", "/settings");
+    expect(settings).toHaveAttribute("title", "设备设置 · 需要处理");
+    view.rerender(<AppShell workspaceStatus={{ label: "工作区已就绪" }}><p>当前工作区</p></AppShell>);
+    expect(settings).toHaveAttribute("title", "设备设置 · 工作区已就绪");
+    view.rerender(<AppShell><p>当前工作区</p></AppShell>);
+    expect(settings).toHaveAttribute("title", "设备设置");
+  });
+
   it("shows the approved Yaohe brand while retaining home navigation", () => {
     render(<AppShell><p>当前工作区</p></AppShell>);
     const home = screen.getByRole("link", { name: "返回首页" });

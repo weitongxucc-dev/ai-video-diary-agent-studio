@@ -1158,10 +1158,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   const workspaceStatus = task.stage_status === "failed"
-    ? { kind: "failed" as const, label: "需要处理" }
+    ? { label: "需要处理" }
     : task.stage_status === "waiting_for_user"
-      ? { kind: "attention" as const, label: "等待确认" }
-      : { kind: "connected" as const, label: task.stage_status === "running" ? "正在处理" : "本地任务" };
+      ? { label: "等待确认" }
+      : { label: task.stage_status === "running" ? "正在处理" : "本地任务" };
 
   const isEditor = activeView === "montage";
   const selectedClip = selectedClipIndex >= 0 ? workspace.montage?.clips[selectedClipIndex] : undefined;

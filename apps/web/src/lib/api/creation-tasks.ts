@@ -1,7 +1,7 @@
 import type { TaskMediaJob } from '../types/task-edits';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
-import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskNarration, CreationTaskPersonRender, CreationTaskMontage, CreationTaskTopicsResponse } from '../types/creation-tasks';
+import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
 import type { CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
 import type { CreationTaskAssistantTurnResponse, CreationTaskAssistantHistory, AssistantStreamEvent } from '../types/assistant';
 import type { CreationTaskTimelineVersionDetail, CreationTaskTimelineVersionList } from '../types/timeline-history';
@@ -109,9 +109,6 @@ export function saveAssistantScriptDraft(taskId: string, input: {
 }): Promise<CreationTaskScript> {
     return creationPlanRequest<CreationTaskScript>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, { method: "POST", body: JSON.stringify(input) });
 }
-export function generateCreationTaskNarration(taskId: string): Promise<CreationTaskNarration> {
-    return creationPlanRequest<CreationTaskNarration>(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/generate`, { method: "POST" });
-}
 export function selectCreationTaskNarrationVoice(taskId: string, input: {
     voice_profile_id: string;
     voice_version: string;
@@ -127,9 +124,6 @@ export function generateCreationTaskPersonRender(taskId: string, input: {
 }): Promise<CreationTaskPersonRender> {
     return creationPlanRequest<CreationTaskPersonRender>(`/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/generate`, { method: "POST", body: JSON.stringify(input) });
 }
-export function createCreationTaskMontagePlan(taskId: string): Promise<CreationTaskMontage> {
-    return creationPlanRequest<CreationTaskMontage>(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`, { method: "POST" });
-}
 export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput): Promise<CreationTaskEditResult> {
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`, { method: "POST", body: JSON.stringify(input) });
 }
@@ -138,9 +132,6 @@ export function previewCreationTaskExactEdit(taskId: string, input: CreationTask
 }
 export function getCreationTaskMontageClipCandidates(taskId: string, clipId: string): Promise<MontageClipCandidate[]> {
     return creationPlanRequest<MontageClipCandidate[]>(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}/candidates`);
-}
-export function renderCreationTaskMontage(taskId: string): Promise<CreationTaskMontage> {
-    return creationPlanRequest<CreationTaskMontage>(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/render`, { method: "POST", body: JSON.stringify({}) });
 }
 export async function getCreationTaskQualityCheck(taskId: string): Promise<import("../types").CreationTaskQualityCheck> {
     // Quality reads require a trusted identity, unlike anonymous task reads.

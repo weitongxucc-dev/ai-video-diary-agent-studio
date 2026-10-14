@@ -100,7 +100,6 @@ const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
 ];
 
 export type AppShellWorkspaceStatus = {
-  kind: "unknown" | "connected" | "attention" | "failed";
   label: string;
 };
 
