@@ -15,7 +15,6 @@ from contextvars import ContextVar
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
-from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlsplit
@@ -40,7 +39,7 @@ from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstand
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
-from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags
+from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
     _required_text, _optional_string_tuple, _required_datetime, _optional_datetime,
@@ -992,8 +991,7 @@ class ProductionRepository:
                 payload = json.loads(row["payload"])
                 payload.update(owner_user_id=member_id, visibility="private")
                 serialized = json.dumps(payload, ensure_ascii=False)
-                conn.execute("UPDATE material_assets SET payload=?, visibility='private' WHERE id=? AND workspace_id='local'",
-                             (serialized, row["id"]))
+                repository._material_assets.privatize_local_adoption_asset(conn, row["id"], serialized)
                 after.append({**row, "payload": serialized, "visibility": "private"})
             for reference in current["references"]:
                 if reference["before_sha256"] is None:
@@ -1008,8 +1006,7 @@ class ProductionRepository:
                 media_type="audio", duration_seconds=source["duration_seconds"],
                 owner_user_id=member_id, visibility="private", created_at=utc_now(), updated_at=utc_now())
             source_payload = _json_payload(source_asset)
-            conn.execute("INSERT INTO material_assets(id,workspace_id,file_path,payload,visibility,updated_at) VALUES (?,'local',?,?,'private',?)",
-                         (source_asset.id, source_asset.path, source_payload, now))
+            repository._material_assets.insert_local_voice_source_asset(conn, source_asset, source_payload, now)
             after.append({"id": source_asset.id, "workspace_id": "local", "file_path": source_asset.path,
                           "payload": source_payload, "visibility": "private", "updated_at": now})
             # Preserve every historical field; v1 stays byte-for-byte in its original row.
@@ -3042,22 +3039,7 @@ class ProductionRepository:
         return candidates
 
     def _mark_material_hash_asset_blocked(self, workspace_id: str, asset_id: str, message: str) -> None:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
-                (workspace_id, asset_id),
-            ).fetchone()
-            if row is None:
-                return
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
-            asset.analysis_status = "blocked"
-            asset.analysis_message = message
-            asset.updated_at = utc_now()
-            conn.execute(
-                "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-                (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
-            )
+        self._material_assets.mark_hash_asset_blocked(workspace_id, asset_id, message)
 
     def material_hash_verdict(
         self, workspace_id: str, asset_id: str, input_digest: str,
@@ -3875,38 +3857,12 @@ class ProductionRepository:
             if not self._valid_scene_checkpoint(row, unit_key, window):
                 raise ValueError("镜头检查点损坏，不能装配片段")
             boundaries.extend(SceneWindowFacts.from_checkpoint_json(row["result_json"]).boundaries_seconds)
-        row = conn.execute(
-            "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
-            (candidate.workspace_id, candidate.asset_id),
-        ).fetchone()
+        row = self._material_assets._scene_asset_source_row(
+            conn, candidate.workspace_id, candidate.asset_id,
+        )
         if row is None:
             raise ValueError("镜头装配时素材已不存在")
-        asset = self._asset_from_payload(json.loads(str(row["payload"])))
-        old_segments = {segment.id: segment for segment in asset.segments}
-        segments = []
-        for start, end in _scene_ranges(boundaries, candidate.duration_seconds):
-            segment_id = _segment_id(asset.id, start, end)
-            segments.append(old_segments.pop(segment_id, None) or MaterialSegment(
-                id=segment_id, asset_id=asset.id, start_seconds=start, end_seconds=end,
-            ))
-        for segment in self._corrected_material_segments(list(old_segments.values())):
-            conn.execute(
-                """INSERT OR IGNORE INTO material_unmatched_corrections
-                   (workspace_id, asset_id, segment_id, payload, preserved_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (asset.workspace_id, asset.id, segment.id, _json_payload(segment),
-                 utc_now().isoformat()),
-            )
-        asset.segments = segments
-        asset.analysis_status = "blocked"
-        asset.analysis_message = (
-            f"已定位 {len(segments)} 个镜头候选；原片声音和画面理解尚未完成。"
-        )
-        asset.updated_at = utc_now()
-        conn.execute(
-            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
-        )
+        self._material_assets.assemble_scene_segments(conn, str(row["payload"]), boundaries, candidate.duration_seconds)
 
     def fail_material_scene(
         self, conn: sqlite3.Connection, grant: Grant,
@@ -3928,18 +3884,10 @@ class ProductionRepository:
             candidate.unit_key, conn,
         ) != candidate):
             raise ValueError("镜头失败来源已变化")
-        row = conn.execute(
-            "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
-            (candidate.workspace_id, candidate.asset_id),
-        ).fetchone()
-        asset = self._asset_from_payload(json.loads(str(row["payload"])))
-        asset.analysis_status = "failed"
-        asset.analysis_message = f"镜头窗口分析失败（{reason}）；检查原片后可重试。"
-        asset.updated_at = utc_now()
-        conn.execute(
-            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
+        row = self._material_assets._scene_asset_source_row(
+            conn, candidate.workspace_id, candidate.asset_id,
         )
+        self._material_assets.mark_scene_failed(conn, str(row["payload"]), reason)
 
     def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
         """Discover pending copies, then claim only explicitly confirmed revisions."""
@@ -9566,21 +9514,7 @@ class ProductionRepository:
         `_save_asset` upserts on (workspace_id, file_path), so a record whose file
         changed path cannot go through it without colliding on its own id.
         """
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE material_assets
-                SET file_path = ?, payload = ?, updated_at = ?
-                WHERE id = ? AND workspace_id = ?
-                """,
-                (
-                    asset.path,
-                    _json_payload(asset),
-                    asset.updated_at.isoformat(),
-                    asset.id,
-                    asset.workspace_id,
-                ),
-            )
+        self._material_assets.repoint_asset(asset)
 
     def register_link_material(
         self,
@@ -11569,9 +11503,7 @@ def _material_query_reasons(
     return reasons
 
 
-def _segment_id(asset_id: str, start: float, end: float) -> str:
-    raw = f"{asset_id}:{start:.3f}:{end:.3f}"
-    return f"seg_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
+
 
 
 def _visual_fingerprint(
@@ -11585,20 +11517,3 @@ def _visual_fingerprint(
         f"{segment.start_seconds:.3f}:{segment.end_seconds:.3f}:{model_id}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _scene_ranges(boundaries: list[float], duration: float) -> list[tuple[float, float]]:
-    clean = sorted({round(value, 3) for value in boundaries if 0 < value < duration})
-    points = [0.0, *clean, round(duration, 3)]
-    ranges: list[tuple[float, float]] = []
-    for start, end in pairwise(points):
-        cursor = start
-        while end - cursor > 12:
-            ranges.append((round(cursor, 3), round(cursor + 12, 3)))
-            cursor += 12
-        if end - cursor >= 0.75:
-            ranges.append((round(cursor, 3), round(end, 3)))
-        elif ranges:
-            previous_start, _ = ranges[-1]
-            ranges[-1] = (previous_start, round(end, 3))
-    return ranges or [(0.0, round(duration, 3))]

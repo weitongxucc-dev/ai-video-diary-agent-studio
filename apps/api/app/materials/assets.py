@@ -6,7 +6,9 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime
+import hashlib
 import json
+from itertools import pairwise
 import sqlite3
 from uuid import uuid4
 
@@ -38,6 +40,110 @@ class MaterialVersionConflict(ValueError):
 class MaterialAssetStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
+
+    def _scene_asset_source_row(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+
+    def assemble_scene_segments(
+        self, conn: sqlite3.Connection, source_payload: str, boundaries: list[float], duration_seconds: float,
+    ) -> MaterialAsset:
+        asset = self._asset_from_payload(json.loads(str(source_payload)))
+        old_segments = {segment.id: segment for segment in asset.segments}
+        segments = []
+        for start, end in _scene_ranges(boundaries, duration_seconds):
+            segment_id = _segment_id(asset.id, start, end)
+            segments.append(old_segments.pop(segment_id, None) or MaterialSegment(
+                id=segment_id, asset_id=asset.id, start_seconds=start, end_seconds=end,
+            ))
+        for segment in self._corrected_material_segments(list(old_segments.values())):
+            conn.execute(
+                """INSERT OR IGNORE INTO material_unmatched_corrections
+                   (workspace_id, asset_id, segment_id, payload, preserved_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (asset.workspace_id, asset.id, segment.id, _json_payload(segment),
+                 utc_now().isoformat()),
+            )
+        asset.segments = segments
+        asset.analysis_status = "blocked"
+        asset.analysis_message = (
+            f"已定位 {len(segments)} 个镜头候选；原片声音和画面理解尚未完成。"
+        )
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
+        )
+        return asset
+
+    def mark_scene_failed(
+        self, conn: sqlite3.Connection, source_payload: str, reason: str,
+    ) -> MaterialAsset:
+        asset = self._asset_from_payload(json.loads(str(source_payload)))
+        asset.analysis_status = "failed"
+        asset.analysis_message = f"镜头窗口分析失败（{reason}）；检查原片后可重试。"
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), asset.workspace_id, asset.id),
+        )
+        return asset
+
+    def mark_hash_asset_blocked(self, workspace_id: str, asset_id: str, message: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload FROM material_assets WHERE workspace_id=? AND id=?",
+                (workspace_id, asset_id),
+            ).fetchone()
+            if row is None:
+                return
+            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset.analysis_status = "blocked"
+            asset.analysis_message = message
+            asset.updated_at = utc_now()
+            conn.execute(
+                "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
+            )
+
+    def privatize_local_adoption_asset(
+        self, conn: sqlite3.Connection, asset_id: str, serialized_payload: str,
+    ) -> None:
+        conn.execute("UPDATE material_assets SET payload=?, visibility='private' WHERE id=? AND workspace_id='local'",
+                     (serialized_payload, asset_id))
+
+    def insert_local_voice_source_asset(
+        self, conn: sqlite3.Connection, source_asset: MaterialAsset, source_payload: str, now: str,
+    ) -> None:
+        conn.execute("INSERT INTO material_assets(id,workspace_id,file_path,payload,visibility,updated_at) VALUES (?,'local',?,?,'private',?)",
+                     (source_asset.id, source_asset.path, source_payload, now))
+
+    def repoint_asset(self, asset: MaterialAsset) -> None:
+        """Move an existing material record onto a restored file, keeping its id.
+
+        `_save_asset` upserts on (workspace_id, file_path), so a record whose file
+        changed path cannot go through it without colliding on its own id.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE material_assets
+                SET file_path = ?, payload = ?, updated_at = ?
+                WHERE id = ? AND workspace_id = ?
+                """,
+                (
+                    asset.path,
+                    _json_payload(asset),
+                    asset.updated_at.isoformat(),
+                    asset.id,
+                    asset.workspace_id,
+                ),
+            )
 
     def _probe_asset_source_row(
         self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
@@ -675,3 +781,25 @@ def _infer_system_tags(
             prefix = {"object": "主体", "scene": "场景", "action": "动作"}[fact["kind"]]
             tags.append(f"{prefix}:{fact['text']}")
     return _normalized_labels(tags)
+
+
+def _scene_ranges(boundaries: list[float], duration: float) -> list[tuple[float, float]]:
+    clean = sorted({round(value, 3) for value in boundaries if 0 < value < duration})
+    points = [0.0, *clean, round(duration, 3)]
+    ranges: list[tuple[float, float]] = []
+    for start, end in pairwise(points):
+        cursor = start
+        while end - cursor > 12:
+            ranges.append((round(cursor, 3), round(cursor + 12, 3)))
+            cursor += 12
+        if end - cursor >= 0.75:
+            ranges.append((round(cursor, 3), round(end, 3)))
+        elif ranges:
+            previous_start, _ = ranges[-1]
+            ranges[-1] = (previous_start, round(end, 3))
+    return ranges or [(0.0, round(duration, 3))]
+
+
+def _segment_id(asset_id: str, start: float, end: float) -> str:
+    raw = f"{asset_id}:{start:.3f}:{end:.3f}"
+    return f"seg_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"

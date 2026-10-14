@@ -594,3 +594,170 @@ def test_probe_outcomes_share_caller_transaction_observer_isolation_and_full_rol
         assert conn.in_transaction
         conn.rollback()
     assert _snapshot(connect) == before
+
+
+def test_remaining_scene_rules_manual_corrections_and_failure_keep_caller_transaction(database, monkeypatch):
+    from app.materials.assets import _scene_ranges, _segment_id
+
+    connect, traces = database
+
+    def forbidden():
+        raise AssertionError("scene storage must use the caller connection")
+
+    store = MaterialAssetStore(forbidden)
+    assert _scene_ranges([5.0001, 5.0002, 25], 25.5) == [(0.0, 5.0), (5.0, 17.0), (17.0, 25.5)]
+    assert _scene_ranges([], 0.5) == [(0.0, 0.5)]
+    assert _segment_id("asset", 0, 5) == "seg_6d3044192a179405"
+    value = _asset()
+    value.duration_seconds = 10
+    value.user_tags = ["资产人工标签"]
+    stable = MaterialSegment(
+        _segment_id(value.id, 0, 5), value.id, 0, 5, description="稳定人工片段",
+        user_tags=["保留"], system_tags=["既有观察"], review_status="approved", usage_role="b_roll",
+        created_at=WHEN, updated_at=WHEN,
+    )
+    vanished = MaterialSegment(
+        "vanished", value.id, 0, 10, description="消失的人工片段",
+        user_tags=["待核对"], system_tags=["既有观察"], review_status="approved", usage_role="b_roll",
+        created_at=WHEN, updated_at=WHEN,
+    )
+    value.segments = [stable, vanished]
+    stamp = datetime(2026, 10, 14, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.materials.assets.utc_now", lambda: stamp)
+    with connect() as conn:
+        _insert(conn, value, column_visibility="shared")
+    before = _snapshot(connect)
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        source = store._scene_asset_source_row(conn, value.workspace_id, value.id)
+        assert source.keys() == ["payload"]
+        assert store._scene_asset_source_row(conn, "foreign", value.id) is None
+        traces.clear()
+        assembled = store.assemble_scene_segments(conn, source["payload"], [5], 10)
+        assert len(traces) == 2
+        assert traces[0].lstrip().startswith("INSERT OR IGNORE INTO material_unmatched_corrections")
+        assert traces[1].startswith("UPDATE material_assets")
+        assert asdict(assembled.segments[0]) == asdict(stable)
+        assert [(part.start_seconds, part.end_seconds) for part in assembled.segments] == [(0, 5), (5, 10)]
+        assert assembled.segments[1].id == _segment_id(value.id, 5, 10)
+        assert assembled.user_tags == value.user_tags
+        assert assembled.analysis_status == "blocked"
+        assert assembled.analysis_message == "已定位 2 个镜头候选；原片声音和画面理解尚未完成。"
+        correction = conn.execute("SELECT * FROM material_unmatched_corrections").fetchone()
+        assert correction["segment_id"] == vanished.id
+        assert json.loads(correction["payload"])["user_tags"] == vanished.user_tags
+        current_payload = store._scene_asset_source_row(conn, value.workspace_id, value.id)["payload"]
+        traces.clear()
+        failed = store.mark_scene_failed(conn, current_payload, "synthetic_failure")
+        assert len(traces) == 1 and traces[0].startswith("UPDATE material_assets")
+        assert failed.analysis_message == "镜头窗口分析失败（synthetic_failure）；检查原片后可重试。"
+        assert failed.analysis_status == "failed" and failed.updated_at == stamp
+        assert failed.segments == assembled.segments
+        assert conn.execute("SELECT visibility FROM material_assets").fetchone()[0] == "shared"
+        with connect() as observer:
+            assert store._scene_asset_source_row(observer, value.workspace_id, value.id)["payload"] == source["payload"]
+            assert observer.execute("SELECT * FROM material_unmatched_corrections").fetchall() == []
+        assert conn.in_transaction
+        conn.rollback()
+    assert _snapshot(connect) == before
+
+
+def test_hash_blocked_and_repoint_preserve_owned_transactions_identity_clock_and_unique_errors(database, monkeypatch):
+    connect, traces = database
+    opened = []
+
+    def owned_connection():
+        opened.append(True)
+        return connect()
+
+    store = MaterialAssetStore(owned_connection)
+    value = _asset()
+    occupied = _asset("occupied")
+    with connect() as conn:
+        _insert(conn, value, column_visibility="shared")
+        _insert(conn, occupied)
+    before = _snapshot(connect)
+    traces.clear()
+    assert store.mark_hash_asset_blocked(value.workspace_id, "missing", "原消息") is None
+    assert len(opened) == 1
+    assert traces[0] == "BEGIN IMMEDIATE"
+    assert not any(sql.startswith("UPDATE material_assets") for sql in traces)
+    assert _snapshot(connect) == before
+    hash_time = datetime(2026, 10, 14, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.materials.assets.utc_now", lambda: hash_time)
+    traces.clear()
+    assert store.mark_hash_asset_blocked(value.workspace_id, value.id, "文件仍在变化，原消息") is None
+    assert len(opened) == 2 and traces[0] == "BEGIN IMMEDIATE"
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()
+        payload = json.loads(row["payload"])
+        assert payload["analysis_status"] == "blocked"
+        assert payload["analysis_message"] == "文件仍在变化，原消息"
+        assert row["updated_at"] == hash_time.isoformat() and row["visibility"] == "shared"
+    value.path = "fixture://restored-original-id"
+    value.updated_at = datetime(2026, 10, 14, 3, tzinfo=timezone.utc)
+    traces.clear()
+    assert store.repoint_asset(value) is None
+    assert len(opened) == 3
+    assert "BEGIN IMMEDIATE" not in traces
+    assert not any("INSERT" in sql for sql in traces)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()
+        assert row["file_path"] == value.path and row["id"] == value.id
+        assert row["updated_at"] == value.updated_at.isoformat()
+        assert row["payload"] == _json_payload(value)
+        assert row["visibility"] == "shared"
+    before_collision = _snapshot(connect)
+    value.path = occupied.path
+    with pytest.raises(sqlite3.IntegrityError):
+        store.repoint_asset(value)
+    assert len(opened) == 4
+    assert _snapshot(connect) == before_collision
+
+
+def test_adoption_asset_commands_keep_raw_private_update_insert_and_parent_rollback(database):
+    connect, traces = database
+
+    def forbidden():
+        raise AssertionError("adoption writes must use the parent connection")
+
+    store = MaterialAssetStore(forbidden)
+    value = _asset(workspace="local", visibility="shared")
+    foreign = _asset("foreign", workspace="workspace-b")
+    with connect() as conn:
+        _insert(conn, value)
+        _insert(conn, foreign)
+    before = _snapshot(connect)
+    private_payload = json.loads(_json_payload(value))
+    private_payload.update(owner_user_id="selected-owner", visibility="private", legacy_field="原字段")
+    serialized = json.dumps(private_payload, ensure_ascii=False, indent=2) + "\n"
+    source_asset = _asset("voice-source", workspace="local")
+    source_payload = "  " + _json_payload(source_asset) + "\n"
+    now = datetime(2026, 10, 14, 4, tzinfo=timezone.utc).isoformat()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        traces.clear()
+        assert store.privatize_local_adoption_asset(conn, value.id, serialized) is None
+        assert len(traces) == 1 and traces[0].startswith("UPDATE material_assets")
+        private = conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()
+        assert private["payload"] == serialized and private["visibility"] == "private"
+        assert private["updated_at"] == value.updated_at.isoformat()
+        assert store.privatize_local_adoption_asset(conn, foreign.id, serialized) is None
+        traces.clear()
+        assert store.insert_local_voice_source_asset(conn, source_asset, source_payload, now) is None
+        assert len(traces) == 1 and traces[0].startswith("INSERT INTO material_assets")
+        inserted = conn.execute("SELECT * FROM material_assets WHERE id=?", (source_asset.id,)).fetchone()
+        assert dict(inserted) == dict(
+            id=source_asset.id, workspace_id="local", file_path=source_asset.path,
+            payload=source_payload, visibility="private", updated_at=now,
+        )
+        assert tuple(conn.execute("SELECT * FROM material_assets WHERE id=?", (foreign.id,)).fetchone()) == before["material_assets"][1]
+        conflicting = _asset(foreign.id, workspace="local")
+        with pytest.raises(sqlite3.IntegrityError):
+            store.insert_local_voice_source_asset(conn, conflicting, _json_payload(conflicting), now)
+        with connect() as observer:
+            assert tuple(observer.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()) == before["material_assets"][0]
+            assert observer.execute("SELECT * FROM material_assets WHERE id=?", (source_asset.id,)).fetchone() is None
+        assert conn.in_transaction
+        conn.rollback()
+    assert _snapshot(connect) == before
