@@ -84,6 +84,7 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
     prepare_clip_command, apply_clip_proposal, prepare_subtitle_display_command)
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
+from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
 from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCase, TimelineRestoreCommand,
     TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
@@ -3709,6 +3710,51 @@ _TASK_MEDIA_SUBMISSION = ContextVar("task_media_submission", default=False)
 
 
 
+
+def _audio_edit_use_case(repository=None):
+    repo=repository if repository is not None else production_repo
+    audio=TaskAudio(repo,artifact_store,settings.effective_temporary_root_path)
+    metadata=MetadataEditUseCase(repo,artifact_store,output_root=Path(settings.video_output_path),audio_service=audio)
+    return AudioEditUseCase(repo,audio,metadata,creation_execution_mode)
+
+
+def _preview_audio_edit_request(task_id, request, payload, *, original_clip=False, queue_on_required=False):
+    workspace_id=current_workspace_id(request)
+    task=_creation_task_or_404(workspace_id,task_id)
+    actor=_request_permit_actor(request,workspace_id)
+    draft=request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact')
+    case=_audio_edit_use_case()
+    source=EXACT_EDIT_SOURCE.get()
+    try:
+        if original_clip:
+            result=case.original_clip(workspace_id,task_id,payload.model_dump(mode='json'),actor,draft_only=draft,source=source)
+        else:
+            result=case.preview(workspace_id,task_id,payload,actor,draft_only=draft,source=source)
+        return _edit_preview_response(result.intent,result.proposal)
+    except AudioEditRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except TaskMediaRequired as required:
+        if not queue_on_required:
+            raise
+        actor=_require_permit_actor(request,workspace_id)
+        values={'payload':payload.model_dump(mode='json',exclude_unset=True),'_media_kind':required.kind,'_draft':draft}
+        runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+        try:
+            if task.montage_plan_id and task.current_timeline_version_id is None:
+                media.facts(workspace_id,task_id,'audio_edit_preview',values,actor)
+                if media.verify_identity(actor)!='ready':raise PermissionError('媒体处理身份失效或无法复核')
+                plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+                base=_ensure_montage_base_version(workspace_id,task,plan)
+                values['payload']['base_version_id']=base.id
+            job=media.submit(runtime,actor,task_id,'audio_edit_preview',values,'edit_preview')
+            receipt=_task_media_job_response(media,job,actor,runtime);receipt['result']=None
+            return JSONResponse(status_code=202,content=receipt)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403,detail=str(exc)) from exc
+        except (ValueError,KeyError) as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+
 def _audio_ingress_use_case(repository=None):
     repo = repository if repository is not None else production_repo
     audio = TaskAudio(repo, artifact_store, settings.effective_temporary_root_path)
@@ -3922,6 +3968,8 @@ def _task_media_route(operation, result_kind):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+    if AudioEditUseCase.handles(operation, arguments):
+        return _audio_edit_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
     if operation in AUDIO_INGRESS_ACTIONS:
         return _audio_ingress_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
     if '_clip_preview' in arguments:
@@ -4154,6 +4202,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if AudioEditUseCase.handles(event['operation'], event['arguments']):
+        raise ValueError('音频编辑必须通过明确用例，不能重入旧路由')
     if event['operation'] in AUDIO_INGRESS_ACTIONS:
         raise ValueError('音频输入必须经明确用例执行，不能重入旧媒体路由')
     if event['arguments'].get('_media_kind') == 'clip_preview':
@@ -4192,6 +4242,8 @@ def _execute_task_media_operation(job, event, actor):
 
 
 def _validate_task_media_result(job, event, result, context):
+    if AudioEditUseCase.handles(event['operation'], event['arguments']):
+        raise ValueError('音频编辑必须通过明确用例，不能重入旧路由')
     if event['operation'] in AUDIO_INGRESS_ACTIONS:
         raise ValueError('音频输入必须经明确用例执行，不能重入旧媒体路由')
     if event['operation'] == 'output_observation':
@@ -4945,137 +4997,12 @@ def listen_creation_task_audio(task_id: str, request: Request, payload: AudioLis
 
 
 def _preview_clip_original_audio(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest):
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    refs = payload.selected_object_refs
-    if len(refs) != 1 or not refs[0].startswith("clip:"):
-        raise HTTPException(status_code=422, detail="请先选择一个镜头，再提取原声。")
-    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    clip = next((item for item in plan.clips if item.id == refs[0][5:]), None)
-    if clip is None:
-        raise HTTPException(status_code=404, detail="所选镜头不存在。")
-    if clip.person_render_id:
-        raise HTTPException(status_code=409, detail="生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。")
-    graph = _effective_audio_timeline(plan)
-    tracks = [track for track in graph.tracks if track.role == "original"]
-    if len(tracks) != 1:
-        raise HTTPException(status_code=409, detail="需要唯一的原声音轨才能添加镜头原声。")
-    track = tracks[0]
-    if clip.locked or track.locked:
-        raise HTTPException(status_code=409, detail="镜头或原声音轨已锁定，请先解锁。")
-    if track.muted:
-        raise HTTPException(status_code=409, detail="原声音轨已静音，请先取消静音再预览。")
-    start, end = round(clip.timeline_start_seconds * 1000), round(clip.timeline_end_seconds * 1000)
-    if any(item.timeline_start_ms < end and item.timeline_start_ms + item.duration_ms > start for item in track.clips):
-        raise HTTPException(status_code=409, detail="该范围已有原声，请编辑现有音频片段，避免重复叠加。")
-    service = _task_audio()
-    try:
-        production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-        reference = production_repo.workspace_media_reference_for_asset(workspace_id, clip.asset_id)
-        source_start, source_end = round(clip.source_start_seconds * 1000), round(clip.source_end_seconds * 1000)
-        rate = (source_end-source_start)/(end-start)
-        record = service.publish(workspace_id, task_id, kind="audio_source",
-            parameters={"action":"extract_clip_original", "clip_id":clip.id, "source_start_ms":source_start,
-                "source_end_ms":source_end, "rate":rate, "duration_ms":end-start}, input_refs=[reference],
-            operation="audio_stretch", media_input={"source_start_ms": source_start, "source_end_ms": source_end, "rate": rate, "duration_ms": end-start})
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "无法提取原声，请检查素材是否包含音轨、FFmpeg和外接盘。") from exc
-    return preview_creation_task_audio(task_id, request, AudioEditRequest(
-        base_version_id=task.current_timeline_version_id, action="add", target_id=track.id,
-        raw_command=payload.raw_command, values={"source_ref":record.logical_ref, "name":"镜头原声",
-            "source_start_ms":0, "source_end_ms":end-start, "timeline_start_ms":start}))
+    return _preview_audio_edit_request(task_id, request, payload, original_clip=True, queue_on_required=False)
 
 
-@app.post("/api/creation-tasks/{task_id}/audio/preview", response_model=CreationTaskEditPreviewResponse)
-@_task_media_route("audio_edit_preview", "edit_preview")
+@app.post('/api/creation-tasks/{task_id}/audio/preview', response_model=CreationTaskEditPreviewResponse)
 def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEditRequest):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.current_timeline_version_id != payload.base_version_id:
-        raise HTTPException(status_code=409, detail="时间线已经变化，请刷新后重新预览音频修改")
-    try:
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        before = _effective_audio_timeline(plan)
-        service = _task_audio()
-        edit = payload
-        if payload.action == "replace_narration":
-            if creation_execution_mode == "scheduled":
-                raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
-            if set(payload.values) != {"source_ref"} or any(clip.person_render_id for clip in plan.clips):
-                raise ValueError("人物口型或附加参数不能随整条旁白录音替换保留")
-            source_ref = payload.values["source_ref"]
-            if not isinstance(source_ref, str):
-                raise ValueError("请选择当前任务已保存的电脑录音")
-            recording, measured_ms = service.recording(workspace_id, task_id, source_ref, verify_digest=True)
-            recording_stat = artifact_store.resolve_file(recording.logical_ref).stat()
-            recording_file_signature = [recording_stat.st_size, recording_stat.st_mtime_ns, recording_stat.st_ctime_ns]
-            duration_ms = round(plan.duration_seconds * 1000)
-            if not duration_ms - 20 <= measured_ms <= duration_ms + 250:
-                raise ValueError("录音时长与当前画面不符，请重录到接近整片时长")
-            edit = payload.model_copy(update={"values": {"source_ref": source_ref, "source_end_ms": duration_ms}})
-            after = apply_audio_edit(before, edit, duration_ms)
-            original_ref = next(clip.source_ref for track in before.tracks if track.role == "narration" for clip in track.clips)
-            service.source(workspace_id, task_id, original_ref)
-            if original_ref.startswith("narration://artifact/"):
-                if original_ref != production_repo.narration_artifact_reference(task.narration_cache_key or ""):
-                    raise ValueError("当前旁白引用与任务版本不一致，请刷新后重试")
-                before_url = f"/api/creation-tasks/{task_id}/narration/audio"
-            else:
-                original = next(record for record in production_repo.list_artifact_records(workspace_id, task_id)
-                                if record.logical_ref == original_ref)
-                before_url = f"/api/creation-tasks/{task_id}/audio/artifacts/{original.id}"
-            preview_media = {
-                "before": {"ref": original_ref, "label": "当前旁白", "detail": "当前版本的完整旁白",
-                           "audio_url": before_url},
-                "after": {"ref": source_ref, "label": "本次电脑录音", "detail": "确认后替换整条旁白；画面时长不变",
-                          "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{recording.id}"},
-            }
-            start = 0.0
-        else:
-            after = apply_audio_edit(before, payload, round(plan.duration_seconds*1000))
-            service.validate(workspace_id, task_id, after, plan.duration_seconds, draft_only=draft_only)
-            start, end = audio_edit_preview_range(before, after, payload, plan.duration_seconds)
-            previews = []
-            if not draft_only:
-                for graph in (before, after):
-                    record = service.publish(workspace_id, task_id, kind="audio_preview",
-                        parameters={"audio_timeline": graph.model_dump(), "start_seconds": start, "end_seconds": end},
-                        input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
-                        operation="audio_mix", media_input={"audio_timeline": graph.model_dump(), "duration_seconds": plan.duration_seconds,
-                "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
-                            "start_seconds": start, "end_seconds": end})
-                    previews.append(record)
-            preview_media = {**{side: {"ref": f"timeline:{payload.base_version_id}", "label": label, "detail": "只更新音轨草稿；明确试听或生成时才处理音频。"} for side, label in (("before", "当前音轨"), ("after", "修改后音轨"))}, **{side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else "音轨修改后",
-                "detail": f"试听 {start:.1f}–{end:.1f} 秒；完整音轨在确认后生效",
-                "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
-                for side, record in zip(("before", "after"), previews)}}
-    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
-        detail = str(exc) if isinstance(exc, ValueError) else "本地音频预览失败，请检查源文件、FFmpeg 与外接盘"
-        raise HTTPException(status_code=422, detail=detail) from exc
-    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
-        raise HTTPException(status_code=409, detail="试听生成期间时间线发生变化，请重新预览")
-    base = _ensure_montage_base_version(workspace_id, task, plan)
-    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}", workspace_id=workspace_id, task_id=task_id,
-        raw_command=payload.raw_command, context_stage="montage", selected_object_refs=[f"audio:{payload.target_id}"],
-        playhead_ms=round(start*1000), intent_type="edit_audio", scope={"kind": "audio", "target_id": payload.target_id},
-        constraints={"preserve_video": True}, confidence=1, status="interpreted"))
-    labels = {"add": "添加音频片段", "update": "修改音频片段", "delete": "删除音频片段（保留时间空隙）", "split": "分割音频片段", "duplicate": "复制音频片段", "track": "修改音轨设置", "replace_narration": "用本机录音替换整条旁白"}
-    summary = labels[payload.action]
-    if payload.action == "add" and any(track.id == payload.target_id and track.role == "original" for track in before.tracks):
-        summary = "添加原声，与现有音轨混合；画面和配音不变"
-    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
-        task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f"audio:{payload.target_id}"],
-        operation={"operation_type": "EditAudioTimeline", "payload": {"base_version_id": base.id, "audio_timeline": after.model_dump(),
-            "edit": edit.model_dump(), "expected_audio_timeline": before.model_dump(),
-            **({"recording_duration_ms": measured_ms, "recording_sha256": recording.sha256,
-                "recording_file_signature": recording_file_signature}
-               if payload.action == "replace_narration" else {})}},
-        invalidated_refs=_logical_montage_output_refs(plan),
-        preview=preview_media,
-        external_effects=(["新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。"]
-                          if payload.action == "replace_narration" else [])))
-    return _edit_preview_response(intent, proposal)
+    return _preview_audio_edit_request(task_id, request, payload, queue_on_required=True)
 
 
 @app.post("/api/creation-tasks/{task_id}/graphics/import")
@@ -10540,770 +10467,309 @@ def preview_creation_task_edit(task_id: str, request: Request, payload: Creation
 def _preview_command_edit_request(task_id, request, payload):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    short_preview_base_version = getattr(request.state, "task_media_base_version_id", task.current_timeline_version_id)
+    short_preview_base_version = getattr(request.state, 'task_media_base_version_id', task.current_timeline_version_id)
     payload = _bind_assistant_edit_instruction(request, task, payload)
     command = payload.raw_command.strip()
     parsed_overlay = None
-    if "/" in command or "\\" in command:
+    if '/' in command or '\\' in command:
         try:
-            overlay_plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
+            overlay_plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
             parsed_overlay = compile_overlay_command(command, overlay_plan.graphic_overlays, (), payload.selected_object_refs)
         except (KeyError, ValueError):
             parsed_overlay = None
-        if not (parsed_overlay and isinstance(parsed_overlay[1], dict) and parsed_overlay[1].get("kind") in {"text", "arrow"}):
-            raise _topic_failure_response(
-            status_code=409,
-            error="edit_path_input_forbidden",
-            reason="修改要求中不能指定本机或网络文件路径。",
-            impact="系统没有读取该路径，任务内容保持不变。",
-            repair_action="先将内容导入当前工作区，再选中具体对象提出修改要求。",
-            retryable=True,
-        )
-    if payload.context_stage in {"montage", "review"}:
+        if not (parsed_overlay and isinstance(parsed_overlay[1], dict) and (parsed_overlay[1].get('kind') in {'text', 'arrow'})):
+            raise _topic_failure_response(status_code=409, error='edit_path_input_forbidden', reason='修改要求中不能指定本机或网络文件路径。', impact='系统没有读取该路径，任务内容保持不变。', repair_action='先将内容导入当前工作区，再选中具体对象提出修改要求。', retryable=True)
+    if payload.context_stage in {'montage', 'review'}:
         reorder = _indexed_reorder_command(command)
         if reorder is not None:
             if payload.replacement_asset_id is not None:
-                raise HTTPException(status_code=422, detail="镜头排序不能混入替换素材。")
+                raise HTTPException(status_code=422, detail='镜头排序不能混入替换素材。')
             return _preview_timeline_reorder(task, request, payload, reorder)
     if payload.replacement_asset_id is not None:
         return _preview_replacement_clip(task, request, payload)
-    # Only this explicit non-modifying constraint sentence precedes the compound compiler.
-    # All other instructions preserve the existing compound-first dispatch.
-    if (payload.context_stage in {"montage", "review"} and len(payload.selected_object_refs) == 1
-            and payload.selected_object_refs[0].startswith("clip:")
-            and re.fullmatch(r"把当前选中的第[1-9]\d*个镜头改为完整显示。保持镜头顺序、时长、配音和字幕不变，生成修改提案[。！]?", command)):
+    if payload.context_stage in {'montage', 'review'} and len(payload.selected_object_refs) == 1 and payload.selected_object_refs[0].startswith('clip:') and re.fullmatch('把当前选中的第[1-9]\\d*个镜头改为完整显示。保持镜头顺序、时长、配音和字幕不变，生成修改提案[。！]?', command):
         return _preview_selected_crop(task_id, request, payload, base_version_id=short_preview_base_version)
-    share_command = re.fullmatch(r"(?:把)?(?:这条视频的?|整片的?)?(?:露脸|口播出镜)(?:占比|比例)?(?:改成|改为|调到|设为)\s*(0|20|40|60|80|100)\s*%[。！]?", command)
-    if share_command and payload.context_stage in {"montage", "review"}:
+    share_command = re.fullmatch('(?:把)?(?:这条视频的?|整片的?)?(?:露脸|口播出镜)(?:占比|比例)?(?:改成|改为|调到|设为)\\s*(0|20|40|60|80|100)\\s*%[。！]?', command)
+    if share_command and payload.context_stage in {'montage', 'review'}:
         return _preview_presenter_share(task, request, payload, int(share_command.group(1)))
-    alignment_command = re.fullmatch(r"(?:按配音|根据配音)(?:校准|对齐)(中文|英文|双语|中英双语|中英)?字幕[。！]?", command)
-    if alignment_command and payload.context_stage in {"montage", "review", "subtitle_cover"}:
+    alignment_command = re.fullmatch('(?:按配音|根据配音)(?:校准|对齐)(中文|英文|双语|中英双语|中英)?字幕[。！]?', command)
+    if alignment_command and payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
         return _preview_subtitle_alignment(task, request, payload, alignment_command[1])
-    if payload.context_stage in {"montage", "review"} and re.fullmatch(
-        r"(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?", command
-    ):
+    if payload.context_stage in {'montage', 'review'} and re.fullmatch('(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?', command):
         return _preview_clip_original_audio(task_id, request, payload)
-    if payload.context_stage in {"montage", "review"} and re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", command):
+    if payload.context_stage in {'montage', 'review'} and re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', command):
         return _preview_remove_silence(task, request, payload)
-    if payload.context_stage in {"montage","review"} or (payload.context_stage == "subtitle_cover" and is_indexed_subtitle_command(command)):
-        combined=_preview_compound_edit(task,request,payload)
+    if payload.context_stage in {'montage', 'review'} or (payload.context_stage == 'subtitle_cover' and is_indexed_subtitle_command(command)):
+        combined = _preview_compound_edit(task, request, payload)
         if combined is not None:
             return combined
-    canvas_commands = {"改横版":"16:9", "改成横版":"16:9", "改成16:9":"16:9", "改成竖版":"9:16", "改竖版":"9:16", "改成9:16":"9:16", "改成方形":"1:1", "改成1:1":"1:1"}
-    canvas_command = command.rstrip("。！")
-    keep_picture = canvas_command.endswith("，别裁掉人物") or canvas_command.endswith("，保留完整画面")
+    canvas_commands = {'改横版': '16:9', '改成横版': '16:9', '改成16:9': '16:9', '改成竖版': '9:16', '改竖版': '9:16', '改成9:16': '9:16', '改成方形': '1:1', '改成1:1': '1:1'}
+    canvas_command = command.rstrip('。！')
+    keep_picture = canvas_command.endswith('，别裁掉人物') or canvas_command.endswith('，保留完整画面')
     if keep_picture:
-        canvas_command = canvas_command.split("，")[0]
-    if payload.context_stage in {"montage", "review"} and canvas_command in canvas_commands:
-        return _preview_canvas(task_id, request, CreationTaskExactEditRequest(operation_type="ChangeCanvas",
-            aspect_ratio=canvas_commands[canvas_command], **({"fit_mode":"fit"} if keep_picture else {})))
-    display_commands = {"关闭字幕": "none", "不显示字幕": "none", "只显示中文字幕": "zh", "只显示英文字幕": "en", "显示中英双语字幕": "zh-en"}
-    if payload.context_stage in {"montage", "review", "subtitle_cover"} and command.rstrip("。！") in display_commands:
-        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
-            operation_type="ConfigureSubtitleTrack", subtitle_display=display_commands[command.rstrip("。！")]))
-
-    if payload.context_stage in {"montage", "review", "subtitle_cover"}:
+        canvas_command = canvas_command.split('，')[0]
+    if payload.context_stage in {'montage', 'review'} and canvas_command in canvas_commands:
+        return _preview_canvas(task_id, request, CreationTaskExactEditRequest(operation_type='ChangeCanvas', aspect_ratio=canvas_commands[canvas_command], **{'fit_mode': 'fit'} if keep_picture else {}))
+    display_commands = {'关闭字幕': 'none', '不显示字幕': 'none', '只显示中文字幕': 'zh', '只显示英文字幕': 'en', '显示中英双语字幕': 'zh-en'}
+    if payload.context_stage in {'montage', 'review', 'subtitle_cover'} and command.rstrip('。！') in display_commands:
+        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='ConfigureSubtitleTrack', subtitle_display=display_commands[command.rstrip('。！')]))
+    if payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
         try:
             style_patch = compile_subtitle_style_command(command)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if style_patch is not None:
-            return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(
-                operation_type="ConfigureSubtitleTrack", style=style_patch))
-
-    if payload.context_stage in {"montage","review"} and any(word in command for word in ("标题","图片","标识","箭头")):
+            return _preview_subtitle_style(task_id, request, CreationTaskExactEditRequest(operation_type='ConfigureSubtitleTrack', style=style_patch))
+    if payload.context_stage in {'montage', 'review'} and any((word in command for word in ('标题', '图片', '标识', '箭头'))):
         try:
-            overlay_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            edit=parsed_overlay or compile_overlay_command(command,overlay_plan.graphic_overlays,graphic_sources(production_repo,workspace_id,task_id) if any(word in command for word in ("图片","标识")) else (),payload.selected_object_refs)
-        except (ValueError,KeyError) as exc:
-            raise HTTPException(status_code=422,detail=str(exc)) from exc
+            overlay_plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+            edit = parsed_overlay or compile_overlay_command(command, overlay_plan.graphic_overlays, graphic_sources(production_repo, workspace_id, task_id) if any((word in command for word in ('图片', '标识'))) else (), payload.selected_object_refs)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if edit:
-            action,value,identity=edit
-            return _preview_graphic_overlay(task_id,request,CreationTaskExactEditRequest(operation_type="EditGraphicOverlay",
-                overlay_action=action,graphic_overlay=value,overlay_id=identity))
-    selected_ref = (
-        payload.selected_object_refs[0]
-        if len(payload.selected_object_refs) == 1
-        else ""
-    )
-    if payload.context_stage == "subtitle_cover" and len(payload.selected_object_refs) == 2:
-        cues = [ref for ref in payload.selected_object_refs if ref.startswith("cue:")]
-        tracks = [ref for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")]
+            action, value, identity = edit
+            return _preview_graphic_overlay(task_id, request, CreationTaskExactEditRequest(operation_type='EditGraphicOverlay', overlay_action=action, graphic_overlay=value, overlay_id=identity))
+    selected_ref = payload.selected_object_refs[0] if len(payload.selected_object_refs) == 1 else ''
+    if payload.context_stage == 'subtitle_cover' and len(payload.selected_object_refs) == 2:
+        cues = [ref for ref in payload.selected_object_refs if ref.startswith('cue:')]
+        tracks = [ref for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')]
         if len(cues) == len(tracks) == 1:
             selected_ref = cues[0]
-    if selected_ref.startswith("clip:"):
-        transition=re.fullmatch(r"(?:(?:当前|这个)?镜头)?(?:与前一个镜头)?(?:添加|改为|设置)?叠化(?:转场)?\s*(\d+(?:\.\d+)?)\s*秒[。！]?",command)
-        remove_transition=command.rstrip("。！") in {"取消叠化","改为硬切"}
+    if selected_ref.startswith('clip:'):
+        transition = re.fullmatch('(?:(?:当前|这个)?镜头)?(?:与前一个镜头)?(?:添加|改为|设置)?叠化(?:转场)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒[。！]?', command)
+        remove_transition = command.rstrip('。！') in {'取消叠化', '改为硬切'}
         if transition or remove_transition:
-            return _preview_transition(task_id,request,CreationTaskExactEditRequest(operation_type="SetClipTransition",
-                clip_id=selected_ref.removeprefix("clip:"),transition_seconds=0 if remove_transition else float(transition[1])))
+            return _preview_transition(task_id, request, CreationTaskExactEditRequest(operation_type='SetClipTransition', clip_id=selected_ref.removeprefix('clip:'), transition_seconds=0 if remove_transition else float(transition[1])))
         crop_preview = _preview_selected_crop(task_id, request, payload, base_version_id=short_preview_base_version)
         if crop_preview is not None:
             return crop_preview
         try:
-            visual_plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            selected_clip=next(clip for clip in visual_plan.clips if clip.id==selected_ref.removeprefix("clip:"))
-            effects=compile_visual_command(command,selected_clip.visual_effects)
-        except (ValueError,KeyError,StopIteration) as exc:
-            raise HTTPException(status_code=422,detail=str(exc) or "当前镜头不可用") from exc
+            visual_plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+            selected_clip = next((clip for clip in visual_plan.clips if clip.id == selected_ref.removeprefix('clip:')))
+            effects = compile_visual_command(command, selected_clip.visual_effects)
+        except (ValueError, KeyError, StopIteration) as exc:
+            raise HTTPException(status_code=422, detail=str(exc) or '当前镜头不可用') from exc
         if effects is not None:
-            return _preview_visual_request(task_id,request,VisualEditRequest(base_version_id=short_preview_base_version,
-                clip_ids=[selected_clip.id],effects=effects,raw_command=command))
-    if selected_ref.startswith("audio:"):
+            return _preview_visual_request(task_id, request, VisualEditRequest(base_version_id=short_preview_base_version, clip_ids=[selected_clip.id], effects=effects, raw_command=command))
+    if selected_ref.startswith('audio:'):
         try:
             montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-            audio_edit = compile_audio_command(command, selected_ref.removeprefix("audio:"), _effective_audio_timeline(montage),
-                task.current_timeline_version_id, payload.playhead_ms)
+            audio_edit = compile_audio_command(command, selected_ref.removeprefix('audio:'), _effective_audio_timeline(montage), task.current_timeline_version_id, payload.playhead_ms)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return preview_creation_task_audio(task_id, request, audio_edit)
-    if selected_ref.startswith("narration:"):
-        if payload.context_stage not in {"narration", "montage", "review"}:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_scope_unavailable",
-                reason="当前步骤不能修改配音片段。",
-                impact="任务内容没有发生变化。",
-                repair_action="进入配音、视频剪辑或检查成片后选择一段配音。",
-                retryable=True,
-            )
+        return _preview_audio_edit_request(task_id, request, audio_edit, queue_on_required=False)
+    if selected_ref.startswith('narration:'):
+        if payload.context_stage not in {'narration', 'montage', 'review'}:
+            raise _topic_failure_response(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改配音片段。', impact='任务内容没有发生变化。', repair_action='进入配音、视频剪辑或检查成片后选择一段配音。', retryable=True)
         try:
             delivery_tempo = compile_narration_command(command)
         except ValueError as exc:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_intent_unsupported",
-                reason=str(exc),
-                impact="任务内容没有发生变化。",
-                repair_action="输入“这句重新配音”或“这句读慢一点”。",
-                retryable=True,
-            )
-        segment_id = selected_ref.removeprefix("narration:")
+            raise _topic_failure_response(status_code=409, error='edit_intent_unsupported', reason=str(exc), impact='任务内容没有发生变化。', repair_action='输入“这句重新配音”或“这句读慢一点”。', retryable=True)
+        segment_id = selected_ref.removeprefix('narration:')
         try:
-            segment = production_repo.get_narration_segment(
-                workspace_id, task.id, segment_id
-            )
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
+            segment = production_repo.get_narration_segment(workspace_id, task.id, segment_id)
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail="creation task narration edit target not found") from exc
-        prerender = montage.status != "rendered"
+            raise HTTPException(status_code=404, detail='creation task narration edit target not found') from exc
+        prerender = montage.status != 'rendered'
         if prerender:
             try:
                 if not task.confirmed_script_id or not task.current_timeline_version_id:
-                    raise ValueError("当前任务缺少确认文案或草稿时间线")
+                    raise ValueError('当前任务缺少确认文案或草稿时间线')
                 script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
                 current_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
                 snapshot_segments = _narration_segments_from_snapshot(current_version.snapshot)
-                snapshot_montage = creation_task_montage_plan_from_payload(current_version.snapshot["montage"])
-                section = next(item for item in script.sections if item.id == segment.source_section_id)
-                if segment.status != "ready" or not segment.audio_reference or not segment.audio_reference.startswith("narration://artifact/"):
-                    raise ValueError("当前配音片段尚未生成有效音频")
-                artifact = production_repo.get_narration_artifact(workspace_id,
-                    segment.audio_reference.removeprefix("narration://artifact/"))
-                if (script.task_id != task.id or script.selection_status != "confirmed"
-                        or segment.script_id != script.id or segment.text != section.content
-                        or (snapshot_segments is not None and segment not in snapshot_segments)
-                        or not segment.duration_seconds or segment.duration_seconds <= 0
-                        or artifact is None or artifact.task_id != task.id or artifact.script_id != script.id
-                        or current_version.task_id != task.id
-                        or snapshot_montage.task_id != task.id or snapshot_montage.script_id != script.id
-                        or montage.script_id != script.id
-                        or not any(cue.narration_segment_id == segment.id for cue in snapshot_montage.cues)
-                        or not any(cue.narration_segment_id == segment.id for cue in montage.cues)):
-                    raise ValueError("所选配音与当前确认文案及草稿版本不一致")
+                snapshot_montage = creation_task_montage_plan_from_payload(current_version.snapshot['montage'])
+                section = next((item for item in script.sections if item.id == segment.source_section_id))
+                if segment.status != 'ready' or not segment.audio_reference or (not segment.audio_reference.startswith('narration://artifact/')):
+                    raise ValueError('当前配音片段尚未生成有效音频')
+                artifact = production_repo.get_narration_artifact(workspace_id, segment.audio_reference.removeprefix('narration://artifact/'))
+                if script.task_id != task.id or script.selection_status != 'confirmed' or segment.script_id != script.id or (segment.text != section.content) or (snapshot_segments is not None and segment not in snapshot_segments) or (not segment.duration_seconds) or (segment.duration_seconds <= 0) or (artifact is None) or (artifact.task_id != task.id) or (artifact.script_id != script.id) or (current_version.task_id != task.id) or (snapshot_montage.task_id != task.id) or (snapshot_montage.script_id != script.id) or (montage.script_id != script.id) or (not any((cue.narration_segment_id == segment.id for cue in snapshot_montage.cues))) or (not any((cue.narration_segment_id == segment.id for cue in montage.cues))):
+                    raise ValueError('所选配音与当前确认文案及草稿版本不一致')
                 original_audio = production_repo.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
                 if not original_audio.is_file() or original_audio.stat().st_size <= 0:
-                    raise ValueError("当前配音产物已不可用")
+                    raise ValueError('当前配音产物已不可用')
             except (KeyError, StopIteration, ValueError, MediaAuthorityError, OSError) as exc:
-                raise _topic_failure_response(status_code=409, error="narration_version_required",
-                    reason=str(exc) or "当前草稿没有所选配音段。", impact="任务内容没有发生变化。",
-                    repair_action="先生成当前确认文案的配音并选择当前草稿中的真实配音段，再重新预览。",
-                    retryable=True) from exc
-        invalidated_refs = [
-            *( [segment.audio_reference] if segment.audio_reference else [] ),
-            *[
-                f"subtitle-cue:{cue.id}"
-                for cue in montage.cues
-                if cue.narration_segment_id == segment.id
-            ],
-            *_logical_montage_output_refs(montage),
-        ]
+                raise _topic_failure_response(status_code=409, error='narration_version_required', reason=str(exc) or '当前草稿没有所选配音段。', impact='任务内容没有发生变化。', repair_action='先生成当前确认文案的配音并选择当前草稿中的真实配音段，再重新预览。', retryable=True) from exc
+        invalidated_refs = [*([segment.audio_reference] if segment.audio_reference else []), *[f'subtitle-cue:{cue.id}' for cue in montage.cues if cue.narration_segment_id == segment.id], *_logical_montage_output_refs(montage)]
         base_version = current_version if prerender else _ensure_montage_base_version(workspace_id, task, montage)
         now = utc_now()
-        intent = production_repo.create_edit_intent(
-            EditIntent(
-                id=f"intent_{uuid4().hex}",
-                workspace_id=workspace_id,
-                task_id=task.id,
-                raw_command=command,
-                context_stage=payload.context_stage,
-                selected_object_refs=[selected_ref],
-                playhead_ms=payload.playhead_ms,
-                intent_type="regenerate_narration_segment",
-                scope={"kind": "narration_segment", "segment_id": segment.id},
-                constraints={"delivery_instruction": command},
-                confidence=0.98,
-                status="interpreted",
-                created_at=now,
-            )
-        )
-        proposal = production_repo.create_edit_proposal(
-            EditProposal(
-                id=f"proposal_{uuid4().hex}",
-                workspace_id=workspace_id,
-                task_id=task.id,
-                intent_id=intent.id,
-                summary=("只重新生成所选配音片段"
-                         + (f"，按 {delivery_tempo:g} 倍速处理" if delivery_tempo != 1.0 else "")
-                         + "，并同步它对应的字幕时间与镜头范围。"),
-                target_refs=[selected_ref],
-                operation={
-                    "operation_type": "RegenerateNarrationSegment",
-                    "payload": {
-                        "narration_segment_id": segment.id,
-                        "expected_audio_reference": segment.audio_reference,
-                        "delivery_instruction": command,
-                        "base_version_id": base_version.id,
-                    },
-                },
-                invalidated_refs=list(dict.fromkeys(invalidated_refs)),
-                preview={
-                    "before": {
-                        "ref": selected_ref,
-                        "label": "当前配音片段",
-                        "detail": f"{segment.duration_seconds or 0:.1f} 秒 · {segment.text}",
-                        **({"audio_url": f"/api/creation-tasks/{task.id}/narration/segments/{segment.id}/audio"} if prerender else {}),
-                    },
-                    "after": {
-                        "ref": selected_ref,
-                        "label": "重新生成所选片段",
-                        "detail": (f"{command} · 预计约 {segment.duration_seconds / delivery_tempo:.1f} 秒，以生成后实测为准。"
-                                   if prerender else command),
-                    },
-                },
-                external_effects=["确认后会调用一次真实声音模型；不会重做其他配音片段。",
-                    *(["当前版本尚未渲染，只比较配音与时间影响，没有视频对比。"] if prerender else [])],
-                created_at=now,
-                updated_at=now,
-            )
-        )
+        intent = production_repo.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='regenerate_narration_segment', scope={'kind': 'narration_segment', 'segment_id': segment.id}, constraints={'delivery_instruction': command}, confidence=0.98, status='interpreted', created_at=now))
+        proposal = production_repo.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只重新生成所选配音片段' + (f'，按 {delivery_tempo:g} 倍速处理' if delivery_tempo != 1.0 else '') + '，并同步它对应的字幕时间与镜头范围。', target_refs=[selected_ref], operation={'operation_type': 'RegenerateNarrationSegment', 'payload': {'narration_segment_id': segment.id, 'expected_audio_reference': segment.audio_reference, 'delivery_instruction': command, 'base_version_id': base_version.id}}, invalidated_refs=list(dict.fromkeys(invalidated_refs)), preview={'before': {'ref': selected_ref, 'label': '当前配音片段', 'detail': f'{segment.duration_seconds or 0:.1f} 秒 · {segment.text}', **({'audio_url': f'/api/creation-tasks/{task.id}/narration/segments/{segment.id}/audio'} if prerender else {})}, 'after': {'ref': selected_ref, 'label': '重新生成所选片段', 'detail': f'{command} · 预计约 {segment.duration_seconds / delivery_tempo:.1f} 秒，以生成后实测为准。' if prerender else command}}, external_effects=['确认后会调用一次真实声音模型；不会重做其他配音片段。', *(['当前版本尚未渲染，只比较配音与时间影响，没有视频对比。'] if prerender else [])], created_at=now, updated_at=now))
         return _edit_preview_response(intent, proposal)
-    if selected_ref.startswith("cover:"):
-        if payload.context_stage != "subtitle_cover":
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_scope_unavailable",
-                reason="当前步骤不能修改封面。",
-                impact="任务内容没有发生变化。",
-                repair_action="进入字幕与封面步骤后选择封面。",
-                retryable=True,
-            )
+    if selected_ref.startswith('cover:'):
+        if payload.context_stage != 'subtitle_cover':
+            raise _topic_failure_response(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改封面。', impact='任务内容没有发生变化。', repair_action='进入字幕与封面步骤后选择封面。', retryable=True)
         try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
-        title_match = re.search(
-            r"标题(?:写|改成|改为|为)?[：:]?\s*[“\"']?(.+?)[”\"']?(?:[，,。]|$)",
-            command,
-        )
-        title = title_match.group(1).strip(" “”。\"'") if title_match else None
+            raise HTTPException(status_code=404, detail='creation task montage plan not found') from exc
+        title_match = re.search('标题(?:写|改成|改为|为)?[：:]?\\s*[“\\"\']?(.+?)[”\\"\']?(?:[，,。]|$)', command)
+        title = title_match.group(1).strip(' “”。"\'') if title_match else None
         if not title:
-            raise _topic_failure_response(
-                status_code=409,
-                error="cover_title_missing",
-                reason="没有识别出要显示的封面标题。",
-                impact="没有生成封面，当前任务保持不变。",
-                repair_action="输入“标题写……”并保留完整标题。",
-                retryable=True,
-            )
-        seconds_match = re.search(r"(\d+(?:\.\d+)?)\s*秒", command)
+            raise _topic_failure_response(status_code=409, error='cover_title_missing', reason='没有识别出要显示的封面标题。', impact='没有生成封面，当前任务保持不变。', repair_action='输入“标题写……”并保留完整标题。', retryable=True)
+        seconds_match = re.search('(\\d+(?:\\.\\d+)?)\\s*秒', command)
         frame_time = float(seconds_match.group(1)) if seconds_match else None
-        ordinal_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-        ordinal_match = re.search(r"第([一二三四五六七八九十]|\d+)个?镜头", command)
+        ordinal_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+        ordinal_match = re.search('第([一二三四五六七八九十]|\\d+)个?镜头', command)
         if frame_time is None and ordinal_match:
             raw_index = ordinal_match.group(1)
             index = int(raw_index) if raw_index.isdigit() else ordinal_map.get(raw_index, 0)
             if 1 <= index <= len(montage.clips):
                 clip = montage.clips[index - 1]
-                frame_time = min(
-                    clip.timeline_end_seconds - 0.05,
-                    clip.timeline_start_seconds + 0.2,
-                )
+                frame_time = min(clip.timeline_end_seconds - 0.05, clip.timeline_start_seconds + 0.2)
         if frame_time is None:
             frame_time = payload.playhead_ms / 1000 if payload.playhead_ms is not None else 0.0
-        return preview_creation_task_exact_edit(
-            task_id,
-            request,
-            CreationTaskExactEditRequest(
-                operation_type="GenerateCoverFromFrame",
-                frame_time_seconds=frame_time,
-                title=title,
-            ),
-        )
-    if selected_ref.startswith("clip:") and payload.context_stage in {"montage", "review", "subtitle_cover"}:
-        linked_speed = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:改成|改为|调到)\s*(\d+(?:\.\d+)?)\s*倍速[，, ]*(?:声音和字幕一起|同步声音和字幕|连同声音字幕)[。！]?", command)
+        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='GenerateCoverFromFrame', frame_time_seconds=frame_time, title=title))
+    if selected_ref.startswith('clip:') and payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
+        linked_speed = re.fullmatch('(?:把)?(?:这个|当前)?镜头(?:改成|改为|调到)\\s*(\\d+(?:\\.\\d+)?)\\s*倍速[，, ]*(?:声音和字幕一起|同步声音和字幕|连同声音字幕)[。！]?', command)
         if linked_speed:
             value = float(linked_speed.group(1))
-            if not .25 <= value <= 4:
-                raise HTTPException(status_code=422, detail="关联倍速须在0.25–4之间")
-            return _preview_linked_timeline(task_id, request, CreationTaskExactEditRequest(
-                operation_type="ChangeLinkedSpeed", clip_id=selected_ref.removeprefix("clip:"), playback_rate=value))
-        speed_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:画面)?(?:改成|改为|调到|设为)\s*(\d+(?:\.\d+)?)\s*倍速[，, ]*(?:保留配音|声音不变|保持时长)[。！]?", command)
+            if not 0.25 <= value <= 4:
+                raise HTTPException(status_code=422, detail='关联倍速须在0.25–4之间')
+            return _preview_linked_timeline(task_id, request, CreationTaskExactEditRequest(operation_type='ChangeLinkedSpeed', clip_id=selected_ref.removeprefix('clip:'), playback_rate=value))
+        speed_match = re.fullmatch('(?:把)?(?:这个|当前)?镜头(?:画面)?(?:改成|改为|调到|设为)\\s*(\\d+(?:\\.\\d+)?)\\s*倍速[，, ]*(?:保留配音|声音不变|保持时长)[。！]?', command)
         if speed_match:
-            if not .25 <= float(speed_match.group(1)) <= 4:
-                raise HTTPException(status_code=422, detail="画面倍速须在0.25–4之间")
-            return _submit_clip_preview(task_id, request, base_version_id=short_preview_base_version, operation_type="ChangeClipSpeed",
-                clip_ids=[selected_ref.removeprefix("clip:")], values={"playback_rate":float(speed_match.group(1))}, raw_command=command)
-        linked_commands = {"删除这个镜头": "DeleteClip", "删除当前镜头": "DeleteClip",
-            "删掉这个镜头，把后面接上": "DeleteClip", "复制这个镜头": "DuplicateClip", "复制当前镜头": "DuplicateClip",
-            #插入还需要一段素材，语音里给不出来，交给 _preview_insert 说明缺什么。
-            "插入镜头": "InsertClip", "插入当前镜头": "InsertClip", "在这个镜头后插入镜头": "InsertClip"}
-        linked_type = linked_commands.get(command.rstrip("。！"))
+            if not 0.25 <= float(speed_match.group(1)) <= 4:
+                raise HTTPException(status_code=422, detail='画面倍速须在0.25–4之间')
+            return _submit_clip_preview(task_id, request, base_version_id=short_preview_base_version, operation_type='ChangeClipSpeed', clip_ids=[selected_ref.removeprefix('clip:')], values={'playback_rate': float(speed_match.group(1))}, raw_command=command)
+        linked_commands = {'删除这个镜头': 'DeleteClip', '删除当前镜头': 'DeleteClip', '删掉这个镜头，把后面接上': 'DeleteClip', '复制这个镜头': 'DuplicateClip', '复制当前镜头': 'DuplicateClip', '插入镜头': 'InsertClip', '插入当前镜头': 'InsertClip', '在这个镜头后插入镜头': 'InsertClip'}
+        linked_type = linked_commands.get(command.rstrip('。！'))
         if linked_type:
-            if linked_type == "InsertClip":
-                return _preview_insert(task_id, request,
-                    CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix("clip:")))
-            return _preview_linked_clip_edit(task_id, request,
-                CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix("clip:")))
-        split_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:在|从)\s*(\d+(?:\.\d+)?)\s*秒(?:处)?(?:分割|切开)[。！]?", command)
-        split_here = command.rstrip("。！") in {"从这里分割镜头", "在播放位置分割镜头", "从这里切开", "分割当前镜头"}
+            if linked_type == 'InsertClip':
+                return _preview_insert(task_id, request, CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix('clip:')))
+            return _preview_linked_clip_edit(task_id, request, CreationTaskExactEditRequest(operation_type=linked_type, clip_id=selected_ref.removeprefix('clip:')))
+        split_match = re.fullmatch('(?:把)?(?:这个|当前)?镜头(?:在|从)\\s*(\\d+(?:\\.\\d+)?)\\s*秒(?:处)?(?:分割|切开)[。！]?', command)
+        split_here = command.rstrip('。！') in {'从这里分割镜头', '在播放位置分割镜头', '从这里切开', '分割当前镜头'}
         if split_match or split_here:
             if split_here and payload.playhead_ms is None:
-                raise HTTPException(status_code=422, detail="请先在播放器定位分割位置，或指定成片秒数。")
-            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
-                operation_type="SplitClip", clip_id=selected_ref.removeprefix("clip:"),
-                split_time_seconds=float(split_match.group(1)) if split_match else payload.playhead_ms / 1000))
-    batch_match = re.fullmatch(r'全文把[“"](.+?)[”"](?:替换成|替换为|改成|改为)[“"](.*)[”"][。！]?', command)
-    if batch_match and payload.context_stage == "subtitle_cover":
+                raise HTTPException(status_code=422, detail='请先在播放器定位分割位置，或指定成片秒数。')
+            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='SplitClip', clip_id=selected_ref.removeprefix('clip:'), split_time_seconds=float(split_match.group(1)) if split_match else payload.playhead_ms / 1000))
+    batch_match = re.fullmatch('全文把[“"](.+?)[”"](?:替换成|替换为|改成|改为)[“"](.*)[”"][。！]?', command)
+    if batch_match and payload.context_stage == 'subtitle_cover':
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-        track_ref = next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None)
-        matching = [track for track in tracks if track.id == track_ref] if track_ref else [track for track in tracks
-            if selected_ref == f"subtitle-track:{track.id}" or any(selected_ref == f"cue:{cue.id}" for cue in track.cues)]
+        track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+        matching = [track for track in tracks if track.id == track_ref] if track_ref else [track for track in tracks if selected_ref == f'subtitle-track:{track.id}' or any((selected_ref == f'cue:{cue.id}' for cue in track.cues))]
         if len(matching) != 1:
-            raise HTTPException(status_code=409, detail="请先选择要全文替换的字幕语言轨")
+            raise HTTPException(status_code=409, detail='请先选择要全文替换的字幕语言轨')
         if len(batch_match.group(1)) > 96 or len(batch_match.group(2)) > 96:
-            raise HTTPException(status_code=422, detail="单次查找和替换文字最多96字")
-        return _preview_subtitle_replace(task_id, request, CreationTaskExactEditRequest(operation_type="ReplaceSubtitleText",
-            track_id=matching[0].id, find_text=batch_match.group(1), replacement_text=batch_match.group(2)))
-    structure_command = re.fullmatch(r"(?:把)?(?:当前|这条)字幕(?:在第(\d+)字后(?:、|，|,)?(?:在)?([0-9.]+)秒拆分|与下一条合并|删除)[。！]?", command)
-    delete_command = command.rstrip("。！") in {"删除当前字幕", "删除这条字幕"}
-    if (structure_command or delete_command) and payload.context_stage == "subtitle_cover":
-        track_ref = next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None)
-        if not selected_ref.startswith("cue:") or not track_ref:
-            raise HTTPException(status_code=409, detail="请先选择当前语言轨中的字幕")
-        operation = "DeleteSubtitleCue" if delete_command or "删除" in command else "MergeSubtitleCue"
+            raise HTTPException(status_code=422, detail='单次查找和替换文字最多96字')
+        return _preview_subtitle_replace(task_id, request, CreationTaskExactEditRequest(operation_type='ReplaceSubtitleText', track_id=matching[0].id, find_text=batch_match.group(1), replacement_text=batch_match.group(2)))
+    structure_command = re.fullmatch('(?:把)?(?:当前|这条)字幕(?:在第(\\d+)字后(?:、|，|,)?(?:在)?([0-9.]+)秒拆分|与下一条合并|删除)[。！]?', command)
+    delete_command = command.rstrip('。！') in {'删除当前字幕', '删除这条字幕'}
+    if (structure_command or delete_command) and payload.context_stage == 'subtitle_cover':
+        track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+        if not selected_ref.startswith('cue:') or not track_ref:
+            raise HTTPException(status_code=409, detail='请先选择当前语言轨中的字幕')
+        operation = 'DeleteSubtitleCue' if delete_command or '删除' in command else 'MergeSubtitleCue'
         extra = {}
         if structure_command and structure_command.group(1):
-            operation = "SplitSubtitleCue"
+            operation = 'SplitSubtitleCue'
             try:
-                extra = {"split_offset":int(structure_command.group(1)), "split_time_seconds":float(structure_command.group(2))}
+                extra = {'split_offset': int(structure_command.group(1)), 'split_time_seconds': float(structure_command.group(2))}
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail="拆分时间须为有效秒数") from exc
-        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type=operation,
-            track_id=track_ref, cue_id=selected_ref.removeprefix("cue:"), **extra))
-    if selected_ref.startswith("cue:"):
-        if payload.context_stage not in {"montage", "review", "subtitle_cover"}:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_scope_unavailable",
-                reason="当前步骤不能修改字幕。",
-                impact="任务内容没有发生变化。",
-                repair_action="进入视频剪辑或检查成片后选择一条字幕。",
-                retryable=True,
-            )
-        shift = re.fullmatch(r"(?:把)?(?:这条|这句|当前)?字幕(?:整体)?(?:向前|往前|提前|向后|往后|延后|推迟)\s*(\d+(?:\.\d+)?)\s*(毫秒|秒)[。！]?", command)
+                raise HTTPException(status_code=422, detail='拆分时间须为有效秒数') from exc
+        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type=operation, track_id=track_ref, cue_id=selected_ref.removeprefix('cue:'), **extra))
+    if selected_ref.startswith('cue:'):
+        if payload.context_stage not in {'montage', 'review', 'subtitle_cover'}:
+            raise _topic_failure_response(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改字幕。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一条字幕。', retryable=True)
+        shift = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:整体)?(?:向前|往前|提前|向后|往后|延后|推迟)\\s*(\\d+(?:\\.\\d+)?)\\s*(毫秒|秒)[。！]?', command)
         if shift:
             montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
             tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-            track_ref = next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None)
-            candidates = [(track, cue) for track in tracks if track_ref is None or track.id == track_ref
-                for cue in track.cues if selected_ref == f"cue:{cue.id}"]
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            candidates = [(track, cue) for track in tracks if track_ref is None or track.id == track_ref for cue in track.cues if selected_ref == f'cue:{cue.id}']
             if len(candidates) != 1:
-                raise HTTPException(status_code=409, detail="请明确选择一条字幕及其语言轨。")
+                raise HTTPException(status_code=409, detail='请明确选择一条字幕及其语言轨。')
             track, cue = candidates[0]
-            offset = float(shift.group(1)) / (1000 if shift.group(2) == "毫秒" else 1)
-            if any(word in command for word in ("向前", "往前", "提前")):
+            offset = float(shift.group(1)) / (1000 if shift.group(2) == '毫秒' else 1)
+            if any((word in command for word in ('向前', '往前', '提前'))):
                 offset = -offset
             try:
-                edit = CreationTaskExactEditRequest(
-                    operation_type="UpdateSubtitleCue", cue_id=cue.id, track_id=track.id,
-                    start_seconds=round(cue.start_seconds + offset, 3), end_seconds=round(cue.end_seconds + offset, 3))
+                edit = CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=cue.id, track_id=track.id, start_seconds=round(cue.start_seconds + offset, 3), end_seconds=round(cue.end_seconds + offset, 3))
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail="字幕移动后的时间必须有效，且不能早于成片开始。") from exc
+                raise HTTPException(status_code=422, detail='字幕移动后的时间必须有效，且不能早于成片开始。') from exc
             return preview_creation_task_exact_edit(task_id, request, edit)
-        timing = re.fullmatch(r"(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\s*(\d+(?:\.\d+)?)\s*秒?\s*(?:到|至|–|-)\s*(\d+(?:\.\d+)?)\s*秒[。！]?", command)
+        timing = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒?\\s*(?:到|至|–|-)\\s*(\\d+(?:\\.\\d+)?)\\s*秒[。！]?', command)
         if timing:
-            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
-                operation_type="UpdateSubtitleCue", cue_id=selected_ref.removeprefix("cue:"),
-                track_id=next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None),
-                start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2))))
+            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=selected_ref.removeprefix('cue:'), track_id=next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None), start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2))))
         new_text = _subtitle_text_from_command(command)
         if new_text is None:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_intent_unsupported",
-                reason="没有识别出新的字幕文字。",
-                impact="字幕和成片保持不变。",
-                repair_action="输入“把这句字幕改成……”并保留要显示的完整文字。",
-                retryable=True,
-            )
-        cue_id = selected_ref.removeprefix("cue:")
+            raise _topic_failure_response(status_code=409, error='edit_intent_unsupported', reason='没有识别出新的字幕文字。', impact='字幕和成片保持不变。', repair_action='输入“把这句字幕改成……”并保留要显示的完整文字。', retryable=True)
+        cue_id = selected_ref.removeprefix('cue:')
         try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
             tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-            track_ref = next((ref.removeprefix("subtitle-track:") for ref in payload.selected_object_refs if ref.startswith("subtitle-track:")), None)
-            selected_track = next((track for track in tracks if (track_ref is None or track.id == track_ref)
-                and any(cue.id == cue_id for cue in track.cues)), None)
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            selected_track = next((track for track in tracks if (track_ref is None or track.id == track_ref) and any((cue.id == cue_id for cue in track.cues))), None)
             if track_ref is not None and selected_track is None:
-                raise HTTPException(status_code=409, detail="所选字幕不属于当前语言轨，请重新选择")
+                raise HTTPException(status_code=409, detail='所选字幕不属于当前语言轨，请重新选择')
             if selected_track is not None:
-                return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(
-                    operation_type="UpdateSubtitleCue", track_id=selected_track.id,
-                    cue_id=cue_id, text=new_text))
-            cue = next(item for item in montage.cues if item.id == cue_id)
+                return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', track_id=selected_track.id, cue_id=cue_id, text=new_text))
+            cue = next((item for item in montage.cues if item.id == cue_id))
         except (KeyError, StopIteration) as exc:
-            raise HTTPException(status_code=404, detail="creation task subtitle edit target not found") from exc
+            raise HTTPException(status_code=404, detail='creation task subtitle edit target not found') from exc
         if new_text == cue.text:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_no_change",
-                reason="新字幕与当前字幕相同。",
-                impact="没有创建新的时间线版本。",
-                repair_action="输入不同的字幕文字后再试。",
-                retryable=True,
-            )
+            raise _topic_failure_response(status_code=409, error='edit_no_change', reason='新字幕与当前字幕相同。', impact='没有创建新的时间线版本。', repair_action='输入不同的字幕文字后再试。', retryable=True)
         base_version = _ensure_montage_base_version(workspace_id, task, montage)
         task = production_repo.get_creation_task(workspace_id, task.id)
-        subtitle_track = next(
-            (
-                track
-                for track in _current_subtitle_tracks(
-                    workspace_id, task, current_version=base_version, montage=montage
-                )
-                if any(track_cue.id == cue.id for track_cue in track.cues)
-            ),
-            None,
-        )
+        subtitle_track = next((track for track in _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage) if any((track_cue.id == cue.id for track_cue in track.cues))), None)
         now = utc_now()
-        intent = production_repo.create_edit_intent(
-            EditIntent(
-                id=f"intent_{uuid4().hex}", workspace_id=workspace_id,
-                task_id=task.id, raw_command=command,
-                context_stage=payload.context_stage,
-                selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms,
-                intent_type="update_subtitle_cue",
-                scope={"kind": "subtitle_cue", "cue_id": cue.id},
-                constraints={"preserve_narration": True, "preserve_clips": True},
-                confidence=0.99, status="interpreted", created_at=now,
-            )
-        )
-        proposal = production_repo.create_edit_proposal(
-            EditProposal(
-                id=f"proposal_{uuid4().hex}", workspace_id=workspace_id,
-                task_id=task.id, intent_id=intent.id,
-                summary="只修改所选字幕；配音和镜头保持不变。",
-                target_refs=[selected_ref],
-                operation={"operation_type": "UpdateSubtitleCue", "payload": {
-                    "cue_id": cue.id, "text": new_text,
-                    "expected_text": cue.text, "base_version_id": base_version.id,
-                    **(
-                        {
-                            "track_id": subtitle_track.id,
-                            "line_breaks": next(
-                                item.line_breaks
-                                for item in subtitle_track.cues
-                                if item.id == cue.id
-                            ),
-                            "emphasis": next(
-                                item.emphasis
-                                for item in subtitle_track.cues
-                                if item.id == cue.id
-                            ),
-                            "style": subtitle_track.style,
-                        }
-                        if subtitle_track is not None
-                        else {}
-                    ),
-                }},
-                invalidated_refs=_logical_montage_output_refs(montage),
-                preview={
-                    "before": {"ref": selected_ref, "label": "当前字幕", "detail": cue.text},
-                    "after": {"ref": selected_ref, "label": "修改后字幕", "detail": new_text},
-                },
-                external_effects=["确认后只更新字幕版本；重新渲染前不会执行媒体进程。"],
-                created_at=now, updated_at=now,
-            )
-        )
+        intent = production_repo.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='update_subtitle_cue', scope={'kind': 'subtitle_cue', 'cue_id': cue.id}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=0.99, status='interpreted', created_at=now))
+        proposal = production_repo.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只修改所选字幕；配音和镜头保持不变。', target_refs=[selected_ref], operation={'operation_type': 'UpdateSubtitleCue', 'payload': {'cue_id': cue.id, 'text': new_text, 'expected_text': cue.text, 'base_version_id': base_version.id, **({'track_id': subtitle_track.id, 'line_breaks': next((item.line_breaks for item in subtitle_track.cues if item.id == cue.id)), 'emphasis': next((item.emphasis for item in subtitle_track.cues if item.id == cue.id)), 'style': subtitle_track.style} if subtitle_track is not None else {})}}, invalidated_refs=_logical_montage_output_refs(montage), preview={'before': {'ref': selected_ref, 'label': '当前字幕', 'detail': cue.text}, 'after': {'ref': selected_ref, 'label': '修改后字幕', 'detail': new_text}}, external_effects=['确认后只更新字幕版本；重新渲染前不会执行媒体进程。'], created_at=now, updated_at=now))
         return _edit_preview_response(intent, proposal)
-    if selected_ref.startswith("clip:") and any(
-        token in command.casefold()
-        for token in (
-            "出镜",
-            "口型",
-            "人物",
-            "表情",
-            "avatar",
-            "lip sync",
-            "lipsync",
-            "expression",
-        )
-    ):
-        if payload.context_stage not in {"montage", "review"}:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_scope_unavailable",
-                reason="当前步骤还不能把人物口型片段写入成片。",
-                impact="任务内容没有发生变化。",
-                repair_action="进入视频剪辑或检查成片后选择一个镜头。",
-                retryable=True,
-            )
-        clip_id = selected_ref.removeprefix("clip:")
+    if selected_ref.startswith('clip:') and any((token in command.casefold() for token in ('出镜', '口型', '人物', '表情', 'avatar', 'lip sync', 'lipsync', 'expression'))):
+        if payload.context_stage not in {'montage', 'review'}:
+            raise _topic_failure_response(status_code=409, error='edit_scope_unavailable', reason='当前步骤还不能把人物口型片段写入成片。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一个镜头。', retryable=True)
+        clip_id = selected_ref.removeprefix('clip:')
         try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
-            clip = next(item for item in montage.clips if item.id == clip_id)
-            cue = next(item for item in montage.cues if item.id == clip.cue_id)
-            segment = production_repo.get_narration_segment(
-                workspace_id, task.id, cue.narration_segment_id
-            )
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+            clip = next((item for item in montage.clips if item.id == clip_id))
+            cue = next((item for item in montage.cues if item.id == clip.cue_id))
+            segment = production_repo.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
             creation_plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
             person_provider = _lipsync_provider(creation_plan.lipsync_quality)
             selected_person = creation_plan.selected_person
             if selected_person is None:
-                raise ValueError("当前任务没有绑定人物声音版本")
-            person = production_repo.get_person_profile(
-                workspace_id,
-                selected_person.profile_id,
-                selected_person.version,
-            )
-            current_render = (
-                production_repo.get_person_render(
-                    workspace_id, task.id, clip.person_render_id
-                )
-                if clip.person_render_id
-                else None
-            )
+                raise ValueError('当前任务没有绑定人物声音版本')
+            person = production_repo.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
+            current_render = production_repo.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
             if current_render is not None:
-                person = production_repo.get_person_profile(
-                    workspace_id,
-                    current_render.person_profile_id,
-                    current_render.person_version,
-                )
+                person = production_repo.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
         except (KeyError, StopIteration) as exc:
-            raise HTTPException(
-                status_code=404,
-                detail="creation task person edit target not found",
-            ) from exc
+            raise HTTPException(status_code=404, detail='creation task person edit target not found') from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if re.fullmatch(r"(?:表情|expression).*(?:自然|开心|微笑|natural|happy|smile)", command.casefold()):
-            raise _topic_failure_response(
-                status_code=409,
-                error="person_expression_control_unavailable",
-                reason="当前本地人物模型只能沿用原视频中的表情，不能单独改变表情。",
-                impact="人物片段、时间线和成片保持不变。",
-                repair_action="可以输入“这里只重做口型，其他都不要动”。",
-                retryable=False,
-            )
+        if re.fullmatch('(?:表情|expression).*(?:自然|开心|微笑|natural|happy|smile)', command.casefold()):
+            raise _topic_failure_response(status_code=409, error='person_expression_control_unavailable', reason='当前本地人物模型只能沿用原视频中的表情，不能单独改变表情。', impact='人物片段、时间线和成片保持不变。', repair_action='可以输入“这里只重做口型，其他都不要动”。', retryable=False)
         try:
             person_operation = compile_person_edit_command(command)
         except ValueError as exc:
-            raise _topic_failure_response(
-                status_code=409, error="edit_intent_unsupported", reason=str(exc),
-                impact="人物片段、时间线和成片保持不变。",
-                repair_action="请明确指定换成人物出镜或重做所选镜头口型。",
-                retryable=True,
-            ) from exc
-        regenerate_requested = person_operation == "RegeneratePersonRender"
+            raise _topic_failure_response(status_code=409, error='edit_intent_unsupported', reason=str(exc), impact='人物片段、时间线和成片保持不变。', repair_action='请明确指定换成人物出镜或重做所选镜头口型。', retryable=True) from exc
+        regenerate_requested = person_operation == 'RegeneratePersonRender'
         if regenerate_requested and current_render is None:
-            raise _topic_failure_response(
-                status_code=409,
-                error="person_render_required",
-                reason="所选镜头还不是人物口型片段，当前没有可以重做的口型。",
-                impact="当前镜头和成片保持不变。",
-                repair_action="先输入“这一段换成当前人物出镜”。",
-                retryable=True,
-            )
+            raise _topic_failure_response(status_code=409, error='person_render_required', reason='所选镜头还不是人物口型片段，当前没有可以重做的口型。', impact='当前镜头和成片保持不变。', repair_action='先输入“这一段换成当前人物出镜”。', retryable=True)
         if not person_provider.ready:
-            raise _topic_failure_response(
-                status_code=503,
-                error="capability_unavailable",
-                reason=person_provider.message,
-                impact="人物片段、时间线和成片保持不变。",
-                repair_action="配置本地人物口型运行环境后重试。",
-                retryable=True,
-            )
-        if montage.status != "rendered":
-            raise _topic_failure_response(
-                status_code=409,
-                error="rendered_version_required",
-                reason="当前任务还没有可比较的成片版本。",
-                impact="无法准确展示人物出镜会替换哪一个镜头。",
-                repair_action="先渲染当前成片，再选择镜头提出人物出镜要求。",
-                retryable=True,
-            )
-        if segment.status != "ready" or not segment.audio_reference:
-            raise _topic_failure_response(
-                status_code=409,
-                error="narration_segment_unavailable",
-                reason="所选镜头没有可用于口型生成的已完成配音。",
-                impact="当前镜头和成片保持不变。",
-                repair_action="先完成对应配音分段，再重新提交人物出镜要求。",
-                retryable=True,
-            )
+            raise _topic_failure_response(status_code=503, error='capability_unavailable', reason=person_provider.message, impact='人物片段、时间线和成片保持不变。', repair_action='配置本地人物口型运行环境后重试。', retryable=True)
+        if montage.status != 'rendered':
+            raise _topic_failure_response(status_code=409, error='rendered_version_required', reason='当前任务还没有可比较的成片版本。', impact='无法准确展示人物出镜会替换哪一个镜头。', repair_action='先渲染当前成片，再选择镜头提出人物出镜要求。', retryable=True)
+        if segment.status != 'ready' or not segment.audio_reference:
+            raise _topic_failure_response(status_code=409, error='narration_segment_unavailable', reason='所选镜头没有可用于口型生成的已完成配音。', impact='当前镜头和成片保持不变。', repair_action='先完成对应配音分段，再重新提交人物出镜要求。', retryable=True)
         if segment.language not in person_provider.supported_languages:
-            raise _topic_failure_response(
-                status_code=503, error="language_unavailable",
-                reason="当前本地人物模型未声明支持所选配音的语言。",
-                impact="人物片段、时间线和成片保持不变。",
-                repair_action="选择已声明支持该配音语言的本地人物模型。",
-                retryable=False,
-            )
+            raise _topic_failure_response(status_code=503, error='language_unavailable', reason='当前本地人物模型未声明支持所选配音的语言。', impact='人物片段、时间线和成片保持不变。', repair_action='选择已声明支持该配音语言的本地人物模型。', retryable=False)
         try:
             person_source_start, person_source_end = _person_source_range(workspace_id, task, montage, clip, segment)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         person_transforms = production_repo.list_transform_runs(workspace_id, task.id)
-        existing_render = next(
-            (
-                item
-                for item in reversed(
-                    production_repo.list_person_renders(workspace_id, task.id)
-                )
-                if item.narration_segment_id == segment.id
-                and item.person_profile_id == person.id
-                and item.person_version == person.version
-                and item.voice_profile_id == segment.voice_profile_id
-                and item.voice_version == segment.voice_version
-                and item.model_id == person_provider.model_id
-                and item.motion == "natural"
-                and item.expression == "neutral"
-                and item.status == "ready"
-                and _person_render_matches_narration(item, segment, person_transforms)
-                and _person_render_media_path(item) is not None
-            ),
-            None,
-        )
-        operation_type = (
-            "RegeneratePersonRender" if regenerate_requested else "ChangePersonSegment"
-        )
-        intent_type = (
-            "regenerate_person_render" if regenerate_requested else "change_person_segment"
-        )
+        existing_render = next((item for item in reversed(production_repo.list_person_renders(workspace_id, task.id)) if item.narration_segment_id == segment.id and item.person_profile_id == person.id and (item.person_version == person.version) and (item.voice_profile_id == segment.voice_profile_id) and (item.voice_version == segment.voice_version) and (item.model_id == person_provider.model_id) and (item.motion == 'natural') and (item.expression == 'neutral') and (item.status == 'ready') and _person_render_matches_narration(item, segment, person_transforms) and (_person_render_media_path(item) is not None)), None)
+        operation_type = 'RegeneratePersonRender' if regenerate_requested else 'ChangePersonSegment'
+        intent_type = 'regenerate_person_render' if regenerate_requested else 'change_person_segment'
         base_version = _ensure_montage_base_version(workspace_id, task, montage)
         now = utc_now()
-        intent = production_repo.create_edit_intent(
-            EditIntent(
-                id=f"intent_{uuid4().hex}",
-                workspace_id=workspace_id,
-                task_id=task.id,
-                raw_command=command,
-                context_stage=payload.context_stage,
-                selected_object_refs=[selected_ref],
-                playhead_ms=payload.playhead_ms,
-                intent_type=intent_type,
-                scope={
-                    "kind": "clip",
-                    "clip_id": clip.id,
-                    "narration_segment_id": segment.id,
-                },
-                constraints={
-                    "preserve_narration": True,
-                    "preserve_subtitles": True,
-                    "preserve_other_clips": True,
-                },
-                confidence=0.98,
-                status="interpreted",
-                created_at=now,
-            )
-        )
-        proposal = production_repo.create_edit_proposal(
-            EditProposal(
-                id=f"proposal_{uuid4().hex}",
-                workspace_id=workspace_id,
-                task_id=task.id,
-                intent_id=intent.id,
-                summary=(
-                    "只重新生成所选人物片段的口型；配音、字幕和其他镜头保持不变。"
-                    if regenerate_requested
-                    else (
-                        f"把所选镜头换成 {person.display_name} 的口型片段；"
-                        "配音、字幕和其他镜头保持不变。"
-                    )
-                ),
-                target_refs=[selected_ref],
-                operation={
-                    "operation_type": operation_type,
-                    "payload": {
-                        "clip_id": clip.id,
-                        "cue_id": cue.id,
-                        "narration_segment_id": segment.id,
-                        "expected_audio_reference": segment.audio_reference,
-                        "source_start_seconds": person_source_start,
-                        "source_end_seconds": person_source_end,
-                        "person_profile_id": person.id,
-                        "person_version": person.version,
-                        "expected_asset_id": clip.asset_id,
-                        "expected_segment_id": clip.segment_id,
-                        "expected_person_render_id": clip.person_render_id,
-                        "motion": "natural",
-                        "expression": "neutral",
-                        "lipsync_quality": creation_plan.lipsync_quality,
-                        "base_version_id": base_version.id,
-                        **(
-                            {"reuse_person_render_id": existing_render.id}
-                            if existing_render is not None
-                            and not regenerate_requested
-                            else {}
-                        ),
-                    },
-                },
-                invalidated_refs=_logical_montage_output_refs(montage),
-                preview={
-                    "before": {
-                        "ref": selected_ref,
-                        "label": "当前镜头",
-                        "detail": (
-                            f"{clip.timeline_start_seconds:.1f}–"
-                            f"{clip.timeline_end_seconds:.1f} 秒"
-                        ),
-                    },
-                    "after": {
-                        "ref": f"person:{person.id}:{person.version}",
-                        "label": (
-                            f"重新生成 {person.display_name} 的口型"
-                            if regenerate_requested
-                            else f"{person.display_name} 出镜"
-                        ),
-                        "detail": (
-                            f"使用配音分段第 {person_source_start:.2f}–{person_source_end:.2f} 秒；"
-                            "沿用人物原视频动作与表情，配音和字幕不变。"
-                        ),
-                    },
-                },
-                external_effects=[
-                    (
-                        "确认后会生成一个新人物片段；旧片段保留在历史版本中。"
-                        if regenerate_requested
-                        else (
-                            "确认后复用已验证的人物口型片段，只使当前成片输出失效。"
-                            if existing_render is not None
-                            else "确认后调用一次真实人物口型模型；不会重做文案、配音、字幕或其他镜头。"
-                        )
-                    )
-                ],
-                created_at=now,
-                updated_at=now,
-            )
-        )
+        intent = production_repo.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type=intent_type, scope={'kind': 'clip', 'clip_id': clip.id, 'narration_segment_id': segment.id}, constraints={'preserve_narration': True, 'preserve_subtitles': True, 'preserve_other_clips': True}, confidence=0.98, status='interpreted', created_at=now))
+        proposal = production_repo.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只重新生成所选人物片段的口型；配音、字幕和其他镜头保持不变。' if regenerate_requested else f'把所选镜头换成 {person.display_name} 的口型片段；配音、字幕和其他镜头保持不变。', target_refs=[selected_ref], operation={'operation_type': operation_type, 'payload': {'clip_id': clip.id, 'cue_id': cue.id, 'narration_segment_id': segment.id, 'expected_audio_reference': segment.audio_reference, 'source_start_seconds': person_source_start, 'source_end_seconds': person_source_end, 'person_profile_id': person.id, 'person_version': person.version, 'expected_asset_id': clip.asset_id, 'expected_segment_id': clip.segment_id, 'expected_person_render_id': clip.person_render_id, 'motion': 'natural', 'expression': 'neutral', 'lipsync_quality': creation_plan.lipsync_quality, 'base_version_id': base_version.id, **({'reuse_person_render_id': existing_render.id} if existing_render is not None and (not regenerate_requested) else {})}}, invalidated_refs=_logical_montage_output_refs(montage), preview={'before': {'ref': selected_ref, 'label': '当前镜头', 'detail': f'{clip.timeline_start_seconds:.1f}–{clip.timeline_end_seconds:.1f} 秒'}, 'after': {'ref': f'person:{person.id}:{person.version}', 'label': f'重新生成 {person.display_name} 的口型' if regenerate_requested else f'{person.display_name} 出镜', 'detail': f'使用配音分段第 {person_source_start:.2f}–{person_source_end:.2f} 秒；沿用人物原视频动作与表情，配音和字幕不变。'}}, external_effects=['确认后会生成一个新人物片段；旧片段保留在历史版本中。' if regenerate_requested else '确认后复用已验证的人物口型片段，只使当前成片输出失效。' if existing_render is not None else '确认后调用一次真实人物口型模型；不会重做文案、配音、字幕或其他镜头。'], created_at=now, updated_at=now))
         return _edit_preview_response(intent, proposal)
     return _preview_replacement_clip(task, request, payload)
 
@@ -12032,49 +11498,44 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
     return result
 
 
-def _confirm_creation_task_edit(
-    task_id: str,
-    proposal_id: str,
-    request: Request,
-) -> CreationTaskEditConfirmResponse:
+def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     try:
         proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task edit proposal not found") from exc
-    if proposal.task_id != task_id or proposal.status != "proposed":
-        raise HTTPException(status_code=409, detail="creation task edit proposal is not confirmable")
-    if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
+        raise HTTPException(status_code=404, detail='creation task edit proposal not found') from exc
+    if proposal.task_id != task_id or proposal.status != 'proposed':
+        raise HTTPException(status_code=409, detail='creation task edit proposal is not confirmable')
+    if proposal.operation.get('operation_type') in LINKED_EDIT_OPERATIONS:
         return _confirm_linked_timeline_response(task, proposal, request)
-    if is_subtitle_edit(proposal.operation.get("operation_type"), proposal.operation.get("payload", {})):
+    if is_subtitle_edit(proposal.operation.get('operation_type'), proposal.operation.get('payload', {})):
         return _confirm_subtitle_response(task, proposal, request)
-    if proposal.operation.get("operation_type") == "EditCompoundTimeline":
+    if proposal.operation.get('operation_type') == 'EditCompoundTimeline':
         return _confirm_compound_response(task, proposal, request)
-    source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source")
-    if source is not None and source["source_facts"] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source["action"]), request):
-        raise HTTPException(status_code=409, detail="预览后的源文件或片段修订已变化，请重新预览")
+    source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
+    if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
+        raise HTTPException(status_code=409, detail='预览后的源文件或片段修订已变化，请重新预览')
     operation_draft = proposal.operation
-    operation_payload = operation_draft.get("payload")
-    operation_type = operation_draft.get("operation_type")
-    if operation_type == "ReorderTimelineItems" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览镜头排序。")
+    operation_payload = operation_draft.get('payload')
+    operation_type = operation_draft.get('operation_type')
+    if operation_type == 'ReorderTimelineItems' and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise HTTPException(status_code=409, detail='时间线已变化，请重新预览镜头排序。')
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         old_order = [clip.id for clip in plan.clips]
-        if old_order != operation_payload.get("current_order"):
-            raise HTTPException(status_code=409, detail="镜头顺序已变化，请重新预览。")
-        new_order = operation_payload["new_order"]
-        target_ids = operation_payload["target_clip_ids"]
+        if old_order != operation_payload.get('current_order'):
+            raise HTTPException(status_code=409, detail='镜头顺序已变化，请重新预览。')
+        new_order = operation_payload['new_order']
+        target_ids = operation_payload['target_clip_ids']
         if not target_ids or not set(target_ids) <= set(old_order):
-            raise HTTPException(status_code=409, detail="镜头排序目标已变化，请重新预览。")
+            raise HTTPException(status_code=409, detail='镜头排序目标已变化，请重新预览。')
         for index, clip_id in enumerate(new_order):
             if index >= len(old_order) or old_order[index] != clip_id:
-                plan, _tracks, _linkage = _apply_creation_task_montage_clip_update(workspace_id, task_id, plan, clip_id,
-                    CreationTaskMontageClipUpdateRequest(), request=request)
+                plan, _tracks, _linkage = _apply_creation_task_montage_clip_update(workspace_id, task_id, plan, clip_id, CreationTaskMontageClipUpdateRequest(), request=request)
         link_narration = _timeline_reorder_narration_scope(plan, new_order, target_ids)
-        if link_narration != operation_payload["link_narration"]:
-            raise HTTPException(status_code=409, detail="人物镜头关联已变化，请重新预览。")
+        if link_narration != operation_payload['link_narration']:
+            raise HTTPException(status_code=409, detail='人物镜头关联已变化，请重新预览。')
         tracks, linkage = _reorder_montage_plan(workspace_id, task, plan, new_order, link_narration=link_narration)
         bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
         if bound is None:
@@ -12082,43 +11543,35 @@ def _confirm_creation_task_edit(
         source_command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         source_command = EditSourceVerifier.restore_scope(source_command, bound)
         verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
-        _prepare_changed_montage(plan, message="整组镜头排序已保存；一次撤销可恢复，重新生成后播放新成片。")
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id),
-            updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
-    if operation_type == "ChangePresenterShare" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览露脸比例")
+        _prepare_changed_montage(plan, message='整组镜头排序已保存；一次撤销可恢复，重新生成后播放新成片。')
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id), updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
+    if operation_type == 'ChangePresenterShare' and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise HTTPException(status_code=409, detail='时间线已变化，请重新预览露脸比例')
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        target = operation_payload["target"]
+        target = operation_payload['target']
         plan.presenter_share_target = target
-        _prepare_changed_montage(plan, message=f"露脸目标 {target}% 已保存到草稿；实际镜头保持不变，请明确生成后再核对实际占比。")
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base, updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload)
-    if operation_type == "AlignSubtitleTiming" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload["base_version_id"]:
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新校准字幕")
+        _prepare_changed_montage(plan, message=f'露脸目标 {target}% 已保存到草稿；实际镜头保持不变，请明确生成后再核对实际占比。')
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload)
+    if operation_type == 'AlignSubtitleTiming' and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload['base_version_id']:
+            raise HTTPException(status_code=409, detail='时间线已变化，请重新校准字幕')
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
-        track = next((item for item in tracks if item.id == operation_payload["track_id"]), None)
+        track = next((item for item in tracks if item.id == operation_payload['track_id']), None)
         if track is None:
-            raise HTTPException(status_code=409, detail="字幕轨已变化，请重新校准")
-        changed = apply_aligned_timings(track, operation_payload["timings"], montage.duration_seconds)
-        changed_tracks = (synchronize_translated_subtitles(tracks, changed, montage.duration_seconds)
-            if operation_payload.get("include_translation") else [changed if item.id == track.id else item for item in tracks])
-        _prepare_changed_montage(montage, message="字幕时间已校准，可重新渲染；撤销恢复原时间。")
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base, updated_plan=montage, operation_type="AlignSubtitleTiming", operation_payload=operation_payload,
-            edited_subtitle_tracks=changed_tracks)
+            raise HTTPException(status_code=409, detail='字幕轨已变化，请重新校准')
+        changed = apply_aligned_timings(track, operation_payload['timings'], montage.duration_seconds)
+        changed_tracks = synchronize_translated_subtitles(tracks, changed, montage.duration_seconds) if operation_payload.get('include_translation') else [changed if item.id == track.id else item for item in tracks]
+        _prepare_changed_montage(montage, message='字幕时间已校准，可重新渲染；撤销恢复原时间。')
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=montage, operation_type='AlignSubtitleTiming', operation_payload=operation_payload, edited_subtitle_tracks=changed_tracks)
     if operation_type in CLIP_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         try:
-            changed, edited_tracks, _linkage = apply_clip_proposal(task, montage, command,
-                resolve_source=lambda clip, values:_resolve_edit_clip_source(task, request, clip, values),
-                link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
+            changed, edited_tracks, _linkage = apply_clip_proposal(task, montage, command, resolve_source=lambda clip, values: _resolve_edit_clip_source(task, request, clip, values), link_reordered=lambda candidate: _link_reordered_edit(task, candidate))
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, KeyError) as exc:
@@ -12133,15 +11586,12 @@ def _confirm_creation_task_edit(
                 raise HTTPException(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
             verifier = EditSourceVerifier(production_repo, identity=command.actor_identity) if command.source is not None else None
         _prepare_changed_montage(changed, message='镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。')
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=production_repo.get_timeline_version(workspace_id, command.base_version_id),
-            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=production_repo.get_timeline_version(workspace_id, command.base_version_id), updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
     if operation_type in PICTURE_METADATA_OPERATIONS and isinstance(operation_payload, dict):
         command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
         try:
-            changed = apply_picture_metadata(task, montage, command,
-                validate_graphic_sources=lambda overlays: _validate_edit_graphic_sources(workspace_id, task_id, overlays))
+            changed = apply_picture_metadata(task, montage, command, validate_graphic_sources=lambda overlays: _validate_edit_graphic_sources(workspace_id, task_id, overlays))
         except (EditConflict, ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         bound = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
@@ -12153,427 +11603,153 @@ def _confirm_creation_task_edit(
             if not set(affected_source_clip_ids(montage, changed)) <= selected:
                 raise HTTPException(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
             verifier = EditSourceVerifier(production_repo, identity=command.actor_identity) if command.source is not None else None
-        messages = {"EditGraphicOverlay":"图文已更新，可以重新渲染。",
-            "SetClipTransition":"转场已更新，配音与字幕时轴不变。", "AdjustVisualEffects":"画面效果已更新，可以重新渲染。"}
+        messages = {'EditGraphicOverlay': '图文已更新，可以重新渲染。', 'SetClipTransition': '转场已更新，配音与字幕时轴不变。', 'AdjustVisualEffects': '画面效果已更新，可以重新渲染。'}
         _prepare_changed_montage(changed, message=messages[operation_type])
         base = production_repo.get_timeline_version(workspace_id, command.base_version_id)
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
-            updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
-    if operation_type == "EditAudioTimeline" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已经变化，不能确认旧的音频提案")
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
+    if operation_type == 'EditAudioTimeline' and isinstance(operation_payload, dict):
+        actor = _require_permit_actor(request, workspace_id)
         try:
-            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-            current_audio = _effective_audio_timeline(montage)
-            if current_audio.model_dump() != operation_payload.get("expected_audio_timeline"):
-                raise ValueError("原音轨已变化，请重新预览")
-            updated_audio = AudioTimeline.model_validate(operation_payload["audio_timeline"])
-            edit = AudioEditRequest.model_validate(operation_payload["edit"])
-            if edit.action == "replace_narration":
-                if creation_execution_mode == "scheduled":
-                    raise HTTPException(status_code=503, detail="电脑录音校验尚未接入整机许可")
-                if any(clip.person_render_id for clip in montage.clips):
-                    raise ValueError("当前人物口型依赖旧配音，请先移除或重做口型")
-                source_ref = edit.values.get("source_ref")
-                if not isinstance(source_ref, str):
-                    raise ValueError("录音引用无效")
-                recording, measured_ms = _task_audio().recording(
-                    workspace_id, task_id, source_ref)
-                stat = artifact_store.resolve_file(recording.logical_ref).stat()
-                duration_ms = round(montage.duration_seconds * 1000)
-                if (recording.sha256 != operation_payload.get("recording_sha256")
-                        or [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns] != operation_payload.get("recording_file_signature")
-                        or measured_ms != operation_payload.get("recording_duration_ms")
-                        or not duration_ms - 20 <= measured_ms <= duration_ms + 250
-                        or apply_audio_edit(current_audio, edit, duration_ms).model_dump() != updated_audio.model_dump()):
-                    raise ValueError("录音或旁白替换提案已变化，请重新预览")
-            else:
-                montage.audio_timeline = current_audio
-                command = _metadata_edit_command(task, request, operation_type, operation_payload, source=source)
-                montage = apply_audio_metadata(task, montage, command, validate_sources=lambda graph, duration:
-                    _task_audio().validate(workspace_id, task_id, graph, duration, draft_only=True))
-        except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
-            raise HTTPException(status_code=409, detail="音频提案不再适用，请检查源文件并重新预览") from exc
-        montage.audio_timeline = updated_audio
-        _prepare_changed_montage(montage, message="音轨已更新，可以试听或重新渲染成片。")
-        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
-            updated_plan=montage, operation_type="EditAudioTimeline", operation_payload=operation_payload)
-    if operation_type == "ChangeCanvas" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="版本已变化，请重新预览画幅")
+            outcome = _audio_edit_use_case().confirm(task, proposal, actor, source=source)
+        except AudioEditRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _metadata_edit_response(outcome)
+    if operation_type == 'ChangeCanvas' and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise HTTPException(status_code=409, detail='版本已变化，请重新预览画幅')
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-        montage.aspect_ratio = operation_payload["aspect_ratio"]
-        if operation_payload.get("fit_mode"):
+        montage.aspect_ratio = operation_payload['aspect_ratio']
+        if operation_payload.get('fit_mode'):
             for clip in montage.clips:
-                clip.fit_mode = operation_payload["fit_mode"]
-        version_id = f"timeline_{uuid4().hex}"
+                clip.fit_mode = operation_payload['fit_mode']
+        version_id = f'timeline_{uuid4().hex}'
         tracks = [_clone_subtitle_track(track, timeline_version_id=version_id) for track in _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)]
-        _prepare_changed_montage(montage, message="画幅已修改，请重新渲染；封面需从新成片重新生成。")
-        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
-            result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload,
-            subtitle_tracks=tracks, cover_asset=None, updated_plan=montage)
-    if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict) and "subtitle_display" in operation_payload:
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+        _prepare_changed_montage(montage, message='画幅已修改，请重新渲染；封面需从新成片重新生成。')
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload, subtitle_tracks=tracks, cover_asset=None, updated_plan=montage)
+    if operation_type == 'ConfigureSubtitleTrack' and isinstance(operation_payload, dict) and ('subtitle_display' in operation_payload):
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
         base_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
-        selection = _subtitle_display_selection(tracks, operation_payload["subtitle_display"])
-        version_id = f"timeline_{uuid4().hex}"
-        updated_tracks = [_clone_subtitle_track(track, timeline_version_id=version_id,
-            style={**track.style, "enabled": selection[track.id]}) for track in tracks]
+        selection = _subtitle_display_selection(tracks, operation_payload['subtitle_display'])
+        version_id = f'timeline_{uuid4().hex}'
+        updated_tracks = [_clone_subtitle_track(track, timeline_version_id=version_id, style={**track.style, 'enabled': selection[track.id]}) for track in tracks]
         cover = _cover_asset_for_version(workspace_id, task.id, base_version)
-        _prepare_changed_montage(montage, message="字幕显示已更新，请重新渲染成片。")
-        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base_version, result_version_id=version_id, operation_type=operation_type,
-            operation_payload=operation_payload, subtitle_tracks=updated_tracks,
-            cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None,
-            updated_plan=montage)
-    if operation_type == "ConfigureSubtitleTrack" and isinstance(operation_payload, dict):
-        source_track_id = operation_payload.get("source_track_id")
-        base_version_id = operation_payload.get("base_version_id")
-        if (
-            not isinstance(source_track_id, str)
-            or not source_track_id
-            or not isinstance(base_version_id, str)
-            or not base_version_id
-            or operation_payload.get("target_language") != "en-US"
-        ):
-            raise HTTPException(status_code=409, detail="invalid subtitle track configuration")
+        _prepare_changed_montage(montage, message='字幕显示已更新，请重新渲染成片。')
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload, subtitle_tracks=updated_tracks, cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None, updated_plan=montage)
+    if operation_type == 'ConfigureSubtitleTrack' and isinstance(operation_payload, dict):
+        source_track_id = operation_payload.get('source_track_id')
+        base_version_id = operation_payload.get('base_version_id')
+        if not isinstance(source_track_id, str) or not source_track_id or (not isinstance(base_version_id, str)) or (not base_version_id) or (operation_payload.get('target_language') != 'en-US'):
+            raise HTTPException(status_code=409, detail='invalid subtitle track configuration')
         if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
         base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
         try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         except KeyError as exc:
-            raise HTTPException(status_code=409, detail="subtitle edit base no longer exists") from exc
-        current_tracks = _current_subtitle_tracks(
-            workspace_id, task, current_version=base_version, montage=montage
-        )
+            raise HTTPException(status_code=409, detail='subtitle edit base no longer exists') from exc
+        current_tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
         source = next((track for track in current_tracks if track.id == source_track_id), None)
-        if source is None or source.language != "zh-CN" or source.status != "valid":
-            raise HTTPException(status_code=409, detail="subtitle source track has changed")
-        result_version_id = f"timeline_{uuid4().hex}"
-        service = SubtitleTranslationService(
-            subtitle_translation_provider_from_settings(settings)
-        )
-        execution = service.translate_zh_to_en(
-            _execution_subtitle_track(source),
-            translated_track_id=f"subtitle_{result_version_id}_en-us",
-            timeline_version_id=result_version_id,
-        )
-        production_repo.append_task_event(TaskEvent(
-            id=f"event_{execution.execution_id}",
-            workspace_id=workspace_id,
-            task_id=task.id,
-            job_id=None,
-            event_type="subtitle_translation_returned",
-            payload={
-                "proposal_id": proposal.id,
-                "source_track_id": source.id,
-                "provider_name": execution.provider_name,
-                "model_id": execution.model_id,
-                "status": execution.status,
-                "failure_code": execution.failure_code,
-                "failure_reason": execution.failure_reason,
-                "impact": execution.impact,
-                "repair_action": execution.repair_action,
-                "retryable": execution.retryable,
-            },
-        ))
-        if execution.status != "succeeded" or execution.translated_track is None:
-            raise _topic_failure_response(
-                status_code=503,
-                error=execution.failure_code or "subtitle_translation_failed",
-                reason=execution.failure_reason or "英文字幕没有生成可信结果。",
-                impact=execution.impact or "中文字幕和当前成片保持不变。",
-                repair_action=execution.repair_action or "检查文字模型后重试。",
-                retryable=bool(execution.retryable),
-            )
+        if source is None or source.language != 'zh-CN' or source.status != 'valid':
+            raise HTTPException(status_code=409, detail='subtitle source track has changed')
+        result_version_id = f'timeline_{uuid4().hex}'
+        service = SubtitleTranslationService(subtitle_translation_provider_from_settings(settings))
+        execution = service.translate_zh_to_en(_execution_subtitle_track(source), translated_track_id=f'subtitle_{result_version_id}_en-us', timeline_version_id=result_version_id)
+        production_repo.append_task_event(TaskEvent(id=f'event_{execution.execution_id}', workspace_id=workspace_id, task_id=task.id, job_id=None, event_type='subtitle_translation_returned', payload={'proposal_id': proposal.id, 'source_track_id': source.id, 'provider_name': execution.provider_name, 'model_id': execution.model_id, 'status': execution.status, 'failure_code': execution.failure_code, 'failure_reason': execution.failure_reason, 'impact': execution.impact, 'repair_action': execution.repair_action, 'retryable': execution.retryable}))
+        if execution.status != 'succeeded' or execution.translated_track is None:
+            raise _topic_failure_response(status_code=503, error=execution.failure_code or 'subtitle_translation_failed', reason=execution.failure_reason or '英文字幕没有生成可信结果。', impact=execution.impact or '中文字幕和当前成片保持不变。', repair_action=execution.repair_action or '检查文字模型后重试。', retryable=bool(execution.retryable))
         try:
-            english_ref, transform_id = _publish_subtitle_text(
-                workspace_id=workspace_id,
-                task_id=task.id,
-                proposal_id=proposal.id,
-                kind="subtitle_translation",
-                input_refs=[source.artifact_ref or f"subtitle-track:{source.id}"],
-                content=render_srt(execution.translated_track),
-                engine=f"{execution.provider_name}:{execution.model_id}",
-                parameters={
-                    "prompt_schema_version": execution.prompt_schema_version,
-                    "provider_execution_id": execution.provider_execution_id,
-                    "source_track_id": source.id,
-                    "target_language": "en-US",
-                },
-            )
+            english_ref, transform_id = _publish_subtitle_text(workspace_id=workspace_id, task_id=task.id, proposal_id=proposal.id, kind='subtitle_translation', input_refs=[source.artifact_ref or f'subtitle-track:{source.id}'], content=render_srt(execution.translated_track), engine=f'{execution.provider_name}:{execution.model_id}', parameters={'prompt_schema_version': execution.prompt_schema_version, 'provider_execution_id': execution.provider_execution_id, 'source_track_id': source.id, 'target_language': 'en-US'})
         except (OSError, ValueError) as exc:
-            raise _topic_failure_response(
-                status_code=503,
-                error="subtitle_artifact_failed",
-                reason="英文字幕已返回，但未能保存为可信字幕产物。",
-                impact="当前时间线和成片保持不变。",
-                repair_action=str(exc),
-                retryable=True,
-            ) from exc
+            raise _topic_failure_response(status_code=503, error='subtitle_artifact_failed', reason='英文字幕已返回，但未能保存为可信字幕产物。', impact='当前时间线和成片保持不变。', repair_action=str(exc), retryable=True) from exc
         translated = execution.translated_track
-        english_track = SubtitleTrack(
-            id=translated.id,
-            workspace_id=workspace_id,
-            task_id=task.id,
-            timeline_version_id=result_version_id,
-            language="en-US",
-            source_language="zh-CN",
-            style=asdict(translated.style),
-            cues=[
-                SubtitleCue(
-                    id=cue.id,
-                    source_cue_id=cue.source_cue_id,
-                    text=cue.text,
-                    start_seconds=cue.start_seconds,
-                    end_seconds=cue.end_seconds,
-                    speaker=cue.speaker,
-                    line_breaks=list(cue.line_breaks),
-                    emphasis=list(cue.emphasis),
-                )
-                for cue in translated.cues
-            ],
-            generation_method="translation",
-            model_id=execution.model_id,
-            artifact_ref=english_ref,
-            transform_id=transform_id,
-            status="valid",
-        )
-        chinese_track = _clone_subtitle_track(
-            source,
-            timeline_version_id=result_version_id,
-            track_id=f"subtitle_{result_version_id}_zh-cn",
-        )
+        english_track = SubtitleTrack(id=translated.id, workspace_id=workspace_id, task_id=task.id, timeline_version_id=result_version_id, language='en-US', source_language='zh-CN', style=asdict(translated.style), cues=[SubtitleCue(id=cue.id, source_cue_id=cue.source_cue_id, text=cue.text, start_seconds=cue.start_seconds, end_seconds=cue.end_seconds, speaker=cue.speaker, line_breaks=list(cue.line_breaks), emphasis=list(cue.emphasis)) for cue in translated.cues], generation_method='translation', model_id=execution.model_id, artifact_ref=english_ref, transform_id=transform_id, status='valid')
+        chinese_track = _clone_subtitle_track(source, timeline_version_id=result_version_id, track_id=f'subtitle_{result_version_id}_zh-cn')
         current_cover = _cover_asset_for_version(workspace_id, task.id, base_version)
-        carried_cover = (
-            _clone_cover_asset(current_cover, timeline_version_id=result_version_id)
-            if current_cover is not None
-            else None
-        )
-        montage, _ = _prepare_changed_montage(
-            montage,
-            message="中英字幕已生成并保持原时间轴；请重新渲染以写入成片。",
-        )
-        return _persist_subtitle_cover_edit(
-            workspace_id=workspace_id,
-            task=task,
-            proposal=proposal,
-            base_version=base_version,
-            result_version_id=result_version_id,
-            operation_type="ConfigureSubtitleTrack",
-            operation_payload=dict(operation_payload),
-            subtitle_tracks=[chinese_track, english_track],
-            cover_asset=carried_cover,
-            updated_plan=montage,
-        )
-    if operation_type == "GenerateCoverFromFrame" and isinstance(operation_payload, dict):
-        _require_automation_task_open(request,workspace_id,task_id)
-        title_position = operation_payload.get("title_position", "bottom")
-        operation_payload = {**operation_payload, "title_position": title_position}
-        base_version_id = operation_payload.get("base_version_id")
-        source_video_ref = operation_payload.get("source_video_ref")
-        title = operation_payload.get("title")
-        frame_time_seconds = operation_payload.get("frame_time_seconds")
-        if (
-            not isinstance(base_version_id, str)
-            or not isinstance(source_video_ref, str)
-            or not isinstance(title, str)
-            or not isinstance(frame_time_seconds, (int, float))
-        ):
-            raise HTTPException(status_code=409, detail="invalid cover generation operation")
+        carried_cover = _clone_cover_asset(current_cover, timeline_version_id=result_version_id) if current_cover is not None else None
+        montage, _ = _prepare_changed_montage(montage, message='中英字幕已生成并保持原时间轴；请重新渲染以写入成片。')
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=result_version_id, operation_type='ConfigureSubtitleTrack', operation_payload=dict(operation_payload), subtitle_tracks=[chinese_track, english_track], cover_asset=carried_cover, updated_plan=montage)
+    if operation_type == 'GenerateCoverFromFrame' and isinstance(operation_payload, dict):
+        _require_automation_task_open(request, workspace_id, task_id)
+        title_position = operation_payload.get('title_position', 'bottom')
+        operation_payload = {**operation_payload, 'title_position': title_position}
+        base_version_id = operation_payload.get('base_version_id')
+        source_video_ref = operation_payload.get('source_video_ref')
+        title = operation_payload.get('title')
+        frame_time_seconds = operation_payload.get('frame_time_seconds')
+        if not isinstance(base_version_id, str) or not isinstance(source_video_ref, str) or (not isinstance(title, str)) or (not isinstance(frame_time_seconds, (int, float))):
+            raise HTTPException(status_code=409, detail='invalid cover generation operation')
         if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
         base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
-        job = production_repo.create_job_run(
-            JobRun(
-                id=f"job_{uuid4().hex}",
-                workspace_id=workspace_id,
-                task_id=task.id,
-                kind="cover_frame_generation",
-                idempotency_key=f"cover:{proposal.id}",
-                input_digest=hashlib.sha256(
-                    json.dumps(operation_payload, ensure_ascii=False, sort_keys=True).encode()
-                ).hexdigest(),
-            )
-        )
+        job = production_repo.create_job_run(JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, kind='cover_frame_generation', idempotency_key=f'cover:{proposal.id}', input_digest=hashlib.sha256(json.dumps(operation_payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()))
         running = production_repo.claim_job_run(workspace_id, job.id)
-        cover_ref = f"artifacts/{task.id}/{job.id}/cover.png"
+        cover_ref = f'artifacts/{task.id}/{job.id}/cover.png'
         try:
-            generated = CoverGenerationService(settings.video_output_path).generate(
-                CoverGenerationRequest(
-                    source_video_path=artifact_store.resolve_file(source_video_ref),
-                    output_ref=cover_ref,
-                    frame_time_seconds=float(frame_time_seconds),
-                    title=title,
-                    safe_area=CoverSafeArea(),
-                    aspect_ratio=operation_payload.get("aspect_ratio", "9:16"),
-                    title_position=title_position,
-                )
-            )
+            generated = CoverGenerationService(settings.video_output_path).generate(CoverGenerationRequest(source_video_path=artifact_store.resolve_file(source_video_ref), output_ref=cover_ref, frame_time_seconds=float(frame_time_seconds), title=title, safe_area=CoverSafeArea(), aspect_ratio=operation_payload.get('aspect_ratio', '9:16'), title_position=title_position))
             evidence = generated.evidence
-            artifact = production_repo.create_artifact_record(
-                ArtifactRecord(
-                    id=f"artifact_{job.id}_cover",
-                    workspace_id=workspace_id,
-                    task_id=task.id,
-                    kind="cover_image",
-                    logical_ref=evidence.output_ref,
-                    sha256=evidence.output_sha256,
-                    size_bytes=evidence.output_size_bytes,
-                    producer_job_id=job.id,
-                    input_refs=[source_video_ref],
-                )
-            )
-            transform = production_repo.create_transform_run(
-                TransformRun(
-                    id=f"transform_{job.id}",
-                    workspace_id=workspace_id,
-                    task_id=task.id,
-                    job_id=job.id,
-                    transform_type="cover_from_frame",
-                    input_digest=job.input_digest,
-                    input_refs=[source_video_ref],
-                    output_refs=[artifact.logical_ref],
-                    engine=f"{evidence.engine}+{evidence.layout_engine}",
-                    parameters=evidence.parameters,
-                    status="succeeded",
-                    started_at=running.started_at or utc_now(),
-                    finished_at=utc_now(),
-                )
-            )
-            production_repo.create_dependency_edge(
-                DependencyEdge(
-                    id=f"edge_{job.id}_cover",
-                    workspace_id=workspace_id,
-                    task_id=task.id,
-                    upstream_ref=source_video_ref,
-                    downstream_ref=artifact.logical_ref,
-                    created_by_transform_id=transform.id,
-                )
-            )
-            production_repo.finish_job_run(
-                workspace_id, job.id, status="succeeded", output_refs=[artifact.logical_ref]
-            )
+            artifact = production_repo.create_artifact_record(ArtifactRecord(id=f'artifact_{job.id}_cover', workspace_id=workspace_id, task_id=task.id, kind='cover_image', logical_ref=evidence.output_ref, sha256=evidence.output_sha256, size_bytes=evidence.output_size_bytes, producer_job_id=job.id, input_refs=[source_video_ref]))
+            transform = production_repo.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task.id, job_id=job.id, transform_type='cover_from_frame', input_digest=job.input_digest, input_refs=[source_video_ref], output_refs=[artifact.logical_ref], engine=f'{evidence.engine}+{evidence.layout_engine}', parameters=evidence.parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
+            production_repo.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_cover', workspace_id=workspace_id, task_id=task.id, upstream_ref=source_video_ref, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
+            production_repo.finish_job_run(workspace_id, job.id, status='succeeded', output_refs=[artifact.logical_ref])
         except Exception as exc:
             try:
-                production_repo.finish_job_run(
-                    workspace_id,
-                    job.id,
-                    status="failed",
-                    failure_reason=str(exc) or type(exc).__name__,
-                    impact="当前时间线和已有成片保持不变。",
-                    repair_action="检查成片、选帧时间与 FFmpeg 后重试。",
-                )
+                production_repo.finish_job_run(workspace_id, job.id, status='failed', failure_reason=str(exc) or type(exc).__name__, impact='当前时间线和已有成片保持不变。', repair_action='检查成片、选帧时间与 FFmpeg 后重试。')
             except (KeyError, ValueError):
                 pass
-            raise _topic_failure_response(
-                status_code=503,
-                error="cover_generation_failed",
-                reason="封面没有生成可信图片产物。",
-                impact="当前时间线和已有成片保持不变。",
-                repair_action=str(exc),
-                retryable=True,
-            ) from exc
-        result_version_id = f"timeline_{uuid4().hex}"
-        tracks = [
-            _clone_subtitle_track(track, timeline_version_id=result_version_id)
-            for track in _current_subtitle_tracks(
-                workspace_id, task, current_version=base_version
-            )
-        ]
-        cover = CoverAsset(
-            id=f"cover_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task.id,
-            timeline_version_id=result_version_id,
-            source_video_ref=source_video_ref,
-            frame_time_seconds=float(frame_time_seconds),
-            title=title,
-            safe_area={key: float(value) for key, value in asdict(CoverSafeArea()).items()},
-            layout={"title_position": title_position, "text_align": "center"},
-            generation_method="video_frame",
-            model_or_engine=f"{generated.evidence.engine}+{generated.evidence.layout_engine}",
-            artifact_ref=generated.evidence.output_ref,
-            transform_id=transform.id,
-            status="valid",
-        )
-        return _persist_subtitle_cover_edit(
-            workspace_id=workspace_id,
-            task=task,
-            proposal=proposal,
-            base_version=base_version,
-            result_version_id=result_version_id,
-            operation_type="GenerateCoverFromFrame",
-            operation_payload=dict(operation_payload),
-            subtitle_tracks=tracks,
-            cover_asset=cover,
-        )
-    if operation_type in {"ChangePersonSegment", "RegeneratePersonRender"} and isinstance(operation_payload, dict):
-        _require_automation_task_open(request,workspace_id,task_id)
+            raise _topic_failure_response(status_code=503, error='cover_generation_failed', reason='封面没有生成可信图片产物。', impact='当前时间线和已有成片保持不变。', repair_action=str(exc), retryable=True) from exc
+        result_version_id = f'timeline_{uuid4().hex}'
+        tracks = [_clone_subtitle_track(track, timeline_version_id=result_version_id) for track in _current_subtitle_tracks(workspace_id, task, current_version=base_version)]
+        cover = CoverAsset(id=f'cover_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, timeline_version_id=result_version_id, source_video_ref=source_video_ref, frame_time_seconds=float(frame_time_seconds), title=title, safe_area={key: float(value) for key, value in asdict(CoverSafeArea()).items()}, layout={'title_position': title_position, 'text_align': 'center'}, generation_method='video_frame', model_or_engine=f'{generated.evidence.engine}+{generated.evidence.layout_engine}', artifact_ref=generated.evidence.output_ref, transform_id=transform.id, status='valid')
+        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=result_version_id, operation_type='GenerateCoverFromFrame', operation_payload=dict(operation_payload), subtitle_tracks=tracks, cover_asset=cover)
+    if operation_type in {'ChangePersonSegment', 'RegeneratePersonRender'} and isinstance(operation_payload, dict):
+        _require_automation_task_open(request, workspace_id, task_id)
         return _apply_person_segment_edit(workspace_id, task, proposal, request)
-    if operation_type == "UpdateSubtitleCue" and isinstance(operation_payload, dict):
-        cue_id = operation_payload.get("cue_id")
-        text = operation_payload.get("text")
-        expected_text = operation_payload.get("expected_text")
-        base_version_id = operation_payload.get("base_version_id")
-        if any(not isinstance(value, str) or not value for value in (cue_id, text, expected_text, base_version_id)):
-            raise HTTPException(status_code=409, detail="invalid subtitle edit operation")
+    if operation_type == 'UpdateSubtitleCue' and isinstance(operation_payload, dict):
+        cue_id = operation_payload.get('cue_id')
+        text = operation_payload.get('text')
+        expected_text = operation_payload.get('expected_text')
+        base_version_id = operation_payload.get('base_version_id')
+        if any((not isinstance(value, str) or not value for value in (cue_id, text, expected_text, base_version_id))):
+            raise HTTPException(status_code=409, detail='invalid subtitle edit operation')
         if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail="creation task edit proposal is stale")
+            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
         base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
         try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
-            cue = next(item for item in montage.cues if item.id == cue_id)
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
+            cue = next((item for item in montage.cues if item.id == cue_id))
         except (KeyError, StopIteration) as exc:
-            raise HTTPException(status_code=409, detail="subtitle edit base no longer exists") from exc
+            raise HTTPException(status_code=409, detail='subtitle edit base no longer exists') from exc
         if cue.text != expected_text:
-            raise HTTPException(status_code=409, detail="subtitle edit target has changed")
+            raise HTTPException(status_code=409, detail='subtitle edit target has changed')
         cue.text = text
         _refresh_montage_review_state(montage)
-        montage, _ = _prepare_changed_montage(
-            montage, message="字幕已修改；配音和镜头保持不变，可以重新渲染。"
-        )
-        narration_segments = (
-            production_repo.list_narration_segments(
-                workspace_id, task.id, task.confirmed_script_id
-            )
-            if task.confirmed_script_id
-            else []
-        )
-        return _persist_typed_montage_edit(
-            workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base_version, updated_plan=montage,
-            operation_type="UpdateSubtitleCue", operation_payload=dict(operation_payload),
-            narration_segments=narration_segments,
-        )
-    if operation_type == "RegenerateNarrationSegment" and isinstance(operation_payload, dict):
-        _require_automation_task_open(request,workspace_id,task_id)
+        montage, _ = _prepare_changed_montage(montage, message='字幕已修改；配音和镜头保持不变，可以重新渲染。')
+        narration_segments = production_repo.list_narration_segments(workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, updated_plan=montage, operation_type='UpdateSubtitleCue', operation_payload=dict(operation_payload), narration_segments=narration_segments)
+    if operation_type == 'RegenerateNarrationSegment' and isinstance(operation_payload, dict):
+        _require_automation_task_open(request, workspace_id, task_id)
         return _submit_narration_edit(workspace_id, task, proposal, request)
-    if operation_type == "RemoveSilence" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览停顿剪辑。")
+    if operation_type == 'RemoveSilence' and isinstance(operation_payload, dict):
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise HTTPException(status_code=409, detail='时间线已变化，请重新预览停顿剪辑。')
         base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
         tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         try:
-            updated, tracks = remove_time_ranges(plan, tracks, _effective_audio_timeline(plan), operation_payload["removed_ranges_ms"])
+            updated, tracks = remove_time_ranges(plan, tracks, _effective_audio_timeline(plan), operation_payload['removed_ranges_ms'])
             _task_audio().validate(workspace_id, task.id, updated.audio_timeline, updated.duration_seconds, draft_only=True)
-            _prepare_changed_montage(updated, message="停顿剪辑已应用；声音、字幕与画面同步缩短，请重新渲染。")
+            _prepare_changed_montage(updated, message='停顿剪辑已应用；声音、字幕与画面同步缩短，请重新渲染。')
         except (KeyError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base, updated_plan=updated, operation_type=operation_type,
-            operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=updated, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks)
     raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 
@@ -12642,269 +11818,122 @@ def preview_creation_task_exact_edit(task_id: str, request: Request, payload: Cr
 
 
 def _preview_exact_edit_request(task_id, request, payload):
-    if payload.operation_type in {"EditAudioTimeline", "AdjustVisualEffects"}:
+    if payload.operation_type in {'EditAudioTimeline', 'AdjustVisualEffects'}:
         task, _member_id = _exact_edit_access(task_id, request, write=True)
-        if payload.operation_type == "EditAudioTimeline":
-            return preview_creation_task_audio.__wrapped__(task_id, request, _audio_mix_request(payload, task.current_timeline_version_id))
+        if payload.operation_type == 'EditAudioTimeline':
+            return _preview_audio_edit_request(task_id, request, _audio_mix_request(payload, task.current_timeline_version_id), queue_on_required=False)
         source = EXACT_EDIT_SOURCE.get()
-        return _preview_visual_request(task_id, request, VisualEditRequest(
-            base_version_id=source["expected_timeline_version_id"] if source is not None else task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects))
-    if payload.operation_type == "EditGraphicOverlay":
-        return _preview_graphic_overlay(task_id,request,payload)
-    if payload.operation_type == "SetClipTransition":
+        return _preview_visual_request(task_id, request, VisualEditRequest(base_version_id=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects))
+    if payload.operation_type == 'EditGraphicOverlay':
+        return _preview_graphic_overlay(task_id, request, payload)
+    if payload.operation_type == 'SetClipTransition':
         return _preview_transition(task_id, request, payload)
-    if payload.operation_type == "ChangeCanvas":
+    if payload.operation_type == 'ChangeCanvas':
         return _preview_canvas(task_id, request, payload)
-    if payload.operation_type == "ConfigureSubtitleTrack" and payload.style is not None and payload.target_language is None:
+    if payload.operation_type == 'ConfigureSubtitleTrack' and payload.style is not None and (payload.target_language is None):
         return _preview_subtitle_style(task_id, request, payload)
-    if payload.operation_type == "ReplaceSubtitleText":
+    if payload.operation_type == 'ReplaceSubtitleText':
         return _preview_subtitle_replace(task_id, request, payload)
-    if payload.operation_type in {"SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue"}:
+    if payload.operation_type in {'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
         return _preview_subtitle_structure(task_id, request, payload)
-    if payload.operation_type == "UpdateSubtitleCue" and payload.track_id is not None:
+    if payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is not None:
         return _preview_subtitle_cue(task_id, request, payload)
-    if payload.operation_type == "ChangeLinkedSpeed":
+    if payload.operation_type == 'ChangeLinkedSpeed':
         return _preview_linked_timeline(task_id, request, payload)
-    if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
+    if payload.operation_type in {'DeleteClip', 'DuplicateClip'}:
         return _preview_linked_clip_edit(task_id, request, payload)
-    if payload.operation_type == "InsertClip":
+    if payload.operation_type == 'InsertClip':
         return _preview_insert(task_id, request, payload)
     if payload.operation_type in CLIP_SETTING_OPERATIONS:
         task = _creation_task_or_404(current_workspace_id(request), task_id)
         source = EXACT_EDIT_SOURCE.get()
-        base_version_id = source["expected_timeline_version_id"] if source is not None else task.current_timeline_version_id
-        fields = {key:value for key,value in payload.model_dump(exclude_unset=True).items()
-            if key not in {"operation_type", "clip_id"} and value is not None}
+        base_version_id = source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
+        fields = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if key not in {'operation_type', 'clip_id'} and value is not None}
         if payload.operation_type in {'SetClipLock', 'ConfirmClip'}:
-            return _preview_metadata_settings(task, request, payload.operation_type,
-                {'clip_id':payload.clip_id, **fields}, base_version_id)
-        return _submit_clip_preview(task_id, request, base_version_id=base_version_id, operation_type=payload.operation_type,
-            clip_ids=[payload.clip_id], values=fields, raw_command="精确操作：" + payload.operation_type)
-    if payload.operation_type in {"ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"}:
+            return _preview_metadata_settings(task, request, payload.operation_type, {'clip_id': payload.clip_id, **fields}, base_version_id)
+        return _submit_clip_preview(task_id, request, base_version_id=base_version_id, operation_type=payload.operation_type, clip_ids=[payload.clip_id], values=fields, raw_command='精确操作：' + payload.operation_type)
+    if payload.operation_type in {'ReplaceClip', 'TrimClip', 'SplitClip', 'ReorderClip'}:
         _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
         return _edit_preview_response(intent, proposal)
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if payload.operation_type not in {
-        "UpdateSubtitleCue",
-        "ConfigureSubtitleTrack",
-        "GenerateCoverFromFrame",
-    }:
-        raise HTTPException(
-            status_code=422,
-            detail="该精确操作尚未迁移到预览确认入口",
-        )
+    if payload.operation_type not in {'UpdateSubtitleCue', 'ConfigureSubtitleTrack', 'GenerateCoverFromFrame'}:
+        raise HTTPException(status_code=422, detail='该精确操作尚未迁移到预览确认入口')
     try:
-        montage = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-        )
+        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task montage plan not found") from exc
+        raise HTTPException(status_code=404, detail='creation task montage plan not found') from exc
     base_version = _ensure_montage_base_version(workspace_id, task, montage)
     task = production_repo.get_creation_task(workspace_id, task_id)
-    tracks = _current_subtitle_tracks(
-        workspace_id, task, current_version=base_version, montage=montage
-    )
+    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
     now = utc_now()
-
-    if payload.operation_type == "ConfigureSubtitleTrack" and payload.subtitle_display is not None:
+    if payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None:
         selection = _subtitle_display_selection(tracks, payload.subtitle_display)
-        if all(track.style.get("enabled", True) == selection[track.id] for track in tracks):
-            raise HTTPException(status_code=409, detail="字幕显示设置没有变化")
-        labels = {"none": "不显示字幕", "zh": "仅中文字幕", "en": "仅英文字幕", "zh-en": "中英双语字幕"}
-        summary = f"成片改为{labels[payload.subtitle_display]}，保留字幕文字与时轴。"
-        target_refs = [f"subtitle-track:{track.id}" for track in tracks]
-        operation_payload = {"subtitle_display": payload.subtitle_display, "base_version_id": base_version.id}
-        preview = {"before": {"ref": f"timeline:{base_version.id}", "label": "当前显示", "detail": "、".join(track.language for track in tracks if track.style.get("enabled", True)) or "无字幕"},
-                   "after": {"ref": f"subtitle-display:{payload.subtitle_display}", "label": "修改后", "detail": labels[payload.subtitle_display]}}
-        effects = ["只修改字幕显示；不调用模型。关闭全部字幕后仍保留可下载的字幕文件。"]
-    elif payload.operation_type == "ConfigureSubtitleTrack":
-        source = next((track for track in tracks if track.language == "zh-CN"), None)
+        if all((track.style.get('enabled', True) == selection[track.id] for track in tracks)):
+            raise HTTPException(status_code=409, detail='字幕显示设置没有变化')
+        labels = {'none': '不显示字幕', 'zh': '仅中文字幕', 'en': '仅英文字幕', 'zh-en': '中英双语字幕'}
+        summary = f'成片改为{labels[payload.subtitle_display]}，保留字幕文字与时轴。'
+        target_refs = [f'subtitle-track:{track.id}' for track in tracks]
+        operation_payload = {'subtitle_display': payload.subtitle_display, 'base_version_id': base_version.id}
+        preview = {'before': {'ref': f'timeline:{base_version.id}', 'label': '当前显示', 'detail': '、'.join((track.language for track in tracks if track.style.get('enabled', True))) or '无字幕'}, 'after': {'ref': f'subtitle-display:{payload.subtitle_display}', 'label': '修改后', 'detail': labels[payload.subtitle_display]}}
+        effects = ['只修改字幕显示；不调用模型。关闭全部字幕后仍保留可下载的字幕文件。']
+    elif payload.operation_type == 'ConfigureSubtitleTrack':
+        source = next((track for track in tracks if track.language == 'zh-CN'), None)
         if source is None:
-            raise _topic_failure_response(
-                status_code=409,
-                error="subtitle_source_missing",
-                reason="当前时间线没有可用的中文字幕轨。",
-                impact="没有调用文字模型，当前成片保持不变。",
-                repair_action="先生成带中文字幕的成片，再启用双语字幕。",
-                retryable=True,
-            )
-        if any(track.language == "en-US" and track.status == "valid" for track in tracks):
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_no_change",
-                reason="当前时间线已经启用中英双语字幕。",
-                impact="没有创建新的时间线版本。",
-                repair_action="可直接编辑具体字幕，或先撤销到上一版本。",
-                retryable=False,
-            )
+            raise _topic_failure_response(status_code=409, error='subtitle_source_missing', reason='当前时间线没有可用的中文字幕轨。', impact='没有调用文字模型，当前成片保持不变。', repair_action='先生成带中文字幕的成片，再启用双语字幕。', retryable=True)
+        if any((track.language == 'en-US' and track.status == 'valid' for track in tracks)):
+            raise _topic_failure_response(status_code=409, error='edit_no_change', reason='当前时间线已经启用中英双语字幕。', impact='没有创建新的时间线版本。', repair_action='可直接编辑具体字幕，或先撤销到上一版本。', retryable=False)
         provider = subtitle_translation_provider_from_settings(settings)
         if not provider.ready:
-            raise _topic_failure_response(
-                status_code=409,
-                error="subtitle_translation_unavailable",
-                reason="文字模型翻译能力不可用。",
-                impact="未生成英文字幕，中文字幕和成片保持不变。",
-                repair_action=provider.message,
-                retryable=True,
-            )
-        summary = "把当前中文字幕逐条翻译为英文，保持原时间轴，并启用中英双语字幕。"
-        target_refs = [f"subtitle-track:{source.id}"]
-        operation_payload = {
-            "source_track_id": source.id,
-            "target_language": "en-US",
-            "base_version_id": base_version.id,
-        }
-        preview = {
-            "before": {"ref": target_refs[0], "label": "中文字幕", "detail": f"{len(source.cues)} 条"},
-            "after": {"ref": "subtitle-track:en-US", "label": "中英双语字幕", "detail": "逐条对齐原时间轴，确认后调用一次文字模型"},
-        }
-        effects = ["确认后调用一次当前已配置文字模型；不会改写字幕时间轴。"]
-    elif payload.operation_type == "UpdateSubtitleCue" and payload.track_id is None:
+            raise _topic_failure_response(status_code=409, error='subtitle_translation_unavailable', reason='文字模型翻译能力不可用。', impact='未生成英文字幕，中文字幕和成片保持不变。', repair_action=provider.message, retryable=True)
+        summary = '把当前中文字幕逐条翻译为英文，保持原时间轴，并启用中英双语字幕。'
+        target_refs = [f'subtitle-track:{source.id}']
+        operation_payload = {'source_track_id': source.id, 'target_language': 'en-US', 'base_version_id': base_version.id}
+        preview = {'before': {'ref': target_refs[0], 'label': '中文字幕', 'detail': f'{len(source.cues)} 条'}, 'after': {'ref': 'subtitle-track:en-US', 'label': '中英双语字幕', 'detail': '逐条对齐原时间轴，确认后调用一次文字模型'}}
+        effects = ['确认后调用一次当前已配置文字模型；不会改写字幕时间轴。']
+    elif payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None:
         if not payload.cue_id:
-            raise HTTPException(status_code=422, detail="subtitle edit requires cue_id")
-        track = next(
-            (
-                item
-                for item in tracks
-                if (payload.track_id is None or item.id == payload.track_id)
-                and any(cue.id == payload.cue_id for cue in item.cues)
-            ),
-            None,
-        )
+            raise HTTPException(status_code=422, detail='subtitle edit requires cue_id')
+        track = next((item for item in tracks if (payload.track_id is None or item.id == payload.track_id) and any((cue.id == payload.cue_id for cue in item.cues))), None)
         if track is None:
-            raise HTTPException(status_code=404, detail="subtitle track or cue not found")
-        cue = next(cue for cue in track.cues if cue.id == payload.cue_id)
-        if track.language == "en-US" and payload.style is not None and payload.style != track.style:
-            raise HTTPException(status_code=422, detail="双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。")
-        normalized_text, normalized_line_breaks = _normalize_subtitle_text_and_breaks(
-            payload.text if payload.text is not None else cue.text,
-            payload.line_breaks if payload.line_breaks is not None else (cue.line_breaks if payload.text is None or payload.text == cue.text else None),
-        )
+            raise HTTPException(status_code=404, detail='subtitle track or cue not found')
+        cue = next((cue for cue in track.cues if cue.id == payload.cue_id))
+        if track.language == 'en-US' and payload.style is not None and (payload.style != track.style):
+            raise HTTPException(status_code=422, detail='双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。')
+        normalized_text, normalized_line_breaks = _normalize_subtitle_text_and_breaks(payload.text if payload.text is not None else cue.text, payload.line_breaks if payload.line_breaks is not None else cue.line_breaks if payload.text is None or payload.text == cue.text else None)
         start = payload.start_seconds if payload.start_seconds is not None else cue.start_seconds
         end = payload.end_seconds if payload.end_seconds is not None else cue.end_seconds
         candidate = replace(cue, text=normalized_text, start_seconds=start, end_seconds=end)
         candidate_track = replace(track, cues=[candidate if item.id == cue.id else item for item in track.cues])
         try:
-            subtitle_schedule([replace(track, status="valid", style={**track.style, "enabled": True},
-                cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
-            changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds,
-                                            invalidate_all_english_on_text_change=True)
+            subtitle_schedule([replace(track, status='valid', style={**track.style, 'enabled': True}, cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
+            changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds, invalidate_all_english_on_text_change=True)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        changed = (
-            start != cue.start_seconds or end != cue.end_seconds
-            or
-            normalized_text != cue.text
-            or normalized_line_breaks != cue.line_breaks
-            or payload.emphasis is not None
-            or payload.style is not None
-        )
+        changed = start != cue.start_seconds or end != cue.end_seconds or normalized_text != cue.text or (normalized_line_breaks != cue.line_breaks) or (payload.emphasis is not None) or (payload.style is not None)
         if not changed:
-            raise _topic_failure_response(
-                status_code=409,
-                error="edit_no_change",
-                reason="字幕文字、时轴和样式没有变化。",
-                impact="没有创建新的时间线版本。",
-                repair_action="修改文字、断行、强调词或字幕样式后再预览。",
-                retryable=False,
-            )
-        summary = "只修改所选字幕条目；配音、镜头和其他字幕保持不变。"
-        target_refs = [f"subtitle-cue:{track.id}:{cue.id}"]
-        operation_payload = {
-            "track_id": track.id,
-            "cue_id": cue.id,
-            "text": normalized_text,
-            "start_seconds": start,
-            "end_seconds": end,
-            "line_breaks": normalized_line_breaks,
-            "emphasis": payload.emphasis if payload.emphasis is not None else cue.emphasis,
-            "style": payload.style if payload.style is not None else track.style,
-            "expected_text": cue.text,
-            "base_version_id": base_version.id,
-        }
-        preview = {
-            "before": {"ref": target_refs[0], "label": "当前字幕", "detail": f"{cue.start_seconds:.2f}–{cue.end_seconds:.2f} 秒 · {cue.text}"},
-            "after": {"ref": target_refs[0], "label": "修改后字幕", "detail": f"{start:.2f}–{end:.2f} 秒 · {normalized_text}"},
-        }
-        effects = ["确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。"]
-        effects.extend(
-            f"{'中文' if before.language == 'zh-CN' else '英文'}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。"
-            for before in tracks for after in changed_tracks if before.id == after.id
-            for start, end in new_subtitle_gap_intervals(before, after, montage.duration_seconds)
-        )
-        if track.language == "zh-CN" and normalized_text != cue.text and any(item.language == "en-US" for item in tracks):
-            effects.append("中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。")
+            raise _topic_failure_response(status_code=409, error='edit_no_change', reason='字幕文字、时轴和样式没有变化。', impact='没有创建新的时间线版本。', repair_action='修改文字、断行、强调词或字幕样式后再预览。', retryable=False)
+        summary = '只修改所选字幕条目；配音、镜头和其他字幕保持不变。'
+        target_refs = [f'subtitle-cue:{track.id}:{cue.id}']
+        operation_payload = {'track_id': track.id, 'cue_id': cue.id, 'text': normalized_text, 'start_seconds': start, 'end_seconds': end, 'line_breaks': normalized_line_breaks, 'emphasis': payload.emphasis if payload.emphasis is not None else cue.emphasis, 'style': payload.style if payload.style is not None else track.style, 'expected_text': cue.text, 'base_version_id': base_version.id}
+        preview = {'before': {'ref': target_refs[0], 'label': '当前字幕', 'detail': f'{cue.start_seconds:.2f}–{cue.end_seconds:.2f} 秒 · {cue.text}'}, 'after': {'ref': target_refs[0], 'label': '修改后字幕', 'detail': f'{start:.2f}–{end:.2f} 秒 · {normalized_text}'}}
+        effects = ['确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。']
+        effects.extend((f"{('中文' if before.language == 'zh-CN' else '英文')}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。" for before in tracks for after in changed_tracks if before.id == after.id for start, end in new_subtitle_gap_intervals(before, after, montage.duration_seconds)))
+        if track.language == 'zh-CN' and normalized_text != cue.text and any((item.language == 'en-US' for item in tracks)):
+            effects.append('中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。')
     else:
         if payload.title is None or payload.frame_time_seconds is None:
-            raise HTTPException(status_code=422, detail="cover edit requires title and frame_time_seconds")
-        if montage.status != "rendered" or not montage.output_path:
-            raise _topic_failure_response(
-                status_code=409,
-                error="rendered_version_required",
-                reason="当前任务没有可选帧的已渲染成片。",
-                impact="没有生成封面，当前任务保持不变。",
-                repair_action="先渲染当前成片，再选择画面和标题生成封面。",
-                retryable=True,
-            )
-        position_label = "画面中部" if payload.title_position == "center" else "画面底部"
-        summary = f"从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并在{position_label}叠加标题生成封面。"
+            raise HTTPException(status_code=422, detail='cover edit requires title and frame_time_seconds')
+        if montage.status != 'rendered' or not montage.output_path:
+            raise _topic_failure_response(status_code=409, error='rendered_version_required', reason='当前任务没有可选帧的已渲染成片。', impact='没有生成封面，当前任务保持不变。', repair_action='先渲染当前成片，再选择画面和标题生成封面。', retryable=True)
+        position_label = '画面中部' if payload.title_position == 'center' else '画面底部'
+        summary = f'从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并在{position_label}叠加标题生成封面。'
         target_refs = [montage.output_path]
-        operation_payload = {
-            "source_video_ref": montage.output_path,
-            "aspect_ratio": montage.aspect_ratio,
-            "frame_time_seconds": payload.frame_time_seconds,
-            "title": payload.title,
-            "title_position": payload.title_position,
-            "base_version_id": base_version.id,
-        }
-        preview = {
-            "before": {"ref": montage.output_path, "label": "当前成片画面", "detail": f"{payload.frame_time_seconds:.1f} 秒"},
-            "after": {"ref": "cover:preview", "label": "封面标题", "detail": f"{position_label} · {payload.title}"},
-        }
-        effects = ["确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。"]
-
-    intent = production_repo.create_edit_intent(
-        EditIntent(
-            id=f"intent_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            raw_command=f"精确操作：{summary}",
-            context_stage="review" if task.stage == "review" else "montage",
-            selected_object_refs=target_refs,
-            playhead_ms=(
-                round((payload.frame_time_seconds or 0) * 1000)
-                if payload.operation_type == "GenerateCoverFromFrame"
-                else None
-            ),
-            intent_type="exact_subtitle_cover_edit",
-            scope={"kind": payload.operation_type},
-            constraints={"preserve_narration": True, "preserve_clips": True},
-            confidence=1.0,
-            status="interpreted",
-            created_at=now,
-        )
-    )
-    proposal = production_repo.create_edit_proposal(
-        EditProposal(
-            id=f"proposal_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            intent_id=intent.id,
-            summary=summary,
-            target_refs=target_refs,
-            operation={"operation_type": payload.operation_type, "payload": operation_payload},
-            invalidated_refs=(
-                _logical_montage_output_refs(montage)
-                if payload.operation_type != "GenerateCoverFromFrame"
-                else []
-            ),
-            preview=preview,
-            external_effects=effects,
-            created_at=now,
-            updated_at=now,
-        )
-    )
+        operation_payload = {'source_video_ref': montage.output_path, 'aspect_ratio': montage.aspect_ratio, 'frame_time_seconds': payload.frame_time_seconds, 'title': payload.title, 'title_position': payload.title_position, 'base_version_id': base_version.id}
+        preview = {'before': {'ref': montage.output_path, 'label': '当前成片画面', 'detail': f'{payload.frame_time_seconds:.1f} 秒'}, 'after': {'ref': 'cover:preview', 'label': '封面标题', 'detail': f'{position_label} · {payload.title}'}}
+        effects = ['确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。']
+    intent = production_repo.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'精确操作：{summary}', context_stage='review' if task.stage == 'review' else 'montage', selected_object_refs=target_refs, playhead_ms=round((payload.frame_time_seconds or 0) * 1000) if payload.operation_type == 'GenerateCoverFromFrame' else None, intent_type='exact_subtitle_cover_edit', scope={'kind': payload.operation_type}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=1.0, status='interpreted', created_at=now))
+    proposal = production_repo.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=target_refs, operation={'operation_type': payload.operation_type, 'payload': operation_payload}, invalidated_refs=_logical_montage_output_refs(montage) if payload.operation_type != 'GenerateCoverFromFrame' else [], preview=preview, external_effects=effects, created_at=now, updated_at=now))
     return _edit_preview_response(intent, proposal)
 
 
@@ -18661,6 +17690,7 @@ def _build_device_components(*, repository: ProductionRepository):
         execute_operation=_execute_task_media_operation, validate_result=_validate_task_media_result,
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
+        audio_edit=_audio_edit_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
