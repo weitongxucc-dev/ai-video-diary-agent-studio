@@ -4399,14 +4399,9 @@ class ProductionRepository:
         except (OSError, ValueError):
             return None
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT vector_json FROM material_segment_features
-                WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
-                    AND model_id = ? AND fingerprint = ?
-                """,
-                (asset.workspace_id, asset.id, segment.id, model_id, fingerprint),
-            ).fetchone()
+            row = self._material_assets._visual_feature_vector_row(
+                conn, asset.workspace_id, asset.id, segment.id, model_id, fingerprint,
+            )
         if row is None:
             return None
         payload = json.loads(str(row["vector_json"]))
@@ -9573,29 +9568,16 @@ class ProductionRepository:
             with self._connect() as conn:
                 for segment in pending:
                     embedding = embedding_by_id[segment.id]
-                    conn.execute(
-                        """
-                        INSERT INTO material_segment_features
-                            (workspace_id, asset_id, segment_id, model_id, fingerprint,
-                             vector_json, sample_count, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(workspace_id, segment_id, model_id) DO UPDATE SET
-                            asset_id = excluded.asset_id,
-                            fingerprint = excluded.fingerprint,
-                            vector_json = excluded.vector_json,
-                            sample_count = excluded.sample_count,
-                            updated_at = excluded.updated_at
-                        """,
-                        (
-                            asset.workspace_id,
-                            asset.id,
-                            segment.id,
-                            provider.model_id,
-                            fingerprints[segment.id],
-                            json.dumps(embedding.vector),
-                            embedding.sample_count,
-                            utc_now().isoformat(),
-                        ),
+                    self._material_assets.write_visual_segment_feature(
+                        conn,
+                        asset.workspace_id,
+                        asset.id,
+                        segment.id,
+                        provider.model_id,
+                        fingerprints[segment.id],
+                        json.dumps(embedding.vector),
+                        embedding.sample_count,
+                        utc_now().isoformat(),
                     )
                     segment.visual_status = "ready"
                     segment.visual_model_id = provider.model_id
@@ -9721,13 +9703,9 @@ class ProductionRepository:
         if not fingerprints:
             return set()
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT segment_id, fingerprint FROM material_segment_features
-                WHERE workspace_id = ? AND model_id = ?
-                """,
-                (workspace_id, model_id),
-            ).fetchall()
+            rows = self._material_assets._visual_feature_cache_rows(
+                conn, workspace_id, model_id,
+            )
         return {
             str(row["segment_id"])
             for row in rows

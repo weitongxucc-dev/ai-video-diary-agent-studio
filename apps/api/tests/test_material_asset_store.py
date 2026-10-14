@@ -976,3 +976,79 @@ def test_asset_read_projections_keep_raw_rows_join_scope_and_caller_rollback(dat
         assert [tuple(row) for row in conn.execute("SELECT * FROM material_segment_features")] == [
             (foreign.workspace_id, foreign.id, "same-segment", "same-model"),
         ]
+
+
+def test_visual_feature_store_keeps_raw_projection_conflict_key_and_caller_transaction(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("feature storage must use the caller connection")
+
+    store = MaterialAssetStore(forbidden)
+    with connect() as conn:
+        # Original feature table shape and conflict key from ProductionRepository.
+        conn.execute("""CREATE TABLE IF NOT EXISTS material_segment_features (
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    segment_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    vector_json TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, segment_id, model_id)
+                );""")
+        conn.executemany("INSERT INTO material_segment_features VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+            ("workspace-a", "original", "segment", "model", "old-fingerprint", "[9]", 1, "original-time"),
+            ("workspace-a", "neighbor", "neighbor-segment", "model", "neighbor-fingerprint", "[8]", 2, "neighbor-time"),
+            ("workspace-a", "other-model-asset", "segment", "other-model", "other-fingerprint", "[7]", 3, "other-time"),
+            ("workspace-b", "foreign", "segment", "model", "foreign-fingerprint", "[6]", 4, "foreign-time"),
+        ])
+        before = [tuple(row) for row in conn.execute("SELECT * FROM material_segment_features ORDER BY rowid")]
+    raw_vector = "  [0.1, 0.2] \n"
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # Asset id is updated on the original workspace/segment/model conflict key.
+        assert store.write_visual_segment_feature(
+            conn, "workspace-a", "replacement", "segment", "model",
+            "new-fingerprint", raw_vector, 5, "supplied-time",
+        ) is None
+        store.write_visual_segment_feature(
+            conn, "workspace-a", "replacement", "new-segment", "model",
+            "new-segment-fingerprint", "[ 3 ]", 6, "new-segment-time",
+        )
+        vector = store._visual_feature_vector_row(
+            conn, "workspace-a", "replacement", "segment", "model", "new-fingerprint",
+        )
+        assert isinstance(vector, sqlite3.Row) and vector.keys() == ["vector_json"]
+        assert vector["vector_json"] == raw_vector
+        for arguments in [
+            ("workspace-b", "replacement", "segment", "model", "new-fingerprint"),
+            ("workspace-a", "original", "segment", "model", "new-fingerprint"),
+            ("workspace-a", "replacement", "missing-segment", "model", "new-fingerprint"),
+            ("workspace-a", "replacement", "segment", "missing-model", "new-fingerprint"),
+            ("workspace-a", "replacement", "segment", "model", "old-fingerprint"),
+        ]:
+            assert store._visual_feature_vector_row(conn, *arguments) is None
+        rows = store._visual_feature_cache_rows(conn, "workspace-a", "model")
+        assert all(isinstance(row, sqlite3.Row) and row.keys() == ["segment_id", "fingerprint"] for row in rows)
+        assert {tuple(row) for row in rows} == {
+            ("segment", "new-fingerprint"), ("neighbor-segment", "neighbor-fingerprint"),
+            ("new-segment", "new-segment-fingerprint"),
+        }
+        assert store._visual_feature_cache_rows(conn, "missing-workspace", "model") == []
+        assert store._visual_feature_cache_rows(conn, "workspace-a", "missing-model") == []
+        updated = conn.execute("SELECT * FROM material_segment_features WHERE workspace_id=? AND segment_id=? AND model_id=?", (
+            "workspace-a", "segment", "model",
+        )).fetchone()
+        assert tuple(updated) == ("workspace-a", "replacement", "segment", "model", "new-fingerprint", raw_vector, 5, "supplied-time")
+        with connect() as observer:
+            assert store._visual_feature_vector_row(observer, "workspace-a", "original", "segment", "model", "old-fingerprint")["vector_json"] == "[9]"
+            assert store._visual_feature_vector_row(observer, "workspace-a", "replacement", "new-segment", "model", "new-segment-fingerprint") is None
+            assert {tuple(row) for row in store._visual_feature_cache_rows(observer, "workspace-a", "model")} == {
+                ("segment", "old-fingerprint"), ("neighbor-segment", "neighbor-fingerprint"),
+            }
+        assert conn.in_transaction
+        conn.rollback()
+    with connect() as conn:
+        assert [tuple(row) for row in conn.execute("SELECT * FROM material_segment_features ORDER BY rowid")] == before

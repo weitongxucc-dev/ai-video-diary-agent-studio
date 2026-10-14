@@ -143,6 +143,51 @@ class MaterialAssetStore:
                 (workspace_id, segment_id, model_id),
         ).fetchone()
 
+    def _visual_feature_vector_row(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+        segment_id: str, model_id: str, fingerprint: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+                """
+                SELECT vector_json FROM material_segment_features
+                WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
+                    AND model_id = ? AND fingerprint = ?
+                """,
+            (workspace_id, asset_id, segment_id, model_id, fingerprint),
+        ).fetchone()
+
+    def _visual_feature_cache_rows(
+        self, conn: sqlite3.Connection, workspace_id: str, model_id: str,
+    ) -> list[sqlite3.Row]:
+        return conn.execute(
+                """
+                SELECT segment_id, fingerprint FROM material_segment_features
+                WHERE workspace_id = ? AND model_id = ?
+                """,
+            (workspace_id, model_id),
+        ).fetchall()
+
+    def write_visual_segment_feature(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+        segment_id: str, model_id: str, fingerprint: str, vector_json: str,
+        sample_count: int, updated_at: str,
+    ) -> None:
+        conn.execute(
+                        """
+                        INSERT INTO material_segment_features
+                            (workspace_id, asset_id, segment_id, model_id, fingerprint,
+                             vector_json, sample_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(workspace_id, segment_id, model_id) DO UPDATE SET
+                            asset_id = excluded.asset_id,
+                            fingerprint = excluded.fingerprint,
+                            vector_json = excluded.vector_json,
+                            sample_count = excluded.sample_count,
+                            updated_at = excluded.updated_at
+                        """,
+            (workspace_id, asset_id, segment_id, model_id, fingerprint, vector_json, sample_count, updated_at),
+        )
+
     def assemble_scene_segments(
         self, conn: sqlite3.Connection, source_payload: str, boundaries: list[float], duration_seconds: float,
     ) -> MaterialAsset:
