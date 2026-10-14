@@ -95,6 +95,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   currentTaskId.current = workspace.task.id;
   const currentWorkspace = useRef(workspace);
   currentWorkspace.current = workspace;
+  const workspaceReceiptRevision = useRef(0);
+  function acceptWorkspace(next: WorkspaceState, readRevision: number) {
+    if (readRevision !== workspaceReceiptRevision.current || next.task.id !== currentTaskId.current
+      || Date.parse(next.task.updated_at) < Date.parse(currentWorkspace.current.task.updated_at)) return false;
+    workspaceReceiptRevision.current += 1;
+    currentWorkspace.current = next;
+    setWorkspace(next);
+    setTasks(items => [next.task, ...items.filter(item => item.id !== next.task.id)]);
+    return true;
+  }
   const navigationReadRevision = useRef(0);
   const pendingNavigationRead = useRef<{ taskId: string; inputRevision: number } | null>({ taskId: initialWorkspace.task.id, inputRevision: 0 });
   // 共享/收回只用接口回读的值：保存失败就保持原样，不显示成已保存。
@@ -103,11 +113,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setVisibilityError(null);
     try {
       const saved = await setCreationTaskVisibility(task.id, next);
-      setWorkspace((current) => ({ ...current, task: saved.task }));
+      acceptWorkspace({ ...currentWorkspace.current, task: saved.task }, workspaceReceiptRevision.current);
     } catch (err) {
-      setVisibilityError(err instanceof Error ? err.message : "共享设置没有保存成功，请再试一次。");
+      if (task.id === currentTaskId.current) setVisibilityError(err instanceof Error ? err.message : "共享设置没有保存成功，请再试一次。");
     } finally {
-      setVisibilityBusy(false);
+      if (task.id === currentTaskId.current) setVisibilityBusy(false);
     }
   }
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(
@@ -185,10 +195,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     timelineVersionId: task.current_timeline_version_id,
     voiceId: workspace.plan.selected_voice?.profile_id,
     voiceVersion: workspace.plan.selected_voice?.version,
-    onWorkspaceRead: next => {
-      setWorkspace(next);
-      setTasks(items => [next.task, ...items.filter(item => item.id !== next.task.id)]);
-    },
+    workspaceReadRevision: workspaceReceiptRevision.current,
+    onWorkspaceRead: acceptWorkspace,
   });
   const { executionPreview, execution, executionError } = executionController;
   const assistantConversation = useAssistantConversation({ scope_kind: "task", scope_id: task.id });
@@ -423,8 +431,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function refresh(preserveActiveView = false, stillCurrent?: (next: WorkspaceState) => boolean, retainProposal = false) {
     const contextRevision = editContextRevision.current;
+    const readRevision = workspaceReceiptRevision.current;
     const next = await getCreationTaskWorkspace(task.id);
     if (stillCurrent && !stillCurrent(next)) return;
+    if (!acceptWorkspace(next, readRevision)) return;
     const selectionChanged = contextRevision !== editContextRevision.current;
     pendingNavigationRead.current = null;
     const proposal = currentEditPreview.current?.proposal;
@@ -443,7 +453,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
     setEditorDraft(false);
     setSelectedOverlayId(current=>next.montage?.graphic_overlays?.some(item=>item.id===current)?current:null);
-    setWorkspace(next);
     // 保留原视图只在该视图按既有门禁仍可呈现时成立。字幕确认会作废 output_url，
     // 使 subtitle_cover 不可呈现；此时保留它会让主区没有任何视图命中（空白且丢失撤销入口）。
     // 这里按既有可用/默认规则回落，不新增视图、不放开任何门禁。
@@ -456,7 +465,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSelectedCueId((current) => next.subtitle_tracks.some((track) => track.cues.some((cue) => cue.id === current)) ? current : null);
     setSelectedCover((current) => current && (Boolean(next.cover_asset) || next.cover_frame_capability.available));
     setSelectedNarrationSegmentId((current) => next.narration?.segments.some((segment) => segment.id === current) ? current : null);
-    setTasks((current) => [next.task, ...current.filter((item) => item.id !== next.task.id)]);
     if (next.task.stage === "topic") {
       const appliedRevision = editContextRevision.current;
       const nextTopics = await getCreationTaskTopics(task.id);

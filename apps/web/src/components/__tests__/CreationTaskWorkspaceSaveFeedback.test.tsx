@@ -38,6 +38,53 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+describe("task receipt ownership", () => {
+  function finishedTaskExecution() {
+    const initial = reviewWorkspace();
+    return { task_id: initial.task.id, job: { id: "done-execution", kind: "creation_execution", status: "succeeded", progress: 100, failure_reason: null, impact: null, repair_action: null },
+      stages: [], current_stage: null, waiting_reason: null, status_updated_at: initial.task.updated_at, video_ready: true, cover_status: "pending", cover_message: null };
+  }
+  it("rejects a workspace read started before a newer shared Task receipt", async () => {
+    const initial = reviewWorkspace();
+    const shared = { ...initial.task, visibility: "shared" as const, updated_at: "2026-10-14T00:00:01Z" };
+    let resolveOld!: (value: WorkspaceState) => void;
+    mocks.getWorkspace.mockReset().mockResolvedValueOnce(initial).mockReturnValueOnce(new Promise(done => { resolveOld = done; }));
+    mocks.getExecution.mockResolvedValue(finishedTaskExecution());
+    vi.mocked(api.setCreationTaskVisibility).mockResolvedValue({ ...initial, task: shared });
+    render(<CreationTaskWorkspace initialWorkspace={initial} initialTopics={null} initialTasks={[initial.task]} />);
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "共享设置" }));
+    fireEvent.click(screen.getByRole("button", { name: /^共享给团队$/ }));
+    await screen.findByText("任务：团队共享");
+    await act(async () => resolveOld({ ...initial, task: { ...initial.task } }));
+    expect(screen.getByText("任务：团队共享")).toBeInTheDocument();
+    expect(screen.queryByText("任务：仅自己可见")).not.toBeInTheDocument();
+  });
+  it("rejects a stale task timestamp read after sharing and continues to the newer full facts", async () => {
+    vi.useFakeTimers();
+    try {
+      const initial = reviewWorkspace();
+      const shared = { ...initial.task, visibility: "shared" as const, updated_at: "2026-10-14T00:00:01Z" };
+      mocks.getExecution.mockResolvedValue({ ...finishedTaskExecution(), job: null });
+      mocks.getWorkspace.mockReset().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, task: { ...initial.task } })
+        .mockResolvedValue({ ...initial, task: shared });
+      vi.mocked(api.setCreationTaskVisibility).mockResolvedValue({ ...initial, task: shared });
+      render(<CreationTaskWorkspace initialWorkspace={initial} initialTopics={null} initialTasks={[initial.task]} />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "共享设置" }));
+      fireEvent.click(screen.getByRole("button", { name: /^共享给团队$/ }));
+      await act(async () => {});
+      mocks.getExecution.mockResolvedValue(finishedTaskExecution());
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(screen.getByText("任务：团队共享")).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mocks.getWorkspace).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("任务：团队共享")).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+  afterEach(() => mocks.getExecution.mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }));
+});
+
 describe("editing proposal input ownership", () => {
   function editorWorkspace() {
     const data = reviewWorkspace();

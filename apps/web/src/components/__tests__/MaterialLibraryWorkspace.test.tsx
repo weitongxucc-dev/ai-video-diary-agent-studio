@@ -1770,3 +1770,88 @@ it("material list background head read preserves tag selection and focused unsav
     expect(note).toHaveFocus();
   } finally { visibility.mockRestore(); vi.useRealTimers(); }
 });
+
+async function beginMaterialScan() {
+  fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
+  fireEvent.click(await screen.findByRole("button", { name: "立即检查" }));
+  fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
+}
+function bindMaterialScan() {
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory });
+}
+
+it("material scan rereads the reset query with its retained tag/media and keeps explicit drafts", async () => {
+  window.history.replaceState({}, "", "/library?tag=wanted&media_type=audio");
+  try {
+    bindMaterialScan();
+    const wanted = { ...taggedAsset, file_name: "old-wanted.wav", media_type: "audio" as const, review_status: "raw" as const, user_tags: ["wanted"] };
+    vi.mocked(getProductionMaterials).mockReset().mockResolvedValue({ ...library, assets: [wanted] });
+    vi.mocked(scanMaterialIntake).mockResolvedValue({ ...library, assets: [{ ...asset, id: "unrelated", file_name: "unrelated.mp4" }] });
+    render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [wanted] }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} initialTag="wanted" />);
+    await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ mediaType: "audio" })));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "old" } });
+    await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ query: "old" })));
+    await waitFor(() => expect(screen.queryByText("正在更新素材列表…")).not.toBeInTheDocument());
+    await chooseSelectValue(screen.getByRole("combobox", { name: "审核状态筛选" }), "raw");
+    await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ reviewStatus: "raw" })));
+    await waitFor(() => expect(screen.queryByText("正在更新素材列表…")).not.toBeInTheDocument());
+    fireEvent.click(document.querySelector(".library-card")!);
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "扫描保留片段草稿" } });
+    fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value: "扫描保留笔记草稿" } });
+    const before = vi.mocked(getProductionMaterials).mock.calls.length;
+    await beginMaterialScan();
+    await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledTimes(before + 1));
+    expect(getProductionMaterials).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0, query: "", reviewStatus: "all", tag: "wanted", mediaType: "audio" }));
+    await waitFor(() => expect(screen.queryByText("正在更新素材列表…")).not.toBeInTheDocument());
+    expect(materialListCards()).toEqual(["old-wanted.wav"]);
+    expect(screen.getByRole("textbox", { name: "搜索素材" })).toHaveValue("");
+    expect(screen.getByLabelText("片段描述")).toHaveValue("扫描保留片段草稿");
+    expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("扫描保留笔记草稿");
+  } finally { window.history.replaceState({}, "", "/library"); }
+});
+
+it("material scan preserves the confirmed collection when its scoped first page fails", async () => {
+  bindMaterialScan();
+  vi.mocked(getProductionMaterials).mockReset().mockRejectedValue(new Error("扫描后的列表读取失败"));
+  vi.mocked(scanMaterialIntake).mockResolvedValue({ ...library, assets: [{ ...asset, id: "unrelated", file_name: "unrelated.mp4" }] });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} initialTag="wanted" />);
+  await beginMaterialScan();
+  await screen.findByText("扫描后的列表读取失败");
+  expect(materialListCards()).toEqual(["local.mp4"]);
+  expect(screen.getByText(/已载入 1 \/ 1/)).toBeInTheDocument();
+});
+
+it.each(["success", "failure"] as const)("material scan discards an old intake %s after a later query has been accepted", async outcome => {
+  bindMaterialScan();
+  const old = materialListDeferred<typeof library>();
+  vi.mocked(scanMaterialIntake).mockReturnValueOnce(old.promise);
+  vi.mocked(getProductionMaterials).mockReset().mockResolvedValue({ ...library, assets: [{ ...asset, id: "new", file_name: "new.mp4" }] });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  await beginMaterialScan();
+  const search = screen.getByRole("textbox", { name: "搜索素材" });
+  fireEvent.change(search, { target: { value: "new" } }); search.focus();
+  await waitFor(() => expect(materialListCards()).toEqual(["new.mp4"]));
+  await act(async () => { if (outcome === "success") old.resolve(library); else old.reject(new Error("旧扫描失败")); });
+  expect(materialListCards()).toEqual(["new.mp4"]);
+  expect(search).toHaveValue("new"); expect(search).toHaveFocus();
+  expect(screen.queryByText("旧扫描失败")).not.toBeInTheDocument();
+  expect(getProductionMaterials).toHaveBeenCalledTimes(1);
+});
+
+it("material scan cannot reset a reopened identical query after its old intake completes", async () => {
+  bindMaterialScan();
+  const old = materialListDeferred<typeof library>();
+  vi.mocked(scanMaterialIntake).mockReturnValueOnce(old.promise);
+  vi.mocked(getProductionMaterials).mockReset().mockResolvedValueOnce({ ...library, assets: [{ ...asset, id: "middle", file_name: "middle.mp4" }] })
+    .mockResolvedValue({ ...library, assets: [{ ...asset, id: "reopened", file_name: "reopened.mp4" }] });
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  await beginMaterialScan();
+  const search = screen.getByRole("textbox", { name: "搜索素材" });
+  fireEvent.change(search, { target: { value: "middle" } });
+  await waitFor(() => expect(materialListCards()).toEqual(["middle.mp4"]));
+  fireEvent.change(search, { target: { value: "" } });
+  await waitFor(() => expect(materialListCards()).toEqual(["reopened.mp4"]));
+  await act(async () => old.resolve(library));
+  expect(materialListCards()).toEqual(["reopened.mp4"]);
+  expect(getProductionMaterials).toHaveBeenCalledTimes(2);
+});

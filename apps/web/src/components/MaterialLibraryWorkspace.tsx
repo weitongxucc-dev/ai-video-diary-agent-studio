@@ -73,6 +73,7 @@ export function MaterialLibraryWorkspace({
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [actionBusy, setBusy] = useState<Busy>(null);
   const [listBusy, setListBusy] = useState<"search" | "load" | null>(null);
+  const [scanReadRevision, setScanReadRevision] = useState(0);
   const [error, setError] = useState("");
   const { intake, intakeError, intakeBusy, refreshIntakeStatus, bindIntake, confirmCopy, readIntakeAfterScan } = useMaterialIntake();
   const { importBusy, importResult, runImport } = useLocalMaterialImport(Boolean(intake?.bound_to_current_workspace && intake.directory_state === "ready"));
@@ -224,7 +225,7 @@ export function MaterialLibraryWorkspace({
 
   useEffect(() => {
     const scope = searchScope;
-    if (scope === initialSearch.current) return;
+    if (scope === initialSearch.current && scanReadRevision === 0) return;
     const request = ++listReadSequence.current;
     const selectionAtRequest = selectionRevision.current;
     let active = true;
@@ -270,7 +271,7 @@ export function MaterialLibraryWorkspace({
     };
     // Selection changes do not re-run search; a revision check protects user choices made in flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchScope, ownsListRead]);
+  }, [searchScope, scanReadRevision, ownsListRead]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -398,29 +399,21 @@ export function MaterialLibraryWorkspace({
 
   async function scan() {
     if (!intake?.bound_to_current_workspace || intake.directory_state !== "ready") return;
-    const selectionAtStart = selectionRevision.current;
+    const scope = lastSearch.current;
+    const request = ++listReadSequence.current;
     setBusy("scan");
     setError("");
     try {
-      const result = await scanMaterialIntake();
-      assetWriteRevision.current += 1;
-      setAssets(result.assets);
-      setTotalCount(result.total_count);
-      setHasMore(result.has_more);
-      setQuery("");
-      setFilter("all");
-      if (
-        selectionAtStart === selectionRevision.current &&
-        !assistantSelection &&
-        result.assets[0] &&
-        !result.assets.some((asset) => asset.id === selectedId)
-      ) {
-        selectAsset(result.assets[0], false);
+      await scanMaterialIntake();
+      if (ownsListRead(scope, request)) {
+        setQuery("");
+        setFilter("all");
+        setScanReadRevision(current => current + 1);
       }
       await refreshInsights();
       try { await readIntakeAfterScan(); } catch { /* Keep the last directory status. */ }
     } catch (cause) {
-      setError(visibleError(cause, "检查素材目录失败，请重试。"));
+      if (ownsListRead(scope, request)) setError(visibleError(cause, "检查素材目录失败，请重试。"));
     } finally {
       setBusy(null);
     }

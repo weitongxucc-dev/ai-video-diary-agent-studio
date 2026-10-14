@@ -9,18 +9,21 @@ type ExecutionInput = {
     timelineVersionId: string | null;
     voiceId: string | undefined;
     voiceVersion: string | undefined;
-    onWorkspaceRead: (workspace: CreationTaskWorkspace) => void;
+    workspaceReadRevision: number;
+    onWorkspaceRead: (workspace: CreationTaskWorkspace, readRevision: number) => boolean;
 };
 function executionSnapshot(execution: CreationExecutionStatus) {
     return `${execution.job?.id ?? "none"}:${execution.job?.status ?? "none"}:${execution.stages.length}`;
 }
 // Production facts own a separate lifecycle from selection, chat, and unsaved inputs.
-export function useCreationExecution({ taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion, onWorkspaceRead }: ExecutionInput) {
+export function useCreationExecution({ taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
     const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
     const [execution, setExecution] = useState<CreationExecutionStatus | null>(null);
     const [executionError, setExecutionError] = useState<ReturnType<typeof errorDetails> | null>(null);
     const applyWorkspace = useRef(onWorkspaceRead);
     applyWorkspace.current = onWorkspaceRead;
+    const receiptRevision = useRef(workspaceReadRevision);
+    receiptRevision.current = workspaceReadRevision;
     const currentTask = useRef(taskId);
     currentTask.current = taskId;
     const pollExecution = useRef<() => void>(() => undefined);
@@ -42,15 +45,16 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         async function readWorkspace(execution: CreationExecutionStatus) {
             const request = ++workspaceRequest;
             const command = commandRequest.current;
+            const readRevision = receiptRevision.current;
             try {
                 const next = await getCreationTaskWorkspace(taskId);
                 if (!active || request !== workspaceRequest || command !== commandRequest.current) return false;
-                applyWorkspace.current(next);
+                if (!applyWorkspace.current(next, readRevision)) return false;
                 snapshot = executionSnapshot(execution);
                 clearReadError();
                 return true;
             } catch (cause) {
-                if (active && request === workspaceRequest && command === commandRequest.current) {
+                if (active && request === workspaceRequest && command === commandRequest.current && readRevision === receiptRevision.current) {
                     readError = { kind: "workspace", detail: errorDetails(cause) };
                     setExecutionError(readError.detail);
                 }

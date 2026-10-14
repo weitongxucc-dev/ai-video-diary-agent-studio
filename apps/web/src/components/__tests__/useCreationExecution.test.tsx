@@ -23,9 +23,9 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 it("keeps a late execution command from replacing the task entered afterwards", async () => {
-  const apply = vi.fn();
+  const apply = vi.fn(() => true);
   const { result, rerender } = renderHook(({ taskId }) => useCreationExecution({ taskId, confirmedScriptId: null,
-    timelineVersionId: null, voiceId: undefined, voiceVersion: undefined, onWorkspaceRead: apply }),
+    timelineVersionId: null, voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: 0, onWorkspaceRead: apply }),
   { initialProps: { taskId: "task-a" } });
   await waitFor(() => expect(result.current.execution?.task_id).toBe("task-a"));
   let resolve!: (value: CreationExecutionStatus) => void;
@@ -42,7 +42,7 @@ it("keeps a late execution command from replacing the task entered afterwards", 
 
 it("does not attach a late command failure to the newly entered task", async () => {
   const { result, rerender } = renderHook(({ taskId }) => useCreationExecution({ taskId, confirmedScriptId: null,
-    timelineVersionId: null, voiceId: undefined, voiceVersion: undefined, onWorkspaceRead: vi.fn() }),
+    timelineVersionId: null, voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: 0, onWorkspaceRead: vi.fn(() => true) }),
   { initialProps: { taskId: "task-a" } });
   let reject!: (cause: Error) => void;
   const command = new Promise<CreationExecutionStatus>((_, fail) => { reject = fail; });
@@ -61,21 +61,21 @@ function finishedExecution(): CreationExecutionStatus {
 function readback(name: string): CreationTaskWorkspace {
   return { task: { id: "task-a", name, current_timeline_version_id: "version-1" } } as CreationTaskWorkspace;
 }
-function mountReadback(apply = vi.fn(), confirmedScriptId: string | null = null) {
+function mountReadback(apply = vi.fn(() => true), confirmedScriptId: string | null = null) {
   return renderHook(() => useCreationExecution({ taskId: "task-a", confirmedScriptId,
-    timelineVersionId: "version-1", voiceId: undefined, voiceVersion: undefined, onWorkspaceRead: apply }));
+    timelineVersionId: "version-1", voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: 0, onWorkspaceRead: apply }));
 }
 
 it("retries the same terminal job after a failed full read and clears that read error", async () => {
   vi.useFakeTimers();
   api.readExecution.mockResolvedValue(finishedExecution());
   api.readWorkspace.mockRejectedValueOnce(new Error("完整回读失败")).mockResolvedValue(readback("当前事实"));
-  const apply = vi.fn();
+  const apply = vi.fn(() => true);
   const { result } = mountReadback(apply);
   await act(async () => {});
   expect(result.current.executionError?.message).toBe("完整回读失败");
   await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
-  expect(apply).toHaveBeenCalledWith(readback("当前事实"));
+  expect(apply).toHaveBeenCalledWith(readback("当前事实"), 0);
   expect(api.readWorkspace).toHaveBeenCalledTimes(2);
   expect(result.current.executionError).toBeNull();
 });
@@ -84,13 +84,13 @@ it("ignores an older full read failure after a newer command read has been accep
   api.readExecution.mockResolvedValue(finishedExecution());
   let reject!: (cause: Error) => void;
   api.readWorkspace.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; })).mockResolvedValue(readback("新事实"));
-  const apply = vi.fn();
+  const apply = vi.fn(() => true);
   const { result } = mountReadback(apply);
   await act(async () => {});
   await act(async () => { await result.current.changeExecution(async () => finishedExecution()); });
   await act(async () => { reject(new Error("旧完整回读失败")); });
   expect(apply).toHaveBeenCalledOnce();
-  expect(apply).toHaveBeenCalledWith(readback("新事实"));
+  expect(apply).toHaveBeenCalledWith(readback("新事实"), 0);
   expect(result.current.executionError).toBeNull();
 });
 
@@ -98,7 +98,7 @@ it("does not clear a requirement-preview failure merely because the full read su
   api.readExecution.mockResolvedValue(finishedExecution());
   api.preview.mockRejectedValue(new Error("制作要求未满足"));
   api.readWorkspace.mockResolvedValue(readback("当前事实"));
-  const { result } = mountReadback(vi.fn(), "script-a");
+  const { result } = mountReadback(vi.fn(() => true), "script-a");
   await waitFor(() => expect(result.current.executionError?.message).toBe("制作要求未满足"));
 });
 
@@ -138,4 +138,39 @@ it("keeps a newer command refusal when an older command fails afterwards", async
   await act(async () => { await result.current.changeExecution(async () => { throw new Error("new command refusal"); }); });
   await act(async () => { reject(new Error("old command refusal")); await pending; });
   expect(result.current.executionError?.message).toBe("new command refusal");
+});
+
+it("retries a terminal workspace read rejected by the parent until its newer receipt is accepted", async () => {
+  vi.useFakeTimers();
+  api.readExecution.mockResolvedValue(finishedExecution());
+  api.readWorkspace.mockResolvedValueOnce(readback("旧事实")).mockResolvedValue(readback("新事实"));
+  const apply = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+  const { rerender } = renderHook(({ revision }) => useCreationExecution({ taskId: "task-a", confirmedScriptId: null,
+    timelineVersionId: "version-1", voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: revision, onWorkspaceRead: apply }),
+  { initialProps: { revision: 0 } });
+  await act(async () => {});
+  expect(apply).toHaveBeenNthCalledWith(1, readback("旧事实"), 0);
+  rerender({ revision: 1 });
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(apply).toHaveBeenNthCalledWith(2, readback("新事实"), 1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(api.readWorkspace).toHaveBeenCalledTimes(2);
+});
+
+it("ignores an old full-read failure after a newer parent receipt and still retries the terminal job", async () => {
+  vi.useFakeTimers();
+  api.readExecution.mockResolvedValue(finishedExecution());
+  let reject!: (cause: Error) => void;
+  api.readWorkspace.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; })).mockResolvedValue(readback("新事实"));
+  const apply = vi.fn(() => true);
+  const { result, rerender } = renderHook(({ revision }) => useCreationExecution({ taskId: "task-a", confirmedScriptId: null,
+    timelineVersionId: "version-1", voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: revision, onWorkspaceRead: apply }),
+  { initialProps: { revision: 0 } });
+  await act(async () => {});
+  rerender({ revision: 1 });
+  await act(async () => { reject(new Error("旧完整回读失败")); });
+  expect(result.current.executionError).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(apply).toHaveBeenCalledWith(readback("新事实"), 1);
+  expect(result.current.executionError).toBeNull();
 });
