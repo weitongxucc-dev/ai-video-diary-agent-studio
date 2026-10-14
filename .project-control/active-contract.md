@@ -15,7 +15,7 @@
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | raw联合六源fa0ebcb2…准确冻结，等待QA，不改production/R4源；现按下方REF-SETTINGS-PERSISTENCE-20261014独占main设置路由/导入、runtime_settings、workspace_settings、env_files及两个明确测试，落实有限存储协调。原metadata/驱动/bootstrap/config/其余维护只读，不混冻结批。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；metadata与Web有限props已集成归还，不复测。当前独立核R4五raw消费者及四仓储源联合六源fa0ebcb2…，沿准确release/快照审计复用原6实际消费者与模块4+2，补必要原权限/原始行摘要/同conn事务独立反例；不运行用户维护、旧全矩阵或宣称完整R4/R9。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
-| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 有限props十源97cee333…已于9aded56准确集成并WRITE_LEASE_RETURN，原51与代表浏览器审计、独立2PASS分别保留；现只读核R5剩余实际消费者/职责与三尺寸证据缺口，只写fresh-web-consumers/r5-remainder-readonly；产品不自动获得新写权，不重复旧全矩阵。 |
+| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5 remainder只读定位已完成；现按下方REF-R5-DEAD-CONSUMERS-20261014独占八源，仅退役未消费的Shell kind与五旧客户端命令/再导出，保留原label/title和活跃错误投影。源释放后再绑定准确GUI差额；不自动算三尺寸完整Shell或R5/R9。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；profile/voice raw reader候选03两源和authorization raw history候选04两源分别SOURCE_RELEASE准确冻结且产品只读。metadata已集成归还，API现接五raw SELECT消费者；两模块待联合独立门与准确集成后即时归还，不把单模块释放当接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -61,6 +61,12 @@ metadata六源已准确集成归还后，现绑定R4五raw SELECT消费者批：
 同步持久失败按有限逆顺序由对应owner恢复/核回读，尽量完成其它独立恢复；保持原首失败原因与各恢复/cleanup拒绝，不能由unlink掩盖原错、猜失败writer必然零写、自动重试或恢复失败仍报unchanged/success。backend恢复未确认时仅失效受影响secret cache，不清其它工作区/字段。完全确认恢复才沿原503/403错误；未完成恢复由一个具体安全错误说明边界与需修复状态，不泄密、不创建通用rollback registry/ledger/配置格式或新框架。所有需要的持久步骤和环境发布成功后只返回changed，main在既有lock/installer guard/quiesced context内激活已预备图一次，用例不导入main/HTTP或拥有驱动；部分activation/publication失败不得盲还原存储或假报零写，继续单列persistence completed/reload failed，不把此片算完整safe reload/崩溃/跨进程隔离。
 
 准确SOURCE_RELEASE需列本批实际六源、快照/脚本/actual import/定向命令exit、首失败/恢复及原边界退役。最小实际验证含原存在与缺失/原bytes/mode/明确环境键恢复、一次后续secret失败及原provider删除、一项真实恢复拒绝的可见反例、一次combined成功只激活一次；只用合成路径/SQLite与内存security替身，不执行用户env/真实钥匙串/账号/媒体，不重跑旧全矩阵。R6产品只读，稳定同候选后独立执行已准备原三HTTP输入与成功control、必要新增恢复拒绝差额，核实际旧owner继续工作/有效配置与cache而非只看对象身份；未知真实原生/媒体/activation/crash/scheduled仍未通过。语义REBASE_ACK后直接实施，不再等待第二次批准。
+
+R5 限定只读 `fresh-web-consumers/r5-remainder-readonly/REPORT.md` 已定位两个确定的无生产消费残留。现绑定 `REF-R5-DEAD-CONSUMERS-20261014`：Web独占 `apps/web/src/components/AppShell.tsx` 的 `AppShellWorkspaceStatus` 死kind字段（原label/title读取保持）、`CreationTaskWorkspace.tsx` 唯一workspaceStatus构造/调用、`apps/web/src/app/production/page.tsx` 两处workspaceStatus构造，以及既有 `components/__tests__/AppShell.test.tsx` 的最小label/title和未传值实际呈现；独占 `apps/web/src/lib/api/creation-tasks.ts` 的 `generateCreationTaskNarration`、`createCreationTaskMontagePlan`、`renderCreationTaskMontage` 三旧body与其唯一无用import，`lib/api/materials.ts` 的 `scanProductionMaterials`、`updateMaterialAssetTagsBatch` 两旧body，`lib/api.ts` 五再导出，以及既有 `lib/__tests__/creation-task-topic-api.test.ts` 的旧narration调用用例接续。主控核八现文件Git干净、字节等只读清点，无其它writer；materials client本段仅这两body从此前主控收敛范围转给Web，不跨写transport/auth/其它活跃请求。
+
+这是内部Web客户端公开导出的退役：有界生产Web消费者为0，允许删这五定义/导出；不据此删除后端HTTP路由、外部API契约、对象/类型、模型或数据。原组件测试的五旧mock/负向防回流断言保留，不顺手改其它parent/CSS/types、功能文案/权限或现代调用。voice_identity_missing的既有用户表达仍由活跃creationPlanRequest唯一边界验证：最小旧测试可接到已有活跃execution preview等客户端的合成HTTP拒绝，不为保住死wrapper改生产错误规则，也不伪称服务端/声音执行通过。原Shell label/title、任务本身badge、两卡/草稿/导航/列表/选播行为保持；不造新状态层或按文件行数分拆。
+
+八源稳定后先SOURCE_RELEASE，列精确摘要/直接消费者不存在与五body/导出不存在证明、必要最小AppShell呈现与活跃拒绝投影/当前类型/目标lint检查，不重跑旧51/10门/全组件或模型矩阵。UI可见与三尺寸组合仍标待验证，当前源release不冒充完成：主控随后绑定确切Web/API tuple、隔离真实AppShell/HTTP/新合成SQLite和原三个代表尺寸的完整可见差额，不用fixture Shell替身/旧图充当当前接受。产品证据只写 `fresh-web-consumers/r5-dead-consumers/**`，八源准确冻结待该同候选GUI/独立门，出现实际缺陷交唯一Web owner最小reopen；其余已集成有限props十源不延长冻结。读当前角色/本段并语义REBASE_ACK后直接实施，不等第二次批准。
 
 ## 用户决定、入口与范围
 
