@@ -14,12 +14,14 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R2-LINKED-TIMELINE-APPLICATION-20261014：按bcc252c9…报告将speed骨架迁单一封闭linked timeline族，接Delete/Duplicate/Insert完整预览/确认/原结果/direct/NL消费者。只独占main指定分支、旧speed模块退役、NEW linked_timeline_use_case.py、两现tests的有限接线及NEW test_linked_clip_application.py；metadata/linked/sources/transactions/production等只读。稳定后一个关键族独立门，不重跑旧16。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R4-DISCOVERY-STAGED-INDEPENDENT-20261014：产品只读，只写fresh-qa/discovery-asset-staged-independent，核24f3eb18…三源原分阶段保存的两个late asset写拒绝；observation/ingestion及先前成功资产保留。module3/normal2审计复用，不重跑已过矩阵。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | speed失败差额已b54f435集成/归还。现REF-R1-PREVIEW-CALIBRATION-PREPARATION-20261014产品只读，核现task_clip_preview用途、profile解析/声明/消费者及注册进程采样闭包，仅写fresh-runtime-reload/clip-preview-calibration-preparation短前提报告；不跑旧门/实际媒体/host probes或访问用户配置。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短预览静态REPORT已核13专用键/独立kind/profile、双侧/探测/发布/PGID闭包；13只读源与main两保护函数AST绑定。真实profile值/同生命周期、成功startup/run/release峰值记录和首次合法测量启动边界仍unknown。准备租约归还，产品/证据只读待后续实际测量或linked关键门，不重复旧测试/私有配置读取。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | discovery两源09b65961…SOURCE_RELEASE冻结，五methods/69静态/首次module3PASS0.29s，已与root四consumer接线形成三源24f3eb18…；当前产品只读待独立分阶段门/集成，不再测试或恢复旧writer。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | discovery联合三源24f3eb18…已SOURCE_RELEASE冻结，四consumer AST范围及首次正常2PASS0.73s；当前无新增产品修改，审核QA分阶段两个lateasset拒绝后精确集成/归还。API main/linked族源保持互斥。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+短预览准备 `fresh-runtime-reload/clip-preview-calibration-preparation/REPORT.md` 为零执行的静态定位，主控核13个非main目标源当前字节与报告一致；main整文件指纹来自并行linked WIP不作为冻结候选，但 `_clip_preview_use_case` / `_build_device_components` 两保护函数AST与3395dd6相同（定向复核见fresh-root-review/clip-preview-static-locator-review.json），不重读/重跑该报告。当前task_clip_preview已独立profile，不沿旧“整片预算”结论；两输出共享总deadline/output额度，profile的13键与整机6键均只列名称未读用户值。每seal再读profile而runtime捕获组装时profile，实际同生命周期值尚未验证；登记ACK前启动峰值与完整成功采样/探测/发布/临时盘/释放记录尚未取得，不能用源码或通用模拟边界通过当标定。下次合法实际测量必须先绑定来源明确的初始启动边界、固定profile/身份/真实输入与测量记录；无该事实保持unknown，不填猜值/改真探针/放宽准入，不因此阻塞当前独立编辑与仓储施工。该只读准备租约至此归还，实际R1/R9与生产媒体未接受。
 
 discovery当前三源联合 `fresh-root-discovery-asset-closure/joint-candidate-01/SOURCE_RELEASE.json` 已释放，TAB摘要24f3eb182399a4778c6b0ea581d26039e76c8572da357b83ba3b0f61c5c6a397、回执SHAbc054eba955cdeeb4e4bd8fc5372218ba57e3bffafa1546abc1090063f5046df，basefc0dc38＋三个overlay，相关API app/三测试与原共享model_workers计时代码共173files/42actualimports，未导入main/不含API linked WIP。R4 module3首次PASS0.29s/69静态/17imports及8artifact只审计复用；root源码四body替换AST证明和两个普通消费者首次actual2PASS0.73s。两次入口问题均零actualcases保留：parent目录定位错未启动child；首collection缺既有model_workers.media_timing、fd相对路径清理被误拒绝，补同Git确切两代码文件并用fd-aware owned guard后执行原尚未执行两case，产品不为入口失败改动。三源已固定，不因SOURCE_RELEASE再运行旧module3/normal2矩阵。
 
