@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期候选 02 六源已 SOURCE_RELEASE 再冻结供 R6；production 人物/声音 records 与维护轻组装候选 03 四源独立 SOURCE_RELEASE 冻结供 QA，互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期六源已 WRITE_LEASE_RETURN，当前只读定位 R2/R3 main 编辑/执行路由、assistant_pi 与直接编辑模块的剩余实际调用闭包，待精确竖向接续；production 人物/声音 records 与维护轻组装候选 03 四源独立 SOURCE_RELEASE 冻结供 QA。R4/R6 整文件例外排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；按 records 候选 03 准确四源执行原维护 dry-run 失败单例和已准备 records 公共门；Web 素材分页已通过并归还，不重复已过门。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，保留生命周期原五输入通过及首许可异常窗口失败，按候选 02 准确六源仅复验失败反例与必要受影响差额；原 DB/tmp 两门不重复，有限门不能算全安全重载或真实媒体接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，生命周期有限门已接受，按准确集成提交核实际 settings HTTP 的两处后段持久化失败：env 成功后 secret 失败、env/secret 成功后 workspace 配置失败。只用合成 IO/内存秘密，先记录实际影响再建议 owner；原五输入/DB/tmp/预算门不重复，不算全安全重载或真实媒体接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；既有候选均已 WRITE_LEASE_RETURN，当前产品只读，限定清点 CreationTaskWorkspace、MaterialLibraryWorkspace 与直接拆出模块/API 分组的剩余活跃消费者、职责和实际反例；不重跑旧矩阵。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源已 WRITE_LEASE_RETURN，人物/声音 records 两源继续 SOURCE_RELEASE 冻结待 API 接线；当前产品只读，未接线模块不接受。 |
 
