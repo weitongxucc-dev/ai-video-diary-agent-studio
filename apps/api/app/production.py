@@ -45,6 +45,12 @@ from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _n
 from app.materials.analysis import MaterialAnalysisUseCase, _material_analysis_public_error
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.source_files import MaterialSourceFileAccess
+from app.materials.workspace_references import WorkspaceMediaReferenceAccess
+from app.profiles.reference_access import ProfileReferenceAccess, _profile_wav_duration
+from app.profiles.registration import ProfileRegistrationUseCase
+from app.source_policy import content_owner
+from app.materials.contracts import MediaAuthorityError
+from app.creation.contracts import CreationPlanVoiceReference, CreationPlanPersonReference
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
     _required_text, _optional_string_tuple, _required_datetime, _optional_datetime,
@@ -83,7 +89,7 @@ from app.visual_semantics import (
     VisualSemanticProvider,
 )
 from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
-from app.media_link_import import RegisteredLink, _probe_file_media_type
+from app.media_link_import import RegisteredLink
 from app.material_scene import (
     SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
     scene_window_for_key, scene_windows,
@@ -97,15 +103,6 @@ logger = logging.getLogger(__name__)
 EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)
 
 
-def content_owner(verified_user_id: str | None) -> str | None:
-    """把一次已验证身份归一成内容的上传者标识。
-
-    来源是 Supabase 已验证的 AuthPrincipal.user_id 或本地成员令牌解析出的
-    member_id——两种既有身份在此归一，不新造第二套规则。dataclass 里已有的
-    owner_user_id 不作数（那是调用方能自填的字段）。没有可解析身份时留空：
-    这条内容不会被算成任何成员的私有资产。
-    """
-    return str(verified_user_id or "").strip() or None
 
 
 def content_readable(
@@ -396,20 +393,6 @@ class VersionedNarrationInputs:
     pronunciation_entries: tuple[PronunciationEntry, ...]
 
 
-class MediaAuthorityError(ValueError):
-    """A fail-closed media identity or authorization error for API callers."""
-
-    def __init__(
-        self,
-        *,
-        reason: str,
-        impact: str,
-        repair_action: str,
-    ) -> None:
-        self.reason = reason
-        self.impact = impact
-        self.repair_action = repair_action
-        super().__init__(repair_action)
 
 
 @dataclass
@@ -502,28 +485,8 @@ class CreationPlanSourceReference:
     identity: str = ""
 
 
-@dataclass(frozen=True)
-class CreationPlanVoiceReference:
-    profile_id: str
-    version: str
-    person_profile_id: str
-    person_version: str
-    person_authorization_id: str
-    person_authorization_version: str
-    authorization_id: str
-    authorization_version: str
-    language: str
-    model_id: str
 
 
-@dataclass(frozen=True)
-class CreationPlanPersonReference:
-    profile_id: str
-    version: str
-
-    def __post_init__(self) -> None:
-        if not self.profile_id.strip() or not self.version.strip():
-            raise ValueError("人物选择必须固定档案ID与版本")
 
 
 @dataclass(frozen=True)
@@ -845,6 +808,8 @@ class ProductionRepository:
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
         self._material_assets = MaterialAssetStore(self._connect)
+        self._workspace_media_references = WorkspaceMediaReferenceAccess(
+            self._connect, self._material_source_files, self._material_assets)
         self._material_analysis = MaterialAnalysisUseCase(
             self._material_assets, self._material_source_files, connection_factory=self._connect,
             duration_reader=duration_reader or probe_duration,
@@ -855,6 +820,13 @@ class ProductionRepository:
         self._initialize_profile_stores()
         self._legacy_voice_profiles = LegacyVoiceProfileStore(self._connect)
         self._workspace_profiles = WorkspaceProductionProfileStore(self._connect)
+        self._profile_references = ProfileReferenceAccess(
+            self._connect, self._profile_records, self._media_authorizations,
+            self._material_assets, self._workspace_media_references, self._material_source_files)
+        self._profile_registration = ProfileRegistrationUseCase(
+            self._connect, self._profile_records, self._media_authorizations,
+            self._workspace_profiles, self._legacy_voice_profiles, self._profile_references,
+            self._workspace_media_references, self._material_assets)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
 
@@ -995,50 +967,7 @@ class ProductionRepository:
         *,
         require_registered: bool = False,
     ) -> Path:
-        """Resolve an approved workspace media reference without widening its root."""
-        if not workspace_id.strip():
-            raise MediaAuthorityError(
-                reason="workspace_required",
-                impact="不能解析或使用没有工作区归属的媒体。",
-                repair_action="从当前已认证工作区重新提交媒体引用。",
-            )
-        value = reference.strip()
-        root = self.video_library_path.resolve()
-        if value.startswith("workspace://"):
-            encoded_path = value.removeprefix("workspace://")
-            decoded_path = unquote(encoded_path)
-            parts = decoded_path.split("/")
-            if (
-                not decoded_path
-                or "\\" in decoded_path
-                or "\x00" in decoded_path
-                or decoded_path.startswith("/")
-                or any(part in {"", ".", ".."} for part in parts)
-            ):
-                raise MediaAuthorityError(
-                    reason="invalid_media_reference",
-                    impact="媒体引用未被解析，未向模型或渲染器传递文件路径。",
-                    repair_action="使用规范的 workspace://<relative-posix-path> 引用。",
-                )
-            candidate = root.joinpath(*parts)
-        else:
-            raise MediaAuthorityError(
-                reason="logical_media_reference_required",
-                impact="任意本机路径不能作为已授权媒体使用。",
-                repair_action="从当前工作区已批准素材选择 workspace:// 逻辑引用。",
-            )
-        resolved = candidate.resolve()
-        try:
-            resolved.relative_to(root)
-        except ValueError as exc:
-            raise MediaAuthorityError(
-                reason="media_reference_outside_authorized_root",
-                impact="越界媒体不会被读取或传给模型、ffmpeg。",
-                repair_action="选择当前工作区已授权媒体根目录内的素材。",
-            ) from exc
-        if require_registered:
-            self._require_workspace_media_reference(workspace_id, value)
-        return resolved
+        return self._workspace_media_references.resolve_workspace_media_reference(workspace_id, reference, require_registered=require_registered)
 
     def validate_material_reference_use(self, workspace_id: str, reference: str) -> None:
         """Check current material restrictions for a source retained in artifact lineage."""
@@ -1163,18 +1092,7 @@ class ProductionRepository:
         asset_id: str,
         *, connection: sqlite3.Connection | None = None,
     ) -> str:
-        asset = self.get_asset(workspace_id, asset_id, connection=connection)
-        root = self.video_library_path.resolve()
-        resolved = Path(asset.path).resolve()
-        try:
-            relative = resolved.relative_to(root)
-        except ValueError as exc:
-            raise MediaAuthorityError(
-                reason="asset_outside_authorized_root",
-                impact="素材不会被写入剪辑计划或传给渲染器。",
-                repair_action="重新扫描当前工作区已授权素材根内的文件。",
-            ) from exc
-        return f"workspace://{relative.as_posix()}"
+        return self._workspace_media_references.workspace_media_reference_for_asset(workspace_id, asset_id, connection=connection)
 
     def resolve_clip_media_reference(
         self,
@@ -1570,130 +1488,19 @@ class ProductionRepository:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         for_generation: bool = True,
     ) -> tuple[Path, float | None, float | None]:
-        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic, for_generation=for_generation)
-        if for_generation and start is not None:
-            if not profile.reference.asset_id:
-                raise ValueError("精确派生参考需要稳定来源素材")
-            asset = self.get_asset(profile.workspace_id, profile.reference.asset_id)
-            if start != 0 or end != asset.duration_seconds:
-                raise ValueError("参考范围需要精确派生输入，不能用整片替代所选范围")
-        return path, start, end
+        return self._profile_references.resolve_profile_reference(profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, for_generation=for_generation)
 
     def _profile_reference_source(
         self, profile: PersonProfile | VersionedVoiceProfile, *,
         viewer_user_id: str | None, local_diagnostic: bool, for_generation: bool,
         probe_media: bool = True,
     ) -> tuple[Path, float | None, float | None]:
-        """Re-read the source, membership and range; registration never runs a model."""
-        with self._connect() as conn:
-            row = self._profile_records._latest_profile_payload_row(
-                conn, profile.workspace_id, profile.id, person=isinstance(profile, PersonProfile))
-            current = ((self._person_profile_from_payload if isinstance(profile, PersonProfile)
-                        else self._versioned_voice_profile_from_payload)(conn, profile.workspace_id, json.loads(row["payload"]))
-                       if row is not None else profile)
-            if row is not None:
-                current = replace(current, authorization=self._current_authorization(conn, profile.workspace_id, current.authorization))
-        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-                                visibility=current.visibility, owner_user_id=current.owner_user_id):
-            raise PermissionError("档案不属于当前成员或已取消共享")
-        if not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-                                visibility=profile.visibility, owner_user_id=profile.owner_user_id):
-            raise PermissionError("档案不属于当前成员或已取消共享")
-        if profile.reference_issue is not None:
-            raise ValueError(f"历史参考不能可靠映射，请重新定位：{profile.reference_issue}")
-        reference = profile.reference
-        if reference is not None:
-            _validate_profile_reference_fields(profile)
-        logical = (profile.avatar_reference if isinstance(profile, PersonProfile)
-                   else profile.reference_audio_path)
-        path = self.resolve_workspace_media_reference(profile.workspace_id, logical,
-                                                       require_registered=reference is None or not reference.asset_id)
-        asset = None
-        if reference is not None and reference.asset_id:
-            asset = self.get_asset(profile.workspace_id, reference.asset_id)
-            if self.workspace_media_reference_for_asset(profile.workspace_id, asset.id) != logical:
-                raise ValueError("参考文件与来源素材不一致")
-        else:
-            with self._connect() as conn:
-                row = self._material_assets._asset_payload_row_by_path(conn, profile.workspace_id, str(path))
-            if row is not None:
-                asset = self._asset_from_row(row)
-        if asset is not None and not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-                                                      visibility=asset.visibility, owner_user_id=asset.owner_user_id):
-            raise PermissionError("来源素材不属于当前成员或已取消共享")
-        if not path.is_file() or path.stat().st_size <= 0:
-            raise ValueError("参考文件失联或为空，请重新定位原参考")
-        if asset is not None:
-            if abs(path.stat().st_mtime - asset.modified_at.timestamp()) > .00001:
-                raise ValueError("原参考已变化，请重新定位并登记新版本")
-            if asset.media_type == "audio" and path.suffix.lower() == ".wav":
-                intact = path.stat().st_size == asset.size_bytes
-                _profile_wav_duration(path)
-            else:
-                intact = (self._material_file_intact(asset) if probe_media else
-                          not path.is_symlink() and path.stat().st_size == asset.size_bytes)
-            if not intact:
-                raise ValueError("原参考已变化，请重新定位并登记新版本")
-            if isinstance(profile, PersonProfile) and asset.media_type not in {"video", "image"}:
-                raise ValueError("人物参考需要已登记的视频或图片")
-            if isinstance(profile, VersionedVoiceProfile) and asset.media_type not in {"audio", "video"}:
-                raise ValueError("声音参考需要已登记音频或视频")
-            if asset.use_state == "excluded" or (for_generation and asset.use_state not in {"available", "not_for_publish"}):
-                raise MediaAuthorityError(reason=f"source_{asset.use_state}",
-                    impact="来源素材的使用限制阻断本次预览或生成，未采用该参考。",
-                    repair_action=f"来源素材使用状态限制：{asset.use_state}；请在来源详情确认允许的用途或选择其他参考。")
-            duration = asset.duration_seconds
-            if asset.media_type != "image" and (duration is None or not math.isfinite(duration) or duration <= 0):
-                raise ValueError("来源时长未知，请重新定位有效参考范围")
-            if reference is not None and reference.segment_id:
-                segment = next((item for item in asset.segments if item.id == reference.segment_id), None)
-                if segment is None or segment.asset_id != asset.id:
-                    raise ValueError("参考片段已失联，请重新选择")
-                if reference.start_seconds is None or reference.end_seconds is None:
-                    raise ValueError("片段参考需要明确起止时间")
-                if reference.start_seconds < segment.start_seconds or reference.end_seconds > segment.end_seconds:
-                    raise ValueError("参考范围超出来源片段")
-                if segment.usage_role == "exclude":
-                    raise ValueError("来源片段已排除使用")
-        else:
-            if isinstance(profile, PersonProfile):
-                raise ValueError("人物参考缺少稳定素材登记，请重新定位")
-            duration = _profile_wav_duration(path)
-            if not local_diagnostic:
-                raise PermissionError("历史声音来源缺少成员归属，请重新导入参考")
-        if isinstance(profile, VersionedVoiceProfile) and path.suffix.lower() == ".wav":
-            duration = _profile_wav_duration(path)
-        start = reference.start_seconds if reference else None
-        end = reference.end_seconds if reference else None
-        if start is not None and (duration is None or end is None or end > duration):
-            raise ValueError("参考范围超出有效来源时长")
-        if for_generation:
-            for version in (profile, current):
-                failure = profile_use_failure(version, content_type=("person_likeness" if isinstance(profile, PersonProfile) else "voice"),
-                                              usage_scope=("avatar_lipsync" if isinstance(profile, PersonProfile) else "narration"))
-                if failure is not None:
-                    raise ValueError(f"参考使用受限：{failure}")
-        return path, start, end
+        return self._profile_references._profile_reference_source(profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=probe_media)
 
     def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
                                 viewer_user_id: str | None = None, local_diagnostic: bool = False,
                                 for_generation: bool = True) -> ProfileReferenceInput:
-        """Qualified source facts only; never decode/derive during device admission."""
-        from app.profile_reference_media import ProfileReferenceInput
-        path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=False)
-        reference = profile.reference
-        asset = self.get_asset(profile.workspace_id, reference.asset_id) if reference and reference.asset_id else None
-        kind = "voice_audio" if isinstance(profile, VersionedVoiceProfile) else "person_visual"
-        if kind == "voice_audio" and asset and asset.media_type not in {"audio", "video"}:
-            raise ValueError("声音参考需要有效音频或视频的声音范围")
-        duration = asset.duration_seconds if asset else _profile_wav_duration(path)
-        return ProfileReferenceInput.from_source(
-            workspace_id=profile.workspace_id, profile_id=profile.id, profile_version=profile.version,
-            asset_id=asset.id if asset else None, segment_id=reference.segment_id if reference else None,
-            source_path=path, source_type=asset.media_type if asset else "audio", kind=kind,
-            start_seconds=start, end_seconds=end, source_duration_seconds=duration)
+        return self._profile_references.profile_reference_input(profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, for_generation=for_generation)
 
     def materialize_profile_reference(self, profile: PersonProfile | VersionedVoiceProfile, *,
                                       grant_context, viewer_user_id: str | None = None,
@@ -1721,8 +1528,6 @@ class ProductionRepository:
         return materialize_reference(source, output_root=self.video_library_path / ".profile_references",
                                      grant_context=grant_context, recheck=recheck)
 
-    def _require_profile_write_owner(self, conn, table: str, profile, verified_owner_user_id, local_diagnostic):
-        return self._profile_records._require_profile_write_owner(conn, table, profile, verified_owner_user_id, local_diagnostic)
 
     def resolve_voice_reference(self, voice: VersionedVoiceProfile, *,
                                 viewer_user_id: str | None = None,
@@ -1744,35 +1549,13 @@ class ProductionRepository:
 
     def set_default_versioned_voice(self, workspace_id: str, voice_profile_id: str, version: str, *,
                                     viewer_user_id: str | None = None, local_diagnostic: bool = False) -> VersionedVoiceProfile:
-        if not voice_profile_id.strip() or not version.strip():
-            raise ValueError("默认声音必须指定准确档案与版本")
-        voice = self.get_versioned_voice_profile(workspace_id, voice_profile_id, version)
-        # A default can be stored without a model, but must point at a readable real reference.
-        self.resolve_profile_reference(voice, viewer_user_id=viewer_user_id,
-                                       local_diagnostic=local_diagnostic, for_generation=False)
-        profile = self.get_profile(workspace_id)
-        profile.default_voice_profile_id, profile.default_voice_version = voice.id, voice.version
-        self.save_profile(profile)
-        return voice
+        return self._profile_registration.set_default_versioned_voice(workspace_id, voice_profile_id, version, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
     def get_default_versioned_voice(self, workspace_id: str) -> VersionedVoiceProfile | None:
-        profile = self.get_profile(workspace_id)
-        if profile.default_voice_profile_id is None and profile.default_voice_version is None:
-            return None
-        if not profile.default_voice_profile_id or not profile.default_voice_version:
-            raise ValueError("默认声音引用不完整，请重新选择准确版本")
-        return self.get_versioned_voice_profile(workspace_id, profile.default_voice_profile_id,
-                                                profile.default_voice_version)
+        return self._profile_registration.get_default_versioned_voice(workspace_id)
 
     def creation_plan_voice_reference(self, workspace_id, profile_id, version, *, viewer_user_id=None, local_diagnostic=False):
-        voice = self.get_versioned_voice_profile(workspace_id, profile_id, version)
-        self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-        auth = self.current_profile_authorization(voice)
-        return CreationPlanVoiceReference(profile_id=voice.id, version=voice.version,
-            person_profile_id=voice.person_profile_id, person_version=voice.person_version,
-            person_authorization_id="", person_authorization_version="",
-            authorization_id=auth.id if auth else "", authorization_version=auth.version if auth else "",
-            language=voice.language, model_id=voice.model_id)
+        return self._profile_registration.creation_plan_voice_reference(workspace_id, profile_id, version, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
     def automatic_material_segments(self, workspace_id, *, viewer_user_id=None, local_diagnostic=False):
         result = []
@@ -1786,46 +1569,14 @@ class ProductionRepository:
 
     def creation_plan_person_reference(self, workspace_id: str, profile_id: str, version: str, *,
                                        viewer_user_id: str | None = None, local_diagnostic: bool = False) -> CreationPlanPersonReference:
-        selected = CreationPlanPersonReference(profile_id, version)
-        person = self.get_person_profile(workspace_id, selected.profile_id, selected.version)
-        self.profile_reference_input(person, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-        return selected
+        return self._profile_registration.creation_plan_person_reference(workspace_id, profile_id, version, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
-    def _retain_profile_authorization(self, table, profile):
-        with self._connect() as conn:
-            return self._profile_records._retain_profile_authorization(conn, table, profile)
 
     def save_person_profile(
         self, person: PersonProfile, *, verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> PersonProfile:
-        person = self._retain_profile_authorization("person_profiles", person)
-        _validate_person_profile(person)
-        if person.reference is not None:
-            person = replace(person, owner_user_id=content_owner(verified_owner_user_id))
-            self.resolve_profile_reference(person, viewer_user_id=verified_owner_user_id,
-                                           local_diagnostic=local_diagnostic, for_generation=False)
-            if person.reference.asset_id is None:
-                path = self.resolve_workspace_media_reference(person.workspace_id, person.avatar_reference)
-                asset = self._asset_by_path(person.workspace_id, str(path))
-                person = replace(person, reference=replace(person.reference, asset_id=asset.id))
-        with self._connect() as conn:
-            if person.reference is not None:
-                self._require_profile_write_owner(conn, "person_profiles", person, verified_owner_user_id, local_diagnostic)
-            if person.avatar_reference.startswith("workspace://"):
-                self.resolve_workspace_media_reference(
-                    person.workspace_id,
-                    person.avatar_reference,
-                )
-                self._claim_workspace_media_reference(
-                    conn,
-                    workspace_id=person.workspace_id,
-                    reference=person.avatar_reference,
-                )
-            if person.authorization is not None:
-                self._save_authorization(conn, person.workspace_id, person.authorization)
-            self._profile_records._save_person_profile(conn, person)
-        return person
+        return self._profile_registration.save_person_profile(person, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
     def get_person_profile(
         self,
@@ -1850,37 +1601,7 @@ class ProductionRepository:
         voice: VersionedVoiceProfile, *, verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
-        voice = self._retain_profile_authorization("versioned_voice_profiles", voice)
-        _validate_versioned_voice_profile(voice)
-        if voice.reference is not None:
-            voice = replace(voice, owner_user_id=content_owner(verified_owner_user_id))
-            self.resolve_profile_reference(voice, viewer_user_id=verified_owner_user_id,
-                                          local_diagnostic=local_diagnostic, for_generation=False)
-            if voice.reference.asset_id is None:
-                path = self.resolve_workspace_media_reference(voice.workspace_id, voice.reference_audio_path)
-                with self._connect() as conn:
-                    row = self._material_assets._asset_id_row_by_path(
-                        conn, voice.workspace_id, str(path))
-                if row is not None:
-                    voice = replace(voice, reference=replace(voice.reference, asset_id=str(row["id"])))
-        with self._connect() as conn:
-            if voice.reference is not None:
-                self._require_profile_write_owner(conn, "versioned_voice_profiles", voice, verified_owner_user_id, local_diagnostic)
-            self.resolve_workspace_media_reference(
-                voice.workspace_id,
-                voice.reference_audio_path,
-            )
-            if voice.person_profile_id:
-                self._get_person_profile(conn, voice.workspace_id, voice.person_profile_id, voice.person_version)
-            if voice.authorization is not None:
-                self._save_authorization(conn, voice.workspace_id, voice.authorization)
-            self._claim_workspace_media_reference(
-                conn,
-                workspace_id=voice.workspace_id,
-                reference=voice.reference_audio_path,
-            )
-            self._profile_records._save_versioned_voice_profile(conn, voice)
-        return voice
+        return self._profile_registration.save_versioned_voice_profile(voice, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
     def get_versioned_voice_profile(
         self,
@@ -2100,26 +1821,7 @@ class ProductionRepository:
         verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
     ) -> VersionedVoiceProfile:
-        """Explicitly map a legacy voice row; no automatic migration is performed."""
-        if language not in {"zh", "en", "zh-en"}:
-            raise ValueError("配音语言必须是 zh、en 或 zh-en")
-        legacy = self.get_voice_profile(workspace_id, legacy_voice_profile_id)
-        versioned = VersionedVoiceProfile(
-            id=legacy.id,
-            workspace_id=workspace_id,
-            person_profile_id=person_profile_id,
-            person_version=person_version,
-            version=version,
-            language=language,
-            reference_audio_path=legacy.reference_audio_path,
-            reference_text=legacy.reference_text,
-            model_id=legacy.model_id,
-            authorization=authorization,
-            reference=ProfileReference(),
-            display_name=legacy.name,
-        )
-        return self.save_versioned_voice_profile(versioned, verified_owner_user_id=verified_owner_user_id,
-                                                 local_diagnostic=local_diagnostic)
+        return self._profile_registration.migrate_legacy_voice_profile(workspace_id=workspace_id, legacy_voice_profile_id=legacy_voice_profile_id, person_profile_id=person_profile_id, person_version=person_version, version=version, language=language, authorization=authorization, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
     def list_applicable_pronunciation_entries(
         self,
@@ -2151,13 +1853,6 @@ class ProductionRepository:
             )
         ]
 
-    def _save_authorization(
-        self,
-        conn: sqlite3.Connection,
-        workspace_id: str,
-        authorization: Authorization,
-    ) -> None:
-        return self._media_authorizations._save_authorization(conn, workspace_id, authorization)
 
     def _claim_workspace_media_reference(
         self,
@@ -2166,43 +1861,8 @@ class ProductionRepository:
         workspace_id: str,
         reference: str,
     ) -> None:
-        row = conn.execute(
-            "SELECT workspace_id FROM workspace_media_references WHERE reference = ?",
-            (reference,),
-        ).fetchone()
-        if row is not None and str(row["workspace_id"]) != workspace_id:
-            raise MediaAuthorityError(
-                reason="media_reference_owned_by_another_workspace",
-                impact="其他工作区登记的媒体不会被当前声音档案或创作任务使用。",
-                repair_action="从当前工作区选择已授权的媒体引用，或由原工作区重新授权。",
-            )
-        conn.execute(
-            """
-            INSERT INTO workspace_media_references (reference, workspace_id, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(reference) DO UPDATE SET
-                workspace_id = excluded.workspace_id,
-                updated_at = excluded.updated_at
-            """,
-            (reference, workspace_id, utc_now().isoformat()),
-        )
+        return self._workspace_media_references.claim_workspace_media_reference(conn, workspace_id=workspace_id, reference=reference)
 
-    def _require_workspace_media_reference(
-        self,
-        workspace_id: str,
-        reference: str,
-    ) -> None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT workspace_id FROM workspace_media_references WHERE reference = ?",
-                (reference,),
-            ).fetchone()
-        if row is None or str(row["workspace_id"]) != workspace_id:
-            raise MediaAuthorityError(
-                reason="media_reference_not_authorized_for_workspace",
-                impact="未登记给当前工作区的媒体不会被读取或传给模型、ffmpeg。",
-                repair_action="先将该媒体作为当前工作区已授权声音引用登记，或选择该工作区已有的逻辑引用。",
-            )
 
 
 
@@ -9177,24 +8837,7 @@ class ProductionRepository:
         return self._material_assets.find_asset_by_source_url(workspace_id, source_url)
 
     def _material_file_intact(self, asset: MaterialAsset) -> bool:
-        """原文件是否仍完整可读——大小相等只是其中一条。
-
-        登记时非空，这里同样要求非空；还要是普通文件，并且真实格式仍能被本地
-        工具读出来、且与登记时的类型一致。只做格式判定，不做内容分析。
-        """
-        path = Path(asset.path)
-        try:
-            if path.is_symlink() or not path.is_file():
-                return False
-            size = path.stat().st_size
-        except OSError:
-            return False
-        if size == 0 or size != asset.size_bytes:
-            return False
-        try:
-            return _probe_file_media_type(path) == asset.media_type
-        except OSError:
-            return False
+        return self._material_source_files.material_file_intact(asset)
 
     def existing_link_material(
         self, workspace_id: str, source_url: str, *,
@@ -9871,6 +9514,8 @@ def _local_adoption_repository(cls, database_path, media_root):
     repository.database_path = Path(database_path).expanduser()
     repository._material_source_files = MaterialSourceFileAccess(repository._connect, Path(media_root).expanduser())
     repository._material_assets = MaterialAssetStore(repository._connect)
+    repository._workspace_media_references = WorkspaceMediaReferenceAccess(
+        repository._connect, repository._material_source_files, repository._material_assets)
     repository._initialize_profile_stores()
     return repository
 
@@ -10183,22 +9828,6 @@ def _person_render_identity(render: PersonRender) -> tuple[str, ...]:
     )
 
 
-def _profile_wav_duration(path: Path) -> float:
-    if path.suffix.lower() != ".wav":
-        raise ValueError("声音参考需要有效 WAV；视频来源需先明确派生音频")
-    try:
-        with wave.open(str(path), "rb") as audio:
-            rate, frames = audio.getframerate(), audio.getnframes()
-            if rate <= 0 or frames <= 0 or audio.getnchannels() not in {1, 2} or audio.getsampwidth() not in {1, 2, 3, 4}:
-                raise ValueError("声音参考 WAV 无有效音频")
-            duration = frames / rate
-            if not 1 <= duration <= 120:
-                raise ValueError("声音参考 WAV 时长必须在 1–120 秒之间")
-            if len(audio.readframes(frames)) != frames * audio.getnchannels() * audio.getsampwidth():
-                raise ValueError("声音参考 WAV 已截断")
-            return duration
-    except (EOFError, wave.Error) as exc:
-        raise ValueError("声音参考不是有效 PCM WAV") from exc
 
 
 def _pronunciation_entry_payload(entry: PronunciationEntry) -> dict[str, object]:
@@ -10729,59 +10358,10 @@ def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
         raise ValueError("终态失败或不可用预览必须包含结束时间、原因、影响和修复动作")
 
 
-def _validate_profile_reference_fields(profile) -> None:
-    if profile.use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
-        raise ValueError("档案使用状态无效")
-    if profile.visibility not in {"private", "shared"}:
-        raise ValueError("档案可见范围无效")
-    reference = profile.reference
-    if reference is None:
-        raise ValueError("新档案需要明确来源引用，不能猜测历史来源")
-    if profile.reference_issue is not None:
-        raise ValueError("历史参考未可靠映射，请先重新定位来源")
-    if reference.segment_id and not reference.asset_id:
-        raise ValueError("参考片段必须绑定素材")
-    if (reference.start_seconds is None) != (reference.end_seconds is None):
-        raise ValueError("参考范围必须同时包含起止时间")
-    if reference.start_seconds is not None:
-        if any(type(value) not in {int, float} or not math.isfinite(value)
-               for value in (reference.start_seconds, reference.end_seconds)):
-            raise ValueError("参考时间必须是有限数值")
-        if reference.start_seconds < 0 or reference.end_seconds <= reference.start_seconds:
-            raise ValueError("参考范围无效")
 
 
-def _validate_person_profile(person: PersonProfile) -> None:
-    if not all(
-        value.strip()
-        for value in (person.id, person.workspace_id, person.display_name, person.version, person.avatar_reference)
-    ):
-        raise ValueError("人物档案缺少必要标识或形象引用")
-    _validate_profile_reference_fields(person)
-    if person.authorization is not None and person.authorization.workspace_id != person.workspace_id:
-        raise ValueError("人物授权不属于当前工作区")
 
 
-def _validate_versioned_voice_profile(voice: VersionedVoiceProfile) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            voice.id,
-            voice.workspace_id,
-            voice.version,
-            voice.reference_audio_path,
-        )
-    ):
-        raise ValueError("声音档案缺少必要标识或参考资料")
-    if voice.language not in {"zh", "en", "zh-en"}:
-        raise ValueError("声音语言必须是 zh、en 或 zh-en")
-    if bool(voice.person_profile_id) != bool(voice.person_version):
-        raise ValueError("人物关系必须同时指定人物和版本")
-    _validate_profile_reference_fields(voice)
-    if voice.reference is not None and not voice.display_name.strip():
-        raise ValueError("独立声音需要名称")
-    if voice.authorization is not None and voice.authorization.workspace_id != voice.workspace_id:
-        raise ValueError("声音授权不属于当前工作区")
 
 
 def _validate_pronunciation_entry(entry: PronunciationEntry) -> None:

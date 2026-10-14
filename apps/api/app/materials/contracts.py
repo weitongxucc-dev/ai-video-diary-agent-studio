@@ -212,3 +212,19 @@ def selectable_segment_usage_role(asset: MaterialAsset, segment: MaterialSegment
     if segment.usage_role_confidence >= 0.7:
         return segment.suggested_usage_role
     return "unassigned"
+
+
+class MediaAuthorityError(ValueError):
+    """A fail-closed media identity or authorization error for API callers."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        impact: str,
+        repair_action: str,
+    ) -> None:
+        self.reason = reason
+        self.impact = impact
+        self.repair_action = repair_action
+        super().__init__(repair_action)

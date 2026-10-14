@@ -59,3 +59,14 @@ def knowledge_item_readable(
     if not owner_user_id:
         return False
     return user_id == owner_user_id
+
+
+def content_owner(verified_user_id: str | None) -> str | None:
+    """把一次已验证身份归一成内容的上传者标识。
+
+    来源是 Supabase 已验证的 AuthPrincipal.user_id 或本地成员令牌解析出的
+    member_id——两种既有身份在此归一，不新造第二套规则。dataclass 里已有的
+    owner_user_id 不作数（那是调用方能自填的字段）。没有可解析身份时留空：
+    这条内容不会被算成任何成员的私有资产。
+    """
+    return str(verified_user_id or "").strip() or None

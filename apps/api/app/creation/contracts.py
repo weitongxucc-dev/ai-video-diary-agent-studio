@@ -313,3 +313,27 @@ class ClipSourceSelection:
     segment_id: str | None = None
     reference: str | None = None
     role: str | None = None
+
+
+@dataclass(frozen=True)
+class CreationPlanVoiceReference:
+    profile_id: str
+    version: str
+    person_profile_id: str
+    person_version: str
+    person_authorization_id: str
+    person_authorization_version: str
+    authorization_id: str
+    authorization_version: str
+    language: str
+    model_id: str
+
+
+@dataclass(frozen=True)
+class CreationPlanPersonReference:
+    profile_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        if not self.profile_id.strip() or not self.version.strip():
+            raise ValueError("人物选择必须固定档案ID与版本")

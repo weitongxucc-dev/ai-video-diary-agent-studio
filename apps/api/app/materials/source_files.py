@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
+from app.materials.contracts import MaterialAsset
+from app.media_link_import import _probe_file_media_type
 
 
 class MaterialSourceFileAccess:
@@ -49,3 +51,23 @@ class MaterialSourceFileAccess:
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
             raise ValueError("素材文件不存在或格式不支持")
         return path
+
+    def material_file_intact(self, asset: MaterialAsset) -> bool:
+        """原文件是否仍完整可读——大小相等只是其中一条。
+
+        登记时非空，这里同样要求非空；还要是普通文件，并且真实格式仍能被本地
+        工具读出来、且与登记时的类型一致。只做格式判定，不做内容分析。
+        """
+        path = Path(asset.path)
+        try:
+            if path.is_symlink() or not path.is_file():
+                return False
+            size = path.stat().st_size
+        except OSError:
+            return False
+        if size == 0 or size != asset.size_bytes:
+            return False
+        try:
+            return _probe_file_media_type(path) == asset.media_type
+        except OSError:
+            return False
