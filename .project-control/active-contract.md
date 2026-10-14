@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 音频编辑五源已75642af集成/WRITE_LEASE_RETURN，旧证据冻结。REF-R3-OUTPUT-OBSERVATION-PREPARATION-20261015仅新fresh-api-output-observation-preparation/**证据写权，定向output_observation一个剩余action及直接依赖；产品只读，零import/test/media。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-OUTPUT-OBSERVATION-EXECUTION-20261015独占main.py、task_audio.py及NEW creation/output_observation_use_case.py、tests/test_output_observation_application.py四源，842d7172基线；一个action及精准三个共享reader迁出，一次normal后一个独立关键族；所有旧包冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -23,7 +23,23 @@
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
-### 当前输出观察执行只读准备
+### 当前输出观察显式执行实施包
+
+`REF-R3-OUTPUT-OBSERVATION-EXECUTION-20261015` 只给当前API准确四源及新test-runs/refactor-20261014/fresh-api-output-observation-execution/**证据写权。准确四路径apps/api/app/main.py、apps/api/app/task_audio.py、NEW apps/api/app/creation/output_observation_use_case.py、NEW apps/api/tests/test_output_observation_application.py；初始绑定见fresh-root-review/output-observation-execution-implementation-binding.json SHA42ff607a9a3c6692e2cef1ddff522df8143e9b333e4b5eef49f34cb6e0bb8fd4；固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140，四路径干净/空index/两个NEW不存在，初始SHA准确绑定。R4三个源码已集成/归还，production、所有其它owner/旧证据只读，QA尚无新写权。
+
+只读准备SOURCE_RELEASE SHA75d39498c072f0f9b3487112851de98258784e798be43060102b54e573d3677e已root output-observation-preparation-reviewed.json SHA85fbd7b5d317158a842a2263ce955b9cf629ed2384b221ae18573b17e4171779核16artifact/15直接source/62完整目标AST、明确读取窗口与report相对链接。62目标在捕获当前/原75642af/已集成842d7172全部同AST，14文件同原Git，production整文件与原Git不同但当前与842d7172一致；不将R4写期冒充全文件原Git。首准备report相对链接失败与只读locator错误保留，root先误认report_sha字段为Markdown及scoped resource branch含后续elif，两处只校正observer语义，JSON/Markdown原manifest及原分支body均匹配；零产品/import/collect/test/media，不要求作者重封或重跑。精准额外依赖只有main._creation_task_output_path、_quality_check_source、_task_media_outputs_current三现有reader，不新资格门。
+
+一个具体OutputObservationUseCase及有限中立拒绝错误承接原version/registered_output/facts/真实采样/结果验证与三reader规则。显式可信actor、task/base/target、原arguments/typed_source、原job/event/context和有限配置/预算；复用现observe_output的run_command端口及原CpuRenderGrantContext/run_granted_command/HostProcessProbe，不main/FastAPI/Request/principal/ambient/handler注册、泛dispatcher/callback/deps袋、第二calculator/ACL/store/journal/schema。main仅原输入/认证、同request observation claim→query/result、HTTP映射与具体零IO组装；移除该action装饰注册，在TaskMediaJobs反射/ambient之前直接owner execute/validate。其它六action、command/exact非音频、音频/编辑已过owner和共享claim-result/checkpoint/通知/许可边界不改变；旧桥明确拒绝该action，不能偷偷HTTP重入。
+
+精准三reader完整原资格/物理SHA-size/版本/原已验证output签名、错误及调用顺序迁入同owner；main保留原签名有限transport delegate供quality/download/receipt等现消费者，不复制实现或追加final render资格。原final是rendered plan+登记kind/path+真实文件摘要，media_job另有succeeded/actor/base及PNG或MP4来源规则；不能把两者强并或假称完整成片生产资格。TaskAudio来源/材料规则与graphic owner仍唯一。原字段/clip-overlay定位/timeline sample时间/64KiB结果/临时采样清理、原source快照再核、cancel和result→verified持久/重试阶段保持，不能要求全部DB/FS无痕或改原wake。
+
+资源必须保留原registered output读取之后CPU budget获取及None拒绝，再OCR预算/worker摘要分支与原字段/检查时点；CPU/observation解析函数本身可能抛HostBudgetUncalibrated，不得提前到source资格之前或让OCR ready跳过CPU前置。可用同owner有限source prepare→入口配置获取→同owner resource seal保持原顺序，不复制源规则、另起通用配置/回调层或改变预算/profile/mode。原两resource分支与worker unavailable原因保持，实际生产预算/default/RSS/fullPGID/worker能力未知，不猜值或宽门。
+
+只一个新normal application节点：合法自有原grant生成、登记且维度匹配的真实MP4，经实际公开观察请求/真实actor/JobRun/TaskEvent/原store/来源资格与原runner采样，再固定result读取和同request回放不二次job/采样。旧quality seed_render默认opaque fake-video和无runtime仅可读fixture，不能直接冒充合法采样；复用已经准确记录的合成fixture caps与真实grant执行规则，Resources准入替身明确分层，不新生产profile/环境配置或宿主标定。source/实际child scripts/直接fixtures执行前seal、prepost、actual模块origin和after-run SHA及实际factory/runtime owner准确记录；只封实际必要相关闭包，旧未改变源按固定Git/精准SHA审计复用，不复制无关旧测试/全仓或为再次封版重跑通过node。首次失败保留，仅复验失败或真正受影响项，不旧门collect/矩阵/model/GUI/native/env/account用户DB。
+
+准确四源SOURCE_RELEASE/root审核后一个独立关键族最多三个真实边界代表：测量后外部native source ACL或base真实变化由原final检查拒绝；首实际受grant采样后公开cancel/下一check拒绝与临时清理（不称inflight全PGID）；真实result已持久后SQLite晚verified INSERT失败，明确原阶段，修复自己的trigger后同输入显式retry只用cached结果不再测量。normal成功仅必要前置，不重跑作者节点。QA门届时另绑，API不能自己作关键独立接受。语义REBASE_ACK后直接实施，无第二START；额外路径或实际资格/持久/状态/资源规则需变先一个精准依赖，不能自行扩批。
+
+### 已履行输出观察执行只读准备（冻结证据）
 
 `REF-R3-OUTPUT-OBSERVATION-PREPARATION-20261015` 仅当前API线程新 `test-runs/refactor-20261014/fresh-api-output-observation-preparation/**` 证据写权；所有产品、旧音频作者/修正/独立门及其它已过批次冻结，不恢复旧租约。产品基线75642af2574e2c7d2e085f7ba56098454c9dca4f，R4只写另绑production/types/读取四路径，不改main；准备只跟踪一个尚由_TASK_MEDIA_HANDLERS/signature.bind、TASK_MEDIA_CONTEXT及装饰路由承担的output_observation。目标精确observe_creation_task_output、_prepare_observation_request、_observation_version、_registered_observation_output及TaskMediaJobs该action的facts/execute/result/来源封存与组装；只读必要的已存在observe_output/DTO/qualification/artifact/ACL/resource/grant与一个直接旧测试helper，不重新清点其余六action、全main/production或已过音频。
 
