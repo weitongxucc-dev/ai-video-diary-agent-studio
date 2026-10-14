@@ -43,6 +43,7 @@ from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase, _material_analysis_public_error
+from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.source_files import MaterialSourceFileAccess
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
@@ -846,8 +847,8 @@ class ProductionRepository:
         self._material_assets = MaterialAssetStore(self._connect)
         self._material_analysis = MaterialAnalysisUseCase(
             self._material_assets, self._material_source_files, connection_factory=self._connect,
-            duration_reader=duration_reader or self._probe_duration,
-            scene_reader=scene_reader or self._detect_scene_boundaries,
+            duration_reader=duration_reader or probe_duration,
+            scene_reader=scene_reader or detect_scene_boundaries,
             visual_provider=visual_provider or UnavailableVisualSemanticProvider(),
             speech_analyzer=speech_analyzer, visual_understanding=visual_understanding,
         )
@@ -9313,54 +9314,7 @@ class ProductionRepository:
     def _validated_library_file(self, raw_path: str) -> Path:
         return self._material_source_files.validated_library_file(raw_path)
 
-    def _probe_duration(self, path: Path) -> float:
-        completed = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return float(completed.stdout.strip())
 
-    def _detect_scene_boundaries(self, path: Path, duration: float) -> list[float]:
-        completed = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-i",
-                str(path),
-                "-vf",
-                "select='gt(scene,0.35)',showinfo",
-                "-an",
-                "-f",
-                "null",
-                "-",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode != 0:
-            raise subprocess.CalledProcessError(
-                completed.returncode,
-                completed.args,
-                output=completed.stdout,
-                stderr=completed.stderr,
-            )
-        boundaries = [
-            float(match.group(1))
-            for match in re.finditer(r"pts_time:([0-9]+(?:\.[0-9]+)?)", completed.stderr)
-        ]
-        return [value for value in boundaries if 0 < value < duration]
 
     _authorization_from_payload = staticmethod(_authorization_from_payload)
 
