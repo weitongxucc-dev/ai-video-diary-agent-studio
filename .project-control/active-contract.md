@@ -14,9 +14,9 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-FRAME-SAMPLING-STRATEGY-PREPARATION-20261015仅fresh-runtime/output-observation-frame-sampling-strategy-preparation/**新只读策略证据；现已核16原型/边界冻结，不复跑。沿原grant/deadline/byte/thread门，结合准确FFmpeg官方语义给一个覆盖真实longGOP缺口的可检验候选，零native/产品/预算变化。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-PREPARATION-20261015仅fresh-runtime/output-observation-trim-last-frame-preparation/**新只读证据；核一条trim整数截止＋最后PNG覆盖输出的具体假设，不重复ffprobe16包研究/原型。零native/app/test/产品/预算，字段与可执行候选尚未批准。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-NARRATION-READS-20261015独占production.py、creation/task_input_reads.py、tests/test_creation_task_input_reads.py三现源与fresh-r4-authorizations/narration-reads/**新证据；两个原SELECT迁到既有sameconn raw reader、一个合并最小自测，原写/upsert/事务/旧节点不变，无独立QA族。API六源互斥。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白读取三源已df1dd384精确集成/WRITE_LEASE_RETURN。本批REF-R4-NARRATION-WRITE-PREPARATION-20261015仅fresh-r4-authorizations/narration-write-preparation/**新只读证据：原旁白分段唯一写body、所有sameconn调用与共同不变量；最多8精准源，零产品/import/test/native。准备不授予产品写权，不复跑旧批。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
@@ -39,7 +39,25 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前实际帧采样策略只读准备
+### 本批旁白写入边界只读准备
+
+`REF-R4-NARRATION-WRITE-PREPARATION-20261015` 只写test-runs/refactor-20261014/fresh-r4-authorizations/narration-write-preparation/**。产品基线df1dd384b42e8aa135f92390fb026d2c5dd302c6；只读当前production.py的_upsert_narration_segments、_narration_segment_values、_validate_narration_segment完整body及三个原同连接调用者save_narration_segments、实际联合editorial保存、complete_creation_task_narration，循直接命中读取原任务/文案/分段类型、codec、digest、来源资格和必要有限测试，最多8精准源。ProductionRepository继续唯一公开任务事实入口，借用conn不能自connect/commit或把跨轨联合提交拆开。原任务/当前确认文案/完整sections与状态、录音/生成来源身份版本摘要、原唯一性/排序、旧错误时点与外部文件/早期artifact阶段保持；先从完整实际body判断所有权，不预定新Store/回调袋/通用端口或仅为行数拆分。
+
+只提出一个有实质职责与有限输入输出的最小实施包和精确互斥文件，说明哪些body唯一移交、哪些跨对象协调留在原事务、旧活跃调用如何退出及一个正常最小自测；若会触及来源资格或联合写不变量，再提一个合并关键独立族最多三代表，不为每个SQL/方法另开门。若实际规则已高内聚且可移交边界无收益，给具体body/caller有限证据关闭该范围，不制造无依据抽象。API六WIP只读，不取live main/task_audio全字节混入执行tuple；需要其有限caller时从固定df1dd384 Git取原目标AST并单列，不复制整仓/用户数据。零产品/app import/collect/test/model/native/GUI/env/账号DB，旧所有release/测试冻结；只读REBASE_ACK核基线、8源上限、sameconn/资格/互斥后直接准备。READONLY_PREPARATION_RELEASE即冻结，root审核后另绑精确产品租约或范围关闭；不是R4/R9接受。
+
+### 旁白读取三源已集成与归还
+
+`REF-R4-NARRATION-READS-20261015` 三源已df1dd384b42e8aa135f92390fb026d2c5dd302c6精确集成，cached/committed字节等SOURCE_RELEASE SHA36ad19d7d21e79f9fa164ce960cf92d402c2ae1aa9b3eac88986d86e2607f6f9；即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN已发资料。root narration-reads-release-reviewed.json SHAd552ad15f2d7ec35ad3ed80ea854d2b61fdd9858ef13b2bc7ccf5b924522be19核29artifact、51源48固定Git、2attempt全prepost/7脚本/2fixtureAST、50→51真实imports/49源与2namespace loader守卫，whole Production只两导入与sameconn读表达式、raw module只两原SQL/参数/fetch/signature，原selector/None-only/after-with错误DTO、所有写及旧测试AST/bytes保留。首次namespace origin=None收集错误新node未执行；证据守卫修正后仅该node1PASS0.50s。root新产品测试0、普通读取不另加QA；全旁白仓储/R4/R9未接受。原三源/证据冻结不复跑，root集成记录narration-reads-integrated.json SHA39aaf43383ee7bd0e678b85c363d2532e78fd9e21b0461acc498171cd3e8dde5。API正在实施六源仍固定80c76a7d加自身overlay，资料独立集成差额单列，不要求它混入另批live源码或重复ACK/normal；全HEAD同候选接受仍在后续。
+
+### 本批最后帧具体假设只读准备
+
+`REF-R3-TRIM-LAST-FRAME-PREPARATION-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-trim-last-frame-preparation/**。上一策略release672480be3521d3ee8cd42c92a09057fcd5cfcefd3ec194b310bc8a06c16369fe已root output-observation-frame-sampling-strategy-preparation-reviewed.json SHA88d8ca01b262432988c0345b4196d441d33f787cbd02a3a4454c8f764fe43368核5artifact/8逻辑源7当前Git/2冻结main函数/15完整AST/6旧证据和最终封存区间；零app/native/test，ATOMIC_FRAME_IDENTITY_AND_STOP_WITNESS缺口保留，WRITE_LEASE_RETURN即时已发，旧包冻结。原资源门、请求消费者、字段提案与未知生产验收沿上一报告，不重抄/重查。
+
+新差额只核root提出的一条未经证明的机制：keyframe input seek保留preroll/copyts；filter上游showinfo保留整数PTS/time_base，trim仅设end_pts=floor(absolute T/time_base)+1；下游scale/同帧身份记录，image2 update=1/atomic_writing与passthrough最终保留最后一个PNG，不用frames:v=1取首帧。trim第一张PTS>=截止的丢弃帧拟作为呈现后继见证；没有后继时必须另证明真实demux EOF和decoder drain，进程rc0/机械trim EOF不替代。只从原设备grant/deadline/stderr/输出门判断是否存在有限可检验链，不能用reverse缓存全片/新帧上限/加大16/重复从头参考解码去补缺口。实际后继重排正确性、last PNG和所记PTS一对一、缺PTS或同步重写、非零起点/整数取整、尾部真实EOF见证，以及多次覆盖PNG的资源影响逐项核；任一仍无准确依据即给第一具体未证明点，不宣称可执行策略。
+
+最多4精准本地源（task_observation.py、creation/output_observation_use_case.py、granted_subprocess.py及旧资源fixture的一个直接定义），最多2个公开官方来源：FFmpeg官方ffmpeg-all.html的seek/copyts/showinfo/image2选项和官方libavfilter/trim.c的trim_filter_frame/config_input/activate相关段落；不重复ffprobe16包源码，不把online trunk等同本机二进制。本批零native（含version/help）、app import/test/model/GUI/service/用户env/账号DB、产品/预算/profile/字段/源复制。只交一条具体CLI/filter候选加匹配版本和有限未通过反例的后续最小证明方案，或一个精确机制失败/缺口；不列一堆替代算法。先语义REBASE_ACK核新范围/zero执行/假设不是已验策略后直接只读准备。READONLY_PREPARATION_RELEASE后冻结，root据明确首决定另绑native/产品差额；API六源施工不撤销或重新ACK。
+
+### 已履行实际帧采样策略只读准备（冻结规约）
 
 `REF-R3-FRAME-SAMPLING-STRATEGY-PREPARATION-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-frame-sampling-strategy-preparation/**，全部产品、已过原型/两个diagnostic/边界包只读；不改16算法求PASS、不复跑任何native或app/test/model/service、无新budget/profile/源复制。定向只读task_observation.py、creation/output_observation_use_case.py、granted_subprocess.py及必要最多另五精准源/测试；API main六WIP和资料三WIP不混执行候选。结合当前原callable的原grant/remaining totaldeadline/stdout/stderr/output/thread与original CPU-none/refusal前门，公开官方FFmpeg/ffprobe文档与必要精确官方源码（最多两个来源、只相关符号/段落，无用户数据/账号）查真实seek/read_intervals/EOF/frame-PTS/trim停止与重排/非零起始语义。绑定已核真实longGOP .93/1.87不足实例和原短tail.17缺PNG，给唯一具体可检验策略及最小实际差额/两个最多合并未通过反例建议；精确说明机制与设备资源门不同，不能只放大16或省略有界停止，不能推算RSS/profile或把primary trunk语义当本机版本实证。若仍不能证明完整帧身份/停止，只交一个准确缺口，不盲列备选或运行试算法。结果timestamp必须与PNG实际被采PTS一致；原request T映射、重复目标/ID/clip-overlay/OCR消费者的准确字段提案和当前消费者证据由root审定后另绑，不自行改产品/缩窄已批准能力。先语义REBASE_ACK后只读准备，READONLY_PREPARATION_RELEASE冻结，root核后另授实际prototype/产品范围。
 
