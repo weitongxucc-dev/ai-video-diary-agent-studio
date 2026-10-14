@@ -2,6 +2,8 @@
 import ast
 import inspect
 import json
+import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -17,22 +19,35 @@ from app.runtime_health import model_catalog_from_settings
 
 @pytest.fixture
 def isolated_host(tmp_path,monkeypatch):
-    for node in ast.walk(ast.parse(inspect.getsource(main._reload_runtime_dependencies))):
-        if isinstance(node,ast.Global):
-            for name in node.names:
-                monkeypatch.setattr(main,name,getattr(main,name))
+    for function in (main._publish_runtime_dependencies, main._activate_runtime_reload, main._publish_runtime_routes):
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if isinstance(node,ast.Global):
+                for name in node.names:
+                    monkeypatch.setattr(main,name,getattr(main,name))
+    monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
+    monkeypatch.setattr(main.app, "openapi_schema", main.app.openapi_schema)
+    for name in ("execution_worker", "material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
+        monkeypatch.setattr(main, name, None)
+    monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    monkeypatch.setenv("TMPDIR", os.environ["TMPDIR"])
     monkeypatch.setattr(main,'creation_execution_mode','legacy')
     monkeypatch.setattr(main,'material_execution_mode','legacy')
     env_path=tmp_path/'accepted.env'
     env_path.write_text('')
     monkeypatch.setenv('AI_VIDEO_DIARY_DOTENV',str(env_path))
     monkeypatch.setenv('MODEL_ROOT_PATH',str(tmp_path/'models'))
+    for key, relative in {
+        "DATABASE_PATH": "old.sqlite3", "VIDEO_INBOX_PATH": "inbox", "VIDEO_OUTPUT_PATH": "output",
+        "DRAFT_OUTPUT_PATH": "drafts", "TEMPORARY_ROOT_PATH": "temporary",
+        "JIANYING_DRAFT_ROOT_PATH": "jianying", "HERMES_RADAR_PATH": "hermes", "OBSIDIAN_VAULT_PATH": "vault",
+    }.items():
+        monkeypatch.setenv(key, str(tmp_path / relative))
     for key in ('MODEL_RUNTIME_PYTHON_PATH','VISUAL_MODEL_WORKER_PATH','VOICE_MODEL_WORKER_PATH',
                 'UNDERSTANDING_RUNTIME_PYTHON_PATH','UNDERSTANDING_WORKER_PATH'):
         monkeypatch.delenv(key,raising=False)
     monkeypatch.setattr(main,'runtime_env_path',env_path)
     current=Settings.from_env()
-    monkeypatch.setattr(main,'settings',current)
+    main._publish_runtime_dependencies(main.prepare_runtime_dependencies(current))
     catalog=model_catalog_from_settings(current)
     assert catalog.model_root_path.is_relative_to(tmp_path)
     monkeypatch.setattr(main,'model_catalog',catalog)
@@ -54,6 +69,13 @@ def isolated_host(tmp_path,monkeypatch):
         if installer._active_thread is not None:
             installer._active_thread.join(10)
             assert not installer._active_thread.is_alive()
+        main._stop_device_runtime()
+        main._stop_material_ingestion()
+        main._stop_execution_worker()
+        if main.automation_runtime is not None:
+            main.automation_runtime.stop()
+        if main.assistant_continuation_driver is not None:
+            main.assistant_continuation_driver.stop()
 
 
 def test_startup_recovers_once_but_reload_never_recovers_or_replaces_installer(isolated_host,monkeypatch):

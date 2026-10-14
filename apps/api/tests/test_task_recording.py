@@ -122,7 +122,7 @@ def recording_task(tmp_path, monkeypatch):
         parent_version_id=None, sequence=1, snapshot={"montage": montage_payload},
         created_by_operation_id=None))
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "creation_execution", main_module._new_creation_execution())
+    monkeypatch.setattr(main_module, "creation_execution", main_module._new_creation_execution(repo))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
     from dataclasses import replace
     monkeypatch.setattr(main_module, "settings", replace(main_module.settings, temporary_root_path=str(tmp_path / "temp"),

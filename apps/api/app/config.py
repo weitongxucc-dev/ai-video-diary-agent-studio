@@ -36,8 +36,11 @@ def structured_completion_options(model_id: str) -> dict[str, object]:
     return {"reasoning_split": True} if model_id.startswith("MiniMax-") else {}
 
 
-def configure_process_temporary_directory(settings: Settings) -> Path:
-    """Route Python and child-process scratch files to the configured data disk."""
+def prepare_process_temporary_directory(settings: Settings) -> Path | None:
+    """Prepare the selected scratch path without changing process temp state.
+
+    None preserves the unconfigured development fallback to the OS temp root.
+    """
     root = settings.effective_temporary_root_path.resolve()
     # On macOS a leftover /Volumes/<name> directory can exist on the internal
     # disk even though the external volume is absent. Existence is not enough.
@@ -47,8 +50,6 @@ def configure_process_temporary_directory(settings: Settings) -> Path:
             raise FileNotFoundError(f"外接存储未挂载：{volume}。请连接原数据盘后重新启动应用。")
     if root.parent.is_dir():
         root.mkdir(parents=False, exist_ok=True)
-        os.environ["TMPDIR"] = str(root)
-        tempfile.tempdir = str(root)
         return root
 
     # An explicitly configured data disk must fail closed when it disappears.
@@ -57,10 +58,22 @@ def configure_process_temporary_directory(settings: Settings) -> Path:
         settings.temporary_root_path is not None or settings.model_root_path_configured
     )
     if strict_external_path:
-        os.environ["TMPDIR"] = str(root)
-        tempfile.tempdir = str(root)
         return root
-    return Path(tempfile.gettempdir())
+    return None
+
+
+def publish_process_temporary_directory(root: Path | None) -> Path:
+    """Publish an already prepared scratch path at the runtime switch boundary."""
+    if root is None:
+        return Path(tempfile.gettempdir())
+    os.environ["TMPDIR"] = str(root)
+    tempfile.tempdir = str(root)
+    return root
+
+
+def configure_process_temporary_directory(settings: Settings) -> Path:
+    """Route Python and child-process scratch files to the configured data disk."""
+    return publish_process_temporary_directory(prepare_process_temporary_directory(settings))
 
 
 def _default_obsidian_vault_path() -> str | None:
@@ -131,8 +144,9 @@ def _default_hermes_radar_path() -> str:
     return str(Path.home() / "Desktop" / "product-hunt-raw" / "daily-reports")
 
 
-def _topic_source_urls_from_env() -> tuple[str, ...]:
-    raw = os.getenv("TOPIC_SOURCE_URLS")
+def _topic_source_urls_from_env(environ: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    values = os.environ if environ is None else environ
+    raw = values.get("TOPIC_SOURCE_URLS")
     if raw is None:
         return ("https://watcha.cn/",)
     return tuple(url.strip() for url in raw.split(",") if url.strip())
@@ -369,104 +383,106 @@ class Settings:
         return None
 
     @classmethod
-    def from_env(cls) -> Settings:
-        load_dotenv_files()
-        catalog_configuration = model_catalog_configuration(os.environ)
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
+        if environ is None:
+            load_dotenv_files()
+        values = os.environ if environ is None else environ
+        catalog_configuration = model_catalog_configuration(values)
         model_root_path = catalog_configuration["model_root_path"]
         return cls(
-            llm_provider=os.getenv("LLM_PROVIDER"),
-            llm_api_key=os.getenv("LLM_API_KEY"),
-            llm_api_key_provider=os.getenv("LLM_API_KEY_PROVIDER"),
-            llm_base_url=os.getenv("LLM_BASE_URL"),
-            llm_model=os.getenv("LLM_MODEL"),
-            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
-            deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
-            deepseek_model=os.getenv("DEEPSEEK_MODEL", cls.deepseek_model),
-            obsidian_vault_path=os.getenv("OBSIDIAN_VAULT_PATH")
+            llm_provider=values.get("LLM_PROVIDER"),
+            llm_api_key=values.get("LLM_API_KEY"),
+            llm_api_key_provider=values.get("LLM_API_KEY_PROVIDER"),
+            llm_base_url=values.get("LLM_BASE_URL"),
+            llm_model=values.get("LLM_MODEL"),
+            deepseek_api_key=values.get("DEEPSEEK_API_KEY"),
+            deepseek_base_url=values.get("DEEPSEEK_BASE_URL", cls.deepseek_base_url),
+            deepseek_model=values.get("DEEPSEEK_MODEL", cls.deepseek_model),
+            obsidian_vault_path=values.get("OBSIDIAN_VAULT_PATH")
             or _default_obsidian_vault_path(),
-            product_hunt_token=os.getenv("PRODUCT_HUNT_TOKEN"),
-            product_hunt_api_url=os.getenv(
+            product_hunt_token=values.get("PRODUCT_HUNT_TOKEN"),
+            product_hunt_api_url=values.get(
                 "PRODUCT_HUNT_API_URL",
                 cls.product_hunt_api_url,
             ),
-            topic_source_urls=_topic_source_urls_from_env(),
-            hermes_radar_path=os.getenv("HERMES_RADAR_PATH")
+            topic_source_urls=_topic_source_urls_from_env(values),
+            hermes_radar_path=values.get("HERMES_RADAR_PATH")
             or _default_hermes_radar_path(),
-            video_inbox_path=os.getenv("VIDEO_INBOX_PATH")
+            video_inbox_path=values.get("VIDEO_INBOX_PATH")
             or _default_video_inbox_path(),
-            video_output_path=os.getenv("VIDEO_OUTPUT_PATH")
+            video_output_path=values.get("VIDEO_OUTPUT_PATH")
             or _default_video_output_path(),
-            draft_output_path=os.getenv("DRAFT_OUTPUT_PATH")
+            draft_output_path=values.get("DRAFT_OUTPUT_PATH")
             or _default_draft_output_path(),
-            jianying_draft_root_path=os.getenv("JIANYING_DRAFT_ROOT_PATH")
+            jianying_draft_root_path=values.get("JIANYING_DRAFT_ROOT_PATH")
             or _default_jianying_draft_root_path(),
-            database_path=os.getenv("DATABASE_PATH") or _default_database_path(),
-            tencentcloud_secret_id=os.getenv("TENCENTCLOUD_SECRET_ID"),
-            tencentcloud_secret_key=os.getenv("TENCENTCLOUD_SECRET_KEY"),
-            tencentcloud_asr_region=os.getenv(
+            database_path=values.get("DATABASE_PATH") or _default_database_path(),
+            tencentcloud_secret_id=values.get("TENCENTCLOUD_SECRET_ID"),
+            tencentcloud_secret_key=values.get("TENCENTCLOUD_SECRET_KEY"),
+            tencentcloud_asr_region=values.get(
                 "TENCENTCLOUD_ASR_REGION",
                 cls.tencentcloud_asr_region,
             ),
-            tencentcloud_asr_engine_model_type=os.getenv(
+            tencentcloud_asr_engine_model_type=values.get(
                 "TENCENTCLOUD_ASR_ENGINE_MODEL_TYPE",
                 cls.tencentcloud_asr_engine_model_type,
             ),
             tencentcloud_asr_max_wait_seconds=int(
-                os.getenv(
+                values.get(
                     "TENCENTCLOUD_ASR_MAX_WAIT_SECONDS",
                     str(cls.tencentcloud_asr_max_wait_seconds),
                 )
             ),
             tencentcloud_asr_poll_interval_seconds=float(
-                os.getenv(
+                values.get(
                     "TENCENTCLOUD_ASR_POLL_INTERVAL_SECONDS",
                     str(cls.tencentcloud_asr_poll_interval_seconds),
                 )
             ),
             tencentcloud_asr_max_local_audio_bytes=int(
-                os.getenv(
+                values.get(
                     "TENCENTCLOUD_ASR_MAX_LOCAL_AUDIO_BYTES",
                     str(cls.tencentcloud_asr_max_local_audio_bytes),
                 )
             ),
-            asr_provider=os.getenv("ASR_PROVIDER", cls.asr_provider),
-            local_whisper_backend=os.getenv("LOCAL_WHISPER_BACKEND", cls.local_whisper_backend),
-            local_whisper_cli_path=os.getenv("LOCAL_WHISPER_CLI_PATH"),
-            local_whisper_python_path=os.getenv("LOCAL_WHISPER_PYTHON_PATH")
+            asr_provider=values.get("ASR_PROVIDER", cls.asr_provider),
+            local_whisper_backend=values.get("LOCAL_WHISPER_BACKEND", cls.local_whisper_backend),
+            local_whisper_cli_path=values.get("LOCAL_WHISPER_CLI_PATH"),
+            local_whisper_python_path=values.get("LOCAL_WHISPER_PYTHON_PATH")
             or _default_local_whisper_python_path(),
-            local_whisper_model_path=os.getenv("LOCAL_WHISPER_MODEL_PATH")
+            local_whisper_model_path=values.get("LOCAL_WHISPER_MODEL_PATH")
             or _default_local_whisper_model_path(),
-            local_whisper_language=os.getenv(
+            local_whisper_language=values.get(
                 "LOCAL_WHISPER_LANGUAGE",
                 cls.local_whisper_language,
             ),
             **catalog_configuration,
-            model_root_path_configured=bool(os.getenv("MODEL_ROOT_PATH")),
-            temporary_root_path=os.getenv("TEMPORARY_ROOT_PATH"),
-            native_ocr_worker_path=os.getenv("NATIVE_OCR_WORKER_PATH"),
-            native_portrait_worker_path=os.getenv("NATIVE_PORTRAIT_WORKER_PATH"),
-            avatar_model_runtime_python_path=os.getenv(
+            model_root_path_configured=bool(values.get("MODEL_ROOT_PATH")),
+            temporary_root_path=values.get("TEMPORARY_ROOT_PATH"),
+            native_ocr_worker_path=values.get("NATIVE_OCR_WORKER_PATH"),
+            native_portrait_worker_path=values.get("NATIVE_PORTRAIT_WORKER_PATH"),
+            avatar_model_runtime_python_path=values.get(
                 "AVATAR_MODEL_RUNTIME_PYTHON_PATH"
             ),
-            avatar_model_worker_path=os.getenv("AVATAR_MODEL_WORKER_PATH")
+            avatar_model_worker_path=values.get("AVATAR_MODEL_WORKER_PATH")
             or _default_avatar_model_worker_path(),
-            avatar_model_root_path=os.getenv("AVATAR_MODEL_ROOT_PATH"),
-            avatar_model_id=os.getenv("AVATAR_MODEL_ID", cls.avatar_model_id),
-            latentsync_worker_path=os.getenv("LATENTSYNC_WORKER_PATH") or cls.latentsync_worker_path,
-            latentsync_runtime_python_path=os.getenv("LATENTSYNC_RUNTIME_PYTHON_PATH")
+            avatar_model_root_path=values.get("AVATAR_MODEL_ROOT_PATH"),
+            avatar_model_id=values.get("AVATAR_MODEL_ID", cls.avatar_model_id),
+            latentsync_worker_path=values.get("LATENTSYNC_WORKER_PATH") or cls.latentsync_worker_path,
+            latentsync_runtime_python_path=values.get("LATENTSYNC_RUNTIME_PYTHON_PATH")
             or str(Path(model_root_path).parent / "model-runtimes" / "musetalk-mac" / ".venv" / "bin" / "python"),
-            latentsync_root_path=os.getenv("LATENTSYNC_ROOT_PATH")
+            latentsync_root_path=values.get("LATENTSYNC_ROOT_PATH")
             or str(Path(model_root_path).parent / "model-runtimes" / "latentsync-mlx-candidate"),
-            latentsync_pose_root_path=os.getenv("LATENTSYNC_POSE_ROOT_PATH")
+            latentsync_pose_root_path=values.get("LATENTSYNC_POSE_ROOT_PATH")
             or str(Path(model_root_path) / "LatentSync-1.5" / "pose"),
-            draft_background_music_path=os.getenv("DRAFT_BACKGROUND_MUSIC_PATH"),
-            supabase_url=os.getenv("SUPABASE_URL"),
-            supabase_publishable_key=os.getenv("SUPABASE_PUBLISHABLE_KEY"),
-            supabase_jwt_audience=os.getenv(
+            draft_background_music_path=values.get("DRAFT_BACKGROUND_MUSIC_PATH"),
+            supabase_url=values.get("SUPABASE_URL"),
+            supabase_publishable_key=values.get("SUPABASE_PUBLISHABLE_KEY"),
+            supabase_jwt_audience=values.get(
                 "SUPABASE_JWT_AUDIENCE",
                 cls.supabase_jwt_audience,
             ),
-            supabase_jwt_issuer=os.getenv("SUPABASE_JWT_ISSUER"),
+            supabase_jwt_issuer=values.get("SUPABASE_JWT_ISSUER"),
         )
 
     def public_status(self) -> dict[str, Any]:

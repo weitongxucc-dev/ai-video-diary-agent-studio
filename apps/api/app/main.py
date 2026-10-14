@@ -13,15 +13,16 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
+from weakref import WeakSet
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -69,6 +70,7 @@ from app.auth import (
 )
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
 from app.artifact_store import ArtifactStore
+from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies
 from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
@@ -117,9 +119,10 @@ from app.cover_generation import (
 from app.config import (
     Settings,
     configure_process_temporary_directory,
+    prepare_process_temporary_directory,
+    publish_process_temporary_directory,
     record_llm_service_verification,
     runtime_env_file_path,
-    model_catalog_configuration,
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
@@ -220,7 +223,7 @@ from app.repository import (
 from app.runtime_health import runtime_health, model_catalog_from_settings
 from app.runtime_settings import (
     WORKSPACE_TEXT_FIELDS,
-    apply_runtime_settings_update,
+    apply_runtime_settings_update as _persist_device_settings,
     apply_workspace_runtime_settings_update,
     is_local_client_host,
     runtime_settings_updates,
@@ -550,16 +553,48 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-settings = Settings.from_env()
-configure_process_temporary_directory(settings)
-set_auth_enabled(settings.auth_enabled)
-repo = EpisodeRepository(database_path=settings.database_path)
-source_repository = SourceRepository(settings.database_path)
-model_catalog = model_catalog_from_settings(settings)
-model_installer = ModelInstaller(
-    model_catalog,
-    on_complete=lambda: _reload_runtime_dependencies(),
-)
+_runtime_reload_lock = threading.RLock()
+_assistant_stream_workers: WeakSet[threading.Thread] = WeakSet()
+
+
+def _publish_runtime_dependencies(candidate: RuntimeDependencies) -> None:
+    global settings, repo, source_repository, model_catalog, visual_semantic_provider, voice_clone_provider
+    global avatar_lipsync_provider, latentsync_provider, production_repo, conversation_repo, montage_repo
+    global quality_check_repo, local_members_service, platform_auth_service, scheduled_task_service
+    global montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service
+    global avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace
+    global source_tracker, service, workflow, auth_context, video_job_runner, runtime_env_path
+    settings = candidate.settings
+    database, models, media, content = candidate.database, candidate.models, candidate.media, candidate.content
+    repo, source_repository, production_repo = database.episodes, database.sources, database.production
+    conversation_repo, montage_repo, quality_check_repo = database.conversations, database.montage, database.quality
+    local_members_service, platform_auth_service = database.members, database.platform_auth
+    scheduled_task_service, video_job_runner = database.scheduled_tasks, database.video_jobs
+    model_catalog, visual_semantic_provider, voice_clone_provider = models.catalog, models.visual, models.voice
+    avatar_lipsync_provider, latentsync_provider = models.avatar, models.latentsync
+    montage_planner, montage_renderer, artifact_store = media.planner, media.renderer, media.artifacts
+    narration_generator, voice_preview_service, avatar_preview_service = media.narration, media.voice_preview, media.avatar_preview
+    video_inbox, video_processor, video_pipeline = media.inbox, media.processor, media.pipeline
+    draft_workspace, source_tracker = media.drafts, media.source_tracker
+    vault, service, workflow = content.vault, content.episodes, content.workflow
+    auth_context = candidate.auth
+    runtime_env_path = runtime_env_file_path()
+    set_auth_enabled(settings.auth_enabled)
+
+
+def _current_database_owners() -> DatabaseOwners:
+    return DatabaseOwners(repo, source_repository, production_repo, conversation_repo, montage_repo,
+        quality_check_repo, local_members_service, platform_auth_service, scheduled_task_service, video_job_runner)
+
+
+def _initialize_runtime_dependencies() -> ModelInstaller:
+    initial_settings = Settings.from_env()
+    configure_process_temporary_directory(initial_settings)
+    _publish_runtime_dependencies(prepare_runtime_dependencies(initial_settings))
+    return ModelInstaller(model_catalog, on_complete=lambda: _reload_runtime_dependencies())
+
+
+model_installer = _initialize_runtime_dependencies()
 
 
 @app.on_event("startup")
@@ -567,61 +602,17 @@ def recover_model_installations() -> None:
     model_installer.recover_interrupted_jobs()
 
 
-visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
-voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
-avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)
-latentsync_provider = avatar_lipsync_provider_from_settings(settings, quality="high")
-
-
 def _lipsync_provider(quality: str):
     return latentsync_provider if quality == "high" else avatar_lipsync_provider
-production_repo = ProductionRepository(
-    database_path=settings.database_path,
-    video_library_path=settings.video_inbox_path,
-    visual_provider=visual_semantic_provider,
-    speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
-    visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
-)
-conversation_repo = ConversationRepository(settings.database_path, initialize=False)
-montage_repo = MontageRepository(settings.database_path)
-quality_check_repo = QualityCheckRepository(settings.database_path)
-local_members_service = LocalMemberService(settings.database_path)
-platform_auth_service = PlatformAuthService(
-    settings.database_path,
-    Path(settings.database_path).expanduser().resolve().parent / "platform-browser-profiles",
-)
-montage_planner = MontagePlanner(
-    semantic_provider=visual_semantic_provider,
-    visual_feature_loader=production_repo.get_visual_feature,
-)
-montage_renderer = MontageRenderer(settings.video_output_path)
-artifact_store = ArtifactStore(settings.video_output_path)
-narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
-voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
-avatar_preview_service = AvatarPreviewService(
-    settings.video_output_path,
-    avatar_lipsync_provider,
-)
-vault = ObsidianVault(settings.obsidian_vault_path)
-video_inbox = VideoInbox(settings.video_inbox_path)
-video_processor = FfmpegVideoProcessor(settings)
-video_pipeline = video_processing_pipeline_from_settings(settings, processor=video_processor)
-draft_workspace = DraftWorkspace(settings)
-runtime_env_path = runtime_env_file_path()
-service = EpisodeService(
-    script_generator=script_generator_from_settings(settings),
-    topic_generator=topic_generator_from_settings(settings, vault),
-)
-workflow = LangGraphEpisodeWorkflow(service)
-video_job_runner = VideoJobRunner(production_repo)
-# A process that disappeared while a durable job was running must leave an
-# explicit recoverable state; it must never be interpreted as a success.
-video_job_runner.recover_after_restart()
-production_repo.interrupt_running_person_renders()
-scheduled_task_service = ScheduledTaskService(settings.database_path)
+
+
+@app.on_event("startup")
+def recover_legacy_video_jobs() -> None:
+    video_job_runner.recover_after_restart()
+    production_repo.interrupt_running_person_renders()
+
+
 edit_plan_apply_runner = None
-source_tracker = SourceTracker(video_inbox)
-auth_context = SupabaseAuthContext(settings)
 
 _EXTERNAL_URLS_CONFIGURATION_REQUIRED = "configuration_required"
 
@@ -1072,28 +1063,37 @@ def _content_visible(
 #   真实跨空间端到端仍未验证。
 # `local_mode` 取「未启用 Supabase 认证」这一既有事实：此时 `current_workspace_id`
 # 只能落到保留的 local 工作区，全部成员共享同一空间，跨空间授权本就不成立。
-app.include_router(knowledge_grant_router(
-    source_repository,
-    workspace_for=current_workspace_id,
-    content_reader=_content_reader,
-    target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth_context.enabled),
-))
+def _prepare_runtime_routes(database: DatabaseOwners, auth: SupabaseAuthContext):
+    router = APIRouter()
+    router.include_router(knowledge_grant_router(
+        database.sources, workspace_for=current_workspace_id, content_reader=_content_reader,
+        target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth.enabled),
+    ))
+    router.include_router(build_automation_guarded_publish_router(build_platform_publish_router(
+        database.production, workspace_for=current_workspace_id, content_reader=_content_reader,
+        actor_for=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+        auth_service=database.platform_auth,
+        task_for_user=lambda workspace_id, task_id, user_id: _platform_publish_task_for_user(
+            workspace_id, task_id, user_id,
+        ),
+        publishable_output_for=lambda workspace_id, task_id, user_id: _platform_publish_output_for(
+            workspace_id, task_id, user_id,
+        ),
+        runtime_for=lambda: _creation_runtime(),
+    ), guard=lambda request, task_id: _require_automation_task_open(request, current_workspace_id(request), task_id)))
+    return router.routes
 
-app.include_router(build_automation_guarded_publish_router(build_platform_publish_router(
-    production_repo,
-    workspace_for=current_workspace_id,
-    content_reader=_content_reader,
-    actor_for=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
-    auth_service=platform_auth_service,
-    # Lambdas defer helper name resolution until after module initialization.
-    task_for_user=lambda workspace_id, task_id, user_id: _platform_publish_task_for_user(
-        workspace_id, task_id, user_id
-    ),
-    publishable_output_for=lambda workspace_id, task_id, user_id: _platform_publish_output_for(
-        workspace_id, task_id, user_id
-    ),
-    runtime_for=lambda: _creation_runtime(),
-),guard=lambda request,task_id:_require_automation_task_open(request,current_workspace_id(request),task_id)))
+
+def _publish_runtime_routes(routes) -> None:
+    global _bound_runtime_routes
+    retained = [route for route in app.router.routes if route not in _bound_runtime_routes]
+    app.router.routes = [*retained, *routes]
+    _bound_runtime_routes = routes
+    app.openapi_schema = None
+
+
+_bound_runtime_routes = _prepare_runtime_routes(_current_database_owners(), auth_context)
+app.router.routes.extend(_bound_runtime_routes)
 
 
 @app.get("/api/members")
@@ -7975,7 +7975,7 @@ def _assistant_stream_response(
         validated = AssistantStreamEvent.model_validate(event)
         safe_event = validated.model_dump(mode="json", exclude_none=True)
         if turn_ref["id"] and event_type in {"text_delta", "tool_start", "tool_end"}:
-            conversation_repo.append_event(turn_ref["id"], safe_event)
+            stream_conversation_repo.append_event(turn_ref["id"], safe_event)
         if not disconnected.is_set():
             events.put(safe_event)
 
@@ -7993,7 +7993,7 @@ def _assistant_stream_response(
             detail = exc.detail if isinstance(exc.detail, str) else "对话未能完成，请查看当前任务状态。"
             if turn_ref["id"]:
                 forget_turn_control(turn_ref["id"])
-                conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
                     "kind": "failure", "message": _assistant_stream_safe_text(detail, workspace_id),
                 })
             if not disconnected.is_set():
@@ -8004,7 +8004,7 @@ def _assistant_stream_response(
         except Exception as exc:
             if turn_ref["id"]:
                 forget_turn_control(turn_ref["id"])
-                conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
                     "kind": "failure", "message": "对话服务未能完整返回结果，请查看当前任务状态。",
                 })
             logger.error("assistant stream worker failed (%s)", type(exc).__name__)
@@ -8020,12 +8020,18 @@ def _assistant_stream_response(
             if terminal_event is not None and not disconnected.is_set():
                 events.put(terminal_event)
             events.put(None)
+            with _runtime_reload_lock:
+                _assistant_stream_workers.discard(thread)
+
+    with _runtime_reload_lock:
+        stream_conversation_repo = conversation_repo
+        thread = threading.Thread(target=work, name="assistant-stream-response", daemon=True)
+        _assistant_stream_workers.add(thread)
 
     def body():
         if turn_id:
             started = AssistantStreamEvent(type="turn_started", turn_id=turn_id, turn_state="running")
             yield f"data: {json.dumps(started.model_dump(mode='json', exclude_none=True), ensure_ascii=False, separators=(',', ':'))}\n\n"
-        thread = threading.Thread(target=work, name="assistant-stream-response", daemon=True)
         thread.start()
         result_seen = False
         error_seen = False
@@ -17226,21 +17232,24 @@ def update_runtime_settings(
         if field not in WORKSPACE_TEXT_FIELDS
         and field not in WORKSPACE_SECRET_FIELDS and field != "llm_key_action"
     }
-    _assert_runtime_reload_allowed()
-    prospective_environment = {**os.environ, **runtime_settings_updates(device_values)}
-    prospective_settings = replace(settings, **model_catalog_configuration(prospective_environment))
-    candidate = model_catalog_from_settings(prospective_settings)
-    changed = False
-
-    def request_reload():
-        nonlocal changed
-        changed = True
     try:
-        with model_installer.guard_catalog_update(candidate):
-            apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
-            apply_runtime_settings_update(runtime_env_path, device_values, request_reload)
-            if changed:
-                _reload_runtime_dependencies()
+        with _runtime_reload_lock:
+            _assert_runtime_reload_allowed()
+            prospective_environment = {**os.environ, **runtime_settings_updates(device_values)}
+            prospective_settings = Settings.from_env(prospective_environment)
+            candidate_catalog = model_catalog_from_settings(prospective_settings)
+            with model_installer.guard_catalog_update(candidate_catalog):
+                prepared = _prepare_runtime_reload(prospective_settings)
+                changed = False
+
+                def request_reload():
+                    nonlocal changed
+                    changed = True
+
+                apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
+                _persist_device_settings(runtime_env_path, device_values, request_reload)
+                if changed:
+                    _reload_runtime_dependencies(prepared)
     except WorkspaceSecretStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ModelInstallError as exc:
@@ -17275,67 +17284,77 @@ def _assert_runtime_reload_allowed() -> None:
         raise HTTPException(status_code=503, detail="整机调度的安全重载尚未接通，现有驱动保持原状态。")
 
 
-def _reload_runtime_dependencies() -> None:
-    global settings, repo, source_repository, model_catalog, model_installer, visual_semantic_provider, voice_clone_provider, avatar_lipsync_provider, latentsync_provider, production_repo, montage_repo, montage_planner, montage_renderer, artifact_store, narration_generator, voice_preview_service, avatar_preview_service, vault, video_inbox, video_processor, video_pipeline, draft_workspace, source_tracker, service, workflow, auth_context, video_job_runner, creation_execution, execution_worker, material_ingestion
+@dataclass(frozen=True)
+class PreparedRuntimeReload:
+    dependencies: RuntimeDependencies
+    temporary_root: Path | None
+    routes: list
+    creation: CreationExecution
 
+
+def _prepare_runtime_reload(prospective_settings: Settings) -> PreparedRuntimeReload:
     _assert_runtime_reload_allowed()
-    prospective_settings = Settings.from_env()
-    prospective_catalog = model_catalog_from_settings(prospective_settings)
-    model_installer.rebind_catalog(prospective_catalog)
+    if _assistant_stream_workers:
+        raise HTTPException(status_code=503, detail="对话仍在运行，请等待当前结果返回后重载设置。")
+    temporary_root = prepare_process_temporary_directory(prospective_settings)
+    dependencies = prepare_runtime_dependencies(prospective_settings, current_database=_current_database_owners())
+    routes = _prepare_runtime_routes(dependencies.database, dependencies.auth)
+    return PreparedRuntimeReload(dependencies, temporary_root, routes,
+        _new_creation_execution(dependencies.database.production))
+
+
+def _activate_runtime_reload(prepared: PreparedRuntimeReload) -> None:
+    global creation_execution, automation_runtime
+    old_platform_auth = platform_auth_service
+    database_changed = (
+        Path(production_repo.database_path).expanduser().resolve()
+        != Path(prepared.dependencies.database.production.database_path).expanduser().resolve()
+    )
+    restart_device = device_runtime is not None and device_runtime.running
+    restart_automation = automation_runtime is not None and automation_runtime.thread is not None and automation_runtime.thread.is_alive()
+    restart_assistant = assistant_continuation_driver is not None
+
+    # A false device stop keeps its original reference and grant. No replacement
+    # coordinator or new globals can be published over a still-running unit.
+    _stop_device_runtime()
+    if automation_runtime is not None:
+        automation_runtime.stop()
+        if automation_runtime.thread is not None and automation_runtime.thread.is_alive():
+            raise RuntimeError("自动任务驱动尚未退出，原运行绑定保持。")
+    if assistant_continuation_driver is not None:
+        assistant_continuation_driver.pause()
     _stop_execution_worker()
     _stop_material_ingestion()
+    if database_changed:
+        old_platform_auth.sessions.close_all()
 
-    settings = prospective_settings
-    configure_process_temporary_directory(settings)
-    set_auth_enabled(settings.auth_enabled)
-    auth_context = SupabaseAuthContext(settings)
-    repo = EpisodeRepository(database_path=settings.database_path)
-    source_repository = SourceRepository(settings.database_path)
-    model_catalog = prospective_catalog
-    visual_semantic_provider = visual_semantic_provider_from_catalog(model_catalog)
-    voice_clone_provider = voice_clone_provider_from_catalog(model_catalog)
-    avatar_lipsync_provider = avatar_lipsync_provider_from_settings(settings)
-    latentsync_provider = avatar_lipsync_provider_from_settings(settings, quality="high")
-    production_repo = ProductionRepository(
-        database_path=settings.database_path,
-        video_library_path=settings.video_inbox_path,
-        visual_provider=visual_semantic_provider,
-        speech_analyzer=LocalMaterialSpeechAnalyzer(settings),
-        visual_understanding=LocalVisualUnderstanding(model_catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path),
-    )
-    video_job_runner = VideoJobRunner(production_repo)
-    montage_repo = MontageRepository(settings.database_path)
-    montage_planner = MontagePlanner(
-        semantic_provider=visual_semantic_provider,
-        visual_feature_loader=production_repo.get_visual_feature,
-    )
-    montage_renderer = MontageRenderer(settings.video_output_path)
-    artifact_store = ArtifactStore(settings.video_output_path)
-    narration_generator = NarrationGenerator(settings.video_output_path, voice_clone_provider)
-    voice_preview_service = VoicePreviewService(settings.video_output_path, voice_clone_provider)
-    avatar_preview_service = AvatarPreviewService(
-        settings.video_output_path,
-        avatar_lipsync_provider,
-    )
-    vault = ObsidianVault(settings.obsidian_vault_path)
-    video_inbox = VideoInbox(settings.video_inbox_path)
-    video_processor = FfmpegVideoProcessor(settings)
-    video_pipeline = video_processing_pipeline_from_settings(
-        settings,
-        processor=video_processor,
-    )
-    draft_workspace = DraftWorkspace(settings)
-    source_tracker = SourceTracker(video_inbox)
-    service = EpisodeService(
-        script_generator=script_generator_from_settings(settings),
-        topic_generator=topic_generator_from_settings(settings, vault),
-    )
-    workflow = LangGraphEpisodeWorkflow(service)
-    video_job_runner.recover_after_restart()
-    creation_execution = _new_creation_execution()
+    model_installer.rebind_catalog(prepared.dependencies.models.catalog)
+    publish_process_temporary_directory(prepared.temporary_root)
+    _publish_runtime_dependencies(prepared.dependencies)
+    _publish_runtime_routes(prepared.routes)
+    creation_execution = prepared.creation
+    automation_runtime = None
     _start_execution_worker()
     _start_material_ingestion()
-    _recover_creation_executions()
+    _start_device_runtime(start=restart_device)
+    if restart_automation:
+        _automation_runtime().start()
+    if restart_assistant:
+        assistant_continuation_driver.start()
+
+
+def _reload_runtime_dependencies(prepared: PreparedRuntimeReload | None = None) -> None:
+    with _runtime_reload_lock:
+        _assert_runtime_reload_allowed()
+        if prepared is None:
+            prospective_settings = Settings.from_env()
+            candidate_catalog = model_catalog_from_settings(prospective_settings)
+        else:
+            candidate_catalog = prepared.dependencies.models.catalog
+        with model_installer.guard_catalog_update(candidate_catalog):
+            if prepared is None:
+                prepared = _prepare_runtime_reload(prospective_settings)
+            _activate_runtime_reload(prepared)
 
 
 @app.get("/api/knowledge/notes", response_model=list[KnowledgeNoteResponse])
@@ -18945,9 +18964,9 @@ def _creation_render_is_valid(
         return False
 
 
-def _new_creation_execution() -> CreationExecution:
+def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
     return CreationExecution(
-        production_repo,
+        repository,
         run_narration=_generate_creation_task_narration_for_workspace,
         run_montage_plan=_create_creation_task_montage_plan_for_workspace,
         run_render=_render_creation_task_montage_for_workspace,
@@ -19468,7 +19487,7 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
     return detail
 
 
-creation_execution = _new_creation_execution()
+creation_execution = _new_creation_execution(production_repo)
 execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
 material_ingestion = None
 material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
@@ -19713,9 +19732,10 @@ def _start_device_runtime(*, start: bool = True) -> None:
 def _stop_device_runtime() -> None:
     global device_runtime
     runtime = device_runtime
-    device_runtime = None
     if runtime is not None:
-        runtime.stop(timeout_seconds=30.0)
+        if not runtime.stop(timeout_seconds=30.0):
+            raise RuntimeError("整机运行单元尚未退出，原许可与运行绑定保持。")
+        device_runtime = None
 
 
 # Automation only scans due local facts; media work remains with DeviceRuntime.
@@ -20621,6 +20641,7 @@ class AssistantContinuationDriver:
         self.thread = None
 
     def start(self):
+        self.stop_event.clear()
         _reconcile_assistant_business_results()
         self.thread = threading.Thread(target=self._run, name="assistant-business-results", daemon=True)
         self.thread.start()
@@ -20637,16 +20658,19 @@ class AssistantContinuationDriver:
             except Exception:
                 logger.exception("对话业务结果回填失败；持久来源保留，未重复执行业务动作")
 
-    def stop(self):
+    def pause(self):
         self.stop_event.set()
         self.wake.set()
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise RuntimeError("对话结果驱动尚未退出")
+
+    def stop(self):
+        self.pause()
         # A process shutdown stops model controls, but is not a user decision
         # to invalidate the original goal or replay an in-flight operation.
         for turn_id in stop_all_assistant_turns():
             conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
-        self.thread.join(timeout=5)
-        if self.thread.is_alive():
-            raise RuntimeError("对话结果驱动尚未退出")
 
 
 def start_assistant_continuation_driver():
