@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白读取三源已df1dd384精确集成/WRITE_LEASE_RETURN。本批REF-R4-NARRATION-WRITE-PREPARATION-20261015仅fresh-r4-authorizations/narration-write-preparation/**新只读证据：原旁白分段唯一写body、所有sameconn调用与共同不变量；最多8精准源，零产品/import/test/native。准备不授予产品写权，不复跑旧批。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白写边界已有限SCOPE_CLOSED/WRITE_LEASE_RETURN。本批REF-R4-PRONUNCIATION-RECORDS-20261015独占production.py、profiles/records.py、tests/test_profile_record_store.py三现源及fresh-r4-authorizations/pronunciation-records/**新证据；五原发音存取/适用方法与三个codec/validator集中现ProfileRecordStore，原规则/DDL/版本/作用域/事务不变，一个组合最小自测，root完整源审，不另加QA。API六冻结源互斥。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
@@ -39,7 +39,19 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 本批旁白写入边界只读准备
+### 本批发音词典记录归属实施
+
+`REF-R4-PRONUNCIATION-RECORDS-20261015` 仅资料准确三个现源apps/api/app/production.py、apps/api/app/profiles/records.py、apps/api/tests/test_profile_record_store.py和test-runs/refactor-20261014/fresh-r4-authorizations/pronunciation-records/**新证据。固定产品df1dd384b42e8aa135f92390fb026d2c5dd302c6，初始三源当前=固定Git/空index及11完整目标AST见fresh-root-review/pronunciation-records-implementation-binding.json SHA598781026c5f0ceb62748df4f30f5e2c115447865ccb2847f0e1f9ccf810e211。profiles/records.py现ProfileRecordStore已有连接工厂/原人物reader，不新增Store/class/factory/callback/deps袋。save_pronunciation_entry、get_pronunciation_entry、list_pronunciation_entries、list_pronunciation_entry_versions、list_applicable_pronunciation_entries五原完整body移到现store；原_payload/_from_payload/_validate完整body唯一移交，生产五公开facade仅传原实参调用store。root有限app/tests符号查找无其他三私有codec消费者，旧三个body退出Production，不加兼容影子实现；若出现实际新直接调用者先报精准差额，不扩大源码写域。
+
+原中立PronunciationEntry类型、public签名/episode_id参数名、language/scope规则、applies_to/workspace/person/task过滤、current头与固定历史version、相同version payload不可变、created_at/rowid DESC顺序/最新id去重、返回DTO/原错误时点全部保持。save先原validator；person作用域在原conn内调用现store同一个_get_person_profile，与原Production委托该方法等价；versioned_payloads原save/read/list函数与原事务不拆，不改变作者/许可/资格或将旧conn另打开。get/list原after-with decoder时点保留；不加guard/默认回退/新schema/DDL/迁移/字段/权限政策。ProfileRecordStore构造和所有已过person/voice原方法、Production其它业务/构造/联合写、旧tests/fixtures完整AST与字节前缀不变。Product其他模块与API六候选、Runtime原型和所有旧证据只读。
+
+普通纯归属拆分：只在现test文件追加一个合并最小node，有限native SQLite与原store/public facades核新的五方法确实接线、version immutability/current与fixed读、workspace/person/task适用及缺人物/无效scope的原时点/排序/DTO；复用现合成fixture定义不改旧fixture，可在新node使用原真实仓储构造/自有空库补相应原DDL和有限合成记录。不得为省事mock目标body/person reader/versioned writer/事务规则，不跑原person/voice/登记/授权/媒体/field矩阵，不新增镜像实现测试。准确脚本/direct fixture/实际module origins/prepost绑定；使用固定df1dd384必要有限依赖＋自身三overlay，排除API六WIP，不复制整仓/用户env/账号DB或运行模型/media/服务。第一次失败保留，仅精确原因/受影响未过node复验，不机械重复已经通过旧批。语义REBASE_ACK先核三精确SHA/原body边界/互斥/一个最小自测与无额外QA后直接实施，不等第二START。SOURCE_RELEASE冻结后root完整三源与旧body/non-target审计及唯一归属确认，精确集成即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN；若实际行为改变关键不变量则先停并给差额，由root决定独立族。不是全R4/R9接受。
+
+### 旁白完整段集写边界已有限关闭与归还
+
+旁白写准备release779c55fe8bdb515215d7f163c5e08561db93b427d1e5aaf9f870046d45dc7120已root narration-write-preparation-reviewed.json SHAf4a0589d7773fa3d6d1a8d2a15356a37dc0b49ea2621a04961cbddabe67c4cbb核8artifact/8现源=登记=df1dd384 Git/27完整AST/3原conn调用者/2运行literal DML在唯一_upsert与v15历史INSERT单列、values/validator仅该helper消费者。只关闭在这套共同不变量外再加一层写Store的提案，不宣称全Production模型/HTTP依赖消失；原独立digest读取、完成入口录音资格与早文件/artifact阶段保持。产品/新测试/模型/native0，无收益不加抽象或额外QA。SCOPE_CLOSED/WRITE_LEASE_RETURN已即时发资料，本证据冻结；真实来源/并发/晚SQL/全旁白/R4/R9未接受。
+
+### 已履行旁白写入边界只读准备（冻结规约）
 
 `REF-R4-NARRATION-WRITE-PREPARATION-20261015` 只写test-runs/refactor-20261014/fresh-r4-authorizations/narration-write-preparation/**。产品基线df1dd384b42e8aa135f92390fb026d2c5dd302c6；只读当前production.py的_upsert_narration_segments、_narration_segment_values、_validate_narration_segment完整body及三个原同连接调用者save_narration_segments、实际联合editorial保存、complete_creation_task_narration，循直接命中读取原任务/文案/分段类型、codec、digest、来源资格和必要有限测试，最多8精准源。ProductionRepository继续唯一公开任务事实入口，借用conn不能自connect/commit或把跨轨联合提交拆开。原任务/当前确认文案/完整sections与状态、录音/生成来源身份版本摘要、原唯一性/排序、旧错误时点与外部文件/早期artifact阶段保持；先从完整实际body判断所有权，不预定新Store/回调袋/通用端口或仅为行数拆分。
 
