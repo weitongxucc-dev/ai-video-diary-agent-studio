@@ -13,13 +13,17 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | speed五源c96bc424…已b54f435集成/WRITE_LEASE_RETURN。现REF-R2-LINKED-CLIP-PREPARATION-20261014产品只读，定向其余linked clip预览/确认/原结果/直接消费者与已有计算/metadata入口，仅写fresh-api-r2r3-readonly/linked-clip-use-case-preparation的一份具体绑定建议；不全清点/建快照/测试或恢复旧写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，现只写fresh-qa/remaining-asset-writes-independent；核54a897b3…三源两个late scene/adoption实际caller写拒绝/全回滚门，source/fixture/scripts/actualimports前后绑定，不复测module3/normal3。Web旧门归还、不重跑GUI；speed归R6。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | asset七写入联合54a897b3…两独立晚写反例PASS，三源已09a7cf6集成/WRITE_LEASE_RETURN；当前产品/证据只读待下个关键组，不重跑module3/normal3/旧scene/adoption/GUI。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | speed失败差额1实际PASS3.70s、wake3→3/首应用+2，171实际imports及461map无漂移，已随b54f435 SOURCE_INTEGRATED/WRITE_LEASE_RETURN。产品/证据只读待下个关键组，不重跑旧16/晚权限/第三矩阵/配置安装资源门。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 剩余asset七methods/两rules两源1de73eb1…已SOURCE_RELEASE冻结、3首次actualPASS/60静态，与主控production形成三源54a897b3…待QA联合门，现产品只读，不复测旧门或恢复写权。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 剩余asset三源54a897b3…SOURCE_RELEASE准确冻结，七DML/两helper退役及3普通消费者差额通过；当前无新增产品修改，审核QA两late写门后精确集成/归还。speed仅API指定wake恢复修复，不形成双writer。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 七asset写入/两rules联合已09a7cf6集成/归还。现REF-R4-DISCOVERY-ASSET-PREPARATION-20261014产品只读，定向discovery与disk-missing两已定位资产事实写及path/source-url读取、现store与直接caller/fixture；只写fresh-r4-authorizations/discovery-asset-closure-preparation短建议，不全清点/测试/恢复旧源租约。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 七asset写入联合三源54a897b3…已09a7cf6精确集成/WRITE_LEASE_RETURN，当前无产品写权；等待API linked-clip及R4 discovery定向建议后分别绑定互斥源，不与实施者同时写文件。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+asset七写入三源54a897b3…已 `09a7cf69a8750040947fee73ccb5cb6d3a0eebcd` 精确集成，并即时归还R4/QA及主控production租约。最终 `fresh-qa/remaining-asset-writes-independent/SOURCE_GATE.json` SHA cab6420cf19456a93f3480048c892754057c48f79a63eece349d71f152b3a2f0，含完成后finalizer前后/新政策说明；较早运行未结束9d353…不是最终门摘要。两个原SQLite晚写反例首次actual2PASS1.25s，459map与root normal一致、51actualimports/三child code/fixture前后稳定；原首次pytest默认/dev/null日志被隔离拒绝为零actualcase保留，module3/normal3不重跑。原scene checkpoint/correction晚asset UPDATE拒绝全回滚保留先前window、ledger/句柄不变及close前零release；adoption同事务trigger collision/newsource UNIQUE拒绝，已发生12private/ref/receiptDDL及碰撞行全回滚，尚未到voice/receipt row INSERT不计覆盖。下文该候选冻结/独立要求已履行，不按旧段重派；本组只退役确切七DML/两rules，不宣称所有material_assets消费者或整体R4/R9完成，真实媒体/资源/用户账户及文件+SQLite全原子仍未知。
+
+`REF-R4-DISCOVERY-ASSET-PREPARATION-20261014` 只给R4证据写权 `fresh-r4-authorizations/discovery-asset-closure-preparation/**`，产品全部只读。主控定向当前production AST已定位 `_mark_material_ingestion_disk_missing` / `_upsert_discovered_asset` 的剩余asset事实写，以及 `_asset_by_path` / `_asset_by_source_url` 读取；本轮只核这四symbol的实际SQL/raw decoder/状态列/权限/原连接与提交边界、直接caller和现materials/assets.py是否已有等价公开入口，必要只读原material_ingestion及其最小直接测试/fixture。不能以本次读权扩大到其它已定位hash/probe/scene授权与candidate读取、get_visual_feature、voice/creation引用或analyze_asset模型业务。现source所有权与事实时序保持，schema/init/CAS/grant/request/checkpoint/扫描动作留原owner。只交一份短REPORT列真正需要的有限store方法、原reader/写入body归属、parent同caller或原own事务、准确files/symbols/旧目标与一组最小正常接线及必要late写关键门建议；无新通用SQL/dispatcher/规则副本。原raw/probe/七写门只定位复用，不全清点/建snapshot/导入/测试/模型/用户数据。语义ACK按新分层条款后直接只读准备，主控随后绑定R4 owner源与production单一接线owner，未绑定前不施工。
 
 speed五源c96bc424…已 `b54f435a336bbb715dee93981cd9caa26a0e4b56` 精确集成并即时归还API/R6租约；新独立门 `fresh-runtime-reload/linked-speed-recovery-independent/SOURCE_GATE.json` SHA1a7979577abf2d1e53c71dd92e3a3ffca9b1176d141b8228085dac0d553fb190，原失败恢复1实际PASS3.70s。主控核16artifact、与作者一致461map/171actualimports前后hash、原操作/固定版本/后来HEAD/回执shape及无第二编辑，wake3→3；旧权限PASS与16自测只复用，原失败/observer错误保存，driver真实通知/生产媒体/整体R2/R3/R9未接受。下文candidate02冻结/复验要求至此履行，不按旧段重派。
 
