@@ -14,9 +14,9 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原选帧六目标证据已审核归还/冻结。REF-R3-FRAME-LOOKUP-BOUNDARY-EVIDENCE-20261015仅fresh-runtime/output-observation-frame-lookup-boundaries/**新证据，两个未验原生边界：含音频的packet/EOF与长GOP纯视频，仍固定单一16包/16可见帧算法及原synthetic caps；产品/旧包只读，零旧目标复跑，无产品规则/标定接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 选帧边界单轮实证已核归还：audio两目标正确、longGOP两目标cap真实拒绝，14命令后释放；不将16机制发布为通用修复。当前全部产品/证据冻结，无新增写/试策略权，新的策略/资源边界须另绑。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 原任务输入/人物/内容范围已核归还。REF-R4-NARRATION-READS-PREPARATION-20261015仅fresh-r4-authorizations/narration-reads-preparation/**静态证据；产品/旧包只读，定向Production两个剩余配音段SELECT与已有task_input_reads归属，不复跑旧门，不改写/upsert规则。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-NARRATION-READS-20261015独占production.py、creation/task_input_reads.py、tests/test_creation_task_input_reads.py三现源与fresh-r4-authorizations/narration-reads/**新证据；两个原SELECT迁到既有sameconn raw reader、一个合并最小自测，原写/upsert/事务/旧节点不变，无独立QA族。API六源互斥。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前配音段读取归属只读准备
+### 当前配音段读取实施包
+
+`REF-R4-NARRATION-READS-20261015` 准确仅apps/api/app/production.py、apps/api/app/creation/task_input_reads.py、apps/api/tests/test_creation_task_input_reads.py三现源和test-runs/refactor-20261014/fresh-r4-authorizations/narration-reads/**新证据，固定80c76a7d，当前三源=Git见fresh-root-review/narration-reads-implementation-binding.json。准备release23b12c8332f9b95b77beb06fdc25a5b478d1013b487bf6a0ca043bc35021fdeb已root narration-reads-preparation-reviewed.json SHA87ae1f003b37ca828508f2f52b63696ff56a13f9d8a48aba26b07f5b83b9c941核4artifact、三primary Git/prepost、6目标/4依赖完整AST、3caller19调用AST；准备WRITE_LEASE_RETURN即时发且冻结，不复跑已过范围。
+
+仅把production.get_narration_segment/list_narration_segments原两条conn.execute/fetch表达式的exact SQL/params/fetchone/fetchall移为现task_input_reads.narration_segment_row/rows公开raw reader，签名只conn/workspace/task/segment或script；不connect/with/commit/rollback/check-task/decoder/guard。production原with/task-first完整解码、script_id or task.confirmed_script_id、None-only []（空confirmed string仍原query）、出conn后KeyError/DTO/comprehension保持；其它方法/构造/写/upsert/script/权限/资格/联合editorial事务与现旧test节点完整AST不变，不增class/factory/模块/兼容参数。仅在现test_creation_task_input_reads复用records追加一个合并借用SQLite row＋public getter/list测试，覆盖真实未提交/独立observer/rollback、workspace/task/selector/排序/错误/DTO时点，不重复旧task/字段矩阵或模型/媒体。预封三源、实际脚本/直接fixture/执行期actualimports前后，首失败保留只失败节点必要修复再验；正常即SOURCE_RELEASE冻结，root核完整target/non-target及最小测试后精确三源集成即时归还，不加独立QA族，不算完整R4/配音仓储接受。
+
+API同时独占六源，双方不碰对方源；APInormal/后续独立族必须固定80c76a7d＋其准确六overlay的有限immutable执行闭包，排除资料三源WIP/其它并行改动，不能用live整app混为本候选，也不复制全仓/用户数据。资料候选只自身三overlay/依赖，排除API六WIP。各本批实际tuple及普通已接受依赖差额分别记录，同HEAD整体真实接受另验，不因不同候选局部门通过称整个R0–R9通过。
+
+选帧边界release db7e02852e82afbb09c4aad87c7b3e6db405013bc595204b80a6241efac4c3d1已root output-observation-frame-lookup-boundaries-reviewed.json SHAc8a202c75bfd9d7a31e3c6f53b7b15b2d8179cff56e3bc1c1d735858a186b85e核14artifact/191只读tuple/9source3fixture3script/15→78实际origin/74media/14原grant命令后组释放，单node首轮5.18s、旧节点0。原loop/caps完整AST不变，audio .73→.7/1.83→1.8唯一PNG正确；longGOP .93/1.87只见0..0.60，cap不足拒绝/未extract，真实参考前驱.92/1.84。诊断PASS不接受两拒绝目标；16本次selected-video计数不等全demux/IO/CPU上限，mux参考非实际I/O tracing。主控不批准16机制为通用产品修复，不改字段/产品/预算；NATIVE_BOUNDARY_EVIDENCE_REVIEWED/WRITE_LEASE_RETURN已即时发Runtime，原新域冻结。以后须另绑能覆盖这个真实反例的单一有界策略及原许可/总deadline/输出/线程边界，不能盲扩cap/猜profile/无界扫描/重跑旧绿矩阵。
+
+### 已履行配音段读取归属只读准备（冻结）
 
 `REF-R4-NARRATION-READS-PREPARATION-20261015` 仅资料线程test-runs/refactor-20261014/fresh-r4-authorizations/narration-reads-preparation/**新证据，全部产品/其它证据只读。精确80c76a7d产品基线；首读production.py的get_narration_segment/list_narration_segments、creation/task_input_reads.py已有require_creation_task/narration_segment_from_row及tests/test_creation_task_input_reads.py，必要直接消费者最多另五精准源，完整源SHA/current Git/目标AST和读期prepost登记。不重审已过bb4bf933的task/DTO、842d7172的person store或内容三交叉，不import app/collect/test/native/服务/模型或复制全仓。核两个SELECT是否还在Production、既有中立读取owner能否直接承接caller同conn、workspace/task隔离、confirmed_script fallback/空列表、KeyError/排序/DTO/借用事务边界；给实际唯一最小产品文件集合及一个合并最小自测提案。_upsert_narration_segments/save_narration_segments、script/identity/资格/写入与联合editorial事务只定位直接依赖，不移规则、不加callback袋/新通用仓储/权限/兼容层，不把两读取收敛算整个配音仓储通过。现API画面准备与Runtime固定191诊断契约都不变，各新证据域互斥。先语义REBASE_ACK后直接准备，READONLY_PREPARATION_RELEASE冻结供root审；产品写权随后按实际必要文件另绑，普通纯读取收敛最小自测/源码审核，不追加独立QA族。
 
