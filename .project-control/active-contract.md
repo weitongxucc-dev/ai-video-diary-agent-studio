@@ -13,13 +13,15 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 关联四动作六路径5e267f78…已冻结SOURCE_RELEASE，旧speed模块删、五现源固定，10最小PASS含仅1受影响旧speed HTTP；首新cue断言错1FAIL保留/只改该断言，产品不改。产品只读等R6一个关键族门，不复测10/旧16或接下一组写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R4-DISCOVERY-STAGED-INDEPENDENT-20261014：产品只读，只写fresh-qa/discovery-asset-staged-independent，核24f3eb18…三源原分阶段保存的两个late asset写拒绝；observation/ingestion及先前成功资产保留。module3/normal2审计复用，不重跑已过矩阵。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | discovery三源24f3eb18…已312636f精确集成/WRITE_LEASE_RETURN；首次独立2PASS0.86s验证原分阶段提交，当前产品/证据只读待下个关键组，不重跑module3/normal2/旧已过矩阵。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R2-LINKED-TIMELINE-INDEPENDENT-20261014产品只读，只写fresh-runtime-reload/linked-timeline-independent，核五现源+一删5e267f78…三个代表恢复/晚权限/lateSQL族反例；10作者/旧16审计复用。短预览实际标定保持unknown，原资源准备门不重跑。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | discovery两源09b65961…SOURCE_RELEASE冻结，五methods/69静态/首次module3PASS0.29s，已与root四consumer接线形成三源24f3eb18…；当前产品只读待独立分阶段门/集成，不再测试或恢复旧writer。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | discovery联合三源24f3eb18…已SOURCE_RELEASE冻结，四consumer AST范围及首次正常2PASS0.73s；当前无新增产品修改，审核QA分阶段两个lateasset拒绝后精确集成/归还。API main/linked族源保持互斥。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | discovery五methods/三源24f3eb18…已312636f精确集成/归还，原module3/normal2不重跑；当前产品只读待后续明确资产消费者范围，不恢复旧writer/全清点。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | discovery三源24f3eb18…已312636f精确集成/WRITE_LEASE_RETURN，当前无产品写权；审核R6关联族独立门后含一删六路径集成，再绑定依赖已满足后续。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+discovery三源24f3eb18…已 `312636f28dd14ba4f19d40b71b5f4699df3b2117` 精确集成，R4/QA及root production写租约已即时归还。冻结 `fresh-qa/discovery-asset-staged-independent/SOURCE_GATE.json` SHAb61b1b01b62f4dcd670a7dddd2145f7ff28c9b64b8ad08b414e08249cef04a5c，首次actual2PASS0.86s，173map/43actualimports/执行期script与fixture无漂移，33artifact及原body/普通门审计；真实事务序列observation COMMIT→asset ROLLBACK、ingestion COMMIT→first asset COMMIT→later asset ROLLBACK，failed/foreign/未到后续行与媒体bytes保持。五methods与四薄消费者归属已收敛，原store3/rootnormal2不重跑，下文该候选冻结/独立要求已履行不重派；该组不接受其他material/profile/analysis消费者、全R4/R9、真实媒体/账户/资源或跨原分阶段的全DB/FS原子性。当前关联族仍按其独立固定tuple审核，不混入此三源做新旧门重测。
 
 关联时轴四动作当前六路径 `fresh-api-linked-timeline/SOURCE_RELEASE.json` 已冻结，回执SHAaf950391e08f7a6f7b0fdab4fd9d273e57fbaaf0f62e5532be61c7d54012e4c2、含删除的摘要5e267f78c06904f1afce6f20dc82ada2c88789165683bb7e07d2f70da5bed02d（sorted path TAB value LF，删除值为DELETE:original_sha256）；basefc0dc38＋五现overlay减旧speed模块。主控核五live/副本/冻结source、一删原hash/不存在、18artifact、462非overlay Git及172actualimports前后/八实际组装绑定；615无关main AST、旧speed/typed原测试有限改名后同body、DTO与fixed结果/claim恢复骨架单一迁移、插入原构造关键词保持。初次新test空cue断言与未变calculator的anchor cue不符：1FAIL、余9未执行，仅改该新断言、产品字节不变；后同族10distinct实际PASS5.61s（总11执行）含仅一旧speed受影响HTTP node，旧16/其它门不跑。InsertClip新增有限material_reader_identity只由main原_content_reader可信投影，保留旧请求素材reader与编辑/source actor不同职责，不接受调用方自报权限或改共享schema。四动作业务不HTTP/Request、保存/原版本/恢复唯一，真实媒体/GUI/当前不同R4生产tuple及全R2/R3/R9未接受。
 
