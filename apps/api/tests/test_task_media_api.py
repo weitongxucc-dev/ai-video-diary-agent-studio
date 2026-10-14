@@ -174,6 +174,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     media.facts = main._task_media_facts
     media.execute_operation = main._execute_task_media_operation
     media.validate_result = main._validate_task_media_result
+    media.audio_ingress = main._audio_ingress_use_case()
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)

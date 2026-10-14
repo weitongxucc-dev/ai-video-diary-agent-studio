@@ -254,11 +254,12 @@ class TaskAudio:
             raise ValueError("媒体产物尚无完整变换回执")
         return transform
 
-    def probe(self, path, *, output=True):
-        active = TASK_MEDIA_CONTEXT.get()
-        if active is None:
-            raise TaskMediaRequired("audio_probe")
-        context = active[0]
+    def probe(self, path, *, output=True, context=None):
+        if context is None:
+            active = TASK_MEDIA_CONTEXT.get()
+            if active is None:
+                raise TaskMediaRequired("audio_probe")
+            context = active[0]
         context.check()
         return probe_audio_source(path, scheduler=context.scheduler, grant=context.grant,
             cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=output)
@@ -371,8 +372,8 @@ class TaskAudio:
                         produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
                                     if record.producer_job_id == job.id}
                         render_audio_mix(graph, media_input["duration_seconds"],
-                            lambda ref: self.source(workspace_id, task_id, ref), path,
-                            produced_source_paths={self.source(workspace_id, task_id, reference) for reference in input_refs if reference in produced},
+                            lambda ref: self.source(workspace_id, task_id, ref, actor=actor), path,
+                            produced_source_paths={self.source(workspace_id, task_id, reference, actor=actor) for reference in input_refs if reference in produced},
                             start_seconds=media_input.get("start_seconds", 0),
                             end_seconds=media_input.get("end_seconds"),
                             normalize_voice_sources=media_input.get("normalize_voice_sources", False),
@@ -505,11 +506,12 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None):
+    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None):
         self.repository = repository
         self.facts = facts
         self.execute_operation = execute_operation
         self.clip_preview = clip_preview
+        self.audio_ingress = audio_ingress
         self.validate_result = validate_result
         self.on_settled = on_settled
         self.verify_identity = verify_identity
@@ -751,7 +753,9 @@ class TaskMediaJobs:
         from app.host_resource_probes import HostResourceRefusal
         from app.device_scheduler import RecoveryBlocked
         from app.repository import set_workspace_context, reset_workspace_context
+        from app.creation.audio_ingress_use_case import AUDIO_INGRESS_ACTIONS, AudioIngressRejected
         job, event = self.read(grant.workspace_id, grant.owner_id)
+        direct_audio = event["operation"] in AUDIO_INGRESS_ACTIONS
         actor = CreationExecutionActor.from_event(job.workspace_id, event)
         cancellation = threading.Event()
         with executor._cancellation_lock:
@@ -788,13 +792,17 @@ class TaskMediaJobs:
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             direct_clip = "_clip_preview" in event["arguments"]
-            if not direct_clip:
+            if not direct_clip and not direct_audio:
                 context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
             context.check()
             try:
                 result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                if direct_clip:
+                if direct_audio:
+                    if self.audio_ingress is None:
+                        raise ValueError("音频输入执行负责人未组装")
+                    result = self.audio_ingress.execute(job, event, actor, context)
+                elif direct_clip:
                     result = self.clip_preview.execute(job, event, actor, context)
                 else:
                     result = self.execute_operation(job, event, actor)
@@ -805,7 +813,8 @@ class TaskMediaJobs:
             else:
                 result = result_event.payload["result"]
             context.check()
-            verification_facts = self.validate_result(job, event, result, context)
+            verification_facts = (self.audio_ingress.validate_result(job, event, result, context)
+                if direct_audio else self.validate_result(job, event, result, context))
             if self.check(job, event, actor) != "ready":
                 raise ValueError("媒体处理期间输入版本或身份发生变化")
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
@@ -835,7 +844,7 @@ class TaskMediaJobs:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:
-                failure_reason = type(exc).__name__
+                failure_reason = "HTTPException" if direct_audio and isinstance(exc, AudioIngressRejected) else type(exc).__name__
                 scheduler.fail_unit(grant, reason="task_media_failed",
                     failure_write=lambda conn, current: checkpoint(conn, current, "failed", failure_reason))
         finally:

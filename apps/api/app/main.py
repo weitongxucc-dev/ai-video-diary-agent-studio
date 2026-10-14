@@ -74,7 +74,7 @@ from app.auth import (
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
 from app.artifact_store import ArtifactStore
 from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies
-from app.audio_waveform import AudioWaveformError, audio_waveform
+from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
 from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewConflict, ClipPreviewUnavailable, prepare_clip_edit, needs_full_visual_preview
@@ -3708,90 +3708,163 @@ def _task_media_grant_or_queue(kind="waveform"):
 _TASK_MEDIA_SUBMISSION = ContextVar("task_media_submission", default=False)
 
 
+
+def _audio_ingress_use_case(repository=None):
+    repo = repository if repository is not None else production_repo
+    audio = TaskAudio(repo, artifact_store, settings.effective_temporary_root_path)
+    return AudioIngressUseCase(repo, audio, settings.effective_temporary_root_path / 'audio-waveforms')
+
+
+def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=None, arguments=None):
+    workspace_id = current_workspace_id(request)
+    if audio is None:
+        _creation_task_or_404(workspace_id, task_id)
+    actor = _require_permit_actor(request, workspace_id)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+    if audio is not None and cpu_audio_budget_from_env() is None:
+        raise HTTPException(status_code=503, detail='CPU 音频处理预算尚未标定，未接收媒体作业')
+    values = {'_media_kind': 'upload' if audio is not None else 'audio_mix' if operation == 'audio_listen' else 'waveform', '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'), **(arguments if arguments is not None else {})}
+    created_input = None
+    try:
+        if audio is not None:
+            suffix = Path(audio.filename or '').suffix.lower()
+            allowed = {'.wav', '.mp3', '.m4a', '.aac', '.flac'} if operation == 'audio_import' else {'.webm', '.mp4', '.m4a', '.ogg', '.wav'}
+            if suffix not in allowed:
+                raise HTTPException(status_code=422, detail='当前上传音频格式不可用')
+            root = settings.effective_temporary_root_path / 'task-media-inputs' / media_digest([workspace_id, actor.identity_payload()])
+            root.mkdir(parents=True, exist_ok=True)
+            partial = root / (uuid4().hex + '.part')
+            limit = (512 if operation == 'audio_import' else 50) * 1024 * 1024
+            total, digest = (0, hashlib.sha256())
+            try:
+                with partial.open('xb') as target:
+                    while (chunk := audio.file.read(1024 * 1024)):
+                        total += len(chunk)
+                        if total > limit:
+                            raise HTTPException(status_code=422, detail='上传音频超过本次大小上限')
+                        target.write(chunk)
+                        digest.update(chunk)
+                if total == 0:
+                    raise HTTPException(status_code=422, detail='上传音频为空')
+                staged = root / (digest.hexdigest() + suffix)
+                if staged.is_symlink():
+                    raise HTTPException(status_code=422, detail='音频暂存位置不可用')
+                try:
+                    os.link(partial, staged)
+                except FileExistsError:
+                    if staged.stat().st_size != total:
+                        raise HTTPException(status_code=409, detail='已保存的固定音频输入发生变化，请检查本机存储')
+                else:
+                    created_input = staged
+            finally:
+                partial.unlink(missing_ok=True)
+            values['audio'] = {'staged_input': str(staged.relative_to(settings.effective_temporary_root_path)), 'filename': Path(audio.filename).name, 'size_bytes': total, 'sha256': digest.hexdigest()}
+        else:
+            _audio_ingress_use_case().check_public_input(workspace_id, task_id, operation, values, actor)
+        runtime = _creation_runtime()
+        media = runtime.registrations['creation_job'].owner.task_media
+        job = media.submit(runtime, actor, task_id, operation, values, result_kind)
+        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt['result'] = None
+        return JSONResponse(status_code=202, content=receipt)
+    except Exception as exc:
+        if created_input is not None:
+            relative = str(created_input.relative_to(settings.effective_temporary_root_path))
+            with production_repo._connect() as conn:
+                referenced = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments.audio.staged_input')=? LIMIT 1", (workspace_id, relative)).fetchone()
+            if referenced is None:
+                created_input.unlink(missing_ok=True)
+        if isinstance(exc, AudioIngressRejected):
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if isinstance(exc, PermissionError):
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if isinstance(exc, (ValueError, KeyError)):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise
+
+
+
+
 def _task_media_route(operation, result_kind):
     import functools
     import inspect
+
     def decorate(function):
         signature = inspect.signature(function)
         _TASK_MEDIA_HANDLERS[operation] = (function, signature)
+
         @functools.wraps(function)
         def queued(*args, **kwargs):
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            request = bound.arguments["request"]
+            request = bound.arguments['request']
             if TASK_MEDIA_CONTEXT.get() is not None or _TASK_MEDIA_SUBMISSION.get():
                 return function(*args, **kwargs)
-            typed_source, edit_request_event = None, None
-            if operation in {"exact_edit_preview", "media_script_preview", "media_script_tool_preview"}:
-                original = bound.arguments["payload"]
-                # Replays are resolved before comparing against today's version.
+            typed_source, edit_request_event = (None, None)
+            if operation in {'exact_edit_preview', 'media_script_preview', 'media_script_tool_preview'}:
+                original = bound.arguments['payload']
                 if original.request_id is not None:
-                    task, member_id = _exact_edit_access(bound.arguments["task_id"], request, write=True)
-                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id,
-                        "preview" if operation == "exact_edit_preview" else "script",
-                        {**original.model_dump(mode="json", exclude_unset=True), **({"tool_id": bound.arguments["tool_id"]} if operation == "media_script_tool_preview" else {})})
+                    task, member_id = _exact_edit_access(bound.arguments['task_id'], request, write=True)
+                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'preview' if operation == 'exact_edit_preview' else 'script', {**original.model_dump(mode='json', exclude_unset=True), **({'tool_id': bound.arguments['tool_id']} if operation == 'media_script_tool_preview' else {})})
                     if not fresh:
                         result = _read_edit_request_result(task, edit_request_event)
                         if result is not None:
                             return result
-                        raise HTTPException(status_code=409, detail="原预览请求结果尚未确定，请查询原请求，不重复执行")
+                        raise HTTPException(status_code=409, detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
                 try:
-                    if operation in {"media_script_preview", "media_script_tool_preview"}:
+                    if operation in {'media_script_preview', 'media_script_tool_preview'}:
                         script_payload = original
-                        if operation == "media_script_tool_preview":
+                        if operation == 'media_script_tool_preview':
                             actor = _require_permit_actor(request, current_workspace_id(request))
                             try:
-                                script_payload, _ref = _instantiate_script_tool(actor, bound.arguments["tool_id"], original)
+                                script_payload, _ref = _instantiate_script_tool(actor, bound.arguments['tool_id'], original)
                             except (KeyError, PermissionError, ScriptToolError) as exc:
                                 _script_tool_error(exc)
-                        typed_source = _prepare_script_request(bound.arguments["task_id"], request, script_payload)
-                        if typed_source.get("reused_completed_source") is not None:
-                            result = JSONResponse(status_code=200, content=typed_source["reused_completed_source"])
+                        typed_source = _prepare_script_request(bound.arguments['task_id'], request, script_payload)
+                        if typed_source.get('reused_completed_source') is not None:
+                            result = JSONResponse(status_code=200, content=typed_source['reused_completed_source'])
                             if edit_request_event:
                                 _save_edit_request_result(task, edit_request_event, result)
                             return result
                     else:
-                        bound.arguments["payload"], typed_source = _prepare_exact_edit_request(bound.arguments["task_id"], request, original)
+                        bound.arguments['payload'], typed_source = _prepare_exact_edit_request(bound.arguments['task_id'], request, original)
                 except HTTPException as exc:
                     if edit_request_event:
-                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}))
+                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
                     raise
-            if operation == "output_observation":
-                original = bound.arguments["payload"]
+            if operation == 'output_observation':
+                original = bound.arguments['payload']
                 if original.request_id is not None:
-                    task, member_id = _exact_edit_access(bound.arguments["task_id"], request, write=True)
-                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id,
-                        "observation", original.model_dump(mode="json", exclude_unset=True))
+                    task, member_id = _exact_edit_access(bound.arguments['task_id'], request, write=True)
+                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'observation', original.model_dump(mode='json', exclude_unset=True))
                     if not fresh:
                         result = _read_edit_request_result(task, edit_request_event)
                         if result is not None:
                             return result
-                        raise HTTPException(status_code=409, detail="原观察请求结果尚未确定；请查原请求，不重复执行")
+                        raise HTTPException(status_code=409, detail='原观察请求结果尚未确定；请查原请求，不重复执行')
                 try:
-                    typed_source = _prepare_observation_request(bound.arguments["task_id"], request, original)
+                    typed_source = _prepare_observation_request(bound.arguments['task_id'], request, original)
                 except HTTPException as exc:
                     if edit_request_event:
-                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}))
+                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
                     raise
-            if operation == "command_edit_preview":
-                task = _creation_task_or_404(current_workspace_id(request), bound.arguments["task_id"])
-                bound.arguments["payload"] = _bind_assistant_edit_instruction(request, task, bound.arguments["payload"])
-                request.state.task_media_command = bound.arguments["payload"]
+            if operation == 'command_edit_preview':
+                task = _creation_task_or_404(current_workspace_id(request), bound.arguments['task_id'])
+                bound.arguments['payload'] = _bind_assistant_edit_instruction(request, task, bound.arguments['payload'])
+                request.state.task_media_command = bound.arguments['payload']
                 request.state.task_media_base_version_id = task.current_timeline_version_id
             scope = _TASK_MEDIA_SUBMISSION.set(operation)
             source_token = EXACT_EDIT_SOURCE.set(typed_source)
             try:
-                if operation not in {"audio_import", "recording_save"}:
-                    # Pure DB proposals and external text requests finish here,
-                    # without constructing a device runtime or taking a grant.
-                    result = function(*bound.args, **bound.kwargs)
-                    if edit_request_event:
-                        _save_edit_request_result(task, edit_request_event, result)
-                    return result
-                raise TaskMediaRequired("upload")
+                result = function(*bound.args, **bound.kwargs)
+                if edit_request_event:
+                    _save_edit_request_result(task, edit_request_event, result)
+                return result
             except HTTPException as exc:
                 if edit_request_event:
-                    _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}))
+                    _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
                 raise
             except TaskMediaRequired as required:
                 media_kind = required.kind
@@ -3800,90 +3873,45 @@ def _task_media_route(operation, result_kind):
                 EXACT_EDIT_SOURCE.reset(source_token)
             workspace_id = current_workspace_id(request)
             actor = _require_permit_actor(request, workspace_id)
-            task_id = bound.arguments["task_id"]
+            task_id = bound.arguments['task_id']
             task = _creation_task_or_404(workspace_id, task_id)
             if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-                raise HTTPException(status_code=403, detail="当前成员不能安排此任务的媒体处理")
-            if operation in {"audio_import", "recording_save"} and cpu_audio_budget_from_env() is None:
-                raise HTTPException(status_code=503, detail="CPU 音频处理预算尚未标定，未接收媒体作业")
-            values = {"_media_kind": media_kind,
-                      "_draft": request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")}
+                raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+            values = {'_media_kind': media_kind, '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')}
             if typed_source is not None:
-                values["_typed_source"] = typed_source
-            if operation in {"media_script_preview", "media_script_tool_preview"}:
+                values['_typed_source'] = typed_source
+            if operation in {'media_script_preview', 'media_script_tool_preview'}:
                 toolchain, _budget = _script_configuration()
-                values["_script_toolchain"] = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
-                if operation == "media_script_tool_preview":
-                    _expanded, values["_recipe_ref"] = _instantiate_script_tool(actor, bound.arguments["tool_id"], bound.arguments["payload"])
-            created_input = None
+                values['_script_toolchain'] = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
+                if operation == 'media_script_tool_preview':
+                    _expanded, values['_recipe_ref'] = _instantiate_script_tool(actor, bound.arguments['tool_id'], bound.arguments['payload'])
             try:
                 for name, value in bound.arguments.items():
-                    if name in {"request", "task_id"}:
+                    if name in {'request', 'task_id'}:
                         continue
                     if isinstance(value, BaseModel):
-                        values[name] = value.model_dump(mode="json", exclude_unset=True)
-                        if "base_version_id" in values[name] and values[name]["base_version_id"] is None:
-                            values[name]["base_version_id"] = task.current_timeline_version_id
-                    elif isinstance(value, UploadFile) or hasattr(value, "file") and hasattr(value, "filename"):
-                        suffix = Path(value.filename or "").suffix.lower()
-                        allowed = {".wav", ".mp3", ".m4a", ".aac", ".flac"} if operation == "audio_import" else {".webm", ".mp4", ".m4a", ".ogg", ".wav"}
-                        if suffix not in allowed:
-                            raise HTTPException(status_code=422, detail="当前上传音频格式不可用")
-                        root = settings.effective_temporary_root_path / "task-media-inputs" / media_digest([workspace_id, actor.identity_payload()])
-                        root.mkdir(parents=True, exist_ok=True)
-                        partial = root / (uuid4().hex + ".part")
-                        limit = (512 if operation == "audio_import" else 50) * 1024 * 1024
-                        total, digest = 0, hashlib.sha256()
-                        try:
-                            with partial.open("xb") as target:
-                                while chunk := value.file.read(1024 * 1024):
-                                    total += len(chunk)
-                                    if total > limit:
-                                        raise HTTPException(status_code=422, detail="上传音频超过本次大小上限")
-                                    target.write(chunk)
-                                    digest.update(chunk)
-                            if total == 0:
-                                raise HTTPException(status_code=422, detail="上传音频为空")
-                            staged = root / (digest.hexdigest() + suffix)
-                            if staged.is_symlink():
-                                raise HTTPException(status_code=422, detail="音频暂存位置不可用")
-                            try:
-                                os.link(partial, staged)
-                            except FileExistsError:
-                                if staged.stat().st_size != total:
-                                    raise HTTPException(status_code=409, detail="已保存的固定音频输入发生变化，请检查本机存储")
-                            else:
-                                created_input = staged
-                        finally:
-                            partial.unlink(missing_ok=True)
-                        values[name] = {"staged_input": str(staged.relative_to(settings.effective_temporary_root_path)),
-                            "filename": Path(value.filename).name, "size_bytes": total, "sha256": digest.hexdigest()}
+                        values[name] = value.model_dump(mode='json', exclude_unset=True)
+                        if 'base_version_id' in values[name] and values[name]['base_version_id'] is None:
+                            values[name]['base_version_id'] = task.current_timeline_version_id
                     else:
                         values[name] = value
                 runtime = _creation_runtime()
-                media = runtime.registrations["creation_job"].owner.task_media
-                if operation in {"audio_edit_preview", "visual_edit_preview", "exact_edit_preview", "command_edit_preview", "compound_selection_preview"} and task.montage_plan_id and task.current_timeline_version_id is None:
+                media = runtime.registrations['creation_job'].owner.task_media
+                if operation in {'audio_edit_preview', 'visual_edit_preview', 'exact_edit_preview', 'command_edit_preview', 'compound_selection_preview'} and task.montage_plan_id and (task.current_timeline_version_id is None):
                     media.facts(workspace_id, task_id, operation, values, actor)
-                    if media.verify_identity(actor) != "ready":
-                        raise PermissionError("媒体处理身份失效或无法复核")
+                    if media.verify_identity(actor) != 'ready':
+                        raise PermissionError('媒体处理身份失效或无法复核')
                     montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
                     base = _ensure_montage_base_version(workspace_id, task, montage)
-                    if "base_version_id" in values.get("payload", {}):
-                        values["payload"]["base_version_id"] = base.id
+                    if 'base_version_id' in values.get('payload', {}):
+                        values['payload']['base_version_id'] = base.id
                 job = media.submit(runtime, actor, task_id, operation, values, result_kind)
                 receipt = _task_media_job_response(media, job, actor, runtime)
                 if edit_request_event:
                     _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=202, content=receipt))
-                receipt["result"] = None
+                receipt['result'] = None
                 return JSONResponse(status_code=202, content=receipt)
             except Exception as exc:
-                if created_input is not None:
-                    relative = str(created_input.relative_to(settings.effective_temporary_root_path))
-                    with production_repo._connect() as conn:
-                        referenced = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND event_type='task_media_submitted' "
-                            "AND json_extract(payload_json,'$.arguments.audio.staged_input')=? LIMIT 1", (workspace_id,relative)).fetchone()
-                    if referenced is None:
-                        created_input.unlink(missing_ok=True)
                 if isinstance(exc, PermissionError):
                     raise HTTPException(status_code=403, detail=str(exc)) from exc
                 if isinstance(exc, (ValueError, KeyError)):
@@ -3894,126 +3922,110 @@ def _task_media_route(operation, result_kind):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
-    if "_clip_preview" in arguments:
-        command = ClipPreviewCommand(**arguments["_clip_preview"])
+    if operation in AUDIO_INGRESS_ACTIONS:
+        return _audio_ingress_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
+    if '_clip_preview' in arguments:
+        command = ClipPreviewCommand(**arguments['_clip_preview'])
         if command.task_id != task_id or actor.workspace_id != workspace_id:
-            raise PermissionError("镜头预览封存输入不属于当前成员和任务")
+            raise PermissionError('镜头预览封存输入不属于当前成员和任务')
         return _clip_preview_use_case().seal(actor, command)
     from app.canvas import canvas_size
     from app.member_permits import cpu_render_budget_from_env
     task = production_repo.get_creation_task(workspace_id, task_id)
-    if arguments.get("_media_kind") == "clip_preview":
-        raise ValueError("历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览")
-    source = arguments.get("_typed_source")
+    if arguments.get('_media_kind') == 'clip_preview':
+        raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
+    source = arguments.get('_typed_source')
     if source is not None:
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-        if (source["workspace_id"], source["task_id"], source["member_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
-                workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
-            raise ValueError("封存的类型化编辑输入或成员已失效")
-    if operation == "output_observation":
+        if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
+            raise ValueError('封存的类型化编辑输入或成员已失效')
+    if operation == 'output_observation':
         return _output_observation_facts(workspace_id, task_id, arguments, actor)
-    if operation in {"media_script_preview", "media_script_tool_preview"}:
-        if operation == "media_script_tool_preview":
-            invocation = MediaScriptToolPreviewRequest.model_validate(arguments["payload"])
-            payload, recipe_ref = _instantiate_script_tool(actor, arguments["tool_id"], invocation)
-            if recipe_ref != arguments["_recipe_ref"]:
-                raise ValueError("封存配方版本或来源发生变化")
+    if operation in {'media_script_preview', 'media_script_tool_preview'}:
+        if operation == 'media_script_tool_preview':
+            invocation = MediaScriptToolPreviewRequest.model_validate(arguments['payload'])
+            payload, recipe_ref = _instantiate_script_tool(actor, arguments['tool_id'], invocation)
+            if recipe_ref != arguments['_recipe_ref']:
+                raise ValueError('封存配方版本或来源发生变化')
         else:
-            payload = MediaScriptPreviewRequest.model_validate(arguments["payload"])
+            payload = MediaScriptPreviewRequest.model_validate(arguments['payload'])
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise ValueError("脚本输入时间线已变化")
+            raise ValueError('脚本输入时间线已变化')
         toolchain, budget = _script_configuration()
-        frozen = arguments.get("_script_toolchain")
+        frozen = arguments.get('_script_toolchain')
         descriptor = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
         if frozen != descriptor:
-            raise ValueError("脚本受校准工具链描述已变化")
+            raise ValueError('脚本受校准工具链描述已变化')
         sealed, _paths, files = seal_script(production_repo, artifact_store, task, payload, toolchain)
-        resources = media_script_resource_facts(sealed=sealed, limits=script_limits(budget),
-            input_sizes={item["name"]: item["size_bytes"] for item in files}, threads=budget.max_threads)
-        resources["definition_bytes"] = len(script_definition(sealed, payload))
-        if resources["definition_bytes"] > budget.additional_disk_bytes:
-            raise ValueError("成功程序元数据超过本次磁盘预留，不安排脚本")
-        return {"base_version_id": task.current_timeline_version_id, "timeline_sequence": version.sequence if version else 0,
-                "script_digest": sealed.digest, "toolchain": descriptor, "files": files}, resources
+        resources = media_script_resource_facts(sealed=sealed, limits=script_limits(budget), input_sizes={item['name']: item['size_bytes'] for item in files}, threads=budget.max_threads)
+        resources['definition_bytes'] = len(script_definition(sealed, payload))
+        if resources['definition_bytes'] > budget.additional_disk_bytes:
+            raise ValueError('成功程序元数据超过本次磁盘预留，不安排脚本')
+        return ({'base_version_id': task.current_timeline_version_id, 'timeline_sequence': version.sequence if version else 0, 'script_digest': sealed.digest, 'toolchain': descriptor, 'files': files}, resources)
     plan_payload = production_repo.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
     plan = creation_task_montage_plan_from_payload(plan_payload) if plan_payload else None
-    # Bind the whole current task input, excluding renderer progress fields.
-    transient = {"status", "message", "output_path", "subtitle_path", "updated_at"}
-    snapshot = {key: value for key, value in creation_task_montage_plan_to_payload(plan).items()
-                if key not in transient} if plan else None
-    payload = arguments.get("payload", {})
+    transient = {'status', 'message', 'output_path', 'subtitle_path', 'updated_at'}
+    snapshot = {key: value for key, value in creation_task_montage_plan_to_payload(plan).items() if key not in transient} if plan else None
+    payload = arguments.get('payload', {})
     picture_candidates = [plan] if plan is not None else []
-    if operation == "exact_edit_preview" and payload.get("operation_type") == "EditGraphicOverlay":
+    if operation == 'exact_edit_preview' and payload.get('operation_type') == 'EditGraphicOverlay':
         overlay_payload = CreationTaskExactEditRequest.model_validate(payload)
         picture_candidates.append(_graphic_overlay_candidate(plan, overlay_payload))
     compound_proposal = None
-    if plan is not None and arguments.get("_media_kind") == "picture_preview" and operation in {"command_edit_preview", "compound_selection_preview"}:
-        command_payload, included = payload, None
-        if operation == "compound_selection_preview":
-            proposal = production_repo.get_edit_proposal(workspace_id, arguments["proposal_id"])
+    if plan is not None and arguments.get('_media_kind') == 'picture_preview' and (operation in {'command_edit_preview', 'compound_selection_preview'}):
+        command_payload, included = (payload, None)
+        if operation == 'compound_selection_preview':
+            proposal = production_repo.get_edit_proposal(workspace_id, arguments['proposal_id'])
             selection = CompoundEditSelectionRequest.model_validate(payload)
-            data = proposal.operation.get("payload", {})
-            if (proposal.task_id != task_id or proposal.status != "proposed"
-                    or proposal.operation.get("operation_type") != "EditCompoundTimeline"
-                    or not data.get("selection_enabled") or data.get("base_version_id") != task.current_timeline_version_id):
-                raise ValueError("当前复合修改提案已失效，不能封存预览")
-            included = (selection.included_step_indices if selection.raw_command is None else
-                        compile_compound_selection(selection.raw_command, data["steps"]))
+            data = proposal.operation.get('payload', {})
+            if proposal.task_id != task_id or proposal.status != 'proposed' or proposal.operation.get('operation_type') != 'EditCompoundTimeline' or (not data.get('selection_enabled')) or (data.get('base_version_id') != task.current_timeline_version_id):
+                raise ValueError('当前复合修改提案已失效，不能封存预览')
+            included = selection.included_step_indices if selection.raw_command is None else compile_compound_selection(selection.raw_command, data['steps'])
             intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
-            command_payload = {"raw_command": intent.raw_command, "selected_object_refs": intent.scope["context_refs"],
-                               "playhead_ms": intent.playhead_ms}
+            command_payload = {'raw_command': intent.raw_command, 'selected_object_refs': intent.scope['context_refs'], 'playhead_ms': intent.playhead_ms}
             compound_proposal = asdict(proposal)
-        compiled = compile_compound_edit(command_payload["raw_command"], plan, _effective_audio_timeline(plan),
-            command_payload.get("selected_object_refs", []), task.current_timeline_version_id,
-            command_payload.get("playhead_ms"), included)
+        compiled = compile_compound_edit(command_payload['raw_command'], plan, _effective_audio_timeline(plan), command_payload.get('selected_object_refs', []), task.current_timeline_version_id, command_payload.get('playhead_ms'), included)
         if compiled is not None:
             picture_candidates.append(compiled[0])
-    expected = payload.get("base_version_id")
-    if "base_version_id" in payload and expected != task.current_timeline_version_id:
-        raise ValueError("时间线已变化，请重新安排当前要求")
+    expected = payload.get('base_version_id')
+    if 'base_version_id' in payload and expected != task.current_timeline_version_id:
+        raise ValueError('时间线已变化，请重新安排当前要求')
     visual_scope = None
-    visual_edit = operation == "visual_edit_preview" or (
-        operation == "exact_edit_preview" and payload.get("operation_type") == "AdjustVisualEffects")
-    if visual_edit and plan is not None and arguments.get("_media_kind") == "picture_preview":
+    visual_edit = operation == 'visual_edit_preview' or (operation == 'exact_edit_preview' and payload.get('operation_type') == 'AdjustVisualEffects')
+    if visual_edit and plan is not None and (arguments.get('_media_kind') == 'picture_preview'):
         tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
-        representative, _after, projected = _visual_preview_projection(
-            plan, payload["clip_ids"], payload["effects"], tracks)
-        visual_scope = {"representative_clip_id": representative.id,
-            "selected_clip_ids": [item.id for item in plan.clips if item.id in payload["clip_ids"]],
-            "start_seconds": representative.timeline_start_seconds,
-            "end_seconds": representative.timeline_end_seconds,
-            "scope": "independent_clip", "adjacent_transitions_included": False}
+        representative, _after, projected = _visual_preview_projection(plan, payload['clip_ids'], payload['effects'], tracks)
+        visual_scope = {'representative_clip_id': representative.id, 'selected_clip_ids': [item.id for item in plan.clips if item.id in payload['clip_ids']], 'start_seconds': representative.timeline_start_seconds, 'end_seconds': representative.timeline_end_seconds, 'scope': 'independent_clip', 'adjacent_transitions_included': False}
         if projected is None:
-            raise ValueError("画面预览范围与封存的媒体用途不一致")
+            raise ValueError('画面预览范围与封存的媒体用途不一致')
         if projected is not None:
             plan = projected[0][0]
             picture_candidates = [candidate for candidate, _tracks in projected]
-            visual_scope["subtitle_tracks"] = [{key: value for key, value in asdict(track).items()
-                if key not in {"created_at", "updated_at"}} for track in projected[0][1]]
-    audio_operations = {"audio_import", "recording_save", "audio_listen", "audio_extract", "audio_edit_preview", "audio_waveform", "narration_waveform"}
-    exact_audio = operation == "exact_edit_preview" and payload.get("operation_type") == "EditAudioTimeline"
+            visual_scope['subtitle_tracks'] = [{key: value for key, value in asdict(track).items() if key not in {'created_at', 'updated_at'}} for track in projected[0][1]]
+    audio_operations = {'audio_extract', 'audio_edit_preview'}
+    exact_audio = operation == 'exact_edit_preview' and payload.get('operation_type') == 'EditAudioTimeline'
     if exact_audio:
         audio_operations.add(operation)
-    if operation == "command_edit_preview" and arguments.get("_media_kind") in {"audio_mix", "audio_probe", "audio_stretch"} and not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip()):
+    if operation == 'command_edit_preview' and arguments.get('_media_kind') in {'audio_mix', 'audio_probe', 'audio_stretch'} and (not re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip())):
         audio_operations.add(operation)
-    files, audio_inputs, audio_uses, graphics = [], [], {}, []
+    files, audio_inputs, audio_uses, graphics = ([], [], {}, [])
     audio_graphs = []
     service = _task_audio()
+
     def remember(reference, path, *, audio=False, metadata=None):
         stat = path.stat()
         fact = [reference, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
         if fact not in files:
             files.append(fact)
-        if audio and not any(item["reference"] == reference for item in audio_inputs):
+        if audio and (not any((item['reference'] == reference for item in audio_inputs))):
             values = metadata if metadata is not None else service.source_metadata(workspace_id, task_id, reference)
-            audio_inputs.append({"reference": reference, "path": str(path.resolve()), "size_bytes": stat.st_size,
-                                 "uses": audio_uses.get(reference, 1), **values})
-    if plan is not None and operation not in {"audio_import", "recording_save", "narration_waveform"}:
+            audio_inputs.append({'reference': reference, 'path': str(path.resolve()), 'size_bytes': stat.st_size, 'uses': audio_uses.get(reference, 1), **values})
+    if plan is not None:
         if operation not in audio_operations:
             _validate_montage_material_use(workspace_id, plan)
             person_ids = set()
-            if any(clip.person_render_id for clip in plan.clips):
+            if any((clip.person_render_id for clip in plan.clips)):
                 from app.creation_execution import presenter_inputs, current_presenter_render
                 creation_plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
                 script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
@@ -4024,234 +4036,170 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             for clip in plan.clips:
                 if clip.person_render_id:
                     if clip.person_render_id not in person_ids:
-                        raise PermissionError("当前人物/声音授权或片段版本已失效")
+                        raise PermissionError('当前人物/声音授权或片段版本已失效')
                 else:
                     asset = production_repo.get_asset(workspace_id, clip.asset_id)
-                    if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
-                        visibility=asset.visibility, owner_user_id=asset.owner_user_id):
-                        raise PermissionError("当前成员不能读取镜头素材")
-                path = (_person_render_media_path(production_repo.get_person_render(workspace_id, task_id, clip.person_render_id))
-                        if clip.person_render_id else production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path))
+                    if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False, visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+                        raise PermissionError('当前成员不能读取镜头素材')
+                path = _person_render_media_path(production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
                 if path is None:
-                    raise ValueError("当前人物片段没有有效媒体")
+                    raise ValueError('当前人物片段没有有效媒体')
                 remember(clip.source_path, path)
-            for reference in dict.fromkeys(item["source_ref"] for candidate in picture_candidates
-                    for item in candidate.graphic_overlays if item.get("kind") == "image"):
+            for reference in dict.fromkeys((item['source_ref'] for candidate in picture_candidates for item in candidate.graphic_overlays if item.get('kind') == 'image')):
                 item = graphic_source_facts(production_repo, artifact_store, workspace_id, task_id, reference, actor=actor)
                 graphics.append(item)
-                remember(reference, Path(item["path"]))
+                remember(reference, Path(item['path']))
         graph = _effective_audio_timeline(plan)
         audio_graphs.append(graph)
-        solo = set(payload.get("solo_track_ids", []))
-        clips = [clip for track in graph.tracks if not track.muted and (not solo or track.id in solo)
-                 for clip in track.clips if not clip.muted]
-        if operation == "audio_waveform":
-            clips = [clip for track in graph.tracks for clip in track.clips if clip.id == arguments["clip_id"]]
-            if not clips:
-                raise ValueError("所选音频片段不存在")
-        if arguments.get("_media_kind") == "audio_stretch":
-            selected = set(payload.get("selected_object_refs", []))
+        solo = set(payload.get('solo_track_ids', []))
+        clips = [clip for track in graph.tracks if not track.muted and (not solo or track.id in solo) for clip in track.clips if not clip.muted]
+        if arguments.get('_media_kind') == 'audio_stretch':
+            selected = set(payload.get('selected_object_refs', []))
             for video_clip in plan.clips:
-                if f"clip:{video_clip.id}" in selected:
+                if f'clip:{video_clip.id}' in selected:
                     reference = production_repo.workspace_media_reference_for_asset(workspace_id, video_clip.asset_id)
-                    remember(reference, production_repo.resolve_clip_media_reference(workspace_id, video_clip.asset_id, video_clip.source_path),
-                        audio=True, metadata=service.source_metadata(workspace_id, task_id, reference))
+                    remember(reference, production_repo.resolve_clip_media_reference(workspace_id, video_clip.asset_id, video_clip.source_path), audio=True, metadata=service.source_metadata(workspace_id, task_id, reference))
         references = {clip.source_ref for clip in clips}
-        audio_uses.update(Counter(clip.source_ref for clip in clips))
-        if operation == "audio_edit_preview" or exact_audio:
-            edit = (_audio_mix_request(CreationTaskExactEditRequest.model_validate(payload), task.current_timeline_version_id)
-                if exact_audio else AudioEditRequest.model_validate(payload))
+        audio_uses.update(Counter((clip.source_ref for clip in clips)))
+        if operation == 'audio_edit_preview' or exact_audio:
+            edit = _audio_mix_request(CreationTaskExactEditRequest.model_validate(payload), task.current_timeline_version_id) if exact_audio else AudioEditRequest.model_validate(payload)
             duration_ms = round(plan.duration_seconds * 1000)
-            if edit.action == "replace_narration":
-                edit = edit.model_copy(update={"values": {**edit.values, "source_end_ms": duration_ms}})
+            if edit.action == 'replace_narration':
+                edit = edit.model_copy(update={'values': {**edit.values, 'source_end_ms': duration_ms}})
             candidate = apply_audio_edit(graph, edit, duration_ms)
             audio_graphs.append(candidate)
             after_clips = [clip for track in candidate.tracks if not track.muted for clip in track.clips if not clip.muted]
-            references.update(clip.source_ref for clip in after_clips)
-            for reference, count in Counter(clip.source_ref for clip in after_clips).items():
+            references.update((clip.source_ref for clip in after_clips))
+            for reference, count in Counter((clip.source_ref for clip in after_clips)).items():
                 audio_uses[reference] = max(audio_uses.get(reference, 0), count)
         for reference in sorted(references):
             remember(reference, service.source(workspace_id, task_id, reference, actor=actor), audio=True)
-    if "audio" in arguments:
-        relative = arguments["audio"]["staged_input"]
-        path = settings.effective_temporary_root_path / relative
-        if path.is_symlink() or not path.resolve().is_relative_to(settings.effective_temporary_root_path.resolve()):
-            raise ValueError("音频暂存输入越界")
-        remember(relative, path, audio=True, metadata={"duration_seconds": None, "sample_rate": None, "channels": None})
-    if operation == "narration_waveform":
-        if not task.narration_cache_key:
-            raise ValueError("当前任务没有可读取的配音")
-        reference = production_repo.narration_artifact_reference(task.narration_cache_key)
-        remember(reference, service.source(workspace_id, task_id, reference, actor=actor), audio=True)
-    facts = {"base_version_id": task.current_timeline_version_id, "script_id": task.confirmed_script_id,
-             "script_digest": production_repo.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
-                 if task.confirmed_script_id else None,
-             "plan_id": task.plan_id, "plan_digest": media_digest(asdict(production_repo.get_creation_plan(workspace_id, task.plan_id))), "montage": snapshot, "files": files,
-             "narration_cache_key": task.narration_cache_key}
+    facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': production_repo.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(production_repo.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
     if visual_scope is not None:
-        facts["visual_preview"] = visual_scope
-    if operation == "audio_import":
-        facts = {"base_version_id": None, "files": files}
+        facts['visual_preview'] = visual_scope
     if graphics:
-        facts["graphic_sources"] = graphics
+        facts['graphic_sources'] = graphics
     if compound_proposal is not None:
-        facts["compound_selection_proposal"] = compound_proposal
+        facts['compound_selection_proposal'] = compound_proposal
     if operation in audio_operations:
         budget = cpu_audio_budget_from_env()
         if budget is None:
-            raise ValueError("CPU 音频处理预算尚未标定，未启动媒体")
-        if not audio_inputs and operation != "audio_listen":
-            raise ValueError("没有固定的音频输入，未启动媒体")
+            raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
+        if not audio_inputs:
+            raise ValueError('没有固定的音频输入，未启动媒体')
         for source in audio_inputs:
-            for field, cap in (("duration_seconds", budget.max_source_duration_seconds),
-                               ("sample_rate", budget.max_sample_rate), ("channels", budget.max_channels)):
+            for field, cap in (('duration_seconds', budget.max_source_duration_seconds), ('sample_rate', budget.max_sample_rate), ('channels', budget.max_channels)):
                 value = source[field]
                 if value is not None and (not isinstance(value, (int, float)) or value <= 0 or value > cap):
-                    raise ValueError("已保存的音频源规格超出标定预算")
-        known_duration = max((item["duration_seconds"] or 0 for item in audio_inputs), default=0)
-        if operation in {"audio_import", "recording_save"}:
-            output_duration = budget.max_output_duration_seconds
-        elif operation in {"audio_waveform", "narration_waveform"}:
-            if known_duration > budget.max_output_duration_seconds:
-                raise ValueError("当前音频超过波形输出时长预算")
-            output_duration = budget.max_output_duration_seconds
-        else:
-            if plan is None:
-                raise ValueError("当前任务没有可试听的音轨")
-            start = payload.get("start_seconds", 0)
-            end = payload.get("end_seconds", plan.duration_seconds)
-            if not 0 <= start < end <= plan.duration_seconds:
-                raise ValueError("试听范围必须位于时间线内")
-            output_duration = end - start
-        # Limits are explicit upper bounds, never reported as measurements.
-        resources = {"kind": "task_audio", "execution_mode": "cpu_ffmpeg",
-            "input_policy": "probe_then_bounded_decode", "inputs": audio_inputs,
-            "input_count": sum(item["uses"] for item in audio_inputs),
-            "input_bytes": sum(item["size_bytes"] * item["uses"] for item in audio_inputs),
-            "source_duration_limit_seconds": budget.max_source_duration_seconds,
-            "output_duration_limit_seconds": output_duration,
-            "source_sample_rate_limit": budget.max_sample_rate, "source_channels_limit": budget.max_channels,
-            "output_sample_rate_limit": 8000 if operation in {"audio_waveform", "narration_waveform"} else
-                budget.max_sample_rate if operation in {"audio_import", "recording_save"} else 48000,
-            "output_channels_limit": budget.max_channels if operation in {"audio_import", "recording_save", "audio_waveform", "narration_waveform"} else 2,
-            "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
-            "timeout_seconds": budget.max_timeout_seconds}
-        if audio_graphs and (operation in {"audio_listen", "audio_edit_preview"} or exact_audio
-                or arguments.get("_media_kind") == "audio_mix"):
-            mix = audio_mix_resources(audio_inputs, audio_graphs, output_duration,
-                normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=budget)
-            resources.update({key: mix[key] for key in ("normalize_voice_sources", "normalized_source_outputs",
-                "mix_output_bytes", "temporary_output_bytes", "output_duration_limit_seconds")})
-        if (resources["input_count"] > budget.max_input_count or resources["input_bytes"] > budget.max_input_bytes
-                or output_duration > budget.max_output_duration_seconds
-                or resources["output_sample_rate_limit"] > budget.max_sample_rate):
-            raise ValueError("当前音频处理输入或输出超出标定预算")
+                    raise ValueError('已保存的音频源规格超出标定预算')
+        known_duration = max((item['duration_seconds'] or 0 for item in audio_inputs), default=0)
+        if plan is None:
+            raise ValueError('当前任务没有可试听的音轨')
+        start = payload.get('start_seconds', 0)
+        end = payload.get('end_seconds', plan.duration_seconds)
+        if not 0 <= start < end <= plan.duration_seconds:
+            raise ValueError('试听范围必须位于时间线内')
+        output_duration = end - start
+        resources = {'kind': 'task_audio', 'execution_mode': 'cpu_ffmpeg', 'input_policy': 'probe_then_bounded_decode', 'inputs': audio_inputs, 'input_count': sum((item['uses'] for item in audio_inputs)), 'input_bytes': sum((item['size_bytes'] * item['uses'] for item in audio_inputs)), 'source_duration_limit_seconds': budget.max_source_duration_seconds, 'output_duration_limit_seconds': output_duration, 'source_sample_rate_limit': budget.max_sample_rate, 'source_channels_limit': budget.max_channels, 'output_sample_rate_limit': 48000, 'output_channels_limit': 2, 'max_output_bytes': budget.max_output_bytes, 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds}
+        if audio_graphs and (operation in {'audio_edit_preview'} or exact_audio or arguments.get('_media_kind') == 'audio_mix'):
+            mix = audio_mix_resources(audio_inputs, audio_graphs, output_duration, normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=budget)
+            resources.update({key: mix[key] for key in ('normalize_voice_sources', 'normalized_source_outputs', 'mix_output_bytes', 'temporary_output_bytes', 'output_duration_limit_seconds')})
+        if resources['input_count'] > budget.max_input_count or resources['input_bytes'] > budget.max_input_bytes or output_duration > budget.max_output_duration_seconds or (resources['output_sample_rate_limit'] > budget.max_sample_rate):
+            raise ValueError('当前音频处理输入或输出超出标定预算')
     else:
         if plan is None:
-            raise ValueError("当前任务没有可预览的故事板")
+            raise ValueError('当前任务没有可预览的故事板')
         budget = cpu_render_budget_from_env()
         if budget is None:
-            raise ValueError("CPU 画面预览预算尚未标定，未启动媒体")
-        if any(clip.person_render_id for clip in plan.clips):
+            raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
+        if any((clip.person_render_id for clip in plan.clips)):
             _, person_budget = presenter_budgets_from_env()
             if person_budget is None:
-                raise ValueError("人物组合 CPU 预览预算尚未标定，未启动媒体")
+                raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
             budget = person_budget
         width, height = canvas_size(plan.aspect_ratio)
-        changed_width, changed_height = canvas_size(payload.get("aspect_ratio") or plan.aspect_ratio)
-        width, height = max(width, changed_width), max(height, changed_height)
-        resources = {"kind": "creation_presenter_render" if any(clip.person_render_id for clip in plan.clips) else "creation_render", "execution_mode": "cpu_ffmpeg", "duration_seconds": plan.duration_seconds,
-            "width_px": width, "height_px": height, "input_bytes": sum(item[1] for item in files),
-            "clip_count": len(plan.clips), "overlay_count": max(len(candidate.graphic_overlays) for candidate in picture_candidates),
-            "threads": budget.max_threads, "timeout_seconds": budget.max_timeout_seconds,
-            "max_output_bytes": budget.max_output_bytes}
+        changed_width, changed_height = canvas_size(payload.get('aspect_ratio') or plan.aspect_ratio)
+        width, height = (max(width, changed_width), max(height, changed_height))
+        resources = {'kind': 'creation_presenter_render' if any((clip.person_render_id for clip in plan.clips)) else 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan.duration_seconds, 'width_px': width, 'height_px': height, 'input_bytes': sum((item[1] for item in files)), 'clip_count': len(plan.clips), 'overlay_count': max((len(candidate.graphic_overlays) for candidate in picture_candidates)), 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds, 'max_output_bytes': budget.max_output_bytes}
         audio_budget = cpu_audio_budget_from_env()
         candidates = []
         for candidate in picture_candidates:
             graph = _effective_audio_timeline(candidate)
-            mix_facts = service.mix_facts(workspace_id, task_id, graph, candidate.duration_seconds,
-                actor=actor, normalize_voice_sources=candidate.narration_linkage_created_audio_timeline, budget=audio_budget)
-            candidates.append({"key": media_digest([graph.model_dump(), candidate.duration_seconds,
-                candidate.narration_linkage_created_audio_timeline]), **mix_facts})
+            mix_facts = service.mix_facts(workspace_id, task_id, graph, candidate.duration_seconds, actor=actor, normalize_voice_sources=candidate.narration_linkage_created_audio_timeline, budget=audio_budget)
+            candidates.append({'key': media_digest([graph.model_dump(), candidate.duration_seconds, candidate.narration_linkage_created_audio_timeline]), **mix_facts})
         mix_inputs = {}
         for candidate in candidates:
-            for source in candidate["resources"]["inputs"]:
-                previous = mix_inputs.get(source["reference"])
-                if previous is None or previous["uses"] < source["uses"]:
-                    mix_inputs[source["reference"]] = source
-        resources["audio_mix"] = audio_mix_resources(list(mix_inputs.values()),
-            [_effective_audio_timeline(candidate) for candidate in picture_candidates],
-            max(candidate.duration_seconds for candidate in picture_candidates),
-            normalize_voice_sources=any(candidate.narration_linkage_created_audio_timeline for candidate in picture_candidates),
-            budget=audio_budget)
-        resources["audio_mix_candidates"] = candidates
-        facts["audio_mix_candidates"] = candidates
-        if (operation == "command_edit_preview" and re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", payload.get("raw_command", "").strip())):
-            selected = payload.get("selected_object_refs", [])
-            if len(selected) != 1 or not selected[0].startswith("clip:"):
-                raise ValueError("静音检测必须绑定一个实际镜头")
-            clip = next((item for item in plan.clips if f"clip:{item.id}" == selected[0]), None)
+            for source in candidate['resources']['inputs']:
+                previous = mix_inputs.get(source['reference'])
+                if previous is None or previous['uses'] < source['uses']:
+                    mix_inputs[source['reference']] = source
+        resources['audio_mix'] = audio_mix_resources(list(mix_inputs.values()), [_effective_audio_timeline(candidate) for candidate in picture_candidates], max((candidate.duration_seconds for candidate in picture_candidates)), normalize_voice_sources=any((candidate.narration_linkage_created_audio_timeline for candidate in picture_candidates)), budget=audio_budget)
+        resources['audio_mix_candidates'] = candidates
+        facts['audio_mix_candidates'] = candidates
+        if operation == 'command_edit_preview' and re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip()):
+            selected = payload.get('selected_object_refs', [])
+            if len(selected) != 1 or not selected[0].startswith('clip:'):
+                raise ValueError('静音检测必须绑定一个实际镜头')
+            clip = next((item for item in plan.clips if f'clip:{item.id}' == selected[0]), None)
             if clip is None or clip.locked:
-                raise ValueError("静音检测镜头不存在或已锁定")
-            resources["silence_analysis_scope"] = {"base_version_id":task.current_timeline_version_id, "clip_id":clip.id}
-            resources["dynamic_clip_count_limit"] = budget.max_clip_count
-            resources["dynamic_overlay_count_limit"] = budget.max_overlay_count
-            resources["audio_mix"]["dynamic_input_count_limit"] = audio_budget.max_input_count
-            resources["audio_mix"]["dynamic_input_bytes_limit"] = audio_budget.max_input_bytes
-        # Local recognition has model memory requirements beyond FFmpeg budgets.
-        if "校准" in payload.get("raw_command", ""):
-            raise ValueError("本地字幕识别尚无独立标定的模型资源许可，未启动识别")
-    return facts, resources
+                raise ValueError('静音检测镜头不存在或已锁定')
+            resources['silence_analysis_scope'] = {'base_version_id': task.current_timeline_version_id, 'clip_id': clip.id}
+            resources['dynamic_clip_count_limit'] = budget.max_clip_count
+            resources['dynamic_overlay_count_limit'] = budget.max_overlay_count
+            resources['audio_mix']['dynamic_input_count_limit'] = audio_budget.max_input_count
+            resources['audio_mix']['dynamic_input_bytes_limit'] = audio_budget.max_input_bytes
+        if '校准' in payload.get('raw_command', ''):
+            raise ValueError('本地字幕识别尚无独立标定的模型资源许可，未启动识别')
+    return (facts, resources)
 
 
 def _execute_task_media_operation(job, event, actor):
-    if event["arguments"].get("_media_kind") == "clip_preview":
-        raise ValueError("短镜头预览必须经独立封存执行入口，不能重入路由")
+    if event['operation'] in AUDIO_INGRESS_ACTIONS:
+        raise ValueError('音频输入必须经明确用例执行，不能重入旧媒体路由')
+    if event['arguments'].get('_media_kind') == 'clip_preview':
+        raise ValueError('短镜头预览必须经独立封存执行入口，不能重入路由')
     from types import SimpleNamespace
     import typing
-    function, signature = _TASK_MEDIA_HANDLERS[event["operation"]]
+    function, signature = _TASK_MEDIA_HANDLERS[event['operation']]
     hints = typing.get_type_hints(function)
-    path = "/api/creation-tasks/" + job.task_id + "/media-execution"
-    request = Request({"type": "http", "method": "POST", "path": path,
-        "query_string": b"draft=true" if event["arguments"].get("_draft") else b"", "headers": [],
-        "state": {"principal": SimpleNamespace(workspace_id=job.workspace_id, user_id=actor.user_id or actor.member_id)}})
-    values = {"task_id": job.task_id, "request": request}
-    for name, value in event["arguments"].items():
-        if name.startswith("_"):
+    path = '/api/creation-tasks/' + job.task_id + '/media-execution'
+    request = Request({'type': 'http', 'method': 'POST', 'path': path, 'query_string': b'draft=true' if event['arguments'].get('_draft') else b'', 'headers': [], 'state': {'principal': SimpleNamespace(workspace_id=job.workspace_id, user_id=actor.user_id or actor.member_id)}})
+    values = {'task_id': job.task_id, 'request': request}
+    for name, value in event['arguments'].items():
+        if name.startswith('_'):
             continue
-        if name == "audio":
-            # Uploads have already been staged; the typed upload handler reads only this fixed reference.
-            values[name] = SimpleNamespace(filename=value["filename"], staged_input=value["staged_input"], source_sha256=value["sha256"])
+        if name == 'audio':
+            values[name] = SimpleNamespace(filename=value['filename'], staged_input=value['staged_input'], source_sha256=value['sha256'])
         elif isinstance(hints.get(name), type) and issubclass(hints[name], BaseModel):
             values[name] = hints[name].model_validate(value)
-            if name == "payload" and getattr(values[name], "assistant_turn_id", None) is not None:
-                values[name] = hints[name].model_validate(values[name].model_dump(
-                    mode="json", exclude_unset=True, exclude={"assistant_turn_id"}))
+            if name == 'payload' and getattr(values[name], 'assistant_turn_id', None) is not None:
+                values[name] = hints[name].model_validate(values[name].model_dump(mode='json', exclude_unset=True, exclude={'assistant_turn_id'}))
         else:
             values[name] = value
-    source = event["arguments"].get("_typed_source")
+    source = event['arguments'].get('_typed_source')
     if source is not None:
-        source = {**source, "media_job_id": job.id, "actor_identity": actor.identity_payload()}
+        source = {**source, 'media_job_id': job.id, 'actor_identity': actor.identity_payload()}
     source_token = EXACT_EDIT_SOURCE.set(source)
     try:
         result = function(**values)
     finally:
         EXACT_EDIT_SOURCE.reset(source_token)
     if isinstance(result, BaseModel):
-        return result.model_dump(mode="json")
+        return result.model_dump(mode='json')
     if isinstance(result, JSONResponse):
         return json.loads(result.body)
     return result
 
 
 def _validate_task_media_result(job, event, result, context):
-    if event["operation"] == "output_observation":
+    if event['operation'] in AUDIO_INGRESS_ACTIONS:
+        raise ValueError('音频输入必须经明确用例执行，不能重入旧媒体路由')
+    if event['operation'] == 'output_observation':
         context.check()
-        if (result.get("timeline_version_id"), result.get("output", {}).get("sha256")) != (
-                event["input_facts"]["base_version_id"], event["input_facts"]["output"]["sha256"]):
-            raise ValueError("观察结果未绑定原实际输出版本和摘要")
-        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_OBSERVATION_BYTES:
-            raise ValueError("观察回执超过有界大小")
+        if (result.get('timeline_version_id'), result.get('output', {}).get('sha256')) != (event['input_facts']['base_version_id'], event['input_facts']['output']['sha256']):
+            raise ValueError('观察结果未绑定原实际输出版本和摘要')
+        if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_OBSERVATION_BYTES:
+            raise ValueError('观察回执超过有界大小')
         return []
     outputs = []
     for record in production_repo.list_artifact_records(job.workspace_id, job.task_id):
@@ -4260,47 +4208,44 @@ def _validate_task_media_result(job, event, result, context):
         context.check()
         publication = artifact_store.describe(record.logical_ref)
         if (publication.sha256, publication.size_bytes) != (record.sha256, record.size_bytes):
-            raise ValueError("已提交预览产物内容发生变化")
+            raise ValueError('已提交预览产物内容发生变化')
         path = artifact_store.resolve_file(record.logical_ref)
         stat = path.stat()
-        outputs.append({"reference":record.logical_ref,"size_bytes":stat.st_size,
-                        "mtime_ns":stat.st_mtime_ns,"ctime_ns":stat.st_ctime_ns})
-        if event["operation"] in {"media_script_preview", "media_script_tool_preview"}:
-            if record.kind == "media_script_definition":
-                if stat.st_size != event["resources"]["definition_bytes"]:
-                    raise ValueError("成功程序定义大小与封存事实不一致")
+        outputs.append({'reference': record.logical_ref, 'size_bytes': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'ctime_ns': stat.st_ctime_ns})
+        if event['operation'] in {'media_script_preview', 'media_script_tool_preview'}:
+            if record.kind == 'media_script_definition':
+                if stat.st_size != event['resources']['definition_bytes']:
+                    raise ValueError('成功程序定义大小与封存事实不一致')
                 definition = json.loads(path.read_bytes())
-                if definition["script_digest"] != event["input_facts"]["script_digest"]:
-                    raise ValueError("成功程序定义摘要不属于原作业")
+                if definition['script_digest'] != event['input_facts']['script_digest']:
+                    raise ValueError('成功程序定义摘要不属于原作业')
                 continue
             from PIL import Image
-            if record.kind != "graphic_source" or path.suffix != ".png":
-                raise ValueError("脚本产物不是登记PNG来源")
+            if record.kind != 'graphic_source' or path.suffix != '.png':
+                raise ValueError('脚本产物不是登记PNG来源')
             with Image.open(path) as image:
                 image.load()
-                if image.format != "PNG" or (image.width, image.height) != (result["width"], result["height"]):
-                    raise ValueError("脚本PNG实测与发布结果不一致")
+                if image.format != 'PNG' or (image.width, image.height) != (result['width'], result['height']):
+                    raise ValueError('脚本PNG实测与发布结果不一致')
             continue
-        if path.suffix == ".mp4":
+        if path.suffix == '.mp4':
             from app.montage import probe_preview_video
             with production_repo._connect() as conn:
-                row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='task_media_input' "
-                    "AND id=?", (job.workspace_id,job.id,f"event_{job.id}_{record.id.removeprefix('artifact_')}_input")).fetchone()
-            inputs = json.loads(row["payload_json"])["media_input"]
-            if "clip" in inputs:
+                row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='task_media_input' AND id=?", (job.workspace_id, job.id, f"event_{job.id}_{record.id.removeprefix('artifact_')}_input")).fetchone()
+            inputs = json.loads(row['payload_json'])['media_input']
+            if 'clip' in inputs:
                 from app.canvas import preview_size
-                clip = inputs["clip"]
-                size = preview_size(inputs["aspect_ratio"])
-                duration = min(5,clip["timeline_end_seconds"]-clip["timeline_start_seconds"])
+                clip = inputs['clip']
+                size = preview_size(inputs['aspect_ratio'])
+                duration = min(5, clip['timeline_end_seconds'] - clip['timeline_start_seconds'])
                 silent = True
             else:
-                size = canvas_size(inputs["plan"]["aspect_ratio"])
-                duration = inputs["plan"]["duration_seconds"]
+                size = canvas_size(inputs['plan']['aspect_ratio'])
+                duration = inputs['plan']['duration_seconds']
                 silent = False
-            probe_preview_video(path,context,expected_size=size,expected_duration_seconds=duration,silent=silent)
+            probe_preview_video(path, context, expected_size=size, expected_duration_seconds=duration, silent=silent)
         else:
-            probe_audio_source(path, scheduler=context.scheduler, grant=context.grant,
-                cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=True)
+            probe_audio_source(path, scheduler=context.scheduler, grant=context.grant, cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=True)
     context.check()
     return outputs
 
@@ -4819,21 +4764,9 @@ def _effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
     return metadata_effective_audio_timeline(plan)
 
 
-@app.post("/api/creation-tasks/{task_id}/audio/import")
-@_task_media_route("audio_import", "audio_source")
-def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile = File(...)):
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    suffix = Path(audio.filename or "").suffix.lower()
-    if suffix not in {".wav", ".mp3", ".m4a", ".aac", ".flac"}:
-        raise HTTPException(status_code=422, detail="请选择 WAV、MP3、M4A、AAC 或 FLAC 音频")
-    try:
-        record = _task_audio().publish(workspace_id, task_id, kind="audio_source", parameters={"name": Path(audio.filename or "音频").name[:120]},
-                                      input_refs=[], operation="upload", media_input={"staged_input": audio.staged_input, "sha256": audio.source_sha256}, suffix=suffix)
-        duration = _task_audio().probe(_task_audio().source(workspace_id, task_id, record.logical_ref))
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail="音频导入失败，请检查文件格式、时长及外接盘。") from exc
-    return {"source_ref": record.logical_ref, "name": Path(audio.filename or "音频").name[:120], "duration_ms": round(duration*1000)}
+@app.post('/api/creation-tasks/{task_id}/audio/import')
+def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile=File(...)):
+    return _submit_audio_ingress(task_id, request, 'audio_import', 'audio_source', audio=audio)
 
 
 @app.get("/api/creation-tasks/{task_id}/audio/recordings")
@@ -4878,39 +4811,9 @@ def list_creation_task_recordings(task_id: str, request: Request):
     return {"items": items}
 
 
-@app.post("/api/creation-tasks/{task_id}/audio/recordings")
-@_task_media_route("recording_save", "recording")
-def save_creation_task_recording(task_id: str, request: Request, audio: UploadFile = File(...)):
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.stage not in {"narration", "montage", "review"} or not task.confirmed_script_id:
-        raise HTTPException(status_code=409, detail="请先确认当前任务文案，再保存电脑录音")
-    script_digest = production_repo.confirmed_creation_task_script_digest(
-        workspace_id, task.id, task.confirmed_script_id,
-    )
-    if script_digest is None:
-        raise HTTPException(status_code=409, detail="当前文案未确认或已经变化，不能保存为本任务录音")
-    suffix = Path(audio.filename or "").suffix.lower()
-    if suffix not in {".webm", ".mp4", ".m4a", ".ogg", ".wav"}:
-        raise HTTPException(status_code=422, detail="当前录音格式不可用，请使用 WebM、MP4、Ogg 或 WAV")
-
-    try:
-        service = _task_audio()
-        record = service.publish(
-            workspace_id, task_id, kind="task_recording",
-            parameters={"script_id": task.confirmed_script_id,
-                        "script_digest": script_digest,
-                        "montage_plan_id": task.montage_plan_id},
-            input_refs=[], operation="upload", media_input={"staged_input": audio.staged_input, "sha256": audio.source_sha256}, suffix=suffix,
-        )
-        duration_ms = round(service.probe(service.source(workspace_id, task_id, record.logical_ref)) * 1000)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"电脑录音未保存：{exc}") from exc
-    except (KeyError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail="电脑录音未保存，请检查录音格式和本地存储") from exc
-    return {"source_ref": record.logical_ref, "artifact_id": record.id,
-            "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
-            "duration_ms": duration_ms, "applied": False}
+@app.post('/api/creation-tasks/{task_id}/audio/recordings')
+def save_creation_task_recording(task_id: str, request: Request, audio: UploadFile=File(...)):
+    return _submit_audio_ingress(task_id, request, 'recording_save', 'recording', audio=audio)
 
 
 @app.post(
@@ -5031,43 +4934,14 @@ def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Re
     return FileResponse(path, media_type=audio_media_types.get(path.suffix))
 
 
-@app.get("/api/creation-tasks/{task_id}/audio/waveform/{clip_id}")
-@_task_media_route("audio_waveform", "waveform")
+@app.get('/api/creation-tasks/{task_id}/audio/waveform/{clip_id}')
 def get_creation_task_audio_waveform(task_id: str, clip_id: str, request: Request):
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    try:
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        clip = next(clip for track in _effective_audio_timeline(plan).tracks for clip in track.clips if clip.id == clip_id)
-        source = _task_audio().source(workspace_id, task_id, clip.source_ref)
-        return audio_waveform(source, settings.effective_temporary_root_path / "audio-waveforms" / workspace_id,
-            context=_task_media_grant_or_queue())
-    except (KeyError, StopIteration, ValueError, AudioWaveformError) as exc:
-        raise HTTPException(status_code=422, detail="无法读取所选音频的波形，请检查源文件") from exc
+    return _submit_audio_ingress(task_id, request, 'audio_waveform', 'waveform', arguments={'clip_id': clip_id})
 
 
-@app.post("/api/creation-tasks/{task_id}/audio/listen")
-@_task_media_route("audio_listen", "audio_listen")
+@app.post('/api/creation-tasks/{task_id}/audio/listen')
 def listen_creation_task_audio(task_id: str, request: Request, payload: AudioListenRequest):
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.current_timeline_version_id != payload.base_version_id:
-        raise HTTPException(status_code=409, detail="时间线已经变化，请刷新后试听")
-    try:
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        graph = _effective_audio_timeline(plan)
-        service = _task_audio()
-        record = service.publish(workspace_id, task_id, kind="audio_preview",
-            parameters={"audio_timeline": graph.model_dump(), "start_seconds": payload.start_seconds,
-                        "end_seconds": payload.end_seconds, "solo_track_ids": sorted(payload.solo_track_ids)},
-            input_refs=list(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips)),
-            operation="audio_mix", media_input={"audio_timeline": graph.model_dump(), "duration_seconds": plan.duration_seconds,
-                "normalize_voice_sources": plan.narration_linkage_created_audio_timeline,
-                "start_seconds": payload.start_seconds, "end_seconds": payload.end_seconds,
-                "solo_track_ids": sorted(payload.solo_track_ids)})
-    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "试听生成失败，请检查音频和外接盘") from exc
-    return {"audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}"}
+    return _submit_audio_ingress(task_id, request, 'audio_listen', 'audio_listen', arguments={'payload': payload.model_dump(mode='json', exclude_unset=True)})
 
 
 def _preview_clip_original_audio(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest):
@@ -9016,25 +8890,9 @@ def get_creation_task_narration_audio(task_id: str, request: Request) -> FileRes
     return FileResponse(artifact.audio_path, media_type=media_type, filename=f"narration{Path(artifact.audio_path).suffix}")
 
 
-@app.get("/api/creation-tasks/{task_id}/narration/waveform")
-@_task_media_route("narration_waveform", "waveform")
+@app.get('/api/creation-tasks/{task_id}/narration/waveform')
 def get_creation_task_narration_waveform(task_id: str, request: Request) -> dict:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    artifact = (
-        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
-        if task.narration_cache_key else None
-    )
-    if artifact is None or artifact.task_id != task.id:
-        raise HTTPException(status_code=404, detail="当前任务还没有可读取的配音。")
-    try:
-        return audio_waveform(
-            Path(artifact.audio_path),
-            settings.effective_temporary_root_path / "audio-waveforms" / workspace_id,
-            context=_task_media_grant_or_queue(),
-        )
-    except AudioWaveformError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _submit_audio_ingress(task_id, request, 'narration_waveform', 'waveform')
 
 
 @app.get("/api/creation-tasks/{task_id}/narration/segments/{segment_id}/audio")
@@ -18802,6 +18660,7 @@ def _build_device_components(*, repository: ProductionRepository):
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         execute_operation=_execute_task_media_operation, validate_result=_validate_task_media_result,
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
+        audio_ingress=_audio_ingress_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
