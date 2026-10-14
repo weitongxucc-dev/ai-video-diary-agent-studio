@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；bootstrap 五源已 WRITE_LEASE_RETURN，当前接 main/bootstrap 停止/持久化边界；production 授权五源仍冻结供独立 QA，两个候选互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；bootstrap 与 production 授权组均已 WRITE_LEASE_RETURN，当前接 main/bootstrap 停止/持久化边界和 production 人物/声音 records 消费者，两个精确候选互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；核稳定新 Web 消费者、API bootstrap 及 R4 授权联合候选；已过 Web/字幕/usage 门与原脚本只读复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；config 两源已 WRITE_LEASE_RETURN，当前产品只读等待 API 稳定停止/持久化候选，后续独立复验三个实际停止反例与必要恢复差额；原两门不重复，停止失败不计全安全重载通过。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源与执行回读/字幕四源均已 WRITE_LEASE_RETURN，当前只读核 MaterialLibraryWorkspace 及材料 API 消费者的下一实际职责/反例，不恢复旧冻结；新施工须主控按精确符号另行登记。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源冻结，当前独占下方新人物/声音 records 两源；production 消费者归 API，两候选分别接线/联合门，未接线模块不接受。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源已 WRITE_LEASE_RETURN，人物/声音 records 两源继续 SOURCE_RELEASE 冻结待 API 接线；当前产品只读，未接线模块不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
