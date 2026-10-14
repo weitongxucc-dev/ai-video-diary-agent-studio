@@ -1,6 +1,6 @@
 "use client";
 import NextImage from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Languages, Play, Save, Undo2, Redo2, Settings2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
@@ -63,16 +63,17 @@ function SubtitleCueEditor({
   track: CreationTaskSubtitleTrack;
 }) {
   const storedText = cueTextWithLineBreaks(cue);
+  const storedTerms = cueEmphasisTerms(cue);
   const [text, setText] = useState(storedText);
   const [terms, setTerms] = useState(cueEmphasisTerms(cue));
   const [start, setStart] = useState(String(cue.start_seconds));
   const [end, setEnd] = useState(String(cue.end_seconds));
   useEffect(() => {
-    setText(storedText); setTerms(cueEmphasisTerms(cue));
+    setText(storedText); setTerms(storedTerms);
     setStart(String(cue.start_seconds)); setEnd(String(cue.end_seconds));
     setSplitOffset(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
     setSplitTime(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
-  }, [cue.id, cue.text, cue.start_seconds, cue.end_seconds, cue.emphasis, cue.line_breaks, track.style]);
+  }, [cue.id, cue.text, storedText, cue.start_seconds, cue.end_seconds, storedTerms]);
   const [splitOffset, setSplitOffset] = useState(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
   const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
   const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
@@ -130,10 +131,17 @@ function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
   style: CreationTaskSubtitleTrack["style"]; busy: boolean; onDraftChange: () => void;
   onPreview: (input: CreationTaskExactEditInput) => void;
 }) {
-  const initial = { ...style, stroke_width: style.stroke_width ?? 3, stroke_color: style.stroke_color ?? "#000000",
-    background_color: style.background_color ?? "#000000", background_opacity: style.background_opacity ?? 158 / 255 };
+  const initial = useMemo(() => ({
+    name: style.name, font_family: style.font_family, font_size: style.font_size,
+    primary_color: style.primary_color, emphasis_color: style.emphasis_color,
+    position: style.position, bilingual_order: style.bilingual_order, enabled: style.enabled,
+    stroke_width: style.stroke_width ?? 3, stroke_color: style.stroke_color ?? "#000000",
+    background_color: style.background_color ?? "#000000", background_opacity: style.background_opacity ?? 158 / 255,
+  }), [style.name, style.font_family, style.font_size, style.primary_color, style.emphasis_color,
+    style.position, style.bilingual_order, style.enabled, style.stroke_width, style.stroke_color,
+    style.background_color, style.background_opacity]);
   const [draft, setDraft] = useState(initial);
-  useEffect(() => { setDraft(initial); }, [style]);
+  useEffect(() => { setDraft(initial); }, [initial]);
   const changed = JSON.stringify(draft) !== JSON.stringify(initial);
   const save=(value=draft)=>{
     if(busy||!value.font_family.trim())return;
@@ -275,10 +283,10 @@ export function SubtitleWorkspace({
               </div>
               {!translationCapability.available && !translationTrack ? <details className={styles.propertySection}><summary>翻译暂不可用</summary><p>{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p></details> : null}
               <label className={styles.cueSelection}><span>选择字幕</span><AppSelect aria-label="选择字幕" disabled={busy} onValueChange={newValue => { const cue=activeTrack.cues.find(item=>item.id===newValue);if(cue){onSelectCue(cue.id);if(videoRef.current)videoRef.current.currentTime=cue.start_seconds;} }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue,index)=><AppSelectOption key={cue.id} value={cue.id}>{index+1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</AppSelectOption>)}</AppSelect></label>
-              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
+              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor key={`${workspace.task.id}:${workspace.task.current_timeline_version_id}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
               <details className={styles.propertySection}><summary>全文查找替换</summary><label className={styles.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event=>{setFindText(event.target.value);onDraftChange();}}/></label><label className={styles.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event=>{setReplaceText(event.target.value);onDraftChange();}}/></label><button className={styles.secondaryButton} type="button" disabled={busy || !findText || findText===replaceText} onClick={()=>onPreviewExact({operation_type:"ReplaceSubtitleText",track_id:activeTrack.id,find_text:findText,replacement_text:replaceText})}>应用全文替换</button></details>
             </Tabs.Panel>
-            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
+            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor key={`${workspace.task.id}:${workspace.task.current_timeline_version_id}:${sourceTrack.id}`} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
             <Tabs.Panel value="cover" keepMounted className={styles.panel}>
               <section className={selectedCover ? styles.selectedCover : undefined} onFocus={onSelectCover} aria-label="封面编辑">
                 {cover?.status === "valid" && cover.artifact_ref ? <NextImage className={styles.coverImage} alt={cover.title} height={1280} src={apiUrl(`/api/creation-tasks/${workspace.task.id}/covers/${cover.id}/image`)} unoptimized width={720}/> : null}
