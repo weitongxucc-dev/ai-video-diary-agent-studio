@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 选帧边界单轮实证已核归还：audio两目标正确、longGOP两目标cap真实拒绝，14命令后释放；不将16机制发布为通用修复。当前全部产品/证据冻结，无新增写/试策略权，新的策略/资源边界须另绑。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-FRAME-SAMPLING-STRATEGY-PREPARATION-20261015仅fresh-runtime/output-observation-frame-sampling-strategy-preparation/**新只读策略证据；现已核16原型/边界冻结，不复跑。沿原grant/deadline/byte/thread门，结合准确FFmpeg官方语义给一个覆盖真实longGOP缺口的可检验候选，零native/产品/预算变化。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-NARRATION-READS-20261015独占production.py、creation/task_input_reads.py、tests/test_creation_task_input_reads.py三现源与fresh-r4-authorizations/narration-reads/**新证据；两个原SELECT迁到既有sameconn raw reader、一个合并最小自测，原写/upsert/事务/旧节点不变，无独立QA族。API六源互斥。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -38,6 +38,10 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 当前实际帧采样策略只读准备
+
+`REF-R3-FRAME-SAMPLING-STRATEGY-PREPARATION-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-frame-sampling-strategy-preparation/**，全部产品、已过原型/两个diagnostic/边界包只读；不改16算法求PASS、不复跑任何native或app/test/model/service、无新budget/profile/源复制。定向只读task_observation.py、creation/output_observation_use_case.py、granted_subprocess.py及必要最多另五精准源/测试；API main六WIP和资料三WIP不混执行候选。结合当前原callable的原grant/remaining totaldeadline/stdout/stderr/output/thread与original CPU-none/refusal前门，公开官方FFmpeg/ffprobe文档与必要精确官方源码（最多两个来源、只相关符号/段落，无用户数据/账号）查真实seek/read_intervals/EOF/frame-PTS/trim停止与重排/非零起始语义。绑定已核真实longGOP .93/1.87不足实例和原短tail.17缺PNG，给唯一具体可检验策略及最小实际差额/两个最多合并未通过反例建议；精确说明机制与设备资源门不同，不能只放大16或省略有界停止，不能推算RSS/profile或把primary trunk语义当本机版本实证。若仍不能证明完整帧身份/停止，只交一个准确缺口，不盲列备选或运行试算法。结果timestamp必须与PNG实际被采PTS一致；原request T映射、重复目标/ID/clip-overlay/OCR消费者的准确字段提案和当前消费者证据由root审定后另绑，不自行改产品/缩窄已批准能力。先语义REBASE_ACK后只读准备，READONLY_PREPARATION_RELEASE冻结，root核后另授实际prototype/产品范围。
 
 ### 当前配音段读取实施包
 
