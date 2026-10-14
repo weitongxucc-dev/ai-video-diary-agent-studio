@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源已bb4bf933精确集成/WRITE_LEASE_RETURN。REF-R4-PERSON-RENDER-STORE-20261015独占production.py及NEW creation/person_renders.py、tests/test_person_render_store.py三源，bb4bf933基线；七人物存储/状态/产物方法完整同body归属，普通一个合并自测，所有旧证据冻结。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933及人物仓储三源842d7172均已精确集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权。七人物方法、五写点同body唯一归属，首次普通合并自测及全部旧证据冻结，不重跑已过包。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -31,7 +31,11 @@
 
 输出bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE，准确paths/symbols/current SHA/Git与完整目标AST读期prepost、真实直接caller/owner边界、最小normal自测和按共同不变量最多三个独立关键反例建议。production全文件如同时R4 WIP不得称与Git全字节一致；必要直接目标AST与读期事实准确区分，不纳入R4写入或新全仓snapshot。只读准备零产品/import/collect/test/媒体/模型/GUI/native/env/account用户DB/宿主标定，现fixture资源替身与生产预算/mode/fullPGID unknown分列。语义REBASE_ACK后直接只读准备，无第二START；准确产品租约和关键QA门待root审包后另绑。R4当前四源绑定0e7a7bb不变，不要求它再ACK或重封。
 
-### 当前人物片段仓储实施包
+### 人物片段仓储已集成与写权归还
+
+准确三源已842d7172fb608f4219b3954bf161d5b8279ee140集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时发资料线程；cached/committed三paths/blobs一致，SOURCE_RELEASE SHA8f985ab8803e2ddc98d69daa96bf6ac554231eb7ac2f2aed8448fbb89f74f6b7/TAB831106f6230df37fcdd34c60937ecd7cb7166194280f3cea452ee84ffedec161冻结。root person-render-store-reviewed.json SHA945aaaabe4d6317a5e94993e98aaac10ea1281bee80eb476ab1b7c69dafb8b54核15artifact、51prepost/实际module origin与after-run SHA、48Git、6script/config/static prepost、3direct fixture AST；七完整方法只有准确五owner调用替换、canonical type/status及四helper完整AST、全部非目标production和准确constructor/import差额保持，五person_renders写点唯一在所属store、旧实现与helper已退出。首唯一1PASS0.45s无失败/重跑、root测试0、普通原body不新增独立QA或旧门执行。真实normal ProductionRepository/store和原profile/reference owner接线，原缓存/固定版本/资格时序、claim/finish/bind/interrupt与重开repo持久元数据被一个合并节点验证；ready/SHA/alignment均为合成存储事实、无媒体文件或模型执行，不是应用冷启动或人物生产媒体/GUI/native/资源/整体接受。下列原租约仅冻结规约，不恢复写权。
+
+### 已履行人物片段仓储实施包（冻结规约）
 
 `REF-R4-PERSON-RENDER-STORE-20261015` 前置canonical task/narration四源已bb4bf933f69b7ac59ec79770abe87ce476ce62c8精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时发资料线程。SOURCE_RELEASE SHAa52f4f47acee6a5b7499422811d567329539160922be066962fe2f2dfdf2621a/TAB3e2166f52ee76ee831ed27121ef298cee916c679c98e360cae039a70a1d9d1d6，root task-input-reads-reviewed.json SHA9e841ede31fce0bc0d4227e99c39328afb1bcd158b1cc14d212480fba80443fc已核15artifact、50相关prepost/实际模块origin与after-run SHA、46非overlay Git、6script/config/static prepost；三完整读取body与类型/validator AST、全部非目标production/contracts及有限imports保持。首次唯一1PASS0.23s，无失败/重跑，实际native caller未提交完整task/recorded/generated narration可读、observer不可见、SELECT-only和caller rollback；没有运行repo构造/模型/媒体/旧门，root tests0，普通拆分不加独立QA。前置四源与证据冻结，不重复跑来封新人物包。
 
