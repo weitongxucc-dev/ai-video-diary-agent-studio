@@ -28,6 +28,7 @@ from app.creation.contracts import (
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload, narration_segment_from_row,
+    narration_segment_row, narration_segment_rows,
 )
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
@@ -5400,13 +5401,7 @@ class ProductionRepository:
     ) -> NarrationSegment:
         with self._connect() as conn:
             self._require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                """
-                SELECT * FROM narration_segments
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, segment_id),
-            ).fetchone()
+            row = narration_segment_row(conn, workspace_id, task_id, segment_id)
         if row is None:
             raise KeyError(segment_id)
         return self._narration_segment_from_row(row)
@@ -5419,14 +5414,7 @@ class ProductionRepository:
             current_script_id = script_id or task.confirmed_script_id
             if current_script_id is None:
                 return []
-            rows = conn.execute(
-                """
-                SELECT * FROM narration_segments
-                WHERE workspace_id = ? AND task_id = ? AND script_id = ?
-                ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id, current_script_id),
-            ).fetchall()
+            rows = narration_segment_rows(conn, workspace_id, task_id, current_script_id)
         return [self._narration_segment_from_row(row) for row in rows]
 
     def create_person_render(self, render: PersonRender) -> PersonRender:

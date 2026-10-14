@@ -63,3 +63,28 @@ def narration_segment_from_row(row: sqlite3.Row) -> NarrationSegment:
         created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
     )
+
+
+def narration_segment_row(
+    conn: sqlite3.Connection, workspace_id: str, task_id: str, segment_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+                SELECT * FROM narration_segments
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+        (workspace_id, task_id, segment_id),
+    ).fetchone()
+
+
+def narration_segment_rows(
+    conn: sqlite3.Connection, workspace_id: str, task_id: str, script_id: str,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+                SELECT * FROM narration_segments
+                WHERE workspace_id = ? AND task_id = ? AND script_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+        (workspace_id, task_id, script_id),
+    ).fetchall()

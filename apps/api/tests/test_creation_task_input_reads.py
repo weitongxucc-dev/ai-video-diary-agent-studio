@@ -125,3 +125,103 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
         "caller_rollback_removed_rows": True,
         "repository_constructor_or_model_media_execution": False,
     }, ensure_ascii=False, indent=2) + "\n")
+
+
+def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transaction(tmp_path):
+    task, segment = records()
+    library = tmp_path / "library"
+    library.mkdir()
+    repo = production.ProductionRepository(
+        tmp_path / "narration-reads.sqlite3", library,
+        duration_reader=lambda _: 2.0, scene_reader=lambda *_: [],
+    )
+    plan = production.CreationPlan(
+        id=task.plan_id, workspace_id=task.workspace_id, goal="合成读取", name="读取夹具",
+        target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=60,
+        knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
+        approved_asset_count=0, approved_clip_count=0, material_rule_summary="合成记录",
+        model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="reads-fixture",
+    )
+    task = repo.confirm_creation_plan(plan, task)[1]
+    segment = replace(segment, source_kind="generated", source_artifact_ref=None,
+                      source_sha256=None, source_script_digest=None)
+
+    def insert(conn, item):
+        values = asdict(item)
+        for name in ("created_at", "updated_at"):
+            values[name] = values[name].isoformat()
+        columns = ", ".join(values)
+        placeholders = ", ".join("?" for _ in values)
+        conn.execute(f"INSERT INTO narration_segments ({columns}) VALUES ({placeholders})", tuple(values.values()))
+
+    with closing(repo._connect()) as conn, closing(repo._connect()) as observer:
+        borrowed = replace(segment, id="borrowed", source_section_id="borrowed")
+        insert(conn, borrowed)
+        assert conn.in_transaction
+        statements = []
+        conn.set_trace_callback(statements.append)
+        raw = task_input_reads.narration_segment_row(conn, "ws", task.id, borrowed.id)
+        assert isinstance(raw, sqlite3.Row) and raw["id"] == borrowed.id
+        assert [r["id"] for r in task_input_reads.narration_segment_rows(conn, "ws", task.id, "script")] == [borrowed.id]
+        assert task_input_reads.narration_segment_row(conn, "other", task.id, borrowed.id) is None
+        assert task_input_reads.narration_segment_rows(conn, "ws", "other", "script") == []
+        assert observer.execute("SELECT COUNT(*) FROM narration_segments").fetchone()[0] == 0
+        with pytest.raises(KeyError) as uncommitted:
+            repo.get_narration_segment("ws", task.id, borrowed.id)
+        assert uncommitted.value.args == (borrowed.id,)
+        assert conn.in_transaction
+        conn.set_trace_callback(None)
+        assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+        conn.rollback()
+        assert task_input_reads.narration_segment_row(conn, "ws", task.id, borrowed.id) is None
+        assert observer.execute("SELECT COUNT(*) FROM narration_segments").fetchone()[0] == 0
+
+    first = replace(segment, id="z-first", source_section_id="z-first")
+    a = replace(segment, id="a", source_section_id="a", created_at=segment.created_at + timedelta(seconds=1))
+    b = replace(a, id="b", source_section_id="b")
+    override = replace(segment, id="override", source_section_id="override", script_id="override-script")
+    empty = replace(segment, id="empty-script", source_section_id="empty", script_id="")
+    with repo._connect() as conn:
+        for item in (b, first, a, override, empty):
+            insert(conn, item)
+    assert repo.get_narration_segment("ws", task.id, first.id) == first
+    assert repo.list_narration_segments("ws", task.id) == [first, a, b]
+    assert repo.list_narration_segments("ws", task.id, "") == [first, a, b]
+    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
+    assert repo.list_narration_segments("ws", task.id, "missing-script") == []
+    with pytest.raises(KeyError) as absent:
+        repo.get_narration_segment("ws", task.id, "missing-segment")
+    assert absent.value.args == ("missing-segment",)
+    with pytest.raises(KeyError) as wrong_workspace:
+        repo.get_narration_segment("other", task.id, first.id)
+    assert wrong_workspace.value.args == (task.id,)
+    with pytest.raises(KeyError) as wrong_task:
+        repo.list_narration_segments("ws", "missing-task")
+    assert wrong_task.value.args == ("missing-task",)
+
+    def confirmed(value):
+        values = asdict(replace(task, confirmed_script_id=value))
+        for name in ("created_at", "updated_at"):
+            values[name] = values[name].isoformat()
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+                         (json.dumps(values), "ws", task.id))
+
+    confirmed(None)
+    assert repo.list_narration_segments("ws", task.id) == []
+    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
+    confirmed("")
+    assert repo.list_narration_segments("ws", task.id) == [empty]
+    (tmp_path / "narration-read-observations.json").write_text(json.dumps({
+        "actual_raw_readers": [task_input_reads.narration_segment_row.__module__ + ".narration_segment_row",
+                               task_input_reads.narration_segment_rows.__module__ + ".narration_segment_rows"],
+        "public_get_and_list_exercised": True,
+        "normal_repository_schema_and_caller_conn": True,
+        "borrowed_uncommitted_visible_observer_invisible_and_caller_rollback": True,
+        "public_own_conn_did_not_read_uncommitted_segment": True,
+        "only_select_statements_during_raw_reader_phase": statements,
+        "canonical_DTO_status": first.status,
+        "ordered_current_ids": [first.id, a.id, b.id],
+        "confirmed_None_empty_and_confirmed_empty_string_query_distinguished": True,
+        "old_test_nodes_executed": 0,
+    }, ensure_ascii=False, indent=2) + "\n")
