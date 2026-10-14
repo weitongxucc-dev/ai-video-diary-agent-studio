@@ -12,14 +12,16 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | linked-speed e89cc82e…独立SOURCE_BLOCK：同请求补projection额外wake+1，编辑/原版本无重复。现仅REF-R2-SPEED-RECOVERY-WAKE-20261014重开main::_confirm_linked_speed_response及typed_assistant测试的最小差额，其余三speed源仍冻结；不复测16/扩改shared helper/parser。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | speed恢复wake修复candidate02 c96bc424…五源SOURCE_RELEASE冻结；仅main恢复保存区段和一个HTTP测试body变化，其余三源不变，首次应用通知保持，1定向自测PASS。现产品只读等R6原失败case差额门，不复测16/扩改shared helper/parser。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，现只写fresh-qa/remaining-asset-writes-independent；核54a897b3…三源两个late scene/adoption实际caller写拒绝/全回滚门，source/fixture/scripts/actualimports前后绑定，不复测module3/normal3。Web旧门归还、不重跑GUI；speed归R6。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | speed独立门SOURCE_BLOCK实际恢复wake+1，晚邻居caller权限门PASS，两distinct case/三次执行（首observer假设错另列）。当前产品/旧证据只读，等API准确candidate02后仅失败HTTP恢复case差额复验，晚权限及16自测按AST/字节复用；不执行未绑定的新矩阵。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R2-SPEED-RECOVERY-INDEPENDENT-20261014：产品/旧门只读，仅写fresh-runtime-reload/linked-speed-recovery-independent，核candidate02 c96bc424…并只复验原失败HTTP恢复case。晚权限PASS及16自测按AST/字节审计复用，不执行第三矩阵或重复首应用完整用例。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 剩余asset七methods/两rules两源1de73eb1…已SOURCE_RELEASE冻结、3首次actualPASS/60静态，与主控production形成三源54a897b3…待QA联合门，现产品只读，不复测旧门或恢复写权。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 剩余asset三源54a897b3…SOURCE_RELEASE准确冻结，七DML/两helper退役及3普通消费者差额通过；当前无新增产品修改，审核QA两late写门后精确集成/归还。speed仅API指定wake恢复修复，不形成双writer。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
+
+speed恢复candidate02 `fresh-api-linked-speed/linked-speed-candidate-02/SOURCE_RELEASE.json` 回执SHA eff15bb425b9a4dfd78c2221b5bb2590d22d6606d6215024f17fe0bbd4efd0d7、五源TAB摘要c96bc42496dfe92a2d549e633c8ea2900f44405695562d35e7264b567058214f，仍base3b0b2a1＋五overlay，不混asset三源或其他WIP。主控核五live/副本、19artifact及局部patch；main只有record_projection恢复分支改用原仓储纯保存，不改首次newly_applied helper及显式wake/shared helper/parser。typed HTTP仅原一个test body加原函数委托的wake计数和回执shape；其余三源字节及461依赖两源之外原样。新producer仅1实际PASS2.68s，另1 collect-only import/owner绑定零额外执行，旧16/晚权限/firstfailure只审计复用。现REF-R2-SPEED-RECOVERY-INDEPENDENT-20261014只给R6证据写权 `fresh-runtime-reload/linked-speed-recovery-independent/**`：复用原合法HTTP恢复fixture和原独立observer修正，实际preview/confirm→后来HEAD→删除原projection→同request恢复，验证原operation/result_version/response、编辑行无重复、wake计数恢复前后不变；首次真实应用沿原两处通知仅作为该case前置观察，不独立增加矩阵。执行前封存准确五source/fixture/script、actualimports及前后hash，原SOURCE_BLOCK/observer错误/晚邻居权限PASS证据不覆盖；相关业务与夹具字节/AST未变的已过权限门不重跑，未执行第三lateSQL不计PASS。本门只对原产品失败差额接受，不接受原生driver通知执行、生产媒体、全R2/R3/R9。真正缺陷只交API原精确两源ISSUE_REOPEN，独立者不改产品；门通过后主控精确集成五源并即时归还。
 
 剩余asset当前三源 `fresh-root-asset-write-closure/joint-candidate-01/SOURCE_RELEASE.json` 已释放，TAB摘要54a897b3c92063e149897502b077eb4d829e8fa4a23e92c27dcd65e10f12d618、回执SHA47e43f761035a36e6a20980b3caae90eaf6f3999ab83cba06265c674f8378fd5，base d6cb8af＋三source overlay，459source/50actualimports，排除API五speed及wake修复。R4 module3实际PASS0.17s/60静态只审计复用；root首集合因证据重复conftest插件collection exit2/零actualcases，去掉该声明后同冻结snapshot首实际三消费者PASS1.31s，旧错误/执行脚本保留，产品未因此改动。现在 `REF-R4-REMAINING-ASSET-WRITES-INDEPENDENT-20261014` 只给QA写 `fresh-qa/remaining-asset-writes-independent/**`，产品全部只读。
 
