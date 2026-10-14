@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；metadata与Web有限props已集成归还，不复测。当前独立核R4五raw消费者及四仓储源联合六源fa0ebcb2…，沿准确release/快照审计复用原6实际消费者与模块4+2，补必要原权限/原始行摘要/同conn事务独立反例；不运行用户维护、旧全矩阵或宣称完整R4/R9。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5 remainder只读定位已完成；现按下方REF-R5-DEAD-CONSUMERS-20261014独占八源，仅退役未消费的Shell kind与五旧客户端命令/再导出，保留原label/title和活跃错误投影。源释放后再绑定准确GUI差额；不自动算三尺寸完整Shell或R5/R9。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；profile/voice raw reader候选03两源和authorization raw history候选04两源分别SOURCE_RELEASE准确冻结且产品只读。metadata已集成归还，API现接五raw SELECT消费者；两模块待联合独立门与准确集成后即时归还，不把单模块释放当接受。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw与authorization history四源保持fa0联合候选准确冻结、待QA/集成归还；当前全部产品只读，另核source-reference/local adoption仍留在API的material raw SELECT与现assets owner最窄接线，限定证据目录fresh-r4-authorizations/asset-raw-consumers-readonly，不复跑已过门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
@@ -67,6 +67,8 @@ R5 限定只读 `fresh-web-consumers/r5-remainder-readonly/REPORT.md` 已定位�
 这是内部Web客户端公开导出的退役：有界生产Web消费者为0，允许删这五定义/导出；不据此删除后端HTTP路由、外部API契约、对象/类型、模型或数据。原组件测试的五旧mock/负向防回流断言保留，不顺手改其它parent/CSS/types、功能文案/权限或现代调用。voice_identity_missing的既有用户表达仍由活跃creationPlanRequest唯一边界验证：最小旧测试可接到已有活跃execution preview等客户端的合成HTTP拒绝，不为保住死wrapper改生产错误规则，也不伪称服务端/声音执行通过。原Shell label/title、任务本身badge、两卡/草稿/导航/列表/选播行为保持；不造新状态层或按文件行数分拆。
 
 八源稳定后先SOURCE_RELEASE，列精确摘要/直接消费者不存在与五body/导出不存在证明、必要最小AppShell呈现与活跃拒绝投影/当前类型/目标lint检查，不重跑旧51/10门/全组件或模型矩阵。UI可见与三尺寸组合仍标待验证，当前源release不冒充完成：主控随后绑定确切Web/API tuple、隔离真实AppShell/HTTP/新合成SQLite和原三个代表尺寸的完整可见差额，不用fixture Shell替身/旧图充当当前接受。产品证据只写 `fresh-web-consumers/r5-dead-consumers/**`，八源准确冻结待该同候选GUI/独立门，出现实际缺陷交唯一Web owner最小reopen；其余已集成有限props十源不延长冻结。读当前角色/本段并语义REBASE_ACK后直接实施，不等第二次批准。
+
+R4 当前四档案源准确冻结等待独立门时，另绑定 `REF-R4-ASSET-RAW-READONLY-20261014` 独立只读定位：仅核 `production.py` 的 `_profile_reference_source` 剩余material raw SELECT、`_local_adoption_plan` 内剩余material raw行/新source ID存在读取及实际直接maintenance调用边，与现 `materials/assets.py` caller conn/public入口和对应直接测试。先定位具体符号/读取及原scope、排序/字段/raw payload/缺失和ID冲突语义，判断是否已有所属reader可复用；只给确需收敛的最窄文件/有限方法建议，不能新建通用SQL门面、搬权限/媒体/manifest/CAS/采用事务或重复decode事实。不读全production/用户DB/历史输出，不运行任何已过档案/资产/维护测试，只写 `fresh-r4-authorizations/asset-raw-consumers-readonly/**` 一份直接证据建议；profiles四冻结源及所有产品无新增写权。主控据该证据在raw联合接受后给实际源绑定，API仍唯一production消费者写入，不与settings或其它API批混合。语义REBASE_ACK后直接只读定位，不需第二批准。
 
 ## 用户决定、入口与范围
 
