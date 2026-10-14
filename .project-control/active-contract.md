@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频独立三代表/7实际执行门13f4c259…已核，五源已3d3eb08精确集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，原失败/冻结证据只读，等下一准确稳定包，不重跑旧门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 注册九源271e41aa…已c74be46准确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续具体存储/执行边界绑定，作者/独立门不重跑，原源清单漏项限制保留。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-PERSON-RENDER-STORE-PREPARATION-20261015仅新fresh-r4-authorizations/person-render-store-preparation/**证据写权，定向人物片段七存储/状态/产物方法与直接类型/owner依赖，只读给一个可实施仓储包或精准依赖；所有产品/旧注册门冻结，不执行测试媒体。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -24,6 +24,14 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+### 当前人物片段仓储只读准备
+
+`REF-R4-PERSON-RENDER-STORE-PREPARATION-20261015` 仅当前资料/档案线程新 `test-runs/refactor-20261014/fresh-r4-authorizations/person-render-store-preparation/**` 准备证据写权。主控定向核当前production的create_person_render/finish_person_render/bind_person_render_artifact仍承载人物片段资格/缓存输入身份、同task narration/person/voice固定版本、pending→running→ready/failed、CAS状态与immutable artifact归属绑定；profile注册/授权已接受，不重复拆它们或造无效薄wrapper。准备覆盖准确七公开方法create/claim/finish/bind/get/list/interrupt_running_person_renders、_person_render_from_row与PersonRender及实际validator/identity/row values、构造和实际直接caller；只跟踪现profile/voice固定版本、narration分段、workspace素材和artifact的必要具体owner接口，最多读取真正必要的直接源/测试helper，不清点整个production/人物模型/全仓。
+
+输出一个高内聚人物片段仓储纵向包的准确paths/symbols、唯一类型/编码/状态/SQL写入归属和有限公共调用。保留原with连接与事务/读取前后时点、原缓存相同输入/冲突、资格/声音人物固定版本/历史auth政策、原状态CAS/interrupt恢复、ready产物同workspace/task/kind绑定和幂等；不改变既有默认版本/增加generation门/actor新政策、复制现qualification/ACL或用泛Repository/callback袋隐藏反向耦合。明确现narration/profile素材的直接公开owner能否满足同conn与decoder需求；若不能，只交一个真实精准最小前置依赖，不先扩大共享contracts或已过所有owner。schema/用户历史数据、runtime/resource/grant、模型/person执行、API/main/Web消费者皆只读；准备不是模型、持久恢复或生产媒体通过。
+
+只交bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE，来源当前字节/Git与直接符号AST/读期prepost、拟最小自测和验证级别。若为原body/同conn/接口/状态/来源不变量原样归属拆分，可建议一个最小合并自测加root源审核；若有实际身份/状态/事务行为变化须标明关键独立门，不每方法铺QA矩阵。不修改产品/import/collect/执行任何测试、媒体/模型/GUI/native/env账号用户DB/宿主资源，不创建全仓snapshot，不覆盖旧注册/授权/分析/音频证据。当前API866a096的单文件原声修正及冻结其余四源、旧音频e966d29b tuple完全不变，无需API再ACK/重封/重跑；QA仍无新写权。语义REBASE_ACK后直接只读准备，无第二START；准确产品租约由主控审依赖后另绑。
 
 ### 当前音频编辑原声资源事实修正
 
