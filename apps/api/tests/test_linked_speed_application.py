@@ -12,8 +12,8 @@ import pytest
 
 from app.audio_timeline import narration_audio_timeline
 from app.creation.contracts import EditCommand, TimelineVersion
-from app.creation.editing.linked_speed_use_case import (
-    LinkedSpeedEditUseCase, LinkedSpeedApplyCommand, LinkedSpeedPreviewFailed,
+from app.creation.editing.linked_timeline_use_case import (
+    LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
 )
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
@@ -67,7 +67,7 @@ def speed_state(tmp_path):
     repo.create_subtitle_track(state.track)
     state.task = repo.get_creation_task('ws', state.task.id)
     state.neighbour = neighbour
-    state.application = LinkedSpeedEditUseCase(repo, state.case)
+    state.application = LinkedTimelineEditUseCase(repo, state.case)
     return state
 
 
@@ -87,13 +87,13 @@ def apply_command(state, proposal, *, requesting=True):
     request_id = str(uuid4()) if requesting else None
     base = proposal.operation['payload']['base_version_id']
     fields = {'request_id': request_id, 'expected_base_version_id': base} if requesting else {}
-    return LinkedSpeedApplyCommand('ws', state.task.id, proposal.id, state.identity, state.member.member_id,
+    return LinkedEditApplyCommand('ws', state.task.id, proposal.id, state.identity, state.member.member_id,
         source=source, request_id=request_id, expected_base_version_id=base if requesting else None,
         base_version_submitted=requesting, request_fields=fields)
 
 
 def test_cold_import_does_not_load_main_or_HTTP():
-    command = "import sys; import app.creation.editing.linked_speed_use_case; assert 'app.main' not in sys.modules; assert 'fastapi' not in sys.modules; assert 'starlette.requests' not in sys.modules"
+    command = "import sys; import app.creation.editing.linked_timeline_use_case; assert 'app.main' not in sys.modules; assert 'fastapi' not in sys.modules; assert 'starlette.requests' not in sys.modules"
     result = subprocess.run([sys.executable, '-c', command], env=dict(os.environ), capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
@@ -212,12 +212,12 @@ def test_shared_base_three_branches_and_narration_snapshot_keep_original_rules(s
 
 def test_constructor_rejects_different_repository_owner(state):
     with pytest.raises(ValueError, match='同一仓储'):
-        LinkedSpeedEditUseCase(object(), state.case)
+        LinkedTimelineEditUseCase(object(), state.case)
 
 
 def test_direct_apply_keeps_preview_failure_as_explicit_phase(state):
     command = speed_command(state)
-    with pytest.raises(LinkedSpeedPreviewFailed) as caught:
+    with pytest.raises(LinkedEditPreviewFailed) as caught:
         state.application.apply(replace(command, values={**command.values, 'playback_rate': None}))
     assert isinstance(caught.value.original, ValueError)
     assert state.repo.list_edit_operations('ws', state.task.id) == []

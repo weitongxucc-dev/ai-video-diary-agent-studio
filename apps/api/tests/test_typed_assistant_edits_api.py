@@ -434,15 +434,15 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
 
 
 def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_speed_http_state, monkeypatch):
-    from app.creation.editing.linked_speed_use_case import LinkedSpeedEditUseCase
+    from app.creation.editing.linked_timeline_use_case import LinkedTimelineEditUseCase
     state = linked_speed_http_state
     calls = []
-    preview = LinkedSpeedEditUseCase.preview
+    preview = LinkedTimelineEditUseCase.preview
     def observed(self, command):
         assert self.repository is state.repo
         calls.append(command)
         return preview(self, command)
-    monkeypatch.setattr(LinkedSpeedEditUseCase, 'preview', observed)
+    monkeypatch.setattr(LinkedTimelineEditUseCase, 'preview', observed)
     monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
     monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
     applied = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
@@ -464,3 +464,113 @@ def test_linked_speed_apply_control_preserves_unsubmitted_and_explicit_null(link
     assert refused.status_code == 409 and '基础版本' in refused.text
     accepted = state.client.post(url, json={'request_id': str(uuid4())})
     assert accepted.status_code == 200, accepted.text
+
+
+def linked_clip_action(state, operation):
+    action = {'operation_type': operation, 'clip_id': 'clip'}
+    if operation == 'InsertClip':
+        action.update(asset_id=state.neighbour.id, segment_id=state.neighbour.segments[0].id)
+    return action
+
+
+@pytest.mark.parametrize('operation,duration', [('DeleteClip', 2), ('DuplicateClip', 6), ('InsertClip', 8)])
+def test_linked_clip_public_preview_confirm_and_fixed_read(linked_speed_http_state, monkeypatch, operation, duration):
+    state = linked_speed_http_state
+    preview = state.client.post(state.url + '/edits/exact/preview', json={**linked_clip_action(state, operation),
+        'request_id': str(uuid4()), 'expected_timeline_version_id': state.base.id, 'expected_timeline_sequence': 2})
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()['proposal']
+    result_url = state.url + f"/edits/{proposal['id']}/result"
+    original = state.client.get(result_url)
+    assert original.status_code == 200 and original.json()['result'] is None
+    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('family must read durable fixed results'))
+    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('family must bypass generic confirm'))
+    accepted = state.client.post(state.url + f"/edits/{proposal['id']}/confirm", json={
+        'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
+        'expected_input_digest': original.json()['input_digest']})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()['operation']['operation_type'] == operation
+    assert accepted.json()['montage']['duration_seconds'] == duration
+    fixed = state.client.get(result_url)
+    assert fixed.status_code == 200 and fixed.json()['result']['operation'] == accepted.json()['operation']
+    assert fixed.json()['result']['montage']['duration_seconds'] == duration
+    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+
+
+@pytest.mark.parametrize('operation,command', [('DeleteClip', '删除这个镜头'),
+    ('DuplicateClip', '复制这个镜头'), ('InsertClip', '在这个镜头后插入镜头')])
+def test_linked_clip_direct_and_natural_use_single_application(linked_speed_http_state, monkeypatch, operation, command):
+    from app.creation.editing.linked_timeline_use_case import LinkedTimelineEditUseCase
+    state = linked_speed_http_state
+    calls = []
+    preview = LinkedTimelineEditUseCase.preview
+    def observed(self, command):
+        assert self.repository is state.repo and self.montage_edits.repository is state.repo
+        calls.append(command)
+        return preview(self, command)
+    monkeypatch.setattr(LinkedTimelineEditUseCase, 'preview', observed)
+    natural = state.client.post(state.url + '/edits/preview', json={'raw_command': command,
+        'context_stage': 'montage', 'selected_object_refs': ['clip:clip']})
+    if operation == 'InsertClip':
+        assert natural.status_code == 422 and natural.json()['detail'] == '插入镜头需要指定素材片段'
+    else:
+        assert natural.status_code == 200, natural.text
+        assert natural.json()['proposal']['operation']['operation_type'] == operation
+    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
+    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
+    direct = state.client.post(state.url + '/edits/exact', json=linked_clip_action(state, operation))
+    assert direct.status_code == 200, direct.text
+    assert direct.json()['operation']['operation_type'] == operation
+    assert len(calls) == 2 and all(item.operation_type == operation for item in calls)
+    assert all(item.actor_identity['member_id'] == state.member.member_id for item in calls)
+
+
+def test_linked_clip_recovery_keeps_original_version_and_does_not_wake(linked_speed_http_state, monkeypatch):
+    from app.task_audio import media_digest
+    state = linked_speed_http_state
+    wakes = []
+    wake = main._wake_assistant_continuations
+    def observed_wake():
+        wakes.append(True)
+        return wake()
+    monkeypatch.setattr(main, '_wake_assistant_continuations', observed_wake)
+    preview = state.client.post(state.url + '/edits/exact/preview', json=linked_clip_action(state, 'DuplicateClip'))
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    result_url = state.url + f'/edits/{proposal_id}/result'
+    request = {'request_id': str(uuid4()), 'expected_base_version_id': state.base.id}
+    accepted = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert accepted.status_code == 200, accepted.text
+    operation = accepted.json()['operation']
+    later = state.client.post(state.url + '/edits/exact', json=linked_clip_action(state, 'DeleteClip'))
+    assert later.status_code == 200, later.text
+    later_head = state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id
+    assert later_head != operation['result_version_id']
+    event = 'event_edit_request_' + media_digest(['ws', state.member.member_id, request['request_id'], 'apply'])
+    with state.repo._connect() as conn:
+        conn.execute('DELETE FROM task_events WHERE id=?', (event + '_result',))
+    before_wakes = len(wakes)
+    recovered = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
+    assert recovered.status_code == 200 and recovered.json()['operation'] == operation
+    assert recovered.json()['montage']['duration_seconds'] == 6
+    assert len(wakes) == before_wakes
+    assert state.repo.read_edit_request_result(state.task, event)['response'] == recovered.json()
+    fixed = state.client.get(result_url)
+    assert fixed.status_code == 200 and fixed.json()['result']['operation'] == operation
+    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == later_head
+    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 2
+    changed = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={**request,
+        'expected_input_digest': fixed.json()['input_digest']})
+    assert changed.status_code == 409 and len(wakes) == before_wakes
+
+
+def test_linked_insert_permission_and_range_keep_original_error_projection(linked_speed_http_state):
+    state = linked_speed_http_state
+    action = linked_clip_action(state, 'InsertClip')
+    state.repo._save_asset(replace(state.neighbour, owner_user_id='outside', visibility='private'))
+    denied = state.client.post(state.url + '/edits/exact/preview', json={**action, 'source_start_seconds': 4})
+    assert denied.status_code == 403 and denied.json()['detail'] == '当前成员无权使用该素材'
+    state.repo._save_asset(state.neighbour)
+    out_of_range = state.client.post(state.url + '/edits/exact/preview', json={**action, 'source_start_seconds': 4})
+    assert out_of_range.status_code == 400 and out_of_range.json()['detail'] == '插入起点须在 0.0–4.0 秒之间。'
+    assert not state.repo.list_edit_operations('ws', state.task.id)

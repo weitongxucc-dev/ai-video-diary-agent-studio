@@ -85,7 +85,8 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.sources import EditSourceVerifier
-from app.creation.editing.linked_speed_use_case import (LinkedSpeedEditUseCase, LinkedSpeedApplyCommand, LinkedSpeedPreviewFailed)
+from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
+    LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError)
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditReplay, InvalidMontage, LegacyMontageReference,
     SubtitleNoChange, SubtitleTargetMissing,
@@ -101,8 +102,6 @@ from app.creation.editing.metadata_use_case import (
 from app.creation.editing.compound import calculate_compound_edit, prepare_compound_proposal, apply_compound_proposal
 from app.creation.editing.subtitle_changes import (prepare_subtitle_content_proposal, apply_subtitle_content_command,
     calculate_subtitle_style, prepare_subtitle_style_proposal, apply_subtitle_style_command)
-from app.creation.editing.linked import (prepare_linked_splice, prepare_linked_insert,
-    apply_linked_splice, apply_linked_insert)
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import (subtitle_display_selection, apply_subtitle_cue)
@@ -9806,23 +9805,39 @@ def _metadata_edit_use_case():
         output_root=Path(settings.video_output_path), audio_service=_task_audio())
 
 
-def _linked_speed_use_case():
-    return LinkedSpeedEditUseCase(production_repo, _metadata_edit_use_case())
+def _linked_timeline_use_case():
+    return LinkedTimelineEditUseCase(production_repo, _metadata_edit_use_case())
 
 
-def _linked_speed_command(task, request, payload):
-    if not payload.clip_id or payload.playback_rate is None or payload.model_fields_set - {"operation_type", "clip_id", "playback_rate"}:
-        raise HTTPException(status_code=422, detail="关联变速需要镜头和倍速，不混入其他操作")
-    return _metadata_edit_command(task, request, "ChangeLinkedSpeed", {
-        "base_version_id": task.current_timeline_version_id, "clip_id": payload.clip_id,
-        "playback_rate": payload.playback_rate}, source=EXACT_EDIT_SOURCE.get())
+def _linked_timeline_values(payload):
+    if payload.operation_type == "ChangeLinkedSpeed":
+        if not payload.clip_id or payload.playback_rate is None or payload.model_fields_set - {"operation_type", "clip_id", "playback_rate"}:
+            raise HTTPException(status_code=422, detail="关联变速需要镜头和倍速，不混入其他操作")
+        return {"clip_id": payload.clip_id, "playback_rate": payload.playback_rate}
+    if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
+        if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id"}:
+            raise HTTPException(status_code=422, detail="关联删除或复制只接受一个镜头，不混入其他修改")
+        return {"clip_id": payload.clip_id}
+    if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id", "asset_id", "segment_id", "source_start_seconds"}:
+        raise HTTPException(status_code=422, detail="插入镜头只接受一个插入位置和一段素材，不混入其他修改")
+    return {"clip_id": payload.clip_id, "asset_id": payload.asset_id, "segment_id": payload.segment_id,
+        "source_start_seconds": payload.source_start_seconds}
 
 
-def _linked_speed_apply_command(task, proposal, request, payload=None):
+def _linked_timeline_command(task, request, operation_type, values, *, source=None):
+    command = _metadata_edit_command(task, request, operation_type, values, source=source)
+    if operation_type == "InsertClip":
+        user_id, diagnostic = _content_reader(request, task.workspace_id)
+        command = replace(command, actor_identity={**command.actor_identity,
+            "material_reader_identity": {"member_id": user_id, "local_diagnostic": diagnostic}})
+    return command
+
+
+def _linked_timeline_apply_command(task, proposal, request, payload=None):
     source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
-    command = _metadata_edit_command(task, request, "ChangeLinkedSpeed", proposal.operation["payload"], source=source)
+    command = _linked_timeline_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
     requesting = payload is not None and payload.request_id is not None
-    return LinkedSpeedApplyCommand(task.workspace_id, task.id, proposal.id, command.actor_identity,
+    return LinkedEditApplyCommand(task.workspace_id, task.id, proposal.id, command.actor_identity,
         _assistant_member_id(request, task.workspace_id), source=source,
         request_id=str(payload.request_id) if requesting else None,
         expected_base_version_id=payload.expected_base_version_id if requesting else None,
@@ -9831,9 +9846,13 @@ def _linked_speed_apply_command(task, proposal, request, payload=None):
         request_fields=payload.model_dump(mode="json", exclude_unset=True) if requesting else {})
 
 
-def _confirm_linked_speed_response(task, proposal, request, payload=None, *, wake=False):
+def _confirm_linked_timeline_response(task, proposal, request, payload=None, *, wake=False):
     try:
-        outcome = _linked_speed_use_case().confirm(_linked_speed_apply_command(task, proposal, request, payload))
+        outcome = _linked_timeline_use_case().confirm(_linked_timeline_apply_command(task, proposal, request, payload))
+    except InsertMaterialMissing as exc:
+        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+    except InsertSourceRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
@@ -9869,16 +9888,6 @@ def _metadata_edit_command(task, request, operation_type, values, *, source=None
     if source is not None:
         user_id, diagnostic = _assistant_member_id(request, task.workspace_id), False
     return metadata_edit_command(task, {"member_id":user_id, "local_diagnostic":diagnostic}, operation_type, values, source=source)
-
-
-def _linked_proposal_source_command(task, request, proposal, source):
-    bound = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("affected_source_scope")
-    if bound is None:
-        raise HTTPException(status_code=409, detail="原关联提案未封存实际影响的来源范围，请为当前版本重新预览")
-    command = _metadata_edit_command(task, request, proposal.operation["operation_type"],
-        proposal.operation["payload"], source=source)
-    command = EditSourceVerifier.restore_scope(command, bound)
-    return command, EditSourceVerifier(production_repo, identity=command.actor_identity)
 
 
 def _validate_edit_graphic_sources(workspace_id, task_id, overlays):
@@ -11013,7 +11022,7 @@ def _preview_command_edit_request(task_id, request, payload):
             value = float(linked_speed.group(1))
             if not .25 <= value <= 4:
                 raise HTTPException(status_code=422, detail="关联倍速须在0.25–4之间")
-            return _preview_linked_speed(task_id, request, CreationTaskExactEditRequest(
+            return _preview_linked_timeline(task_id, request, CreationTaskExactEditRequest(
                 operation_type="ChangeLinkedSpeed", clip_id=selected_ref.removeprefix("clip:"), playback_rate=value))
         speed_match = re.fullmatch(r"(?:把)?(?:这个|当前)?镜头(?:画面)?(?:改成|改为|调到|设为)\s*(\d+(?:\.\d+)?)\s*倍速[，, ]*(?:保留配音|声音不变|保持时长)[。！]?", command)
         if speed_match:
@@ -12067,8 +12076,8 @@ def _edit_proposal_binding(task_id, proposal_id, request):
     origin = intent.constraints.get("request_source")
     if origin is not None and origin["member_id"] != member_id:
         raise HTTPException(status_code=403, detail="提案不属于当前请求成员")
-    digest = (_linked_speed_use_case().input_digest(task, proposal, origin)
-        if proposal.operation.get("operation_type") == "ChangeLinkedSpeed" else media_digest([task.id, proposal.id, proposal.operation, proposal.target_refs,
+    digest = (_linked_timeline_use_case().input_digest(task, proposal, origin)
+        if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS else media_digest([task.id, proposal.id, proposal.operation, proposal.target_refs,
                            origin.get("source_facts") if origin else None]))
     return task, member_id, proposal, digest
 
@@ -12098,9 +12107,9 @@ def _original_edit_result(task, proposal):
 @app.get("/api/creation-tasks/{task_id}/edits/{proposal_id}/result")
 def get_creation_task_edit_result(task_id: str, proposal_id: str, request: Request):
     task, _member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
-    if proposal.operation.get("operation_type") == "ChangeLinkedSpeed":
+    if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
         try:
-            saved = _linked_speed_use_case().read_result(_linked_speed_apply_command(task, proposal, request))
+            saved = _linked_timeline_use_case().read_result(_linked_timeline_apply_command(task, proposal, request))
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, OSError) as exc:
@@ -12126,15 +12135,15 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
         intent = production_repo.get_edit_intent(proposal.workspace_id, proposal.intent_id)
         if intent.constraints.get("request_source") is not None:
             _edit_proposal_binding(task_id, proposal_id, request)
-        if proposal.operation.get("operation_type") == "ChangeLinkedSpeed":
+        if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
             task = _creation_task_or_404(current_workspace_id(request), task_id)
-            return _confirm_linked_speed_response(task, proposal, request, payload, wake=True)
+            return _confirm_linked_timeline_response(task, proposal, request, payload, wake=True)
         result = _confirm_creation_task_edit(task_id, proposal_id, request)
         _wake_assistant_continuations()
         return result
     task, member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
-    if proposal.operation.get("operation_type") == "ChangeLinkedSpeed":
-        return _confirm_linked_speed_response(task, proposal, request, payload, wake=True)
+    if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
+        return _confirm_linked_timeline_response(task, proposal, request, payload, wake=True)
     base = proposal.operation.get("payload", {}).get("base_version_id")
     if (("expected_base_version_id" in payload.model_fields_set and payload.expected_base_version_id != base)
             or (payload.expected_input_digest is not None and payload.expected_input_digest != digest)):
@@ -12171,8 +12180,8 @@ def _confirm_creation_task_edit(
         raise HTTPException(status_code=404, detail="creation task edit proposal not found") from exc
     if proposal.task_id != task_id or proposal.status != "proposed":
         raise HTTPException(status_code=409, detail="creation task edit proposal is not confirmable")
-    if proposal.operation.get("operation_type") == "ChangeLinkedSpeed":
-        return _confirm_linked_speed_response(task, proposal, request)
+    if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
+        return _confirm_linked_timeline_response(task, proposal, request)
     source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source")
     if source is not None and source["source_facts"] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source["action"]), request):
         raise HTTPException(status_code=409, detail="预览后的源文件或片段修订已变化，请重新预览")
@@ -12877,52 +12886,6 @@ def _confirm_creation_task_edit(
         return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
             base_version=base, updated_plan=updated, operation_type=operation_type,
             operation_payload=operation_payload, edited_subtitle_tracks=tracks)
-    if operation_type in {"DeleteClip", "DuplicateClip"} and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览关联编辑")
-        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
-        command, verifier = _linked_proposal_source_command(task, request, proposal, source)
-        try:
-            updated, tracks = apply_linked_splice(task, plan, tracks, _effective_audio_timeline(plan), command)
-            _prepare_changed_montage(updated, message="镜头及关联音轨、字幕已更新，请重新渲染。")
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base, updated_plan=updated, operation_type=operation_type,
-            operation_payload=operation_payload, edited_subtitle_tracks=tracks,
-            proposal_source_command=command, proposal_source_verifier=verifier)
-    if operation_type == "InsertClip" and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get("base_version_id"):
-            raise HTTPException(status_code=409, detail="时间线已变化，请重新预览插入镜头")
-        required = ("clip_id", "asset_id", "segment_id")
-        if any(not isinstance(operation_payload.get(key), str) or not operation_payload.get(key) for key in required):
-            raise HTTPException(status_code=409, detail="invalid creation task insert operation")
-        source_start = operation_payload.get("source_start_seconds")
-        if source_start is not None and (isinstance(source_start, bool) or not isinstance(source_start, (int, float))):
-            raise HTTPException(status_code=409, detail="invalid creation task insert operation")
-        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
-        new_clip = _creation_task_insert_clip(workspace_id, CreationTaskExactEditRequest(
-            operation_type="InsertClip", clip_id=operation_payload["clip_id"],
-            asset_id=operation_payload["asset_id"], segment_id=operation_payload["segment_id"],
-            source_start_seconds=float(source_start) if source_start is not None else None), request=request)
-        command, verifier = _linked_proposal_source_command(task, request, proposal, source)
-        try:
-            updated, tracks = apply_linked_insert(task, plan, tracks, _effective_audio_timeline(plan), command, new_clip)
-            _prepare_changed_montage(updated, message="镜头及关联音轨、字幕已更新，请重新渲染。")
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal,
-            base_version=base, updated_plan=updated, operation_type=operation_type,
-            operation_payload=operation_payload, edited_subtitle_tracks=tracks,
-            proposal_source_command=command, proposal_source_verifier=verifier)
     raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 
@@ -13011,7 +12974,7 @@ def _preview_exact_edit_request(task_id, request, payload):
     if payload.operation_type in {"SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue"}:
         return _preview_subtitle_structure(task_id, request, payload)
     if payload.operation_type == "ChangeLinkedSpeed":
-        return _preview_linked_speed(task_id, request, payload)
+        return _preview_linked_timeline(task_id, request, payload)
     if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
         return _preview_linked_clip_edit(task_id, request, payload)
     if payload.operation_type == "InsertClip":
@@ -13266,16 +13229,23 @@ def apply_creation_task_exact_edit(
 ) -> CreationTaskEditConfirmResponse:
     if (payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS or (payload.operation_type == 'EditAudioTimeline' and payload.audio_edit.action in {'update', 'track'}) or (payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None)) or (payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None):
         return _save_direct_metadata_edit(task_id, request, payload)
-    if payload.operation_type == "ChangeLinkedSpeed":
+    if payload.operation_type in LINKED_EDIT_OPERATIONS:
         task = _creation_task_or_404(current_workspace_id(request), task_id)
-        command = _linked_speed_command(task, request, payload)
+        command = _linked_timeline_command(task, request, payload.operation_type,
+            {"base_version_id": task.current_timeline_version_id, **_linked_timeline_values(payload)}, source=EXACT_EDIT_SOURCE.get())
         try:
-            return _metadata_edit_response(_linked_speed_use_case().apply(command))
+            return _metadata_edit_response(_linked_timeline_use_case().apply(command))
+        except LinkedEditInputError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except InsertMaterialMissing as exc:
+            raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+        except InsertSourceRangeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (EditConflict, KeyError, TimelineVersionConflict) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except LinkedSpeedPreviewFailed as exc:
+        except LinkedEditPreviewFailed as exc:
             raise HTTPException(status_code=422, detail=str(exc.original) if isinstance(exc.original, ValueError) else "关联变速预览失败，请检查本地素材和FFmpeg") from exc
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -13680,17 +13650,31 @@ def _preview_subtitle_replace(task_id: str, request: Request, payload: CreationT
     return _edit_preview_response(intent, proposal)
 
 
-def _preview_linked_speed(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    task = _creation_task_or_404(current_workspace_id(request), task_id)
-    command = _linked_speed_command(task, request, payload)
+def _preview_linked_timeline(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
+    if payload.operation_type == "ChangeLinkedSpeed":
+        task = _creation_task_or_404(current_workspace_id(request), task_id)
+        values = _linked_timeline_values(payload)
+    else:
+        values = _linked_timeline_values(payload)
+        task = _creation_task_or_404(current_workspace_id(request), task_id)
+    command = _linked_timeline_command(task, request, payload.operation_type,
+        {"base_version_id": task.current_timeline_version_id, **values}, source=EXACT_EDIT_SOURCE.get())
     try:
-        intent, proposal = _linked_speed_use_case().preview(command)
+        intent, proposal = _linked_timeline_use_case().preview(command)
+    except LinkedEditInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InsertMaterialMissing as exc:
+        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
+    except InsertSourceRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (EditConflict, KeyError, TimelineVersionConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "关联变速预览失败，请检查本地素材和FFmpeg") from exc
+        if payload.operation_type == "ChangeLinkedSpeed":
+            raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "关联变速预览失败，请检查本地素材和FFmpeg") from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _edit_preview_response(intent, proposal)
 
 
@@ -13769,101 +13753,11 @@ def _preview_remove_silence(task, request, payload):
 
 
 def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id"}:
-        raise HTTPException(status_code=422, detail="关联删除或复制只接受一个镜头，不混入其他修改")
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    base = _ensure_montage_base_version(workspace_id, task, plan)
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
-    command = _metadata_edit_command(task, request, payload.operation_type, {
-        "base_version_id": base.id, "clip_id": payload.clip_id,
-    }, source=EXACT_EDIT_SOURCE.get())
-    verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
-    try:
-        prepared = prepare_linked_splice(task, plan, tracks, _effective_audio_timeline(plan), command,
-            verifier=verifier, output_refs=_logical_montage_output_refs(plan))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        intent, proposal = production_repo.save_clip_preview_proposal(
-            prepared.intent, prepared.proposal, expected_version_id=base.id)
-    except TimelineVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _edit_preview_response(intent, proposal)
-
-
-def _creation_task_insert_clip(
-    workspace_id: str, payload: CreationTaskExactEditRequest, *, request: Request,
-) -> MontageClip:
-    """Build the shot an InsertClip adds, picking material the way ReplaceClip does."""
-    if not payload.asset_id or not payload.segment_id:
-        raise HTTPException(status_code=422, detail="插入镜头需要指定素材片段")
-    try:
-        asset = production_repo.get_asset(workspace_id, payload.asset_id)
-        segment = next(item for item in asset.segments if item.id == payload.segment_id)
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=404, detail="material segment not found") from exc
-    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
-        raise HTTPException(status_code=403, detail="当前成员无权使用该素材")
-    if not material_segment_eligible(asset, segment, workspace_id):
-        raise HTTPException(status_code=409, detail="素材片段当前不可用，请检查来源、范围和使用限制")
-    source_min, source_max = segment.start_seconds, segment.end_seconds
-    source_start = payload.source_start_seconds if payload.source_start_seconds is not None else source_min
-    # 插入没有时长参数：镜头长度就是这段素材从起点到片段末尾还剩多少。
-    if source_start < source_min - 1e-6 or source_start >= source_max - 1e-6:
-        raise HTTPException(status_code=400, detail=f"插入起点须在 {source_min:.1f}–{max(source_min, source_max - 0.04):.1f} 秒之间。")
-    return MontageClip(
-        id=f"clip_{uuid4().hex[:12]}",
-        cue_id="",
-        asset_id=asset.id,
-        segment_id=segment.id,
-        source_path=production_repo.workspace_media_reference_for_asset(workspace_id, asset.id),
-        source_start_seconds=round(source_start, 3),
-        source_end_seconds=round(source_max, 3),
-        timeline_start_seconds=0.0,
-        timeline_end_seconds=0.0,
-        match_score=1.0,
-        match_reasons=["由用户插入", "当前工作区可用素材"],
-        needs_confirmation=False,
-        role="a_roll" if effective_segment_usage_role(asset, segment) == "a_roll" else "b_roll",
-        manually_selected=True,
-    )
+    return _preview_linked_timeline(task_id, request, payload)
 
 
 def _preview_insert(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    if not payload.clip_id or payload.model_fields_set - {
-        "operation_type", "clip_id", "asset_id", "segment_id", "source_start_seconds",
-    }:
-        raise HTTPException(status_code=422, detail="插入镜头只接受一个插入位置和一段素材，不混入其他修改")
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    new_clip = _creation_task_insert_clip(workspace_id, payload, request=request)
-    plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    base = _ensure_montage_base_version(workspace_id, task, plan)
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
-    command = _metadata_edit_command(task, request, "InsertClip", {
-        "base_version_id": base.id, "clip_id": payload.clip_id, "asset_id": payload.asset_id,
-        "segment_id": payload.segment_id, "source_start_seconds": payload.source_start_seconds,
-    }, source=EXACT_EDIT_SOURCE.get())
-    verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
-    try:
-        prepared = prepare_linked_insert(task, plan, tracks, _effective_audio_timeline(plan), command, new_clip,
-            verifier=verifier, output_refs=_logical_montage_output_refs(plan))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        intent, proposal = production_repo.save_clip_preview_proposal(
-            prepared.intent, prepared.proposal, expected_version_id=base.id)
-    except TimelineVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _edit_preview_response(intent, proposal)
+    return _preview_linked_timeline(task_id, request, payload)
 
 
 def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip, cue: NarrationCue) -> str:
