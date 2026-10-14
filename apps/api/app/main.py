@@ -85,6 +85,7 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS, apply_pi
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
+from app.creation.output_observation_use_case import OutputObservationUseCase, OutputObservationRejected
 from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCase, TimelineRestoreCommand,
     TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
@@ -211,7 +212,6 @@ from app.quality_inspection import (
     final_quality_check_payload,
     start_final_video_quality_check,
 )
-from app.task_observation import observe_output, MAX_SAMPLE_EDGE, MAX_OBSERVATION_BYTES
 from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget, KnowledgeSearchResponse
 from app.media_link_import import (
     DEFAULT_MAX_BYTES,
@@ -3711,6 +3711,13 @@ _TASK_MEDIA_SUBMISSION = ContextVar("task_media_submission", default=False)
 
 
 
+def _output_observation_use_case(repository=None):
+    repo = repository if repository is not None else production_repo
+    audio = TaskAudio(repo, artifact_store, settings.effective_temporary_root_path)
+    return OutputObservationUseCase(repo, artifact_store, audio,
+        settings.effective_temporary_root_path, settings.native_ocr_worker_path)
+
+
 def _audio_edit_use_case(repository=None):
     repo=repository if repository is not None else production_repo
     audio=TaskAudio(repo,artifact_store,settings.effective_temporary_root_path)
@@ -3880,22 +3887,6 @@ def _task_media_route(operation, result_kind):
                     if edit_request_event:
                         _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
                     raise
-            if operation == 'output_observation':
-                original = bound.arguments['payload']
-                if original.request_id is not None:
-                    task, member_id = _exact_edit_access(bound.arguments['task_id'], request, write=True)
-                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'observation', original.model_dump(mode='json', exclude_unset=True))
-                    if not fresh:
-                        result = _read_edit_request_result(task, edit_request_event)
-                        if result is not None:
-                            return result
-                        raise HTTPException(status_code=409, detail='原观察请求结果尚未确定；请查原请求，不重复执行')
-                try:
-                    typed_source = _prepare_observation_request(bound.arguments['task_id'], request, original)
-                except HTTPException as exc:
-                    if edit_request_event:
-                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
-                    raise
             if operation == 'command_edit_preview':
                 task = _creation_task_or_404(current_workspace_id(request), bound.arguments['task_id'])
                 bound.arguments['payload'] = _bind_assistant_edit_instruction(request, task, bound.arguments['payload'])
@@ -3968,6 +3959,8 @@ def _task_media_route(operation, result_kind):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+    if operation == "output_observation":
+        return _output_observation_facts(workspace_id, task_id, arguments, actor)
     if AudioEditUseCase.handles(operation, arguments):
         return _audio_edit_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
     if operation in AUDIO_INGRESS_ACTIONS:
@@ -3987,8 +3980,6 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
             raise ValueError('封存的类型化编辑输入或成员已失效')
-    if operation == 'output_observation':
-        return _output_observation_facts(workspace_id, task_id, arguments, actor)
     if operation in {'media_script_preview', 'media_script_tool_preview'}:
         if operation == 'media_script_tool_preview':
             invocation = MediaScriptToolPreviewRequest.model_validate(arguments['payload'])
@@ -4202,6 +4193,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if event["operation"] == "output_observation":
+        raise ValueError("输出观察必须通过明确用例，不能重入旧媒体路由")
     if AudioEditUseCase.handles(event['operation'], event['arguments']):
         raise ValueError('音频编辑必须通过明确用例，不能重入旧路由')
     if event['operation'] in AUDIO_INGRESS_ACTIONS:
@@ -4247,12 +4240,7 @@ def _validate_task_media_result(job, event, result, context):
     if event['operation'] in AUDIO_INGRESS_ACTIONS:
         raise ValueError('音频输入必须经明确用例执行，不能重入旧媒体路由')
     if event['operation'] == 'output_observation':
-        context.check()
-        if (result.get('timeline_version_id'), result.get('output', {}).get('sha256')) != (event['input_facts']['base_version_id'], event['input_facts']['output']['sha256']):
-            raise ValueError('观察结果未绑定原实际输出版本和摘要')
-        if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_OBSERVATION_BYTES:
-            raise ValueError('观察回执超过有界大小')
-        return []
+        raise ValueError("输出观察必须通过明确用例，不能重入旧媒体路由")
     outputs = []
     for record in production_repo.list_artifact_records(job.workspace_id, job.task_id):
         if record.producer_job_id != job.id:
@@ -4303,20 +4291,7 @@ def _validate_task_media_result(job, event, result, context):
 
 
 def _task_media_outputs_current(job):
-    records = [item for item in production_repo.list_artifact_records(job.workspace_id,job.task_id) if item.producer_job_id==job.id]
-    if not records:
-        return True
-    try:
-        verified = production_repo.get_task_event(job.workspace_id,f"event_{job.id}_verified").payload["outputs"]
-        if not verified or {item["reference"] for item in verified} != {item.logical_ref for item in records}:
-            return False
-        for item in verified:
-            stat = artifact_store.resolve_file(item["reference"]).stat()
-            if (stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns) != (item["size_bytes"],item["mtime_ns"],item["ctime_ns"]):
-                return False
-    except (KeyError,FileNotFoundError,OSError):
-        return False
-    return True
+    return _output_observation_use_case().published_outputs_current(job)
 
 
 def _task_media_device_request(job, actor, runtime):
@@ -4376,11 +4351,7 @@ def _task_media_job_response(media, job, actor, runtime):
 
 
 def _observation_version(task, payload):
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (
-            task.current_timeline_version_id, version.sequence if version else 0):
-        raise ValueError("观察目标时间线已变化，请回读当前版本")
-    return version
+    return _output_observation_use_case().version(task, payload)
 
 
 def _prepare_observation_request(task_id, request, payload):
@@ -4409,94 +4380,19 @@ def _prepare_observation_request(task_id, request, payload):
 
 
 def _registered_observation_output(workspace_id, task_id, target, actor):
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if target.kind == "final":
-        _task, plan, path, _digest = _quality_check_source(workspace_id, task_id)
-        record = next(item for item in production_repo.list_artifact_records(workspace_id, task_id)
-                      if item.logical_ref == plan.output_path and item.kind == "rendered_video")
-        binding = {"kind": "composed_output", "montage": creation_task_montage_plan_to_payload(plan)}
-        width, height = canvas_size(plan.aspect_ratio)
-    else:
-        job = production_repo.get_job_run(workspace_id, target.job_id)
-        if job.task_id != task_id or job.kind != TASK_MEDIA_KIND or job.status != "succeeded":
-            raise ValueError("只能观察本任务真实成功的媒体作业输出")
-        start = production_repo.get_task_event(workspace_id, f"event_{job.id}_start").payload
-        if (CreationExecutionActor.from_event(workspace_id, start) != actor
-                or start["input_facts"]["base_version_id"] != task.current_timeline_version_id):
-            raise PermissionError("原媒体作业身份或输入版本不再适用当前目标")
-        record = production_repo.get_artifact_record(workspace_id, target.artifact_id)
-        if record.task_id != task_id or record.producer_job_id != job.id:
-            raise ValueError("产物不属于指定任务媒体作业")
-        path = artifact_store.resolve_file(record.logical_ref)
-        if path.suffix == ".png" and record.kind == "graphic_source":
-            graphic = graphic_source_facts(production_repo, artifact_store, workspace_id, task_id, record.logical_ref, actor=actor)
-            width, height = graphic["width"], graphic["height"]
-            binding = {"kind": "graphic_source", "applied": False}
-        elif path.suffix == ".mp4":
-            _task_audio().validate_source_access(workspace_id, task_id, record.logical_ref, actor)
-            _task_audio().validate_material_use(workspace_id, task_id, record.logical_ref)
-            saved = production_repo.get_task_event(workspace_id,
-                f"event_{job.id}_{record.id.removeprefix('artifact_')}_input").payload
-            binding = {"kind": "composed_preview", "media_input": saved["media_input"]}
-            if "clip" in saved["media_input"]:
-                from app.canvas import preview_size
-                width, height = preview_size(saved["media_input"]["aspect_ratio"])
-            else:
-                width, height = canvas_size(saved["media_input"]["plan"]["aspect_ratio"])
-        else:
-            raise ValueError("本轮只能观察登记 MP4 预览或 PNG 图片来源")
-        if not _task_media_outputs_current(job):
-            raise ValueError("原媒体输出已丢失或变化，不能观察旧成功状态")
-    publication = artifact_store.describe(record.logical_ref)
-    if (publication.sha256, publication.size_bytes) != (record.sha256, record.size_bytes):
-        raise ValueError("观察媒体与真实登记摘要不一致")
-    stat = path.stat()
-    output = {"artifact_id": record.id, "artifact_kind": record.kind, "sha256": record.sha256,
-              "registered_width": width, "registered_height": height,
-              "size_bytes": record.size_bytes, "producer_job_id": record.producer_job_id,
-              "logical_ref": record.logical_ref, "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns}
-    return path, output, binding
+    try:
+        return _output_observation_use_case().registered_output(workspace_id, task_id, target, actor)
+    except OutputObservationRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _output_observation_facts(workspace_id, task_id, arguments, actor):
-    payload = CreationTaskObservationRequest.model_validate(arguments["payload"])
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    version = _observation_version(task, payload)
-    path, output, binding = _registered_observation_output(workspace_id, task_id, payload.target, actor)
+    case = _output_observation_use_case()
+    source = case.prepare_source(workspace_id, task_id, arguments, actor)
     budget = cpu_render_budget_from_env()
-    if budget is None:
-        raise ValueError("实际画面观察的 CPU 执行预算尚未标定")
-    facts = {"base_version_id": task.current_timeline_version_id, "timeline_sequence": version.sequence if version else 0,
-             "output": output, "binding": binding, "target": payload.target.model_dump(mode="json"),
-             "sample_times_seconds": payload.sample_times_seconds}
-    width, height = output["registered_width"], output["registered_height"]
-    scale = min(1., MAX_SAMPLE_EDGE / width, MAX_SAMPLE_EDGE / height)
-    sample_width, sample_height = max(1, round(width * scale)), max(1, round(height * scale))
-    sample_count = 1 if path.suffix == ".png" else len(payload.sample_times_seconds) or 3
+    case.require_render_budget(budget)
     observation_budget = observation_budget_from_env()
-    ocr_worker = Path(settings.native_ocr_worker_path).expanduser() if settings.native_ocr_worker_path else None
-    if observation_budget is not None and ocr_worker is not None and ocr_worker.is_file():
-        worker_digest = hashlib.sha256(ocr_worker.read_bytes()).hexdigest()
-        if worker_digest == observation_budget.worker_sha256:
-            facts["ocr"] = {"worker_sha256": worker_digest, "status": "ready"}
-            resources = {"kind": "task_output_observation", "execution_mode": "local_ffmpeg_apple_vision",
-                "worker_sha256": worker_digest, "sample_count": sample_count,
-                "source_pixels": output["registered_width"] * output["registered_height"],
-                "width_px": sample_width, "height_px": sample_height, "input_bytes": path.stat().st_size,
-                "threads": observation_budget.max_threads, "timeout_seconds": observation_budget.max_timeout_seconds,
-                "max_output_bytes": observation_budget.max_output_bytes}
-            return facts, resources
-        facts["ocr"] = {"status": "unavailable", "reason": "本地 OCR worker 摘要与已标定执行文件不一致。"}
-    else:
-        facts["ocr"] = {"status": "unavailable", "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"}
-    resources = {"kind": "creation_render", "execution_mode": "cpu_ffmpeg",
-        "duration_seconds": float(sample_count),
-        "width_px": sample_width, "height_px": sample_height, "input_bytes": path.stat().st_size,
-        "clip_count": 1, "overlay_count": 0, "threads": 1,
-        "timeout_seconds": budget.max_timeout_seconds, "max_output_bytes": budget.max_output_bytes}
-    if width * height > budget.max_width_px * budget.max_height_px:
-        raise ValueError("实际输出源帧像素超过已标定 CPU 范围")
-    return facts, resources
+    return case.seal_resources(source, budget, observation_budget)
 
 
 def _bounded_quality_evidence(record):
@@ -4584,49 +4480,51 @@ def get_creation_task_observations(task_id: str, request: Request):
 
 
 @app.post("/api/creation-tasks/{task_id}/observations")
-@_task_media_route("output_observation", "observation")
 def observe_creation_task_output(task_id: str, request: Request, payload: CreationTaskObservationRequest):
-    task, _member_id = _exact_edit_access(task_id, request, write=True)
+    event_id = None
+    if payload.request_id is not None:
+        task, member_id = _exact_edit_access(task_id, request, write=True)
+        event_id, fresh = _claim_edit_request(task, member_id, payload.request_id, 'observation',
+            payload.model_dump(mode='json', exclude_unset=True))
+        if not fresh:
+            result = _read_edit_request_result(task, event_id)
+            if result is not None:
+                return result
+            raise HTTPException(status_code=409, detail='原观察请求结果尚未确定；请查原请求，不重复执行')
     try:
-        _observation_version(task, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    context = _task_media_grant_or_queue("output_observation")
-    _context, job, event, actor = TASK_MEDIA_CONTEXT.get()
-    path, output, binding = _registered_observation_output(task.workspace_id, task_id, payload.target, actor)
-    from app.granted_subprocess import run_granted_command
-    def run_command(command, *, output_paths=()):
-        context.check()
-        result = run_granted_command(context.scheduler, context.grant, command,
-            timeout_seconds=max(.1, min(30., context.deadline_monotonic - time.monotonic())),
-            max_stdout_bytes=MAX_OBSERVATION_BYTES, max_stderr_bytes=32 * 1024,
-            output_paths=output_paths, max_output_file_bytes=context.max_output_bytes,
-            cancel_event=context.cancel_event)
-        if result.returncode:
-            raise ValueError("本地实际输出采样失败，请检查媒体和工具")
-        return result
-    measured = observe_output(path, sample_times=payload.sample_times_seconds,
-        temporary_root=settings.effective_temporary_root_path, run_command=run_command,
-        expected_size=(output["registered_width"], output["registered_height"]),
-        max_output_bytes=context.max_output_bytes,
-        ocr_worker=Path(settings.native_ocr_worker_path).expanduser() if event["input_facts"]["ocr"]["status"] == "ready" else None)
-    montage = binding.get("montage") or binding.get("media_input", {}).get("plan")
-    single_clip = binding.get("media_input", {}).get("clip")
-    for sample in measured["samples"]:
-        timestamp = sample["timestamp_seconds"]
-        if montage:
-            sample["object_refs"] = [f"clip:{clip['id']}" for clip in montage.get("clips", [])
-                if clip["timeline_start_seconds"] <= timestamp < clip["timeline_end_seconds"]]
-            sample["object_refs"].extend(f"overlay:{overlay['id']}" for overlay in montage.get("graphic_overlays", [])
-                if overlay["start_seconds"] <= timestamp < overlay["end_seconds"])
-        elif single_clip:
-            sample["object_refs"] = [f"clip:{single_clip['id']}"]
-            sample["timeline_timestamp_seconds"] = single_clip["timeline_start_seconds"] + timestamp
-    result = {"observation_id": job.id, "task_id": task_id, "timeline_version_id": event["input_facts"]["base_version_id"],
-        "timeline_sequence": event["input_facts"]["timeline_sequence"], "observed_at": utc_now().isoformat(),
-        "target": payload.target.model_dump(mode="json"), "ocr_execution": event["input_facts"]["ocr"], "output": {key: value for key, value in output.items()
-            if key not in {"logical_ref", "mtime_ns", "ctime_ns"}}, "output_role": binding["kind"], **measured}
-    return result
+        source = _prepare_observation_request(task_id, request, payload)
+        task, _member_id = _exact_edit_access(task_id, request, write=True)
+        try:
+            _observation_version(task, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException as exc:
+        if event_id:
+            _save_edit_request_result(task, event_id, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
+        raise
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+    values = {'_media_kind': 'output_observation',
+        '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'),
+        '_typed_source': source, 'payload': payload.model_dump(mode='json', exclude_unset=True)}
+    try:
+        runtime = _creation_runtime()
+        media = runtime.registrations['creation_job'].owner.task_media
+        job = media.submit(runtime, actor, task_id, 'output_observation', values, 'observation')
+        receipt = _task_media_job_response(media, job, actor, runtime)
+        if event_id:
+            _save_edit_request_result(task, event_id, JSONResponse(status_code=202, content=receipt))
+        receipt['result'] = None
+        return JSONResponse(status_code=202, content=receipt)
+    except OutputObservationRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/media-jobs")
@@ -13477,40 +13375,11 @@ def _render_creation_task_montage_for_workspace(
     return _creation_task_montage_response(rendered)
 
 
-def _creation_task_output_path(
-    workspace_id: str,
-    task_id: str,
-    *,
-    subtitle: bool,
-) -> Path:
-    task = _creation_task_or_404(workspace_id, task_id)
+def _creation_task_output_path(workspace_id: str, task_id: str, *, subtitle: bool) -> Path:
     try:
-        plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task output not found") from exc
-    raw_path = plan.subtitle_path if subtitle else plan.output_path
-    if plan.status != "rendered" or not raw_path:
-        raise HTTPException(status_code=404, detail="creation task output not found")
-    expected_kind = "subtitle_track" if subtitle else "rendered_video"
-    registered = next(
-        (
-            artifact
-            for artifact in production_repo.list_artifact_records(workspace_id, task.id)
-            if artifact.logical_ref == raw_path and artifact.kind == expected_kind
-        ),
-        None,
-    )
-    if registered is None:
-        raise HTTPException(
-            status_code=409, detail="creation task output is not a registered artifact"
-        )
-    try:
-        path = artifact_store.resolve_file(raw_path)
-    except (FileNotFoundError, ValueError):
-        raise HTTPException(status_code=404, detail="creation task output not found")
-    return path
+        return _output_observation_use_case().output_path(workspace_id, task_id, subtitle=subtitle)
+    except OutputObservationRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _platform_publish_task_for_user(workspace_id: str, task_id: str, user_id: str) -> CreationTask:
@@ -13564,17 +13433,10 @@ def _quality_check_task_access(request: Request, workspace_id: str, task_id: str
 
 
 def _quality_check_source(workspace_id: str, task_id: str):
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = creation_task_montage_plan_from_payload(
-        production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-    )
-    path = _creation_task_output_path(workspace_id, task_id, subtitle=False)
-    publication = artifact_store.describe(plan.output_path)
-    registered = next(record for record in production_repo.list_artifact_records(workspace_id, task_id)
-                      if record.logical_ref == plan.output_path and record.kind == "rendered_video")
-    if publication.sha256 != registered.sha256 or publication.size_bytes != registered.size_bytes:
-        raise ValueError("成片与登记产物不匹配，请重新生成。")
-    return task, plan, path, publication.sha256
+    try:
+        return _output_observation_use_case().quality_source(workspace_id, task_id)
+    except OutputObservationRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _creation_task_quality_check_response(workspace_id: str, task_id: str) -> CreationTaskQualityCheckResponse:
@@ -17691,6 +17553,7 @@ def _build_device_components(*, repository: ProductionRepository):
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
         audio_edit=_audio_edit_use_case(repository),
+        output_observation=_output_observation_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
