@@ -15,7 +15,7 @@
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期六源被许可异常窗口反例 SOURCE_BLOCK，仅 DeviceRuntime 与其既有测试重开修复，其他四源保持准确冻结。production 人物/声音 records 接线及下方只读维护轻组装为独立子片，互不延长冻结。完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；人物 records 联合门已准备，维护 dry-run 实际缺 owner 反例已交唯一 API 修复，待准确释放复验；已过门原脚本只读复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，保留生命周期原五输入通过及实际许可异常窗口失败，待新准确六源仅复验失败反例与必要受影响差额；原 DB/tmp 两门不重复，有限门不能算全安全重载或真实媒体接受。 |
-| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源与执行回读/字幕四源均已 WRITE_LEASE_RETURN，当前独占下方 MaterialLibraryWorkspace 与既有同名测试的分页/查询归属修复；API 客户端与其他编辑子模块只读。 |
+| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源与执行回读/字幕四源均已 WRITE_LEASE_RETURN，MaterialLibraryWorkspace 与既有同名测试两源已 SOURCE_RELEASE 准确冻结供 QA；API 客户端与其他编辑子模块只读。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源已 WRITE_LEASE_RETURN，人物/声音 records 两源继续 SOURCE_RELEASE 冻结待 API 接线；当前产品只读，未接线模块不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
