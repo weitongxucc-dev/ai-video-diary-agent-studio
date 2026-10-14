@@ -15,7 +15,7 @@
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；生命周期六源已 WRITE_LEASE_RETURN，当前只读定位 R2/R3 main 编辑/执行路由、assistant_pi 与直接编辑模块的剩余实际调用闭包，待精确竖向接续；production 人物/声音 records 与维护轻组装候选 03 四源独立 SOURCE_RELEASE 冻结供 QA。R4/R6 整文件例外排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；按 records 候选 03 准确四源执行原维护 dry-run 失败单例和已准备 records 公共门；Web 素材分页已通过并归还，不重复已过门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，生命周期有限门已接受，按准确集成提交核实际 settings HTTP 的两处后段持久化失败：env 成功后 secret 失败、env/secret 成功后 workspace 配置失败。只用合成 IO/内存秘密，先记录实际影响再建议 owner；原五输入/DB/tmp/预算门不重复，不算全安全重载或真实媒体接受。 |
-| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；既有候选均已 WRITE_LEASE_RETURN，当前产品只读，限定清点 CreationTaskWorkspace、MaterialLibraryWorkspace 与直接拆出模块/API 分组的剩余活跃消费者、职责和实际反例；不重跑旧矩阵。 |
+| Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；既有候选均已 WRITE_LEASE_RETURN，当前按下方 CLOSE1/CLOSE2 精确六文件独占修复扫描列表归属和任务事实回执接受；其他静态完整 workspace 输入残留另项后续，不重跑旧矩阵。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源已 WRITE_LEASE_RETURN，人物/声音 records 两源继续 SOURCE_RELEASE 冻结待 API 接线；当前产品只读，未接线模块不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -37,6 +37,8 @@ API 停止/持久化组依据现三个真实 stop-failure states 追加独占 `a
 Web 素材库公开组件只读探针在 `fresh-web-consumers/materials-readonly/attempt-03` 复现 READ1–READ3 三个行为反例、源字节前后未变。现独占 `apps/web/src/components/MaterialLibraryWorkspace.tsx` 与 `apps/web/src/components/__tests__/MaterialLibraryWorkspace.test.tsx`，当前两文件 Git 干净、无其他 WIP/owner。仅修改 `loadMore`、查询首屏回读与其实际列表/error/total/hasMore/busy/assetWriteRevision 的请求归属接线和必要分页按钮门：旧分页成功/错误/完成不能覆盖后来查询的已接受或正在回读事实；新查询未接受自己的首屏时不得用旧列表数量或偏移发分页，返回相同参数的新请求轮次也不继承旧完成权。保留搜索失败最后可用集合、正常分页去重/总数/URL tag、现背景回读、明确选择和素材/片段/笔记草稿，未接受请求不得伪增写修订。不改变 API/类型/权限/持久格式、布局/CSS/视觉命名或现独立编辑 owner，不建通用状态层；实际必要其他符号/文件先报依赖。原三反例和正常分页、焦点/选择/草稿、必要现 tag/背景读最小回归及同候选真实浏览器单一查询/分页交错差额分别留证，不全重跑旧素材库/GUI矩阵。稳定准确 SOURCE_RELEASE 冻结后独立 QA 核同候选，组件/合成HTTP浏览器不能算 SQL/模型/媒体或整体产品接受。
 
 QA 在固定已提交候选的原 `test_local_adoption.py::test_dry_run_is_read_only_and_manifest_has_no_private_bodies` 实际复现轻构造遗漏 `_media_authorizations`，数据库和合成媒体字节前后相同。API 当前 production/records 子片追加 `production.py::_local_adoption_repository` 及实际必要的同文件有限 owner 组装接线；独占既有 `apps/api/tests/test_local_adoption.py` 的最小轻组装/只读回归，绑定时该测试 Git 干净且无其他 owner。维护轻构造只显式组装无 IO 的授权/人物仓储，不调用完整 `__init__`、startup、DDL、provision 或模型；原只读 URI、调用方事务、CAS、摘要和维护政策保持。授权已集成源与 R4 两冻结源只读；如需其他文件先报主控。按准确联合 release 执行原失败单用例及 records 必要公开门，不运行真实数据维护 apply 或无关矩阵。
+
+R5 限定只读清点 `fresh-web-consumers/closure-readonly/attempt-03` 在当前公开组件实际复现 CLOSE1/CLOSE2 两个 FAIL，六个直接源前后相同；早期无断言及无效 completed 夹具记录保留，规范输入为当前 succeeded。现独占 `apps/web/src/components/MaterialLibraryWorkspace.tsx`、`CreationTaskWorkspace.tsx` 与既有 `__tests__/MaterialLibraryWorkspace.test.tsx`、`__tests__/CreationTaskWorkspaceSaveFeedback.test.tsx`；必要有限读取归属接线另明确独占 `creation-task/useCreationExecution.ts`、既有 `__tests__/useCreationExecution.test.tsx`。绑定时六文件 Git 干净，无其他 owner。扫描接入回包不能冒充当前 URL tag/media 查询的已接受列表；保留现扫描协议和 query/filter 原重置语义，沿当前有限查询重读，晚回包不得覆写后来的意图/已接受集合、选择或草稿，读失败保留最后确认集合。parent 唯一接受任务事实，共享保存的实际新 Task 回执不能被更早的完整执行回读覆盖；任务身份/版本/时间/读取与写入归属用有限输入表达，不建第二 Task 缓存。只有 parent 真正接受完整回读才更新 hook 快照；拒绝旧回读后原循环能重读新事实。共享失败、换任务、后续输入/选择、编辑草稿与现轮询恢复规则保持。API/client/types/CSS、权限与共享政策只读，不消除 URL tag 或改后端协议，不建通用状态框架。本批不顺带收窄四个编辑组件的完整 workspace props。按规范原两反例、必要晚成功/错误/同参数与正常扫描/共享/轮询最小差额及同候选单尺寸实际浏览器 HTTP 留证，稳定准确 SOURCE_RELEASE 后独立复验；合成边界不算真实 SQL/权限/模型/整体 R5/R9接受。
 
 ## 用户决定、入口与范围
 
