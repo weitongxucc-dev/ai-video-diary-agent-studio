@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 恢复五源9daad3bc…已SOURCE_RELEASE冻结，最终3PASS3.60s/3不同case；历史17actual含5fixture失败保留，三产品源七轮同字节。产品/证据只读等一个独立族门，不重跑作者3或旧门，不先写执行包。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 恢复五源9daad3bc…已SOURCE_RELEASE冻结、旧证据只读等独立族门；REF-R3-AUDIO-INGRESS-PREPARATION-20261014仅新fresh-api-audio-ingress-preparation证据写权，定向只读五音频输入/事实action与直接owners，零产品/测试/媒体执行，不重跑作者3/旧门、不提前写执行包。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R2-TIMELINE-RESTORE-INDEPENDENT-20261014仅新fresh-qa/timeline-restore-independent证据写权；固定恢复五源9daad3bc…/478源三个新增差额反例，作者3/历史17与已过注册/编辑门只读复用，产品无写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -24,6 +24,10 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+`REF-R3-AUDIO-INGRESS-PREPARATION-20261014` 是恢复等待独立门期间的下一包只读准备，API仅新 `test-runs/refactor-20261014/fresh-api-audio-ingress-preparation/**` 证据写权，恢复五源及原证据继续冻结。定向当前main的五个 `_task_media_route` action：audio_import、recording_save、audio_waveform、audio_listen、narration_waveform；对应 `import_creation_task_audio/save_creation_task_recording/get_creation_task_audio_waveform/listen_creation_task_audio/get_creation_task_narration_waveform`，实际最后一个函数名以源码为准。只核 `_task_media_route/_execute_task_media_operation/_validate_task_media_result` 与实际seal/TaskMediaJobs/TaskAudio及直接音频、grant执行、回执 owner 的该五段；不重新清点13全组、整个main或已过编辑/注册/校准材料。主控已定位现 `_execute_task_media_operation` 用handler/signature反射、SimpleNamespace/伪Request重入路由和HTTP响应解JSON；该准备只交第一个音频输入/事实纵向包的有限调用契约、准确必要paths/symbols与退役目标，不实施通用dispatcher/registry或复制现TaskAudio业务。
+
+复用现公开TaskAudio/TaskMediaJobs/原具体音频服务；定位可信actor、原job/request、expected timeline、封存staged_input/source_sha、grant/取消check/输出验证及持久回执的真正有限显式参数，HTTP上传入口与内部已封存输入分清。原recording/版本写入、publish文件与登记、资源许可阶段/unknown查询/错误映射保持；原scope内媒体执行不能从HTTP成功推断或丢actor/source。只提出一个实际可实现包及其最小正常自测、一个关键族最多三差额反例（取消/迟到版本/已发布与DB失败等按实际路径选择），不为每action铺矩阵、不猜预算/模式或升级SDK。read-only源字节与涉及的有限joint symbol/current Git分列；可读直接测试helper定位，不collect/import/执行任何测试、模型/媒体/host/env/用户DB/账号、全仓snapshot或修改产品。语义REBASE_ACK后直接只读准备，确切产品租约及执行tuple须恢复集成后由主控另绑；此准备不能放行恢复QA或算R1/R3完成。
 
 恢复五源 `fresh-api-timeline-restore/SOURCE_RELEASE.json` SHA99b1729aeb90de45f92f53424dfbea315089abac1bbcc6a6748f22435704e797 / TAB9daad3bce88ea3ff568c2620bbf7a8afd5e8955a7d411c7907064da3eeed2f9c已冻结，固定9b64d8a加五overlay、478map3c3ea417a9116ca8dca57bc44d405d0d35885dba6c894774987905de7de3baa8；主控预审f8a6f382…核47artifact/五live-released-snapshot/473非overlayGit/180实际imports前后/4script2test prepost/9组装身份、635无关main funcs与metadata原16method/其余语句、原prepare/apply各完整语句经明确owner/error重绑同AST，原qualification/控制/两入口不变。原intent/proposal独立先行阶段不承诺全DB/FS原子。最终3PASS3.60s/3不同case，历史17actual含5fixture/binding失败全部保留，三产品源七轮同字节；此前两PASS和最后新增单node断言的全组复验不能把历史数写成新增能力。后续严格只复验失败或实际受影响node/fixture；单node新增断言不构成其他已过node重跑理由，不为重封tuple跑整组。当前已c74be46注册不在该作者tuple，公开joint仓储method未变、组合接受另列。原False ready资格不是registered输出失效门，真实媒体/资源/GUI/native与全R2/R3/R9尚未接受。
 
