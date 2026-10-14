@@ -12,12 +12,16 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-MEDIA-SCRIPT-EXECUTION-20261015独占main.py、task_audio.py、media_script_jobs.py、NEW tests/test_media_script_application.py四源及fresh-api-media-script-execution/**新证据；2b9a5e1e基线，两个script action显式执行，一个明确fixture层normal后另绑关键独立族，原leaf/resource门不改。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 输出观察三个代表已审核、准确四源2b9a5e1e已集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧门及本族冻结只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 媒体脚本四源已SOURCE_RELEASE，TAB bf149328…；主控已预审，当前四源及fresh-api-media-script-execution/**全部冻结只读，等待独立族，不新增修改或复跑。精确集成前不归还产品租约。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015：产品/作者/旧包只读，仅fresh-qa/media-script-independent/**新证据写权；固定2b9a5e1e＋四overlay及192源tuple，一个最多三代表关键族，作者normal及已通过族零重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短源decoder实证已审核/归还。REF-R3-OUTPUT-OBSERVATION-FRAME-LOOKUP-FEASIBILITY-20261015仅fresh-runtime/output-observation-frame-lookup-feasibility/**新有界帧选择证据，所有产品/旧包只读；一个组合prototype node核单一有界候选的实际被采PTS/PNG身份，未授权产品采样规则或资源标定。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
+
+`REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
+
+本族仅既有helper域下业务/持久化独立反例，最多三代表：①真实固定配方撤销或输入修订在封存后/明确dispatch或最终check时失效，拒绝新成功、旧PNG/历史保留；②原started真实durable后、登记PNG之前仅原外部run端口失败/中断，查询及明确retry保留未知、run不二次执行；③原PNG实际发布/ArtifactRecord已durable后，SQLite原definition ArtifactRecord或TransformRun INSERT晚失败，明确记录已到达/未到达SQL和残留阶段，移除自己的trigger后公开retry复用原PNG/slot/digest补元数据、外部执行计数1→1。若原状态机在更早门拒绝，记录真实边界，不mock守卫、不绕过身份/资格/journal/started/恢复规则，不全DB/FS回滚；实现缺陷归唯一API owner。两原prepare/run外部端口可用同一明确替身，trusted actor provider/有限真实roster port、合成settings/toolchain/budget/sys/ControlledResources同作者helper域单列，不算认证生产/Seatbelt/HostResourceProbe/full PGID标定。新脚本/fixtures预封存、每次实际模块origin/字节及原组装完整AST/替身签名记录，作者192 tuple只读复用且无全仓快照；首次失败保留，仅失败节点按必要差额重验，不跑作者normal或旧门。先语义REBASE_ACK核准确合同/四源/tuple/互斥范围及上述阶段，再直接执行本族，不等待重复START。SOURCE_GATE释放后产品/新证据冻结，主控核门再精确集成四源并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN；全R3/R9与同候选真实接受仍未完成。
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
