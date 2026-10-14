@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 输出观察四源SOURCE_RELEASE已交出并经主控源码预审；产品与本批作者证据冻结，无新增写权，等单一问题回派或精确集成/归还，不重跑normal。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-OUTPUT-OBSERVATION-INDEPENDENT-20261015仅fresh-qa/output-observation-independent/**新证据写权；准确842d7172+四源overlay/191源，最多三个真实关键边界代表。全部产品/旧门/作者证据只读。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-PREPARATION-20261015仅fresh-runtime/output-observation-short-source-preparation/**新只读诊断证据写权；原两帧短视频失败精准静态定位，不改产品/QA冻结tuple，不运行采样/旧门/标定。default资源与mode/budget/取消unknown保持。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 输出观察四源2b9a5e1e已集成归还。REF-R3-MEDIA-SCRIPT-EXECUTION-PREPARATION-20261015仅fresh-api-media-script-execution-preparation/**新只读准备证据写权；精准两个脚本action及必要依赖，不改产品/执行/重跑旧门。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 输出观察三个代表已审核、准确四源2b9a5e1e已集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧门及本族冻结只读。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 短源只读诊断已审核归还。REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-DECODER-EVIDENCE-20261015仅fresh-runtime/output-observation-short-source-decoder-evidence/**新有界decoder证据写权；产品/旧证据只读，一个新组合诊断node核原.2s失败和2s对照的实际PTS/文件/原错误，不定采样修复或资源标定。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -35,9 +35,31 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前输出观察独立关键族
+### 当前媒体脚本显式执行只读准备
 
-`REF-R3-OUTPUT-OBSERVATION-INDEPENDENT-20261015` 给当前QA仅test-runs/refactor-20261014/fresh-qa/output-observation-independent/**新证据写权。作者四源和fresh-api-output-observation-execution/**全部冻结，旧门不collect/复跑。固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140加准确四overlay，SOURCE_RELEASE SHA458e1aa1d70318f2b2091375d0e742e11d7db24ece873c42923d7efd2a9b19ca、四源TAB摘要462024f996690863d9d9e7fc32b18efbf05de926ced2f6575e66c7c1bc61c4b8。作者family-candidate-04/source-binding.json SHAf5aa1545dffd8611aa33e3a35ef0c7b32193b252f0d26ecf92adc5a30d67d3fe绑定191源/187固定Git，core map摘要f92e3feb32789c623f04bb5a0e0309a9a97ec263e2b42255919247d2d38b0b35、combined摘要f74885d7df192775d2ca33341e4692fcad5b5e4683a4a6ae2a4513d583f82419。主控fresh-root-review/output-observation-execution-pre-independent-reviewed.json SHA24d733899efb1d118b68e74196a153866021652e3018be640307c54823494305已核57artifact/191源/四执行脚本与实际185imports、全未目标函数/方法及旧读取/版本/资源/采样/结果规则；额外有限import和TaskMediaJobs ctor/execute/身份映射人工审核已完成，无产品或测试新执行。
+`REF-R3-MEDIA-SCRIPT-EXECUTION-PREPARATION-20261015` 只给当前API test-runs/refactor-20261014/fresh-api-media-script-execution-preparation/**新证据写权，固定产品2b9a5e1eea3a96fe33c82646ab0b4e995faa1299。输出观察/音频等全部已过包冻结，所有产品/旧证据只读，零产品import/collect/test/native/model/GUI/env/account。只跟踪仍经_TASK_MEDIA_HANDLERS/signature.bind/TASK_MEDIA_CONTEXT的media_script_preview和media_script_tool_preview，两者实际共享media_script_jobs原PNG执行/封存，而后者又走preview_media_script.__wrapped__。
+
+只读main这两个route、_task_media_route两action的输入/原request journal/配置与arguments、_task_media_facts/result的精准两个branch、_script_configuration/_instantiate_script_tool/_media_script_tools及TaskMediaJobs现dispatch；media_script_jobs的seal_script/execute_script、必要media_script/media_script_tools/schema/graphic/artifact所属规则及一个直接旧helper。先复用已存在隔离执行、canonical配方版本/授权/任务来源、原预算/资格、登记artifact-transform-event与重试阶段，不能另造脚本运行器/通用dispatcher/ACL/store/manifest/兼容层。只保留一条自然输入到登记PNG/原query回读的垂直边界，准备具体owner如何显式接收actor/job/event/context和有限配置、去除两个ambient/decorator/反射/__wrapped__入口；其余四action及已过owner保持，原共享阶段/permit/wake不变。配置描述/运行时校准未知不能猜权限或预算。
+
+READONLY_PREPARATION_RELEASE给准确目标AST/现SHA与2b9固定Git、必要有限依赖/读窗口、一个最小可实施包的拟路径/旧消费者退役与拟一个normal及关键独立族（不实际执行、不先建空owner）。若原现有规则或执行条件导致真实受阻，交一个精准缺口，不全main/其它action清点或重复所有旧脚本测试。语义REBASE_ACK后直接只读准备，无第二START；实施写权另绑。
+
+### 当前原短源有界decoder实证
+
+`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-DECODER-EVIDENCE-20261015` 只给当前Runtime test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-decoder-evidence/**新诊断执行证据写权。固定产品2b9a5e1e；复用输出观察作者/QA已封存的191源同一tuple与原实际grant/helper，源码/既有fixture只读，不修改任何产品或旧证据，不在只读snapshot写pycache/pytest cache。只封本次实际脚本/直接fixture执行前后SHA和实际module origins，不重复制无关源码/全仓或执行旧normal/门。
+
+只一个新组合diagnostic node，生成原1920×1080/10fps/.2s、mpeg4的自有原失败输入及2s同参数对照；执行原observe_output默认采样不改参数/比例/worker，捕获原异常类型/正文/真实到达点/清理，观察每次真实命令后的必需PNG存在/size/SHA。另一个有限原grant ffprobe获取每源实际frame PTS/count，严格有界stdout、timeout/threads/输出，走原registered grant runner和HostProcessProbe；所有生成/采样/probe都绑定实际child/原许可，并沿已准确封存的Resources/synthetic render caps，不猜生产profile或宽门。若原grant不支持该有限probe，报精确拒绝而不绕过；这是诊断实证，不接受生产资源/OCR/完整PGID、来源资格/public API全部再验或整体产品。
+
+原公开失败只有类型标签，旧临时源/帧/PTS未保存成可核实回执，数学两帧例子尚是推断；本诊断实测只对本次同参数输入有效，不补写原raw stack。记录正常对照和短输入真实结果，无论是否复现，不强写预期失败或以diagnostic PASS冒称短输入成功。首失败保留，仅必要探针纠正后复验失败项；不改采样policy、clamp/fallback/跳样或局部产品guard，先以实证交一个精准修复建议/语义差额。后续产品实施与独立接受另绑，当前191已过族不复跑。语义REBASE_ACK后直接有界诊断，无第二START。
+
+### 输出观察四源已集成与归还
+
+准确四源2b9a5e1eea3a96fe33c82646ab0b4e995faa1299已集成，cached/committed blobs与作者release/TAB及独立gate完全同一；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。独立gate SHAa1f34bb80308beef69ac6548a8afb7e1d6948f2d0737cf221af804cf74e82b51经root output-observation-independent-reviewed.json SHAd436aad1ea3feaa054dbc7f57680d6ca59b6efc5edd40bbcbbed7f9e9eb15515核67artifact/61只读复用/8保留6接受媒体、191同作者source map与187固定Git预审复用、两次186实际imports前后、3child/6fixture/7factory/4graph。三个代表四actual：首2PASS1FAIL5.41s，原仓储IntegrityError→ValueError的第三标签探针错保留，仅第三修正复验1PASS3.68s，前两与common helper AST未变不重跑。接受13native/全18含失败，真实HostProcessProbe完成child释放不冒充inflight全PGID。真实测量/结果已存后外部native CAS由final拒绝，外部head/result保留；公开首采样后cancel下一check拒绝并清理；verified INSERT晚拒绝时同conn/observer result已持久且job running/permit held，该成功conn仅BEGIN/attempted INSERT/ROLLBACK，success/done/free更新未到达，原fail_unit另提交失败释放，原cached结果retry逐字段同一/测量1→1/工具5→5，原claim/202/wake保持。主控无新产品测试。root仅修ASSEMBLY_DURING list读取observer，不产品缺陷/全门复跑。integration record SHA1914a71606c51bfc9da2bb0a281dbeb96157d65bd03189c15605ee30a4e50d1f冻结。
+
+短源只读诊断release SHAccac6c1b9d2e80ec3a3a7cdb1f6446f75517fcbc208c651c4ccaff20b626a62b已root output-observation-short-source-reviewed.json SHA21e01fca1113c67651047ffcbc06c69783c2969df3e98dd2645e671782e25a6a核3artifact/8原输入/6当前源/7完整目标AST/5旧命令与原Git；READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN即时发Runtime。若必需PNG缺失，原先读size stat、再_sample、再OCR顺序成立；准确原missing文件/raw栈/实际PTS仍unknown。局部exists+ValueError仅诊断保护、不修可观察性，且TaskMediaJobs仅持久错误类型，不能声称可见可行动文字已送达。root空third_node组误读未进入snapshot的locator只修observer，零产品/执行。后续先补上文有限decoder实证，不将更长fixture正常通过、静态数学例子或错误guard算解决原短源。全R2/R3/R9与生产/default/RSS/fullPGID/GUI/native真实整体仍未接受。
+
+### 已履行输出观察独立关键族（冻结规约）
+
+下述`REF-R3-OUTPUT-OBSERVATION-INDEPENDENT-20261015`已履行并集成，QA test-runs/refactor-20261014/fresh-qa/output-observation-independent/**证据全部归还冻结，不恢复写权。作者四源和fresh-api-output-observation-execution/**全部冻结，旧门不collect/复跑。固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140加准确四overlay，SOURCE_RELEASE SHA458e1aa1d70318f2b2091375d0e742e11d7db24ece873c42923d7efd2a9b19ca、四源TAB摘要462024f996690863d9d9e7fc32b18efbf05de926ced2f6575e66c7c1bc61c4b8。作者family-candidate-04/source-binding.json SHAf5aa1545dffd8611aa33e3a35ef0c7b32193b252f0d26ecf92adc5a30d67d3fe绑定191源/187固定Git，core map摘要f92e3feb32789c623f04bb5a0e0309a9a97ec263e2b42255919247d2d38b0b35、combined摘要f74885d7df192775d2ca33341e4692fcad5b5e4683a4a6ae2a4513d583f82419。主控fresh-root-review/output-observation-execution-pre-independent-reviewed.json SHA24d733899efb1d118b68e74196a153866021652e3018be640307c54823494305已核57artifact/191源/四执行脚本与实际185imports、全未目标函数/方法及旧读取/版本/资源/采样/结果规则；额外有限import和TaskMediaJobs ctor/execute/身份映射人工审核已完成，无产品或测试新执行。
 
 只最多三个实际代表，不运行作者normal节点；每例正常前置用合法自有1920×1080/2s真实MP4、原公开请求/真实actor/store/runtime/DeviceScheduler/registered runner，既有Resources准入替身和合成caps分层，不能冒充生产资源/完整PGID/GUI/全R9。第一例测量后外部原native CAS推进base，原final检查拒绝verified/success/current result，保留外部head及真实已到达的result阶段。第二例首实际采样命令完成后公开取消原请求，下一原check拒绝，记录临时清理与登记输入不变；不声称inflight全PGID杀进程。第三例在result已真实持久后native SQLite verified INSERT晚失败，记录实际SQL到达点、原事务/失败/恢复；只移除自己的trigger并显式同输入retry，cached结果不再次observe_output/采样，原claim/result/source/校验/释放/wake规则保持。不能用mock布尔/绕过资格/改冻结源/全库无痕要求替代真实反例；三者允许准确复用原fixture与source静态证据，但自身脚本/直接fixture/实际imports来源须执行前封存及执行后核SHA、真实factory/children绑定。首次失败保留，仅修复探针或单一回派后重验受影响例，不重封已过批次。
 
@@ -45,9 +67,9 @@
 
 语义REBASE_ACK须核四overlay、191闭包、合法正常前置与上述实际边界/阶段限制后直接执行，不等第二START；发现必须变产品仅交精确证据/一个建议，由主控给单一产品负责人，QA不能自行修复自己验收。
 
-### 当前原短源采样边界只读诊断
+### 已审核原短源采样边界只读诊断（冻结规约）
 
-`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-PREPARATION-20261015` 给当前Runtime仅test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-preparation/**新诊断证据写权。产品/作者及QA证据均只读；只读apps/api/app/task_observation.py的observe_output/_sample及必要的唯一原runner输出存在语义、原CreationTaskObservationRequest有限采样约束，作者RUN_HISTORY/REPORT与准确family-candidate-03的pytest.log/result.json/actual-python-binding.json/source-binding.json及其已绑定该源/直接测试AST。不新增媒体命令、测试collect/产品import、模型/GUI/标定/环境扫描；不遍历pytest-tmp或其它output。必要具体日志由准确记录路径定向读，不能猜原异常栈。
+下述`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-PREPARATION-20261015`已审核归还，Runtime test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-preparation/**全部冻结只读，不恢复新写权。产品/作者及QA证据均只读；原只读apps/api/app/task_observation.py的observe_output/_sample及必要的唯一原runner输出存在语义、原CreationTaskObservationRequest有限采样约束，作者RUN_HISTORY/REPORT与准确family-candidate-03的pytest.log/result.json/actual-python-binding.json/source-binding.json及其已绑定该源/直接测试AST。不新增媒体命令、测试collect/产品import、模型/GUI/标定/环境扫描；不遍历pytest-tmp或其它output。必要具体日志由准确记录路径定向读，不能猜原异常栈。
 
 目标只判断原duration内默认采样是否可能位于最后可解码frame PTS之后、rc0/no file到原文件读取的到达边界及真实证据限制，提交一个最小可实施缺陷/拟准确文件、当前SHA/原Git同源证明与最小正常/反例建议。不得用更长fixture、放宽资源门、静默跳样/伪造成功或猜decoder fallback定案；若修复需改变观察采样的既有行为先报具体规则差额，后续实施和独立接受另绑。本诊断与QA tuple互斥、不可将未验证推断算修复或全产品阻断，不停止QA独立工作。语义REBASE_ACK后直接只读诊断，READONLY_PREPARATION_RELEASE后冻结归还。
 
