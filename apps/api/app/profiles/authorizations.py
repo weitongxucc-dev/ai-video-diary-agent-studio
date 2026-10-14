@@ -21,6 +21,17 @@ class MediaAuthorizationStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
+    def _authorization_history_rows(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        authorization_id: str,
+    ) -> list[sqlite3.Row]:
+        return conn.execute(
+            "SELECT * FROM media_authorizations WHERE workspace_id=? AND id=? ORDER BY created_at,rowid",
+            (workspace_id, authorization_id),
+        ).fetchall()
+
     def save_authorization(self, authorization: Authorization) -> Authorization:
         _validate_authorization(authorization)
         with self._connect() as conn:

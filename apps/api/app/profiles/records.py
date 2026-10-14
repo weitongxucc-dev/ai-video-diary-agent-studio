@@ -27,6 +27,55 @@ class ProfileRecordStore:
         self._connect = connection_factory
         self._authorizations = authorizations
 
+    def _latest_profile_payload_row(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        profile_id: str,
+        *,
+        person: bool,
+    ) -> sqlite3.Row | None:
+        table = "person_profiles" if person else "versioned_voice_profiles"
+        return conn.execute(
+            f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (workspace_id, profile_id),
+        ).fetchone()
+
+    def _voice_version_row(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        voice_id: str,
+        version: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM versioned_voice_profiles WHERE workspace_id=? AND id=? AND version=?",
+            (workspace_id, voice_id, version),
+        ).fetchone()
+
+    def _latest_voice_version_row(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        voice_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT version FROM versioned_voice_profiles WHERE workspace_id=? AND id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (workspace_id, voice_id),
+        ).fetchone()
+
+    def _voice_version_existence_row(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        voice_id: str,
+        version: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT 1 FROM versioned_voice_profiles WHERE workspace_id=? AND id=? AND version=?",
+            (workspace_id, voice_id, version),
+        ).fetchone()
+
     def get_person_profile(
         self,
         workspace_id: str,

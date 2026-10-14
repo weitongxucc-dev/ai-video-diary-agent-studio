@@ -304,3 +304,101 @@ def test_original_owner_rule_and_legacy_embedded_authorization_retention(databas
         conn.execute(f"UPDATE {table} SET payload=? WHERE id=?", (json.dumps(payload), original.id))
         with pytest.raises(PermissionError, match="历史归属缺失"):
             store._require_profile_write_owner(conn, table, original, "member-a", False)
+
+
+def _raw_reader_store():
+    def forbidden():
+        raise AssertionError("raw reader must use only its supplied connection")
+
+    return ProfileRecordStore(forbidden, MediaAuthorizationStore(forbidden))
+
+
+@pytest.mark.parametrize("person", [True, False])
+def test_raw_latest_profile_preserves_payload_none_and_rowid_tie_order(database, person):
+    table = "person_profiles" if person else "versioned_voice_profiles"
+    original = ' { "原始": "v1", "authorization_version": "missing" }\n'
+    later = ' { "原始": "v2", "authorization_version": "missing" }\n'
+    with database() as conn:
+        for workspace, version, payload, created_at in [
+            (WORKSPACE, "v1", original, WHEN.isoformat()),
+            (WORKSPACE, "v2", later, WHEN.isoformat()),
+            ("workspace-b", "v3", "foreign raw bytes", (WHEN + timedelta(days=1)).isoformat()),
+        ]:
+            conn.execute(f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?)",
+                         (workspace, "profile", version, payload, created_at))
+    before = snapshot(database)
+    store = _raw_reader_store()
+    with database() as conn:
+        row = store._latest_profile_payload_row(conn, WORKSPACE, "profile", person=person)
+        assert isinstance(row, sqlite3.Row)
+        assert row.keys() == ["payload"]
+        assert row["payload"] == later
+        assert store._latest_profile_payload_row(conn, "workspace-b", "profile", person=person)["payload"] == "foreign raw bytes"
+        assert store._latest_profile_payload_row(conn, "missing-workspace", "profile", person=person) is None
+        assert store._latest_profile_payload_row(conn, WORKSPACE, "missing-profile", person=person) is None
+    assert snapshot(database) == before
+
+
+def test_raw_voice_fixed_current_and_existence_keep_full_rows_and_workspace_scope(database):
+    payload = ' { "legacy": "保持原字节" }\n'
+    with database() as conn:
+        for workspace, version, raw, created_at in [
+            (WORKSPACE, "v1", payload, WHEN.isoformat()),
+            (WORKSPACE, "v2", "not decoded JSON", WHEN.isoformat()),
+            ("workspace-b", "v3", "foreign payload", (WHEN + timedelta(days=1)).isoformat()),
+        ]:
+            conn.execute("INSERT INTO versioned_voice_profiles VALUES (?, ?, ?, ?, ?)",
+                         (workspace, "voice", version, raw, created_at))
+    before = snapshot(database)
+    store = _raw_reader_store()
+    with database() as conn:
+        fixed = store._voice_version_row(conn, WORKSPACE, "voice", "v1")
+        assert isinstance(fixed, sqlite3.Row)
+        assert dict(fixed) == dict(
+            workspace_id=WORKSPACE, id="voice", version="v1", payload=payload, created_at=WHEN.isoformat(),
+        )
+        current = store._latest_voice_version_row(conn, WORKSPACE, "voice")
+        assert current.keys() == ["version"]
+        assert current["version"] == "v2"
+        exists = store._voice_version_existence_row(conn, WORKSPACE, "voice", "v2")
+        assert isinstance(exists, sqlite3.Row)
+        assert tuple(exists) == (1,)
+        assert store._voice_version_row(conn, WORKSPACE, "voice", "v3") is None
+        assert store._voice_version_existence_row(conn, WORKSPACE, "voice", "v3") is None
+        assert store._latest_voice_version_row(conn, "workspace-b", "voice")["version"] == "v3"
+        assert store._voice_version_row(conn, "workspace-b", "voice", "v3")["payload"] == "foreign payload"
+        assert store._latest_voice_version_row(conn, WORKSPACE, "missing-voice") is None
+    assert snapshot(database) == before
+
+
+def test_four_raw_readers_see_caller_uncommitted_rows_observer_isolation_and_rollback(database):
+    store = _raw_reader_store()
+
+    def read_all(conn):
+        return [
+            store._latest_profile_payload_row(conn, WORKSPACE, "person", person=True),
+            store._voice_version_row(conn, WORKSPACE, "voice", "v1"),
+            store._latest_voice_version_row(conn, WORKSPACE, "voice"),
+            store._voice_version_existence_row(conn, WORKSPACE, "voice", "v1"),
+        ]
+
+    before = snapshot(database)
+    with database() as conn:
+        conn.execute("BEGIN")
+        conn.execute("INSERT INTO person_profiles VALUES (?, ?, ?, ?, ?)",
+                     (WORKSPACE, "person", "v1", "uncommitted person payload", WHEN.isoformat()))
+        conn.execute("INSERT INTO versioned_voice_profiles VALUES (?, ?, ?, ?, ?)",
+                     (WORKSPACE, "voice", "v1", "uncommitted voice payload", WHEN.isoformat()))
+        seen = read_all(conn)
+        assert all(isinstance(row, sqlite3.Row) for row in seen)
+        assert seen[0]["payload"] == "uncommitted person payload"
+        assert seen[1]["payload"] == "uncommitted voice payload"
+        assert seen[2]["version"] == "v1"
+        assert tuple(seen[3]) == (1,)
+        assert conn.in_transaction
+        with database() as observer:
+            assert read_all(observer) == [None, None, None, None]
+        assert conn.in_transaction
+        conn.rollback()
+        assert read_all(conn) == [None, None, None, None]
+    assert snapshot(database) == before

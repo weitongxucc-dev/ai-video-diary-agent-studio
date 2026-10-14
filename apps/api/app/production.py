@@ -1633,10 +1633,9 @@ class ProductionRepository:
         probe_media: bool = True,
     ) -> tuple[Path, float | None, float | None]:
         """Re-read the source, membership and range; registration never runs a model."""
-        table = "person_profiles" if isinstance(profile, PersonProfile) else "versioned_voice_profiles"
         with self._connect() as conn:
-            row = conn.execute(f"SELECT payload FROM {table} WHERE workspace_id=? AND id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                               (profile.workspace_id, profile.id)).fetchone()
+            row = self._profile_records._latest_profile_payload_row(
+                conn, profile.workspace_id, profile.id, person=isinstance(profile, PersonProfile))
             current = ((self._person_profile_from_payload if isinstance(profile, PersonProfile)
                         else self._versioned_voice_profile_from_payload)(conn, profile.workspace_id, json.loads(row["payload"]))
                        if row is not None else profile)
@@ -10590,14 +10589,11 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
             "target_owner_user_id": member_id, "target_visibility": "private"})
         originals["assets"].append(dict(row))
 
-    voice_row = conn.execute("SELECT * FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? AND version=?",
-                             (voice_id, voice_version)).fetchone()
-    latest = conn.execute("SELECT version FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
-                          (voice_id,)).fetchone()
+    voice_row = repository._profile_records._voice_version_row(conn, "local", voice_id, voice_version)
+    latest = repository._profile_records._latest_voice_version_row(conn, "local", voice_id)
     if voice_row is None or latest["version"] != voice_version:
         raise ValueError("local_adoption_selected_current_voice_missing")
-    if conn.execute("SELECT 1 FROM versioned_voice_profiles WHERE workspace_id='local' AND id=? AND version=?",
-                    (voice_id, new_voice_version)).fetchone():
+    if repository._profile_records._voice_version_existence_row(conn, "local", voice_id, new_voice_version):
         raise ValueError("local_adoption_voice_version_exists")
     data = json.loads(voice_row["payload"])
     if data.get("owner_user_id") is not None or data.get("reference") is not None:
@@ -10619,9 +10615,8 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
     duration = _profile_wav_duration(path)
     if _local_adoption_file_revision(path) != revision:
         raise ValueError("local_adoption_voice_file_changed")
-    authorization_rows = [dict(row) for row in conn.execute(
-        "SELECT * FROM media_authorizations WHERE workspace_id='local' AND id=? ORDER BY created_at,rowid",
-        (voice.authorization.id,))]
+    authorization_rows = [dict(row) for row in repository._media_authorizations._authorization_history_rows(
+        conn, "local", voice.authorization.id)]
     source_id = "voice_source_" + hashlib.sha256((operation_id + ":" + voice_id).encode()).hexdigest()[:32]
     if conn.execute("SELECT 1 FROM material_assets WHERE id=?", (source_id,)).fetchone():
         raise ValueError("local_adoption_voice_source_id_exists")

@@ -272,3 +272,54 @@ def test_shared_version_helpers_preserve_canonical_json_current_lists_and_immuta
                 conn, table=table, workspace_id=WORKSPACE, record_id="item", version="v1", payload=second,
             )
     assert snapshot(database) == before
+
+
+def test_raw_authorization_history_keeps_full_rows_strings_ascending_time_and_rowid(database):
+    def forbidden():
+        raise AssertionError("history reader must use its supplied connection")
+
+    store = MediaAuthorizationStore(forbidden)
+    early = WHEN.isoformat()
+    late = (WHEN + timedelta(seconds=1)).isoformat()
+    raw_values = [
+        (WORKSPACE, "grant", "later", "raw later JSON is not decoded", late),
+        (WORKSPACE, "grant", "z-first-tie", ' { "原始": "first" }\n', early),
+        (WORKSPACE, "grant", "a-second-tie", ' { "原始": "second" }\n', early),
+        ("workspace-b", "grant", "foreign", "foreign bytes", early),
+        (WORKSPACE, "other-grant", "other", "other ID bytes", early),
+    ]
+    with database() as conn:
+        conn.executemany("INSERT INTO media_authorizations VALUES (?, ?, ?, ?, ?)", raw_values)
+    before = snapshot(database)
+    with database() as conn:
+        rows = store._authorization_history_rows(conn, WORKSPACE, "grant")
+        assert isinstance(rows, list)
+        assert all(isinstance(row, sqlite3.Row) for row in rows)
+        assert [tuple(row) for row in rows] == [raw_values[1], raw_values[2], raw_values[0]]
+        assert [row["payload"] for row in rows] == [raw_values[1][3], raw_values[2][3], raw_values[0][3]]
+        assert rows[0].keys() == ["workspace_id", "id", "version", "payload", "created_at"]
+        assert [tuple(row) for row in store._authorization_history_rows(conn, "workspace-b", "grant")] == [raw_values[3]]
+        assert [tuple(row) for row in store._authorization_history_rows(conn, WORKSPACE, "other-grant")] == [raw_values[4]]
+        assert store._authorization_history_rows(conn, "missing-workspace", "grant") == []
+        assert store._authorization_history_rows(conn, WORKSPACE, "missing-grant") == []
+    assert snapshot(database) == before
+
+
+def test_raw_authorization_history_reads_caller_uncommitted_rows_without_commit_or_rollback(database):
+    def forbidden():
+        raise AssertionError("history reader must not request another connection")
+
+    store = MediaAuthorizationStore(forbidden)
+    raw = (WORKSPACE, "grant", "v1", ' { "原始": "未提交" }\n', WHEN.isoformat())
+    before = snapshot(database)
+    with database() as conn:
+        conn.execute("BEGIN")
+        conn.execute("INSERT INTO media_authorizations VALUES (?, ?, ?, ?, ?)", raw)
+        assert [tuple(row) for row in store._authorization_history_rows(conn, WORKSPACE, "grant")] == [raw]
+        assert conn.in_transaction
+        with database() as observer:
+            assert store._authorization_history_rows(observer, WORKSPACE, "grant") == []
+        assert conn.in_transaction
+        conn.rollback()
+        assert store._authorization_history_rows(conn, WORKSPACE, "grant") == []
+    assert snapshot(database) == before
