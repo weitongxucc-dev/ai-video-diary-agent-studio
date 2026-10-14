@@ -39,12 +39,12 @@ function mediaState(video: HTMLVideoElement, readyState: number, seeking = false
   }
 }
 function workspace(selected = clip, output: string | null = null, version = "timeline-1", ratio = "9:16"): CreationTaskWorkspace {
-  return { task: { id: "task-1", current_timeline_version_id: version },
-    montage: { clips: [selected], duration_seconds: 3, aspect_ratio: ratio, output_url: output, low_confidence_clip_count: 0 },
+  return { task: { id: "task-1", current_timeline_version_id: version, narration_cache_key: null }, plan: { aspect_ratio: ratio },
+    montage: { clips: [selected], cues: [], duration_seconds: 3, aspect_ratio: ratio, output_url: output, low_confidence_clip_count: 0 },
     subtitle_tracks: [] } as unknown as CreationTaskWorkspace;
 }
 function stage(data = workspace(), ref = createRef<HTMLVideoElement>()) {
-  return <VideoEditingStage workspace={data} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} />;
+  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} />;
 }
 
 it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
@@ -269,7 +269,7 @@ describe("complete source in clip details and replacement", () => {
     const data = workspace(selected, null, "timeline-1", "9:16");
     data.person_renders = [];
     data.person_render_capability = { available: false } as CreationTaskWorkspace["person_render_capability"];
-    return <VideoClipInspector clip={selected} index={0} count={1} workspace={data} busy={false}
+    return <VideoClipInspector clip={selected} index={0} count={1} taskId={data.task.id} versionId={data.task.current_timeline_version_id} subtitleTracks={data.subtitle_tracks} personRender={data.person_renders.find(item => item.id === selected.person_render_id)} personRenderCapability={data.person_render_capability} portraitAvailable={data.portrait_available} graphicOverlays={data.montage!.graphic_overlays} durationSeconds={data.montage!.duration_seconds} allClipIds={data.montage!.clips.map(item => item.id)} hasOutput={Boolean(data.montage!.output_url)} busy={false}
       onPreview={onPreview} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing onPerson={vi.fn()} />;
   }
   function dimensions(video: HTMLVideoElement, width: number, height: number) {

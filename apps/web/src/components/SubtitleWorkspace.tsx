@@ -3,7 +3,7 @@ import NextImage from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Languages, Play, Save, Undo2, Redo2, Settings2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
-import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskMontage, CreationTaskCoverAsset, CreationTaskCapability } from "@/lib/types";
 import { AppSelect, AppSelectOption } from "./AppSelect";
 import { Tabs } from "@base-ui/react/tabs";
 import { Popover } from "@base-ui/react/popover";
@@ -181,7 +181,7 @@ export function SubtitleWorkspace({
   onRedo,
   selectedCover,
   selectedCueId,
-  workspace,
+  taskId, versionId, canUndo, canRedo, cover, montage, planAspectRatio, subtitleTracks: tracks, translationCapability, frameCapability,
 }: {
   activeTrack: CreationTaskSubtitleTrack;
   busy: boolean;
@@ -196,9 +196,11 @@ export function SubtitleWorkspace({
   onRedo: () => void;
   selectedCover: boolean;
   selectedCueId: string | null;
-  workspace: WorkspaceState;
+  taskId: string; versionId: string | null; canUndo: boolean; canRedo: boolean | undefined;
+  cover: CreationTaskCoverAsset | null; montage: Pick<CreationTaskMontage, "duration_seconds" | "output_url" | "aspect_ratio"> | null;
+  planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
+  translationCapability: CreationTaskCapability; frameCapability: CreationTaskCapability;
 }) {
-  const { cover_asset: cover, montage, subtitle_tracks: tracks } = workspace;
   const sourceTrack = tracks.find((track) => track.language === "zh-CN") ?? activeTrack;
   const translationTrack = tracks.find((track) => track.language === "en-US") ?? null;
   const [frameTime, setFrameTime] = useState(cover?.frame_time_seconds ?? 0);
@@ -218,8 +220,6 @@ export function SubtitleWorkspace({
   const selectedSavable = saveSubtitleMode === "zh" ? chineseSavable : saveSubtitleMode === "en" ? englishSavable : chineseSavable && englishSavable;
   const displayMode = chineseVisible ? englishVisible ? "zh-en" : "zh" : englishVisible ? "en" : "none";
   const duration = montage?.duration_seconds ?? 0;
-  const translationCapability = workspace.subtitle_translation_capability;
-  const frameCapability = workspace.cover_frame_capability;
   const currentCueIndex = Math.max(0, activeTrack.cues.findIndex((cue) => cue.id === selectedCueId));
   const currentCue = activeTrack.cues[currentCueIndex];
   const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0) || titlePosition !== (cover?.layout.title_position ?? "bottom");
@@ -261,7 +261,7 @@ export function SubtitleWorkspace({
       <Tabs.Root value={view} onValueChange={value => setView(value as typeof view)} className={styles.tabRoot}>
         <div className={styles.toolbar}>
           <Tabs.List className={styles.tabs} aria-label="字幕与封面视图"><Tabs.Tab value="subtitle">字幕</Tabs.Tab><Tabs.Tab value="style">样式</Tabs.Tab><Tabs.Tab value="cover">封面</Tabs.Tab></Tabs.List>
-          <div className={styles.history} role="group" aria-label="字幕历史编辑"><button className={styles.iconButton} aria-label="撤销" title="撤销" disabled={busy || !workspace.task.can_undo} onClick={onUndo} type="button"><Undo2 size={16}/></button><button className={styles.iconButton} aria-label="重做" title="重做" disabled={busy || !workspace.task.can_redo} onClick={onRedo} type="button"><Redo2 size={16}/></button></div>
+          <div className={styles.history} role="group" aria-label="字幕历史编辑"><button className={styles.iconButton} aria-label="撤销" title="撤销" disabled={busy || !canUndo} onClick={onUndo} type="button"><Undo2 size={16}/></button><button className={styles.iconButton} aria-label="重做" title="重做" disabled={busy || !canRedo} onClick={onRedo} type="button"><Redo2 size={16}/></button></div>
           {view !== "cover" ? <div className={styles.exportActions}>
             <Popover.Root><Popover.Trigger className={styles.iconButton} aria-label="字幕导出设置" title="字幕导出设置" disabled={busy}><Settings2 size={16}/></Popover.Trigger><Popover.Portal><Popover.Positioner className={styles.popoverPositioner} side="bottom" align="end" sideOffset={6}><Popover.Popup className={styles.popover} aria-label="字幕导出设置"><label className={styles.exportField}>保存字幕语言<AppSelect aria-label="保存字幕语言" disabled={busy} value={saveSubtitleMode} onValueChange={newValue => setSaveSubtitleMode(newValue as "zh" | "en" | "zh-en")}><AppSelectOption value="zh">中文 SRT</AppSelectOption><AppSelectOption value="en">英文 SRT</AppSelectOption><AppSelectOption value="zh-en">中英双语 SRT（一个文件，中文在前）</AppSelectOption></AppSelect></label>{!selectedSavable ? <p className={styles.capabilityLine}>所选语言暂无有效字幕轨，请先检查或生成字幕。</p> : null}</Popover.Popup></Popover.Positioner></Popover.Portal></Popover.Root>
             <button className={styles.secondaryButton} disabled={busy || !selectedSavable} onClick={() => onSaveSubtitle(saveSubtitleMode)} type="button"><Save size={15}/>保存字幕</button>
@@ -270,7 +270,7 @@ export function SubtitleWorkspace({
         <div className={styles.columns}>
           <section className={styles.mediaPanel}>
             <header><span><Play size={15}/>{montage?.output_url ? "当前成片" : "草稿字幕"}</span><small>{duration.toFixed(1)} 秒</small></header>
-            {montage?.output_url ? <video key={workspace.task.current_timeline_version_id} aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} style={{aspectRatio:(montage.aspect_ratio ?? workspace.plan.aspect_ratio).replace(":","/")}} src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(workspace.task.current_timeline_version_id ?? "")}`)}/> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
+            {montage?.output_url ? <video key={versionId} aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} style={{aspectRatio:(montage.aspect_ratio ?? planAspectRatio).replace(":","/")}} src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)}/> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
           </section>
           <div className={styles.editor}>
             {view === "subtitle" ? <div className={styles.trackChoice}><span>编辑轨道</span><AppSelect aria-label="当前编辑字幕轨道" disabled={busy} value={activeTrack.id} onValueChange={onSelectTrack}>{tracks.map(track=><AppSelectOption key={track.id} value={track.id}>{track.language === "zh-CN" ? "中文轨" : "英文轨"} · {track.cues.length} 条</AppSelectOption>)}</AppSelect></div> : null}
@@ -283,13 +283,13 @@ export function SubtitleWorkspace({
               </div>
               {!translationCapability.available && !translationTrack ? <details className={styles.propertySection}><summary>翻译暂不可用</summary><p>{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p></details> : null}
               <label className={styles.cueSelection}><span>选择字幕</span><AppSelect aria-label="选择字幕" disabled={busy} onValueChange={newValue => { const cue=activeTrack.cues.find(item=>item.id===newValue);if(cue){onSelectCue(cue.id);if(videoRef.current)videoRef.current.currentTime=cue.start_seconds;} }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue,index)=><AppSelectOption key={cue.id} value={cue.id}>{index+1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</AppSelectOption>)}</AppSelect></label>
-              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor key={`${workspace.task.id}:${workspace.task.current_timeline_version_id}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
+              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor key={`${taskId}:${versionId}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
               <details className={styles.propertySection}><summary>全文查找替换</summary><label className={styles.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event=>{setFindText(event.target.value);onDraftChange();}}/></label><label className={styles.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event=>{setReplaceText(event.target.value);onDraftChange();}}/></label><button className={styles.secondaryButton} type="button" disabled={busy || !findText || findText===replaceText} onClick={()=>onPreviewExact({operation_type:"ReplaceSubtitleText",track_id:activeTrack.id,find_text:findText,replacement_text:replaceText})}>应用全文替换</button></details>
             </Tabs.Panel>
-            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor key={`${workspace.task.id}:${workspace.task.current_timeline_version_id}:${sourceTrack.id}`} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
+            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor key={`${taskId}:${versionId}:${sourceTrack.id}`} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
             <Tabs.Panel value="cover" keepMounted className={styles.panel}>
               <section className={selectedCover ? styles.selectedCover : undefined} onFocus={onSelectCover} aria-label="封面编辑">
-                {cover?.status === "valid" && cover.artifact_ref ? <NextImage className={styles.coverImage} alt={cover.title} height={1280} src={apiUrl(`/api/creation-tasks/${workspace.task.id}/covers/${cover.id}/image`)} unoptimized width={720}/> : null}
+                {cover?.status === "valid" && cover.artifact_ref ? <NextImage className={styles.coverImage} alt={cover.title} height={1280} src={apiUrl(`/api/creation-tasks/${taskId}/covers/${cover.id}/image`)} unoptimized width={720}/> : null}
                 <div className={styles.coverControls}>
                   <label className={styles.field}><span>成片画面时间（秒）</span><input aria-label="封面画面时间" disabled={busy} max={duration} min="0" onChange={event=>{onDraftChange();seekFrame(Number(event.target.value));}} step="0.1" type="number" value={frameTime}/></label>
                   <label className={styles.field}><span>封面标题</span><input aria-label="封面标题" disabled={busy} onChange={event=>{onDraftChange();setCoverTitle(event.target.value);}} value={coverTitle}/></label>

@@ -51,7 +51,7 @@ it("opens the full editor with the same crop draft", () => {
   const initialDraft = { ...createVideoClipDraft(clip), start: 1.5, mode:"fit" as const };
   const onDraftStateChange = vi.fn();
   const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
-  render(<VideoClipInspector clip={clip} index={0} count={1} workspace={workspace} busy={false} initialDraft={initialDraft} onDraftStateChange={onDraftStateChange} onPreview={vi.fn()} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing={false} onPerson={vi.fn()} />);
+  render(<VideoClipInspector clip={clip} index={0} count={1} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} subtitleTracks={workspace.subtitle_tracks} personRender={workspace.person_renders.find(item => item.id === clip.person_render_id)} personRenderCapability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} graphicOverlays={workspace.montage!.graphic_overlays} durationSeconds={workspace.montage!.duration_seconds} allClipIds={workspace.montage!.clips.map(item => item.id)} hasOutput={Boolean(workspace.montage!.output_url)} busy={false} initialDraft={initialDraft} onDraftStateChange={onDraftStateChange} onPreview={vi.fn()} onDraftChange={vi.fn()} onReplace={vi.fn()} candidates={[]} replacing={false} onPerson={vi.fn()} />);
   expect(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" })).toHaveValue(1.5);
   expect(screen.getByRole("combobox", { name:"画面显示方式" })).toHaveAttribute("data-selected-value", "fit");
   fireEvent.change(screen.getByRole("spinbutton", { name:"镜头 1 裁剪起点" }), { target:{ value:"2" } });
@@ -61,7 +61,7 @@ it("opens the full editor with the same crop draft", () => {
 it("submits split and copy directly while keeping deletion explicitly confirmable", () => {
   const onPreview = vi.fn();
   const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip, { ...clip, id:"clip-2", timeline_start_seconds:3, timeline_end_seconds:6 }], duration_seconds:6, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
-  render(<VideoClipInspector clip={clip} index={0} count={2} workspace={workspace} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
+  render(<VideoClipInspector clip={clip} index={0} count={2} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} subtitleTracks={workspace.subtitle_tracks} personRender={workspace.person_renders.find(item => item.id === clip.person_render_id)} personRenderCapability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} graphicOverlays={workspace.montage!.graphic_overlays} durationSeconds={workspace.montage!.duration_seconds} allClipIds={workspace.montage!.clips.map(item => item.id)} hasOutput={Boolean(workspace.montage!.output_url)} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
   fireEvent.click(screen.getByText("更多剪辑"));
   fireEvent.click(screen.getByRole("button", { name:"复制镜头" }));
   expect(onPreview).toHaveBeenLastCalledWith({ operation_type:"DuplicateClip", clip_id:"clip-1" });
@@ -108,7 +108,7 @@ it("disables every fine-edit control for a locked clip", () => {
 it("submits ordinary inspector fields on valid completion without preview buttons", async () => {
   const onPreview = vi.fn();
   const workspace = { task:{ id:"task-1" }, montage:{ clips:[clip], duration_seconds:3, graphic_overlays:[] }, subtitle_tracks:[], person_renders:[], person_render_capability:{ available:false, message:"", repair_action:null } } as unknown as CreationTaskWorkspace;
-  render(<VideoClipInspector clip={clip} index={1} count={2} workspace={workspace} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
+  render(<VideoClipInspector clip={clip} index={1} count={2} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} subtitleTracks={workspace.subtitle_tracks} personRender={workspace.person_renders.find(item => item.id === clip.person_render_id)} personRenderCapability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} graphicOverlays={workspace.montage!.graphic_overlays} durationSeconds={workspace.montage!.duration_seconds} allClipIds={workspace.montage!.clips.map(item => item.id)} hasOutput={Boolean(workspace.montage!.output_url)} busy={false} onPreview={onPreview} onDraftChange={() => {}} onReplace={() => {}} candidates={[]} replacing={false} onPerson={() => {}} />);
   const trim = screen.getByRole("spinbutton", { name:"镜头 2 裁剪起点" });
   fireEvent.change(trim, { target:{ value:"1.5" } });
   fireEvent.blur(trim);

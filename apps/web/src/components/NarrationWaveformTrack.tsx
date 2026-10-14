@@ -2,16 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { apiUrl } from "@/lib/api";
-import type { CreationTaskWorkspace } from "@/lib/types";
+import type { CreationTaskMontage } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 
 type Waveform = { source_id: string; duration_seconds: number; seconds_per_peak: number; peaks: number[] };
 
-export function NarrationWaveformTrack({ workspace, selectedId, onSelect }: {
-  workspace: CreationTaskWorkspace; selectedId: string | null; onSelect: (id: string) => void;
+export function NarrationWaveformTrack({ taskId, narrationCacheKey: cacheKey, clips, cues, selectedId, onSelect }: {
+  taskId: string; narrationCacheKey: string | null; clips: CreationTaskMontage["clips"]; cues: CreationTaskMontage["cues"];
+  selectedId: string | null; onSelect: (id: string) => void;
 }) {
-  const taskId = workspace.task.id;
-  const cacheKey = workspace.task.narration_cache_key;
   const [result, setResult] = useState<{ key: string; waveform?: Waveform; error?: string } | null>(null);
   const [retry, setRetry] = useState(0);
   const key = `${taskId}:${cacheKey}`;
@@ -30,11 +29,10 @@ export function NarrationWaveformTrack({ workspace, selectedId, onSelect }: {
   if (!cacheKey) return null;
   const current = result?.key === key ? result : null;
   const waveform = current?.waveform;
-  const montage = workspace.montage!;
   return <div className={ui.track} aria-label="真实配音波形">
     <span>配音</span>
-    <div>{waveform ? montage.clips.map(clip => {
-      const cue = montage.cues.find(item => item.id === clip.cue_id);
+    <div>{waveform ? clips.map(clip => {
+      const cue = cues.find(item => item.id === clip.cue_id);
       const start = clip.timeline_start_seconds;
       const duration = clip.timeline_end_seconds - start;
       const first = Math.floor(start / waveform.seconds_per_peak);

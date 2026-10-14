@@ -3,7 +3,7 @@
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTaskAudioWaveform, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
-import type { AudioEditInput, CreationTaskWorkspace, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
+import type { AudioEditInput, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 
 function AudioWave({ taskId, versionId, clip }: { taskId: string; versionId: string | null; clip: TimelineAudioClip }) {
@@ -37,12 +37,11 @@ function AudioWave({ taskId, versionId, clip }: { taskId: string; versionId: str
   return <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
 }
 
-export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false, subtitleTrack }: {
-  workspace: CreationTaskWorkspace; selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
+export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, durationSeconds: duration, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false, subtitleTrack }: {
+  taskId: string; versionId: string | null; audioTimeline: AudioTimeline; durationSeconds: number;
+  selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
   onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
-  const graph = workspace.montage!.audio_timeline!;
-  const duration = workspace.montage!.duration_seconds;
   const [zoom, setZoom] = useState(1);
   const [role, setRole] = useState("audio-music");
   const [solo, setSolo] = useState<string[]>([]);
@@ -52,7 +51,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const file = useRef<HTMLInputElement>(null);
-  const listenContext = JSON.stringify([workspace.task.id, workspace.task.current_timeline_version_id, selectedId, start, end, solo]);
+  const listenContext = JSON.stringify([taskId, versionId, selectedId, start, end, solo]);
   const currentListenContext = useRef({ value: listenContext, revision: 0 });
   if (currentListenContext.current.value !== listenContext) currentListenContext.current = { value: listenContext, revision: currentListenContext.current.revision + 1 };
   const listenController = useRef<AbortController | null>(null);
@@ -67,13 +66,13 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
     listenController.current?.abort(); listenController.current = controller;
     setWorking(true); setError(null); setJob(null);
     try {
-      const response = await importCreationTaskAudio(workspace.task.id, selected);
-      const source = await resolveCreationTaskMediaResponse(workspace.task.id, response, "audio_source", {
-        signal: controller.signal, baseVersionId: workspace.task.current_timeline_version_id,
+      const response = await importCreationTaskAudio(taskId, selected);
+      const source = await resolveCreationTaskMediaResponse(taskId, response, "audio_source", {
+        signal: controller.signal, baseVersionId: versionId,
         onUpdate: value => { if (!controller.signal.aborted && currentListenContext.current === context) setJob({ context: listenContext, value }); },
       });
       if (controller.signal.aborted || currentListenContext.current !== context) return;
-      onPreview({ base_version_id: workspace.task.current_timeline_version_id, action: "add", target_id: role,
+      onPreview({ base_version_id: versionId, action: "add", target_id: role,
         values: { source_ref: source.source_ref, name: source.name, source_start_ms: 0,
           source_end_ms: Math.min(source.duration_ms, Math.round(duration*1000)), timeline_start_ms: 0 } });
     } catch (cause) { if (!controller.signal.aborted && currentListenContext.current === context && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(cause instanceof Error ? cause.message : "音频导入失败"); }
@@ -85,10 +84,10 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
     listenController.current?.abort(); listenController.current = controller;
     setWorking(true); setError(null); setAudio(null); setJob(null);
     try {
-      const response = await listenCreationTaskAudio(workspace.task.id, { base_version_id: workspace.task.current_timeline_version_id,
+      const response = await listenCreationTaskAudio(taskId, { base_version_id: versionId,
         start_seconds: start, end_seconds: end, solo_track_ids: solo });
-      const result = await resolveCreationTaskMediaResponse(workspace.task.id, response, "audio_listen", {
-        signal: controller.signal, baseVersionId: workspace.task.current_timeline_version_id,
+      const result = await resolveCreationTaskMediaResponse(taskId, response, "audio_listen", {
+        signal: controller.signal, baseVersionId: versionId,
         onUpdate: value => { if (!controller.signal.aborted && currentListenContext.current === context) setJob({ context: listenContext, value }); },
       });
       if (!controller.signal.aborted && currentListenContext.current === context) setAudio({url:result.audio_url,start,end,soloKey:solo.join(","),context:listenContext});
@@ -100,7 +99,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
     if (!job || job.context !== listenContext) return;
     const context = currentListenContext.current;
     try {
-      const result = await cancelCreationTaskMediaJob(workspace.task.id, job.value.job_id);
+      const result = await cancelCreationTaskMediaJob(taskId, job.value.job_id);
       if (currentListenContext.current !== context) return;
       setJob({ context: listenContext, value: result });
       if (result.status === "cancelled") { listenController.current?.abort(); setWorking(false); }
@@ -130,7 +129,7 @@ export function AudioTimelineTracks({ workspace, selectedId, onSelect, onPreview
         onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();
           const fraction=event.detail && bounds.width ? Math.max(0,Math.min(1,(event.clientX-bounds.left)/bounds.width)) : 0;
           onSelect(clip.id,(clip.timeline_start_ms+fraction*((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1)))/1000); setStart(clip.timeline_start_ms/1000); setEnd(Math.min(duration,(clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000)); setAudio(null); }}>
-        <AudioWave taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} clip={clip} /><span>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
+        <AudioWave taskId={taskId} versionId={versionId} clip={clip} /><span>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
       </button>)}<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
     </div>)}</div></div>
     {subtitleTrack}

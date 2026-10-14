@@ -15,7 +15,7 @@ it("selects an actual audio range and keeps solo in listening requests",async()=
   vi.mocked(listenCreationTaskAudio).mockResolvedValue({audio_url:"/preview.wav"});
   const workspace={task:{id:"task",current_timeline_version_id:"version"},montage:{duration_seconds:10,audio_timeline:{format_version:1,tracks:[track]}}} as unknown as CreationTaskWorkspace;
   const select=vi.fn(),preview=vi.fn(),position=vi.fn();
-  render(<AudioTimelineTracks workspace={workspace} selectedId={null} onSelect={select} onListenPosition={position} onPreview={preview} busy={false} />);
+  render(<AudioTimelineTracks taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={null} onSelect={select} onListenPosition={position} onPreview={preview} busy={false} />);
   fireEvent.click(screen.getByRole("button",{name:"选择音频：背景音乐"}));
   expect(select).toHaveBeenCalledWith("clip",4);
   fireEvent.click(screen.getByRole("button",{name:"独听音乐"}));
@@ -41,7 +41,7 @@ it("does not present a late mix after the selected audio changes", async () => {
   let finish!: (value: { audio_url: string }) => void;
   vi.mocked(listenCreationTaskAudio).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   const workspace = { task: { id: "task", current_timeline_version_id: "version" }, montage: { duration_seconds: 10, audio_timeline: { format_version: 1, tracks: [track] } } } as unknown as CreationTaskWorkspace;
-  const props = { workspace, onSelect: vi.fn(), onPreview: vi.fn(), busy: false };
+  const props = { taskId: workspace.task.id, versionId: workspace.task.current_timeline_version_id, audioTimeline: workspace.montage!.audio_timeline!, durationSeconds: workspace.montage!.duration_seconds, onSelect: vi.fn(), onPreview: vi.fn(), busy: false };
   const { rerender } = render(<AudioTimelineTracks {...props} selectedId="clip" />);
   fireEvent.click(screen.getByRole("button", { name: "试听混音" }));
   rerender(<AudioTimelineTracks {...props} selectedId="music" />);
@@ -54,10 +54,10 @@ it("clears the old waveform while a changed source is being read", async () => {
   vi.stubGlobal("fetch", fetchWave);
   const workspace = { task: { id: "task", current_timeline_version_id: "version" }, montage: { duration_seconds: 10, audio_timeline: { format_version: 1, tracks: [track] } } } as unknown as CreationTaskWorkspace;
   const props = { onSelect: vi.fn(), onPreview: vi.fn(), busy: false, selectedId: "clip" };
-  const { rerender } = render(<AudioTimelineTracks {...props} workspace={workspace} />);
+  const { rerender } = render(<AudioTimelineTracks {...props} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} />);
   await waitFor(() => expect(screen.getByRole("button", { name: "选择音频：背景音乐" }).querySelector("svg")).not.toBeNull());
   const changed = { ...workspace, montage: { ...workspace.montage!, audio_timeline: { format_version: 1 as const, tracks: [{ ...track, clips: [{ ...track.clips[0], source_ref: "artifacts/new-music" }] }] } } };
-  rerender(<AudioTimelineTracks {...props} workspace={changed} />);
+  rerender(<AudioTimelineTracks {...props} taskId={changed.task.id} versionId={changed.task.current_timeline_version_id} audioTimeline={changed.montage.audio_timeline} durationSeconds={changed.montage.duration_seconds} />);
   expect(screen.getByText("读取波形…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "选择音频：背景音乐" }).querySelector("svg")).toBeNull();
 });
@@ -67,7 +67,7 @@ it("keeps one audio controller when shared tracks place the subtitle before impo
   vi.mocked(listenCreationTaskAudio).mockResolvedValue({ audio_url: "/shared-preview.wav" });
   const workspace = { task: { id: "task", current_timeline_version_id: "version" }, montage: { duration_seconds: 10,
     audio_timeline: { format_version: 1, tracks: [track] } } } as unknown as CreationTaskWorkspace;
-  render(<AudioTimelineTracks workspace={workspace} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}
+  render(<AudioTimelineTracks taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}
     sharedTimeScale subtitleTrack={<button type="button" aria-label="定位测试字幕">测试字幕</button>} />);
 
   const audioClip = screen.getByRole("button", { name: "选择音频：背景音乐" });
