@@ -250,12 +250,20 @@ def test_runtime_settings_endpoint_persists_and_returns_bgm_path(tmp_path, monke
     # Bind the actual IO owner to the synthetic file for both read and write.
     monkeypatch.setattr(main_module, "runtime_env_path", env_path)
     monkeypatch.setattr(env_files, "_resolve_dotenv_path", lambda: env_path)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "combined-save-test")
+    activations = []
+    activate = main_module._activate_runtime_reload
+    def observed_activation(prepared, drivers):
+        activations.append(prepared)
+        return activate(prepared, drivers)
+    monkeypatch.setattr(main_module, "_activate_runtime_reload", observed_activation)
 
     client = TestClient(main_module.app, client=("127.0.0.1", 50000))
 
     response = client.post(
         "/api/settings/runtime",
-        json={"draft_background_music_path": "/Users/test/bgm.mp3"},
+        json={"draft_background_music_path": "/Users/test/bgm.mp3",
+            "llm_provider": "deepseek", "llm_model": "synthetic-combined-model", "llm_api_key": "synthetic-combined-key"},
     )
     assert response.status_code == 200
 
@@ -275,6 +283,55 @@ def test_runtime_settings_endpoint_persists_and_returns_bgm_path(tmp_path, monke
     assert env_path.exists()
     env_content = env_path.read_text()
     assert "DRAFT_BACKGROUND_MUSIC_PATH=/Users/test/bgm.mp3" in env_content
+    assert "synthetic-combined-key" not in env_content
+    assert len(activations) == 1
+    actual = main_module._workspace_settings_for("combined-save-test")
+    assert actual.effective_llm_model == "synthetic-combined-model"
+    assert actual.effective_llm_api_key == "synthetic-combined-key"
+
+
+def test_runtime_settings_HTTP_reports_incomplete_secret_restoration(tmp_path, monkeypatch):
+    import subprocess
+    from pathlib import Path
+    from app import workspace_settings
+    workspace_id = "incomplete-save-test"
+    env_path = tmp_path / "device.env"
+    monkeypatch.setattr(main_module, "runtime_env_path", env_path)
+    monkeypatch.setattr(env_files, "_resolve_dotenv_path", lambda: env_path)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda request: workspace_id)
+    monkeypatch.setattr(main_module, "_activate_runtime_reload", lambda *args: pytest.fail("failed save cannot activate"))
+    workspace_settings.save_workspace_secret(workspace_id, "llm_api_key", "synthetic-before")
+    security = workspace_settings._run_security
+    def refuse_restore(arguments):
+        if arguments[0] == "add-generic-password" and arguments[arguments.index("-w") + 1] == "synthetic-before":
+            return subprocess.CompletedProcess(arguments, 36, "", "synthetic restore denied")
+        return security(arguments)
+    monkeypatch.setattr(workspace_settings, "_run_security", refuse_restore)
+    replace = env_files.os.replace
+    def refuse_device(source, target):
+        if Path(target) == env_path:
+            raise PermissionError("synthetic device target denied")
+        return replace(source, target)
+    monkeypatch.setattr(env_files.os, "replace", refuse_device)
+    response = TestClient(main_module.app, client=("127.0.0.1", 50000)).post("/api/settings/runtime", json={
+        "llm_api_key": "synthetic-after", "llm_model": "synthetic-new-model", "draft_background_music_path": "/tmp/synthetic-bgm.wav"})
+    assert response.status_code == 503 and "恢复未完成" in response.text
+    assert "synthetic-before" not in response.text and "synthetic-after" not in response.text
+    assert workspace_settings.read_workspace_secret_fresh(workspace_id, "llm_api_key") == "synthetic-after"
+    assert not env_path.exists()
+
+
+def test_runtime_settings_activation_failure_reports_persistence_completed(tmp_path, monkeypatch):
+    env_path = tmp_path / "device.env"
+    monkeypatch.setattr(main_module, "runtime_env_path", env_path)
+    monkeypatch.setattr(env_files, "_resolve_dotenv_path", lambda: env_path)
+    def activation_refusal(*args):
+        raise RuntimeError("synthetic activation-call refusal")
+    monkeypatch.setattr(main_module, "_activate_runtime_reload", activation_refusal)
+    response = TestClient(main_module.app, client=("127.0.0.1", 50000)).post("/api/settings/runtime",
+        json={"draft_background_music_path": "/tmp/synthetic-saved-bgm.wav"})
+    assert response.status_code == 503 and "配置已保存，运行重载失败" in response.text
+    assert "DRAFT_BACKGROUND_MUSIC_PATH=/tmp/synthetic-saved-bgm.wav" in env_path.read_text()
 
 
 def test_runtime_settings_bgm_path_rejected_for_non_local_client(tmp_path, monkeypatch):

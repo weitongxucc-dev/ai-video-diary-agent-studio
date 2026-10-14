@@ -3,14 +3,25 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
-from app.env_files import write_dotenv_values
+from app.env_files import (
+    write_dotenv_values,
+    prepare_dotenv_values,
+    commit_prepared_dotenv_values,
+    restore_prepared_dotenv_values,
+    discard_prepared_dotenv_values,
+)
 from app.workspace_settings import (
     WORKSPACE_SECRET_FIELDS,
     delete_workspace_secret,
     load_workspace_config,
-    read_workspace_secret,
-    save_workspace_config,
-    save_workspace_secret,
+    read_workspace_secret_fresh,
+    prepare_workspace_config,
+    commit_prepared_workspace_config,
+    restore_prepared_workspace_config,
+    discard_prepared_workspace_config,
+    prepare_workspace_secret_changes,
+    commit_prepared_workspace_secrets,
+    restore_prepared_workspace_secrets,
 )
 
 LOCAL_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
@@ -85,11 +96,9 @@ def apply_runtime_settings_update(
     payload: Mapping[str, object],
     reload_dependencies: Callable[[], None],
 ) -> bool:
-    """旧的全局 dotenv 写入路径，main.py 目前仍调用；本单新接线走工作区函数。"""
-    updates = runtime_settings_updates(payload)
-    if not updates:
+    """Save the device-only public path through the same owned persistence rules."""
+    if not _save_runtime_settings(None, Path(env_path), payload):
         return False
-    write_dotenv_values(Path(env_path), updates)
     reload_dependencies()
     return True
 
@@ -108,7 +117,7 @@ def _secret_fields_for_provider(workspace_id: str) -> list[str]:
     snapshot = load_workspace_config(workspace_id)
     provider = (snapshot.get("llm_provider") or "").strip().lower()
     owner = (snapshot.get("llm_api_key_provider") or "").strip().lower()
-    if not provider and read_workspace_secret(workspace_id, "deepseek_api_key"):
+    if not provider and read_workspace_secret_fresh(workspace_id, "deepseek_api_key"):
         provider = "deepseek"
     if provider == "deepseek":
         fields = ["deepseek_api_key"]
@@ -161,22 +170,103 @@ def apply_workspace_runtime_settings_update(
     删除走同一个保存路由的显式动作字段 `llm_key_action=delete`。没传动作字段
     时，密钥输入框留空表示「不改」，不能因为空输入把已存的密钥删掉。
     """
-    config_updates, secret_updates = split_runtime_settings_updates(payload)
-    deleting = str(payload.get("llm_key_action", "")) == LLM_KEY_DELETE_ACTION
-    if deleting:
-        secret_updates.clear()
-        # 删完当前供应商真正在用的那把键，以及同供应商的旧备用键；旧键不得复活。
-        for field in _secret_fields_for_provider(workspace_id):
-            if delete_workspace_secret(workspace_id, field):
-                config_updates["llm_api_key_provider"] = ""
-    for field, value in secret_updates.items():
-        save_workspace_secret(workspace_id, field, value)
-    if config_updates:
-        save_workspace_config(workspace_id, config_updates)
-    if not config_updates and not secret_updates and not deleting:
+    if not _save_runtime_settings(workspace_id, None, payload):
         return False
     reload_dependencies()
     return True
+
+
+class RuntimeSettingsSaveError(RuntimeError):
+    """A rejected persistence operation whose recovery could not be verified."""
+    def __init__(self, original: Exception, failures: list[tuple[str, Exception]]) -> None:
+        self.original = original
+        self.failures = tuple(failures)
+        super().__init__("配置保存失败，恢复未完成；请检查设置。涉及：" + "、".join(name for name, _ in failures))
+
+
+def device_runtime_settings_values(payload: Mapping[str, object]) -> dict[str, object]:
+    return {name: value for name, value in payload.items()
+        if name not in WORKSPACE_TEXT_FIELDS and name not in WORKSPACE_SECRET_FIELDS and name != "llm_key_action"}
+
+
+def apply_runtime_settings_save(workspace_id: str, env_path: str | Path, payload: Mapping[str, object]) -> bool:
+    """Coordinate this local combined save; runtime activation stays with main."""
+    return _save_runtime_settings(workspace_id, Path(env_path), payload)
+
+
+def _save_runtime_settings(workspace_id: str | None, env_path: Path | None, payload: Mapping[str, object]) -> bool:
+    secret_plan = workspace_plan = device_plan = None
+    device_cleanup_attempted = workspace_cleanup_attempted = False
+    device_cleanup_complete = workspace_cleanup_complete = False
+    try:
+        deleting = workspace_id is not None and str(payload.get("llm_key_action", "")) == LLM_KEY_DELETE_ACTION
+        config_updates, secret_updates = split_runtime_settings_updates(payload) if workspace_id is not None else ({}, {})
+        if deleting:
+            secret_updates = {name: None for name in _secret_fields_for_provider(workspace_id)}
+        if secret_updates:
+            secret_plan = prepare_workspace_secret_changes(workspace_id, secret_updates)
+            if deleting and any(value is not None for value in secret_plan.originals.values()):
+                config_updates["llm_api_key_provider"] = ""
+        if config_updates:
+            workspace_plan = prepare_workspace_config(workspace_id, config_updates)
+        device_values = device_runtime_settings_values(payload) if workspace_id is not None else payload
+        env_updates = runtime_settings_updates(device_values) if env_path is not None else {}
+        if env_updates:
+            device_plan = prepare_dotenv_values(env_path, env_updates)
+        if secret_plan is not None:
+            commit_prepared_workspace_secrets(secret_plan)
+        if workspace_plan is not None:
+            commit_prepared_workspace_config(workspace_plan)
+        if device_plan is not None:
+            commit_prepared_dotenv_values(device_plan)
+        if device_plan is not None:
+            device_cleanup_attempted = True
+            discard_prepared_dotenv_values(device_plan)
+            device_cleanup_complete = True
+        if workspace_plan is not None:
+            workspace_cleanup_attempted = True
+            discard_prepared_workspace_config(workspace_plan)
+            workspace_cleanup_complete = True
+    except Exception as original:
+        failures = []
+        first_error = original
+        if isinstance(original, ExceptionGroup):
+            first_error = original.exceptions[0]
+            failures.append(("预备临时文件", original))
+        if device_cleanup_attempted and not device_cleanup_complete:
+            failures.append(("设备临时文件", original))
+        if workspace_cleanup_attempted and not workspace_cleanup_complete:
+            failures.append(("工作区临时文件", original))
+        if device_plan is not None:
+            try:
+                restore_prepared_dotenv_values(device_plan)
+            except Exception as exc:
+                failures.append(("设备配置", exc))
+        if workspace_plan is not None:
+            try:
+                restore_prepared_workspace_config(workspace_plan)
+            except Exception as exc:
+                failures.append(("工作区配置", exc))
+        if secret_plan is not None:
+            try:
+                restore_prepared_workspace_secrets(secret_plan)
+            except Exception as exc:
+                failures.append(("工作区密钥", exc))
+        if device_plan is not None and not device_cleanup_attempted:
+            try:
+                discard_prepared_dotenv_values(device_plan)
+            except Exception as exc:
+                failures.append(("设备临时文件", exc))
+        if workspace_plan is not None and not workspace_cleanup_attempted:
+            try:
+                discard_prepared_workspace_config(workspace_plan)
+            except Exception as exc:
+                failures.append(("工作区临时文件", exc))
+        if failures:
+            raise RuntimeSettingsSaveError(first_error, failures) from ExceptionGroup(
+                "settings persistence and recovery failed", [original, *(exc for _, exc in failures)])
+        raise
+    return bool(deleting or secret_plan is not None or workspace_plan is not None or device_plan is not None)
 
 
 def delete_workspace_runtime_secrets(

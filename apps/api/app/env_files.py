@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import stat
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -96,9 +98,60 @@ def load_dotenv_files() -> None:
             os.environ[key] = value
 
 
-def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing_lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+@dataclass
+class PreparedDotenvWrite:
+    path: Path
+    original: tuple | None = field(repr=False)
+    temporary: Path
+    staged: tuple = field(repr=False)
+    updates: dict[str, str] = field(repr=False)
+    environment_before: dict[str, str | None] = field(repr=False)
+    attempted: bool = False
+
+
+def _dotenv_file_state(path: Path) -> tuple | None:
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeError("dotenv target is not a regular file")
+    payload = path.read_bytes()
+    after = path.lstat()
+    identity = lambda value: (value.st_dev, value.st_ino, stat.S_IMODE(value.st_mode), value.st_mtime_ns, value.st_size)
+    if identity(before) != identity(after):
+        raise RuntimeError("dotenv target changed while reading")
+    return (*identity(after), payload)
+
+
+def _stage_dotenv_bytes(path: Path, payload: bytes, mode: int = 0o600) -> tuple[Path, tuple]:
+    temporary_path = None
+    identity = None
+    try:
+        with NamedTemporaryFile("wb", dir=path.parent, prefix=f"{path.name}.", suffix=".tmp", delete=False) as stream:
+            temporary_path = Path(stream.name)
+            created = os.fstat(stream.fileno())
+            identity = (created.st_dev, created.st_ino)
+            stream.write(payload)
+        temporary_path.chmod(mode)
+        return temporary_path, _dotenv_file_state(temporary_path)
+    except Exception as original:
+        if temporary_path is not None:
+            try:
+                current = temporary_path.lstat()
+                if (current.st_dev, current.st_ino) != identity:
+                    raise RuntimeError("dotenv temporary ownership changed; cleanup refused")
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as cleanup:
+                raise ExceptionGroup("dotenv staging and cleanup failed", [original, cleanup]) from original
+        raise
+
+
+def prepare_dotenv_values(path: Path, updates: dict[str, str]) -> PreparedDotenvWrite:
+    original = _dotenv_file_state(path)
+    existing_lines = original[-1].decode("utf-8").splitlines() if original is not None else []
     consumed: set[str] = set()
     lines: list[str] = []
     for raw_line in existing_lines:
@@ -116,21 +169,88 @@ def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
         if key not in consumed:
             lines.append(f"{key}={value}")
     payload = "\n".join(lines).rstrip() + "\n"
-    temporary_path: Path | None = None
-    try:
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f"{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_file:
-            temporary_file.write(payload)
-            temporary_path = Path(temporary_file.name)
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-    for key, value in updates.items():
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary, staged = _stage_dotenv_bytes(path, payload.encode("utf-8"))
+    return PreparedDotenvWrite(path, original, temporary, staged, dict(updates),
+        {key: os.environ.get(key) for key in updates})
+
+
+def commit_prepared_dotenv_values(prepared: PreparedDotenvWrite) -> None:
+    if _dotenv_file_state(prepared.path) != prepared.original:
+        raise RuntimeError("dotenv target changed before save")
+    if any(os.environ.get(key) != value for key, value in prepared.environment_before.items()):
+        raise RuntimeError("device environment changed before save")
+    prepared.attempted = True
+    os.replace(prepared.temporary, prepared.path)
+    if _dotenv_file_state(prepared.path) != prepared.staged:
+        raise RuntimeError("dotenv replacement could not be confirmed")
+    for key, value in prepared.updates.items():
         os.environ[key] = value
+
+
+def restore_prepared_dotenv_values(prepared: PreparedDotenvWrite) -> None:
+    if not prepared.attempted:
+        return
+    failures = []
+    try:
+        current = _dotenv_file_state(prepared.path)
+        if current != prepared.original:
+            if current != prepared.staged:
+                raise RuntimeError("dotenv changed outside this save; restoration refused")
+            if prepared.original is None:
+                prepared.path.unlink()
+                if _dotenv_file_state(prepared.path) is not None:
+                    raise RuntimeError("dotenv removal could not be confirmed")
+            else:
+                temporary, staged = _stage_dotenv_bytes(prepared.path, prepared.original[-1], prepared.original[2])
+                try:
+                    if _dotenv_file_state(prepared.path) != current:
+                        raise RuntimeError("dotenv changed before restoration")
+                    os.replace(temporary, prepared.path)
+                    if _dotenv_file_state(prepared.path) != staged:
+                        raise RuntimeError("dotenv restoration could not be confirmed")
+                except Exception as original:
+                    try:
+                        if _dotenv_file_state(temporary) == staged:
+                            temporary.unlink()
+                    except Exception as cleanup:
+                        raise ExceptionGroup("dotenv restoration and cleanup failed", [original, cleanup]) from original
+                    raise
+    except Exception as exc:
+        failures.append(exc)
+    for key, previous in prepared.environment_before.items():
+        try:
+            current = os.environ.get(key)
+            if current == previous:
+                continue
+            if current != prepared.updates[key]:
+                raise RuntimeError("device environment changed outside this save; restoration refused")
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+        except Exception as exc:
+            failures.append(exc)
+    if failures:
+        raise ExceptionGroup("device settings restoration incomplete", failures)
+
+
+def discard_prepared_dotenv_values(prepared: PreparedDotenvWrite) -> None:
+    current = _dotenv_file_state(prepared.temporary)
+    if current is not None:
+        if current != prepared.staged:
+            raise RuntimeError("dotenv temporary file changed; cleanup refused")
+        prepared.temporary.unlink()
+
+
+def write_dotenv_values(path: Path, updates: dict[str, str]) -> None:
+    prepared = prepare_dotenv_values(path, updates)
+    try:
+        commit_prepared_dotenv_values(prepared)
+    except Exception as original:
+        try:
+            discard_prepared_dotenv_values(prepared)
+        except Exception as cleanup:
+            raise ExceptionGroup("dotenv write and cleanup failed", [original, cleanup]) from original
+        raise
+    discard_prepared_dotenv_values(prepared)

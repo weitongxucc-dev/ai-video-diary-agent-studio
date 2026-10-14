@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from app.config import Settings, runtime_env_file_path
 
@@ -134,6 +136,18 @@ def read_workspace_secret(workspace_id: str, field: str) -> str | None:
         cached = _secret_cache.get((workspace_id, field))
     if cached is not None:
         return cached
+    value = read_workspace_secret_fresh(workspace_id, field)
+    if not value:
+        return None
+    with _lock:
+        _secret_cache[(workspace_id, field)] = value
+    return value
+
+
+def read_workspace_secret_fresh(workspace_id: str, field: str, *, recoverable: bool = False) -> str | None:
+    """Read the owned backend without using or populating the cache."""
+    if field not in WORKSPACE_SECRET_FIELDS:
+        raise ValueError(f"不是本单范围内的文字服务密钥：{field}")
     result = _run_security([
         "find-generic-password",
         "-a", workspace_id,
@@ -145,10 +159,8 @@ def read_workspace_secret(workspace_id: str, field: str) -> str | None:
         return None
     _require_store(result, "读取")
     value = result.stdout.strip("\n")
-    if not value:
-        return None
-    with _lock:
-        _secret_cache[(workspace_id, field)] = value
+    if recoverable and (not value.strip() or result.stdout not in (value, value + "\n")):
+        raise WorkspaceSecretStoreError("无法确认可恢复的原密钥，配置未保存。")
     return value
 
 
@@ -173,12 +185,7 @@ def delete_workspace_secret(workspace_id: str, field: str) -> bool:
     return True
 
 
-def load_workspace_config(workspace_id: str) -> dict[str, str]:
-    """读工作区配置快照。文件不存在就是空配置，不是错误。"""
-    path = workspace_config_path(workspace_id)
-    if not path.exists():
-        return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _workspace_config_fields(payload: object) -> dict[str, str]:
     if not isinstance(payload, dict):
         return {}
     return {
@@ -188,18 +195,75 @@ def load_workspace_config(workspace_id: str) -> dict[str, str]:
     }
 
 
-def save_workspace_config(workspace_id: str, fields: dict[str, str]) -> dict[str, str]:
-    """写工作区配置快照，按已有快照合并更新。
+def load_workspace_config(workspace_id: str) -> dict[str, str]:
+    """读工作区配置快照。文件不存在就是空配置，不是错误。"""
+    path = workspace_config_path(workspace_id)
+    if not path.exists():
+        return {}
+    return _workspace_config_fields(json.loads(path.read_text(encoding="utf-8")))
 
-    只改模型名不能把上次的 provider 和地址一起丢掉，所以这里与既有快照合并。
-    密钥字段直接拒绝，不落任何明文。
-    """
+
+@dataclass
+class PreparedWorkspaceConfig:
+    path: Path
+    original: tuple | None = field(repr=False)
+    temporary: Path
+    staged: tuple = field(repr=False)
+    merged: dict[str, str]
+    attempted: bool = False
+
+
+def _workspace_config_file_state(path: Path) -> tuple | None:
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeError("workspace config target is not a regular file")
+    payload = path.read_bytes()
+    after = path.lstat()
+    identity = lambda value: (value.st_dev, value.st_ino, stat.S_IMODE(value.st_mode), value.st_mtime_ns, value.st_size)
+    if identity(before) != identity(after):
+        raise RuntimeError("workspace config changed while reading")
+    return (*identity(after), payload)
+
+
+def _stage_workspace_config(path: Path, payload: bytes, mode: int = 0o600) -> tuple[Path, tuple]:
+    temporary_path = None
+    identity = None
+    try:
+        with NamedTemporaryFile("wb", dir=path.parent, prefix=f"{path.name}.", suffix=".tmp", delete=False) as stream:
+            temporary_path = Path(stream.name)
+            created = os.fstat(stream.fileno())
+            identity = (created.st_dev, created.st_ino)
+            stream.write(payload)
+        temporary_path.chmod(mode)
+        return temporary_path, _workspace_config_file_state(temporary_path)
+    except Exception as original:
+        if temporary_path is not None:
+            try:
+                current = temporary_path.lstat()
+                if (current.st_dev, current.st_ino) != identity:
+                    raise RuntimeError("workspace temporary ownership changed; cleanup refused")
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as cleanup:
+                raise ExceptionGroup("workspace staging and cleanup failed", [original, cleanup]) from original
+        raise
+
+
+def prepare_workspace_config(workspace_id: str, fields: dict[str, str]) -> PreparedWorkspaceConfig:
+    """Prepare the existing filtered merge, retaining the exact owned original."""
+
     rejected = sorted(key for key in fields if key in WORKSPACE_SECRET_FIELDS)
     if rejected:
         raise WorkspaceSecretStoreError(
             f"密钥不能写进配置文件：{', '.join(rejected)}"
         )
-    merged = load_workspace_config(workspace_id)
+    path = workspace_config_path(workspace_id)
+    original = _workspace_config_file_state(path)
+    merged = _workspace_config_fields(json.loads(original[-1].decode("utf-8"))) if original is not None else {}
     for key, value in fields.items():
         if key in WORKSPACE_CONFIG_FIELDS and isinstance(value, str):
             cleaned = value.strip()
@@ -207,13 +271,136 @@ def save_workspace_config(workspace_id: str, fields: dict[str, str]) -> dict[str
                 merged[key] = cleaned
             else:
                 merged.pop(key, None)
-    path = workspace_config_path(workspace_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.chmod(0o600)
-    os.replace(temporary, path)
-    return merged
+    temporary, staged = _stage_workspace_config(path, json.dumps(merged, ensure_ascii=False, indent=2).encode("utf-8"))
+    return PreparedWorkspaceConfig(path, original, temporary, staged, merged)
+
+
+def commit_prepared_workspace_config(prepared: PreparedWorkspaceConfig) -> None:
+    if _workspace_config_file_state(prepared.path) != prepared.original:
+        raise RuntimeError("workspace config changed before save")
+    prepared.attempted = True
+    os.replace(prepared.temporary, prepared.path)
+    if _workspace_config_file_state(prepared.path) != prepared.staged:
+        raise RuntimeError("workspace config replacement could not be confirmed")
+
+
+def restore_prepared_workspace_config(prepared: PreparedWorkspaceConfig) -> None:
+    if not prepared.attempted:
+        return
+    current = _workspace_config_file_state(prepared.path)
+    if current == prepared.original:
+        return
+    if current != prepared.staged:
+        raise RuntimeError("workspace config changed outside this save; restoration refused")
+    if prepared.original is None:
+        prepared.path.unlink()
+        if _workspace_config_file_state(prepared.path) is not None:
+            raise RuntimeError("workspace config removal could not be confirmed")
+        return
+    temporary, staged = _stage_workspace_config(prepared.path, prepared.original[-1], prepared.original[2])
+    try:
+        if _workspace_config_file_state(prepared.path) != current:
+            raise RuntimeError("workspace config changed before restoration")
+        os.replace(temporary, prepared.path)
+        if _workspace_config_file_state(prepared.path) != staged:
+            raise RuntimeError("workspace config restoration could not be confirmed")
+    except Exception as original:
+        try:
+            if _workspace_config_file_state(temporary) == staged:
+                temporary.unlink()
+        except Exception as cleanup:
+            raise ExceptionGroup("workspace restoration and cleanup failed", [original, cleanup]) from original
+        raise
+
+
+def discard_prepared_workspace_config(prepared: PreparedWorkspaceConfig) -> None:
+    current = _workspace_config_file_state(prepared.temporary)
+    if current is not None:
+        if current != prepared.staged:
+            raise RuntimeError("workspace temporary file changed; cleanup refused")
+        prepared.temporary.unlink()
+
+
+def save_workspace_config(workspace_id: str, fields: dict[str, str]) -> dict[str, str]:
+    """Save the single owned config merge; secrets never enter this plan."""
+    prepared = prepare_workspace_config(workspace_id, fields)
+    try:
+        commit_prepared_workspace_config(prepared)
+    except Exception as original:
+        try:
+            discard_prepared_workspace_config(prepared)
+        except Exception as cleanup:
+            raise ExceptionGroup("workspace write and cleanup failed", [original, cleanup]) from original
+        raise
+    discard_prepared_workspace_config(prepared)
+    return prepared.merged
+
+
+@dataclass
+class PreparedWorkspaceSecrets:
+    workspace_id: str
+    originals: dict[str, str | None] = field(repr=False)
+    cache_before: dict[str, str | None] = field(repr=False)
+    updates: dict[str, str | None] = field(repr=False)
+    attempted: list[str] = field(default_factory=list)
+    confirmed: set[str] = field(default_factory=set)
+
+
+def prepare_workspace_secret_changes(workspace_id: str, updates: dict[str, str | None]) -> PreparedWorkspaceSecrets:
+    for name, value in updates.items():
+        if name not in WORKSPACE_SECRET_FIELDS:
+            raise ValueError(f"不是本单范围内的文字服务密钥：{name}")
+        if value is not None and not value.strip():
+            raise WorkspaceSecretStoreError("密钥内容为空，没有保存。")
+    with _lock:
+        cached = {name: _secret_cache.get((workspace_id, name)) for name in updates}
+    originals = {name: read_workspace_secret_fresh(workspace_id, name, recoverable=True) for name in updates}
+    return PreparedWorkspaceSecrets(workspace_id, originals, cached, dict(updates))
+
+
+def commit_prepared_workspace_secrets(prepared: PreparedWorkspaceSecrets) -> None:
+    for name, value in prepared.updates.items():
+        if read_workspace_secret_fresh(prepared.workspace_id, name) != prepared.originals[name]:
+            raise WorkspaceSecretStoreError("密钥在保存前已变化，配置未保存。")
+        prepared.attempted.append(name)
+        if value is None:
+            if delete_workspace_secret(prepared.workspace_id, name):
+                prepared.confirmed.add(name)
+        else:
+            save_workspace_secret(prepared.workspace_id, name, value)
+            prepared.confirmed.add(name)
+        if read_workspace_secret_fresh(prepared.workspace_id, name) != value:
+            raise WorkspaceSecretStoreError("无法确认密钥保存结果。")
+
+
+def restore_prepared_workspace_secrets(prepared: PreparedWorkspaceSecrets) -> None:
+    failures = []
+    for name in reversed(prepared.attempted):
+        previous = prepared.originals[name]
+        try:
+            current = read_workspace_secret_fresh(prepared.workspace_id, name)
+            if current != previous:
+                if name not in prepared.confirmed or current != prepared.updates[name]:
+                    raise WorkspaceSecretStoreError("密钥改变不属于已确认的本次写入，恢复被拒绝。")
+                if previous is None:
+                    delete_workspace_secret(prepared.workspace_id, name)
+                else:
+                    save_workspace_secret(prepared.workspace_id, name, previous)
+                if read_workspace_secret_fresh(prepared.workspace_id, name) != previous:
+                    raise WorkspaceSecretStoreError("无法确认密钥恢复结果。")
+            with _lock:
+                cached = prepared.cache_before[name]
+                if cached is None:
+                    _secret_cache.pop((prepared.workspace_id, name), None)
+                else:
+                    _secret_cache[(prepared.workspace_id, name)] = cached
+        except Exception as exc:
+            with _lock:
+                _secret_cache.pop((prepared.workspace_id, name), None)
+            failures.append(exc)
+    if failures:
+        raise ExceptionGroup("workspace secret restoration incomplete", failures)
 
 
 @dataclass(frozen=True)

@@ -237,14 +237,13 @@ from app.repository import (
 )
 from app.runtime_health import runtime_health, model_catalog_from_settings
 from app.runtime_settings import (
-    WORKSPACE_TEXT_FIELDS,
-    apply_runtime_settings_update as _persist_device_settings,
-    apply_workspace_runtime_settings_update,
+    RuntimeSettingsSaveError,
+    apply_runtime_settings_save,
+    device_runtime_settings_values,
     is_local_client_host,
     runtime_settings_updates,
 )
 from app.workspace_settings import (
-    WORKSPACE_SECRET_FIELDS,
     WorkspaceSecretStoreError,
     workspace_settings,
 )
@@ -16840,11 +16839,7 @@ def update_runtime_settings(
         )
     workspace_id = current_workspace_id(request)
     submitted = payload.model_dump()
-    device_values = {
-        field: value for field, value in submitted.items()
-        if field not in WORKSPACE_TEXT_FIELDS
-        and field not in WORKSPACE_SECRET_FIELDS and field != "llm_key_action"
-    }
+    device_values = device_runtime_settings_values(submitted)
     try:
         with _runtime_reload_lock:
             _assert_runtime_reload_allowed()
@@ -16854,16 +16849,14 @@ def update_runtime_settings(
             with model_installer.guard_catalog_update(candidate_catalog):
                 prepared = _prepare_runtime_reload(prospective_settings)
                 with _quiesced_runtime_drivers() as drivers:
-                    changed = False
-
-                    def request_reload():
-                        nonlocal changed
-                        changed = True
-
-                    apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
-                    _persist_device_settings(runtime_env_path, device_values, request_reload)
+                    changed = apply_runtime_settings_save(workspace_id, runtime_env_path, submitted)
                     if changed:
-                        _activate_runtime_reload(prepared, drivers)
+                        try:
+                            _activate_runtime_reload(prepared, drivers)
+                        except Exception as exc:
+                            raise HTTPException(status_code=503, detail="配置已保存，运行重载失败；请检查运行状态。") from exc
+    except RuntimeSettingsSaveError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except WorkspaceSecretStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ModelInstallError as exc:
