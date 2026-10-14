@@ -1665,3 +1665,108 @@ it("keeps observation tag suggestions separate until explicit adoption returns t
   expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", expect.objectContaining({ user_tags: ["旧标签", "人物走路"] }));
   expect(screen.queryByText("标签建议 · 1 项待采纳")).not.toBeInTheDocument();
 });
+
+function materialListCards() {
+  return Array.from(document.querySelectorAll(".library-grid .library-card strong")).map(element => element.getAttribute("title"));
+}
+function materialListDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+it.each(["success", "failure"] as const)("material list rejects an old page %s after a newer query has been accepted", async outcome => {
+  const old = materialListDeferred<typeof library>();
+  const first = { ...asset, id: "old-first", file_name: "old-first.mp4" };
+  const newer = { ...asset, id: "new-target", file_name: "new-target.mp4" };
+  vi.mocked(getProductionMaterials).mockReset();
+  vi.mocked(getProductionMaterials).mockReturnValueOnce(old.promise).mockResolvedValue({ ...library, assets: [newer], limit: 1 });
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [first], limit: 1, total_count: 3, has_more: true }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "new" } });
+  await waitFor(() => expect(materialListCards()).toEqual(["new-target.mp4"]));
+  await act(async () => {
+    if (outcome === "success") old.resolve({ ...library, assets: [{ ...asset, id: "old-page", file_name: "old-page.mp4" }], total_count: 3 });
+    else old.reject(new Error("old page failure"));
+  });
+  expect(materialListCards()).toEqual(["new-target.mp4"]);
+  expect(screen.queryByText("old page failure")).not.toBeInTheDocument();
+});
+
+it("material list does not page a new query with the old collection count before its first read", () => {
+  vi.mocked(getProductionMaterials).mockReset();
+  vi.mocked(getProductionMaterials).mockReturnValue(new Promise(() => {}));
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [asset, otherAsset], limit: 2, total_count: 5, has_more: true }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "new" } });
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  expect(vi.mocked(getProductionMaterials).mock.calls.some(([input]) => input?.query === "new" && (input.offset ?? 0) > 0)).toBe(false);
+});
+
+it("material list reopening identical parameters rejects old completion and still accepts the new first page", async () => {
+  const old = materialListDeferred<typeof library>();
+  const middle = materialListDeferred<typeof library>();
+  const latest = materialListDeferred<typeof library>();
+  vi.mocked(getProductionMaterials).mockReset();
+  vi.mocked(getProductionMaterials).mockReturnValueOnce(old.promise).mockReturnValueOnce(middle.promise).mockReturnValueOnce(latest.promise);
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, limit: 1, total_count: 3, has_more: true }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  const input = screen.getByRole("textbox", { name: "搜索素材" });
+  fireEvent.change(input, { target: { value: "middle" } });
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledTimes(2));
+  fireEvent.change(input, { target: { value: "" } });
+  await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledTimes(3));
+  await act(async () => old.resolve({ ...library, assets: [otherAsset], total_count: 3 }));
+  expect(materialListCards()).toEqual(["local.mp4"]);
+  expect(screen.getByRole("button", { name: /载入更多/ })).toBeDisabled();
+  await act(async () => latest.resolve({ ...library, assets: [{ ...asset, file_name: "reopened-head.mp4" }], total_count: 3, limit: 1, has_more: true }));
+  expect(materialListCards()).toEqual(["reopened-head.mp4"]);
+  expect(screen.getByRole("button", { name: /载入更多/ })).toBeEnabled();
+  await act(async () => middle.reject(new Error("middle stale error")));
+  expect(screen.queryByText("middle stale error")).not.toBeInTheDocument();
+});
+
+it("material list normal paging keeps tag count deduplication selection and unsaved inputs", async () => {
+  const pending = materialListDeferred<typeof taggedLibrary>();
+  vi.mocked(getProductionMaterials).mockReset();
+  vi.mocked(getProductionMaterials).mockReturnValue(pending.promise);
+  const first = { ...taggedAsset, user_tags: ["fixture-tag"] };
+  const second = { ...otherAsset, user_tags: ["fixture-tag"] };
+  const third = { ...asset, id: "asset-c", file_name: "third.mp4", user_tags: ["fixture-tag"], segments: [{ ...segment, id: "segment-c", asset_id: "asset-c" }] };
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [first, second], total_count: 5, limit: 2, has_more: true }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} initialTag="fixture-tag" />);
+  fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+  fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "保留片段输入" } });
+  fireEvent.change(screen.getByLabelText("本素材说明（可选）"), { target: { value: "保留素材笔记" } });
+  fireEvent.click(screen.getByRole("button", { name: /载入更多/ }));
+  const input = screen.getByRole("textbox", { name: "搜索素材" });
+  input.focus();
+  await act(async () => pending.resolve({ ...library, assets: [second, third], total_count: 5, limit: 2, offset: 2, has_more: true }));
+  expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ limit: 2, offset: 2, tag: "fixture-tag" }));
+  expect(materialListCards()).toEqual(["local.mp4", "自造素材B.mp4", "third.mp4"]);
+  expect(screen.getByRole("button", { name: /载入更多.*2/ })).toBeEnabled();
+  expect(screen.getByLabelText("片段描述")).toHaveValue("保留片段输入");
+  expect(screen.getByLabelText("本素材说明（可选）")).toHaveValue("保留素材笔记");
+  expect(input).toHaveFocus();
+});
+
+it("material list background head read preserves tag selection and focused unsaved inputs", async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  vi.mocked(getMaterialIntakeStatus).mockResolvedValue({ ...intakeReady, bound_to_current_workspace: true, bound_directory: intakeReady.configured_directory });
+  vi.mocked(getProductionMaterials).mockReset();
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...taggedLibrary, assets: [{ ...taggedAsset, user_description: "服务端说明" }], limit: 1 });
+  try {
+    render(<MaterialLibraryWorkspace initialLibrary={{ ...taggedLibrary, limit: 1 }} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} initialTag="fixture-tag" />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: /local\.mp4/ }));
+    fireEvent.change(screen.getByLabelText("片段描述"), { target: { value: "背景回读保留片段" } });
+    const note = screen.getByLabelText("本素材说明（可选）");
+    fireEvent.change(note, { target: { value: "背景回读保留笔记" } });
+    note.focus();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(getProductionMaterials).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, tag: "fixture-tag" }));
+    expect(screen.getByLabelText("片段描述")).toHaveValue("背景回读保留片段");
+    expect(note).toHaveValue("背景回读保留笔记");
+    expect(note).toHaveFocus();
+  } finally { visibility.mockRestore(); vi.useRealTimers(); }
+});

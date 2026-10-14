@@ -17,7 +17,7 @@ import { useMaterialUsageRecords } from "./material-library/useMaterialUsageReco
 import { useMaterialBusinessObjects } from "./material-library/useMaterialBusinessObjects";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw, Search, Sparkles, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { useAssistantMaterialReference } from "./AssistantConversationProvider";
@@ -72,6 +72,7 @@ export function MaterialLibraryWorkspace({
   const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [actionBusy, setBusy] = useState<Busy>(null);
+  const [listBusy, setListBusy] = useState<"search" | "load" | null>(null);
   const [error, setError] = useState("");
   const { intake, intakeError, intakeBusy, refreshIntakeStatus, bindIntake, confirmCopy, readIntakeAfterScan } = useMaterialIntake();
   const { importBusy, importResult, runImport } = useLocalMaterialImport(Boolean(intake?.bound_to_current_workspace && intake.directory_state === "ready"));
@@ -102,8 +103,18 @@ export function MaterialLibraryWorkspace({
   const selectionRevision = useRef(0);
   // 服务端渲染的第一页没有类型条件，所以这里的 mediaType 只能是「全部」；
   // 挂载后从 URL 读回的类型会让下面的搜索 effect 重新取第一页。
-  const lastSearch = useRef({ filter, query, tag: initialTag ?? "", mediaType: "all" as MediaTypeFilter });
+  const searchScope = useMemo(() => ({ filter, query, tag: initialTag ?? "", mediaType, limit: initialLibrary.limit }),
+    [filter, query, initialTag, mediaType, initialLibrary.limit]);
+  const lastSearch = useRef(searchScope);
+  lastSearch.current = searchScope;
+  const initialSearch = useRef(searchScope);
+  const [acceptedSearch, setAcceptedSearch] = useState(searchScope);
+  const listReadSequence = useRef(0);
   const assetWriteRevision = useRef(0);
+  useEffect(() => () => { listReadSequence.current += 1; }, []);
+  const ownsListRead = useCallback((scope: typeof searchScope, request: number) => {
+    return scope === lastSearch.current && request === listReadSequence.current;
+  }, []);
 
   // Keep explicit assistant targets and edited segment drafts tied to their
   // original asset. If a filter drops that object, close the inspector and
@@ -140,7 +151,7 @@ export function MaterialLibraryWorkspace({
   const { usageRecords, usageRead, retryUsageRead } = useMaterialUsageRecords(selected?.id ?? null, selectedSegment?.id ?? null);
   const { pending: notesPending, voiceNote, voiceNoteNotice, noteDrafts, noteErrors, noteSaved, noteBatchIds, batchContext, batchNoteError, batchNoteSaved,
     resetVoiceNote, changeAssetNote, cancelSpokenNote, startVoiceNote, receiveVoiceNote, saveNotes, chooseBatchAsset, changeBatchContext } = useMaterialNotes(selected?.id ?? null, replaceAsset);
-  const busy: Busy = notesPending ? "notes" : actionBusy;
+  const busy: Busy = notesPending ? "notes" : actionBusy ?? listBusy;
   const noteBatchAssets = assets.filter(asset => noteBatchIds.includes(asset.id));
   const noteDraft = selected ? noteDrafts[selected.id] ?? selected.user_description : "";
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
@@ -174,6 +185,8 @@ export function MaterialLibraryWorkspace({
     const timer = window.setInterval(async () => {
       if (document.visibilityState !== "visible" || inFlight) return;
       inFlight = true;
+      const scope = lastSearch.current;
+      const request = ++listReadSequence.current;
       const revision = assetWriteRevision.current;
       const loadedCount = Math.max(initialLibrary.limit, assets.length);
       try {
@@ -185,8 +198,9 @@ export function MaterialLibraryWorkspace({
             mediaType,
           }));
         }
-        if (active && revision === assetWriteRevision.current) {
+        if (active && ownsListRead(scope, request) && revision === assetWriteRevision.current) {
           const refreshed = libraries.flatMap((page) => page.assets);
+          setAcceptedSearch(scope);
           setAssets(refreshed);
           setTotalCount(libraries[0]?.total_count ?? 0);
           setHasMore(refreshed.length < (libraries[0]?.total_count ?? 0));
@@ -199,7 +213,7 @@ export function MaterialLibraryWorkspace({
       }
     }, 15000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, mediaType, query, selectedId]);
+  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, mediaType, query, selectedId, ownsListRead]);
 
   // 首屏是服务端按「全部」渲染的，URL 里的类型在挂载后才读回来，
   // 于是下面那次搜索会带上类型重新取第一页；URL 里没有类型时状态不变，不会多取一次。
@@ -209,14 +223,15 @@ export function MaterialLibraryWorkspace({
   }, []);
 
   useEffect(() => {
-    if (lastSearch.current.filter === filter && lastSearch.current.query === query && lastSearch.current.tag === (initialTag ?? "") && lastSearch.current.mediaType === mediaType) return;
-    lastSearch.current = { filter, query, tag: initialTag ?? "", mediaType };
+    const scope = searchScope;
+    if (scope === initialSearch.current) return;
+    const request = ++listReadSequence.current;
+    const selectionAtRequest = selectionRevision.current;
     let active = true;
+    setError("");
+    setListBusy("search");
     const timer = window.setTimeout(() => {
       const revision = assetWriteRevision.current;
-      const selectionAtRequest = selectionRevision.current;
-      setError("");
-      setBusy("search");
       getProductionMaterials({
         limit: initialLibrary.limit,
         offset: 0,
@@ -226,7 +241,8 @@ export function MaterialLibraryWorkspace({
         mediaType,
       })
         .then((result) => {
-          if (!active || revision !== assetWriteRevision.current) return;
+          if (!active || !ownsListRead(scope, request) || revision !== assetWriteRevision.current) return;
+          setAcceptedSearch(scope);
           setAssets(result.assets);
           setTotalCount(result.total_count);
           setHasMore(result.has_more);
@@ -241,11 +257,11 @@ export function MaterialLibraryWorkspace({
           }
         })
         .catch((cause) => {
-          if (active)
+          if (active && ownsListRead(scope, request))
             setError(visibleError(cause, "搜索素材失败，请重试。"));
         })
         .finally(() => {
-          if (active) setBusy(null);
+          if (active && ownsListRead(scope, request)) setListBusy(null);
         });
     }, 250);
     return () => {
@@ -254,7 +270,7 @@ export function MaterialLibraryWorkspace({
     };
     // Selection changes do not re-run search; a revision check protects user choices made in flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, initialLibrary.limit, initialTag, mediaType, query]);
+  }, [searchScope, ownsListRead]);
 
   function replaceAsset(updated: MaterialAsset) {
     assetWriteRevision.current += 1;
@@ -411,22 +427,24 @@ export function MaterialLibraryWorkspace({
   }
 
   async function refreshLibrary() {
+    const request = ++listReadSequence.current;
     const revision = assetWriteRevision.current;
     const searchAtRequest = lastSearch.current;
     const loadedCount = Math.max(initialLibrary.limit, assets.length);
-    setBusy("search"); setError("");
+    setListBusy("search"); setError("");
     try {
       const pages: MaterialLibrary[] = [];
       for (let offset = 0; offset < loadedCount; offset += 100) {
         pages.push(await getProductionMaterials({ limit: Math.min(100, loadedCount - offset), offset, query: query.trim(), reviewStatus: filter, tag: initialTag, mediaType }));
-        if (searchAtRequest !== lastSearch.current || revision !== assetWriteRevision.current) return;
+        if (!ownsListRead(searchAtRequest, request) || revision !== assetWriteRevision.current) return;
       }
       const refreshed = pages.flatMap(page => page.assets);
+      setAcceptedSearch(searchAtRequest);
       setAssets(refreshed); setTotalCount(pages[0].total_count); setHasMore(refreshed.length < pages[0].total_count);
       setFailedThumbnails({});
     } catch (cause) {
-      if (searchAtRequest === lastSearch.current) setError(visibleError(cause, "素材列表刷新失败，请重试。"));
-    } finally { if (searchAtRequest === lastSearch.current) setBusy(null); }
+      if (ownsListRead(searchAtRequest, request)) setError(visibleError(cause, "素材列表刷新失败，请重试。"));
+    } finally { if (ownsListRead(searchAtRequest, request)) setListBusy(null); }
   }
 
   function constrainSegmentPlayback(media: HTMLMediaElement) {
@@ -461,7 +479,11 @@ export function MaterialLibraryWorkspace({
   }
 
   async function loadMore() {
-    setBusy("load");
+    const scope = lastSearch.current;
+    if (scope !== acceptedSearch || busy !== null) return;
+    const request = ++listReadSequence.current;
+    const revision = assetWriteRevision.current;
+    setListBusy("load");
     setError("");
     try {
       const result = await getProductionMaterials({
@@ -472,6 +494,7 @@ export function MaterialLibraryWorkspace({
         tag: initialTag,
         mediaType,
       });
+      if (!ownsListRead(scope, request) || revision !== assetWriteRevision.current) return;
       assetWriteRevision.current += 1;
       setAssets((current) => {
         const known = new Set(current.map((asset) => asset.id));
@@ -483,9 +506,9 @@ export function MaterialLibraryWorkspace({
       setTotalCount(result.total_count);
       setHasMore(result.has_more);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "加载更多素材失败");
+      if (ownsListRead(scope, request)) setError(cause instanceof Error ? cause.message : "加载更多素材失败");
     } finally {
-      setBusy(null);
+      if (ownsListRead(scope, request)) setListBusy(null);
     }
   }
 
@@ -822,7 +845,7 @@ export function MaterialLibraryWorkspace({
         {hasMore ? (
           <div className="library-load-more">
             <button
-              disabled={busy !== null}
+              disabled={busy !== null || acceptedSearch !== searchScope}
               onClick={() => void loadMore()}
               type="button"
             >
