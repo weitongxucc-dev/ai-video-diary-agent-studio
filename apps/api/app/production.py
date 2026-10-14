@@ -25,6 +25,7 @@ from app.creation.contracts import ClipSourceSelection
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
+from app.profiles.legacy_voice import LegacyVoiceProfileStore, VoiceProfile
 from app.profiles.records import (
     ProfileRecordStore, _person_profile_payload, _versioned_voice_profile_payload,
     _profile_reference_payload, _profile_reference_fields,
@@ -337,22 +338,6 @@ class ProductionProfile:
     use_hermes: bool = True
     factuality_gate_enabled: bool = True
     cloud_enhancement_enabled: bool = False
-    updated_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass
-class VoiceProfile:
-    id: str
-    workspace_id: str
-    name: str
-    reference_audio_path: str
-    reference_text: str
-    consent_confirmed: bool
-    is_default: bool = False
-    model_id: str = "qwen3-tts-12hz-0.6b-base-8bit"
-    status: AnalysisStatus = "pending"
-    message: str = "等待声音模型检查。"
-    created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
 
@@ -899,6 +884,7 @@ class ProductionRepository:
             speech_analyzer=speech_analyzer, visual_understanding=visual_understanding,
         )
         self._initialize_profile_stores()
+        self._legacy_voice_profiles = LegacyVoiceProfileStore(self._connect)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
 
@@ -2313,62 +2299,13 @@ class ProductionRepository:
         return profile
 
     def list_voice_profiles(self, workspace_id: str) -> list[VoiceProfile]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload, is_default FROM voice_profiles
-                WHERE workspace_id = ? ORDER BY is_default DESC, updated_at DESC
-                """,
-                (workspace_id,),
-            ).fetchall()
-        profiles: list[VoiceProfile] = []
-        for row in rows:
-            data = json.loads(str(row["payload"]))
-            data["is_default"] = bool(row["is_default"])
-            profiles.append(self._voice_profile_from_payload(data))
-        return profiles
+        return self._legacy_voice_profiles.list_voice_profiles(workspace_id)
 
     def get_voice_profile(self, workspace_id: str, voice_profile_id: str) -> VoiceProfile:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload, is_default FROM voice_profiles
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (workspace_id, voice_profile_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(voice_profile_id)
-        data = json.loads(str(row["payload"]))
-        data["is_default"] = bool(row["is_default"])
-        return self._voice_profile_from_payload(data)
+        return self._legacy_voice_profiles.get_voice_profile(workspace_id, voice_profile_id)
 
     def save_voice_profile(self, voice: VoiceProfile) -> VoiceProfile:
-        voice.updated_at = utc_now()
-        with self._connect() as conn:
-            if voice.is_default:
-                conn.execute(
-                    "UPDATE voice_profiles SET is_default = 0 WHERE workspace_id = ?",
-                    (voice.workspace_id,),
-                )
-            conn.execute(
-                """
-                INSERT INTO voice_profiles (id, workspace_id, is_default, payload, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    is_default = excluded.is_default,
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    voice.id,
-                    voice.workspace_id,
-                    int(voice.is_default),
-                    _json_payload(voice),
-                    voice.updated_at.isoformat(),
-                ),
-            )
-        return voice
+        return self._legacy_voice_profiles.save_voice_profile(voice)
 
     def selected_episode_versioned_voice_identity(
         self,
@@ -9480,11 +9417,6 @@ class ProductionRepository:
     def _profile_from_payload(data: dict[str, object]) -> ProductionProfile:
         data = _with_datetime(data, "updated_at")
         return ProductionProfile(**data)
-
-    @staticmethod
-    def _voice_profile_from_payload(data: dict[str, object]) -> VoiceProfile:
-        data = _with_datetime(data, "created_at", "updated_at")
-        return VoiceProfile(**data)
 
     _authorization_from_payload = staticmethod(_authorization_from_payload)
 
