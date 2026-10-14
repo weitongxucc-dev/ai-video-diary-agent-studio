@@ -130,6 +130,7 @@ class DeviceRuntime:
         self.registrations = dict(registrations)
         self.poll_interval_seconds = poll_interval_seconds
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._wake = threading.Event()
         self._lifecycle_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
@@ -150,34 +151,39 @@ class DeviceRuntime:
     def run_once(self) -> bool:
         """Dispatch at most one unit; useful before start and in isolated tests."""
         with self._dispatch_lock:
-            if self._stop.is_set():
+            if self._stop.is_set() or self._paused.is_set():
                 return False
             if self._thread is not None and self._thread.is_alive() and threading.current_thread() is not self._thread:
                 raise RuntimeUnavailable("后台调度驱动已经运行")
-            grant = self.scheduler.pick_and_grant()
-            if grant is None:
-                return False
-            if self._stop.is_set():
-                raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
-            registration = self.registrations.get(grant.owner_type)
-            if registration is None:
-                raise RecoveryBlocked("获准对象缺少执行器，许可保留供核查")
-            self.scheduler.assert_grant(grant)
-            if self._stop.is_set():
-                raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
-            registration.executor.execute(grant, self.scheduler)
-            self.scheduler.assert_released(grant)
-            return True
+            try:
+                grant = self.scheduler.pick_and_grant()
+                if grant is None:
+                    return False
+                if self._stop.is_set():
+                    raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
+                registration = self.registrations.get(grant.owner_type)
+                if registration is None:
+                    raise RecoveryBlocked("获准对象缺少执行器，许可保留供核查")
+                self.scheduler.assert_grant(grant)
+                if self._stop.is_set():
+                    raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
+                registration.executor.execute(grant, self.scheduler)
+                self.scheduler.assert_released(grant)
+                return True
+            except Exception as exc:
+                # Pause shares this lock: publish a retained-permit fault before
+                # the dispatch boundary can be observed as quiescent.
+                with self._lifecycle_lock:
+                    self._last_error = exc
+                    self._stop.set()
+                raise
 
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
                 dispatched = self.run_once()
-            except Exception as exc:
+            except Exception:
                 logger.exception("Device dispatch stopped; inspect the permit before resuming")
-                with self._lifecycle_lock:
-                    self._last_error = exc
-                self._stop.set()
                 return
             if not dispatched:
                 self._wake.wait(self.poll_interval_seconds)
@@ -199,6 +205,29 @@ class DeviceRuntime:
     def wake(self) -> None:
         """Wake the existing driver; never start or duplicate one."""
         if not self._stop.is_set():
+            self._wake.set()
+
+    def pause(self, timeout_seconds: float) -> bool:
+        """Quiesce between units without closing or touching a held grant."""
+        if timeout_seconds < 0:
+            raise ValueError("暂停等待时间不能为负数")
+        if not self._dispatch_lock.acquire(timeout=timeout_seconds):
+            return False
+        try:
+            with self._lifecycle_lock:
+                if self._closed or self._last_error is not None:
+                    raise RuntimeUnavailable("调度驱动已停止，须重新构造并核查许可")
+                self._paused.set()
+        finally:
+            self._dispatch_lock.release()
+        return True
+
+    def resume(self) -> None:
+        """Resume the same owner and thread, preserving queued requests."""
+        with self._lifecycle_lock:
+            if self._closed or self._last_error is not None:
+                raise RuntimeUnavailable("调度驱动已停止，须重新构造并核查许可")
+            self._paused.clear()
             self._wake.set()
 
     def stop(self, timeout_seconds: float) -> bool:

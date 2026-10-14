@@ -26,6 +26,39 @@ def assert_legacy_worker_usable(worker, ingestion):
     assert ingestion._thread is not None and ingestion._thread.is_alive()
 
 
+def configuration_state(env_path):
+    from app.workspace_settings import load_workspace_config, read_workspace_secret
+    return (env_path.read_bytes(), dict(os.environ), tempfile.tempdir,
+        load_workspace_config(LEGACY_WORKSPACE_ID), read_workspace_secret(LEGACY_WORKSPACE_ID, "llm_api_key"))
+
+
+def next_configuration(tmp_path):
+    return {"model_root_path": str(tmp_path / "next-models"), "llm_provider": "deepseek",
+        "llm_model": "must-not-persist", "llm_api_key": "synthetic-unwritten-secret"}
+
+
+def healthy_idle_predecessor(tmp_path, monkeypatch, later_owner):
+    completed = threading.Event()
+    if later_owner == "automation":
+        from test_device_runtime import _runtime, CompletingExecutor
+        class Observer(CompletingExecutor):
+            def execute(self, grant, scheduler):
+                super().execute(grant, scheduler)
+                completed.set()
+        root = tmp_path / "predecessor-device"
+        root.mkdir()
+        predecessor = _runtime(root, database=main.production_repo.database_path, executor=Observer())
+        predecessor.start()
+        monkeypatch.setattr(main, "device_runtime", predecessor)
+    else:
+        predecessor = main._automation_runtime()
+        predecessor.service.tick = completed.set
+        predecessor.start()
+        assert completed.wait(2)
+        completed.clear()
+    return predecessor, completed
+
+
 def test_database_switch_moves_five_actual_service_writes_together(isolated_host, tmp_path):
     old_db = Path(main.settings.database_path)
     main.conversation_repo.create("probe", "member", "home", "home", "OLD")
@@ -144,62 +177,70 @@ def test_stream_in_progress_refuses_reload_before_configuration_write(isolated_h
     assert not main._assistant_stream_workers
 
 
-def test_device_stop_false_retains_permit_and_does_not_replace_running_unit(isolated_host, tmp_path, monkeypatch):
+def test_busy_device_pause_refuses_before_config_and_original_driver_continues(isolated_host, tmp_path, monkeypatch):
     from test_device_runtime import _runtime, _intent
     main._reload_runtime_dependencies()
-    worker, ingestion = main.execution_worker, main.material_ingestion
-    entered, release = threading.Event(), threading.Event()
-    class BlockingUnit:
+    entered, release, continued = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    class Unit:
         def execute(self, grant, scheduler):
-            entered.set()
-            assert release.wait(5)
+            calls.append(grant.owner_id)
+            if grant.owner_id == "first":
+                entered.set()
+                assert release.wait(5)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                 checkpoint_write=lambda conn, current: current.owner_id)
+            if grant.owner_id == "second":
+                continued.set()
     device_root = tmp_path / "device"
     device_root.mkdir()
-    runtime = _runtime(device_root, database=main.production_repo.database_path, executor=BlockingUnit())
+    runtime = _runtime(device_root, database=main.production_repo.database_path, executor=Unit())
     runtime.scheduler.submit(_intent("first"), "member")
+    runtime.scheduler.submit(_intent("second"), "member")
     runtime.start()
     assert entered.wait(2)
-    stop = runtime.stop
-    monkeypatch.setattr(runtime, "stop", lambda timeout_seconds: stop(0.01))
+    thread = runtime._thread
+    pause = runtime.pause
+    monkeypatch.setattr(runtime, "pause", lambda timeout_seconds: pause(0.01))
     monkeypatch.setattr(main, "device_runtime", runtime)
-    old_settings, old_catalog = main.settings, main.model_installer.catalog
-    old_tmp = os.environ["TMPDIR"], tempfile.tempdir
+    before = configuration_state(isolated_host[3])
     try:
-        response = client().post("/api/settings/runtime", json={"model_root_path": str(tmp_path / "next-models")})
-        assert response.status_code == 500, response.text
-        assert main.device_runtime is runtime and runtime.running
-        assert main.settings is old_settings and main.model_installer.catalog is old_catalog
-        assert (os.environ["TMPDIR"], tempfile.tempdir) == old_tmp
-        assert "next-models" in isolated_host[3].read_text()  # persistence precedes an unsuccessful stop
+        response = client().post("/api/settings/runtime", json=next_configuration(tmp_path))
+        assert response.status_code == 503, response.text
+        assert configuration_state(isolated_host[3]) == before
+        assert main.device_runtime is runtime and runtime._thread is thread
+        assert not runtime._closed and not runtime._stop.is_set() and not runtime._paused.is_set()
         with sqlite3.connect(runtime.scheduler.database_path) as conn:
             assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "held"
-        assert_legacy_worker_usable(worker, ingestion)
-        (tmp_path / "stop-state.json").write_text(json.dumps({
-            "owner": "device", "env_candidate_persisted": True,
-            "workspace_or_secret_submitted": False, "installer_binding_changed": False,
-            "runtime_globals_changed": False, "process_tmp_changed": False,
-            "device_thread_alive": runtime.running, "device_closed": runtime._closed,
-            "permit": "held", "legacy_worker_submit": "ready", "ingestion_thread_alive": True,
-            "replacement_coordinator": False,
-        }))
+        release.set()
+        assert continued.wait(2)
+        assert calls == ["first", "second"] and runtime.last_error is None
+        assert runtime._thread is thread
+        (tmp_path / "pause-state.json").write_text(json.dumps({"owner": "device", "configuration_written": False,
+            "closed": False, "stop_requested": False, "same_driver": True, "held_unit_finished": True,
+            "next_queued_unit_completed": True, "replacement_coordinator": False}))
     finally:
         release.set()
-        assert stop(2)
+        assert runtime.stop(2)
         main.device_runtime = None
 
 
+
 @pytest.mark.parametrize("owner", ["automation", "continuation"])
-def test_unfinished_background_stop_keeps_bindings_but_records_persisted_config_limit(isolated_host, tmp_path, monkeypatch, owner):
+def test_busy_background_pause_refuses_and_restores_previous_owner(isolated_host, tmp_path, monkeypatch, owner):
     main._reload_runtime_dependencies()
-    worker, ingestion = main.execution_worker, main.material_ingestion
-    entered, release = threading.Event(), threading.Event()
+    entered, release, continued = threading.Event(), threading.Event(), threading.Event()
+    calls = []
     def blocked():
         if threading.current_thread() is not threading.main_thread():
-            entered.set()
-            assert release.wait(5)
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                assert release.wait(5)
+            else:
+                continued.set()
         return 0
+    predecessor, predecessor_done = healthy_idle_predecessor(tmp_path, monkeypatch, owner)
     if owner == "automation":
         driver = main._automation_runtime()
         monkeypatch.setattr(driver.service, "tick", blocked)
@@ -211,35 +252,120 @@ def test_unfinished_background_stop_keeps_bindings_but_records_persisted_config_
     if owner == "continuation":
         driver.wake.set()
     assert entered.wait(2)
-    join = driver.thread.join
-    monkeypatch.setattr(driver.thread, "join", lambda timeout=None: join(0.01))
-    old_settings, old_catalog, old_tmp = main.settings, main.model_installer.catalog, os.environ["TMPDIR"]
+    thread = driver.thread
+    pause = driver.pause
+    monkeypatch.setattr(driver, "pause", lambda timeout_seconds: pause(0.01))
+    before = configuration_state(isolated_host[3])
     try:
-        response = client().post("/api/settings/runtime", json={
-            "model_root_path": str(tmp_path / "next-models"), "llm_provider": "deepseek",
-            "llm_model": "newly-persisted", "llm_api_key": "synthetic-stop-test-secret",
-        })
-        assert response.status_code == 500, response.text
-        assert main.settings is old_settings and main.model_installer.catalog is old_catalog
-        assert os.environ["TMPDIR"] == old_tmp
-        assert driver.thread.is_alive()
-        assert "next-models" in isolated_host[3].read_text()
-        assert_legacy_worker_usable(worker, ingestion)
-        from app.workspace_settings import load_workspace_config, read_workspace_secret
-        assert load_workspace_config(LEGACY_WORKSPACE_ID)["llm_model"] == "newly-persisted"
-        assert read_workspace_secret(LEGACY_WORKSPACE_ID, "llm_api_key") == "synthetic-stop-test-secret"
-        (tmp_path / "stop-state.json").write_text(json.dumps({
-            "owner": owner, "env_candidate_persisted": True, "workspace_config_persisted": True,
-            "synthetic_secret_store_persisted": True, "secret_value_recorded": False,
-            "installer_binding_changed": False, "runtime_globals_changed": False,
-            "process_tmp_changed": False, "driver_thread_alive": True,
-            "driver_stop_requested": driver.stop_event.is_set(),
-            "legacy_worker_submit": "ready", "ingestion_thread_alive": True,
-            "whole_configuration_runtime_atomic": False,
-        }))
+        response = client().post("/api/settings/runtime", json=next_configuration(tmp_path))
+        assert response.status_code == 503, response.text
+        assert configuration_state(isolated_host[3]) == before
+        assert driver.thread is thread and not driver.stop_event.is_set() and not driver._paused.is_set()
+        assert not predecessor._paused.is_set()
+        if owner == "automation":
+            from test_device_runtime import _intent
+            predecessor.scheduler.submit(_intent("after-rollback"), "member")
+            predecessor.wake()
+        else:
+            predecessor._wake.set()
+        assert predecessor_done.wait(2)
+        release.set()
+        (driver._wake if owner == "automation" else driver.wake).set()
+        assert continued.wait(2) and driver.thread is thread
+        (tmp_path / "pause-state.json").write_text(json.dumps({"owner": owner, "configuration_written": False,
+            "stop_requested": False, "same_driver": True, "original_loop_tick_after_refusal": True,
+            "previous_paused_owner_resumed_and_ran": True}))
     finally:
         release.set()
-        join(2)
-        assert not driver.thread.is_alive()
-        if owner == "continuation":
+        driver.stop()
+        if owner == "automation":
+            assert predecessor.stop(2)
+            main.device_runtime = None
+        else:
             main.assistant_continuation_driver = None
+
+
+def test_device_persistence_error_resumes_all_original_loops(isolated_host, tmp_path, monkeypatch):
+    main._reload_runtime_dependencies()
+    device, completed = healthy_idle_predecessor(tmp_path, monkeypatch, "automation")
+    automatic = main._automation_runtime()
+    auto_tick, conversation_tick = threading.Event(), threading.Event()
+    automatic.service.tick = auto_tick.set
+    automatic.start()
+    assert auto_tick.wait(2)
+    auto_tick.clear()
+    def reconcile():
+        if threading.current_thread() is not threading.main_thread():
+            conversation_tick.set()
+        return 0
+    monkeypatch.setattr(main, "_reconcile_assistant_business_results", reconcile)
+    continuation = main.AssistantContinuationDriver()
+    monkeypatch.setattr(main, "assistant_continuation_driver", continuation)
+    continuation.start()
+    threads = device._thread, automatic.thread, continuation.thread
+    bad_env = tmp_path / "env-is-directory"
+    bad_env.mkdir()
+    monkeypatch.setattr(main, "runtime_env_path", bad_env)
+    before = configuration_state(isolated_host[3])
+    try:
+        response = client().post("/api/settings/runtime", json={"model_root_path": str(tmp_path / "next-models")})
+        assert response.status_code == 500, response.text
+        assert "IsADirectoryError" in response.text
+        assert configuration_state(isolated_host[3]) == before
+        for owner in (device, automatic, continuation):
+            assert not owner._paused.is_set()
+        from test_device_runtime import _intent
+        device.scheduler.submit(_intent("after-io-failure"), "member")
+        device.wake()
+        assert completed.wait(2) and auto_tick.wait(2) and conversation_tick.wait(2)
+        assert (device._thread, automatic.thread, continuation.thread) == threads
+    finally:
+        continuation.stop()
+        main.assistant_continuation_driver = None
+        assert device.stop(2)
+        main.device_runtime = None
+
+
+def test_successful_switch_retires_old_automation_and_resumes_same_continuation(isolated_host, tmp_path, monkeypatch):
+    main._reload_runtime_dependencies()
+    automatic = main._automation_runtime()
+    automatic.service.tick = lambda: None
+    automatic.start()
+    updated = threading.Event()
+    next_root = tmp_path / "next-models"
+    def reconcile():
+        if Path(main.settings.model_root_path) == next_root:
+            updated.set()
+        return 0
+    monkeypatch.setattr(main, "_reconcile_assistant_business_results", reconcile)
+    continuation = main.AssistantContinuationDriver()
+    monkeypatch.setattr(main, "assistant_continuation_driver", continuation)
+    continuation.start()
+    thread = continuation.thread
+    response = client().post("/api/settings/runtime", json={"model_root_path": str(next_root)})
+    assert response.status_code == 200, response.text
+    assert "next-models" in isolated_host[3].read_text()
+    assert not automatic.thread.is_alive()
+    assert main.automation_runtime is not automatic and main.automation_runtime.thread.is_alive()
+    assert main.assistant_continuation_driver is continuation and continuation.thread is thread
+    assert updated.wait(2) and not continuation._paused.is_set()
+    continuation.stop()
+    main.assistant_continuation_driver = None
+    with pytest.raises(RuntimeError, match="已终止"):
+        continuation.resume()
+
+
+def test_terminal_device_during_quiescence_exposes_unrecoverable_owner(isolated_host, tmp_path, monkeypatch):
+    main._reload_runtime_dependencies()
+    device, _ = healthy_idle_predecessor(tmp_path, monkeypatch, "automation")
+    before = configuration_state(isolated_host[3])
+    try:
+        with pytest.raises(RuntimeError, match="旧运行恢复失败.*device"):
+            with main._quiesced_runtime_drivers():
+                assert device._paused.is_set()
+                assert device.stop(2)  # independently terminated owner cannot be resumed
+        assert configuration_state(isolated_host[3]) == before
+        assert main.device_runtime is device and device._closed
+    finally:
+        device.stop(2)
+        main.device_runtime = None

@@ -17,10 +17,13 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from weakref import WeakSet
+
+if TYPE_CHECKING:
+    from app.device_runtime import DeviceRuntime
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -484,6 +487,7 @@ from app.voice_clone import voice_clone_provider_from_catalog
 from app.workflow import LangGraphEpisodeWorkflow
 from app.automation_routes import build_automation_guarded_publish_router
 from contextvars import ContextVar
+from contextlib import contextmanager
 from app.automation_routes import build_automation_router
 from app.automation_runtime import AutomationRuntime
 
@@ -17240,16 +17244,17 @@ def update_runtime_settings(
             candidate_catalog = model_catalog_from_settings(prospective_settings)
             with model_installer.guard_catalog_update(candidate_catalog):
                 prepared = _prepare_runtime_reload(prospective_settings)
-                changed = False
+                with _quiesced_runtime_drivers() as drivers:
+                    changed = False
 
-                def request_reload():
-                    nonlocal changed
-                    changed = True
+                    def request_reload():
+                        nonlocal changed
+                        changed = True
 
-                apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
-                _persist_device_settings(runtime_env_path, device_values, request_reload)
-                if changed:
-                    _reload_runtime_dependencies(prepared)
+                    apply_workspace_runtime_settings_update(workspace_id, submitted, request_reload)
+                    _persist_device_settings(runtime_env_path, device_values, request_reload)
+                    if changed:
+                        _activate_runtime_reload(prepared, drivers)
     except WorkspaceSecretStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ModelInstallError as exc:
@@ -17292,6 +17297,45 @@ class PreparedRuntimeReload:
     creation: CreationExecution
 
 
+@dataclass
+class QuiescedRuntimeDrivers:
+    device: DeviceRuntime | None = None
+    automation: AutomationRuntime | None = None
+    continuation: AssistantContinuationDriver | None = None
+    committed: bool = False
+
+
+@contextmanager
+def _quiesced_runtime_drivers():
+    drivers = QuiescedRuntimeDrivers()
+    try:
+        if device_runtime is not None:
+            if not device_runtime.pause(30.0):
+                raise HTTPException(503, "整机运行单元尚未到达安全边界，配置未保存。")
+            drivers.device = device_runtime
+        if automation_runtime is not None:
+            if not automation_runtime.pause(10.0):
+                raise HTTPException(503, "自动任务仍在处理本轮输入，配置未保存。")
+            drivers.automation = automation_runtime
+        if assistant_continuation_driver is not None:
+            if not assistant_continuation_driver.pause(5.0):
+                raise HTTPException(503, "对话结果仍在回填，配置未保存。")
+            drivers.continuation = assistant_continuation_driver
+        yield drivers
+    finally:
+        if not drivers.committed:
+            failed = []
+            for name, owner in (("continuation", drivers.continuation),
+                    ("automation", drivers.automation), ("device", drivers.device)):
+                if owner is not None:
+                    try:
+                        owner.resume()
+                    except RuntimeError as exc:
+                        failed.append((name, exc))
+            if failed:
+                raise RuntimeError("旧运行恢复失败，未创建替代协调者：" + ", ".join(name for name, _ in failed)) from failed[0][1]
+
+
 def _prepare_runtime_reload(prospective_settings: Settings) -> PreparedRuntimeReload:
     _assert_runtime_reload_allowed()
     if _assistant_stream_workers:
@@ -17303,7 +17347,7 @@ def _prepare_runtime_reload(prospective_settings: Settings) -> PreparedRuntimeRe
         _new_creation_execution(dependencies.database.production))
 
 
-def _activate_runtime_reload(prepared: PreparedRuntimeReload) -> None:
+def _activate_runtime_reload(prepared: PreparedRuntimeReload, drivers: QuiescedRuntimeDrivers) -> None:
     global creation_execution, automation_runtime
     old_platform_auth = platform_auth_service
     database_changed = (
@@ -17321,8 +17365,6 @@ def _activate_runtime_reload(prepared: PreparedRuntimeReload) -> None:
         automation_runtime.stop()
         if automation_runtime.thread is not None and automation_runtime.thread.is_alive():
             raise RuntimeError("自动任务驱动尚未退出，原运行绑定保持。")
-    if assistant_continuation_driver is not None:
-        assistant_continuation_driver.pause()
     _stop_execution_worker()
     _stop_material_ingestion()
     if database_changed:
@@ -17340,7 +17382,8 @@ def _activate_runtime_reload(prepared: PreparedRuntimeReload) -> None:
     if restart_automation:
         _automation_runtime().start()
     if restart_assistant:
-        assistant_continuation_driver.start()
+        assistant_continuation_driver.resume()
+    drivers.committed = True
 
 
 def _reload_runtime_dependencies(prepared: PreparedRuntimeReload | None = None) -> None:
@@ -17354,7 +17397,8 @@ def _reload_runtime_dependencies(prepared: PreparedRuntimeReload | None = None) 
         with model_installer.guard_catalog_update(candidate_catalog):
             if prepared is None:
                 prepared = _prepare_runtime_reload(prospective_settings)
-            _activate_runtime_reload(prepared)
+            with _quiesced_runtime_drivers() as drivers:
+                _activate_runtime_reload(prepared, drivers)
 
 
 @app.get("/api/knowledge/notes", response_model=list[KnowledgeNoteResponse])
@@ -20638,11 +20682,16 @@ class AssistantContinuationDriver:
     def __init__(self):
         self.wake = threading.Event()
         self.stop_event = threading.Event()
+        self._paused = threading.Event()
+        self._tick_lock = threading.Lock()
         self.thread = None
 
     def start(self):
+        if self.thread is not None and self.thread.is_alive():
+            return
         self.stop_event.clear()
-        _reconcile_assistant_business_results()
+        with self._tick_lock:
+            _reconcile_assistant_business_results()
         self.thread = threading.Thread(target=self._run, name="assistant-business-results", daemon=True)
         self.thread.start()
 
@@ -20653,20 +20702,37 @@ class AssistantContinuationDriver:
             if self.stop_event.is_set():
                 break
             try:
-                _reconcile_assistant_business_results()
-                _goal_service().reconcile()
+                with self._tick_lock:
+                    if not self.stop_event.is_set() and not self._paused.is_set():
+                        _reconcile_assistant_business_results()
+                        _goal_service().reconcile()
             except Exception:
                 logger.exception("对话业务结果回填失败；持久来源保留，未重复执行业务动作")
 
-    def pause(self):
+    def pause(self, timeout_seconds: float) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("暂停等待时间不能为负数")
+        if not self._tick_lock.acquire(timeout=timeout_seconds):
+            return False
+        try:
+            self._paused.set()
+        finally:
+            self._tick_lock.release()
+        return True
+
+    def resume(self) -> None:
+        if self.stop_event.is_set():
+            raise RuntimeError("对话结果驱动已终止，不能恢复原循环")
+        self._paused.clear()
+        self.wake.set()
+
+    def stop(self):
         self.stop_event.set()
         self.wake.set()
         self.thread.join(timeout=5)
         if self.thread.is_alive():
             raise RuntimeError("对话结果驱动尚未退出")
 
-    def stop(self):
-        self.pause()
         # A process shutdown stops model controls, but is not a user decision
         # to invalidate the original goal or replay an in-flight operation.
         for turn_id in stop_all_assistant_turns():

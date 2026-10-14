@@ -75,6 +75,9 @@ class AutomationRuntime:
         self.service = AutomationService(production.database_path,verify_identity=verify_identity,
             read_inputs=self.read_inputs,project_run=self.project_run,check_capabilities=self.check_capabilities)
         self.stop_event = threading.Event()
+        self._paused = threading.Event()
+        self._tick_lock = threading.Lock()
+        self._wake = threading.Event()
         self.thread = None
         self.driver_error = None
 
@@ -296,14 +299,35 @@ class AutomationRuntime:
     def drive(self):
         while not self.stop_event.is_set():
             try:
-                self.service.tick()
-                self.driver_error = None
+                with self._tick_lock:
+                    if not self.stop_event.is_set() and not self._paused.is_set():
+                        self.service.tick()
+                        self.driver_error = None
             except (ValueError,KeyError,OSError,sqlite3.Error) as exc:
                 self.driver_error = str(exc)
                 log.exception("Automation due scan failed; no execution success is inferred")
-            self.stop_event.wait(5)
+            self._wake.wait(5)
+            self._wake.clear()
+
+    def pause(self, timeout_seconds: float) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("暂停等待时间不能为负数")
+        if not self._tick_lock.acquire(timeout=timeout_seconds):
+            return False
+        try:
+            self._paused.set()
+        finally:
+            self._tick_lock.release()
+        return True
+
+    def resume(self) -> None:
+        if self.stop_event.is_set():
+            raise RuntimeError("自动任务驱动已终止，不能恢复原循环")
+        self._paused.clear()
+        self._wake.set()
 
     def stop(self):
         self.stop_event.set()
+        self._wake.set()
         if self.thread:
             self.thread.join(timeout=10)

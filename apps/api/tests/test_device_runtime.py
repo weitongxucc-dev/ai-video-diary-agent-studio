@@ -170,6 +170,9 @@ def test_executor_failure_keeps_permit_and_exposes_fault(tmp_path, failure):
     with sqlite3.connect(runtime.scheduler.database_path) as conn:
         assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "held"
     assert runtime.scheduler._get(request.id).state == "granted"
+    assert isinstance(runtime.last_error, (RuntimeError, RecoveryBlocked))
+    with pytest.raises(RuntimeUnavailable, match="已停止"):
+        runtime.pause(0.1)
     assert runtime.stop(0.1) is True  # closes this process's fd, preserves the held ledger
 
 
@@ -210,6 +213,70 @@ def test_start_is_idempotent_and_stop_timeout_never_releases_active_unit(tmp_pat
         runtime.start()
 
 
+def test_pause_between_grant_and_execute_leaves_admitted_unit_untouched(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    completed = threading.Event()
+    class ObservedExecutor(CompletingExecutor):
+        def execute(self, grant, scheduler):
+            super().execute(grant, scheduler)
+            completed.set()
+    executor = ObservedExecutor()
+    runtime = _runtime(tmp_path, executor=executor)
+    runtime.scheduler.submit(_intent("first"), "member")
+    pick = runtime.scheduler.pick_and_grant
+
+    def admitted_then_wait():
+        grant = pick()
+        if grant is not None:
+            entered.set()
+            assert release.wait(3)
+        return grant
+
+    monkeypatch.setattr(runtime.scheduler, "pick_and_grant", admitted_then_wait)
+    runtime.start()
+    original_thread = runtime._thread
+    try:
+        assert entered.wait(2)
+        assert runtime.pause(0.01) is False
+        assert not runtime._stop.is_set() and not runtime._paused.is_set() and not runtime._closed
+        with sqlite3.connect(runtime.scheduler.database_path) as conn:
+            assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "held"
+        release.set()
+        assert completed.wait(2)
+        assert runtime.stop(2)
+        assert len(executor.calls) == 1
+        assert runtime.last_error is None and runtime._thread is original_thread
+    finally:
+        release.set()
+        runtime.stop(2)
+
+
+def test_idle_pause_resume_uses_same_driver_scheduler_and_waiting_request(tmp_path):
+    completed = threading.Event()
+    class ObservedExecutor(CompletingExecutor):
+        def execute(self, grant, scheduler):
+            super().execute(grant, scheduler)
+            completed.set()
+    executor = ObservedExecutor()
+    runtime = _runtime(tmp_path, executor=executor)
+    runtime.start()
+    thread, scheduler = runtime._thread, runtime.scheduler
+    try:
+        assert runtime.pause(1)
+        request = scheduler.submit(_intent("after-pause"), "member")
+        assert runtime.run_once() is False
+        assert scheduler._get(request.id).state == "waiting"
+        assert not runtime._stop.is_set() and not runtime._closed
+        runtime.resume()
+        assert completed.wait(2)
+        assert runtime._thread is thread and runtime.scheduler is scheduler
+        assert len(executor.calls) == 1 and scheduler._get(request.id).state == "done"
+    finally:
+        assert runtime.stop(2)
+    with pytest.raises(RuntimeUnavailable, match="已停止"):
+        runtime.resume()
+
+
 def test_background_executor_error_is_visible_and_stops_before_next_unit(tmp_path):
     class RaisingExecutor:
         def execute(self, grant, scheduler):
@@ -227,6 +294,48 @@ def test_background_executor_error_is_visible_and_stops_before_next_unit(tmp_pat
     with pytest.raises(RuntimeUnavailable, match="已停止"):
         runtime.start()
     assert runtime.stop(0.1) is True
+
+
+def test_pause_rejects_admitted_fault_before_background_catch(tmp_path):
+    exception_returned, allow_background_catch = threading.Event(), threading.Event()
+    fault = RuntimeError("admitted failure without checkpoint or permit release")
+    class RaisingExecutor:
+        def execute(self, grant, scheduler):
+            scheduler.assert_grant(grant)
+            raise fault
+    runtime = _runtime(tmp_path, executor=RaisingExecutor())
+    request = runtime.scheduler.submit(_intent("admitted-failure"), "member")
+    original_run_once = runtime.run_once
+    def hold_exception():
+        try:
+            return original_run_once()
+        except RuntimeError:
+            exception_returned.set()
+            assert allow_background_catch.wait(3)
+            raise
+    runtime.run_once = hold_exception
+    runtime.start()
+    try:
+        assert exception_returned.wait(2)
+        assert not runtime._dispatch_lock.locked()
+        assert runtime.last_error is fault and runtime._stop.is_set()
+        assert not runtime._closed and not runtime._paused.is_set()
+        ledger = runtime.scheduler.ledger_path.read_bytes()
+        fd = runtime.scheduler._held_fd
+        inode = os.fstat(fd).st_ino
+        with pytest.raises(RuntimeUnavailable, match="已停止"):
+            runtime.pause(0.1)
+        with sqlite3.connect(runtime.scheduler.database_path) as conn:
+            assert conn.execute("SELECT state,request_id FROM device_permit WHERE id=1").fetchone() == ("held", request.id)
+        assert runtime.scheduler._get(request.id).state == "granted"
+        assert runtime.scheduler.ledger_path.read_bytes() == ledger
+        assert runtime.scheduler._held_fd == fd and os.fstat(fd).st_ino == inode
+        assert not runtime._paused.is_set()
+    finally:
+        allow_background_catch.set()
+        runtime._thread.join(2)
+        assert not runtime.running
+        assert runtime.stop(2)
 
 
 def test_driver_rejects_freed_permit_with_unfinished_request_row(tmp_path):
