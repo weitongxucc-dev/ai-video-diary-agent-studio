@@ -39,6 +39,44 @@ class MaterialAssetStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
+    def _asset_payload_row_by_path(
+        self, conn: sqlite3.Connection, workspace_id: str, file_path: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND file_path=?",
+            (workspace_id, file_path),
+        ).fetchone()
+
+    def _asset_file_path_rows_outside_workspace(
+        self, conn: sqlite3.Connection, excluded_workspace_id: str,
+    ) -> list[sqlite3.Row]:
+        return conn.execute(
+            "SELECT file_path FROM material_assets WHERE workspace_id!=?",
+            (excluded_workspace_id,),
+        ).fetchall()
+
+    def _asset_row_by_id(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM material_assets WHERE id=? AND workspace_id=?",
+            (asset_id, workspace_id),
+        ).fetchone()
+
+    def _asset_file_path_existence_row(
+        self, conn: sqlite3.Connection, file_path: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT 1 FROM material_assets WHERE file_path=?", (file_path,),
+        ).fetchone()
+
+    def _asset_id_existence_row(
+        self, conn: sqlite3.Connection, asset_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT 1 FROM material_assets WHERE id=?", (asset_id,),
+        ).fetchone()
+
     def get_asset(self, workspace_id: str, asset_id: str, *, connection: sqlite3.Connection | None = None) -> MaterialAsset:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(

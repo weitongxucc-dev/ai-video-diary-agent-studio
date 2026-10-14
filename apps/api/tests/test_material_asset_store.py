@@ -369,3 +369,111 @@ def test_actual_observations_round_trip_through_sqlite_json_and_response_schema(
     assert response["speech_analysis"]["observations"] == [{"start_ms": 0, "end_ms": 1000, "text": "原始语音"}]
     assert response["segments"][0]["understanding"]["summary"] == "画面事实"
     assert response["modified_at"] == "2026-10-14T00:00:00Z"
+
+
+def test_raw_asset_readers_preserve_scoped_projection_payload_visibility_and_missing(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("raw asset reader must use its supplied connection")
+
+    store = MaterialAssetStore(forbidden)
+    value = _asset("local-asset", workspace="local", visibility="private")
+    value.path = "/synthetic/raw path.mp4"
+    raw = json.dumps(json.loads(_json_payload(value)), ensure_ascii=False, indent=2) + "\n"
+    original = (value.id, value.workspace_id, value.path, raw, WHEN.isoformat(), "shared")
+    foreign = ("foreign-asset", "foreign", value.path, "foreign undecoded bytes", WHEN.isoformat(), "private")
+    with connect() as conn:
+        conn.executemany("INSERT INTO material_assets VALUES (?, ?, ?, ?, ?, ?)", [original, foreign])
+    before = _snapshot(connect)
+    with connect() as conn:
+        row = store._asset_payload_row_by_path(conn, "local", value.path)
+        assert isinstance(row, sqlite3.Row)
+        assert row.keys() == ["payload", "visibility"]
+        assert row["payload"] == raw
+        assert row["visibility"] == "shared"
+        assert store._asset_from_row(row).visibility == "shared"
+        complete = store._asset_row_by_id(conn, "local", value.id)
+        assert isinstance(complete, sqlite3.Row)
+        assert tuple(complete) == original
+        assert complete.keys() == ["id", "workspace_id", "file_path", "payload", "updated_at", "visibility"]
+        assert store._asset_row_by_id(conn, "local", "foreign-asset") is None
+        assert store._asset_row_by_id(conn, "foreign", value.id) is None
+        assert store._asset_payload_row_by_path(conn, "missing-space", value.path) is None
+        assert store._asset_payload_row_by_path(conn, "local", "/missing-path") is None
+        assert store._asset_row_by_id(conn, "local", "missing-id") is None
+        assert store._asset_payload_row_by_path(conn, "foreign", value.path)["payload"] == foreign[3]
+    assert _snapshot(connect) == before
+
+
+def test_raw_asset_global_collisions_include_foreign_private_rows_and_foreign_paths_keep_duplicates(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("global/foreign reader must use its supplied connection")
+
+    store = MaterialAssetStore(forbidden)
+    path = "/synthetic/foreign-collision.wav"
+    with connect() as conn:
+        conn.executemany("INSERT INTO material_assets VALUES (?, ?, ?, ?, ?, ?)", [
+            ("local-id", "local", "/synthetic/local.wav", "local bytes", WHEN.isoformat(), "private"),
+            ("foreign-id", "foreign-a", path, "foreign private bytes", WHEN.isoformat(), "private"),
+            ("another-foreign-id", "foreign-b", path, "foreign shared bytes", WHEN.isoformat(), "shared"),
+        ])
+    before = _snapshot(connect)
+    with connect() as conn:
+        by_path = store._asset_file_path_existence_row(conn, path)
+        by_id = store._asset_id_existence_row(conn, "foreign-id")
+        assert isinstance(by_path, sqlite3.Row) and tuple(by_path) == (1,)
+        assert isinstance(by_id, sqlite3.Row) and tuple(by_id) == (1,)
+        assert store._asset_payload_row_by_path(conn, "local", path) is None
+        assert store._asset_row_by_id(conn, "local", "foreign-id") is None
+        foreign = store._asset_file_path_rows_outside_workspace(conn, "local")
+        assert isinstance(foreign, list)
+        assert all(isinstance(row, sqlite3.Row) and row.keys() == ["file_path"] for row in foreign)
+        assert [row["file_path"] for row in foreign] == [path, path]
+        outside_a = store._asset_file_path_rows_outside_workspace(conn, "foreign-a")
+        assert len(outside_a) == 2
+        assert {row["file_path"] for row in outside_a} == {"/synthetic/local.wav", path}
+        assert store._asset_file_path_existence_row(conn, "/missing-path") is None
+        assert store._asset_id_existence_row(conn, "missing-id") is None
+    assert _snapshot(connect) == before
+
+
+def test_five_raw_asset_readers_see_caller_uncommitted_rows_isolate_observer_and_allow_rollback(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("caller connection must not be replaced by a factory connection")
+
+    store = MaterialAssetStore(forbidden)
+
+    def read_all(conn):
+        return [
+            store._asset_payload_row_by_path(conn, "local", "/synthetic/local.wav"),
+            store._asset_file_path_rows_outside_workspace(conn, "local"),
+            store._asset_row_by_id(conn, "local", "local-id"),
+            store._asset_file_path_existence_row(conn, "/synthetic/foreign.wav"),
+            store._asset_id_existence_row(conn, "foreign-id"),
+        ]
+
+    before = _snapshot(connect)
+    with connect() as conn:
+        conn.execute("BEGIN")
+        conn.executemany("INSERT INTO material_assets VALUES (?, ?, ?, ?, ?, ?)", [
+            ("local-id", "local", "/synthetic/local.wav", "uncommitted local raw bytes", WHEN.isoformat(), "private"),
+            ("foreign-id", "foreign", "/synthetic/foreign.wav", "uncommitted foreign raw bytes", WHEN.isoformat(), "private"),
+        ])
+        rows = read_all(conn)
+        assert rows[0]["payload"] == "uncommitted local raw bytes"
+        assert [row["file_path"] for row in rows[1]] == ["/synthetic/foreign.wav"]
+        assert rows[2]["id"] == "local-id"
+        assert tuple(rows[3]) == (1,)
+        assert tuple(rows[4]) == (1,)
+        assert conn.in_transaction
+        with connect() as observer:
+            assert read_all(observer) == [None, [], None, None, None]
+        assert conn.in_transaction
+        conn.rollback()
+        assert read_all(conn) == [None, [], None, None, None]
+    assert _snapshot(connect) == before

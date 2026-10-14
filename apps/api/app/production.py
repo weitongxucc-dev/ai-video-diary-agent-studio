@@ -1663,8 +1663,7 @@ class ProductionRepository:
                 raise ValueError("参考文件与来源素材不一致")
         else:
             with self._connect() as conn:
-                row = conn.execute("SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND file_path=?",
-                                   (profile.workspace_id, str(path))).fetchone()
+                row = self._material_assets._asset_payload_row_by_path(conn, profile.workspace_id, str(path))
             if row is not None:
                 asset = self._asset_from_row(row)
         if asset is not None and not content_readable(user_id=viewer_user_id, local_diagnostic=local_diagnostic,
@@ -10495,6 +10494,7 @@ def _local_adoption_repository(cls, database_path, media_root):
     repository = cls.__new__(cls)
     repository.database_path = Path(database_path).expanduser()
     repository.video_library_path = Path(media_root).expanduser()
+    repository._material_assets = MaterialAssetStore(repository._connect)
     repository._initialize_profile_stores()
     return repository
 
@@ -10553,7 +10553,7 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
         for other in conn.execute("SELECT reference FROM workspace_media_references WHERE workspace_id!='local'"):
             if repository.resolve_workspace_media_reference("local", other["reference"]) == path:
                 raise ValueError("local_adoption_reference_other_workspace")
-        for other in conn.execute("SELECT file_path FROM material_assets WHERE workspace_id!='local'"):
+        for other in repository._material_assets._asset_file_path_rows_outside_workspace(conn, "local"):
             if Path(other["file_path"]).resolve() == path:
                 raise ValueError("local_adoption_source_other_workspace")
         if reference not in references:
@@ -10563,7 +10563,7 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
         return path, _local_adoption_file_revision(path)
 
     for asset_id in sorted(asset_ids):
-        row = conn.execute("SELECT * FROM material_assets WHERE id=? AND workspace_id='local'", (asset_id,)).fetchone()
+        row = repository._material_assets._asset_row_by_id(conn, "local", asset_id)
         if row is None:
             raise ValueError("local_adoption_selected_local_asset_missing")
         data = json.loads(row["payload"])
@@ -10610,7 +10610,7 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
         if failure:
             raise ValueError("local_adoption_voice_" + failure)
     path, revision = source(voice.reference_audio_path, must_be_registered=True)
-    if conn.execute("SELECT 1 FROM material_assets WHERE file_path=?", (str(path),)).fetchone():
+    if repository._material_assets._asset_file_path_existence_row(conn, str(path)):
         raise ValueError("local_adoption_voice_source_already_registered")
     duration = _profile_wav_duration(path)
     if _local_adoption_file_revision(path) != revision:
@@ -10618,7 +10618,7 @@ def _local_adoption_plan(repository, conn, *, member_id, operation_id, asset_ids
     authorization_rows = [dict(row) for row in repository._media_authorizations._authorization_history_rows(
         conn, "local", voice.authorization.id)]
     source_id = "voice_source_" + hashlib.sha256((operation_id + ":" + voice_id).encode()).hexdigest()[:32]
-    if conn.execute("SELECT 1 FROM material_assets WHERE id=?", (source_id,)).fetchone():
+    if repository._material_assets._asset_id_existence_row(conn, source_id):
         raise ValueError("local_adoption_voice_source_id_exists")
     originals.update(voice=dict(voice_row), voice_path=str(path), authorizations=authorization_rows)
     manifest = {"format": "local-adoption/v1", "operation_id": operation_id, "workspace_id": "local",
