@@ -24,6 +24,8 @@ from uuid import uuid4
 from app.avatar_lipsync import (AvatarAndLipSyncRequest)
 from app.creation.contracts import ClipSourceSelection
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
+from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
+from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
     LOCAL_ADOPTION_RECEIPTS_DDL,
@@ -35,7 +37,10 @@ from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags
-from app.persistence_json import _json_payload, _json_object, _json_default, _with_datetime
+from app.persistence_json import (
+    _json_payload, _json_object, _json_default, _with_datetime,
+    _required_text, _optional_string_tuple, _required_datetime, _optional_datetime,
+)
 from app.materials.contracts import (
     AssetReviewStatus,
     ContentVisibility,
@@ -914,6 +919,7 @@ class ProductionRepository:
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
         self._material_assets = MaterialAssetStore(self._connect)
+        self._media_authorizations = MediaAuthorizationStore(self._connect)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
 
@@ -1577,17 +1583,7 @@ class ProductionRepository:
             ensure_content_visibility_columns(conn)
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
-        _validate_authorization(authorization)
-        with self._connect() as conn:
-            self._save_versioned_payload(
-                conn,
-                table="media_authorizations",
-                workspace_id=authorization.workspace_id,
-                record_id=authorization.id,
-                version=authorization.version,
-                payload=_authorization_payload(authorization),
-            )
-        return authorization
+        return self._media_authorizations.save_authorization(authorization)
 
     def get_authorization(
         self,
@@ -1595,32 +1591,17 @@ class ProductionRepository:
         authorization_id: str,
         version: str | None = None,
     ) -> Authorization:
-        with self._connect() as conn:
-            return self._get_authorization(conn, workspace_id, authorization_id, version)
+        return self._media_authorizations.get_authorization(workspace_id, authorization_id, version)
 
     def list_authorizations(self, workspace_id: str) -> list[Authorization]:
-        with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
-                conn,
-                table="media_authorizations",
-                workspace_id=workspace_id,
-                current_only=True,
-            )
-        return [self._authorization_from_payload(payload) for payload in payloads]
+        return self._media_authorizations.list_authorizations(workspace_id)
 
     def list_authorization_versions(
         self,
         workspace_id: str,
         authorization_id: str,
     ) -> list[Authorization]:
-        with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
-                conn,
-                table="media_authorizations",
-                workspace_id=workspace_id,
-                record_id=authorization_id,
-            )
-        return [self._authorization_from_payload(payload) for payload in payloads]
+        return self._media_authorizations.list_authorization_versions(workspace_id, authorization_id)
 
     def resolve_profile_reference(
         self, profile: PersonProfile | VersionedVoiceProfile, *,
@@ -1895,7 +1876,7 @@ class ProductionRepository:
                 )
             if person.authorization is not None:
                 self._save_authorization(conn, person.workspace_id, person.authorization)
-            self._save_versioned_payload(
+            _save_versioned_payload(
                 conn,
                 table="person_profiles",
                 workspace_id=person.workspace_id,
@@ -1916,7 +1897,7 @@ class ProductionRepository:
 
     def list_person_profiles(self, workspace_id: str) -> list[PersonProfile]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="person_profiles",
                 workspace_id=workspace_id,
@@ -1933,7 +1914,7 @@ class ProductionRepository:
         person_id: str,
     ) -> list[PersonProfile]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="person_profiles",
                 workspace_id=workspace_id,
@@ -1978,7 +1959,7 @@ class ProductionRepository:
                 workspace_id=voice.workspace_id,
                 reference=voice.reference_audio_path,
             )
-            self._save_versioned_payload(
+            _save_versioned_payload(
                 conn,
                 table="versioned_voice_profiles",
                 workspace_id=voice.workspace_id,
@@ -2007,7 +1988,7 @@ class ProductionRepository:
         workspace_id: str,
     ) -> list[VersionedVoiceProfile]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="versioned_voice_profiles",
                 workspace_id=workspace_id,
@@ -2024,7 +2005,7 @@ class ProductionRepository:
         voice_profile_id: str,
     ) -> list[VersionedVoiceProfile]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="versioned_voice_profiles",
                 workspace_id=workspace_id,
@@ -2043,7 +2024,7 @@ class ProductionRepository:
         with self._connect() as conn:
             if entry.scope == "person":
                 self._get_person_profile(conn, entry.workspace_id, entry.scope_reference or "")
-            self._save_versioned_payload(
+            _save_versioned_payload(
                 conn,
                 table="pronunciation_entries",
                 workspace_id=entry.workspace_id,
@@ -2060,7 +2041,7 @@ class ProductionRepository:
         version: str | None = None,
     ) -> PronunciationEntry:
         with self._connect() as conn:
-            row = self._versioned_row(
+            row = _versioned_row(
                 conn,
                 table="pronunciation_entries",
                 workspace_id=workspace_id,
@@ -2071,7 +2052,7 @@ class ProductionRepository:
 
     def list_pronunciation_entries(self, workspace_id: str) -> list[PronunciationEntry]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="pronunciation_entries",
                 workspace_id=workspace_id,
@@ -2085,7 +2066,7 @@ class ProductionRepository:
         entry_id: str,
     ) -> list[PronunciationEntry]:
         with self._connect() as conn:
-            payloads = self._list_versioned_payloads(
+            payloads = _list_versioned_payloads(
                 conn,
                 table="pronunciation_entries",
                 workspace_id=workspace_id,
@@ -2289,17 +2270,7 @@ class ProductionRepository:
         workspace_id: str,
         authorization: Authorization,
     ) -> None:
-        _validate_authorization(authorization)
-        if authorization.workspace_id != workspace_id:
-            raise ValueError("授权不属于当前工作区")
-        self._save_versioned_payload(
-            conn,
-            table="media_authorizations",
-            workspace_id=workspace_id,
-            record_id=authorization.id,
-            version=authorization.version,
-            payload=_authorization_payload(authorization),
-        )
+        return self._media_authorizations._save_authorization(conn, workspace_id, authorization)
 
     def _claim_workspace_media_reference(
         self,
@@ -2346,83 +2317,8 @@ class ProductionRepository:
                 repair_action="先将该媒体作为当前工作区已授权声音引用登记，或选择该工作区已有的逻辑引用。",
             )
 
-    def _save_versioned_payload(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        table: str,
-        workspace_id: str,
-        record_id: str,
-        version: str,
-        payload: dict[str, object],
-    ) -> None:
-        if not workspace_id.strip() or not record_id.strip() or not version.strip():
-            raise ValueError("版本化媒体对象必须包含工作区、ID 和版本")
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        row = conn.execute(
-            f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? AND version = ?",
-            (workspace_id, record_id, version),
-        ).fetchone()
-        if row is not None:
-            if str(row["payload"]) != encoded:
-                raise ValueError("语义变更必须使用新版本")
-            return
-        conn.execute(
-            f"INSERT INTO {table} (workspace_id, id, version, payload, created_at) VALUES (?, ?, ?, ?, ?)",
-            (workspace_id, record_id, version, encoded, utc_now().isoformat()),
-        )
 
-    @staticmethod
-    def _list_versioned_payloads(
-        conn: sqlite3.Connection,
-        *,
-        table: str,
-        workspace_id: str,
-        record_id: str | None = None,
-        current_only: bool = False,
-    ) -> list[dict[str, object]]:
-        if record_id is None:
-            rows = conn.execute(
-                f"SELECT id, payload FROM {table} WHERE workspace_id = ? ORDER BY id, created_at DESC, rowid DESC",
-                (workspace_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"SELECT id, payload FROM {table} WHERE workspace_id = ? AND id = ? ORDER BY created_at DESC, rowid DESC",
-                (workspace_id, record_id),
-            ).fetchall()
-        seen: set[str] = set()
-        payloads: list[dict[str, object]] = []
-        for row in rows:
-            item_id = str(row["id"])
-            if current_only and item_id in seen:
-                continue
-            seen.add(item_id)
-            payloads.append(json.loads(str(row["payload"])))
-        return payloads
 
-    @staticmethod
-    def _versioned_row(
-        conn: sqlite3.Connection,
-        *,
-        table: str,
-        workspace_id: str,
-        record_id: str,
-        version: str | None,
-    ) -> sqlite3.Row:
-        if version is None:
-            row = conn.execute(
-                f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? ORDER BY created_at DESC LIMIT 1",
-                (workspace_id, record_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                f"SELECT payload FROM {table} WHERE workspace_id = ? AND id = ? AND version = ?",
-                (workspace_id, record_id, version),
-            ).fetchone()
-        if row is None:
-            raise KeyError(record_id)
-        return row
 
     def _get_authorization(
         self,
@@ -2431,14 +2327,7 @@ class ProductionRepository:
         authorization_id: str,
         version: str | None,
     ) -> Authorization:
-        row = self._versioned_row(
-            conn,
-            table="media_authorizations",
-            workspace_id=workspace_id,
-            record_id=authorization_id,
-            version=version,
-        )
-        return self._authorization_from_payload(json.loads(str(row["payload"])))
+        return self._media_authorizations._get_authorization(conn, workspace_id, authorization_id, version)
 
     def _current_authorization(
         self,
@@ -2446,14 +2335,7 @@ class ProductionRepository:
         workspace_id: str,
         authorization: Authorization | None,
     ) -> Authorization | None:
-        if authorization is None:
-            return None
-        # An explicitly revoked/expired historical version cannot be upgraded by a later record.
-        if authorization.status in {"revoked", "expired"} or (
-            authorization.expires_at is not None and _as_utc(authorization.expires_at) <= utc_now()
-        ):
-            return authorization
-        return self._get_authorization(conn, workspace_id, authorization.id, None)
+        return self._media_authorizations._current_authorization(conn, workspace_id, authorization)
 
     def _get_person_profile(
         self,
@@ -2462,7 +2344,7 @@ class ProductionRepository:
         person_id: str,
         version: str | None = None,
     ) -> PersonProfile:
-        row = self._versioned_row(
+        row = _versioned_row(
             conn,
             table="person_profiles",
             workspace_id=workspace_id,
@@ -2478,7 +2360,7 @@ class ProductionRepository:
         voice_profile_id: str,
         version: str | None = None,
     ) -> VersionedVoiceProfile:
-        row = self._versioned_row(
+        row = _versioned_row(
             conn,
             table="versioned_voice_profiles",
             workspace_id=workspace_id,
@@ -10110,20 +9992,7 @@ class ProductionRepository:
         data = _with_datetime(data, "created_at", "updated_at")
         return VoiceProfile(**data)
 
-    @staticmethod
-    def _authorization_from_payload(data: dict[str, object]) -> Authorization:
-        return Authorization(
-            id=_required_text(data, "id"),
-            version=_required_text(data, "version"),
-            rights_holder=str(data.get("rights_holder") or ""),
-            content_types=_optional_string_tuple(data, "content_types"),
-            usage_scopes=_optional_string_tuple(data, "usage_scopes"),
-            effective_from=_required_datetime(data, "effective_from"),
-            expires_at=_optional_datetime(data, "expires_at"),
-            evidence_reference=str(data.get("evidence_reference") or ""),
-            status=_required_text(data, "status"),  # type: ignore[arg-type]
-            workspace_id=_required_text(data, "workspace_id"),
-        )
+    _authorization_from_payload = staticmethod(_authorization_from_payload)
 
     def _profile_authorization_from_payload(self, conn, workspace_id, data):
         if not data.get("authorization_id") and not data.get("authorization_version"):
@@ -11029,19 +10898,6 @@ def _person_render_identity(render: PersonRender) -> tuple[str, ...]:
     )
 
 
-def _authorization_payload(authorization: Authorization) -> dict[str, object]:
-    return {
-        "id": authorization.id,
-        "version": authorization.version,
-        "rights_holder": authorization.rights_holder,
-        "content_types": list(authorization.content_types),
-        "usage_scopes": list(authorization.usage_scopes),
-        "effective_from": authorization.effective_from.isoformat(),
-        "expires_at": authorization.expires_at.isoformat() if authorization.expires_at else None,
-        "evidence_reference": authorization.evidence_reference,
-        "status": authorization.status,
-        "workspace_id": authorization.workspace_id,
-    }
 
 
 def _profile_reference_payload(profile) -> dict[str, object]:
@@ -11618,23 +11474,6 @@ def _validate_logical_reference(reference: str, label: str) -> None:
         raise ValueError(f"{label}不能是绝对路径")
 
 
-def _validate_authorization(authorization: Authorization) -> None:
-    if not authorization.workspace_id.strip():
-        raise ValueError("授权必须属于一个工作区")
-    if not all(
-        value.strip()
-        for value in (
-            authorization.id,
-            authorization.version,
-            authorization.rights_holder,
-            authorization.evidence_reference,
-        )
-    ):
-        raise ValueError("授权缺少必要标识或证据")
-    if not authorization.content_types or not authorization.usage_scopes:
-        raise ValueError("授权必须声明内容类型和用途范围")
-    if authorization.status not in {"active", "pending", "expired", "revoked"}:
-        raise ValueError("授权状态无效")
 
 
 def _validate_media_preview_run(record: MediaPreviewRunRecord) -> None:
@@ -11734,11 +11573,6 @@ def _validate_pronunciation_entry(entry: PronunciationEntry) -> None:
         raise ValueError("对象或任务发音词典必须绑定作用域引用")
 
 
-def _required_text(data: dict[str, object], key: str) -> str:
-    value = data.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"持久化媒体对象缺少 {key}")
-    return value
 
 
 def _string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
@@ -11748,29 +11582,10 @@ def _string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _optional_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
-    value = data.get(key)
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item.strip() for item in value
-    ):
-        raise ValueError(f"持久化媒体对象的 {key} 无效")
-    return tuple(value)
 
 
-def _required_datetime(data: dict[str, object], key: str) -> datetime:
-    value = data.get(key)
-    if not isinstance(value, str):
-        raise ValueError(f"持久化媒体对象缺少 {key}")
-    return datetime.fromisoformat(value)
 
 
-def _optional_datetime(data: dict[str, object], key: str) -> datetime | None:
-    value = data.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"持久化媒体对象的 {key} 无效")
-    return datetime.fromisoformat(value)
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

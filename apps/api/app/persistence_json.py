@@ -26,3 +26,35 @@ def _with_datetime(data: dict[str, object], *keys: str) -> dict[str, object]:
         if isinstance(value, str):
             converted[key] = datetime.fromisoformat(value)
     return converted
+
+
+def _required_text(data: dict[str, object], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"持久化媒体对象缺少 {key}")
+    return value
+
+
+def _optional_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise ValueError(f"持久化媒体对象的 {key} 无效")
+    return tuple(value)
+
+
+def _required_datetime(data: dict[str, object], key: str) -> datetime:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"持久化媒体对象缺少 {key}")
+    return datetime.fromisoformat(value)
+
+
+def _optional_datetime(data: dict[str, object], key: str) -> datetime | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"持久化媒体对象的 {key} 无效")
+    return datetime.fromisoformat(value)
