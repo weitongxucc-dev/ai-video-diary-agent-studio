@@ -111,8 +111,8 @@ from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
-from app.media_script import ScriptToolchain, media_script_resource_facts, MediaScriptError
-from app.media_script_jobs import read_script_toolchain, script_limits, seal_script, execute_script, script_definition
+from app.media_script import MediaScriptError
+from app.media_script_jobs import read_script_toolchain, MediaScriptPreviewUseCase, MEDIA_SCRIPT_ACTIONS
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
 from app.visual_effects import VisualEditRequest, VisualEffects, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
@@ -3856,33 +3856,18 @@ def _task_media_route(operation, result_kind):
             if TASK_MEDIA_CONTEXT.get() is not None or _TASK_MEDIA_SUBMISSION.get():
                 return function(*args, **kwargs)
             typed_source, edit_request_event = (None, None)
-            if operation in {'exact_edit_preview', 'media_script_preview', 'media_script_tool_preview'}:
+            if operation == 'exact_edit_preview':
                 original = bound.arguments['payload']
                 if original.request_id is not None:
                     task, member_id = _exact_edit_access(bound.arguments['task_id'], request, write=True)
-                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'preview' if operation == 'exact_edit_preview' else 'script', {**original.model_dump(mode='json', exclude_unset=True), **({'tool_id': bound.arguments['tool_id']} if operation == 'media_script_tool_preview' else {})})
+                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'preview', original.model_dump(mode='json', exclude_unset=True))
                     if not fresh:
                         result = _read_edit_request_result(task, edit_request_event)
                         if result is not None:
                             return result
                         raise HTTPException(status_code=409, detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
                 try:
-                    if operation in {'media_script_preview', 'media_script_tool_preview'}:
-                        script_payload = original
-                        if operation == 'media_script_tool_preview':
-                            actor = _require_permit_actor(request, current_workspace_id(request))
-                            try:
-                                script_payload, _ref = _instantiate_script_tool(actor, bound.arguments['tool_id'], original)
-                            except (KeyError, PermissionError, ScriptToolError) as exc:
-                                _script_tool_error(exc)
-                        typed_source = _prepare_script_request(bound.arguments['task_id'], request, script_payload)
-                        if typed_source.get('reused_completed_source') is not None:
-                            result = JSONResponse(status_code=200, content=typed_source['reused_completed_source'])
-                            if edit_request_event:
-                                _save_edit_request_result(task, edit_request_event, result)
-                            return result
-                    else:
-                        bound.arguments['payload'], typed_source = _prepare_exact_edit_request(bound.arguments['task_id'], request, original)
+                    bound.arguments['payload'], typed_source = _prepare_exact_edit_request(bound.arguments['task_id'], request, original)
                 except HTTPException as exc:
                     if edit_request_event:
                         _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
@@ -3917,11 +3902,6 @@ def _task_media_route(operation, result_kind):
             values = {'_media_kind': media_kind, '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')}
             if typed_source is not None:
                 values['_typed_source'] = typed_source
-            if operation in {'media_script_preview', 'media_script_tool_preview'}:
-                toolchain, _budget = _script_configuration()
-                values['_script_toolchain'] = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
-                if operation == 'media_script_tool_preview':
-                    _expanded, values['_recipe_ref'] = _instantiate_script_tool(actor, bound.arguments['tool_id'], bound.arguments['payload'])
             try:
                 for name, value in bound.arguments.items():
                     if name in {'request', 'task_id'}:
@@ -3959,6 +3939,11 @@ def _task_media_route(operation, result_kind):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+    if operation in MEDIA_SCRIPT_ACTIONS:
+        owner = _media_script_use_case()
+        prepared = owner.prepare_source(workspace_id, task_id, operation, arguments, actor)
+        toolchain, budget = _script_configuration()
+        return owner.seal(prepared, toolchain, budget, arguments.get('_script_toolchain'))
     if operation == "output_observation":
         return _output_observation_facts(workspace_id, task_id, arguments, actor)
     if AudioEditUseCase.handles(operation, arguments):
@@ -3980,28 +3965,6 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
             raise ValueError('封存的类型化编辑输入或成员已失效')
-    if operation in {'media_script_preview', 'media_script_tool_preview'}:
-        if operation == 'media_script_tool_preview':
-            invocation = MediaScriptToolPreviewRequest.model_validate(arguments['payload'])
-            payload, recipe_ref = _instantiate_script_tool(actor, arguments['tool_id'], invocation)
-            if recipe_ref != arguments['_recipe_ref']:
-                raise ValueError('封存配方版本或来源发生变化')
-        else:
-            payload = MediaScriptPreviewRequest.model_validate(arguments['payload'])
-        version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-        if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise ValueError('脚本输入时间线已变化')
-        toolchain, budget = _script_configuration()
-        frozen = arguments.get('_script_toolchain')
-        descriptor = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
-        if frozen != descriptor:
-            raise ValueError('脚本受校准工具链描述已变化')
-        sealed, _paths, files = seal_script(production_repo, artifact_store, task, payload, toolchain)
-        resources = media_script_resource_facts(sealed=sealed, limits=script_limits(budget), input_sizes={item['name']: item['size_bytes'] for item in files}, threads=budget.max_threads)
-        resources['definition_bytes'] = len(script_definition(sealed, payload))
-        if resources['definition_bytes'] > budget.additional_disk_bytes:
-            raise ValueError('成功程序元数据超过本次磁盘预留，不安排脚本')
-        return ({'base_version_id': task.current_timeline_version_id, 'timeline_sequence': version.sequence if version else 0, 'script_digest': sealed.digest, 'toolchain': descriptor, 'files': files}, resources)
     plan_payload = production_repo.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
     plan = creation_task_montage_plan_from_payload(plan_payload) if plan_payload else None
     transient = {'status', 'message', 'output_path', 'subtitle_path', 'updated_at'}
@@ -4193,6 +4156,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if event['operation'] in MEDIA_SCRIPT_ACTIONS:
+        raise ValueError('媒体脚本必须通过明确用例，不能重入旧媒体路由')
     if event["operation"] == "output_observation":
         raise ValueError("输出观察必须通过明确用例，不能重入旧媒体路由")
     if AudioEditUseCase.handles(event['operation'], event['arguments']):
@@ -4235,6 +4200,8 @@ def _execute_task_media_operation(job, event, actor):
 
 
 def _validate_task_media_result(job, event, result, context):
+    if event['operation'] in MEDIA_SCRIPT_ACTIONS:
+        raise ValueError('媒体脚本必须通过明确用例，不能重入旧媒体路由')
     if AudioEditUseCase.handles(event['operation'], event['arguments']):
         raise ValueError('音频编辑必须通过明确用例，不能重入旧路由')
     if event['operation'] in AUDIO_INGRESS_ACTIONS:
@@ -4252,22 +4219,6 @@ def _validate_task_media_result(job, event, result, context):
         path = artifact_store.resolve_file(record.logical_ref)
         stat = path.stat()
         outputs.append({'reference': record.logical_ref, 'size_bytes': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'ctime_ns': stat.st_ctime_ns})
-        if event['operation'] in {'media_script_preview', 'media_script_tool_preview'}:
-            if record.kind == 'media_script_definition':
-                if stat.st_size != event['resources']['definition_bytes']:
-                    raise ValueError('成功程序定义大小与封存事实不一致')
-                definition = json.loads(path.read_bytes())
-                if definition['script_digest'] != event['input_facts']['script_digest']:
-                    raise ValueError('成功程序定义摘要不属于原作业')
-                continue
-            from PIL import Image
-            if record.kind != 'graphic_source' or path.suffix != '.png':
-                raise ValueError('脚本产物不是登记PNG来源')
-            with Image.open(path) as image:
-                image.load()
-                if image.format != 'PNG' or (image.width, image.height) != (result['width'], result['height']):
-                    raise ValueError('脚本PNG实测与发布结果不一致')
-            continue
         if path.suffix == '.mp4':
             from app.montage import probe_preview_video
             with production_repo._connect() as conn:
@@ -5008,31 +4959,96 @@ def get_media_script_capabilities(task_id: str, request: Request):
 
 
 @app.post("/api/creation-tasks/{task_id}/media-scripts/preview", response_model=TaskMediaJobResponse)
-@_task_media_route("media_script_preview", "graphic_source")
 def preview_media_script(task_id: str, request: Request, payload: MediaScriptPreviewRequest):
-    active = TASK_MEDIA_CONTEXT.get()
-    if active is None:
+    return _submit_media_script(task_id, request, payload)
+
+
+def _media_script_use_case(repository=None):
+    repo = repository if repository is not None else production_repo
+    return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo))
+
+
+def _submit_media_script(task_id, request, payload, *, tool_id=None):
+    operation = 'media_script_tool_preview' if tool_id is not None else 'media_script_preview'
+    edit_request_event = None
+    if payload.request_id is not None:
+        task, member_id = _exact_edit_access(task_id, request, write=True)
+        edit_request_event, fresh = _claim_edit_request(task, member_id, payload.request_id, 'script',
+            {**payload.model_dump(mode='json', exclude_unset=True), **({'tool_id': tool_id} if tool_id is not None else {})})
+        if not fresh:
+            result = _read_edit_request_result(task, edit_request_event)
+            if result is not None:
+                return result
+            raise HTTPException(status_code=409, detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
+    try:
+        script_payload = payload
+        if tool_id is not None:
+            actor = _require_permit_actor(request, current_workspace_id(request))
+            try:
+                script_payload, _ref = _instantiate_script_tool(actor, tool_id, payload)
+            except (KeyError, PermissionError, ScriptToolError) as exc:
+                _script_tool_error(exc)
+        typed_source = _prepare_script_request(task_id, request, script_payload)
+        if typed_source.get('reused_completed_source') is not None:
+            result = JSONResponse(status_code=200, content=typed_source['reused_completed_source'])
+            if edit_request_event:
+                _save_edit_request_result(task, edit_request_event, result)
+            return result
+    except HTTPException as exc:
+        if edit_request_event:
+            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
+        raise
+    try:
+        if tool_id is not None:
+            actor = _require_permit_actor(request, current_workspace_id(request))
+            try:
+                _expanded, _ref = _instantiate_script_tool(actor, tool_id, payload)
+            except (KeyError, PermissionError, ScriptToolError) as exc:
+                _script_tool_error(exc)
         try:
             _script_configuration()
         except MediaScriptError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        raise TaskMediaRequired("media_script")
-    context, job, event, _actor = active
-    task = production_repo.get_creation_task(job.workspace_id, task_id)
-    descriptor = dict(event["arguments"]["_script_toolchain"])
-    toolchain = ScriptToolchain(**{key: Path(value) if key in {"python", "stdlib", "python_library", "pillow"} else value
-                                for key, value in descriptor.items()})
-    context.check()
-    return execute_script(production_repo, artifact_store, settings.effective_temporary_root_path,
-                          task, payload, toolchain)
+    except HTTPException as exc:
+        if edit_request_event:
+            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
+        raise
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+    values = {'_media_kind': 'media_script', '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'),
+              '_typed_source': typed_source}
+    toolchain, _budget = _script_configuration()
+    values['_script_toolchain'] = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
+    if tool_id is not None:
+        _expanded, values['_recipe_ref'] = _instantiate_script_tool(actor, tool_id, payload)
+    try:
+        if tool_id is not None:
+            values['tool_id'] = tool_id
+        values['payload'] = payload.model_dump(mode='json', exclude_unset=True)
+        runtime = _creation_runtime()
+        media = runtime.registrations['creation_job'].owner.task_media
+        job = media.submit(runtime, actor, task_id, operation, values, 'graphic_source')
+        receipt = _task_media_job_response(media, job, actor, runtime)
+        if edit_request_event:
+            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=202, content=receipt))
+        receipt['result'] = None
+        return JSONResponse(status_code=202, content=receipt)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _media_script_tools():
+def _media_script_tools(repository=None):
+    repo = repository if repository is not None else production_repo
     def authorize(actor, task):
         user_id = actor.user_id or actor.member_id
         return (actor.workspace_id == task.workspace_id and (task.owner_user_id is None or task.owner_user_id == user_id)
             and content_readable(user_id=user_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id))
-    return MediaScriptTools(production_repo, artifact_store, verify_identity=_verify_creation_identity,
+    return MediaScriptTools(repo, artifact_store, verify_identity=_verify_creation_identity,
                             authorize_task_write=authorize)
 
 
@@ -5042,17 +5058,7 @@ def _script_tool_error(exc):
 
 
 def _instantiate_script_tool(actor, tool_id, payload):
-    tools = _media_script_tools()
-    value = tools.get(actor, tool_id, version=payload.tool_version)
-    instantiated = tools.instantiate_request(actor, tool_id, version=payload.tool_version, parameters=payload.parameters)
-    slots = {item["name"] for item in instantiated.pop("input_slots")}
-    if {item.name for item in payload.input_refs} != slots or len(payload.input_refs) != len(slots):
-        raise ScriptToolError("本次新任务图片输入须与配方输入槽一一匹配")
-    expanded = MediaScriptPreviewRequest.model_validate({**instantiated,
-        **payload.model_dump(mode="json", exclude_unset=True, exclude={"tool_version", "parameters"})})
-    ref = {"tool_id": value["tool_id"], "version": value["version"], "definition_ref": value["definition_ref"],
-           "code_sha256": value["code_sha256"]}
-    return expanded, ref
+    return _media_script_use_case().expand_recipe(actor, tool_id, payload)
 
 
 @app.post("/api/creation-tasks/{task_id}/media-script-tools")
@@ -5136,25 +5142,8 @@ def revoke_media_script_tool(tool_id: str, request: Request, payload: MediaScrip
 
 
 @app.post("/api/creation-tasks/{task_id}/media-script-tools/{tool_id}/preview", response_model=TaskMediaJobResponse)
-@_task_media_route("media_script_tool_preview", "graphic_source")
 def preview_media_script_tool(task_id: str, tool_id: str, request: Request, payload: MediaScriptToolPreviewRequest):
-    active = TASK_MEDIA_CONTEXT.get()
-    actor = active[3] if active is not None else _require_permit_actor(request, current_workspace_id(request))
-    try:
-        expanded, ref = _instantiate_script_tool(actor, tool_id, payload)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        if active is None:
-            _script_tool_error(exc)
-        raise
-    if active is None:
-        try:
-            _script_configuration()
-        except MediaScriptError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        raise TaskMediaRequired("media_script")
-    if ref != active[2]["arguments"]["_recipe_ref"]:
-        raise HTTPException(status_code=409, detail="当前配方与原封存版本不一致")
-    return preview_media_script.__wrapped__(task_id, request, expanded)
+    return _submit_media_script(task_id, request, payload, tool_id=tool_id)
 
 
 @app.get("/api/creation-tasks/{task_id}/graphics/sources")
@@ -17554,6 +17543,7 @@ def _build_device_components(*, repository: ProductionRepository):
         audio_ingress=_audio_ingress_use_case(repository),
         audio_edit=_audio_edit_use_case(repository),
         output_observation=_output_observation_use_case(repository),
+        media_script=_media_script_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
