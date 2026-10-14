@@ -86,8 +86,10 @@ def test_dry_run_is_read_only_and_manifest_has_no_private_bodies(legacy, monkeyp
     raw_before = hashlib.sha256(repo.database_path.read_bytes()).hexdigest()
     def forbidden(*args, **kwargs):
         raise AssertionError('must not initialize Repository')
-    monkeypatch.setattr(ProductionRepository, '__init__', forbidden)
-    manifest = plan(repo)
+    with monkeypatch.context() as construction:
+        construction.setattr(ProductionRepository, '__init__', forbidden)
+        construction.setattr(ProductionRepository, '_connect', forbidden)
+        manifest = plan(repo)
     assert dump(repo) == before
     assert hashlib.sha256(repo.database_path.read_bytes()).hexdigest() == raw_before
     text = json.dumps(manifest)
