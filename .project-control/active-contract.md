@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原选帧六目标证据已审核归还/冻结。REF-R3-FRAME-LOOKUP-BOUNDARY-EVIDENCE-20261015仅fresh-runtime/output-observation-frame-lookup-boundaries/**新证据，两个未验原生边界：含音频的packet/EOF与长GOP纯视频，仍固定单一16包/16可见帧算法及原synthetic caps；产品/旧包只读，零旧目标复跑，无产品规则/标定接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 原任务输入/人物/内容范围已核归还。REF-R4-NARRATION-READS-PREPARATION-20261015仅fresh-r4-authorizations/narration-reads-preparation/**静态证据；产品/旧包只读，定向Production两个剩余配音段SELECT与已有task_input_reads归属，不复跑旧门，不改写/upsert规则。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
@@ -38,6 +38,10 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 当前配音段读取归属只读准备
+
+`REF-R4-NARRATION-READS-PREPARATION-20261015` 仅资料线程test-runs/refactor-20261014/fresh-r4-authorizations/narration-reads-preparation/**新证据，全部产品/其它证据只读。精确80c76a7d产品基线；首读production.py的get_narration_segment/list_narration_segments、creation/task_input_reads.py已有require_creation_task/narration_segment_from_row及tests/test_creation_task_input_reads.py，必要直接消费者最多另五精准源，完整源SHA/current Git/目标AST和读期prepost登记。不重审已过bb4bf933的task/DTO、842d7172的person store或内容三交叉，不import app/collect/test/native/服务/模型或复制全仓。核两个SELECT是否还在Production、既有中立读取owner能否直接承接caller同conn、workspace/task隔离、confirmed_script fallback/空列表、KeyError/排序/DTO/借用事务边界；给实际唯一最小产品文件集合及一个合并最小自测提案。_upsert_narration_segments/save_narration_segments、script/identity/资格/写入与联合editorial事务只定位直接依赖，不移规则、不加callback袋/新通用仓储/权限/兼容层，不把两读取收敛算整个配音仓储通过。现API画面准备与Runtime固定191诊断契约都不变，各新证据域互斥。先语义REBASE_ACK后直接准备，READONLY_PREPARATION_RELEASE冻结供root审；产品写权随后按实际必要文件另绑，普通纯读取收敛最小自测/源码审核，不追加独立QA族。
 
 ### 媒体脚本四源已集成与归还
 
