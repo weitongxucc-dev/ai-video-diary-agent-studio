@@ -477,3 +477,120 @@ def test_five_raw_asset_readers_see_caller_uncommitted_rows_isolate_observer_and
         conn.rollback()
         assert read_all(conn) == [None, [], None, None, None]
     assert _snapshot(connect) == before
+
+
+def test_probe_metadata_uses_validated_raw_payload_preserves_manual_facts_columns_and_workspace(database, monkeypatch):
+    connect, traces = database
+
+    def forbidden():
+        raise AssertionError("probe outcome must use its supplied connection")
+
+    store = MaterialAssetStore(forbidden)
+    value = _asset()
+    value.user_tags = ["人工标签"]
+    value.user_description = "人工说明"
+    value.segments[0].user_tags = ["人工片段标签"]
+    value.use_state = "not_for_automation"
+    foreign = _asset("foreign", workspace="workspace-b")
+    raw = json.dumps(json.loads(_json_payload(value)), ensure_ascii=False, indent=2) + "\n"
+    stamp = datetime(2026, 10, 14, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.materials.assets.utc_now", lambda: stamp)
+    with connect() as conn:
+        conn.execute("INSERT INTO material_assets VALUES (?, ?, ?, ?, ?, ?)", (
+            value.id, value.workspace_id, value.path, raw, value.updated_at.isoformat(), "shared",
+        ))
+        _insert(conn, foreign)
+    foreign_before = _snapshot(connect)["material_assets"][1]
+    with connect() as conn:
+        conn.execute("BEGIN")
+        source = store._probe_asset_source_row(conn, value.workspace_id, value.id)
+        assert source.keys() == ["payload", "file_path"]
+        assert source["payload"] == raw and source["file_path"] == value.path
+        assert store._probe_asset_source_row(conn, "workspace-b", value.id) is None
+        assert store._probe_asset_source_row(conn, value.workspace_id, "missing") is None
+        traces.clear()
+        updated = store.apply_probe_metadata(conn, value.workspace_id, value.id, source["payload"], 3.25)
+        assert len(traces) == 1 and traces[0].startswith("UPDATE material_assets")
+        expected = asdict(value)
+        expected.update(duration_seconds=3.25, analysis_status="blocked",
+                        analysis_message="已读取时长与媒体流；镜头和画面分析尚未完成。", updated_at=stamp)
+        assert asdict(updated) == expected
+        row = conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()
+        assert row["visibility"] == "shared"
+        assert json.loads(row["payload"])["visibility"] == "private"
+        assert row["file_path"] == value.path
+        assert row["updated_at"] == stamp.isoformat()
+    assert _snapshot(connect)["material_assets"][1] == foreign_before
+
+
+def test_probe_failure_preserves_original_reason_messages_unknown_keyerror_and_other_rows(database, monkeypatch):
+    connect, traces = database
+
+    def forbidden():
+        raise AssertionError("failure command must not request another connection")
+
+    store = MaterialAssetStore(forbidden)
+    value = _asset()
+    value.user_tags = ["人工保留"]
+    value.segments[0].description = "人工片段说明"
+    foreign = _asset("foreign", workspace="workspace-b")
+    stamp = datetime(2026, 10, 14, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.materials.assets.utc_now", lambda: stamp)
+    with connect() as conn:
+        _insert(conn, value, column_visibility="shared")
+        _insert(conn, foreign)
+    foreign_before = _snapshot(connect)["material_assets"][1]
+    reasons = {
+        "probe_invalid_media": "媒体信息无效；请检查或更换原文件，当前不会自动重试。",
+        "probe_timeout": "读取媒体信息超时；请检查磁盘和文件，当前不会自动重试。",
+        "probe_output_limit": "媒体信息输出超出上限；请检查文件，当前不会自动重试。",
+        "probe_failed": "无法读取媒体信息；请检查磁盘和文件，当前不会自动重试。",
+    }
+    with connect() as conn:
+        conn.execute("BEGIN")
+        raw = store._probe_asset_source_row(conn, value.workspace_id, value.id)["payload"]
+        for reason, message in reasons.items():
+            traces.clear()
+            failed = store.mark_probe_failed(conn, value.workspace_id, value.id, raw, reason)
+            assert len(traces) == 1 and traces[0].startswith("UPDATE material_assets")
+            expected = asdict(value)
+            expected.update(analysis_status="failed", analysis_message=message, updated_at=stamp)
+            assert asdict(failed) == expected
+        before_unknown = tuple(conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone())
+        traces.clear()
+        with pytest.raises(KeyError) as error:
+            store.mark_probe_failed(conn, value.workspace_id, value.id, raw, "unknown-reason")
+        assert error.value.args == ("unknown-reason",)
+        assert traces == []
+        assert tuple(conn.execute("SELECT * FROM material_assets WHERE id=?", (value.id,)).fetchone()) == before_unknown
+        assert conn.execute("SELECT visibility FROM material_assets WHERE id=?", (value.id,)).fetchone()[0] == "shared"
+    assert _snapshot(connect)["material_assets"][1] == foreign_before
+
+
+def test_probe_outcomes_share_caller_transaction_observer_isolation_and_full_rollback(database):
+    connect, _traces = database
+
+    def forbidden():
+        raise AssertionError("probe methods must not replace the caller connection")
+
+    store = MaterialAssetStore(forbidden)
+    value = _asset()
+    with connect() as conn:
+        _insert(conn, value, column_visibility="shared")
+    before = _snapshot(connect)
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        original = store._probe_asset_source_row(conn, value.workspace_id, value.id)
+        metadata = store.apply_probe_metadata(conn, value.workspace_id, value.id, original["payload"], 3.25)
+        changed = store._probe_asset_source_row(conn, value.workspace_id, value.id)
+        assert json.loads(changed["payload"])["duration_seconds"] == 3.25
+        failed = store.mark_probe_failed(conn, value.workspace_id, value.id, changed["payload"], "probe_failed")
+        assert failed.duration_seconds == metadata.duration_seconds == 3.25
+        assert failed.analysis_status == "failed"
+        assert conn.in_transaction
+        with connect() as observer:
+            visible = store._probe_asset_source_row(observer, value.workspace_id, value.id)
+            assert visible["payload"] == original["payload"]
+        assert conn.in_transaction
+        conn.rollback()
+    assert _snapshot(connect) == before

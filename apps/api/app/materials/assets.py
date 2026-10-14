@@ -39,6 +39,56 @@ class MaterialAssetStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
+    def _probe_asset_source_row(
+        self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
+            (workspace_id, asset_id),
+        ).fetchone()
+
+    def apply_probe_metadata(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        asset_id: str,
+        source_payload: str,
+        duration_seconds: float,
+    ) -> MaterialAsset:
+        asset = self._asset_from_payload(json.loads(str(source_payload)))
+        asset.duration_seconds = duration_seconds
+        asset.analysis_status = "blocked"
+        asset.analysis_message = "已读取时长与媒体流；镜头和画面分析尚未完成。"
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
+        )
+        return asset
+
+    def mark_probe_failed(
+        self,
+        conn: sqlite3.Connection,
+        workspace_id: str,
+        asset_id: str,
+        source_payload: str,
+        reason: str,
+    ) -> MaterialAsset:
+        asset = self._asset_from_payload(json.loads(str(source_payload)))
+        asset.analysis_status = "failed"
+        asset.analysis_message = {
+            "probe_invalid_media": "媒体信息无效；请检查或更换原文件，当前不会自动重试。",
+            "probe_timeout": "读取媒体信息超时；请检查磁盘和文件，当前不会自动重试。",
+            "probe_output_limit": "媒体信息输出超出上限；请检查文件，当前不会自动重试。",
+            "probe_failed": "无法读取媒体信息；请检查磁盘和文件，当前不会自动重试。",
+        }[reason]
+        asset.updated_at = utc_now()
+        conn.execute(
+            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id),
+        )
+        return asset
+
     def _asset_payload_row_by_path(
         self, conn: sqlite3.Connection, workspace_id: str, file_path: str,
     ) -> sqlite3.Row | None:

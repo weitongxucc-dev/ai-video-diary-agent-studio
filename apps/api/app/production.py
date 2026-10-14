@@ -3490,10 +3490,9 @@ class ProductionRepository:
             candidate.provisional_revision,
         ):
             raise ValueError("素材媒体探测契约已更新，未保存旧检查点")
-        asset_row = conn.execute(
-            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
-            (candidate.workspace_id, candidate.asset_id),
-        ).fetchone()
+        asset_row = self._material_assets._probe_asset_source_row(
+            conn, candidate.workspace_id, candidate.asset_id,
+        )
         observation = conn.execute(
             "SELECT provisional_revision FROM material_ingestion_files "
             "WHERE workspace_id=? AND file_path=?",
@@ -3519,15 +3518,9 @@ class ProductionRepository:
             or existing["result_ref"] != result_ref
         ):
             raise ValueError("既有媒体探测检查点结果不匹配")
-        asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
-        asset.duration_seconds = facts.duration_seconds
-        asset.analysis_status = "blocked"
-        asset.analysis_message = "已读取时长与媒体流；镜头和画面分析尚未完成。"
-        asset.updated_at = utc_now()
-        conn.execute(
-            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
-             candidate.asset_id),
+        self._material_assets.apply_probe_metadata(
+            conn, candidate.workspace_id, candidate.asset_id,
+            str(asset_row["payload"]), facts.duration_seconds,
         )
         if existing is None:
             conn.execute(
@@ -3565,25 +3558,14 @@ class ProductionRepository:
                     grant.unit_key, grant.attempt_number)
                 or request["state"] not in {"granted", "yield_requested"}):
             raise PermissionError("素材媒体失败不属于当前许可尝试")
-        row = conn.execute(
-            "SELECT payload, file_path FROM material_assets WHERE workspace_id=? AND id=?",
-            (candidate.workspace_id, candidate.asset_id),
-        ).fetchone()
+        row = self._material_assets._probe_asset_source_row(
+            conn, candidate.workspace_id, candidate.asset_id,
+        )
         if row is None or row["file_path"] != candidate.file_path:
             raise ValueError("素材媒体失败来源已变化")
-        asset = self._asset_from_payload(json.loads(str(row["payload"])))
-        asset.analysis_status = "failed"
-        asset.analysis_message = {
-            "probe_invalid_media": "媒体信息无效；请检查或更换原文件，当前不会自动重试。",
-            "probe_timeout": "读取媒体信息超时；请检查磁盘和文件，当前不会自动重试。",
-            "probe_output_limit": "媒体信息输出超出上限；请检查文件，当前不会自动重试。",
-            "probe_failed": "无法读取媒体信息；请检查磁盘和文件，当前不会自动重试。",
-        }[reason]
-        asset.updated_at = utc_now()
-        conn.execute(
-            "UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-            (_json_payload(asset), asset.updated_at.isoformat(), candidate.workspace_id,
-             candidate.asset_id),
+        self._material_assets.mark_probe_failed(
+            conn, candidate.workspace_id, candidate.asset_id,
+            str(row["payload"]), reason,
         )
         updated = conn.execute(
             """UPDATE material_ingestion_files SET state='failed'
