@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；本批接下方显式组装/安全重载组，R4 授权模块释放后仍由 API 接消费者；完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 沿 R1/API 后续范围，唯一 main/production/schema owner；bootstrap 五源冻结供独立有限门，当前接 production 授权消费者；停止失败边界仍唯一 API 接续，完整 R2/R3 后续范围继续有效，R4/R6 整文件例外排除。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；核稳定新 Web 消费者、API bootstrap 及 R4 授权联合候选；已过 Web/字幕/usage 门与原脚本只读复用。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；本批独占下方 config 候选解析/临时目录准备及最小测试，主入口接线归 API；稳定联合候选后独立复验原两个 reload 反例。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；config 两源继续冻结，与 API 七源联合候选独立复验原两个实际 reload 反例；只接受有限源码子片，停止失败不计全安全重载通过。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 沿 R5 原范围及例外；原六源与执行回读/字幕四源均已 WRITE_LEASE_RETURN，当前只读核 MaterialLibraryWorkspace 及材料 API 消费者的下一实际职责/反例，不恢复旧冻结；新施工须主控按精确符号另行登记。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；资产组租约已归还，当前独占下方版本化授权四源模块；production 消费者归 API，模块未接线/联合门未过不接受。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 沿 R4 原范围；版本化授权四源冻结，当前独占下方新人物/声音 records 两源；production 消费者归 API，两候选分别接线/联合门，未接线模块不接受。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
@@ -29,6 +29,8 @@ Web 六源集成并归还后，依据 `fresh-web-consumers/REPORT.md` 的三个�
 R4 资产组租约已归还，当前接续独立的版本化授权仓储模块：独占实际新增 `apps/api/app/profiles/authorizations.py`、`profiles/versioned_payloads.py`、`tests/test_media_authorization_store.py`，并仅在既有 `app/persistence_json.py` 原样迁入授权 decoder 实际使用的 `_required_text`、`_optional_string_tuple`、`_required_datetime`、`_optional_datetime` 四纯函数。`MediaAuthorizationStore` 只收有限 SQLite 连接 factory，迁入 save/get/list/list_versions 四公开方法、三个现 conn 授权方法、原 payload/decoder/validator；调用方提供 conn 时不得另开或提交。原 `_save_versioned_payload`、`_list_versioned_payloads`、`_versioned_row` 三 helper 原样归 `versioned_payloads`，供授权/人物/声音/发音词典现消费者消费同一实现，不新增表、授权政策、版本排序或 production 回调。`_as_utc` 直接消费现 profiles/contracts 唯一对象。production 组装、四公开/三个 conn 薄委托、其他版本 helper 消费者接线、旧 helper/decoder/validator body 删除仍归 API；R4 不改 production/main/schema/原 API 档案测试。文件/媒体归属声明、人物/声音保存用例、DDL 与模型执行不迁入 store。未接线模块不集成或接受；模块释放后由 API 接线，联合门验证不可变版本/幂等、工作区隔离、revoked/expired 历史不升级、固定版本缺失拒绝、调用方未提交可读及同事务回滚和实际 HTTP/档案消费者。本组不替代完整人物/声音仓储与 R4。
 
 API bootstrap 已定位 config 的必要接线依赖，R6 本批追加产品写权：整文件独占 `apps/api/app/config.py`，仅修改 `Settings.from_env` 及其实际直接环境解析 helper，使同一现规则可消费显式 Mapping（显式输入不读取 dotenv、不改 os.environ）；无参入口仍沿唯一 env_files IO 和原字段/默认/秘密/六路径规则。拆开现临时目录的可失败准备与进程 TMPDIR/tempfile 发布，供 API 在配置持久化和旧驱动停止之前准备；原 `configure_process_temporary_directory` 沿同一实现，外盘挂载/严格目录边界与未配置开发行为保持。不用临时改全局环境解析候选、不复制第二套 Settings 规则、不改其他配置/IO/状态/模型政策。独占 `test_config_atomic.py`、`test_runtime_settings.py` 的最小边界测试及实际新增 `test_config_candidate_preparation.py`；API 对本组三源测试/config 整文件只读，main/bootstrap 消费者接线仍唯一 API。R6 先交精确公共 Python 入口及 SOURCE_RELEASE，API 接线后联合验证候选拒绝不落 env/secret/运行绑定、冷启动与候选同解析、原 IO/安装 guard 保持；不把 config 小片当整体 bootstrap 接受。
+
+R4 已完成 `fresh-r4-authorizations/profile-records-readonly-01/REVIEW.json` 的实际消费者清点，API 已 FILE_RELEASE_ACK、主控实时核新增两文件不存在且无 WIP。现仅将新增 `apps/api/app/profiles/records.py` 和 `apps/api/tests/test_profile_record_store.py` 从 API profiles 范围转给 R4 独占；授权四源继续冻结，两个候选不混淆释放。`ProfileRecordStore` 只收有限 SQLite 连接 factory 与明确组装的 `MediaAuthorizationStore`，消费已释放的中立版本 SQL、严格字段及 profiles/contracts 同一对象，不回调 production/HTTP/模型。迁入现人物/声音六个 get/list/list_versions、两个现 conn reader、固定授权解码、人物/声音 decoder 与 payload/reference 纯转换；原 `_require_profile_write_owner` 和 `_retain_profile_authorization` 的读取/纯规则及两个 save 的纯版本落库段可成为明确现 conn 方法，保留原历史授权与排序，不另开/提交调用方事务。不整段搬 save_person_profile/save_versioned_voice_profile：文件/参考范围校验、媒体归属声明、授权写入与跨人物/声音协调仍唯一 API 用例，按原 parent conn 顺序组织；不新增 CAS、表、重试、owner 推断或权限政策。production 组装、六读/两个 conn 薄委托、保存片段接线与旧对应 body 删除归 API；main/schema/原档案测试、现授权四源不跨写。`_profile_reference_source` 和 local adoption 尚未绑定的原始行/摘要读取保持显式后续例外，不能宣称全部人物仓储/旧路径退役。模块先 SOURCE_RELEASE，API 当前授权消费者联合门后再顺序接人物消费者；独立联合门至少验证固定授权缺失/历史撤销、外工作区、不可变版本、同 conn 未提交可读与第二写失败回滚、关联人物固定版本及真实公开解码，不以模块通过替代完整 R4。
 
 ## 用户决定、入口与范围
 
