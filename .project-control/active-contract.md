@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 字幕六形态五源9b9feb95…已冻结SOURCE_RELEASE/同候选9PASS5.82s；历史33实际执行和首失败保留，产品只读等QA一个关键族门，不重跑作者9/旧已过矩阵或先开下一组产品。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R2-SUBTITLE-INDEPENDENT-20261014仅新fresh-qa/subtitle-application-independent证据写权；核五源9b9feb95…三代表双轨lateSQL、真正空轨原结果恢复、原actor/base/input绑定；产品/原门只读、9作者只审计复用。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 字幕六形态五源9b9feb95…已05b51b6精确集成/WRITE_LEASE_RETURN；独立3代表通过（首2QA探针失败保留，实际5执行），9作者/旧门不重跑；当前无产品写权，后续独占绑定另发。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 字幕独立门80c913ae… PASS_WITH_SCOPE_NOTE已主控核定、05b51b6集成后即时WRITE_LEASE_RETURN；3代表/5实际执行，产品与冻结证据只读待下批关键族，不重跑作者或旧门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R4-MATERIAL-ANALYSIS-INDEPENDENT-20261014仅新fresh-runtime-reload/material-analysis-independent证据写权；核47file/五源8757806f…三代表late feature/source-change/late asset原阶段，产品/旧门只读。19键审计已归还、真实资源仍unknown，不重复测。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 分析/source五源8757806f…已冻结SOURCE_RELEASE（其中foundation不变，实际四diff），5不同PASS/7实际执行/首2FAIL保留，产品/证据只读等R6一个关键族门，不重跑作者5或旧矩阵/先写下一组。 |
@@ -36,6 +36,8 @@ confirm/apply/read_result处理该族有限业务并保持immutable原operation/
 `REF-R2-SUBTITLE-INDEPENDENT-20261014` 仅给当前QA新证据 `test-runs/refactor-20261014/fresh-qa/subtitle-application-independent/**`，产品/作者五源/所有旧门只读。固定上述464源/五overlay/2a5bfe4，禁止混入当前R4 analysis/source_files WIP或sys.path宿主main；复用最后family-final-09合法双语言SRT/opaque cover/job queued→claim→publish/transform→finish的真实fixture，不能重用早期缺provenance/直接succeeded/按track位置的错误输入。先seal实际source/fixture/child scripts，实际imports/path/hash及组装prepost分开准确记录，作者9/历史33和旧门仅hash/语义审计，不collect完整族/模型/字体/媒体/GUI/host/用户DB/env/账号。
 
 一个关键族最多三个真实代表：①双轨Merge或条目时间编辑进入真实公开API到第二字幕轨INSERT，实际SQLite trigger晚拒绝；first字幕/operation/version等已进入SQL的顺序留证，task/version/proposal/op/montage/字幕/封面等联合editorial全回滚，原claim及此前SRT/job/artifact/transform/文件单列保留，不mock业务异常/伪HTTP错误/要求全DB无痕。②合法删除最后有效字幕后确认snapshot明确[]（不能将一轨为空/仍留另一轨冒充全部为空），再用一个现合法metadata动作推进HEAD，丢原projection并同apply request恢复：原operation/result_version、空轨/原snapshot/response shape保持，无第二编辑/错误补HEAD轨；原共享main journal/notification AST不变，实际通知分别观察、不强行套linked的0wake政策。③代表actor/base/input绑定拒绝选最有信息量原请求/提案场景，真实授权或明确业务actor、旧base/同request不同inputs或未传与null区分原规则不放宽、无新editorial应用；不为每动作铺权限矩阵，fixture工作区选择器与真实认证范围准确限项。正常成功仅上述实际反例前置不新凑PASS数，首真实失败保留交唯一API ISSUE_REOPEN，不让QA修源。准确冻结SOURCE_GATE后主控精确五源集成/即时归还，此门不是全R2/R3/R9、媒体/资源/原生接受。语义REBASE_ACK后直接执行，无需第二START。
+
+字幕五源已 `05b51b6d1dba90b4aec2173f9ae8edab3760b460` 精确集成，API/QA本批产品及证据租约即时归还。冻结独立门 `fresh-qa/subtitle-application-independent/SOURCE_GATE.json` SHA80c913aebd61a3c27eed15dbc8ad28385ade3af02696dceaab8d071a55bd73cb为PASS_WITH_SCOPE_NOTE；主控核54artifact/57复用/22合成输入、464冻结源、两次173→175实际imports及source/fixtures/实际child scripts前后零漂移、八真实组装。3独立代表、5实际执行，首2QA探针失败保留并只复验失败项，作者9和历史33/旧矩阵不重跑。第二轨真实SQLite晚INSERT联合editorial回滚、claim与两份预发布SRT等原分阶段事实保留；真正全轨空snapshot、后来HEAD/丢projection恢复原op/result_version、无重复confirm、原首次2wake/恢复1wake如实记录；原journal同request不同input含显式null被拒绝。范围注记：回读montage.updated_at为原不可变snapshot准备时间，fresh响应为稍后提交时间，其他montage字段/op/narration/shape保持，不声称完整HTTP字节相同。stage/committed五blob准确，不含并行R4 WIP；本组门已履行，后文旧门指令不重派，全R2/R3/R9、真实媒体/资源/字体/GUI/native及当前所有组同候选接受仍未完成。
 
 `REF-R2-SUBTITLE-FAMILY-PREPARATION-20261014` 仅给当前API只读准备及新证据目录 `test-runs/refactor-20261014/fresh-api-subtitle-family-preparation/**` 写权，产品和所有冻结证据仍只读。定向定位剩余纯字幕内容/结构/样式的实际preview、confirm、固定结果、直接/自然语言消费者，区分已接受metadata动作与媒体对齐/生成/cover，列出最小同职责下一组的精确旧body、既有calculator/公共事务复用、拟新增有限usecase和受影响既有测试node。准备不执行或collect测试、不全仓清点/读旧矩阵、不修改任何源或重写已冻结回执；只给依赖、退役目标、最小自测和一个关键族独立反例建议。关联族独立门与当前五源一删tuple不变，无需其他线程空ACK/HOLD；通过精确集成及原lease归还后主控另绑定产品范围。
 
