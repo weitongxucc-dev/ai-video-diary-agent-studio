@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | raw已19a8b94集成归还；settings六源97815d98…已SOURCE_RELEASE准确冻结，20实际检查/21静态审计与collect-only绑定分别记录。当前等R6同候选独立HTTP差额，不改冻结六源或恢复其它main/production旧写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | settings六源97815d98…保持准确冻结等R6，不混批；R2proposal只读建议可先结束，现另沿REF-R4-ASSET-RAW-CONSUMERS-20261014独占production两已清点消费者与必要维护轻组装、实际新增material raw消费者测试，接R4两准确冻结源。main/settings/R4模块只读。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；当前合并核Web八源4d036e4a…退役静态及R5当前真实Shell三尺寸可见差额，明确API base19a8b94＋八Web overlay，3447/9447隔离端口；审计复用6自测/类型，不重复旧51/10/全文矩阵。settings实际HTTP独立门归R6。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 产品全部只读；现沿准确settings六源97815d98…与原PREPARED_GATE执行原三HTTP输入、成功control和一项必要恢复拒绝独立差额，有限快照base ee1cf4b+六overlay，不混其它WIP。原驱动/DB/tmp/预算门不重复，核原存储/cache及实际旧owner后续工作；完整activation/crash/native尚未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5八源死kind/五client退役已SOURCE_RELEASE4d036e4a…准确冻结；6实际PASS/33SKIP与类型/lint分别记录，待同tuple真实Shell可见差额和联合门，产品只读，不复测/重跑旧门。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw/history已19a8b94集成归还；asset raw只读建议已审，现沿REF-R4-ASSET-RAW-READERS-20261014独占现materials/assets.py五个caller conn原样raw reader及直接test_material_asset_store最小用例。production/API consumers、其它模块只读，模块释放后由API薄接线，再联合接受，不作未接线完成。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | asset raw两源346e0e02…已SOURCE_RELEASE准确冻结，3实际PASS/42静态保持，当前产品只读；API接五消费者及轻组装后联合差额，不重复旧模块/维护门，不以module-only接受。profiles原四已19a8b94归还。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
@@ -81,6 +81,10 @@ Web八源释放后，独立QA现绑定合并 `REF-R5-COMBINED-SHELL-GATE-2026101
 依 `fresh-r4-authorizations/asset-raw-consumers-readonly/REVIEW.json` 的五个实际SELECT，现绑定 `REF-R4-ASSET-RAW-READERS-20261014`：R4独占 `apps/api/app/materials/assets.py` 中新增五个具体caller conn reader和既有 `apps/api/tests/test_material_asset_store.py` 的最小对应用例；两源现Git干净、无其它writer，assets字节等清点207e914c…，主控已核。有限方法分别返回workspace＋exact path的原payload/visibility Row或None、workspace!=excluded的原file_path Rows、workspace＋ID的完整raw Row或None、仅global path及仅global ID的原SELECT1 Row或None。五原查询都无ORDER BY，保持字段、None/Rows、rawstring、未排序/不去重/不额外visibility/成员过滤；原glob碰撞不缩成当前workspace，不解码、解析路径或改摘要。每个方法只用显式caller conn，不开factory/commit/rollback、不新增DDL/SQL门面/通用参数框架；原get/list/page/decoder与其它资产业务AST保持，不造新模块或第二事实源。
 
 producer仅补3个必要模块边界：raw字段/空白/列visibility/None与作用域、外workspace的global path/ID命中及foreign rows不去重、caller未提交可见/observer隔离/全rollback且factory禁开，原全部资产/档案/维护门不重跑。两源稳定准确SOURCE_RELEASE＋digest/定向actualexit/旧方法不变证明后，API在另行精确production绑定下接这五读取及 `_local_adoption_repository` 必要轻资产store组装（ctor无IO），原权限、physical path校验/manifest/raw摘要/CAS与采用事务仍原位；R4不改production/main/settings或原local adoption消费者测试。先 module release后紧接consumer联合门，未接线模块不集成/算完成；关键global冲突/外workspace及事务否定用联合差额验证，不逐方法开复杂QA。语义REBASE_ACK后直接实施，不需第二批准。
+
+R4 asset raw两源346e0e022849a8c852c334bfe6b0396d1666e16cd1bb5b4fbe1f140aa010d06f已准确释放，现绑定独立 `REF-R4-ASSET-RAW-CONSUMERS-20261014`：API仅独占现Git干净的 `apps/api/app/production.py` 中 `_profile_reference_source` material-by-path SELECT与 `_local_adoption_plan` 四material SELECT的薄接线/旧body删除，以及 `_local_adoption_repository` 必要轻 `MaterialAssetStore` 组装；实际新增 `apps/api/tests/test_material_raw_reader_consumers.py`（绑定时不存在）。现production字节等19a8b94/base bc3dd11d…，无其它writer；R4 assets/test_material_asset_store两源只读准确冻结，其余main/settings/profiles/DDL/维护DML及既有local adoption测试只读。用五已释放方法保留caller conn、原payload/visibility/full row/None/foreign rows及global path/ID冲突；无新ORDER BY/过滤/去重，raw摘要/dict/path/权限/manifest/CAS/采用事务决策保持API原位，源fallback继续同一decoder用column visibility。轻维护组装不调用full repo ctor/初始化/模型/文件预备，原profile owner两绑定不改。
+
+本批producer只跑实际source fallback/列visibility、foreign/global collision拒绝、raw digest/caller未提交与rollback的最小consumer差额，必要一个现readonly dryrun仅用于新轻组装门；原3模块与既有profile/asset/adoption矩阵审计复用、不全重跑。精确joint SOURCE_RELEASE为本批实际API源＋R4两源，列actual imports/commands/exits/原两个消费者五SQL不存在及其它production AST保持，不混settings六源或Web八源。随后一次联合独立反例核global范围/foreign row与事务，不能逐reader另开复杂QA或把源码/合成SQLite当真实用户维护/模型/全R4。语义REBASE_ACK后直接实施；当前R2只读建议完成即可先交，不重读旧总清单或等待用户继续。
 
 ## 用户决定、入口与范围
 
