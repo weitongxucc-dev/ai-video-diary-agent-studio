@@ -16,12 +16,20 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933及人物仓储三源842d7172均已精确集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权。七人物方法、五写点同body唯一归属，首次普通合并自测及全部旧证据冻结，不重跑已过包。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。REF-R4-CONTENT-BOUNDARY-REMAINDER-20261015仅新fresh-r4-authorizations/content-boundary-remainder/**只读证据写权，定向原sources/source_repository/knowledge_grants与已存在中立owner的实际剩余边界；零产品/执行，不重做资产人物旧包。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 当前内容与用途边界剩余只读核验
+
+`REF-R4-CONTENT-BOUNDARY-REMAINDER-20261015` 仅当前资料线程新test-runs/refactor-20261014/fresh-r4-authorizations/content-boundary-remainder/**证据写权，所有产品/已过资产人物/旧证据只读。R4计划中的sources/source_repository/knowledge_grants旧交叉已存在source_types/source_policy/source_storage_schema中立归属；root当前imports定向定位如实，不假定它们仍需搬迁。只核上述六源的实际imports/type/DDL/用途规则/持久写归属及真正必要直接caller，不全production/main/知识检索产品清点，不重复已过素材/注册/授权/分析/人物门。main并行API四源在变，只取实际知识/引用/授权caller目标AST及读期事实，不把main全字节变化混为内容目标变化。
+
+对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
+
+只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
 ### 当前输出观察显式执行实施包
 
