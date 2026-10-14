@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | raw联合六源fa0ebcb2…准确冻结，等待QA，不改production/R4源；现按下方REF-SETTINGS-PERSISTENCE-20261014独占main设置路由/导入、runtime_settings、workspace_settings、env_files及两个明确测试，落实有限存储协调。原metadata/驱动/bootstrap/config/其余维护只读，不混冻结批。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写 `test-runs/refactor-20261014/fresh-qa/**`；metadata与Web有限props已集成归还，不复测。当前独立核R4五raw消费者及四仓储源联合六源fa0ebcb2…，沿准确release/快照审计复用原6实际消费者与模块4+2，补必要原权限/原始行摘要/同conn事务独立反例；不运行用户维护、旧全矩阵或宣称完整R4/R9。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | raw联合六源fa0ebcb2…已19a8b94准确集成并分别WRITE_LEASE_RETURN，不复测、不自动获后续production写权；当前沿REF-SETTINGS-PERSISTENCE-20261014独占设置六源落实有限存储协调。原metadata/驱动/bootstrap/config/其它main与维护只读，候选互斥。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 产品只读，只写fresh-qa；metadata/Web有限props/raw六源均准确集成归还，不重复原门。下一Web八源旧字段/五client退役准确release后核独立门与实际Shell GUI；settings独立HTTP差额归R6，当前不测试未冻结WIP。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 沿 R6 原范围；当前产品只读，后三存储失败事实已交唯一 API，原 lifecycle 有限接受保持，全 safe save 未接受。只准备原三 HTTP 输入与恢复的独立差额，待准确修复 release 执行；原文件 release ACK 核无 WIP，不自行恢复旧写权，原五输入/DB/tmp/预算门不重复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | R5 remainder只读定位已完成；现按下方REF-R5-DEAD-CONSUMERS-20261014独占八源，仅退役未消费的Shell kind与五旧客户端命令/再导出，保留原label/title和活跃错误投影。源释放后再绑定准确GUI差额；不自动算三尺寸完整Shell或R5/R9。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw与authorization history四源保持fa0联合候选准确冻结、待QA/集成归还；当前全部产品只读，另核source-reference/local adoption仍留在API的material raw SELECT与现assets owner最窄接线，限定证据目录fresh-r4-authorizations/asset-raw-consumers-readonly，不复跑已过门。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | profiles raw/history四源随fa0联合六源已19a8b94准确集成并WRITE_LEASE_RETURN，原冻结结束；当前产品全部只读，继续REF-R4-ASSET-RAW-READONLY限定定位，核source-reference/local adoption剩余material raw SELECT与assets owner最窄接线，不复跑已过门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
