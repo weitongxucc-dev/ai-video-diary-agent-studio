@@ -13,10 +13,10 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 复合四源已9b64d8a精确集成/归还；REF-R2-TIMELINE-RESTORE-20261014独占下述五路径有限恢复body、decoder薄委托与必要测试，固定9b64d8a加五overlay。关键门待新SOURCE_RELEASE，旧复合/字幕/关联门不重跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 复合一个关键族门已通过并9b64d8a集成/WRITE_LEASE_RETURN，冻结证据只读；当前无产品或新增证据写权，等新恢复/注册准确SOURCE_RELEASE后再绑独立差额。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R4-PROFILE-REGISTRATION-INDEPENDENT-20261014仅新fresh-qa/profile-registration-independent证据写权；固定注册九源271e41aa…/相关49源，独立一个关键族三个反例。作者两node/复合/旧门只读复用，产品无写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 投影后的注册准备九路径已核；REF-R4-PROFILE-REGISTRATION-20261014独占下述九路径注册/固定版本/引用资格有限owner、同conn保存与必要类型同体迁出，固定9b64d8a加九overlay。生产仓储默认adapter已归还，assets原id-reader只读复用；不重跑旧门。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 注册九源271e41aa…已SOURCE_RELEASE冻结，作者首两node通过、源清单首漏项保留并继承既有封存补充；产品/证据只读等独立一个关键族门。不得修改九源或重跑作者/旧门，准确缺陷由主控单一reopen。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -24,6 +24,14 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+注册九源已沿 `fresh-r4-authorizations/profile-registration/SOURCE_RELEASE.json` SHAbe1728223035b09f892686d0b21e8c58cd229f22531a9419605fe2a4d26d1954 / TAB271e41aa036077ac346c5142025e48e55b3e6fa6d5872bbce2bd189b422980cf冻结，基线9b64d8a加九overlay；相关49map998a6b58025f2fda1b8f5da23c5e8f83371e7bf5c53ea66542374a8133ce0bcf，40非overlay全部固定Git，不含API恢复WIP。作者首次2PASS0.52s/2实际执行+56静态、pytest subprocess事件0、无格式探测替身；原wrapper首源门失败保留：本轮PRE_RUN48漏analysis_execution一源，child pytest0但wrapper1。主控核17artifact/49实际after-run import、48本轮prepost/6script-config，漏项以更早R6 binding/release/3bc8900/9b64d8a/actual-current同字节继承封存，不称其有本轮单独prepost、不重跑测试。root预审e9e5b69b…核15迁出完整method AST、293无关repo methods/79globals同AST、三owner构造/本地接管唯一绑定及共享规范同体迁出；首root normalizer按两参数误判原单profile getter已修helper，零产品/测试重跑。
+
+`REF-R4-PROFILE-REGISTRATION-INDEPENDENT-20261014` 仅当前QA新证据 `test-runs/refactor-20261014/fresh-qa/profile-registration-independent/**` 写权，作者九源/全部旧证据/产品只读。执行准确上面九源/49map，先seal本轮全部49及新独立case/actualchild/直接fixture；actual导入路径与after-run hash、执行期prepost、真实ProductionRepository有限owner组装分别记录，禁止sys.path混入API main/metadata/recovery WIP或扫描全仓。作者两正常node只复用夹具/源码，不collect运行它们或旧stores/analysis/id/compound/字幕/GUI矩阵。直接仓储注册公开入口是真正被验边界，可信member参数与HTTP/cloud/auth范围分列，不冒充端到端认证接受。
+
+一个关键族最多三个独立真实代表：① 合法shared来源和注册资格预检完成后，由另一native SQLite connection/另一可信member真实注册同profile ID并commit；原最终caller records owner重读拒绝当前覆盖，外部已提交版本保留、当前无半注册。记录实际原qualification调用、caller owner读和外部提交顺序，不mock业务异常或只测预检，原read-before-write/withconn是否已BEGIN按trace事实报告。② 新voice注册进入真实同conn授权/引用claim/档案保存，在最后实际版本INSERT放native SQLite trigger拒绝，核原caller已到达SQL与联合回滚，尚未到达步骤不能称已写后回滚；原前置read/既有文件和外部事实单列。③ 固定v1历史授权实际revoked后，登记有效新authorization/新版v2，再由原generation资格/creation固定引用验证v1仍拒绝、未被换latest或洗白，合法v2只作该反例必要对照，不铺权限矩阵。沿真实owner/不可变版本/默认固定事实，不加产品分支或新许可政策。
+
+正常成功仅反例必要前置，first真实产品失败交唯一R4 ISSUE_REOPEN；first探针错误保留且只复验失败/受影响项，QA不得修源。准确SOURCE_GATE后冻结，主控核精确九源/摘要/反例集成与即时归还。原源清单首遗漏的显式继承注记继续保留，不改旧PRE_RUN/结果/脚本；本独立执行重新完整预封49，不能倒写作者首源门为PASS。没有真实模型/媒体/资源标定/GUI/native/env/account/用户DB权限，不猜预算；完整R4/R9及全候选旅程仍未接受。语义REBASE_ACK后直接执行，无第二START。
 
 两包产品基线同为9b64d8a，上述整合后14路径均Git干净、NEW均不存在且互不重叠；精确起始字节在 `test-runs/refactor-20261014/fresh-root-review/restore-and-profile-registration-binding.json` SHAc6697e1ae199e8f5ca6f02ba578ce40423ec37ff2dad416bf25120ec171bdf37。各自产物只用固定Git加本包overlay，不能混入另一包WIP；共享类型在另包变化并不授权改其文件或用宿主新源替换已冻结tuple。当前主控无产品写权。两包语义REBASE_ACK后直接实施，无第二START或用户复批；稳定SOURCE_RELEASE后先冻结再安排一个非作者关键族，每族最多三个新增差额反例，不复测已通过门。
 
