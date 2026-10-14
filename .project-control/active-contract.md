@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-OUTPUT-OBSERVATION-EXECUTION-20261015独占main.py、task_audio.py及NEW creation/output_observation_use_case.py、tests/test_output_observation_application.py四源，842d7172基线；一个action及精准三个共享reader迁出，一次normal后一个独立关键族；所有旧包冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 输出观察四源SOURCE_RELEASE已交出并经主控源码预审；产品与本批作者证据冻结，无新增写权，等单一问题回派或精确集成/归还，不重跑normal。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-OUTPUT-OBSERVATION-INDEPENDENT-20261015仅fresh-qa/output-observation-independent/**新证据写权；准确842d7172+四源overlay/191源，最多三个真实关键边界代表。全部产品/旧门/作者证据只读。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-PREPARATION-20261015仅fresh-runtime/output-observation-short-source-preparation/**新只读诊断证据写权；原两帧短视频失败精准静态定位，不改产品/QA冻结tuple，不运行采样/旧门/标定。default资源与mode/budget/取消unknown保持。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源bb4bf933/人物三源842d7172已集成归还。内容原三条结构交叉经精确有限不存在证明关闭，产品差额0/测试0、证据WRITE_LEASE_RETURN；当前无产品/新增证据写权，全部旧包冻结，待实际精准依赖。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -35,9 +35,25 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 当前输出观察显式执行实施包
+### 当前输出观察独立关键族
 
-`REF-R3-OUTPUT-OBSERVATION-EXECUTION-20261015` 只给当前API准确四源及新test-runs/refactor-20261014/fresh-api-output-observation-execution/**证据写权。准确四路径apps/api/app/main.py、apps/api/app/task_audio.py、NEW apps/api/app/creation/output_observation_use_case.py、NEW apps/api/tests/test_output_observation_application.py；初始绑定见fresh-root-review/output-observation-execution-implementation-binding.json SHA42ff607a9a3c6692e2cef1ddff522df8143e9b333e4b5eef49f34cb6e0bb8fd4；固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140，四路径干净/空index/两个NEW不存在，初始SHA准确绑定。R4三个源码已集成/归还，production、所有其它owner/旧证据只读，QA尚无新写权。
+`REF-R3-OUTPUT-OBSERVATION-INDEPENDENT-20261015` 给当前QA仅test-runs/refactor-20261014/fresh-qa/output-observation-independent/**新证据写权。作者四源和fresh-api-output-observation-execution/**全部冻结，旧门不collect/复跑。固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140加准确四overlay，SOURCE_RELEASE SHA458e1aa1d70318f2b2091375d0e742e11d7db24ece873c42923d7efd2a9b19ca、四源TAB摘要462024f996690863d9d9e7fc32b18efbf05de926ced2f6575e66c7c1bc61c4b8。作者family-candidate-04/source-binding.json SHAf5aa1545dffd8611aa33e3a35ef0c7b32193b252f0d26ecf92adc5a30d67d3fe绑定191源/187固定Git，core map摘要f92e3feb32789c623f04bb5a0e0309a9a97ec263e2b42255919247d2d38b0b35、combined摘要f74885d7df192775d2ca33341e4692fcad5b5e4683a4a6ae2a4513d583f82419。主控fresh-root-review/output-observation-execution-pre-independent-reviewed.json SHA24d733899efb1d118b68e74196a153866021652e3018be640307c54823494305已核57artifact/191源/四执行脚本与实际185imports、全未目标函数/方法及旧读取/版本/资源/采样/结果规则；额外有限import和TaskMediaJobs ctor/execute/身份映射人工审核已完成，无产品或测试新执行。
+
+只最多三个实际代表，不运行作者normal节点；每例正常前置用合法自有1920×1080/2s真实MP4、原公开请求/真实actor/store/runtime/DeviceScheduler/registered runner，既有Resources准入替身和合成caps分层，不能冒充生产资源/完整PGID/GUI/全R9。第一例测量后外部原native CAS推进base，原final检查拒绝verified/success/current result，保留外部head及真实已到达的result阶段。第二例首实际采样命令完成后公开取消原请求，下一原check拒绝，记录临时清理与登记输入不变；不声称inflight全PGID杀进程。第三例在result已真实持久后native SQLite verified INSERT晚失败，记录实际SQL到达点、原事务/失败/恢复；只移除自己的trigger并显式同输入retry，cached结果不再次observe_output/采样，原claim/result/source/校验/释放/wake规则保持。不能用mock布尔/绕过资格/改冻结源/全库无痕要求替代真实反例；三者允许准确复用原fixture与source静态证据，但自身脚本/直接fixture/实际imports来源须执行前封存及执行后核SHA、真实factory/children绑定。首次失败保留，仅修复探针或单一回派后重验受影响例，不重封已过批次。
+
+作者一个distinct normal四actual执行，当前1PASS5.24s/前三FAIL如实保留：第一plan stage fixture无效；第二真实源尺寸不匹配；第三原1920×1080/.2s两帧视频默认.17s seek出现ffmpeg rc0无PNG后worker FileNotFoundError标签，原短源边界未修，不能把前三全称fixture误差或用合法2s PASS消除第三缺陷。QA新族只验证此次显式用例的原边界；该原短源失败另由Runtime只读准备，未证实完整raw异常body/修复/真实生产接受。完整R2/R3/R9仍未完成。
+
+语义REBASE_ACK须核四overlay、191闭包、合法正常前置与上述实际边界/阶段限制后直接执行，不等第二START；发现必须变产品仅交精确证据/一个建议，由主控给单一产品负责人，QA不能自行修复自己验收。
+
+### 当前原短源采样边界只读诊断
+
+`REF-R3-OUTPUT-OBSERVATION-SHORT-SOURCE-PREPARATION-20261015` 给当前Runtime仅test-runs/refactor-20261014/fresh-runtime/output-observation-short-source-preparation/**新诊断证据写权。产品/作者及QA证据均只读；只读apps/api/app/task_observation.py的observe_output/_sample及必要的唯一原runner输出存在语义、原CreationTaskObservationRequest有限采样约束，作者RUN_HISTORY/REPORT与准确family-candidate-03的pytest.log/result.json/actual-python-binding.json/source-binding.json及其已绑定该源/直接测试AST。不新增媒体命令、测试collect/产品import、模型/GUI/标定/环境扫描；不遍历pytest-tmp或其它output。必要具体日志由准确记录路径定向读，不能猜原异常栈。
+
+目标只判断原duration内默认采样是否可能位于最后可解码frame PTS之后、rc0/no file到原文件读取的到达边界及真实证据限制，提交一个最小可实施缺陷/拟准确文件、当前SHA/原Git同源证明与最小正常/反例建议。不得用更长fixture、放宽资源门、静默跳样/伪造成功或猜decoder fallback定案；若修复需改变观察采样的既有行为先报具体规则差额，后续实施和独立接受另绑。本诊断与QA tuple互斥、不可将未验证推断算修复或全产品阻断，不停止QA独立工作。语义REBASE_ACK后直接只读诊断，READONLY_PREPARATION_RELEASE后冻结归还。
+
+### 已释放输出观察显式执行实施包（冻结规约）
+
+下述`REF-R3-OUTPUT-OBSERVATION-EXECUTION-20261015`实施协议已交SOURCE_RELEASE，不恢复写权。准确四路径apps/api/app/main.py、apps/api/app/task_audio.py、NEW apps/api/app/creation/output_observation_use_case.py、NEW apps/api/tests/test_output_observation_application.py；初始绑定见fresh-root-review/output-observation-execution-implementation-binding.json SHA42ff607a9a3c6692e2cef1ddff522df8143e9b333e4b5eef49f34cb6e0bb8fd4；固定产品基线842d7172fb608f4219b3954bf161d5b8279ee140，初始四路径干净/空index/两个NEW不存在与准确SHA仅历史初态。当前新QA/Runtime权以上文为准。
 
 只读准备SOURCE_RELEASE SHA75d39498c072f0f9b3487112851de98258784e798be43060102b54e573d3677e已root output-observation-preparation-reviewed.json SHA85fbd7b5d317158a842a2263ce955b9cf629ed2384b221ae18573b17e4171779核16artifact/15直接source/62完整目标AST、明确读取窗口与report相对链接。62目标在捕获当前/原75642af/已集成842d7172全部同AST，14文件同原Git，production整文件与原Git不同但当前与842d7172一致；不将R4写期冒充全文件原Git。首准备report相对链接失败与只读locator错误保留，root先误认report_sha字段为Markdown及scoped resource branch含后续elif，两处只校正observer语义，JSON/Markdown原manifest及原分支body均匹配；零产品/import/collect/test/media，不要求作者重封或重跑。精准额外依赖只有main._creation_task_output_path、_quality_check_source、_task_media_outputs_current三现有reader，不新资格门。
 
