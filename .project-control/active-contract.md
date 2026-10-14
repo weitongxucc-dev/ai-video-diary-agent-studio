@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-AUDIO-EDIT-EXECUTION-20261014独占下述五路径，仅audio_edit_preview与必要exact/command音频/原声caller及legacy音频confirm；基线3d3eb08加五overlay。原音频输入/准备/旧门冻结只读，不改其余七action或复合视觉。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-AUDIO-EDIT-RESOURCE-PARITY-20261015仅audio_edit_use_case.py原声seal资源分支修正；其它四源/旧72artifact冻结只读，仅新fresh-api-audio-edit-resource-parity/**证据写权。只复验实际受影响载体node，先语义ACK，不重跑direct/旧门。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频独立三代表/7实际执行门13f4c259…已核，五源已3d3eb08精确集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，原失败/冻结证据只读，等下一准确稳定包，不重跑旧门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -24,6 +24,16 @@
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
 ### 当前恢复与档案注册两个互斥实施包
+
+### 当前音频编辑原声资源事实修正
+
+`REF-R3-AUDIO-EDIT-RESOURCE-PARITY-20261015` 为主控源审阅发现且唯一API只读确认的ISSUE_REOPEN。旧音频编辑SOURCE_RELEASE SHA9fd138b8a6f5552cb6b8e7db33b142a2d682b95accb943bf466f63f4d755ccca/TABe966d29b…与72artifact继续冻结；root预审7a2965cc…已核五当前源/486封存/481Git/182实际imports与四child脚本/一test prepost、八组装/两个先前接受代表43工具43child、完整module AST复用，最终release06执行0如实。此审阅尚未放行独立QA，根因是原声seal资源事实不等价；不是新生产预算决定、运行反例或资源接受。
+
+固定3d3eb08原command的_media_kind=audio_stretch分支不调用audio_mix_resources；新的seal无条件调用，新增normalize/normalized outputs/mix bytes/temporary bytes并在提交前拒绝组合临时量。candidate05自有作业job_media_6a20f7cf57f906d03d47e04ab9d45fa108fd7609430cb7d71a955d6608ee10ca实存inputs2/bytes8033/duration0.2/max_output_bytes1000000，额外mix/tmp103936未触发拒绝；Resources(admit=True)是fixture替身，不能据此称实际生产decision等价。仅现同fixture caps的静态6s估算1217536>1000000展示原接受封存/新提交拒绝的错误阶段变化，未执行该反例/新资源/宿主预算。API已明确承认“原预算声明保持”概括过宽，需有限修正而不是为通过删保护/猜放宽限额。
+
+唯一产品写权仅 `apps/api/app/creation/editing/audio_edit_use_case.py` 的seal中original资源分支，初始SHAe0b3dc2b6ca317d46a7bbbe4af75294ba9fefd9717b3088e7495bf2067c820e2；准确初始/冻结其余四源/实际旧作业facts见 `fresh-root-review/audio-edit-resource-parity-issue-binding.json` SHA1dec3ee06efc3a972f766d94f4e48a87f4c6a754ce33e2f3466bbe391714a422。仅original恢复原基础task_audio resources和原预算None/空输入/规格/数量/字节/输出时长检查及原错误阶段/细节；其它direct/exact/已编译audio继续原mix owner，保留已有输入guard，不能改预算值/profile/mode、现真实stretch及后续preview的grant/check/输出边界。main/task_audio/两测试、新source guard/confirm/其余业务均冻结只读，不扩路径；若确需额外变化先交一个准确依赖。原声实际ref与同job发布步骤保持，不能新HTTP请求/新的resource调度协议。
+
+仅新 `test-runs/refactor-20261014/fresh-api-audio-edit-resource-parity/**` 修正证据写权，不覆盖旧SOURCE_RELEASE/72artifact/失败/通过node证据。先语义REBASE_ACK后直接有限修正，无第二START；新的执行tuple仍固定3d3eb08加准确五overlay，四源字节保持，最终变更只有此原声seal分支。先封相关source/实际scripts/直接fixtures并记录prepost/actualimports/真实owner组装；只复验确实受影响的现test_exact_command_and_original_audio_share_original_job_and_recording_block一次，使用准确原测试字节/合法最后fixture/原受grant保护自有媒体，可在新证据observer核原声资源字段及原条件，不collect/执行direct节点、其它旧门/矩阵。失败仅复验真正失败项；不改测试或为了再次封版重跑通过项。给一个完整replacement SOURCE_RELEASE绑定五源/新相关snapshot/patch及旧72只读复用、此次实际执行与最终源tuple分列；root确认来源/原original分支和其它成功路径AST保持后，按原一个最多三代表独立关键族接续。生产mode/budget/RSS/全PGID、GUI/native和整体仍未接受，不放宽门假通过。
 
 ### 当前音频编辑执行实施包
 
