@@ -16,7 +16,7 @@
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 音频编辑独立族首次三个实际反例通过、精确五源已75642af集成/WRITE_LEASE_RETURN；当前无产品/新增证据写权，fresh-qa/audio-edit-independent及全部旧门冻结只读，待新的关键族绑定。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 分析执行adapter三源已3bc8900精确集成/WRITE_LEASE_RETURN；产品/冻结证据只读等后续资源纵向绑定。原default资源门缺口和mode/budget/取消unknown保持，不跑旧矩阵或猜预算。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | REF-R4-TASK-INPUT-READS-20261015独占production.py、creation/contracts.py及NEW creation/task_input_reads.py、tests/test_creation_task_input_reads.py四路径，75642af基线；只完成同conn完整任务/配音读取前置与canonical类型，普通拆分一个合并自测，旧人物准备和全部已过证据冻结。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 任务输入四源已bb4bf933精确集成/WRITE_LEASE_RETURN。REF-R4-PERSON-RENDER-STORE-20261015独占production.py及NEW creation/person_renders.py、tests/test_person_render_store.py三源，bb4bf933基线；七人物存储/状态/产物方法完整同body归属，普通一个合并自测，所有旧证据冻结。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
@@ -31,7 +31,19 @@
 
 输出bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE，准确paths/symbols/current SHA/Git与完整目标AST读期prepost、真实直接caller/owner边界、最小normal自测和按共同不变量最多三个独立关键反例建议。production全文件如同时R4 WIP不得称与Git全字节一致；必要直接目标AST与读期事实准确区分，不纳入R4写入或新全仓snapshot。只读准备零产品/import/collect/test/媒体/模型/GUI/native/env/account用户DB/宿主标定，现fixture资源替身与生产预算/mode/fullPGID unknown分列。语义REBASE_ACK后直接只读准备，无第二START；准确产品租约和关键QA门待root审包后另绑。R4当前四源绑定0e7a7bb不变，不要求它再ACK或重封。
 
-### 当前任务与配音读取前置实施包
+### 当前人物片段仓储实施包
+
+`REF-R4-PERSON-RENDER-STORE-20261015` 前置canonical task/narration四源已bb4bf933f69b7ac59ec79770abe87ce476ce62c8精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时发资料线程。SOURCE_RELEASE SHAa52f4f47acee6a5b7499422811d567329539160922be066962fe2f2dfdf2621a/TAB3e2166f52ee76ee831ed27121ef298cee916c679c98e360cae039a70a1d9d1d6，root task-input-reads-reviewed.json SHA9e841ede31fce0bc0d4227e99c39328afb1bcd158b1cc14d212480fba80443fc已核15artifact、50相关prepost/实际模块origin与after-run SHA、46非overlay Git、6script/config/static prepost；三完整读取body与类型/validator AST、全部非目标production/contracts及有限imports保持。首次唯一1PASS0.23s，无失败/重跑，实际native caller未提交完整task/recorded/generated narration可读、observer不可见、SELECT-only和caller rollback；没有运行repo构造/模型/媒体/旧门，root tests0，普通拆分不加独立QA。前置四源与证据冻结，不重复跑来封新人物包。
+
+当前只给资料线程准确三路径：apps/api/app/production.py、NEW apps/api/app/creation/person_renders.py、NEW apps/api/tests/test_person_render_store.py；及新test-runs/refactor-20261014/fresh-r4-authorizations/person-render-store/**证据。固定产品基线bb4bf933f69b7ac59ec79770abe87ce476ce62c8，三路径干净/空index/两个NEW不存在与准确初始SHA见fresh-root-review/person-render-store-implementation-binding.json SHA983d710bb28dc40ded619b9ecf7fc675bbe8ecf48383efc9ca5b8e9ec7b41e87。先前人物准备PACKAGE/完整21目标AST及root9d1442ed…继续只读复用；本包不是复验注册/授权、全production清点或API音频旧门。
+
+具体PersonRenderStore(connection_factory, ProfileRecordStore, WorkspaceMediaReferenceAccess)唯一拥有PersonRender/PersonRenderStatus、原row decoder/values/identity/validator与create/claim/finish/bind/get/list/interrupt_running_person_renders七完整body及person_renders五写点。production同名称canonical exports、七原公开签名薄delegate及在正常constructor具体现owner已绑定后零IO组装；不加泛Repository/callback袋/反向production/main依赖或猜测lazy/light初始化。显式复用此前置require_creation_task/narration_segment_from_row、纯validate_logical_reference、现ProfileRecordStore._get_person_profile/_get_versioned_voice_profile(conn,ws,id,fixedversion)和WorkspaceMediaReferenceAccess.resolve_workspace_media_reference(require_registered=True)；这些owner不写，不复制资格/ACL/版本规则。后者原独立readconn如实保持，不宣称create全依赖同事务。
+
+原create在缓存查询前完整task/narration ready+voice一致/person与voice固定版本/素材登记资格校验，12字段缓存identity及冲突、pending初始规则/SQL顺序保持；claim pending/failed→running原CAS与清列；finish先独立get/replace/validator、再running UPDATE、最后独立get；bind ready/同ref已绑定提前幂等/异ref拒绝、在原conn按workspace/logicalref SELECT task_id,kind、同task/person_render类型与ready/null CAS，不替代为现artifact-id新conn getter，不移动任何artifact写。get/list先完整task解码、原缺失错误/排序与后续读期；interrupt原可选workspace/running→failed/process_interrupted字段/文本/utc时点/rowcount均保持。types/validators/SQL/helper全body保持，仅有限self owner调用替换；不新增BEGIN IMMEDIATE、事务范围、generation/actor/file-exists/media SHA门、状态、schema或历史迁移。
+
+本包按以上原行为不变归属为普通拆分，一个合并native SQLite节点验证真实公共接线、状态领取/结束/interrupt、合法fixed输入缓存及产物归属幂等与必要原拒绝，复用已合法自有fixture但不执行旧node。source/实际执行script/fixture先seal与prepost/actualimport和有限真实组装，所有首次失败如实仅复验失败/实际影响项；不为七方法铺QA矩阵，不model/媒体工具/GUI/native/env/account用户DB/资源标定。root核完整迁移body/所有非目标/有限调用映射/旧helper与五SQL写权不存在后准确三源集成并即时归还。真实资格/身份/状态/事务必须变化或额外路径先交一个精准依赖停在该范围，不能普通自测冒充关键门。语义REBASE_ACK后直接实施，无第二START；API输出观察只读准备范围不变，不要求其再ACK/重封。
+
+### 已集成任务与配音读取前置（冻结规约）
 
 `REF-R4-TASK-INPUT-READS-20261015` 只给当前资料/档案线程上述准确四源及新 `test-runs/refactor-20261014/fresh-r4-authorizations/task-input-reads/**` 证据写权。固定产品基线75642af2574e2c7d2e085f7ba56098454c9dca4f；准确初始SHA、两个NEW不存在与空index/四路径干净见 `fresh-root-review/task-input-reads-implementation-binding.json` SHA132575a3f69878de4dc63200103f643a85dda96e01b3c65bfe75b7b3c51b0e14。人物仓储只读准备SOURCE_RELEASE SHA18334bc4b8184fe073ac40b0df387188b7d49bc3b9c5b4eeba0cde8e2fa08dfc及root审阅9d1442ed…已核6artifact、21完整目标AST、8直接文件读期不变，零产品/import/test/media；它准确发现现get_narration_segment新开conn/再核task/不同缺失错误，不能替代人物create的同conn完整decoder读取。准备证据冻结，不重做旧注册/授权或整个production清点。
 
