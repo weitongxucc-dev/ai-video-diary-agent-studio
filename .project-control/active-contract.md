@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | command11源/作者证据SOURCE_RELEASE冻结待QA/集成；REF-R3-NARRATION-STAGE-PREPARATION-20261015仅fresh-api-narration-stage-preparation/**只读准备证据写权，零产品/执行写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMMAND-OWNER-PORT-C1-20261015仅linked_timeline_use_case.py、subtitle_use_case.py两源和fresh-api-command-owner-port-c1/**；其余9源/原证据冻结。配音阶段准备仍仅证据写权，不先施工。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMMAND-INDEPENDENT-20261015：只读冻结command11源；仅fresh-qa-command-preview/**新脚本/隔离证据写权，两个特有族见下；旧exact/共享门与normal冻结复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -53,6 +53,12 @@ conversation_repository.py只新增一个所属公开reader，承接原_bind_ass
 
 唯一normal：原自然语言“字幕字号改为64”经原公共入口→具体command worker→现exact/Subtitle核心→真实有声字幕双侧预览，核真实字形变化、原source/固定输入digest、公开查询/同job重放不再渲染及未应用timeline；复用合成fixture域，实际业务/renderer/资格/状态机保持，不以旧adapter伪成功或202→200改写。源/脚本/必要fixture执行前hard SHA与实际origin prepost、准确两侧文件/原native登记与释放实录即可，不复制整仓/全source/全AST或扩展字段矩阵。首失败保留，仅失败受影响node复验，过即简短SOURCE_RELEASE冻结。root源码审核后另绑最多两个特有独立族：assistant原指令/选择/版本在排队前后失效；静音分析真实结果到动态候选/预算与恢复阶段的不变量。共享已过门/normal不复跑；普通纯body归属只完整AST和最小必要自测，不逐拆分另设QA。生产认证、GUI、资源标定/fullPGID及整体同候选真实旅程单列未知，不放宽预算求绿。先简洁语义REBASE_ACK核11源/初始字节、原阶段和唯一normal后直接实施，无第二START；SOURCE_RELEASE后精确审核/关键门/集成即时归还，并接续实际满足依赖的剩余R0–R9工作，不将此单包当整体完成。
 
+
+### 自然语言 owner 端口唯一差额修正（当前优先）
+
+`REF-R3-COMMAND-OWNER-PORT-C1-20261015` 原SOURCE_RELEASE99f930及QA首attempt-01保留冻结：助手原指令/排队后turn结束代表已PASS，静音排队前AttributeError，尚未到真实分析。root精确类实例端口核得LinkedTimelineEditUseCase与SubtitleEditUseCase构造均只有repository/montage_edits，迁入silence及command cue/batch方法误用self.metadata；其它四具体owner有限实例read-vs-constructor/method核无同类缺口。只给同API负责人两源apps/api/app/creation/editing/linked_timeline_use_case.py、subtitle_use_case.py修正迁入方法中的self.metadata→self.montage_edits，不新增别名/兼容属性或改构造/原既有body/预算/守卫/事务。证据仅新fresh-api-command-owner-port-c1/**。原其余9源、119artifact、normal、QA助手PASS全部冻结；仅整module有限属性名差额和原完整body正确具体端口AST/最终11源、196map两项差额，无新normal/native/矩阵。
+
+C1 SOURCE_RELEASE即冻结，root核精确差额后通知QA同一原脚本仅复验静音失败node，不重跑助手/字幕normal。QA在root通知前只封存首败与脚本、无新执行权；最终新11tuple不冒称原normal或助手整SHA重跑，只复用其完整不变可达body/端口。门通过即时精确集成、双方SOURCE_INTEGRATED/WRITE_LEASE_RETURN，配音制作准备再接实际依赖满足的后续。
 
 ### 配音制作与局部再生成只读接续准备（当前活动）
 
