@@ -307,6 +307,41 @@ class TaskAudio:
         return probe_audio_metadata(path,scheduler=context.scheduler,grant=context.grant,
             cancel_event=context.cancel_event,deadline_monotonic=context.deadline_monotonic,output=True)
 
+    def validate_publications(self, job, event, result, context):
+        from app.canvas import canvas_size
+        outputs = []
+        for record in self.repository.list_artifact_records(job.workspace_id, job.task_id):
+            if record.producer_job_id != job.id:
+                continue
+            context.check()
+            publication = self.artifact_store.describe(record.logical_ref)
+            if (publication.sha256, publication.size_bytes) != (record.sha256, record.size_bytes):
+                raise ValueError('已提交预览产物内容发生变化')
+            path = self.artifact_store.resolve_file(record.logical_ref)
+            stat = path.stat()
+            outputs.append({'reference': record.logical_ref, 'size_bytes': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'ctime_ns': stat.st_ctime_ns})
+            if path.suffix == '.mp4':
+                from app.montage import probe_preview_video
+                with self.repository._connect() as conn:
+                    row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='task_media_input' AND id=?", (job.workspace_id, job.id, f"event_{job.id}_{record.id.removeprefix('artifact_')}_input")).fetchone()
+                inputs = json.loads(row['payload_json'])['media_input']
+                if 'clip' in inputs:
+                    from app.canvas import preview_size
+                    clip = inputs['clip']
+                    size = preview_size(inputs['aspect_ratio'])
+                    duration = min(5, clip['timeline_end_seconds'] - clip['timeline_start_seconds'])
+                    silent = True
+                else:
+                    size = canvas_size(inputs['plan']['aspect_ratio'])
+                    duration = inputs['plan']['duration_seconds']
+                    silent = False
+                probe_preview_video(path, context, expected_size=size, expected_duration_seconds=duration, silent=silent)
+            else:
+                probe_audio_source(path, scheduler=context.scheduler, grant=context.grant, cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=True)
+        context.check()
+        return outputs
+
+
     def publish(self, workspace_id: str, task_id: str, *, kind: str, parameters: dict,
                 input_refs: list[str], operation: str, media_input: dict,
                 suffix: str = ".wav", engine: str = "local-audio-v1", execution=None) -> ArtifactRecord:
@@ -510,7 +545,7 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None):
+    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None):
         self.repository = repository
         self.facts = facts
         self.execute_operation = execute_operation
@@ -519,6 +554,7 @@ class TaskMediaJobs:
         self.audio_edit = audio_edit
         self.output_observation = output_observation
         self.media_script = media_script
+        self.visual_preview = visual_preview
         self.validate_result = validate_result
         self.on_settled = on_settled
         self.verify_identity = verify_identity
@@ -764,10 +800,12 @@ class TaskMediaJobs:
         from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
         from app.creation.output_observation_use_case import OutputObservationRejected
         from app.media_script_jobs import MEDIA_SCRIPT_ACTIONS, MediaScriptPreviewRejected
+        from app.media.picture_preview import PicturePreviewRejected
         job, event = self.read(grant.workspace_id, grant.owner_id)
         direct_audio = event["operation"] in AUDIO_INGRESS_ACTIONS
         direct_observation = event["operation"] == "output_observation"
         direct_script = event["operation"] in MEDIA_SCRIPT_ACTIONS
+        direct_visual = event["operation"] == "visual_edit_preview" and "_clip_preview" not in event["arguments"]
         direct_edit = AudioEditUseCase.handles(event["operation"],event["arguments"])
         actor = CreationExecutionActor.from_event(job.workspace_id, event)
         cancellation = threading.Event()
@@ -805,13 +843,17 @@ class TaskMediaJobs:
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             direct_clip = "_clip_preview" in event["arguments"]
-            if not direct_clip and not direct_audio and not direct_edit and not direct_observation and not direct_script:
+            if not direct_clip and not direct_audio and not direct_edit and not direct_observation and not direct_script and not direct_visual:
                 context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
             context.check()
             try:
                 result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                if direct_script:
+                if direct_visual:
+                    if self.visual_preview is None:
+                        raise ValueError("画面编辑执行负责人未组装")
+                    result = self.visual_preview.execute(job, event, actor, context)
+                elif direct_script:
                     if self.media_script is None:
                         raise ValueError("媒体脚本执行负责人未组装")
                     result = self.media_script.execute(job, event, actor, context)
@@ -838,7 +880,9 @@ class TaskMediaJobs:
             else:
                 result = result_event.payload["result"]
             context.check()
-            verification_facts = (self.media_script.validate_result(job,event,result,context) if direct_script else
+            verification_facts = (self.clip_preview.validate_result(job,event,result,context) if direct_clip else
+                self.visual_preview.validate_result(job,event,result,context) if direct_visual else
+                self.media_script.validate_result(job,event,result,context) if direct_script else
                 self.output_observation.validate_result(job,event,result,context) if direct_observation else
                 self.audio_edit.validate_result(job,event,result,context) if direct_edit else
                 self.audio_ingress.validate_result(job, event, result, context) if direct_audio else self.validate_result(job,event,result,context))
@@ -871,7 +915,7 @@ class TaskMediaJobs:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:
-                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected)) else type(exc).__name__
+                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected)) else type(exc).__name__
                 scheduler.fail_unit(grant, reason="task_media_failed",
                     failure_write=lambda conn, current: checkpoint(conn, current, "failed", failure_reason))
         finally:

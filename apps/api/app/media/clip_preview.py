@@ -47,3 +47,6 @@ class ClipPreviewExecutor:
         context.check()
         intent, proposal = self.use_case.proposal(actor, command, records=records, job=job)
         return {"intent":asdict(intent), "proposal":asdict(proposal)}
+
+    def validate_result(self, job, event, result, context):
+        return self.publisher.validate_publications(job, event, result, context)
