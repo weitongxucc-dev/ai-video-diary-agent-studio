@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
 from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
@@ -13220,6 +13221,10 @@ def _creation_render_is_valid(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+def _creation_execution_control():
+    return CreationExecutionControl(production_repo, creation_execution, _render_stage_use_case(), _verify_creation_identity)
+
+
 def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
     return CreationExecution(
         repository,
@@ -13231,81 +13236,7 @@ def _new_creation_execution(repository: ProductionRepository) -> CreationExecuti
 
 
 def _recover_creation_executions() -> None:
-    """开机恢复：身份只取持久行，并且每次都重新对本机名册核一遍。
-
-    被移除的成员留下的作业不会被自动重新申请整机许可——它停在待处理状态等人
-    明确处理，而不是靠一个旧的字符串身份继续拿许可。
-    """
-    # The repository owns the cross-workspace pending-job query. A workspace is
-    # taken only from each persisted JobRun, never from the current login.
-    runtime = device_runtime
-    if runtime is None or "creation_job" not in runtime.registrations:
-        # 没有整机许可通道就不派发。退回旧的本机线程等于绕开身份和主机门禁，
-        # 那正是这张许可要挡住的事；作业停在待处理状态，等许可就绪或人明确处理。
-        pending = production_repo.list_pending_creation_executions()
-        if pending:
-            logger.warning(
-                "整机许可通道尚未就绪，%s 件制作作业留在待处理状态等待人工处理",
-                len(pending),
-            )
-        return
-    media = runtime.registrations["creation_job"].owner.task_media
-    if media is not None:
-        with production_repo._connect() as conn:
-            pending_media = conn.execute("SELECT * FROM job_runs WHERE kind=? AND status IN ('queued','interrupted','running','cancelled')", (TASK_MEDIA_KIND,)).fetchall()
-        for row in pending_media:
-            job = production_repo._job_run_from_row(row)
-            with production_repo._connect() as conn:
-                request_rows = conn.execute("SELECT id,state FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND owner_type='creation_job'", (job.workspace_id, job.id)).fetchall()
-            _, event = media.read(job.workspace_id, job.id)
-            original = CreationExecutionActor.from_event(job.workspace_id, event)
-            if job.status == "cancelled":
-                for saved in request_rows:
-                    if saved["state"] in {"waiting", "blocked", "granted", "yield_requested"}:
-                        runtime.scheduler.cancel(saved["id"], original)
-                continue
-            if media.check(job, event, original) != "ready":
-                continue
-            if not request_rows:
-                runtime.scheduler.submit(SubmissionIntent(job.workspace_id, "creation_job", job.id,
-                    job.input_digest, f"task_media:{job.input_digest}", SchedulePolicy()), original)
-            # Existing grants are reconciled by DeviceScheduler before any dispatch.
-    # A crash may land after the JobRun cancellation commits but before
-    # its device request is cancelled. Reconcile from both durable rows.
-    with production_repo._connect() as conn:
-        cancelled_requests = conn.execute(
-            "SELECT r.id, r.workspace_id, r.member_id, r.owner_id FROM device_work_requests r "
-            "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
-            "WHERE r.owner_type='creation_job' AND j.kind='creation_task_execution' "
-            "AND j.status='cancelled' AND r.state IN ('waiting', 'blocked', 'granted')"
-        ).fetchall()
-    for row in cancelled_requests:
-        event = production_repo.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
-        # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
-        try:
-            original = CreationExecutionActor.from_event(row["workspace_id"], event.payload)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            logger.warning("已停止制作请求 %s 的持久身份无法复核", row["id"])
-            continue
-        if (not row["member_id"] or original.member_id != row["member_id"]
-                or (original.device_id is None and row["workspace_id"] != LEGACY_WORKSPACE_ID)):
-            raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
-        runtime.scheduler.cancel(row["id"], original)
-    for job in production_repo.list_pending_creation_executions():
-        event = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start")
-        try:
-            original = CreationExecutionActor.from_event(job.workspace_id, event.payload)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
-            continue
-        if _verify_creation_identity(original) != "ready":
-            logger.warning("制作作业 %s 的成员许可失效或未知，保留待处理", job.id)
-            continue
-        try:
-            submit_creation_stage(creation_execution, runtime.scheduler, job, original)
-        except (PermissionError, ValueError) as exc:
-            logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
-    runtime.wake()
+    _creation_execution_control().recover(device_runtime)
 
 
 def _creation_runtime():
@@ -13395,145 +13326,21 @@ def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecut
     return actor
 
 
-_EXECUTION_WAITING_TEXT = {
-    "dependency": "等待前一步或受许可执行能力就绪。",
-    "owner_unknown": "当前成员或任务归属暂不能核实。",
-    "authorization_lost": "当前任务授权已变化，请核对权限。",
-    "input_stale": "文案或制作要求已变化，请重新确认。",
-    "scheduled_time": "等待指定开始时间。",
-    "outside_window": "当前不在选择的执行时段内。",
-    "activity_unknown": "暂不能确认设备是否空闲。",
-    "device_active": "设备有人正在播放、录音或编辑。",
-    "resource_unknown": "暂不能确认设备资源是否足够。",
-    "resource_busy": "本机资源余量不足，正在等待满足制作条件。",
-    "retry_not_before": "等待下次可重试时间。",
-    "recovered": "设备恢复后等待重新核验。",
-}
 
 
 def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, object]:
-    task = _creation_task_or_404(workspace_id, task_id)
-    job = creation_execution.latest(workspace_id, task_id)
-    events = (
-        [
-            {"stage": event.payload.get("stage"), "status": event.payload.get("status"),
-             "reason": event.payload.get("reason"), "at": event.created_at.isoformat()}
-            for event in production_repo.list_task_events(workspace_id, task_id)
-            if job is not None and event.job_id == job.id
-            and event.event_type == "creation_execution_stage"
-        ]
-        if job else []
-    )
-    covers = (
-        production_repo.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
-        if task.current_timeline_version_id else []
-    )
-    current_stage = None
-    if job and events:
-        latest_stage_event = events[-1]
-        if (latest_stage_event["stage"] in {"narration", "person_render", "montage_plan", "render", "cover"}
-                and latest_stage_event["status"] in {"running", "failed", "pending"}):
-            current_stage = latest_stage_event["stage"]
-    waiting_reason = None
-    status_updated_at = job.updated_at.isoformat() if job else None
-    if job and job.status in {"queued", "interrupted"}:
-        start_event = production_repo.get_task_event(workspace_id, f"event_{job.id}_start")
-        queued_member_id = start_event.payload.get("member_id")
-        if queued_member_id:
-            with production_repo._connect() as conn:
-                row = conn.execute(
-                    "SELECT unit_key, wait_reason, updated_at FROM device_work_requests "
-                    "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
-                    "AND input_digest=? AND state IN ('waiting', 'blocked', 'granted', 'yield_requested') "
-                    "ORDER BY created_at DESC LIMIT 1",
-                    (workspace_id, queued_member_id, job.id, job.input_digest),
-                ).fetchone()
-            if row is not None:
-                queued_stage = row["unit_key"].split(":", 1)[0]
-                if queued_stage in {"narration", "person_render", "montage_plan", "render"}:
-                    current_stage = queued_stage
-                waiting_reason = _EXECUTION_WAITING_TEXT.get(row["wait_reason"])
-                if datetime.fromisoformat(row["updated_at"]) > job.updated_at:
-                    status_updated_at = row["updated_at"]
-    if job and job.status == "queued" and montage_waiting_for_confirmation(production_repo, task):
-        current_stage = "montage_plan"
-        waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
-    return {
-        "task_id": task_id,
-        "job": asdict(job) if job else None,
-        "stages": events,
-        "current_stage": current_stage,
-        "waiting_reason": waiting_reason,
-        "status_updated_at": status_updated_at,
-        "video_ready": _creation_render_is_valid(
-            workspace_id, task_id, verify_media=device_runtime is None),
-        "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
-        "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
-    }
+    try:
+        return _creation_execution_control().status(workspace_id, task_id, verify_media=device_runtime is None)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/execution/preview")
 def preview_creation_execution(task_id: str, request: Request) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if not task.confirmed_script_id:
-        raise HTTPException(status_code=409, detail="请先确认实际文案")
-    script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    digest = revision_digest(script, plan)
     try:
-        creation_execution.validate_input(workspace_id, task, script.id, digest)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    narration_artifact = (
-        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
-        if task.narration_cache_key
-        else None
-    )
-    if (narration_artifact is not None
-            and (narration_artifact.task_id != task.id or narration_artifact.script_id != script.id)):
-        narration_artifact = None
-    recorded_narration_ready = (
-        narration_artifact is not None and narration_artifact.source_kind == "recorded"
-    )
-    can_continue = (
-        plan.presenter_share_target == 0
-        if recorded_narration_ready
-        else bool(plan.selected_voice)
-    )
-    if can_continue:
-        continuation_blocker = None
-    elif recorded_narration_ready:
-        continuation_blocker = "当前配音是本人录音，不能满足露脸目标与口型身份；请将露脸目标设为0，或改用与授权声音匹配的生成配音。"
-    elif narration_artifact is not None:
-        continuation_blocker = "当前已有配音产物，但制作要求未选定授权声音版本；请选择授权声音后重新确认。"
-    elif task.narration_cache_key:
-        continuation_blocker = "当前配音产物不可用或不再对应这版文案；请重新采用录音或选择已授权声音。"
-    else:
-        continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
-    return {
-        "task_id": task.id,
-        "script_id": script.id,
-        "script_title": script.title,
-        "script_sections": [{"title": section.title, "content": section.content} for section in script.sections],
-        "plan_id": plan.id,
-        "narration_source": ({
-            "source_kind": narration_artifact.source_kind,
-            "source_artifact_ref": narration_artifact.source_artifact_ref,
-            "duration_seconds": narration_artifact.duration_seconds,
-        } if narration_artifact is not None else None),
-        "requirements": {
-            "aspect_ratio": plan.aspect_ratio,
-            "duration_target_seconds": plan.duration_target_seconds,
-            "presenter_share_target": plan.presenter_share_target,
-            "lipsync_quality": plan.lipsync_quality,
-            "selected_voice": plan.selected_voice.profile_id if plan.selected_voice else None,
-            "can_continue": can_continue,
-            "continuation_blocker": continuation_blocker,
-            "template_settings": plan.template_settings,
-        },
-        "input_digest": digest,
-    }
+        return _creation_execution_control().preview(current_workspace_id(request), task_id)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/execution")
@@ -13587,17 +13394,9 @@ def start_creation_execution(task_id: str, request: Request, payload: ExecutionS
     runtime = _creation_runtime()
     actor = _require_permit_actor(request, workspace_id)
     try:
-        job = creation_execution.start(workspace_id, task_id, payload.script_id, payload.input_digest,
-                                       actor=actor)
-        submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="创作任务或确认对象不存在") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    runtime.wake()
-    result = _creation_execution_status(workspace_id, task_id)
+        result = _creation_execution_control().start(workspace_id, task_id, payload.script_id, payload.input_digest, actor, runtime, verify_media=device_runtime is None)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
 
 
@@ -13612,14 +13411,9 @@ def resume_creation_execution(task_id: str, request: Request, assistant_turn_id:
     runtime = _creation_runtime()
     actor = _require_permit_actor(request, workspace_id)
     try:
-        job = creation_execution.retry(workspace_id, task_id, member_id=actor.member_id)
-        submit_creation_stage(creation_execution, runtime.scheduler, job, actor)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    runtime.wake()
-    result = _creation_execution_status(workspace_id, task_id)
+        result = _creation_execution_control().resume(workspace_id, task_id, actor, runtime, verify_media=device_runtime is None)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
 
 
@@ -13633,38 +13427,13 @@ def cancel_creation_execution(task_id: str, request: Request) -> dict[str, objec
     if actor is None:
         raise HTTPException(status_code=403, detail="缺少可核查的原制作身份，不能取消")
     try:
-        job = creation_execution.cancel(workspace_id, task_id, member_id=actor.member_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if runtime is not None:
-        with production_repo._connect() as conn:
-            rows = conn.execute(
-                "SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
-                "AND owner_id=? AND state IN ('waiting', 'blocked', 'granted')",
-                (workspace_id, job.id),
-            ).fetchall()
-        for row in rows:
-            runtime.scheduler.cancel(row["id"], actor)
-            registration = runtime.registrations.get("creation_job")
-            executor = getattr(registration, "executor", None)
-            if isinstance(executor, CreationJobUnitExecutor):
-                executor.request_cancel(row["id"])
-    return _creation_execution_status(workspace_id, task_id)
+        return _creation_execution_control().cancel(workspace_id, task_id, actor, runtime, verify_media=device_runtime is None)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _creation_job_for_request(workspace_id: str, request_id: str):
-    """这条设备许可背后是不是一个制作作业；不是就返回 ``None``。"""
-    with production_repo._connect() as conn:
-        row = conn.execute(
-            "SELECT owner_id FROM device_work_requests "
-            "WHERE id=? AND workspace_id=? AND owner_type='creation_job'",
-            (request_id, workspace_id),
-        ).fetchone()
-    if row is None:
-        return None
-    return production_repo.get_job_run(workspace_id, row["owner_id"])
+    return _creation_execution_control().job_for_request(workspace_id, request_id)
 
 
 @app.post("/api/device/session/heartbeat")
@@ -14401,15 +14170,11 @@ def _goal_service():
 def _read_bound_execution_result(task_id, request, job_id):
     task, _member_id = _exact_edit_access(task_id, request, write=True)
     actor = _require_permit_actor(request, task.workspace_id)
-    job = production_repo.get_job_run(task.workspace_id, job_id)
-    start = production_repo.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
-    if (job.kind != "creation_task_execution" or job.task_id != task_id
-            or CreationExecutionActor.from_event(task.workspace_id, start) != actor
-            or start["input_digest"] != job.input_digest):
-        raise ValueError("原制作作业身份或任务不可核验")
-    result = _creation_execution_status(task.workspace_id, task_id)
-    if result["job"] is None or result["job"]["id"] != job_id:
-        raise ValueError("原制作作业已被新的制作请求替代")
+    try:
+        result = _creation_execution_control().read_bound(task.workspace_id, task_id, job_id, actor,
+            verify_media=device_runtime is None)
+    except ExecutionControlRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return jsonable_encoder(result)
 
 

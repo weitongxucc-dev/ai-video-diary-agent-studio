@@ -4783,6 +4783,55 @@ class ProductionRepository:
             ).fetchall()
         return [self._job_run_from_row(row) for row in rows]
 
+    def list_pending_task_media_jobs(self, kind: str):
+        with self._connect() as conn:
+            pending_media = conn.execute("SELECT * FROM job_runs WHERE kind=? AND status IN ('queued','interrupted','running','cancelled')", (kind,)).fetchall()
+        return (self._job_run_from_row(row) for row in pending_media)
+
+    def list_creation_job_request_states(self, workspace_id: str, job_id: str):
+        with self._connect() as conn:
+            request_rows = conn.execute("SELECT id,state FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND owner_type='creation_job'", (workspace_id, job_id)).fetchall()
+        return request_rows
+
+    def list_cancelled_creation_execution_requests(self):
+        with self._connect() as conn:
+            cancelled_requests = conn.execute(
+                "SELECT r.id, r.workspace_id, r.member_id, r.owner_id FROM device_work_requests r "
+                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
+                "WHERE r.owner_type='creation_job' AND j.kind='creation_task_execution' "
+                "AND j.status='cancelled' AND r.state IN ('waiting', 'blocked', 'granted')"
+            ).fetchall()
+        return cancelled_requests
+
+    def creation_execution_wait_row(self, workspace_id: str, member_id: str, job_id: str, input_digest: str):
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT unit_key, wait_reason, updated_at FROM device_work_requests "
+                "WHERE workspace_id=? AND member_id=? AND owner_type='creation_job' AND owner_id=? "
+                "AND input_digest=? AND state IN ('waiting', 'blocked', 'granted', 'yield_requested') "
+                "ORDER BY created_at DESC LIMIT 1",
+                (workspace_id, member_id, job_id, input_digest),
+            ).fetchone()
+        return row
+
+    def active_creation_request_ids(self, workspace_id: str, job_id: str):
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+                "AND owner_id=? AND state IN ('waiting', 'blocked', 'granted')",
+                (workspace_id, job_id),
+            ).fetchall()
+        return rows
+
+    def creation_job_for_device_request_row(self, workspace_id: str, request_id: str):
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT owner_id FROM device_work_requests "
+                "WHERE id=? AND workspace_id=? AND owner_type='creation_job'",
+                (request_id, workspace_id),
+            ).fetchone()
+        return row
+
     def list_pending_creation_executions(self) -> list[JobRun]:
         """Recover only explicitly persisted execution jobs and their original workspace."""
         with self._connect() as conn:
