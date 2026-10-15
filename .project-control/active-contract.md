@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1两源冻结待QA；另REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅fresh-api-explicit-cold-start-preparation/**只读准备证据写权，所有产品/旧证据只读，零import/测试/执行。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-PRIMARY-C1-INDEPENDENT-20261015仅新fresh-qa-late-runtime-activation-primary-c1/**，精确两overlay后仅复验原真实失败代表；其它源/旧证据冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1已a63b9fc5集成/即时归还；当前REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅fresh-api-explicit-cold-start-preparation/**只读准备证据写权，所有产品/旧证据只读，零import/测试/执行。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 晚activation主次异常独立门已过，a63b9fc5精确集成/即时归还。所有原首败/通过证据冻结，当前无新产品/证据/执行写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -45,11 +45,11 @@ REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅API新证据目录，root expl
 
 按architecture3.14/原R7目标给最小后续实施包：由现具体组装/生命周期显式承接上述运行构造的准确边界，原schema初始化/中断恢复/驱动start-stop与路由/安装器/业务全局consumer依赖和先后，明确旧导入期consumer退役及精确拟独占源，一个最小normal和关键生命周期差额。只按需读取三源目标及必要原runtime bootstrap/fixture consumer，source/script prepost最小记录；零app import/collect/test/model/native/用户配置/DB/账号，零全仓或完整AST副本。不得执行或改写C1候选，不设计通用容器/兼容lazy全局/新恢复政策；若无实际剩余差额给有限不存在证明而不捏造拆分。准备释放后冻结，必须root另给产品绑定才实施；短ACK后直接准备，无第二START，不阻塞独立QA。
 
-### 晚激活主次异常稳定候选独立续验（当前有效）
+### 晚激活主次异常已集成（冻结复用）
 
-API release9336eaab609f297d67d02dbb4832b3110b6a10d7c9e8163869ac966fc6986503两源TAB6bb1a9df8a5f38107e18c13e59870121d5b2393d81680580638f21b3307da09c，经root late-activation-primary-c1-reviewed.json SHAe45851558fbaf1296267910c44038ac9fc511c29bd7026bfecd44789bd432118核14artifact、195loader/196origin、完整原pause/yield/恢复loop/无主异常抛错及624其它main函数/15旧tests不变。新单node首过，仅原continuation pause/stop/resume与stopped-thread/有限其它owner fixture，真实线程/native/资源/模型/dispatch0；不能代替真实持久化后失败门。两源和作者证据冻结。
+两源已a63b9fc5d36bf64a0d6ac1a6b371bd39b38ec2ce精确集成，index/commit/live等release9336eaab609f297d67d02dbb4832b3110b6a10d7c9e8163869ac966fc6986503与TAB6bb1a9df8a5f38107e18c13e59870121d5b2393d81680580638f21b3307da09c；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。root源码回执late-activation-primary-c1-reviewed.json SHAe45851558fbaf1296267910c44038ac9fc511c29bd7026bfecd44789bd432118核14artifact/195loader/196origin、原完整loop及624其它main函数/15旧tests保持；唯一新focused node首过，原主对象/cause和无主异常旧抛错核过，无真实线程/native/资源。
 
-REF-R7-LATE-ACTIVATION-PRIMARY-C1-INDEPENDENT-20261015仅QA新目录，root late-activation-primary-c1-independent-binding.json SHA826287dfe8fca7e452c859e7ab259ef4eeafcbd2ac842c04d18f464cf8d516e3精确两overlay（main e64f6541、bootstrap test d578157b）覆盖原196+3固定Git对应条目，其余不变；原FIRST_FAILURE_SEAL/全部旧证据只读。只重验原失败test_saved_settings_then_real_terminated_continuation_preserves_primary_failure，一个原同DB保存后真实stop的完整生命周期代表，保留原case、注入、保存、激活、启动/恢复和清理语义。两个执行脚本定向复用，runner仅新binding路径及MAPPING显式overlay优先；可在原errors观察函数添加__notes__遥测/有限主异常诊断断言，不改变已冻结脚本或删除首次失败。核公开503已保存主失败及原cause、原continuation/device次恢复诊断，持久配置/当前新绑定/终止旧循环真实如前，不能声称原驱动恢复或新成功/回滚。只必要真实空闲线程且全部结束清理，零stage/模型/native/资源，原37预算不动。首失败保留；旧normal/作者新node/旧矩阵不跑，source/script/actual origin最小证据。语义ACK后直接执行，无第二START；稳定SOURCE_GATE后root精确核门/集成/即时归还。
+独立gate578c77f6b63a15c957b99d7b0867079f05b8ad5c9ad43d23cba50afe42e84282已root late-activation-primary-c1-independent-reviewed.json SHA457cc90aa3b7138e12930b3c4379fa52c965711b147f9df3210fca69c7b267ba核18artifact/10refs、199loader/198→200actual origin、196+3固定Git加精确两overlay、原case完整body及仅binding/overlay优先和notes观察差额。原真实晚保存失败代表仅首次复验1PASS6.49s：配置durable、旧continuation终止/旧device关闭、新prepared绑定和新device发布，原HTTP503主异常及原cause保持，两真实恢复失败附notes而不覆盖；两device/原continuation全停净、queued/dispatch/native/资源0。37原fixture值不变，作者node/旧normal/矩阵0重跑。回执late-activation-primary-c1-integrated.json SHA08d7e439d7db13b04e17109dd3f19301df2f3f51b4b557f5c4e656d22ced6158；原首败和通过证据冻结。只接受已保存失败如实报告，不宣称原循环恢复、回滚、正常重载或完整R7/R9/GUI/生产资源；显式冷启动准备继续，源字节未变无需新ACK。
 
 ### 晚激活真实首败与最小修复（首败与实施原绑定）
 
