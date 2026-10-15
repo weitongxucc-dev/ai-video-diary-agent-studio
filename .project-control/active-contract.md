@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-CREATION-PLAN-PREFLIGHT-IMPLEMENTATION-20261016仅下节五源与fresh-api-plan-preflight-implementation/**；方案预检具体owner/唯一来源指纹迁交，一个metadata自测，其余产品/证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 自动任务确认单个真实SQLite晚绑定独立门已root接受、五源46493fcb集成/即时归还；产品和全部证据冻结，当前无新执行/写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 方案预检五源/作者证据冻结待QA；当前REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅fresh-api-video-template-preparation/**只读准备，零产品写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-CREATION-PLAN-PREFLIGHT-INDEPENDENT-20261016仅fresh-qa-plan-preflight/**；一个固定历史知识当前grant撤回后原confirm拒绝的元数据独立门，零产品写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,21 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 方案预检具体owner与唯一来源指纹五源实施（当前有效）
+### 视频模板具体业务归属只读接续（当前有效）
+
+REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅当前API写fresh-api-video-template-preparation/**，零产品执行/写权；root video-template-preparation-binding.json SHA3a620776ddcd825da7c56aebd3f8a3c5cd1dc143317f283f957c9d5b55b411af固定main/production/content_templates/test_video_templates四初始源。main当前为已release预检候选，所有预检五源和旧证据冻结；QA目录互斥。只核_builtin_video_templates/_video_template_or_404/create_video_template_version/save_creation_task_template及真正必要直接output/subtitle/default-style/公开仓储helper，复用已审四组/已知Web四consumer，不重复全main/消费者大清点。
+
+给一个紧凑可实施具体模板业务包：精确文件/new owner、原append-only version/owner/可用已render来源/颜色fit字幕voice脚本推导与错误身份时点、有限显式依赖与原实现退役；ProductionRepository原SQL/CAS/visibility唯一不变，预检所需resolver保持原签名，不新policy/层/通用callback袋。一个最小metadata自测，若确有关键身份/version边界迁交，最多一个独立代表，不为每方法开QA。仅命名span/hash/read期/有限证据，零产品/import/collect/test/DB/media/native/model/lifecycle/env/resource/GUI/network或全source/AST/旧证据复制。预检后续集成HEAD变化按准确路径/body核，不视为本组源码变化。一次短语义ACK后直接准备，无第二START；release后freeze、root核包另绑产品。
+
+### 方案预检五源源审与撤grant单个独立门（当前有效）
+
+release21f44ebb0ea3de63fd715c743abee24fffea893de066f5e8053cc6baf8d2ecfb / TABce62ad208011287d0c4e3417808c0b356736aa69b98ae0c09867efef2f1dfc28已root plan-preflight-release-reviewed.json SHA48a34224d065b29a4b75a2dc151689112b646956277d743aed8238470727458f核35artifact/196 actual beforecompile-origin、原完整prepare有限翻译/其余main整AST及五helper调用名/唯一identity body/三phase/14不可变字段/二旧测试名字字节，12直接源/37值冻结。一个metadata node共3实际（首次numeric知识夹具失败、第二通过后发现fields union可变，显式frozenset修正仅本node重验最终通过）；preexec runner key错误0应用也保留。最终call .116s/pytest .19s/runner1.993s，三有限preflight调用、provider share0零/positive在catalog后一次，reader两次照旧，零新Plan/Task/Job。root初把summary hash定位到NORMAL_FACTS，改读release绑定NORMAL_SUMMARY的元数据observer差额，无产品/证据修改或应用复跑。五源/作者证据冻结，未集成。
+
+REF-R9-CREATION-PLAN-PREFLIGHT-INDEPENDENT-20261016仅当前QA写fresh-qa-plan-preflight/**，零产品写权；root plan-preflight-independent-binding.json SHA3c9918f6b41d53110c5beb64254df88688b4955242080341f11435cc73290a6b固定五源与candidate04的actual196 map引用。仅一个真实公开来源仓储metadata代表：原preview后通过当前SourceRepository公开owner撤回reader当前grant；精确历史版本仍可由合法owner公开getter核存在。原confirm用同pin/fingerprint在读取固定知识按原404/字符串detail/直接KeyError cause拒绝，先于source-item/material/catalog/lazy口型，无Plan/Task写或新版本fallback；list知识本就在pin前允许原执行。原权限/pin/owner/确认业务不得mock或放宽，仅trusted reader/workspace身份、初preview有限material/catalog/provider为明确夹具。
+
+自有隔离metadata DB/空media，优先原handler直接调用，无服务/lifecycle；若原main组装确需仅原显式factory一次/原37隔离值且零driver启动。脚本/source预封、actual beforecompile/origin前后、只引用作者map/必要fixed Git，不复制全源/AST/旧证据。记录原method observer及实际到达顺序/未到达后续、合法owner历史仍在与无持久创建；保留首失败，只真实失败/新差额必要修正。作者normal/旧撤权或automation矩阵零新执行，账号用户DB/私env/native/model/probe/GUI/network/host资源/dispatch禁止。一次短语义REBASE_ACK后直接执行，无第二START；SOURCE_GATE稳定freeze后root核门/准确五源集成/即时SOURCE_INTEGRATED与WRITE_LEASE_RETURN。该门非生产认证/真实模型媒体/GUI/resource或整体R9接受。
+
+### 方案预检具体owner与唯一来源指纹五源原实施（已源审冻结）
 
 只读release131c4921d1b86060849b1418b5a0a38594774b98b67b7946322d3c1012fec2f0 / package ebc9d1c954d8dd653b2ced5f935c69e176ac3972ec3b9c0f683d25f136b03152已root plan-preflight-preparation-reviewed.json SHAd7b7b9551bd86d07b6a85f7f5b04d4b2f55d5fabf548992e1cdcb30c45773027核4artifact/12当前Git源/10文本与完整declaration-body摘要、四初始读期一致；前一自动确认产品集成的HEAD变化未改目标。准备冻结/READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN随本实施绑定接续，不重做大清点。
 
