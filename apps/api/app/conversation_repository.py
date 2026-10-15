@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+
+
 import json
 import hashlib
 import sqlite3
@@ -1031,3 +1033,10 @@ class ConversationRepository:
         return [{**dict(row), "events": json.loads(row["events_json"]),
                  "result": json.loads(row["result_json"]) if row["result_json"] else None}
                 for row in rows]
+
+
+    def consumed_turn_request_context(self, turn_id, conversation_id, workspace_id, member_id):
+        with self._connect() as conn:
+            receipt = conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts WHERE turn_id=? AND conversation_id=? AND workspace_id=? AND member_id=? AND outcome='consumed'", (turn_id, conversation_id, workspace_id, member_id)).fetchone()
+        context = json.loads(receipt['request_context_json']) if receipt else {}
+        return context

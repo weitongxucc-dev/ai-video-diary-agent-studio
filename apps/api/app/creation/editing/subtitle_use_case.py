@@ -1,4 +1,8 @@
 """One finite subtitle family; publication and the existing joint save keep their owners."""
+
+from app.schemas import CreationTaskExactEditRequest
+import re
+from app.creation.editing.command_compile import subtitle_text_from_command
 from dataclasses import dataclass, replace
 import subprocess
 from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command
@@ -397,6 +401,92 @@ class SubtitleEditUseCase:
         except (ValueError, OSError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
         return (intent, proposal)
+
+
+    def command_cue(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        if payload.context_stage not in {'montage', 'review', 'subtitle_cover'}:
+            raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改字幕。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一条字幕。', retryable=True)
+        shift = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:整体)?(?:向前|往前|提前|向后|往后|延后|推迟)\\s*(\\d+(?:\\.\\d+)?)\\s*(毫秒|秒)[。！]?', command)
+        if shift:
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+            tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, montage=montage)
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            candidates = [(track, cue) for track in tracks if track_ref is None or track.id == track_ref for cue in track.cues if selected_ref == f'cue:{cue.id}']
+            if len(candidates) != 1:
+                raise EditPreviewRejected(status_code=409, detail='请明确选择一条字幕及其语言轨。')
+            track, cue = candidates[0]
+            offset = float(shift.group(1)) / (1000 if shift.group(2) == '毫秒' else 1)
+            if any((word in command for word in ('向前', '往前', '提前'))):
+                offset = -offset
+            try:
+                edit = CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=cue.id, track_id=track.id, start_seconds=round(cue.start_seconds + offset, 3), end_seconds=round(cue.end_seconds + offset, 3))
+            except ValueError as exc:
+                raise EditPreviewRejected(status_code=422, detail='字幕移动后的时间必须有效，且不能早于成片开始。') from exc
+            return edit
+        timing = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒?\\s*(?:到|至|–|-)\\s*(\\d+(?:\\.\\d+)?)\\s*秒[。！]?', command)
+        if timing:
+            return CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=selected_ref.removeprefix('cue:'), track_id=next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None), start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2)))
+        new_text = subtitle_text_from_command(command)
+        if new_text is None:
+            raise edit_preview_failure(status_code=409, error='edit_intent_unsupported', reason='没有识别出新的字幕文字。', impact='字幕和成片保持不变。', repair_action='输入“把这句字幕改成……”并保留要显示的完整文字。', retryable=True)
+        cue_id = selected_ref.removeprefix('cue:')
+        try:
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+            tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, montage=montage)
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            selected_track = next((track for track in tracks if (track_ref is None or track.id == track_ref) and any((cue.id == cue_id for cue in track.cues))), None)
+            if track_ref is not None and selected_track is None:
+                raise EditPreviewRejected(status_code=409, detail='所选字幕不属于当前语言轨，请重新选择')
+            if selected_track is not None:
+                return CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', track_id=selected_track.id, cue_id=cue_id, text=new_text)
+            cue = next((item for item in montage.cues if item.id == cue_id))
+        except (KeyError, StopIteration) as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task subtitle edit target not found') from exc
+        if new_text == cue.text:
+            raise edit_preview_failure(status_code=409, error='edit_no_change', reason='新字幕与当前字幕相同。', impact='没有创建新的时间线版本。', repair_action='输入不同的字幕文字后再试。', retryable=True)
+        base_version = self.montage_edits.ensure_montage_base(workspace_id, task, montage)
+        task = self.repository.get_creation_task(workspace_id, task.id)
+        subtitle_track = next((track for track in self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage) if any((track_cue.id == cue.id for track_cue in track.cues))), None)
+        now = utc_now()
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='update_subtitle_cue', scope={'kind': 'subtitle_cue', 'cue_id': cue.id}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=0.99, status='interpreted', created_at=now), source=request_source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只修改所选字幕；配音和镜头保持不变。', target_refs=[selected_ref], operation={'operation_type': 'UpdateSubtitleCue', 'payload': {'cue_id': cue.id, 'text': new_text, 'expected_text': cue.text, 'base_version_id': base_version.id, **({'track_id': subtitle_track.id, 'line_breaks': next((item.line_breaks for item in subtitle_track.cues if item.id == cue.id)), 'emphasis': next((item.emphasis for item in subtitle_track.cues if item.id == cue.id)), 'style': subtitle_track.style} if subtitle_track is not None else {})}}, invalidated_refs=logical_montage_output_refs(montage), preview={'before': {'ref': selected_ref, 'label': '当前字幕', 'detail': cue.text}, 'after': {'ref': selected_ref, 'label': '修改后字幕', 'detail': new_text}}, external_effects=['确认后只更新字幕版本；重新渲染前不会执行媒体进程。'], created_at=now, updated_at=now))
+        return (intent, proposal)
+
+
+    def command_batch_or_structure(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        batch_match = re.fullmatch('全文把[“"](.+?)[”"](?:替换成|替换为|改成|改为)[“"](.*)[”"][。！]?', command)
+        if batch_match and payload.context_stage == 'subtitle_cover':
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+            tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, montage=montage)
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            matching = [track for track in tracks if track.id == track_ref] if track_ref else [track for track in tracks if selected_ref == f'subtitle-track:{track.id}' or any((selected_ref == f'cue:{cue.id}' for cue in track.cues))]
+            if len(matching) != 1:
+                raise EditPreviewRejected(status_code=409, detail='请先选择要全文替换的字幕语言轨')
+            if len(batch_match.group(1)) > 96 or len(batch_match.group(2)) > 96:
+                raise EditPreviewRejected(status_code=422, detail='单次查找和替换文字最多96字')
+            return CreationTaskExactEditRequest(operation_type='ReplaceSubtitleText', track_id=matching[0].id, find_text=batch_match.group(1), replacement_text=batch_match.group(2))
+        structure_command = re.fullmatch('(?:把)?(?:当前|这条)字幕(?:在第(\\d+)字后(?:、|，|,)?(?:在)?([0-9.]+)秒拆分|与下一条合并|删除)[。！]?', command)
+        delete_command = command.rstrip('。！') in {'删除当前字幕', '删除这条字幕'}
+        if (structure_command or delete_command) and payload.context_stage == 'subtitle_cover':
+            track_ref = next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None)
+            if not selected_ref.startswith('cue:') or not track_ref:
+                raise EditPreviewRejected(status_code=409, detail='请先选择当前语言轨中的字幕')
+            operation = 'DeleteSubtitleCue' if delete_command or '删除' in command else 'MergeSubtitleCue'
+            extra = {}
+            if structure_command and structure_command.group(1):
+                operation = 'SplitSubtitleCue'
+                try:
+                    extra = {'split_offset': int(structure_command.group(1)), 'split_time_seconds': float(structure_command.group(2))}
+                except ValueError as exc:
+                    raise EditPreviewRejected(status_code=422, detail='拆分时间须为有效秒数') from exc
+            return CreationTaskExactEditRequest(operation_type=operation, track_id=track_ref, cue_id=selected_ref.removeprefix('cue:'), **extra)
+        return None
+
+
+    def preview_alignment(self, task, payload, language_label):
+        raise EditPreviewRejected(status_code=503, detail='本地字幕识别缺少独立模型资源预算，未开始校准。')
 
 
 def subtitle_values(payload):

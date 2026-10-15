@@ -545,10 +545,9 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None, compound_selection=None, exact_preview=None):
+    def __init__(self, repository, *, facts, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None, compound_selection=None, exact_preview=None, command_preview=None):
         self.repository = repository
         self.facts = facts
-        self.execute_operation = execute_operation
         self.clip_preview = clip_preview
         self.audio_ingress = audio_ingress
         self.audio_edit = audio_edit
@@ -557,7 +556,7 @@ class TaskMediaJobs:
         self.visual_preview = visual_preview
         self.compound_selection = compound_selection
         self.exact_preview = exact_preview
-        self.validate_result = validate_result
+        self.command_preview = command_preview
         self.on_settled = on_settled
         self.verify_identity = verify_identity
 
@@ -804,6 +803,7 @@ class TaskMediaJobs:
         from app.media_script_jobs import MEDIA_SCRIPT_ACTIONS, MediaScriptPreviewRejected
         from app.media.picture_preview import PicturePreviewRejected
         from app.creation.editing.metadata_use_case import EditPreviewRejected
+        from app.creation.editing.command_compile import CommandParseRejected
         job, event = self.read(grant.workspace_id, grant.owner_id)
         direct_compound = event["operation"] == "compound_selection_preview"
         direct_audio = event["operation"] in AUDIO_INGRESS_ACTIONS
@@ -812,12 +812,12 @@ class TaskMediaJobs:
         direct_visual = event["operation"] == "visual_edit_preview" and "_clip_preview" not in event["arguments"]
         direct_edit = AudioEditUseCase.handles(event["operation"],event["arguments"])
         direct_exact = event["operation"] == "exact_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
+        direct_command = event["operation"] == "command_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
         actor = CreationExecutionActor.from_event(job.workspace_id, event)
         cancellation = threading.Event()
         with executor._cancellation_lock:
             executor._cancellations[grant.request_id] = cancellation
         token = set_workspace_context(job.workspace_id)
-        context_token = None
         verification_facts = None
         def checkpoint(conn, current, status, reason=None):
             if status == "succeeded":
@@ -848,13 +848,15 @@ class TaskMediaJobs:
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             direct_clip = "_clip_preview" in event["arguments"]
-            if not direct_clip and not direct_audio and not direct_edit and not direct_observation and not direct_script and not direct_visual and not direct_compound and not direct_exact:
-                context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
             context.check()
             try:
                 result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                if direct_exact:
+                if direct_command:
+                    if self.command_preview is None:
+                        raise ValueError('指令编辑执行负责人未组装')
+                    result = self.command_preview.execute(job,event,actor,context)
+                elif direct_exact:
                     if self.exact_preview is None:
                         raise ValueError('精确编辑执行负责人未组装')
                     result = self.exact_preview.execute(job,event,actor,context)
@@ -885,7 +887,7 @@ class TaskMediaJobs:
                 elif direct_clip:
                     result = self.clip_preview.execute(job, event, actor, context)
                 else:
-                    result = self.execute_operation(job, event, actor)
+                    raise ValueError('未知任务媒体处理类型')
                 # Persist the receipt before validation; retry validates this same output.
                 self.repository.append_task_event(TaskEvent(
                     id=f"event_{job.id}_result", workspace_id=job.workspace_id, task_id=job.task_id,
@@ -893,14 +895,16 @@ class TaskMediaJobs:
             else:
                 result = result_event.payload["result"]
             context.check()
-            verification_facts = (self.clip_preview.validate_result(job,event,result,context) if direct_clip else
-                self.exact_preview.validate_result(job,event,result,context) if direct_exact else
-                self.compound_selection.validate_result(job,event,result,context) if direct_compound else
-                self.visual_preview.validate_result(job,event,result,context) if direct_visual else
-                self.media_script.validate_result(job,event,result,context) if direct_script else
-                self.output_observation.validate_result(job,event,result,context) if direct_observation else
-                self.audio_edit.validate_result(job,event,result,context) if direct_edit else
-                self.audio_ingress.validate_result(job, event, result, context) if direct_audio else self.validate_result(job,event,result,context))
+            if direct_clip:verification_facts=self.clip_preview.validate_result(job,event,result,context)
+            elif direct_command:verification_facts=self.command_preview.validate_result(job,event,result,context)
+            elif direct_exact:verification_facts=self.exact_preview.validate_result(job,event,result,context)
+            elif direct_compound:verification_facts=self.compound_selection.validate_result(job,event,result,context)
+            elif direct_visual:verification_facts=self.visual_preview.validate_result(job,event,result,context)
+            elif direct_script:verification_facts=self.media_script.validate_result(job,event,result,context)
+            elif direct_observation:verification_facts=self.output_observation.validate_result(job,event,result,context)
+            elif direct_edit:verification_facts=self.audio_edit.validate_result(job,event,result,context)
+            elif direct_audio:verification_facts=self.audio_ingress.validate_result(job,event,result,context)
+            else:raise ValueError('未知任务媒体处理类型')
             if self.check(job, event, actor) != "ready":
                 raise ValueError("媒体处理期间输入版本或身份发生变化")
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
@@ -930,12 +934,10 @@ class TaskMediaJobs:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:
-                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected) or direct_compound and isinstance(exc,PicturePreviewRejected) or direct_exact and isinstance(exc,(EditPreviewRejected,PicturePreviewRejected))) else type(exc).__name__
+                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected) or direct_compound and isinstance(exc,PicturePreviewRejected) or direct_exact and isinstance(exc,(EditPreviewRejected,PicturePreviewRejected)) or direct_command and isinstance(exc,(EditPreviewRejected,PicturePreviewRejected,CommandParseRejected))) else type(exc).__name__
                 scheduler.fail_unit(grant, reason="task_media_failed",
                     failure_write=lambda conn, current: checkpoint(conn, current, "failed", failure_reason))
         finally:
-            if context_token is not None:
-                TASK_MEDIA_CONTEXT.reset(context_token)
             reset_workspace_context(token)
             with executor._cancellation_lock:
                 executor._cancellations.pop(grant.request_id, None)

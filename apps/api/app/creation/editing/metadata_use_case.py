@@ -1,6 +1,16 @@
 """Concrete metadata commands, durable replay and one montage-version commit."""
 from __future__ import annotations
 
+from app.creation.editing.clips import ClipPreviewCommand
+from app.schemas import CreationTaskExactEditRequest
+from app.schemas import MontageClipCandidateResponse
+from app.visual_effects import compile_crop_command
+from app.creation.editing.command_compile import edit_material_constraint
+from app.production import effective_segment_usage_role
+from app.production import material_segment_eligible
+import re
+from app.creation.editing.clips import reorder_picture
+
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -796,3 +806,178 @@ class MetadataEditUseCase:
         preview = {'before': {'ref': montage.output_path, 'label': '当前成片画面', 'detail': f'{payload.frame_time_seconds:.1f} 秒'}, 'after': {'ref': 'cover:preview', 'label': '封面标题', 'detail': f'{position_label} · {payload.title}'}}
         effects = ['确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。']
         return (summary, target_refs, operation_payload, preview, effects)
+
+
+    def preview_replacement(self, task, payload, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        task_id = task.id
+        command = payload.raw_command.strip()
+        if payload.context_stage not in {'montage', 'review'}:
+            raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不支持这项镜头修改。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片，选中一个镜头后再输入替换要求。', retryable=True)
+        if not re.search('替换|改用|replace|换(?:成|为|一下|一段|一条|一个|个|镜头|素材|画面)', command.casefold()):
+            raise edit_preview_failure(status_code=409, error='edit_intent_unsupported', reason='这条镜头指令还无法完整执行。', impact='任务内容没有发生变化。', repair_action='可指定替换镜头、曝光、冷暖或美颜；其他操作暂时使用右侧已有控件。', retryable=True)
+        if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith('clip:'):
+            raise edit_preview_failure(status_code=409, error='edit_scope_required', reason='还没有确定要替换哪个镜头。', impact='系统不会猜测修改范围。', repair_action='先在故事板中选中一个镜头，再提交修改要求。', retryable=True)
+        clip_id = payload.selected_object_refs[0].removeprefix('clip:')
+        try:
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            clip = next((item for item in plan.clips if item.id == clip_id))
+            current_asset = None if clip.person_render_id else self.repository.get_asset(workspace_id, clip.asset_id)
+        except (KeyError, StopIteration) as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task edit target not found') from exc
+        if plan.status == 'rendering':
+            raise EditPreviewRejected(status_code=409, detail='rendering montage cannot be edited')
+        if clip.locked:
+            raise EditPreviewRejected(status_code=409, detail='请先解锁镜头，再替换素材。')
+        invalidated_refs = logical_montage_output_refs(plan)
+        viewer_user_id, local_diagnostic = (identity['member_id'], identity['local_diagnostic'])
+        candidates = [candidate for candidate in self.montage_candidates(workspace_id, plan, clip, automation_only=True, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic) if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id) and candidate.end_seconds - candidate.start_seconds + 1e-06 >= (clip.timeline_end_seconds - clip.timeline_start_seconds) * clip_playback_rate(clip)]
+        if payload.replacement_asset_id is not None:
+            candidates = [item for item in candidates if (item.asset_id, item.segment_id) == (payload.replacement_asset_id, payload.replacement_segment_id)]
+        material_constraint = '' if payload.replacement_asset_id is not None else edit_material_constraint(command)
+        if material_constraint:
+            slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+            matched_refs = self.repository.search_material_segments(workspace_id, query=material_constraint, usage_roles=['a_roll', 'b_roll'], min_duration_seconds=slot_duration, limit=24, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            candidate_by_ref = {(f'asset:{candidate.asset_id}', f'segment:{candidate.segment_id}'): candidate for candidate in candidates}
+            candidates = [candidate_by_ref[match.asset_ref, match.segment_ref] for match in matched_refs if (match.asset_ref, match.segment_ref) in candidate_by_ref]
+        if not candidates:
+            raise edit_preview_failure(status_code=409, error='replacement_clip_unavailable', reason=f'当前工作区没有符合“{material_constraint}”且满足时间槽的其他镜头。' if material_constraint else '当前工作区没有满足这个时间槽的其他可用镜头。', impact='原镜头和当前成片保持不变。', repair_action='导入或审核更多素材后重新提出替换要求。', retryable=True)
+        base_version = self.ensure_montage_base(workspace_id, task, plan)
+        replacement = candidates[0]
+        now = utc_now()
+        source_command = metadata_edit_command(task, identity, 'ReplaceClip', {'base_version_id': base_version.id, 'clip_id': clip.id, 'asset_id': replacement.asset_id, 'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds}, source=request_source)
+        changed, _tracks, _linkage = apply_clip_patch(plan, clip.id, source_command.values, resolve_source=lambda target, values: self.resolve_edit_clip_source(task, identity, target, values), link_reordered=lambda target: self.link_reordered_edit(task, target))
+        verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
+        source_command = self.bind_affected_source_command(verifier, source_command, plan, changed)
+        source_scope = verifier.scope_payload(source_command)
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='replace_visual', scope={'kind': 'clip', 'clip_id': clip.id}, constraints={**{'preserve_narration': True, 'preserve_timing': True, 'material_query': material_constraint or None}, 'affected_source_scope': source_scope}, confidence=0.95, status='interpreted', created_at=now), source=request_source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=f'把选中的镜头替换为 {replacement.file_name}，保留当前配音和时间位置。', target_refs=[f'clip:{clip.id}'], operation={'operation_type': 'ReplaceClip', 'payload': {'clip_id': clip.id, 'asset_id': replacement.asset_id, 'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds, 'expected_asset_id': clip.asset_id, 'expected_segment_id': clip.segment_id, 'base_version_id': base_version.id, 'automation_only': True}}, invalidated_refs=invalidated_refs, preview={'before': {'ref': f'clip:{clip.id}', 'label': current_asset.file_name if current_asset else '人物口播', 'detail': f'{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒'}, 'after': {'ref': f'segment:{replacement.segment_id}', 'label': replacement.file_name, 'detail': f'{replacement.start_seconds:.1f}–{replacement.start_seconds + clip.timeline_end_seconds - clip.timeline_start_seconds:.1f} 秒 · {replacement.description}'}}, external_effects=['确认后只更新任务版本，不会立即调用模型或渲染。'], created_at=now, updated_at=now))
+        return (intent, proposal)
+
+
+    def montage_candidates(self, workspace_id, plan, clip, *, automation_only=False, viewer_user_id=None, local_diagnostic=False):
+        cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
+        cue_tokens = set((cue.text if cue else '').lower())
+        slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+        rate = clip_playback_rate(clip)
+        source_need = slot_duration * rate
+        candidates: list[MontageClipCandidateResponse] = []
+        for asset in self.repository.list_assets(workspace_id, include_private=viewer_user_id is not None or local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic):
+            for segment in asset.segments:
+                if not material_segment_eligible(asset, segment, workspace_id, automation_only=automation_only):
+                    continue
+                if abs(rate - 1) > 0.001 and (clip.person_render_id or effective_segment_usage_role(asset, segment) == 'a_roll'):
+                    continue
+                available = segment.end_seconds - segment.start_seconds
+                if available + 1e-06 < source_need:
+                    continue
+                description = (segment.description or segment.transcript or asset.file_name).strip()
+                overlap = len(cue_tokens & set(description.lower())) / max(1, len(cue_tokens))
+                score = max(0.0, min(1.0, overlap * 0.7 + min(1.0, available / max(slot_duration, 0.1)) * 0.3))
+                candidates.append(MontageClipCandidateResponse(asset_id=asset.id, segment_id=segment.id, file_name=asset.file_name, start_seconds=segment.start_seconds, end_seconds=segment.end_seconds, description=description, score=round(score, 3), reasons=['当前工作区可用素材', '时长满足当前旁白时间槽']))
+        candidates.sort(key=lambda item: (item.asset_id == clip.asset_id and item.segment_id == clip.segment_id, item.score), reverse=True)
+        return candidates[:24]
+
+
+    def preview_reorder(self, task, payload, change, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        try:
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=409, detail='当前任务没有可排序的故事板。') from exc
+        kind, source, destination = change
+        if min(source, destination) < 0 or max(source, destination) >= len(plan.clips):
+            raise EditPreviewRejected(status_code=422, detail='镜头序号超出当前故事板，请重新查看镜头。')
+        if source == destination:
+            raise EditPreviewRejected(status_code=409, detail='两个镜头位置相同，没有需要应用的修改。')
+        old_order = [clip.id for clip in plan.clips]
+        new_order = list(old_order)
+        target_ids = [old_order[source]]
+        if kind == 'swap':
+            target_ids.append(old_order[destination])
+            new_order[source], new_order[destination] = (new_order[destination], new_order[source])
+        else:
+            new_order.insert(destination, new_order.pop(source))
+        link_narration = self.reorder_narration_scope(plan, new_order, target_ids)
+        base = self.ensure_montage_base(workspace_id, task, plan)
+        candidate = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
+        for index, clip_id in enumerate(new_order):
+            if old_order[index] != clip_id:
+                candidate, _tracks, _linkage = self.apply_clip_update(workspace_id, task.id, candidate, clip_id, CreationTaskMontageClipUpdateRequest(), reader_identity=identity)
+        _tracks, linkage = self.reorder_montage_plan(workspace_id, task, candidate, new_order, link_narration=link_narration)
+        if linkage and ('配音不变' in payload.raw_command or '配音和字幕不变' in payload.raw_command):
+            raise EditPreviewRejected(status_code=409, detail='人物镜头换位须联动对应配音和字幕，与保持配音时轴不变的要求冲突。')
+        summary = f'交换第{source + 1}和第{destination + 1}个镜头' if kind == 'swap' else f'将第{source + 1}个镜头移动到第{destination + 1}个位置'
+        summary += '；总时长保持不变；' + ('人物镜头的配音和字幕按来源一并移动。' if linkage else '配音和字幕时轴保持不变。')
+        source_command = metadata_edit_command(task, identity, 'ReorderTimelineItems', {'base_version_id': base.id, 'target_clip_ids': target_ids, 'new_order': new_order}, source=request_source)
+        verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
+        source_command = self.bind_affected_source_command(verifier, source_command, plan, candidate)
+        source_scope = verifier.scope_payload(source_command)
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=payload.raw_command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='trim_or_reorder', scope={'target_refs': [f'clip:{item}' for item in target_ids]}, constraints={**{'preserve_duration': True, 'linked_narration': link_narration}, 'affected_source_scope': source_scope}, confidence=1, status='interpreted'), source=request_source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary=summary, target_refs=[f'clip:{item}' for item in target_ids], operation={'operation_type': 'ReorderTimelineItems', 'payload': {'base_version_id': base.id, 'current_order': old_order, 'new_order': new_order, 'target_clip_ids': target_ids, 'link_narration': link_narration}}, invalidated_refs=logical_montage_output_refs(plan), preview={'before': {'ref': f'timeline:{base.id}', 'label': '当前镜头顺序', 'detail': ' → '.join((str(old_order.index(item) + 1) for item in old_order))}, 'after': {'ref': f'timeline:{base.id}', 'label': '修改后镜头顺序', 'detail': summary + ('\n' + '\n'.join(self.linkage_lines(linkage)) if linkage else '')}}, external_effects=['应用时只保存一个新版本；不自动渲染，可一次撤销整组排序。'], status='proposed'))
+        return (intent, proposal)
+
+
+    def reorder_narration_scope(self, plan, new_order, target_ids):
+        if any((clip.person_render_id for clip in plan.clips if clip.id in target_ids)):
+            return True
+        by_id = {clip.id: clip for clip in plan.clips}
+        cursor = 0.0
+        for clip_id in new_order:
+            clip = by_id[clip_id]
+            duration = clip.timeline_end_seconds - clip.timeline_start_seconds
+            if clip.person_render_id and (abs(round(cursor, 3) - clip.timeline_start_seconds) > 0.001 or abs(round(cursor + duration, 3) - clip.timeline_end_seconds) > 0.001):
+                raise EditPreviewRejected(status_code=409, detail='这次换位会移动人物口型镜头；需连同其配音字幕一起调整，请明确联动范围。')
+            cursor += duration
+        return False
+
+
+    def reorder_montage_plan(self, workspace_id, task, plan, new_order, *, link_narration):
+        try:
+            changed = reorder_picture(plan, new_order)
+        except ValueError as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        plan.clips = changed.clips
+        if link_narration:
+            linkage, tracks = self.reorder_narration_linkage(workspace_id, task, plan)
+            return (tracks, linkage)
+        return (None, None)
+
+
+    def selected_crop_command(self, workspace_id, task_id, payload, *, base_version_id, request_source):
+        try:
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            clip = next((item for item in plan.clips if item.id == payload.selected_object_refs[0].removeprefix('clip:')))
+            crop = compile_crop_command(payload.raw_command.strip(), {'fit_mode': clip.fit_mode, 'crop_x': clip.crop_x, 'crop_y': clip.crop_y, 'clip_index': plan.clips.index(clip) + 1})
+            if crop is not None:
+                return ClipPreviewCommand(task_id, base_version_id, 'ChangeCrop', [clip.id], crop, payload.raw_command, request_source)
+        except (ValueError, KeyError, StopIteration) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc) or '当前镜头不可用') from exc
+        return None
+
+
+    def command_cover(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        if payload.context_stage != 'subtitle_cover':
+            raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改封面。', impact='任务内容没有发生变化。', repair_action='进入字幕与封面步骤后选择封面。', retryable=True)
+        try:
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task montage plan not found') from exc
+        title_match = re.search('标题(?:写|改成|改为|为)?[：:]?\\s*[“\\"\']?(.+?)[”\\"\']?(?:[，,。]|$)', command)
+        title = title_match.group(1).strip(' “”。"\'') if title_match else None
+        if not title:
+            raise edit_preview_failure(status_code=409, error='cover_title_missing', reason='没有识别出要显示的封面标题。', impact='没有生成封面，当前任务保持不变。', repair_action='输入“标题写……”并保留完整标题。', retryable=True)
+        seconds_match = re.search('(\\d+(?:\\.\\d+)?)\\s*秒', command)
+        frame_time = float(seconds_match.group(1)) if seconds_match else None
+        ordinal_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+        ordinal_match = re.search('第([一二三四五六七八九十]|\\d+)个?镜头', command)
+        if frame_time is None and ordinal_match:
+            raw_index = ordinal_match.group(1)
+            index = int(raw_index) if raw_index.isdigit() else ordinal_map.get(raw_index, 0)
+            if 1 <= index <= len(montage.clips):
+                clip = montage.clips[index - 1]
+                frame_time = min(clip.timeline_end_seconds - 0.05, clip.timeline_start_seconds + 0.2)
+        if frame_time is None:
+            frame_time = payload.playhead_ms / 1000 if payload.playhead_ms is not None else 0.0
+        return CreationTaskExactEditRequest(operation_type='GenerateCoverFromFrame', frame_time_seconds=frame_time, title=title)

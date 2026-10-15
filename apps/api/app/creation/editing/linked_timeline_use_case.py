@@ -1,4 +1,14 @@
 """One closed linked-timeline family with atomic application and fixed-result recovery."""
+
+from app.creation.contracts import EditIntent
+from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.creation.contracts import EditProposal
+from app.creation.contracts import TaskEvent
+from datetime import UTC
+from app.audio_timeline import bounded_audio_context
+from datetime import datetime
+from app.visual_effects import fade_filters
+from app.linked_timeline import remove_time_ranges
 from dataclasses import dataclass, field, replace
 import subprocess
 
@@ -254,3 +264,55 @@ class LinkedTimelineEditUseCase:
         member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
         return self.confirm(LinkedEditApplyCommand(command.workspace_id, command.task_id, proposal.id,
             command.actor_identity, member, source=command.source)).outcome
+
+
+    def preview_remove_silence(self, task, payload, *, identity, request_source, draft_only, execution, actor):
+        workspace_id, task_id = (task.workspace_id, task.id)
+        from app.silence_edits import detect_silence_cuts
+        if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith('clip:'):
+            raise EditPreviewRejected(status_code=422, detail='请先选择要剪掉停顿的镜头。')
+        plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+        clip = next((c for c in plan.clips if f'clip:{c.id}' == payload.selected_object_refs[0]), None)
+        if clip is None:
+            raise EditPreviewRejected(status_code=404, detail='所选镜头不存在。')
+        if clip.locked:
+            raise EditPreviewRejected(status_code=409, detail='所选镜头已锁定，请先解锁。')
+        base = self.montage_edits.ensure_montage_base(workspace_id, task, plan)
+        tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        graph = effective_audio_timeline(plan)
+        voice_ids = {t.id for t in graph.tracks if t.role in {'narration', 'original'} and (not t.muted) and any((not c.muted for c in t.clips))}
+        if not voice_ids:
+            raise EditPreviewRejected(status_code=409, detail='所选任务没有可检测的配音或原声，请先加入讲话音轨。')
+        service = self.montage_edits.audio_service
+        try:
+            analysis = service.publish(workspace_id, task.id, kind='audio_preview', parameters={'action': 'silence_analysis', 'clip_id': clip.id}, input_refs=sorted({c.source_ref for t in graph.tracks if t.id in voice_ids for c in t.clips}), operation='audio_mix', media_input={'audio_timeline': graph.model_dump(), 'duration_seconds': plan.duration_seconds, 'normalize_voice_sources': plan.narration_linkage_created_audio_timeline, 'start_seconds': clip.timeline_start_seconds, 'end_seconds': clip.timeline_end_seconds, 'solo_track_ids': sorted(voice_ids)}, execution=execution)
+            with bounded_audio_context(execution[0]) as audio_context:
+                cuts = detect_silence_cuts(self.montage_edits.artifact_store.resolve_file(analysis.logical_ref), clip.timeline_end_seconds - clip.timeline_start_seconds, clip.timeline_start_seconds, context=audio_context)
+            active_context, active_job = execution[:2]
+            active_context.check()
+            analysis_transform = service._transform_for(workspace_id, task.id, analysis)
+            measured_event = TaskEvent(id=f'event_{active_job.id}_{analysis.id}_silence_detected', workspace_id=workspace_id, task_id=task.id, job_id=active_job.id, event_type='silence_analysis_result', payload={'base_version_id': base.id, 'clip_id': clip.id, 'analysis_ref': analysis.logical_ref, 'analysis_sha256': analysis.sha256, 'transform_id': analysis_transform.id, 'removed_ranges_ms': cuts}, created_at=datetime.now(UTC))
+            try:
+                saved_event = self.repository.get_task_event(workspace_id, measured_event.id)
+            except KeyError:
+                self.repository.append_task_event(measured_event)
+            else:
+                if replace(saved_event, created_at=measured_event.created_at) != measured_event:
+                    raise ValueError('同一分析产物的静音结果已变化，未生成新预览')
+            edited, changed_tracks = remove_time_ranges(plan, tracks, graph, cuts)
+            service.validate(workspace_id, task.id, edited.audio_timeline, edited.duration_seconds, draft_only=True, actor=actor)
+            for c in edited.clips:
+                fade_filters(c)
+            previews = {}
+            for side, candidate, captions in (('before', plan, tracks), ('after', edited, changed_tracks)):
+                record = self.montage_edits.picture_renderer.publish_picture(workspace_id, task, base, candidate, captions, kind='silence_preview', parameters={'side': side, 'removed_ranges_ms': cuts, 'analysis_ref': analysis.logical_ref}, execution=execution)
+                previews[side] = {'ref': record.logical_ref, 'label': '修改前' if side == 'before' else '缩短停顿后', 'detail': f'{candidate.duration_seconds:.3f} 秒', 'video_url': f'/api/creation-tasks/{task.id}/visual/artifacts/{record.id}'}
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '本地停顿预览失败，请检查音轨、素材和外接盘。') from exc
+        if self.repository.get_creation_task(workspace_id, task.id).current_timeline_version_id != base.id:
+            raise EditPreviewRejected(status_code=409, detail='预览期间时间线已变化，请重新预览。')
+        removed = sum((b - a for a, b in cuts)) / 1000
+        detail = '、'.join((f'{a / 1000:.3f}–{b / 1000:.3f}秒' for a, b in cuts))
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=payload.raw_command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='remove_silence', scope={'clip_id': clip.id}, constraints={'linked_tracks': True}, confidence=1, status='interpreted'), source=request_source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary=f'缩短 {len(cuts)} 处静音候选，共 {removed:.3f} 秒；画面、声音、字幕与叠加同步前移。', target_refs=payload.selected_object_refs, operation={'operation_type': 'RemoveSilence', 'payload': {'base_version_id': base.id, 'clip_id': clip.id, 'removed_ranges_ms': cuts, 'analysis_ref': analysis.logical_ref}}, invalidated_refs=logical_montage_output_refs(plan), preview=previews, external_effects=[f'删除范围：{detail}', '按低于-40dB且持续0.45秒检测，两端至少保留0.12秒。低声讲话也可能被识别为静音，请试听后确认；不改变保留部分的语速。']))
+        return (intent, proposal)
