@@ -12,7 +12,8 @@ from app.linked_timeline import remove_time_ranges
 from app.local_portrait import LocalPortrait
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import PersonRender, MediaAuthorityError, SubtitleTrack, SubtitleCue, content_readable, material_allows_footage
-from app.task_audio import TASK_MEDIA_KIND, media_digest
+from app.task_audio import TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
+from app.canvas import canvas_size
 from app.transitions import extend_dissolve_sources
 from app.visual_effects import VisualEffects
 
@@ -393,3 +394,52 @@ class PicturePreviewRenderer:
             remember(reference, Path(item['path']))
         return files, graphics
 
+
+
+    def publish_picture(self, workspace_id,task,base,candidate,tracks,*,kind,parameters,execution):
+        from copy import deepcopy
+        self.validate_material_use(workspace_id,candidate)
+        preview_plan=deepcopy(candidate)
+        preview_plan.status="ready"
+        preview_plan.audio_timeline=effective_audio_timeline(candidate)
+        input_refs = list(dict.fromkeys([f"timeline:{base.id}", *[clip.source_path for clip in candidate.clips],
+            *sorted({item.source_ref for track in preview_plan.audio_timeline.tracks for item in track.clips}),
+            *[item['source_ref'] for item in candidate.graphic_overlays if item.get('kind')=='image'],
+            *[track.artifact_ref for track in tracks if track.artifact_ref]]))
+        media_input = {"plan": creation_task_montage_plan_to_payload(preview_plan), "subtitle_tracks": [asdict(track) for track in tracks]}
+        if execution is None:
+            raise TaskMediaRequired("picture_preview")
+        return self.audio.publish(workspace_id,task.id,kind=kind,suffix=".mp4",engine="local-montage-v20",
+            parameters={"base_version_id":base.id,**parameters}, input_refs=input_refs,
+            operation="picture_preview", media_input=media_input, execution=execution)
+
+    def picture_resources(self, plan, payload, picture_candidates, facts, budget):
+        width, height = canvas_size(plan.aspect_ratio)
+        changed_width, changed_height = canvas_size(payload.get('aspect_ratio') or plan.aspect_ratio)
+        width, height = max(width, changed_width), max(height, changed_height)
+        resources = {'kind': 'creation_presenter_render' if any(clip.person_render_id for clip in plan.clips) else 'creation_render',
+            'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan.duration_seconds, 'width_px': width, 'height_px': height,
+            'input_bytes': sum(item[1] for item in facts['files']), 'clip_count': len(plan.clips),
+            'overlay_count': max(len(candidate.graphic_overlays) for candidate in picture_candidates),
+            'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds, 'max_output_bytes': budget.max_output_bytes}
+        return resources
+
+    def seal_audio_resources(self, task, picture_candidates, facts, resources, audio_budget, *, actor):
+        candidates = []
+        for candidate in picture_candidates:
+            graph = effective_audio_timeline(candidate)
+            mix_facts = self.audio.mix_facts(task.workspace_id, task.id, graph, candidate.duration_seconds, actor=actor,
+                normalize_voice_sources=candidate.narration_linkage_created_audio_timeline, budget=audio_budget)
+            candidates.append({'key': media_digest([graph.model_dump(), candidate.duration_seconds, candidate.narration_linkage_created_audio_timeline]), **mix_facts})
+        mix_inputs = {}
+        for candidate in candidates:
+            for source in candidate['resources']['inputs']:
+                previous = mix_inputs.get(source['reference'])
+                if previous is None or previous['uses'] < source['uses']:
+                    mix_inputs[source['reference']] = source
+        resources['audio_mix'] = audio_mix_resources(list(mix_inputs.values()), [effective_audio_timeline(candidate) for candidate in picture_candidates],
+            max(candidate.duration_seconds for candidate in picture_candidates),
+            normalize_voice_sources=any(candidate.narration_linkage_created_audio_timeline for candidate in picture_candidates), budget=audio_budget)
+        resources['audio_mix_candidates'] = candidates
+        facts['audio_mix_candidates'] = candidates
+        return facts, resources

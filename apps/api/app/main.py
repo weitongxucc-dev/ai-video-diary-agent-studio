@@ -3954,7 +3954,25 @@ def _visual_preview_facts(workspace_id, task_id, arguments, actor):
     return case.seal_resources(prepared, budget, cpu_audio_budget_from_env(), actor=actor)
 
 
+def _compound_selection_facts(workspace_id, task_id, arguments, actor):
+    case = _compound_edit_use_case()
+    prepared = case.prepare_source(workspace_id, task_id, arguments, actor)
+    if prepared[1] is None:
+        raise ValueError('当前任务没有可预览的故事板')
+    budget = cpu_render_budget_from_env()
+    if budget is None:
+        raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
+    if any(clip.person_render_id for clip in prepared[1].clips):
+        _presenter, presenter_cpu = presenter_budgets_from_env()
+        if presenter_cpu is None:
+            raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
+        budget = presenter_cpu
+    return case.seal_resources(prepared, budget, cpu_audio_budget_from_env(), actor=actor)
+
+
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+    if operation == "compound_selection_preview":
+        return _compound_selection_facts(workspace_id, task_id, arguments, actor)
     if operation == "visual_edit_preview" and "_clip_preview" not in arguments:
         return _visual_preview_facts(workspace_id, task_id, arguments, actor)
     if operation in MEDIA_SCRIPT_ACTIONS:
@@ -3992,19 +4010,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == 'exact_edit_preview' and payload.get('operation_type') == 'EditGraphicOverlay':
         overlay_payload = CreationTaskExactEditRequest.model_validate(payload)
         picture_candidates.append(_graphic_overlay_candidate(plan, overlay_payload))
-    compound_proposal = None
-    if plan is not None and arguments.get('_media_kind') == 'picture_preview' and (operation in {'command_edit_preview', 'compound_selection_preview'}):
+    if plan is not None and arguments.get('_media_kind') == 'picture_preview' and operation == 'command_edit_preview':
         command_payload, included = (payload, None)
-        if operation == 'compound_selection_preview':
-            proposal = production_repo.get_edit_proposal(workspace_id, arguments['proposal_id'])
-            selection = CompoundEditSelectionRequest.model_validate(payload)
-            data = proposal.operation.get('payload', {})
-            if proposal.task_id != task_id or proposal.status != 'proposed' or proposal.operation.get('operation_type') != 'EditCompoundTimeline' or (not data.get('selection_enabled')) or (data.get('base_version_id') != task.current_timeline_version_id):
-                raise ValueError('当前复合修改提案已失效，不能封存预览')
-            included = selection.included_step_indices if selection.raw_command is None else compile_compound_selection(selection.raw_command, data['steps'])
-            intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
-            command_payload = {'raw_command': intent.raw_command, 'selected_object_refs': intent.scope['context_refs'], 'playhead_ms': intent.playhead_ms}
-            compound_proposal = asdict(proposal)
         compiled = compile_compound_edit(command_payload['raw_command'], plan, _effective_audio_timeline(plan), command_payload.get('selected_object_refs', []), task.current_timeline_version_id, command_payload.get('playhead_ms'), included)
         if compiled is not None:
             picture_candidates.append(compiled[0])
@@ -4075,8 +4082,6 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         facts['visual_preview'] = visual_scope
     if graphics:
         facts['graphic_sources'] = graphics
-    if compound_proposal is not None:
-        facts['compound_selection_proposal'] = compound_proposal
     if operation in audio_operations:
         budget = cpu_audio_budget_from_env()
         if budget is None:
@@ -4113,25 +4118,10 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             if person_budget is None:
                 raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
             budget = person_budget
-        width, height = canvas_size(plan.aspect_ratio)
-        changed_width, changed_height = canvas_size(payload.get('aspect_ratio') or plan.aspect_ratio)
-        width, height = (max(width, changed_width), max(height, changed_height))
-        resources = {'kind': 'creation_presenter_render' if any((clip.person_render_id for clip in plan.clips)) else 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan.duration_seconds, 'width_px': width, 'height_px': height, 'input_bytes': sum((item[1] for item in files)), 'clip_count': len(plan.clips), 'overlay_count': max((len(candidate.graphic_overlays) for candidate in picture_candidates)), 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds, 'max_output_bytes': budget.max_output_bytes}
+        renderer = _picture_preview_renderer()
+        resources = renderer.picture_resources(plan, payload, picture_candidates, facts, budget)
         audio_budget = cpu_audio_budget_from_env()
-        candidates = []
-        for candidate in picture_candidates:
-            graph = _effective_audio_timeline(candidate)
-            mix_facts = service.mix_facts(workspace_id, task_id, graph, candidate.duration_seconds, actor=actor, normalize_voice_sources=candidate.narration_linkage_created_audio_timeline, budget=audio_budget)
-            candidates.append({'key': media_digest([graph.model_dump(), candidate.duration_seconds, candidate.narration_linkage_created_audio_timeline]), **mix_facts})
-        mix_inputs = {}
-        for candidate in candidates:
-            for source in candidate['resources']['inputs']:
-                previous = mix_inputs.get(source['reference'])
-                if previous is None or previous['uses'] < source['uses']:
-                    mix_inputs[source['reference']] = source
-        resources['audio_mix'] = audio_mix_resources(list(mix_inputs.values()), [_effective_audio_timeline(candidate) for candidate in picture_candidates], max((candidate.duration_seconds for candidate in picture_candidates)), normalize_voice_sources=any((candidate.narration_linkage_created_audio_timeline for candidate in picture_candidates)), budget=audio_budget)
-        resources['audio_mix_candidates'] = candidates
-        facts['audio_mix_candidates'] = candidates
+        facts, resources = renderer.seal_audio_resources(task, picture_candidates, facts, resources, audio_budget, actor=actor)
         if operation == 'command_edit_preview' and re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip()):
             selected = payload.get('selected_object_refs', [])
             if len(selected) != 1 or not selected[0].startswith('clip:'):
@@ -4150,6 +4140,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if event["operation"] == "compound_selection_preview":
+        raise ValueError("复合选择必须通过明确用例，不能重入旧媒体路由")
     if event["operation"] == "visual_edit_preview":
         raise ValueError("画面编辑必须通过明确用例，不能重入旧媒体路由")
     if event['operation'] in MEDIA_SCRIPT_ACTIONS:
@@ -4196,6 +4188,8 @@ def _execute_task_media_operation(job, event, actor):
 
 
 def _validate_task_media_result(job, event, result, context):
+    if event["operation"] == "compound_selection_preview":
+        raise ValueError("复合选择必须通过明确用例，不能重入旧媒体路由")
     if event["operation"] == "visual_edit_preview":
         raise ValueError("画面编辑必须通过明确用例，不能重入旧媒体路由")
     if event['operation'] in MEDIA_SCRIPT_ACTIONS:
@@ -11832,35 +11826,54 @@ def _render_task_picture_input(workspace_id, task_id, media_input, output, conte
 
 
 def _publish_task_picture_preview(workspace_id,task,base,candidate,tracks,*,kind,parameters):
-    return _visual_preview_use_case().publish_picture(workspace_id,task,base,candidate,tracks,
+    return _picture_preview_renderer().publish_picture(workspace_id,task,base,candidate,tracks,
         kind=kind,parameters=parameters,execution=TASK_MEDIA_CONTEXT.get())
 
 
 @app.post("/api/creation-tasks/{task_id}/edits/{proposal_id}/selection/preview")
-@_task_media_route("compound_selection_preview", "edit_preview")
 def preview_compound_selection(task_id:str,proposal_id:str,request:Request,payload:CompoundEditSelectionRequest):
     task = _creation_task_or_404(current_workspace_id(request), task_id)
     actor = _metadata_edit_command(task, request, "EditCompoundTimeline", {"base_version_id": task.current_timeline_version_id}).actor_identity
     control = CompoundSelectionCommand(task.workspace_id, task.id, proposal_id, actor,
         payload.included_step_indices, payload.raw_command)
-    case = _compound_edit_use_case()
+    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
     try:
-        prepared = case.prepare_selection(control)
-        return _save_compound_preview(case, prepared, request)
-    except CompoundProposalMissing as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except CompoundSelectionInputError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        outcome = _compound_edit_use_case().preview_selection(control, draft_only=draft_only, execution=None)
+        return _edit_preview_response(*outcome) if outcome is not None else None
+    except PicturePreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except TaskMediaRequired as required:
+        media_kind = required.kind
+    workspace_id = current_workspace_id(request)
+    actor = _require_permit_actor(request, workspace_id)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+    values = {'_media_kind': media_kind, '_draft': draft_only, 'proposal_id': proposal_id,
+        'payload': payload.model_dump(mode='json', exclude_unset=True)}
+    try:
+        runtime = _creation_runtime()
+        media = runtime.registrations['creation_job'].owner.task_media
+        if task.montage_plan_id and task.current_timeline_version_id is None:
+            media.facts(workspace_id, task_id, 'compound_selection_preview', values, actor)
+            if media.verify_identity(actor) != 'ready':
+                raise PermissionError('媒体处理身份失效或无法复核')
+            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
+            _ensure_montage_base_version(workspace_id, task, montage)
+        job = media.submit(runtime, actor, task_id, 'compound_selection_preview', values, 'edit_preview')
+        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt['result'] = None
+        return JSONResponse(status_code=202, content=receipt)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (EditConflict, TimelineVersionConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _compound_edit_use_case():
-    return CompoundEditUseCase(production_repo, _metadata_edit_use_case())
+def _compound_edit_use_case(repository=None):
+    repo = repository if repository is not None else production_repo
+    _audio, metadata, renderer = _picture_preview_components(repo)
+    return CompoundEditUseCase(repo, metadata, picture_renderer=renderer)
 
 
 def _compound_proposal_command(task, proposal, request):
@@ -11879,25 +11892,10 @@ def _confirm_compound_response(task, proposal, request):
 
 
 def _save_compound_preview(case, prepared, request):
-    if prepared is None:
-        return None
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    task, base, plan, tracks = prepared.task, prepared.base, prepared.before, prepared.original_tracks
-    calculated = prepared.candidate
-    workspace_id = task.workspace_id
-    proposal = prepared.proposal
-    records = []
-    if not draft_only:
-        records = [_publish_task_picture_preview(workspace_id, task, base, item, captions,
-            kind="compound_preview", parameters={"steps": calculated.steps, "side": side})
-            for side, item, captions in (("before", plan, tracks), ("after", calculated.plan, calculated.subtitle_tracks))]
-    proposal = replace(proposal, preview={**proposal.preview, **{
-        side: {"ref": record.logical_ref, "label": "修改前" if side == "before" else proposal.summary,
-            "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
-            "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
-        for side, record in zip(("before", "after"), records)}})
-    intent, proposal = case.save_preview(replace(prepared, proposal=proposal))
-    return _edit_preview_response(intent, proposal)
+    outcome = case.preview(prepared,
+        draft_only=request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact"),
+        execution=TASK_MEDIA_CONTEXT.get())
+    return _edit_preview_response(*outcome) if outcome is not None else None
 
 
 def _preview_compound_edit(task,request,payload,included_step_indices=None,selection_command=None):
@@ -17194,6 +17192,7 @@ def _build_device_components(*, repository: ProductionRepository):
         output_observation=_output_observation_use_case(repository),
         media_script=_media_script_use_case(repository),
         visual_preview=_visual_preview_use_case(repository),
+        compound_selection=_compound_edit_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {

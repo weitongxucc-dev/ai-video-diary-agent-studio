@@ -545,7 +545,7 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None):
+    def __init__(self, repository, *, facts, execute_operation, validate_result, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None, compound_selection=None):
         self.repository = repository
         self.facts = facts
         self.execute_operation = execute_operation
@@ -555,6 +555,7 @@ class TaskMediaJobs:
         self.output_observation = output_observation
         self.media_script = media_script
         self.visual_preview = visual_preview
+        self.compound_selection = compound_selection
         self.validate_result = validate_result
         self.on_settled = on_settled
         self.verify_identity = verify_identity
@@ -802,6 +803,7 @@ class TaskMediaJobs:
         from app.media_script_jobs import MEDIA_SCRIPT_ACTIONS, MediaScriptPreviewRejected
         from app.media.picture_preview import PicturePreviewRejected
         job, event = self.read(grant.workspace_id, grant.owner_id)
+        direct_compound = event["operation"] == "compound_selection_preview"
         direct_audio = event["operation"] in AUDIO_INGRESS_ACTIONS
         direct_observation = event["operation"] == "output_observation"
         direct_script = event["operation"] in MEDIA_SCRIPT_ACTIONS
@@ -843,13 +845,17 @@ class TaskMediaJobs:
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             direct_clip = "_clip_preview" in event["arguments"]
-            if not direct_clip and not direct_audio and not direct_edit and not direct_observation and not direct_script and not direct_visual:
+            if not direct_clip and not direct_audio and not direct_edit and not direct_observation and not direct_script and not direct_visual and not direct_compound:
                 context_token = TASK_MEDIA_CONTEXT.set((context, job, event, actor))
             context.check()
             try:
                 result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                if direct_visual:
+                if direct_compound:
+                    if self.compound_selection is None:
+                        raise ValueError("复合选择执行负责人未组装")
+                    result = self.compound_selection.execute(job, event, actor, context)
+                elif direct_visual:
                     if self.visual_preview is None:
                         raise ValueError("画面编辑执行负责人未组装")
                     result = self.visual_preview.execute(job, event, actor, context)
@@ -881,6 +887,7 @@ class TaskMediaJobs:
                 result = result_event.payload["result"]
             context.check()
             verification_facts = (self.clip_preview.validate_result(job,event,result,context) if direct_clip else
+                self.compound_selection.validate_result(job,event,result,context) if direct_compound else
                 self.visual_preview.validate_result(job,event,result,context) if direct_visual else
                 self.media_script.validate_result(job,event,result,context) if direct_script else
                 self.output_observation.validate_result(job,event,result,context) if direct_observation else
@@ -915,7 +922,7 @@ class TaskMediaJobs:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:
-                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected)) else type(exc).__name__
+                failure_reason = "HTTPException" if (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected) or direct_compound and isinstance(exc,PicturePreviewRejected)) else type(exc).__name__
                 scheduler.fail_unit(grant, reason="task_media_failed",
                     failure_write=lambda conn, current: checkpoint(conn, current, "failed", failure_reason))
         finally:
