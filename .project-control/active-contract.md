@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMMAND-OWNER-PORT-C1-20261015仅linked_timeline_use_case.py、subtitle_use_case.py两源和fresh-api-command-owner-port-c1/**；其余9源/原证据冻结。配音阶段准备仍仅证据写权，不先施工。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMMAND-INDEPENDENT-20261015：只读冻结command11源；仅fresh-qa-command-preview/**新脚本/隔离证据写权，两个特有族见下；旧exact/共享门与normal冻结复用。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-NARRATION-STAGE-EXECUTION-20261015独占下述5源及fresh-api-narration-stage-execution/**；command11源已3d2c24bb集成/即时归还，不恢复其余旧租约。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | command两特有门已root审并3d2c24bb集成/即时归还；门与证据冻结。当前无新产品/证据/执行租约，待下一稳定制作候选再绑关键族。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,21 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 精确编辑已集成；接续自然语言入口（当前优先）
+### 自然语言入口已集成；接续配音制作执行（当前优先）
+
+command+C1最终11源已3d2c24bba3992d4bbb92735c3d1dac238f53e80b精确集成，索引/提交/当前逐源等release，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发送API和QA。root command-preview-integrated.json SHAcd767e8fff11ad83d628491fd756ea411afd32c4d3986d2ac745647cad41a8e5；独立门99ea73bd8a3bc15f1cda1bf9d5391361dc169aebca2f843e0f787c3a298eda5d经root command-independent-reviewed.json SHAfbbb58949533a5a80f33ef7fd1f84c82d5b4219935d663d0b7dda7d9e96ee9e9核48artifact/6refs、每轮197before-compile/198actual imports。助手排队前原selection/version409无job，真实turn结束/新草稿后worker仍执行封存原命令且不重绑；静音真实detector/唯一durable分析事件/同步动态候选与原预算、晚SQL失败及公开retry成立，三publication/slot/digest/物理文件复用无新render，detector1→2/measure3→9如实。两特有代表4实际；产品端口首败和仅公共错误类型断言首败保留，仅失败静音复验；76native/64登记全释放/12原fixture。原normal与助手不受C1可达body影响冻结复用，不冒称最终整体SHA重跑。原handler/伪HTTP worker/执行验证fallback已无活跃具名消费者。生产认证/GUI/资源标定/fullPGID及整体R0–R9仍未验，以下command/旧exact绑定均已履行冻结，不恢复写权。
+
+`REF-R3-NARRATION-STAGE-EXECUTION-20261015` 固定产品基线3d2c24bb，API精确5源：现apps/api/app/main.py、creation_execution.py、member_permits.py；NEW apps/api/app/creation/narration_stage_use_case.py与apps/api/tests/test_narration_stage_application.py。证据仅test-runs/refactor-20261014/fresh-api-narration-stage-execution/**。初始三现源=Git/两NEW不存在/空index见fresh-root-review/narration-stage-implementation-binding.json SHA6605e1d353a5a4d7704f705ced27f314cf94b726ab49e95d3652cd7c9dea6ed1。只读准备release e393b2f72794829d227d59b5f60f71a1745ebd4ae56efc2b1201e39e7e0d2bd1及IMPLEMENTATION_PACKAGE SHAabe394d16d21dd5f368e7bfa2437728e5243539c3e35ec51bdd67cc5dbaecff4已root narration-stage-preparation-reviewed.json SHAeb46f51e64b119ea8885d0d0a5b12f2a43adef75ee0516a565fadad1e4517132核8artifact/16源/56原完整body。按该具体包实施；有必要超五源先报精准必要差额，所有已过owner/仓储/生成器/来源和资源事实/取消恢复/共享checkpoint保持只读复用。
+
+具体NarrationStageUseCase承接main完整配音制作、局部配音再生成/retime及原commit(connection)闭包；main只有限零IOfactory/认证DTO与原错误映射，executor/registration显式注入具体owner。stage_actions中仅narration/narration_edit消费者退役，其他原stage消费者/门禁保持；旧四业务/stage body与sole retime实现删除，仅实际诊断消费者可留有限facade，不为旧fixture保留影子callback/路由反射。保留原Task.owner_user_id/固定声音及发音规则/材料化/原sealed身份来源、原grant/context/许可释放、具体read时点及worker错误文本；业务owner不依赖Request/HTTPException/main或反探scheduler.owners取业务预算。原同一narration_budget对象在既有注册配置读点显式传verifier与owner，构造零IO、不提前拒None/加默认预算/复制profile。源码审核同时核有限实例端口/构造实际赋值与完整迁交body，不只核global names。
+
+完整制作先start→逐段真实生成文件/独立save→combined→原complete_creation_task_narration内部联合事务，仍早于外层checkpoint；不挪并到外层/清理早记录。局部先真实target/combined文件→返回原commit，在原检查点同conn重新核任务/base，保存target及现Metadata.persist_montage_edit；原目标/combined/segments/operation/version/montage/task与terminal job/event共同提交或回滚，不改共享checkpoint/facts/资源/恢复body。文件与DB分开，unknown不得盲重放、不得新journal/第二调度者。
+
+唯一最小normal为新test一个合并node：原公开开始/队列→受许可真实两段配音→最小声明montage/base fixture→原公开选定一段旁白提案/确认排队→真实local narration_edit。使用原注册合成声档案、真实资格/仓储/NarrationGenerator/Qwen subprocess协议与granted concat/probe；仅原有限synthetic TTS worker和既有NarrationBudget/OS/settings/actorfixture端口替身单列，不改生产或借未许可模型。旧测试替换resolve_inputs/generator/checkpoint的业务lambda不得作为此normal；只复用有限数据/外部worker组装并恢复实际body。核两原段/combined登记、local只改选定段/未选文件stat不变、combined与retime/字幕/版本同原事务、重复队列同job/原completed confirm409/查询无重生成、实际登记子进程释放。首失败保留只失败node必要复验，过即简短SOURCE_RELEASE冻结；原normal/已过矩阵零新执行。不按每方法另建QA。
+
+稳定候选root审核后另绑一个合并关键独立族最多三代表：完整配音已durable后外层checkpoint/release真实unknown及原valid-output恢复；local真实早WAV后外部native CAS失效；local同checkpoint已写目标及edit数据后真实terminal SQLite晚失败联合回滚/早文件保留。具体阶段和精确执行源等release后绑定，当前QA无执行权；不预设共享门重跑。合成媒体/原生协议/真实模型/GUI/生产资源及同候选整体接受分列。API简洁语义REBASE_ACK核5源/原两种提交时点/唯一normal/退役边界后直接继续，无第二START。通过后root精确集成并即时归还、继续剩余R0–R9，不将此包当整体完成。
+
+### 精确编辑与自然语言入口原绑定（已履行冻结）
 
 exact最终六源已3ec7a1bc60630c632120fee55b080c756c87ed2b精确集成并向API/QA即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN。独立门c69084a092c0b22d9718b3a75fca884a65af035308305be8bc5b68b37ff60ffe已root exact-preview-independent-reviewed.json SHAe11a00614d8809aa85f9f7c842182ed0a4828100ef1d01bbd932cd1413c3e8ac核28artifact/3复用、最终192源＋4固定Git fixture、两会话193实际imports/192before-compile加载、零源/fixture/script漂移与零媒体/旧门执行。原claim提交后native CAS先于typed来源校验，409错误回执可重放且他人成员404/不新增claim；首次wire原error+detail与cache仅detail区别如实保留。journal晚失败的原ValueError.__cause__为native IntegrityError；intent/proposal已同conn提交并从独立连接可见，后续journal自身回滚，提案保留，公开unknown不再preview/不应用timeline。两个首失败仅投影断言误设，helper/源码不变，最终两项复验2PASS7.67s/共4实际；root新app/test/native零。原graphic PASS15.11s及linked C1仅复用未影响行为，非最终新SHA重跑或整体同候选接受。集成回执exact-preview-integrated.json SHA9bf63203239517b4b21740ff7059e12899fa2dcb004d1738e54e34ae8fa18838；下方exact/C1/QA旧段全部已履行冻结，不续旧租约。当前仅一个旧decorated route command_edit_preview；整体R3/R9及R0–R9未完成。
 
@@ -54,19 +68,19 @@ conversation_repository.py只新增一个所属公开reader，承接原_bind_ass
 唯一normal：原自然语言“字幕字号改为64”经原公共入口→具体command worker→现exact/Subtitle核心→真实有声字幕双侧预览，核真实字形变化、原source/固定输入digest、公开查询/同job重放不再渲染及未应用timeline；复用合成fixture域，实际业务/renderer/资格/状态机保持，不以旧adapter伪成功或202→200改写。源/脚本/必要fixture执行前hard SHA与实际origin prepost、准确两侧文件/原native登记与释放实录即可，不复制整仓/全source/全AST或扩展字段矩阵。首失败保留，仅失败受影响node复验，过即简短SOURCE_RELEASE冻结。root源码审核后另绑最多两个特有独立族：assistant原指令/选择/版本在排队前后失效；静音分析真实结果到动态候选/预算与恢复阶段的不变量。共享已过门/normal不复跑；普通纯body归属只完整AST和最小必要自测，不逐拆分另设QA。生产认证、GUI、资源标定/fullPGID及整体同候选真实旅程单列未知，不放宽预算求绿。先简洁语义REBASE_ACK核11源/初始字节、原阶段和唯一normal后直接实施，无第二START；SOURCE_RELEASE后精确审核/关键门/集成即时归还，并接续实际满足依赖的剩余R0–R9工作，不将此单包当整体完成。
 
 
-### 自然语言 owner 端口唯一差额修正（当前优先）
+### 自然语言 owner 端口差额修正（已履行冻结）
 
 `REF-R3-COMMAND-OWNER-PORT-C1-20261015` 原SOURCE_RELEASE99f930及QA首attempt-01保留冻结：助手原指令/排队后turn结束代表已PASS，静音排队前AttributeError，尚未到真实分析。root精确类实例端口核得LinkedTimelineEditUseCase与SubtitleEditUseCase构造均只有repository/montage_edits，迁入silence及command cue/batch方法误用self.metadata；其它四具体owner有限实例read-vs-constructor/method核无同类缺口。只给同API负责人两源apps/api/app/creation/editing/linked_timeline_use_case.py、subtitle_use_case.py修正迁入方法中的self.metadata→self.montage_edits，不新增别名/兼容属性或改构造/原既有body/预算/守卫/事务。证据仅新fresh-api-command-owner-port-c1/**。原其余9源、119artifact、normal、QA助手PASS全部冻结；仅整module有限属性名差额和原完整body正确具体端口AST/最终11源、196map两项差额，无新normal/native/矩阵。
 
 C1 SOURCE_RELEASE即冻结，root核精确差额后通知QA同一原脚本仅复验静音失败node，不重跑助手/字幕normal。QA在root通知前只封存首败与脚本、无新执行权；最终新11tuple不冒称原normal或助手整SHA重跑，只复用其完整不变可达body/端口。门通过即时精确集成、双方SOURCE_INTEGRATED/WRITE_LEASE_RETURN，配音制作准备再接实际依赖满足的后续。
 
-### 配音制作与局部再生成只读接续准备（当前活动）
+### 配音制作与局部再生成只读接续准备（已审核冻结）
 
 `REF-R3-NARRATION-STAGE-PREPARATION-20261015` 同API线程仅新test-runs/refactor-20261014/fresh-api-narration-stage-preparation/**证据写权。产品全部只读；command最终11源保持99f930release冻结供QA。目标仅main._generate_creation_task_narration_for_workspace、_generate_narration_edit_with_grant、_narration_stage_with_grant、_narration_edit_stage_with_grant及creation_execution.py对应narration/narration_edit阶段实际输入/检查点消费者，必要直接narration.py/ProfileRecordStore/事务公开端口。main目标函数从固定3ec7a1bc取原完整AST，核其当前目标AST未变并单列command WIP不执行；其余直接依赖按实际Git/SHA。定位现存最小测试和有限fixture，不import/collect/test/执行模型、native或读私人env/账号/用户数据；不得全仓/全AST快照。
 
 交一个具体高内聚制作执行owner的最小实施包：原完整body唯一归属、显式repo/模型/工具/actor/grant/配置端口、跨对象同conn提交与early文件保留时点、现路由/worker有限组装及旧消费者退役、准确拟独占文件和一个最小normal＋必要合并关键独立族。不加通用registry/callback bag/第二调度者；不改变原身份资格、版本、产物缓存/未知恢复、资源cap与provider调用。若实际共同不变量须分开owner，给最小有收益边界，不按行数拆。报告精准依赖及未验证项；只读准备释放后冻结，须主控另绑实施文件才可施工，不恢复旧产品租约、不妨碍当前QA/集成。
 
-### 自然语言入口关键独立门（当前活动）
+### 自然语言入口关键独立门（已集成冻结）
 
 C1已root审核：release a374725576c1db5d2eb85c32b1893506b59293d2628167709bd469c18ba963b1、最终11源TAB 1d9761c04176292a8135f3f9780ccdf612319addd004f7ce4d8777ffabe3ff64、派生196fingerprint 5f91bcf1ea16db9f9d5b37f21a587722ad7775902cbee4063b0adf2233450c8b；map ac7e0ec0c0ed2d150efa2a698fa6264872a40a2f0574cff9621a97aa655871d9。root command-owner-port-c1-reviewed.json SHAc99cbf4ed15d1b0eeb157b157b9742b490e6bb49cafe3a3cc32727182ebca05d核9artifact、两整module仅10属性端口替换、其余9源不变、六具体owner实例端口闭合。QA attempt-01首助手PASS7.18s/静音prequeue产品AttributeError已封存；现QA仍仅原证据目录，可按同原脚本和新两源tuple复验静音失败node，助手及normal不重跑。脚本只改精确source-map/attempt/选中失败node的运行绑定，不改原测试不变量、fixture/cap/OS/业务。首败与原两个脚本SHA保留；仅真实失败的新缺陷再交唯一API负责人。
 
