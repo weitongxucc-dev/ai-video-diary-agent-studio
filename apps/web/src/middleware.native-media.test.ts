@@ -58,6 +58,8 @@ describe("native local media identity forwarding", () => {
       "/api/media/previews/avatar_lipsync/lipsync-preview-1/media",
       "/api/creation-tasks/task-1/person-renders/render-1/media",
       "/api/creation-tasks/task-1/output",
+      "/api/creation-tasks/task-1/covers/cover-1/image",
+      "/api/creation-tasks/task-1/output/selected-subtitles",
       "/api/creation-tasks/task-1/audio/artifacts/audio-1",
       "/api/creation-tasks/task-1/narration/segments/segment-1/audio",
       "/api/production/materials/asset-1/media",
@@ -90,6 +92,44 @@ describe("native local media identity forwarding", () => {
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 20-30/100");
     expect(await response.text()).toBe("range-bytes");
+  });
+
+  it.each([
+    "/api/creation-tasks/task-1/covers/cover-1/image",
+    "/api/creation-tasks/task-1/output/selected-subtitles?expected_version_id=version-1&mode=zh&zh_track_id=track-1",
+  ])("uses only the current cookie/explicit header for the save path %s", async (savePath) => {
+    for (const method of ["GET", "HEAD"]) {
+      await middleware(new NextRequest(`http://localhost:3000${savePath}`, { method, headers: { cookie: localCookie } }));
+      expect(forwardedHeaders.get("x-local-member-token")).toBe(syntheticToken);
+      expect(forwardedUrl).toBe(`http://127.0.0.1:8000${savePath}`);
+    }
+    for (const explicit of ["", "explicitly-invalid-token"]) {
+      await middleware(new NextRequest(`http://localhost:3000${savePath}`, {
+        headers: { cookie: localCookie, "x-local-member-token": explicit },
+      }));
+      expect(forwardedHeaders.get("x-local-member-token")).toBe(explicit);
+    }
+    for (const cookie of ["", `${localMemberTokenCookieName("http:", "3001")}=wrong-port`]) {
+      await middleware(new NextRequest(`http://localhost:3000${savePath}`, { headers: { cookie } }));
+      expect(forwardedHeaders.has("x-local-member-token")).toBe(false);
+    }
+    await middleware(new NextRequest(`http://localhost:3000${savePath}`, { method: "POST", headers: { cookie: localCookie } }));
+    expect(forwardedHeaders.has("x-local-member-token")).toBe(false);
+  });
+
+  it.each([
+    "/api/creation-tasks/task-1/covers/cover-1/image",
+    "/api/creation-tasks/task-1/output/selected-subtitles",
+  ])("keeps verified Supabase identity on the save path %s", async (savePath) => {
+    process.env.NEXT_PUBLIC_AUTH_MODE = "supabase";
+    authMocks.refreshSession.mockResolvedValueOnce({
+      userId: "verified-user", onboardingComplete: true, accessToken: "verified-session-token", response: null,
+    });
+    await middleware(new NextRequest(`http://localhost:3000${savePath}`, {
+      headers: { cookie: localCookie, authorization: "Bearer renderer-forgery" },
+    }));
+    expect(forwardedHeaders.has("x-local-member-token")).toBe(false);
+    expect(forwardedHeaders.get("authorization")).toBe("Bearer verified-session-token");
   });
 
   it("forwards native HEAD with the port-matched cookie and keeps Range", async () => {

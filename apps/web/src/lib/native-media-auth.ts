@@ -26,6 +26,8 @@ const NATIVE_MEDIA_PATHS = [
   /^\/api\/media\/previews\/(?:voice|avatar_lipsync)\/[^/]+\/media$/,
   /^\/api\/creation-tasks\/[^/]+\/person-renders\/[^/]+\/media$/,
   /^\/api\/creation-tasks\/[^/]+\/output$/,
+  /^\/api\/creation-tasks\/[^/]+\/covers\/[^/]+\/image$/,
+  /^\/api\/creation-tasks\/[^/]+\/output\/selected-subtitles$/,
   /^\/api\/production\/materials\/[^/]+\/media$/,
   /^\/api\/production\/montage-plans\/[^/]+\/output$/,
   /^\/api\/creation-tasks\/[^/]+\/audio\/artifacts\/[^/]+$/,

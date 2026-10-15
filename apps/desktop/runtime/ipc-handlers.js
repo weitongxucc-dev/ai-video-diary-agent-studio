@@ -4,9 +4,19 @@ function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, ge
   ipcMain.handle('open-directory', () => files.openDirectory());
   ipcMain.handle('open-file', () => files.openFile());
   ipcMain.handle('open-wav-file', () => files.openWavFile());
-  ipcMain.handle('save-rendered-video', (_event, taskId) => media.saveRenderedVideo(taskId));
-  ipcMain.handle('save-cover-image', (_event, taskId, coverId) => media.saveCoverImage(taskId, coverId));
-  ipcMain.handle('save-subtitle-file', (_event, selection) => media.saveSubtitleFile(selection));
+  const rejectedSave = () => ({ saved: false, error: '保存来源已失效，请返回当前应用窗口后重试。' });
+  ipcMain.handle('save-rendered-video', (event, taskId) => {
+    if (!media.checkSaveSender(event)) return rejectedSave();
+    return media.saveRenderedVideo(taskId);
+  });
+  ipcMain.handle('save-cover-image', (event, taskId, coverId) => {
+    if (!media.checkSaveSender(event)) return rejectedSave();
+    return media.saveCoverImage(taskId, coverId);
+  });
+  ipcMain.handle('save-subtitle-file', (event, selection) => {
+    if (!media.checkSaveSender(event)) return rejectedSave();
+    return media.saveSubtitleFile(selection);
+  });
   // The identity is forwarded; renderer paths never choose import source/destination.
   ipcMain.handle('import-materials', (_event, identity = {}) => media.importSelectedMaterials(identity));
   ipcMain.handle('open-path', (_event, filePath) => files.openPath(filePath));

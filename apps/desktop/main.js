@@ -97,6 +97,7 @@ const files = createNativeFiles({ dialog, shell, getWindow });
 const { importMaterials } = createMaterialImporter({ recordLifecycle });
 const media = createNativeMedia({
   showSaveDialog: (options) => dialog.showSaveDialog(getWindow(), options),
+  getWindow, webOrigin,
   getMediaDirectory: (name) => app.getPath(name), getApiEndpoint: services.getApiEndpoint,
   importMaterials, pickMaterialSources: files.pickMaterialSources, recordLifecycle,
 });

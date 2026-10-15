@@ -142,6 +142,20 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
       this.visible = Boolean(options.show);
       this.webContents = {
         on() {},
+        removeListener() {},
+        isDestroyed: () => Boolean(this.destroyed),
+        mainFrame: {
+          processId: 1, routingId: 1, frameTreeNodeId: windows.length, detached: false,
+          isDestroyed: () => Boolean(this.destroyed), url: '', origin: '',
+        },
+        session: {
+          fetch: (url, init) => {
+            // Loopback substitute, not Electron cookie/session acceptance.
+            const target = new URL(url);
+            target.hostname = '127.0.0.1';
+            return fetch(target, init);
+          },
+        },
         openDevTools() {},
         setWindowOpenHandler() {},
         send() {},
@@ -163,6 +177,8 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
     }
     loadURL(url) {
       this.loadedURL = url;
+      this.webContents.mainFrame.url = url;
+      this.webContents.mainFrame.origin = new URL(url).origin;
       this.loadURLCount = (this.loadURLCount || 0) + 1;
       this.visibleWhenNavigationStarted = this.visible;
       if (windowLoadMode === 'sync-later-events') {
@@ -660,18 +676,20 @@ async function assertDevelopmentExternalServices() {
 async function assertNativeRenderedVideoSaveBoundary() {
   const test = await startPackaged();
   try {
+    const sender = test.runtime.windows[0].webContents;
+    const event = { sender, senderFrame: sender.mainFrame };
     const handler = test.runtime.handlers.get('save-rendered-video');
     assert.equal(typeof handler, 'function', 'native rendered-video save handler must be registered');
-    const invalid = await handler({}, '/tmp/untrusted.mp4');
+    const invalid = await handler(event, '/tmp/untrusted.mp4');
     assert.equal(invalid.saved, false, 'renderer paths must not be accepted as task ids');
 
     test.runtime.setSaveDialogResult({ canceled: true });
-    const canceled = await handler({}, 'task_fixture');
+    const canceled = await handler(event, 'task_fixture');
     assert.deepEqual(canceled, { saved: false, canceled: true }, 'canceling the native dialog must be a normal result');
 
     const missingDestination = path.join(test.resources, 'missing-output.mp4');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: missingDestination });
-    const missing = await handler({}, 'task_missing');
+    const missing = await handler(event, 'task_missing');
     assert.deepEqual(missing, {
       saved: false,
       error: '本地服务没有返回可保存的 MP4（HTTP 404）。',
@@ -685,21 +703,21 @@ async function assertNativeRenderedVideoSaveBoundary() {
 
     const destination = path.join(test.resources, 'chosen-output.mp4');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: destination });
-    const saved = await handler({}, 'task_fixture');
+    const saved = await handler(event, 'task_fixture');
     assert.deepEqual(saved, { saved: true, fileName: 'chosen-output.mp4' });
     assert.equal(fs.readFileSync(destination, 'utf8'), 'fixture-mp4');
 
     const saveCover = test.runtime.handlers.get('save-cover-image');
     assert.equal(typeof saveCover, 'function');
-    assert.equal((await saveCover({}, 'task_fixture', '/tmp/source.png')).saved, false);
+    assert.equal((await saveCover(event, 'task_fixture', '/tmp/source.png')).saved, false);
     test.runtime.setSaveDialogResult({ canceled: true });
-    assert.deepEqual(await saveCover({}, 'task_fixture', 'cover_fixture'), { saved: false, canceled: true });
+    assert.deepEqual(await saveCover(event, 'task_fixture', 'cover_fixture'), { saved: false, canceled: true });
     const coverDestination = path.join(test.resources, 'chosen-cover.png');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: coverDestination });
-    const wrongType = await saveCover({}, 'task_fixture', 'cover_unknown');
+    const wrongType = await saveCover(event, 'task_fixture', 'cover_unknown');
     assert.equal(wrongType.saved, false, 'non-image response must not be saved');
     assert.equal(fs.existsSync(coverDestination), false);
-    assert.deepEqual(await saveCover({}, 'task_fixture', 'cover_fixture'), { saved: true, fileName: 'chosen-cover.png' });
+    assert.deepEqual(await saveCover(event, 'task_fixture', 'cover_fixture'), { saved: true, fileName: 'chosen-cover.png' });
     assert.equal(fs.readFileSync(coverDestination, 'utf8'), 'fixture-png');
     assert.deepEqual(fs.readdirSync(test.resources).filter((name) => name.includes('.partial-')), []);
   } finally {
