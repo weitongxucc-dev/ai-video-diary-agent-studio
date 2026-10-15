@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 核心旅程只读准备已root核验/即时归还；所有产品与旧证据冻结，当前无新写入或执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016仅fresh-api-r9-unclaimed-boundaries/**只读准备；产品/旧证据冻结，无执行权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-NATIVE-SAVE-SESSION-INDEPENDENT-20261016仅fresh-qa-native-save-session/**新证据/隔离Electron四代表族，产品只读；元数据及其它已过门冻结不重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存八源SOURCE_RELEASE已root源审、冻结待精确独立门；当前无新增写入/执行权，缺陷由root另绑本owner，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -38,6 +38,12 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### R9未认领主入口职责的有限只读接续（当前有效）
+
+REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016只给API新准备目录，root r9-unclaimed-main-preparation-binding.json绑定cfb9b65d的main及方案5.2/5.3、架构目标章节三初始字节，准确SHA见该绑定。只读核当前main的模型/设置/能力预检、认证首启成员、模板自动化、发布聚合四组及必要直接imports/caller，找仍在入口内的业务计算/持久写和实际归属违规，区分薄transport/错误映射/组装生命周期。先rg目标route/symbol、再有限定义；不重清点已过编辑/执行/仓储/冷启动或当前native八源，不全AST/全仓/构建/旧证据/历史线程扫描。给简洁准确剩余symbol/caller/owner、一个最高优先可实施包和旧目标退役/最小自测；已经归属清楚则以有限事实关闭该明确范围，不为拆文件增加抽象或兼容层，不另造整体进度副本。
+
+初始三源/必要按需直接源Git/hash和目标anchors足够，静态准备不需200执行tuple。零产品修改/import/collect/test/service/GUI/native/model/network/host采样/私人env账号用户DB/Git修改，只新证据写权。稳定只读release冻结，由root另绑精确产品。native-save八源及QA绑定完全不变，无HOLD/重复ACK/旧门重跑；本新工作一次语义ACK后直接准备，无第二START。
 
 ### 原生保存八源已源审，实际Session与窗口边界独立门（当前有效）
 
