@@ -118,7 +118,7 @@ def person_application(tmp_path,monkeypatch):
     assert registration.executor.person_stage is case
     assert case.repository is case.metadata.repository is case.person_preview.repository is repo
     assert case.person_preview.metadata is case.metadata and case.person_preview.provider('fast') is provider
-    assert case.settings is main.settings and not {'person_render','person_edit'}&set(registration.executor.stage_actions)
+    assert case.settings is main.settings and not hasattr(registration.executor,'stage_actions')
     state=SimpleNamespace(repo=repo,task_id=task_id,script_id=script_id,plan=plan,member=member,sections=sections,combined=combined_record,
         case=case,runtime=runtime,client=client,provider=provider,worker=worker,synthetic_video=synthetic_video,budget=budget,host_budget=host_budget,
         fixture_OS={'cpu_percent':0,'swap_used_bytes':0,'actual_swap_before':swap.used,'aggregate_disk':disk._asdict(),

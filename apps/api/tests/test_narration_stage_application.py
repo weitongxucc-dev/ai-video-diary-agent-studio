@@ -103,7 +103,7 @@ def narration_application(tmp_path,monkeypatch):
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
     assert registration.owner.narration_budget is case.narration_budget is budget
     assert registration.executor.narration_stage is case
-    assert not {'narration','narration_edit'}&set(registration.executor.stage_actions)
+    assert not hasattr(registration.executor,'stage_actions')
     state=SimpleNamespace(repo=repo,task_id=task_id,script_id=script_id,plan=plan,member=member,generator=generator,
         runtime=runtime,case=case,client=client,asset=asset,worker=worker,budget=budget,host_budget=host_budget,
         fixture_OS={'cpu_percent':0,'swap_used_bytes':0,'actual_swap_before':swap.used,'disk_io_baseline':disk._asdict(),
