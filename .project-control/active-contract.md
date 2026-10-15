@@ -13,8 +13,8 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 核心旅程只读准备已root核验/即时归还；所有产品与旧证据冻结，当前无新写入或执行权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-METADATA-RESTART-UNDO-INDEPENDENT-20261016仅fresh-qa-metadata-restart-undo/**新证据/隔离fixture与一次两进程精确编辑重启撤销联合门；产品只读，旧门冻结。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-NATIVE-SAVE-AUTH-TRANSPORT-PREPARATION-20261016仅fresh-runtime-native-save-auth-preparation/**只读准备，无产品/执行权；旧日志策略首败冻结不恢复。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 元数据两进程编辑/撤销联合门已root接受/即时归还；全部新旧证据冻结，当前无新产品/证据/执行权，待原生保存稳定候选的精确独立门。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-NATIVE-SAVE-AUTH-IMPLEMENTATION-20261016独占下节准确五product/三test及fresh-runtime-native-save-auth-implementation/**；只最小局部Node/Vitest自测，旧native/日志策略和其它源只读。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -39,7 +39,21 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 同候选闭环接续：认证保存准备与非空元数据重启独立门（当前有效）
+### 原生保存认证传输八源实施（当前有效）
+
+只读准备release bd175be3202ed1b7d688aa81b6b97e6c9297b84f1a2e28f65d96ea9a9deef2e4已root native-save-auth-preparation-reviewed.json SHA83e93bd631f6f64571e073f738bbde8da624a520104a171ef2aab3ab27b03021核4artifact、14原源+15必要依赖/installed types/现测试、fixedGit/current及最终捕获区间prepost（不追认早先全部研究读期）。Electron33.4.11确有Session.fetch，Response.url/type不可作信任证明；导航现代details可用。准备冻结、READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN已即时发工具线程；实际认证/native运行未验。
+
+REF-R9-NATIVE-SAVE-AUTH-IMPLEMENTATION-20261016仅工具线程独占apps/desktop/main.js、runtime/native-media.js、runtime/ipc-handlers.js、runtime/media-downloads.js、apps/web/src/lib/native-media-auth.ts及现apps/desktop/scripts/subtitle-save-test.js、lifecycle-smoke.js、apps/web/src/middleware.native-media.test.ts，证据只新实施目录。root native-save-auth-implementation-binding.json SHAa3d66bd494ec4e27a5fa79ca51e7379530f03594f5491c97dee129934e54eec5核八源clean/current=cfb9b65d、index空。按已审PACKAGE五product三test实施，不新增模块/依赖或身份事实源。main显式传现getWindow/webOrigin，原getApiEndpoint就绪/素材导入保持；NativeMedia集中每次保存可信上下文和受限fetchPath，三个IPC只先checkSaveSender，无await再同步捕获。只当前存活主窗口main frame/准确origin、实际frame标识可调用；对话框后、请求前、rename前复核，跨文档导航使当前操作失效，finally清监听。不能以JS包装对象相等或Response.url作信任证明，不能添加空event兼容放行。
+
+下载器退役两裸http.get/直连API/仅Accept消费者，用捕获window.session的Session.fetch请求三个固定同源Next GET模板，credentials=include、redirect=error、cache=no-store、原Accept。Next/API仍独占Supabase/local身份验证；不提取token、传凭据IPC/renderer任意URL/header、默认session/Node fetch/API直连fallback。local名单只增加封面image与selected-subtitles两精确GET/HEAD模式。preload三原签名、API授权/其它IPC、素材导入不变；保留原dialog抛错/取消、wx partial流式落盘/rename/失败清理、status/MIME/非空、字幕版本query/detail409及30000ms完整headers+body timeout，不顺带新增视频/封面timeout政策。
+
+作者仅一个修改后的desktop保存focused包（合并三消费者、错误/取消/timeout/信任反例和清理）及middleware两新路径/直接受影响不变量最小自测，允许Node语法/版本核验。lifecycle-smoke只改assertNativeRenderedVideoSaveBoundary及必要mock，不运行全生命周期。仅声明session/window/dialog替身或自己loopback/tmp，不能真实启动Electron/Next/API/GUI、访问账号用户DB/私人env、外网/native媒体/model/host采样、构建/打包/签名/覆盖原app。精确八源/必要直接依赖与实际Node执行origin/脚本预封/首败和结果足够，不复制全仓/AST/旧证据或重跑旧normal/矩阵。稳定SOURCE_RELEASE后冻结，由root源审并另绑关键独立身份/frame/session反例；作者替身自测不等于真实认证/原生保存或R9。短语义ACK核八源后直接施工，无第二START。
+
+### 元数据跨进程编辑与撤销独立门已接受（冻结复用）
+
+gate 05aff4469e694ba9b663b82404015d84e713cf1ecd900baddc5717e4005b7811已root metadata-restart-undo-reviewed.json SHA0de1baeedd594075cebcea9c44dd44b4d8a21373f2d1019b1366aa29343666b9核42artifact/4refs、201固定current源，三个实际Python API进程各195beforecompile/origin，37原隔离值不变。首轮fixture计划目标1秒触发公开回读400、尚未编辑；保留首败，只把计划目标改既有minimum15，旁白/镜头仍1秒。成功两阶段第一进程原生命周期完全退出后第二fresh进程同DB/文件/member读取完整相同durable值，实际HTTP TrimClip/undo与持久offset0→.25→0、sequence1→2→3、新恢复operation/version指原内容父，脚本/旁白/file hashes保持且输出未渲染无效。实际6s输入视频只生成一次，重验复用同字节；原owned六线程/worker均停、三进程exit，产品native/stage/model/资源采样0。仅public-owner合成fixture元数据后段接受，不算UI模型新建/成片/native保存/Electron重启/生产JWT或资源/整体R9；无产品改动可集成，SOURCE_GATE_ACCEPTED/WRITE_LEASE_RETURN已即时发QA。
+
+### 同候选闭环接续：认证保存准备与非空元数据重启独立门（已履行冻结）
 
 核心旅程release 0d4b858384e6f5c4e6ccc87f4ee5813e0ffaf63ee0c8e4912d91772038b1abfc已root core-journey-preparation-reviewed.json SHA3963013c21090a980b6a76bfb691a8c1d777423649ed7050970482271da34a89核4artifact/36当前源=cfb9b65d固定Git及九完整入口AST，READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN已即时发送API。只读准备无产品集成或运行接受。root静态纠正原配方：helper六秒视频分三段，首段仅两秒，原两秒镜头从0移到0.25会越界且应拒绝；下一单列元数据门采用一秒旁白/镜头，不改范围守卫。当前media-downloads直连API只有Accept、缺可信认证上下文为静态条件缺口，尚无实际401。
 
