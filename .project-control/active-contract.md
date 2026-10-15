@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | execution-control已92bbaf8a精确集成/即时归还，R7只读准备已审/关闭；当前REF-R7-DEVICE-RUNTIME-ASSEMBLY-20261015下述3源及fresh-api-device-runtime-assembly/**独占实施，旧证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 控制唯一metadata取消恢复门已root审核/92bbaf8a精确集成并即时归还；当前无新产品/证据/执行权，原门及normal冻结，普通组装包不另开复杂QA。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | R7有限组装已dfcba3b4精确集成/即时归还；当前REF-R3-LEGACY-STAGE-TEST-WIRING-C1-20261015仅test_creation_execution.py两个旧stage_actions测试接线及下述新证据，全部app源只读。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-INDEPENDENT-20261015仅fresh-qa-late-runtime-activation/**，一项原先未验证的持久化后真实生命周期失败；app/旧证据只读，不导入/读取/监控API独占test_creation_execution.py，不重跑已过门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 执行控制已集成；设备组装显式化（当前有效）
+### 有限组装已集成；安全重载晚失败与旧测试消费者（当前有效）
+
+R7普通构造原三源已dfcba3b4c05e633f6af5dcd7af827dfb2fd710d3精确集成/即时向API归还，index/commit/live等release13c6f4c06a51120a577ae7e7b5a58b2a269a1e555a1b769cdc6a2a6d56202d15。root device-runtime-assembly-reviewed.json SHA98b0b1704601dd2c5103e9df9a5d92d558858933d88236302d046db6d6ba7463核22artifact/195before-compile/195→196实际来源、完整tail/624其它main函数、旧bootstrap和tests全部AST/37预算值；唯一真实隔离repo/member/probe/runtime/material构造首过，start/dispatch/native/resource均0，无额外复杂QA或旧矩阵。回执device-runtime-assembly-integrated.json SHA90183947d6202632157021484a0d53acfb8a0381103a336ca10e654714117ebd，所有旧证据冻结；只闭有限构造，未闭整体R7/R9。
+
+REF-R7-LATE-ACTIVATION-INDEPENDENT-20261015是尚缺的安全重载关键链路验证，不是重跑普通构造或既有reload矩阵。QA仅写新test-runs/refactor-20261014/fresh-qa-late-runtime-activation/**，固定当前dfcba3b4全app，复用组装RESULT actual_origins_post的196来源（额外所需原bootstrap/settings/isolated_host测试依赖仅按当前Git on-demand硬绑定）；禁止导入/读取/监控并行API独占test_creation_execution.py。一个同DB、仅隔离配置变动的真实public settings代表：原实际空队列DeviceRuntime与AssistantContinuationDriver启动/暂停，原save确实changed并落盘之后，调用原continuation.stop制造已暂停原循环真实终止；接着仍执行原_activate_runtime_reload，观察旧device实际stop、新依赖/路由/设备绑定发布及原continuation.resume的真实拒绝、finally原恢复和公开结果。只在原save的前向观察边界安排这一真实控制注入，不替换生命周期、守卫、保存、激活或成功结果，不预先规定HTTP一定通过，不重跑旧busy/pre-save/立即activation-refusal代表。
+
+核验已保存的失败必须如实报告，不能把已终止原循环称为恢复，也不能让finally次级恢复异常掩盖已保存的主失败；逐项记录实际持久env/workspace配置、当前settings/仓储/路由/installer绑定、旧/新device与continuation存活/closed引用和原主/次异常及HTTP/无HTTP事实。若实际不满足，首败冻结给唯一API负责人，不绕过真状态或为了绿加重建/回滚新政策；root据真实阶段另绑最小修复。全部DB/config/输出/临时目录只在QA隔离域，无用户/账号库/凭据、模型、媒体、外网或native；只准已知原37值fixture预算，不改门，不称生产校准。允许上述必要真实空闲驱动线程，禁止任何阶段/模型派发并证明空队列及零stage/native/resource采样；结束无论成败停自己的全部新旧线程，不覆盖原应用。一个代表首次失败保留，只失败受影响node必要续验；源/脚本预封/实际来源/构造与启停精确计数最小证据，不复制全仓/全AST/旧包。一次语义ACK后直接执行，无第二START；SOURCE_GATE后冻结，未验不计整体完成。
+
+REF-R3-LEGACY-STAGE-TEST-WIRING-C1-20261015仅API改apps/api/tests/test_creation_execution.py及新fresh-api-legacy-stage-test-wiring-c1/**；root legacy-stage-test-wiring-c1-binding.json SHAee6649ca2a3cf43be7279c03baabf7cc272b597ed07651e0b89c2aa0482cbce2核初始源526fd2ad和两个完整目标。只适配test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account及test_resource_pressure_defers_original_job_and_revalidates_before_regrant的已退役stage_actions/旧montage helper，走现narration_stage/montage_stage明确generate端口；可用测试局部的原故障callback适配明确stage端口，第一原normal继续调用现具体owner，不增加产品兼容registry/公共抽象或删原参数矩阵/预算/故障/身份/回滚断言。其余整个测试module及helpers/全app只读不变。最小验证最多该pressure测试ordinary_error一个受改动影响的metadata node；不跑第一full媒体normal或其它参数/已过矩阵，不以fixture替身称真实模型或生产QA。两接线原完整body除必要端口/fixture差额、所有decorators/断言不变与最小node核过即release；超单文件或需native先报准确差额不扩大域。该文件不在组装196执行tuple内，可与上项互斥并行；ACK后直接实施，无第二START，root过门精确集成即时归还。
+
+### 执行控制与设备组装原实施绑定（已履行冻结）
 
 控制原四源已92bbaf8a111bf7eb3afa46bd7683066351cea21b精确集成，index/commit/live全等release7bd6e0a4，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时已发API及QA。root execution-control-independent-reviewed.json SHA8080e0f0a5f7fe2f960fe84a300c77023a0054bf2d14d195f79c4e4c0358146a核gate3f6cbdab4084ac716fa03fe270412c61f106e78efd84897bce6a1f9bba4fe7f6、14artifact/3refs、198before-compile/199origin和首轮唯一代表：原公开取消在scheduler边界传播实际OSError，独立native reader见job cancelled/request waiting，原recover携start完整持久actor调用原scheduler.cancel一次补完同request，job保持cancelled；两次重复recover/查询无新工作。dispatch/run_once/start/driver/native/登记/resource采样均0，非生产重启；root应用0、旧normal/矩阵0。集成回执execution-control-integrated.json SHA732bc0e6cbb072780f013fb3119a54b79a2bd9394ea5865fe41659eae77e8a9b。全部原证据冻结，整体接受仍未完成。
 
