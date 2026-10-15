@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 先完成并冻结C1准确四源；随后REF-R3-QUALITY-PRESSURE-C2-20261016仅quality_execution与NEW test_quality_resource_pressure两源/fresh-api-quality-pressure-c2/**，修未来重试时点，一个新增非native分支门，C1和其它源冻结；零native/标定权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 发布资格单个私有Task门已root接受/随b76574da集成并归还；证据冻结，无产品或新执行权，待真正关键接受差额。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality C1/C2联合18源已释放并root差额审阅；全源与作者证据冻结，无新增产品/执行权，待独立晚SQL/实际回执恢复与队列一致性门。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R3-QUALITY-TERMINAL-INDEPENDENT-20261016仅fresh-qa-quality-terminal/**；单个晚TaskEvent真实SQL回滚/原public恢复续交/queue事实门，零产品写权/native执行。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 物理后段前提包已root核并归还/冻结，quality未进grant为真实源码阻断、实测profile未绑；当前零新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -55,7 +55,15 @@ REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。r
 
 准确三源b76574da1996e36cb83a4d116049959e32b8684e已cached/committed/live核一致；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。作者releaseafe554f4与源审c176cde2冻结复用；gatef3b5e070e10d5da4de56f5322ee8c1efa4982ddf4274eb387e999a8d56c091d6已root publish-output-independent-reviewed.json SHA8ab7be3a6d7a177b5dd70769ab5260642845b66016a35dde18d88b8bd96b2876核11artifact/4ref/196actual beforecompile-origin，单代表首次过child8.559s/process8.869s。公开repo真实private Plan/Task；OTHER经原callback、真实getTask、canonical权限false，同一原PermissionError早于readiness/全部输出门；owner Plan/Task/list全字段、计数保持，0新写/平台动作。只声明可信caller与隔离repo，无factory/lifecycle/driver/native/model/network/预算或旧门，非生产JWT/真实成片/GUI资源/整体R9。receipt publish-output-integrated.json SHA75a4f0f41cbe6c157a2e43d0cf5c4330a22d5a65ce97016d299983258b15a303。此前有限清点的四个真实剩余职责已分别46493fcb/6fb2d137/a90dc4f6/b76574da迁交；复用各批有限退役证据，不将该明确范围当整体RETIRED或重启全仓清点。
 
-### 质检压力延期时点C2（C1冻结后顺序生效）
+### 质检18源已审差额与单个独立终态门（当前有效）
+
+C1 release991b080a已root quality-recovery-c1-reviewed.json SHA4a9cfd503772f03bc98dc84ea2ad959f0b630160c1c4a311d84bb56b9f2ece00核17artifact/准确四差额/201actual/affected node首次过2.642s；原scheduler完整AST除新增public reconcile不变、main只四生命周期目标/导入变，proof→BEGIN free-generation fence→原staged结果/actor/source校验，无worker重跑、无当前budget借用，unknown/live数据库全字段保持，旧history不覆盖新current。原13冻结与算法/24旧assert/20artifact/201normal已root6838f55d复用；首root metadata比较四map对joint17错误仅解析纠正，无测试/产品重跑。
+
+C2 release844a9e20f3394e9ad8281cef031a20a0a0369f25b0e404b2c11b857d2ce2410e已root quality-resource-release-reviewed.json SHAf51072745bc05765871b810c01e11a4cbed5fa5c7e44b2fac18468b7e864f022核16artifact/18当前源/202actual前后。产品逆还原两行后全文件hash等原候选；新增pressure节点首次过，原真实runtime/scheduler/repo+声明refusal令blocked/resource_pressure、Job interrupted/check未终态/permitfree、30秒future gate阻止second dispatch/worker1/源不变；C1与旧门0重跑。18源TAB5c3dc119a8308186e47b02fd91c727fc93595a8fc0ae02b06d7d7a70df316414固定，作者全冻结，无产品新写权；此为metadata非native资源验收。
+
+REF-R3-QUALITY-TERMINAL-INDEPENDENT-20261016 root quality-terminal-independent-binding.json SHA97584f568190c02b4be9b83baf162e314da8250d0d65d95b3f1dfabfee0e6dd3仅QA写fresh-qa-quality-terminal/**，一个代表：原executor/runtime将声明worker结果真实durable后，owned SQLite trigger在原terminal TaskEvent INSERT晚拒绝，记录check/history/job写已达和独立reader旧committed状态，原IntegrityError与联合rollback、workerreceipt保留。停自有faulted runtime/锁，移除唯一trigger，经原public reconciliation+recover续交原IDs/结果、worker1，禁止direct execute(oldgrant)/私有scheduler修补；可新增一个当前check验证旧history不覆盖current，旧未执行检查可原明确失败。真实public fixture/仓储/权限/事务/原回调不mock，仅worker/resource/process为明确metadata替身；tiny NONMEDIA/source事实单列。检查request/permit/request-events，Job成功不等queue收口；若恢复遗留finished job对应waiting/blocked或不一致，按实际失败报告，不强更表/忽略/假PASS。零作者normal/已过unknown-live/旧矩阵/native/host采样/GUI/服务/网络/env用户DB/Git；引用C2202map和精确overlay/实际origin最小证据，首败保留仅失败节点必要修正。短ACK直接门，无第二START；真过root核后精确18集成/即时归还，真实profile/native/fullPGID/物理闭环未接受。
+
+### 质检压力延期时点C2（已释放冻结）
 
 API在冻结源中报告quality_execution可恢复资源压力分支传datetime.now，root核原DeviceScheduler.defer_unit要求retry_at严格晚于后续_now，因而实际会ValueError/fault而不进入预期blocked/interrupted。REF-R3-QUALITY-PRESSURE-C2-20261016 root quality-pressure-c2-binding.json SHA25c6e40f18b3aeee5e3cfb7e285e717f06dabb44d138cfe8fe6273ea28de3891仅quality_execution.py及NEW tests/test_quality_resource_pressure.py两源、证据fresh-api-quality-pressure-c2/**。先完成C1唯一受影响node并冻结release，C2 READ_START记录其精确SHA；随后C1四源归还冻结，C2只加timedelta并复用现CreationJob/TaskMedia资源压力已有30秒未来间隔，不设新预算/开关/重试policy。一个新非native节点经真实repo/原scheduler/runtime和声明pressure worker端口核blocked/resource_pressure+future gate、Job interrupted/check未终态/permit free/源不变/worker1；不重跑C1 normal或旧矩阵。准确两overlay/actual origins最小证据，首败保留；稳定18源联合release后root复审C1及C2差额，再单个独立晚SQL门。仅该明确例外可修改原C1 frozen quality_execution，其余冻结不变；零真实native/采样/标定/GUI/用户env数据/Git，一短ACK后按序直接接续，无第二START。原16减C1三重叠源为13冻结源（scheduler为第四新增修改文件），此前文字12为计数笔误，以精确路径映射和本C2例外为准，不扩大其它写权。
 
