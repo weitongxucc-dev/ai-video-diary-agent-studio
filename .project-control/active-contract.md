@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 方案预检五源已6fb2d137集成/即时归还；当前REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅fresh-api-video-template-preparation/**只读准备，零产品写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-VIDEO-TEMPLATE-IMPLEMENTATION-20261016仅下节main与二NEW三源/fresh-api-video-template-implementation/**；一个metadata normal，旧产品/证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 方案预检撤grant独立门已root接受、五源6fb2d137集成/即时归还；产品与全部证据冻结，当前无新执行/写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -39,7 +39,19 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 视频模板具体业务归属只读接续（当前有效）
+### 视频模板具体owner三源实施（当前有效）
+
+准备release06ba2e0460c429b86f491ba44ec2d4a8c766ab43a345998808fa09c484cdd221 / package f74d1fee02c0817e5fab39e77e9fb1808231d6a874eae73354e37af7e3d5632f已root video-template-preparation-reviewed.json SHA98714a661add5c66543f9352a4a2de4703ed3a66cddf9957c726cdc1c0adcf79核4artifact/13当前Git源/27命名span、四初始读期一致；预检6fb2d137集成只改HEAD不改本组源字节。准备冻结/READONLY_PREPARATION_REVIEWED与WRITE_LEASE_RETURN随本新绑定接续，不重复大清点。
+
+REF-R9-VIDEO-TEMPLATE-IMPLEMENTATION-20261016独占现apps/api/app/main.py，NEW apps/api/app/creation/video_template_use_case.py和tests/test_video_template_use_case.py，证据仅fresh-api-video-template-implementation/**。root video-template-implementation-binding.json SHA33e0eb954748ae1be9b4d63d08dec757f58ee62e91c8e96ac892eb743dff0e23固定6fb2d137产品基线/main clean=currentGit/二NEW absent/index空。按已审package具体VideoTemplateUseCase仅ProductionRepository引用、per-call current repo；具名scalar/现domain对象/已解析Path分段输入，不新DTO默认/校验、callback/config袋、第二policy/SQL/style/catalog事实源或反向main/Request/FastAPI/schemas。
+
+迁交四原业务整body/字面值与有限member/value/error替换。main两个真实_builtin_video_templates/_video_template_or_404 facade签名保持；builtin先于repo/reader，user准确版本read再原reader/canonical readability；field append沿FIRST reader守卫、原version+1/time/name/style/settings/provenance。task-save原task/Plan→rendered montage→原output helper和真实stat/原HTTPException或OSError包装→pair检查→可选resolver及独立owner reader→原subtitle helper→script/color/fit/voice/uuid/settings构造→原两个late reader各自current_workspace调用→公开持久化。读/身份不合并或提前，canonical content_readable/default_subtitle_style/reusable_color_settings/原montage parse及仓储append SQL/CAS/owner/visibility唯一复用；不擅加强source-task授权或新policy。空clips all(fit)等原表达式不顺修。
+
+owner只具体7类typed拒绝，adapter原status/detail及原KeyError/ValueError直接cause，原output嵌套catch、parser/color/subtitle异常时点保持，无blanket catch/fallback。其余main包括已集成preflight完整AST不改；production/content catalog/schemas/output/metadata/color/montage/所有旧tests只读。一个新增metadata focused node：真实v1→原field handler append v2→fresh repo核v1原样/v2仅指定字段及原owner/visibility/provenance；一个原task-save基于声明已qualify元数据与真实非空NONMEDIA小文件，原output helper仅声明已qualified替身，核reusable一致color/fit/subtitle/固定voice/script count/不带旧文本clip output身份与reader序列；同node一次builtin投影。无旧normal/矩阵重跑，不冒充真实render/media/model/认证/GUI/resource；其它原mixed/fallback表达式整body静态保持，不逐method开测试。
+
+fresh隔离Python，预封source/script、actual beforecompile/origin前后，引用已审preflight map/delta加当前三源/必要fixedGit，不复制全源/AST/DB/旧证据；必要时原explicit factory最多一次/原37值，零driver/native/FFmpeg/probe/model/install/GUI/外网/用户DB/私env/host采样/dispatch。首败保留，仅受影响node必要重验。稳定release后root源审，再一个独立shared-visible template/非owner经原task-save403门：前置qualify先达、真实共享可读resolver过，但原owner403在subtitle/script/build/late-reader/写入前拒绝，原template owner/settings/version全不变；作者不自验，不为未改SQL/CAS另加矩阵。超三源先报实际必要差额。一次短语义ACK后直接实施，无第二START；门过精确集成/即时归还，余发布资格与整体接受继续。
+
+### 视频模板具体业务归属只读接续（已审核冻结）
 
 REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅当前API写fresh-api-video-template-preparation/**，零产品执行/写权；root video-template-preparation-binding.json SHA3a620776ddcd825da7c56aebd3f8a3c5cd1dc143317f283f957c9d5b55b411af固定main/production/content_templates/test_video_templates四初始源。main当前为已release预检候选，所有预检五源和旧证据冻结；QA目录互斥。只核_builtin_video_templates/_video_template_or_404/create_video_template_version/save_creation_task_template及真正必要直接output/subtitle/default-style/公开仓储helper，复用已审四组/已知Web四consumer，不重复全main/消费者大清点。
 
