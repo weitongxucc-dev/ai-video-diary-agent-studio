@@ -8151,6 +8151,35 @@ class ProductionRepository:
             raise ValueError("配音产物持久化失败")
         return self.get_creation_task(artifact.workspace_id, artifact.task_id), saved
 
+    def publish_creation_task_render(
+        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object],
+        version: TimelineVersion, *,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> None:
+        with self._connect() as publish_conn:
+            publish_conn.execute("BEGIN IMMEDIATE")
+            self.save_creation_task_montage_plan(
+                workspace_id, task_id, plan_id, payload, connection=publish_conn,
+                expected_current_version_id=expected_current_version_id,
+            )
+            self.create_timeline_version(
+                version, connection=publish_conn,
+                expected_current_version_id=expected_current_version_id,
+            )
+
+    def save_failed_creation_task_render_if_current(
+        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object], *,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> None:
+        with self._connect() as failure_conn:
+            failure_conn.execute("BEGIN IMMEDIATE")
+            current_task = self._require_creation_task(failure_conn, workspace_id, task_id)
+            # A failed old render must not replace a crop confirmed while it ran.
+            if expected_current_version_id is False or current_task.current_timeline_version_id == expected_current_version_id:
+                self.save_creation_task_montage_plan(
+                    workspace_id, task_id, plan_id, payload, connection=failure_conn,
+                )
+
     def save_creation_task_montage_plan(
         self,
         workspace_id: str,
