@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源c340000c已SOURCE_RELEASE/root审核，全部产品及旧证据冻结；仅下述执行控制接续只读准备fresh-api-execution-control-preparation/**，无产品/应用执行写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-RENDER-STAGE-INDEPENDENT-20261015仅新fresh-qa-render-stage/**，下述最多两个新仓储事务特有代表；四产品及197来源只读，作者normal/旧门零重跑。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源已7fbb44ec精确集成/即时归还；当前REF-R3-EXECUTION-CONTROL-20261015下述4源与fresh-api-execution-control/**独占实施，旧候选/证据冻结。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | render两个特有代表已root审核/7fbb44ec集成并即时归还；当前无产品/证据/执行权，后续仅稳定控制候选的新取消缺口/恢复metadata代表另绑，旧门冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,11 +39,23 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 执行控制接续只读准备（可与成片独立门并行）
+### 成片已集成；执行控制迁交（当前有效）
+
+成片四源已7fbb44ec081dc80d26fc5cad6b134e4e6c55e3a2精确提交，index/commit/live逐字节等原c340000c release，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时已发API和QA。root render-independent-reviewed.json SHA0506cae70c45398d8abd8dbecd5a84aa91f4f7d61188c9135933dec3c65fd3a1核独立gate148aad12e1eaeeff10d65baa5fd1c957a17e2273e9d92b96f1ed8adfe4708814、21artifact/3refs、197before-compile/198origin、两个首过代表与8native/6登记释放/2输入fixture。paired晚SQLite失败前同conn已写montage/task、另一observer只见旧值，rollback后原failed-save另行合法提交；早MP4/SRT/Artifact/Transform/6edges保留，后续成功event/cover/tracks/child/outer success与QC未到达。另一代表真实renderer交付处外部OSError，原独立新HEAD+montage提交后stale failed-save零保存，未发布staging被原cleanup删除如实。原normal/旧门零重跑，root未执行应用；回执render-stage-integrated.json SHAf56229f7d0452ae80183250929846d068cc98ab93476512f866eb95578ab810c。原quality未登记、子入口完整来源/fullPGID、GUI/真实模型/生产身份资源及整体接受仍未验。
+
+REF-R3-EXECUTION-CONTROL-20261015固定产品7fbb44ec，API只写apps/api/app/main.py、production.py、NEW creation/execution_control.py、NEW tests/test_execution_control_application.py（后二路径均在apps/api/下），证据只写新fresh-api-execution-control/**。root execution-control-implementation-binding.json SHAfbf4c47e6f98dc5a98f38277c32b74565020d2fa6df7f2135c34bca1f8de4baf核2现源=Git/2NEW absent/空index；准备release48cb8a4534c1992ffdd0f719172c6d5c7cf96dea81a02c0e1dee848afb3bc7b9/包c59cd60e及root execution-control-preparation-reviewed.json SHA3b49a86bda93366ec8e6b610de956d6e82dfa00bce7a38947eaa8174ce2919ac核10源/47完整body及六原SELECT。其余共享执行/身份/许可/预算/阶段owner和既有tests只读，不扩域顺修。
+
+一个具体CreationExecutionControl承接完整preview/status/start-resume/cancel/recover/full-bound-query与设备请求归属查询编排；constructor仅repository、现CreationExecution、现RenderStageUseCase、原命名verify_identity引用赋值，runtime显式方法实参。不新registry/调度/HTTP Request/状态事实源、反向main或业务回调袋。main保留原HTTP、automation/要求/assistant来源重放、exact-access/actor提取与错误映射时点、实际singleton/build/预算与生命周期入口及诊断组装，迁交业务只留真实消费者有限facade；原render_action及所有已过owner/driver/checkpoint不改。Production仅六原只读查询的有限公开端口，保持SQL/参数/原范围/顺序/Row或None与连接时点，DeviceScheduler仍唯一请求/许可writer。pending-media新端口必须在原调用点fetchall并关闭conn后返回generator expression逐项调用原JobRun decoder；保留原恢复循环逐行解码时点，不急切解码全list、不延迟query、不跨迭代持conn，避免坏后行使前面有效项的已执行reconcile消失。
+
+所有原业务条件和提交阶段保留：start(actor)/retry(member_id)→submit→wake→status；取消先JobRun提交，runtime缺席也可停止；有runtime才查原三活态并分别scheduler.cancel和原executor取消。恢复只取持久身份、原task-media四活态与原cancelled-full三活态及join快照、完整身份一致性、原ASC待处理full次序和原verify→submit→末尾wake；禁止诊断线程fallback或从当前login补身份。full-bound查询原kind/task/完整actor/digest/latest条件和404/409不变；local job_id的原409及原独立proposal结果协议继续保留。status中historical running事件原样，不借本迁交擅改interrupted投影/UI政策。
+
+一个新metadata-only最小normal核公开preview→重复start/同job和request→同actor bound full查询→cancel→原恢复→按原规则resume/requeue/query，真实仓储/队列/actor但不dispatch阶段、模型或native；同node核原local-kind409和预声明interrupted/history-running回读及六read端口scope/order/None，不放宽守卫或用fake success。预算只复用有精确既有来源的同值，不把零dispatch算资源接受。完整迁交AST、非目标main/整个production其余body不变与最小验证即可，已过媒体/normal/矩阵冻结。因取消与恢复编排属于关键执行边界，稳定release后另绑最多一个metadata独立代表：真实JobRun取消已提交、scheduler取消前原外部端口故障，恢复用原持久actor补完原请求取消且不重复工作；不为六个纯读端口各开QA，不重跑已过媒体/身份/资源矩阵。先一次简短语义ACK后直接实施，无第二START；release冻结后root核/最小独立门/精确集成即时归还并接续。
+
+### 执行控制接续只读准备（已审核关闭）
 
 REF-R3-EXECUTION-CONTROL-PREPARATION-20261015仅API写新test-runs/refactor-20261014/fresh-api-execution-control-preparation/**，不写产品/import/collect/test/native/模型/GUI或环境。只定位当前main的_new_creation_execution、_recover_creation_executions、_creation_runtime、_creation_execution_status、preview/get/start/resume/cancel_creation_execution、_creation_job_for_request、_read_bound_execution_result及这些符号真正必要直接caller；creation_execution.py、member_permits.py与device_scheduler.py仅所需对应公开端口/原规则。给一个最小下一实施包的精确文件/归属/原顺序/仓储边界/退役目标与最小验证，不扩成全main/全仓/历史大清点、不复制全AST或旧证据。当前人物已记录的local job_id查询409与full interrupted仍有running阶段分别核原身份语义/实际消费者，区分现有边界和新回归，不预设放宽身份门或新增产品策略。准备用当前Git与目标body摘要，只读期间render四源/197执行tuple不得改变；不把本准备当产品通过，root核后另绑准确产品范围，无重复ACK/START。
 
-### 成片源码已审核；两个特有独立事务门（当前有效）
+### 成片源码及两个特有独立事务门（已履行冻结）
 
 REF-R3-RENDER-STAGE-INDEPENDENT-20261015绑定作者SOURCE_RELEASE SHA c340000cf16e74a9f6d28e1da0d4585b4a9420a5994fe6b42f2604a9397c21cd、四源TAB dfcfb4228871df6ac060c317703397730eea45511ad59c1f3233511135662ffa、197实际来源fingerprint db3486d2c8b894cd407141cbe89580ceb37d9781578207064b5cb0cbd209b8d8。root render-stage-release-reviewed.json SHA f0349c02f889e786a59c86808d9d133128256b19ef6ba5a7b80979df6ff3b880核34artifact、196 before-compile/197实际来源与固定Git、8完整迁交body/628其它main函数、production整module仅两原with公开端口差额，五引用constructor零IO、原三成功QC及worker拒绝语义、原预算/OS八赋值AST不变。唯一真实队列normal首次PASS（call1.849s/pytest7.36s/process9.372s），物理MP4/SRT SHA/size、Artifact/Transform/edges、sealed inputs/版本/外层checkpoint与查询不重复均核；12native=4登记释放+1输入fixture+7原quality未登记，后者不是fullPGID/生产资源接受。root只修观察器len整数与quality文件名单复数断言，无产品/import/test/native复跑。
 
