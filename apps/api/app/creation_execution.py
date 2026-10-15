@@ -911,13 +911,14 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], stage_actions: dict | None=None, task_media=None, narration_stage=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], stage_actions: dict | None=None, task_media=None, narration_stage=None, person_stage=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
         self.stage_actions = stage_actions or {}
         self.task_media = task_media
         self.narration_stage = narration_stage
+        self.person_stage = person_stage
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
         self.last_resource_refusal: HostResourceRefusal | None = None
@@ -1018,7 +1019,7 @@ class CreationJobUnitExecutor:
 
     def _execute_upstream(self, grant, scheduler, stage):
         from app.granted_subprocess import GrantedCommandCancelled
-        if stage == 'narration' and self.narration_stage is None or (stage != 'narration' and stage not in self.stage_actions):
+        if stage == 'person_render' and self.person_stage is None or (stage != 'person_render' and (stage == 'narration' and self.narration_stage is None or (stage != 'narration' and stage not in self.stage_actions))):
             raise PermissionError('该制作阶段没有受许可执行者')
         with self.repository._connect() as conn:
             row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
@@ -1050,7 +1051,9 @@ class CreationJobUnitExecutor:
             def valid(current):
                 return owner.person_valid(current) if stage == 'person_render' else upstream_stage_valid(self.repository, current, stage) or (stage == 'montage_plan' and montage_waiting_for_confirmation(self.repository, current))
             if not valid(current_task):
-                if stage == 'narration':
+                if stage == 'person_render':
+                    self.person_stage.generate_stage(job.workspace_id, job.task_id, context)
+                elif stage == 'narration':
                     self.narration_stage.generate(job.workspace_id, job.task_id, grant_context=context)
                 else:
                     self.stage_actions[stage](job.workspace_id, job.task_id, context)
@@ -1135,40 +1138,32 @@ class CreationJobUnitExecutor:
         try:
             job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
             with self.repository._connect() as conn:
-                row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
-                permit = conn.execute("SELECT granted_at_utc FROM device_permit WHERE id=1").fetchone()
-            resources = json.loads(row["resources_json"])
-            if resources.get("kind") != "creation_person_render" or not permit["granted_at_utc"]:
-                raise PermissionError("人物编辑缺少专属资源许可")
-            elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
-            context = CreationStageGrantContext(scheduler, grant,
-                time.monotonic() + resources["timeout_seconds"] - elapsed,
-                resources["max_output_bytes"], resources["threads"], cancellation)
-            if job.status == "running":
+                row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
+                permit = conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1').fetchone()
+            resources = json.loads(row['resources_json'])
+            if resources.get('kind') != 'creation_person_render' or not permit['granted_at_utc']:
+                raise PermissionError('人物编辑缺少专属资源许可')
+            elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
+            context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources['timeout_seconds'] - elapsed, resources['max_output_bytes'], resources['threads'], cancellation)
+            if job.status == 'running':
                 with self.repository._connect() as conn:
-                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                                 (job.workspace_id, job.id))
-            if job.status != "cancelled":
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
+            if job.status != 'cancelled':
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             context.check()
-            event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
-            commit = self.stage_actions["person_edit"](job.workspace_id, job.task_id, context, event.payload["edit_proposal_id"])
+            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start')
+            commit = self.person_stage.prepare_edit(job.workspace_id, job.task_id, context, event.payload['edit_proposal_id'])
             context.check()
-            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "succeeded", commit=commit))
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, 'succeeded', commit=commit))
         except RecoveryBlocked:
-            raise  # Unknown child/permit ownership must retain the original recovery gate.
+            raise
         except Exception as exc:
-            cancelled = (isinstance(exc, GrantedCommandCancelled) or cancellation.is_set()
-                         or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == "cancelled")
+            cancelled = isinstance(exc, GrantedCommandCancelled) or cancellation.is_set() or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == 'cancelled'
             if cancelled:
-                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                    checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "cancelled", reason="user_cancelled"),
-                    cancelled=True)
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, 'cancelled', reason='user_cancelled'), cancelled=True)
             else:
                 reason = str(exc)
-                scheduler.fail_unit(grant, reason="person_edit_failed",
-                    failure_write=lambda conn, current: self._person_edit_checkpoint(conn, current, "failed", reason=reason))
+                scheduler.fail_unit(grant, reason='person_edit_failed', failure_write=lambda conn, current: self._person_edit_checkpoint(conn, current, 'failed', reason=reason))
         finally:
             reset_workspace_context(token)
             with self._cancellation_lock:
