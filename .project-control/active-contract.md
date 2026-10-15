@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 发布资格三源releaseafe554f4已root源审；三源/全部作者证据冻结待单个私有Task权限门，无新产品或证据写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-PUBLISH-OUTPUT-INDEPENDENT-20261016仅fresh-qa-publish-output/**；一个OTHER读私有Task发布资格的早PermissionError门，零产品写权。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 发布资格三源已b76574da准确集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；四组剩余main/自动确认目标均已迁交，源/证据冻结，无新产品/证据写权，整体接受待后续精确绑定。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 发布资格单个私有Task门已root接受/随b76574da集成并归还；证据冻结，无产品或新执行权，待真正关键接受差额。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-NATIVE-SUFFIX-READINESS-20261016只读原生物理后段启动/资源前提差额，仅fresh-runtime-native-suffix-readiness/**，零产品写入/应用执行；旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -51,7 +51,15 @@ release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04 / TAB40d
 
 REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。root video-template-independent-binding.json SHA2d9eef6dab164d10a3abd0eeec466d68d5229174f9a868c0fa014d0283b4cfa0绑定三源与candidate01 actual197 map。一个元数据代表：公开repo seed/set共享/read，OTHER声明可信reader经原task-save更新共享模板；原rendered_source真实解析/守卫、原非空stat先达（task/Plan/montage/output路径为声明qualified替身、文件为自有NONMEDIA），真实共享resolver可读通过后，原403「只有这个模板的所有者可以保存新版本。」在subtitle/script/build/late readers/persist前拒绝；原template版本/owner/settings等公开回读不变、0新写。禁止mock权限/readability/owner/save或rawSQL fixture writer，不为未改CAS另开门，不跑作者normal/旧测试。自有隔离DB，优先direct handler无factory/lifecycle；必要时原factory一次/原37值，零driver/native/probe/model/GUI/network/资源。预封source/script、actual beforecompile-origin/前后、197 map引用/必要fixed Git，不复制全源/AST/DB/旧证据；首败保留，只必要失败节点重验。一次短ACK后直接执行，无第二START；稳定SOURCE_GATE冻结，root核后精确集成/即时归还，未算整体R9。
 
-### 发布资格三源源审与私有Task单个独立门（当前有效）
+### 发布输出资格三源已精确集成（冻结复用）
+
+准确三源b76574da1996e36cb83a4d116049959e32b8684e已cached/committed/live核一致；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。作者releaseafe554f4与源审c176cde2冻结复用；gatef3b5e070e10d5da4de56f5322ee8c1efa4982ddf4274eb387e999a8d56c091d6已root publish-output-independent-reviewed.json SHA8ab7be3a6d7a177b5dd70769ab5260642845b66016a35dde18d88b8bd96b2876核11artifact/4ref/196actual beforecompile-origin，单代表首次过child8.559s/process8.869s。公开repo真实private Plan/Task；OTHER经原callback、真实getTask、canonical权限false，同一原PermissionError早于readiness/全部输出门；owner Plan/Task/list全字段、计数保持，0新写/平台动作。只声明可信caller与隔离repo，无factory/lifecycle/driver/native/model/network/预算或旧门，非生产JWT/真实成片/GUI资源/整体R9。receipt publish-output-integrated.json SHA75a4f0f41cbe6c157a2e43d0cf5c4330a22d5a65ce97016d299983258b15a303。此前有限清点的四个真实剩余职责已分别46493fcb/6fb2d137/a90dc4f6/b76574da迁交；复用各批有限退役证据，不将该明确范围当整体RETIRED或重启全仓清点。
+
+### 同候选物理后段启动与资源前提只读接续（当前有效）
+
+REF-R9-NATIVE-SUFFIX-READINESS-20261016仅当前工具线程写fresh-runtime-native-suffix-readiness/**，root native-suffix-readiness-binding.json SHA00a3b272a684b9a225539ab36ca32f6e6313be196952b54bc202d322a0ab0564固定七初始源及旧core配方/已过metadata门/native集成引用。只核现源的实际queued render→可见Electron真OS保存→真Quit及同状态/固定origin所属API-Web退出重启→同Vout回读→可见undo这一合成物理后段前提差额；复用已过公开fixture构造/元数据重启和actual Session替身门，不重跑、不重复整旅程或全main/全仓/全AST/生成物清点。给一个紧凑准确可执行包：源匹配dev shell加显式owned外部服务或已证明当前包的真实启动路径/进程与隔离状态、原资源profile与含quality的全部native后代门、已知准确tool依赖可用性、首个缺失条件和最小下一门。零产品写入/import/test/collect/build/server/lifecycle/GUI/native/probe/采样/model/install/network/用户DB私env凭据，无猜预算、OS替身或降门；尚无执行权，release冻结由root另绑。七初始源和必要直接定义命名span/hash足够，不复制旧数据/证据/源码；发布三源已集成源冻结。短ACK直接准备，无第二START；模型新建/生产身份与资源/整体R9仍单列。
+
+### 发布资格三源源审与私有Task单个独立门（已履行冻结）
 
 releaseafe554f497f09321e7e9872896aa6ec5d3796d99663f12260a8320825f5f7f61/TABe069d6c002506826a13af94400819208007da1242538958de477ab5d68e9e38f已root publish-output-release-reviewed.json SHAc176cde2ee93378a8ada23206a7caee181c6d8159288b4c45ad4e427db918109核18artifact/198actual beforecompile-origin、两完整body/member翻译与OR短路/两签名/其余main与callback/11 canonical源/模板非main二源/37值。一个metadata node首次通过(call.107s/pytest.18s/runner2.250s)，两个原callback及原task/version/artifact/is_file/stat/返回顺序，公开Plan/Task/Timeline/queued producer/Artifact与50字节NONMEDIA登记/fresh回读；计数不变/producer queued0/0/平台0/新写0。render/output端口明确替身，非真实render、worker/媒体、认证/GUI/resource接受。三源/作者证据冻结，未集成。
 
