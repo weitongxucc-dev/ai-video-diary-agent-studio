@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 方案预检五源/作者证据冻结待QA；当前REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅fresh-api-video-template-preparation/**只读准备，零产品写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-CREATION-PLAN-PREFLIGHT-INDEPENDENT-20261016仅fresh-qa-plan-preflight/**；一个固定历史知识当前grant撤回后原confirm拒绝的元数据独立门，零产品写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 方案预检五源已6fb2d137集成/即时归还；当前REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅fresh-api-video-template-preparation/**只读准备，零产品写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 方案预检撤grant独立门已root接受、五源6fb2d137集成/即时归还；产品与全部证据冻结，当前无新执行/写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -45,7 +45,13 @@ REF-R9-VIDEO-TEMPLATE-PREPARATION-20261016仅当前API写fresh-api-video-templat
 
 给一个紧凑可实施具体模板业务包：精确文件/new owner、原append-only version/owner/可用已render来源/颜色fit字幕voice脚本推导与错误身份时点、有限显式依赖与原实现退役；ProductionRepository原SQL/CAS/visibility唯一不变，预检所需resolver保持原签名，不新policy/层/通用callback袋。一个最小metadata自测，若确有关键身份/version边界迁交，最多一个独立代表，不为每方法开QA。仅命名span/hash/read期/有限证据，零产品/import/collect/test/DB/media/native/model/lifecycle/env/resource/GUI/network或全source/AST/旧证据复制。预检后续集成HEAD变化按准确路径/body核，不视为本组源码变化。一次短语义ACK后直接准备，无第二START；release后freeze、root核包另绑产品。
 
-### 方案预检五源源审与撤grant单个独立门（当前有效）
+### 方案预检五源已精确集成（冻结复用）
+
+准确五源已6fb2d13742f02d5b98e34dafe21704df522ef0b0集成，cached/committed/live等release21f44ebb0ea3de63fd715c743abee24fffea893de066f5e8053cc6baf8d2ecfb / TABce62ad208011287d0c4e3417808c0b356736aa69b98ae0c09867efef2f1dfc28。root plan-preflight-integrated.json SHAa959d0449fe68062562cc164cfe5e0a099d7bbb7d8c9b591ded85e00158ac818；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA，早于本合同更新。产品/预检作者与QA证据冻结，API独立模板只读准备继续有效，无重复ACK/旧normal或矩阵复跑。
+
+独立gate94ecdad1b29b4e28ed9ae7269f215c6ddb2f251c236bff719539e4296d4c08d5已root plan-preflight-independent-reviewed.json SHA53b4b2a78298f8c371e0ff4ac4b617699ce946573aa4aa3834970c1fff40b0f6核11artifact/4ref/194 actual beforecompile-origin，一个代表首次通过（child8.431s/process8.717s）。两个声明身份/工作区通过真实SourceRepository公开create→edit为head2→grant，原preview固定历史1；公开revoke后原confirm按原404字符串detail与同一原KeyError直接cause拒绝。原知识list→pin→当前可读性先行，后续source/material/catalog/provider/historyfallback/生产写未达；owner仍合法读完全同旧版1/head2，Plan/Task/Timeline/Job均0。无factory/服务/driver/native/model/资源/旧矩阵，初preview素材为空真实仓储/catalog空声明；不是JWT/真实身份、HTTP服务链路、生产媒体/GUI/resource或整体R9接受。余模板/发布资格和整体同候选接受继续，下节原门不恢复租约。
+
+### 方案预检五源源审与撤grant单个独立门（已履行冻结）
 
 release21f44ebb0ea3de63fd715c743abee24fffea893de066f5e8053cc6baf8d2ecfb / TABce62ad208011287d0c4e3417808c0b356736aa69b98ae0c09867efef2f1dfc28已root plan-preflight-release-reviewed.json SHA48a34224d065b29a4b75a2dc151689112b646956277d743aed8238470727458f核35artifact/196 actual beforecompile-origin、原完整prepare有限翻译/其余main整AST及五helper调用名/唯一identity body/三phase/14不可变字段/二旧测试名字字节，12直接源/37值冻结。一个metadata node共3实际（首次numeric知识夹具失败、第二通过后发现fields union可变，显式frozenset修正仅本node重验最终通过）；preexec runner key错误0应用也保留。最终call .116s/pytest .19s/runner1.993s，三有限preflight调用、provider share0零/positive在catalog后一次，reader两次照旧，零新Plan/Task/Job。root初把summary hash定位到NORMAL_FACTS，改读release绑定NORMAL_SUMMARY的元数据observer差额，无产品/证据修改或应用复跑。五源/作者证据冻结，未集成。
 
