@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 自动任务确认五源已46493fcb集成/即时归还；当前REF-R9-CREATION-PLAN-PREFLIGHT-PREPARATION-20261016仅fresh-api-plan-preflight-preparation/**只读准备，无产品写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-CREATION-PLAN-PREFLIGHT-IMPLEMENTATION-20261016仅下节五源与fresh-api-plan-preflight-implementation/**；方案预检具体owner/唯一来源指纹迁交，一个metadata自测，其余产品/证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 自动任务确认单个真实SQLite晚绑定独立门已root接受、五源46493fcb集成/即时归还；产品和全部证据冻结，当前无新执行/写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -39,7 +39,19 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 方案预检具体归属的只读接续（当前有效）
+### 方案预检具体owner与唯一来源指纹五源实施（当前有效）
+
+只读release131c4921d1b86060849b1418b5a0a38594774b98b67b7946322d3c1012fec2f0 / package ebc9d1c954d8dd653b2ced5f935c69e176ac3972ec3b9c0f683d25f136b03152已root plan-preflight-preparation-reviewed.json SHAd7b7b9551bd86d07b6a85f7f5b04d4b2f55d5fabf548992e1cdcb30c45773027核4artifact/12当前Git源/10文本与完整declaration-body摘要、四初始读期一致；前一自动确认产品集成的HEAD变化未改目标。准备冻结/READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN随本实施绑定接续，不重做大清点。
+
+REF-R9-CREATION-PLAN-PREFLIGHT-IMPLEMENTATION-20261016独占现apps/api/app/main.py、现tests/test_topic_evidence_provenance.py、test_source_input_contract.py；NEW apps/api/app/creation/plan_preflight_use_case.py、tests/test_creation_plan_preflight_use_case.py；证据仅fresh-api-plan-preflight-implementation/**。root plan-preflight-implementation-binding.json SHA367f85f08b08f737e12a81ff0131ba44e04e8ec33967ea185c9f55b2445237a4固定46493fcb产品基线、三现源clean/Git一致与二NEW absent/index空。具体CreationPlanPreflightUseCase返回现CreationPlan；一个frozen具名值输入只复制schema已验证字段、三个(id,version)可空固定pin及provided_fields，无新默认/validator/Settings事实源。owner仅concrete生产/来源仓储、ModelCatalog和一个keyword-only lazy口型provider端口，不依赖main/Request/FastAPI/schemas，不构造HTTP、不新callback/config袋/dispatcher。
+
+精确保留三段：owner模板成对检查→main原_video_template_or_404解析→owner原纯继承（explicit zero/false、provided_fields/inherited union与fast默认照旧）→main原_content_reader，继而owner完整预检body。constructor只赋引用且每次用current repos/catalog；原用户模板可能先读reader，后续reader不合并。main _creation_plan_preflight原签名与5 main调用/Automation callback保持。原六错误只用具体typed code携原message，adapter映射原422/404/409；不可读pin HTTP直接cause仍原KeyError，其余原异常/捕捉位置不改。原knowledge列举/固定版本与scope门、source identity、有效asset/segment pair过滤/search时点/limit/fallback、voice显式>模板>默认且缺失不回退、person和发音、catalog原晚点/positive share后lazy口型、blocker顺序和整个fingerprint字段/JSON/字面值保持。_source_item_identity完整body迁为同模块唯一source_item_identity，main直接import并换5剩余调用；二旧测试仅名字换接，不保留私名alias/第二hash或重跑。
+
+一个新metadata focused node，按已审包有限调用：不完整模板pair在resolver/reader前拒绝；模板省略字段继承share0/provider0与明确positive/provider在catalog后仅1；Preview/Confirm输入映射、固定pin/scope/eligible pairs/blockers与确定canonical指纹。真实SourceRepository公共metadata、明确material/catalog/provider夹具边界，不以返回事实冒充真实文件/模型/生产认证；无复制旧整body/自证式测试。fresh隔离Python、源/script预封、actual beforecompile/origin前后；引用既有accepted映射加当前五源/必要fixed Git，不复制全源/AST/旧证据。若conftest需要仅现显式factory一次/原37值，零driver/native/model/install/GUI/外网/用户DB/host采样/dispatch；首败保留，只失败或新差额必要重验，不复跑已过批次/矩阵。
+
+稳定release后root源审，再单个独立关键反例：真实公开source owner撤回固定知识当前grant，历史版本仍在，原confirm在pin读取按原404/detail/KeyError cause拒绝，早于后续source/material/catalog/provider且无Plan/Task写/新版本fallback。作者不执行/自验此门。其余所有产品尤其schemas/已集成automation/生产来源policy/model/person/template业务/生命周期/预算冻结，超五源先报准确必要差额。一次短语义ACK后直接实施，无第二START；门过精确集成/即时归还与接续，未称整体R9。
+
+### 方案预检具体归属的只读接续（已审核冻结）
 
 REF-R9-CREATION-PLAN-PREFLIGHT-PREPARATION-20261016仅当前API写fresh-api-plan-preflight-preparation/**。root plan-preflight-preparation-binding.json SHA600754716db0c5c849b42bd0ddb83ee74f8af3d8eee613c6ba9df82f1f51b0eb固定初始四源；所有产品、自动确认五源及旧证据只读，QA独占目录互斥。复用已审27源/四组准备，不重复大清点；只定位main._creation_plan_preflight与preview_creation_plan/confirm_creation_plan/AutomationRuntime准确消费者及真正必要直接helper/type。给一个紧凑可实施包：新具体owner/精确文件、原模板继承与身份解析/固定引用/素材/模型及lazy口型provider调用时点、明确输入输出、迁交完整body与旧消费者退役、一个最小metadata normal和最多一个关键独立反例。无第二事实源/通用callback配置袋/反向main/HTTP重入，不改权限/资源/模型/协议/schema。
 
