@@ -13,8 +13,8 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMPOUND-SELECTION-EXECUTION-20261015独占main.py、task_audio.py、creation/editing/compound_use_case.py、media/picture_preview.py、creation/visual_preview_use_case.py及NEW tests/test_compound_preview_application.py六源与fresh-api-compound-selection-execution/**；先关闭复合选择旧执行入口，已集成画面/旧证据冻结不复跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 画面C1三个关键反例已审核集成db57f1fc并WRITE_LEASE_RETURN；当前产品/旧证据只读，无新执行写权，待复合选择稳定候选另绑最多两个特有反例。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-LOG-C1-20261015仅fresh-runtime/output-observation-trim-last-frame-log-c1/**；V1已审归还冻结。只减少无用上游checksum日志、修实际调用观察器，原32KiB stderr及所有门不变；跳过已匹配.93，先受影响1.87，再只执行尚未运行目标。产品/字段/profile只读。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMPOUND-SELECTION-INDEPENDENT-20261015仅fresh-qa/compound-selection-independent/**新证据；复用191源/185固定Git＋六冻结源，只两个特有反例，不跑作者normal或已过共享visual族。产品及旧证据只读。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -38,6 +38,14 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 复合选择候选已预审，绑定两个特有反例
+
+`REF-R3-COMPOUND-SELECTION-INDEPENDENT-20261015` 仅QA写test-runs/refactor-20261014/fresh-qa/compound-selection-independent/**。作者release SHA3589fecc02c7ea590eec8699172936fe28203ac796790a77fd7c5890e7a117dd、六TAB407184ac8e1a88c36ac8d208793cde1cde69bdfaad143dfabe94fa10ab87a923、candidate-04/SOURCE_BINDING.json SHA24007cd11dfde7b723741eb9ad3ce09fb9bc7c45d880d5dc6f43429ee2158820。root compound-selection-release-reviewed.json SHAfe856df7644d04f568b9bbff355db80d337d3c5a4df9ae2a534f05dd65c77112含准确191源map与fingerprint926f08ef4edf310f50c738d7ad4049927e648450ebebd2696f8008462acdb1c0，核98artifact、185固定db57f1fc Git＋六冻结overlay、190实际source loads/191origins、709非目标完整函数、公共publish/resources与driver仅增compound分支后完整AST等价；已读六源diff，正常链路四实际后PASS14.93s（首collect误收.venv、原snapshot日期类型错、test误比public/storage三首失败保留），旧门0。实际13字段通过现persistence codec保留原持久值，修复新input digest与durable事件不一致；共享check/事务/许可/历史job与digest不改。父98项证据只读复用，不复制191源/全AST。
+
+两个预定特有代表：①首侧真实媒体登记后，原selection proposal/status/base由真实外部提交失效，后续侧/提案/成功拒绝、早媒体与外部状态保留；②两媒体已真实发布/登记后，在原复合intent＋proposal联合保存的edit_proposals INSERT做真实晚SQL失败，核同conn已写intent而另一observer尚不可见、proposal attempted和ROLLBACK，文件/早metadata保持；移除自身trigger后公开retry同job/slot、两个原媒体不重render，原联合保存成功且timeline未应用。使用原实际owner/guards/身份/资格/JSON编码/digest与原helper资源域，不mock业务；若更早门拒绝则记实际阶段而不绕过。原visual共享publication/cancel族按完整body与接线证明复用，不新增第三代表或复跑作者normal。只封存自身必要脚本/fixture/191源prepost与actualimports，不复制全仓/全AST，最小简短回执，保首失败仅复验受影响未过node。先语义REBASE_ACK核map/六源/互斥/两阶段后直接执行，无第二START；SOURCE_GATE冻结后root审门精确集成六源即时归还。真实生产/GUI/fullPGID/全R3/R9仍未接受。
+
+日志C1 release4623f33292558b722165d3f7a705e3334cba907974d32aa9e4bfeb071a24c10a已root output-observation-trim-last-log-c1-reviewed.json SHAd55d27e4fca728d9d097c82f456057677a1f7883002160bca45e1875b2b7d47d核12artifact、11源/6输入/3脚本、13→78origins、完整candidate仅pre checksum差额及原helper/caps AST相同。3登记命令同原grant，原stderr32768真实拒绝1.87且捕获前缀/execACK/后释放；未复跑.93，short/B-VFR/cancel未到达。仅接收失败实证并即时归还冻结，停止该日志策略，不接受目标PNG或生产资源，也不阻断API。
 
 ### 已集成画面与发音词典；接续复合选择入口
 
