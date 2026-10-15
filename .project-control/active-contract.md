@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源release372ec90冻结待关键QA；montage只读准备已root审核，所有产品/原证据冻结，待人物集成后精确实施绑定。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物HEAD独立代表首轮通过冻结；仅下述两项资源阻断节点在实际原内存门满足后定向续验，fresh-qa-person-stage/**隔离证据/执行，人物产品只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源及montage准备冻结；当前仅REF-R3-RENDER-STAGE-PREPARATION-20261015成片执行只读准备/new fresh-api-render-stage-preparation/**，不写产品。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物HEAD首轮PASS冻结；续验前内存检查再拒绝、零新测试，暂只读等待原资源门稳定恢复后两节点精确续验，不盲重试。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物独立门部分通过；只续两项资源阻断节点（当前有效）
+### 人物内存门再拒绝；保持候选与通过节点冻结（当前有效）
+
+root原单次恢复测量后，QA执行前实际available_memory又降到2916204544字节，小于原3221225472，PRE_EXECUTION_MEMORY-02.json SHA8ef4ab1af33248b23cddfb76fcc236e2697517b7d74799584daa084865ad4cb4：两原脚本SHA不变、app_execution_started=false，本次零应用/测试/native新增。原HEAD PASS及首次两阻断事实不变，仍无完整SOURCE_GATE，人物5源不stage/集成。后续监督只低频只读检查实际资源；原门真实稳定恢复后（两次分开的实际读数均满足原门，执行中仍由原probe决定）再通知当前QA仅续验下列两原失败节点，不重复HEAD/normal/旧门或协议ACK；若不足继续等待、不调预算/伪造OS或退出用户进程。无需用户再次批准继续；整体R0–R9未完成，监督保持。
+
+利用该外部条件等待，只给当前API REF-R3-RENDER-STAGE-PREPARATION-20261015新test-runs/refactor-20261014/fresh-api-render-stage-preparation/**证据写权、所有产品/既有证据只读。只核下一成片执行的完整_render_creation_task_montage_for_workspace、_render_creation_stage_with_grant、_creation_stage_valid_with_grant、_creation_render_is_valid及实际必要直接renderer/仓储/注册端口，提出具体owner、精确拟改源、原lazy读取/子作业/产物/版本提交与恢复时点、旧消费者、一个最小normal及真正特有的关键独立门。只输出一个紧凑READONLY_PREPARATION_RELEASE.json（含精确源/目标body摘要，不复制原文）和必要可选核验脚本，不建立多套报告/manifest/整仓或全AST快照；零产品修改/import/collect/test/model/media/GUI/native。已有quality helper未登记子进程是既有未验边界，不能凭本准备假称资源通过；不扩大到quality/lifecycle/continuation/全消费者审计或提前实现。人物门及精确集成仍优先，montage准备已核可复用、后续实际新基线再绑定实施；无需重复ACK，直接有限只读准备后冻结。
+
+### 人物独立门部分通过；只续两项资源阻断节点（已裁定，受上节资源等待约束）
 
 人物QA首轮三个实际代表中local HEAD首轮PASS，早ready child/JobRun/Artifact/Transform/edges/视频保留，原current guard拒绝editorial，未进入提交CAS；其余full来源变化和local晚SQL均被实际可用内存不足原3221225472字节门阻断、各目标注入未到达，不能作业务失败或通过。RESOURCE_BLOCKER.json SHA89562e96e4a1a0289a7b51fc5c58ef9bc248643b5dda49ccea81c6af84d82657已root person-independent-resource-blocked-reviewed.json SHA234734e21605c25c3dbc2c8ef83cf862b5a39a026ca6a297ec8c5e373ac7bf41核11artifact、195实际加载/196父imports、源/脚本/3refs无漂移、42native/25登记全部释放/3fixture与14原quality probes单列。HEAD通过节点及attempt-01冻结，不重跑。暂未SOURCE_GATE、未集成，不能按整族PASS归还。
 
