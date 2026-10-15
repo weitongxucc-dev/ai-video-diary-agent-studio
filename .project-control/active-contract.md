@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | execution-control四源7bd6e0a4已SOURCE_RELEASE/root源码审过，产品及旧证据冻结；仅下述组装/安全重载只读准备fresh-api-runtime-assembly-preparation/**，无产品/应用执行写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-EXECUTION-CONTROL-INDEPENDENT-20261015仅fresh-qa-execution-control/**，一个metadata取消提交缺口/恢复代表；四产品与198实际来源只读，作者normal/旧矩阵零重跑。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | execution-control已92bbaf8a精确集成/即时归还，R7只读准备已审/关闭；当前REF-R7-DEVICE-RUNTIME-ASSEMBLY-20261015下述3源及fresh-api-device-runtime-assembly/**独占实施，旧证据冻结。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 控制唯一metadata取消恢复门已root审核/92bbaf8a精确集成并即时归还；当前无新产品/证据/执行权，原门及normal冻结，普通组装包不另开复杂QA。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,13 +39,23 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 执行控制源码已审核；一个取消提交缺口恢复门（当前有效）
+### 执行控制已集成；设备组装显式化（当前有效）
+
+控制原四源已92bbaf8a111bf7eb3afa46bd7683066351cea21b精确集成，index/commit/live全等release7bd6e0a4，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时已发API及QA。root execution-control-independent-reviewed.json SHA8080e0f0a5f7fe2f960fe84a300c77023a0054bf2d14d195f79c4e4c0358146a核gate3f6cbdab4084ac716fa03fe270412c61f106e78efd84897bce6a1f9bba4fe7f6、14artifact/3refs、198before-compile/199origin和首轮唯一代表：原公开取消在scheduler边界传播实际OSError，独立native reader见job cancelled/request waiting，原recover携start完整持久actor调用原scheduler.cancel一次补完同request，job保持cancelled；两次重复recover/查询无新工作。dispatch/run_once/start/driver/native/登记/resource采样均0，非生产重启；root应用0、旧normal/矩阵0。集成回执execution-control-integrated.json SHA732bc0e6cbb072780f013fb3119a54b79a2bd9394ea5865fe41659eae77e8a9b。全部原证据冻结，整体接受仍未完成。
+
+REF-R7-DEVICE-RUNTIME-ASSEMBLY-20261015固定产品92bbaf8a，仅API写apps/api/app/main.py、apps/api/app/bootstrap.py、apps/api/tests/test_device_runtime_wiring.py及新test-runs/refactor-20261014/fresh-api-device-runtime-assembly/**。root device-runtime-assembly-implementation-binding.json SHA79c9928600b73918d28f6ba9efa6f27f45096b2f2a9204ae16175331f1245988核3现源=Git/空index；R7准备release2b0097d3c76a8ce0509e8352d9a712fdfe9742b9b3cdba4523de9c392acdf4b8、包83a5ff60经root runtime-assembly-preparation-reviewed.json SHAe871fee609bd1c3318153d3de037c32c492f1296ffe52122fd575eaf37debde7核7源/50完整body或dataclass及37值既有fixture。旧准备只读租约关闭，生产global/reload/业务/身份/许可/预算/driver及其它tests只读。
+
+现bootstrap新增一个具体bind_device_runtime显式函数，仅接repository、原settings、实际LocalMemberService、已有OwnerRegistration map、已解析原HostBudget、实际material executor或原None、原命名verify_identity和task_media.record_admission bound method。原build_host_probes→build_device_runtime→可选MaterialIngestionService同scheduler构造/bind完整tail唯一迁交；原对象按引用传，不复制注册、读环境/模型或引入通用容器/第二调度/兼容registry。main预算解析/业务owner创建/注册map/conditional material owner和原early local imports完整时序不变，仅tail改显式调用；lock路径在原device构造实参求值点按传入repository的expanduser/resolve parent派生，同名常量归bootstrap，退役main._device_lock_path及原常量，不加死test兼容facade。lazy imports仅调用时，模块新增仅定义/必要import/一个literal常量，构造不启动驱动或素材扫描；原host probes先于runtime，素材服务后于runtime且绑定同scheduler。
+
+唯一新construction-only最小node加在现wiring测试；全部旧测试完整body及_CALIBRATED_ENV原37值不变，不重跑旧node/reload矩阵。真实隔离repo/member/OwnerRegistration/probes/runtime/material绑定，用与当前main全局不同的repository核DB/lock及同预算/member/identity/admission/注册引用的原传递、runtime未启动和同scheduler；只准前向观察原构造，不以fake runtime/probes代替。预算只既有fixture同值，不改环境门或称实测校准；driver start/dispatch/models/native/resource samples均0。完整tail显式参数AST、非目标main/现bootstrap全部旧声明/所有reload与生命周期body静态复用；这是普通组装职责拆分，无额外复杂独立QA。首次失败保留只受影响node复验，一次语义ACK后直接实施无第二START；SOURCE_RELEASE后冻结，root精确审核/集成即时归还。只关闭有限device/probe/material构造归属；全局发布和持久化后partial activation、真实冷启动/安全重载/GUI/资源/整体R7/R9不因此通过。
+
+### 执行控制源码及取消提交缺口恢复门（已履行冻结）
 
 REF-R3-EXECUTION-CONTROL-INDEPENDENT-20261015绑定作者release7bd6e0a485c06e092206e3801290c50b936dccc6ee1604af05626497ff26c4dd、四源TAB597209eece262a5d3944975a0cab18aeab6b523dc839aa08a663bc3fd8439603、198实际来源fingerprint7248542482df25367132e31715d4009e7b22aca897dab9b48513d116208b8402。root execution-control-release-reviewed.json SHAf31535860b1f1a7c824c8df6c3b96e9b0bd032a277aa28e04c3a712c7f341e5b核26artifact/197before-compile/198origin、10完整body/626其它main函数、main其余module/production仅六原with只读查询、四引用constructor与原HTTP前缀/catch/身份/singleton/driver不变、fetchall闭conn再逐项decoder。唯一metadata normal首次PASS（call .448s/pytest6.59s/process9.155s），原公开重复start/绑定查询/cancel/recover/resume和六读取scope/order/Row或None通过；explicit interrupted/history-running/local-kind/read-order夹具如实，非实际worker中断。native/dispatch/model/resource sample均0，root应用执行0；首次静态只因recover docstring缩进，有限cleandoc规范化且首失败保留，不重跑作者normal。
 
 QA只写新test-runs/refactor-20261014/fresh-qa-execution-control/**，一个metadata独立代表：真实公开start形成原full JobRun/设备waiting请求；仅原runtime.scheduler.cancel外部边界一次故障，须在实际CreationExecution.cancel已提交JobRun=cancelled、请求仍waiting时观察独立DB。保留实际异常/HTTP结果不预设成功。移除自己故障后经原_recover_creation_executions facade，核用原start event完整持久actor取消原设备请求，job仍cancelled、无新job/request/阶段工作或旁路身份，重复查询/恢复不增执行；真正调用原scheduler.cancel，不能以直接改请求状态或mock业务守卫代替。不dispatch/run_once/start线程/模型/native、资源采样0，原预算/OS精确同值。只复用新test正常setup前缀/原finally及现实际真实仓储/actor/队列，不执行作者normal主体；198tuple直接引用作者RESULT actual_origins_post，必要额外固定Git源on-demand硬绑定，不复制全仓/全AST/旧证据。源/脚本预封、实际before-compile/origin与零native/dispatch计数最小证明；首失败保留仅失败影响node必要重验。简短语义ACK后直接执行无第二START，SOURCE_GATE后冻结；root过门即时四源集成/双方归还，不将metadata门升级为生产重启/真实资源/GUI或整体接受。
 
-### 组装与安全重载只读准备（可并行）
+### 组装与安全重载只读准备（已审核关闭）
 
 REF-R7-RUNTIME-ASSEMBLY-PREPARATION-20261015仅API写新fresh-api-runtime-assembly-preparation/**，产品、控制198执行tuple及全部既有证据只读，零app import/collect/test/model/native/GUI/env/account用户DB/Git变更。按系统架构3.14及8，仅核main已知_publish_runtime_dependencies/_current_database_owners/_initialize_runtime_dependencies、_prepare_runtime_routes/_publish_runtime_routes、PreparedRuntimeReload/QuiescedRuntimeDrivers与_assert_runtime_reload_allowed/_quiesced_runtime_drivers/_prepare_runtime_reload/_activate_runtime_reload/_reload_runtime_dependencies、_build_device_components/_start_device_runtime/_stop_device_runtime/_creation_runtime/_new_creation_execution及必要实际startup/shutdown直接caller；app.bootstrap实际模块与原reload对应测试只取必需body/调用关系。给一个最小下一包：显式组装、实际依赖发布/激活与停旧驱动→持久配置→新驱动绑定的所有权和失败恢复边界，区分已迁交能力及真实剩余，不再重做已过reload批次。列准确拟源/退役目标/原语义与必要最小验证，未授权提前改导入启动、默认配置、身份/预算或生产数据，不造通用容器/第二调度/兼容registry。只做目标摘要与精确当前Git/读期冻结，不全main/全仓/全AST/历史长报告；root核准备后另绑产品与真正受影响门。
 
