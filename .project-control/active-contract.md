@@ -12,12 +12,12 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | montage release a131b504已冻结待root精确集成；root处理下述单一EOF差额和两个旧fixture断言，API暂无新增写/执行权，全部原证据冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | montage c760b8ec已集成/即时归还；当前REF-R3-RENDER-STAGE-EXECUTION-20261015下述4源独占实施与fresh-api-render-stage-execution/**，旧候选/证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物三个特有代表已root审核、7444fd39集成/即时归还；当前无新产品/证据/执行写权，全部原门冻结，不重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | REF-R3-MONTAGE-INTEGRATION-C1-20261015仅creation/montage_stage_use_case.py的EOF多余空行，以及tests/test_narration_stage_application.py、test_person_stage_application.py对已退役stage_actions的各一处夹具断言；无其它产品写权。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
 
@@ -39,7 +39,21 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 故事板稳定候选与最小集成差额（当前有效）
+### 故事板已集成；接续成片执行（当前有效）
+
+montage最终5源已c760b8ec3a10818a03ba5fc3991f848de80a9f3c精确集成并即时向API SOURCE_INTEGRATED/WRITE_LEASE_RETURN。root montage-stage-integrated.json SHA255ba440cabc110a125e0b8d53d14a6e6c4bcb8644b73fd0949365e33bdd292f；原release a131b504、normal/32artifact冻结。唯一EOF差额经root montage-eof-c1-reviewed.json SHA2e9642baa974524d03a2965796517da2c1cb352c942e7c91f75630b16b3b4632证全module AST不变，最终5源TAB ab24dcfac1d39ef680cd4298720204f6c61d68b6d9b23d06cff9bd23399c3138同index/commit/current；不称最终EOF字节重跑了normal。721既有函数完整不变，195加载/196实际来源；normal首次metadata PASS（call .493s/process8.19s，pytest报告6.13s分别记录）、1条输入fixture native/执行native0、原waiting_for_user/保存-版本分步/查询零重复；原HostBudget六值与MontageBudget确为既有旁白fixture域复用，不算生产资源接受。无新增独立QA、旧normal或共享矩阵重跑。
+
+root两旧normal夹具各一处断言已c124a14400f48c05c72eb05087b87e94aeb132b8最小提交：移除对已退役executor.stage_actions字段读取，检查旧registry不存在，各原具体owner身份/设置检查及其余完整module AST不变，语法compile，无import/collect/test/native。这两模块不在montage已执行196 tuple内。回执montage-fixture-c1-integrated.json SHA9d5d173ef4a52a54f348ab0dce87dd2bcc4b916d360416560760d327d8d665d9，root该3源写权已归还；test_creation_execution.py两段历史callback wiring仍列后续旧测试消费者差额，不恢复产品兼容registry或宣称全套测试通过。
+
+REF-R3-RENDER-STAGE-EXECUTION-20261015固定当前c124a144，API精确4源：现apps/api/app/main.py、production.py；NEW apps/api/app/creation/render_stage_use_case.py、apps/api/tests/test_render_stage_application.py，证据仅新fresh-api-render-stage-execution/**。fresh-root-review/render-stage-implementation-binding.json核2现源=Git/2NEW absent/空index、8核心render body等已审准备；复用回执c79ff953/包c6afce64/root审e2417704。executor/member_permits、Montage/Person/Narration/Metadata/Picture/TaskAudio及共享身份/事实/许可/取消恢复/外层检查点只读，超4源先报准确必要差额。简短语义REBASE_ACK核此新绑定后直接实施，一个START不重复；源码稳定后才另绑关键独立门。
+
+具体RenderStageUseCase承接完整render/validity/granted-validity、唯一input payload/refs/digest/contract v20与原usage规则，constructor只显式repository/同Metadata/同PersonPreview/既有VideoJobRunner/原settings引用赋值零IO；保留原lazy provider/profile/portrait/staging配置读取时点，不新全局包/dispatcher/调度者/反向main或HTTP Request。main只有限真实消费者facade、DTO/原status-detail映射和原QC成功触发（三个原成功返回各恰一次，原usage仅最终成功路径），worker明确owner调用并保留原RenderStageRejected语义；原两render_action/render_is_valid有限注册端口保持，不为行数改executor或已过montage接线。所属ProductionRepository只新增原publish_conn和failure_conn的两个公开端口，原BEGIN IMMEDIATE/同conn保存montage-task与TimelineVersion及False/None/string条件原样；不扩事务成员、不加CAS/校验、避免业务core私有连接/SQL。无context既有reuse分支原分开提交不误并入新paired事务；原own-request恢复sealed timeline/subtitle/digest/child/Transform/物理字幕事实、重试幂等和原次序保持。早MP4/SRT/Artifact/Transform/edges、paired montage-task-version、success event、cover/subtitle、child终态、外层checkpoint各原提交点不变，晚失败不删除早产物；stale failure条件保留较新HEAD/蒙太奇，原成功QC仍在原返回前。
+
+一个新test最小normal：声明真实有限2秒B-roll ready montage/base/已授权旁白字幕，经原公开设备队列真实canonical renderer/validator、发布/仓储新paired端口和原外层检查点；核物理MP4/SRT、Artifact SHA/size、Transform/edges、sealed inputs/current版本/原grant及重复查询不再render/建版本。预算/host/OS只复用已有实际render normal（人物normal中的真实成片前置）或准备明确已有fixture的准确原值，执行前给来源与差额；不猜cap、不提高预算或因资源拒绝降门，不以stub媒体、success_runner、renderer/validator替身求过。真实native/登记/原quality未登记命令分列，不认生产标定/fullPGID。旧renderer/许可/取消/恢复矩阵和作者旧normal不重跑，原ungranted/reuse/字幕隐藏/cover/历史人物等分支完整body与直接端口静态复用，首失败保留只失败node必要续验。
+
+稳定SOURCE_RELEASE经root核后关键独立族最多两个特有代表，仅围绕新公开仓储边界：原真实render流程在montage/task SQL已写后TimelineVersion INSERT由SQLite真实晚失败，paired联合rollback而早媒体/图谱保留；真实较新HEAD在失败保存条件前提交，stale失败不覆盖其蒙太奇/HEAD。记录真实SQL到达/未到达、同conn/独立observer和早产物，不mock业务守卫/成功发布，不重复旧共享门。原quality helper未登记后代、生产身份资源/GUI、continuation/投影/显式组装安全重载/旧消费者和整体R0–R9仍未验；此包不越界顺修。通过后即时精确集成与归还，接续实际依赖满足的后续。
+
+### 故事板稳定候选与最小集成差额（已履行冻结）
 
 montage release a131b50483cb73f26ea02053c240f7f1f239eb78fd535092c93f3a20365c84d9已root montage-stage-release-reviewed.json SHA5bcd35437b4234f7e310c59b44add43653343b9898d9b076cecc77a0ced2b87a核32artifact/196实际origins/195加载、721完整既有函数、原HostBudget六位置参数及MontageBudget AST；唯一metadata normal首轮PASS，零执行native（1条输入视频生成单列），无额外QA或旧门执行。root仅对rg返回的旧fixture行顺序做集合比较，不把并行输出顺序当源码差额。精确stage后git diff --cached --check发现新owner文件多余EOF空行，尚未commit，五个stage条目均为root本次登记的原release字节；不reset/丢弃或改原封存证据。
 
