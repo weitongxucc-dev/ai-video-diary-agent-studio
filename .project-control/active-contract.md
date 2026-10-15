@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-NARRATION-STAGE-EXECUTION-20261015独占下述5源及fresh-api-narration-stage-execution/**；command11源已3d2c24bb集成/即时归还，不恢复其余旧租约。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | command两特有门已root审并3d2c24bb集成/即时归还；门与证据冻结。当前无新产品/证据/执行租约，待下一稳定制作候选再绑关键族。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 配音5源及fresh-api-narration-stage-execution/**已SOURCE_RELEASE冻结，root源码审核通过待关键独立门；当前无产品续写权，command已集成批冻结。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-NARRATION-STAGE-INDEPENDENT-20261015仅fresh-qa-narration-stage/**证据与隔离执行写权；产品5源只读，三特有代表见下；旧command/normal/共享门冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -38,6 +38,14 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 配音制作稳定候选关键独立门（当前优先）
+
+`REF-R3-NARRATION-STAGE-INDEPENDENT-20261015` 绑定SOURCE_RELEASE6ef30009f74af921546156d05a0763cdfc9c71e58f9babd87f3962db9b36605e，最终5源TAB18da6cb6703c6a54d7c63c38bbda216f00cdb3abe8c1eb01f844f6aec80e031f及194源fingerprint b513b615535d8112cfbd70f19bc02c4b3a566885e78114669fbcad8c14861638；FINAL_SOURCE_MAP SHA9bcb8addc21e6faea6574a2f31138938eb8d4f25ee44a7b4d40f46464ebede9e、key actual_origin_source_map。root narration-stage-release-reviewed.json SHA475e9b3051fe0fc017486fe9d64d24ab7a0126fb207dbdc6df7470e984279599已核59artifact、194origin/193before-compile、7原完整迁交body、712未变完整函数、32实例方法与关键字端口、零IO四字段构造及原同一预算对象接线。唯一合并normal两实际，首OS fixture perdisk形状失败在准入前保留，最终PASS4.74s call/13.05s process；真实资格/仓储/generator/Qwen协议/concat/probe，3合成TTS/8native/7登记全释放/1原视频输入fixture；full后公开cancel停止下游再声明最小montage/base/subtitle fixture，未执行完整后续制作。真实模型/生产资源/GUI/整体R0–R9未知。
+
+QA仅写test-runs/refactor-20261014/fresh-qa-narration-stage/**，所有产品/原作者证据只读，沿固定3d2c24bb＋准确5overlay/194闭包及确实必要固定Git额外fixture源；不复制全仓/全AST/旧证据，不跑作者normal或共享旧矩阵。三特有代表：①完整配音原内部事务已经真正durable，原外层成功checkpoint/事件SQL被该自有SQLite精确trigger拒绝，核早section/combined/segments/task保持、原job/permit实际失败或不确定状态；移除自己trigger后仅公开恢复/重试，原valid-output复用而不再次TTS。以实际SQL/状态为准，不为凑unknown mock release/current/resource守卫；共享release/unknown完整body已静态保持，旧门冻结复用，不把本代表升级为新full-PGID/任意unknown实测。②local真实target/combined WAV已存在、进入原commit前由独立native连接/公开仓储CAS推进实际HEAD；拒绝旧版本成功，保留外部新HEAD/早WAV，局部target/combined/segments/operation/version/montage/task无半提交。③local原checkpoint同conn已写target/联合编辑数据后，terminal job/event的真实SQLite晚SQL trigger拒绝；核原同conn联合回滚涵盖局部业务和terminal状态/事件、早文件保持，许可与公开状态按原实际恢复，不伪造checkpoint异常替代。实际到达/未到达SQL、独立observer可见性及原因链如实，不能把恢复blocked或提前门拒绝算成功。
+
+复用新test_narration_stage_application.narration_application有限合成注册/外部worker/既有budget和OS端口；业务输入解析、generator/资格/版本/current、原scheduler/checkpoints不替换。必要观察wrapper只调用并返回原body，注入唯一真实外部SQL/CAS故障，不改actor/存储/模型协议/预算阈值求绿。先封存实际脚本/fixture/源与origin prepost；正常合成输入和实际模型、真实native协议、GUI、生产资源分别记录。普通helper搬迁不逐一另设门。简洁语义ACK核5源/上述两种真实提交时点/3代表/互斥范围后直接执行无第二START；首失败保留，只失败受影响node复验。SOURCE_GATE后冻结，root精确核门/集成5源并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN，再接剩余具体制作执行。
 
 ### 自然语言入口已集成；接续配音制作执行（当前优先）
 
