@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R3-QUALITY-RESOURCE-IMPLEMENTATION-20261016准确16源（root binding）及fresh-api-quality-resource-implementation/**；独立quality owner/受许可worker/私有freshness回执接线，一个非native normal；无真实资源标定/native执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R3-QUALITY-RECOVERY-C1-20261016仅main/quality_inspection_use_case/device_scheduler/新focusedtest四源及fresh-api-quality-recovery-c1/**；修启动恢复先证释放与已释放worker回执续交，其余12候选源/原证据冻结，无native/标定权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 发布资格单个私有Task门已root接受/随b76574da集成并归还；证据冻结，无产品或新执行权，待真正关键接受差额。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 物理后段前提包已root核并归还/冻结，quality未进grant为真实源码阻断、实测profile未绑；当前零新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -55,7 +55,13 @@ REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。r
 
 准确三源b76574da1996e36cb83a4d116049959e32b8684e已cached/committed/live核一致；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。作者releaseafe554f4与源审c176cde2冻结复用；gatef3b5e070e10d5da4de56f5322ee8c1efa4982ddf4274eb387e999a8d56c091d6已root publish-output-independent-reviewed.json SHA8ab7be3a6d7a177b5dd70769ab5260642845b66016a35dde18d88b8bd96b2876核11artifact/4ref/196actual beforecompile-origin，单代表首次过child8.559s/process8.869s。公开repo真实private Plan/Task；OTHER经原callback、真实getTask、canonical权限false，同一原PermissionError早于readiness/全部输出门；owner Plan/Task/list全字段、计数保持，0新写/平台动作。只声明可信caller与隔离repo，无factory/lifecycle/driver/native/model/network/预算或旧门，非生产JWT/真实成片/GUI资源/整体R9。receipt publish-output-integrated.json SHA75a4f0f41cbe6c157a2e43d0cf5c4330a22d5a65ce97016d299983258b15a303。此前有限清点的四个真实剩余职责已分别46493fcb/6fb2d137/a90dc4f6/b76574da迁交；复用各批有限退役证据，不将该明确范围当整体RETIRED或重启全仓清点。
 
-### 质检独立许可与有限freshness具体实施（当前有效）
+### 质检恢复源码审核C1（当前有效）
+
+原16源SOURCE_RELEASE已冻结且一个新非native元数据node首次PASS2.641s（call0.277s）、201actual来源前后同字节；尚未独立QA或集成。root quality-resource-source-review-c1.json SHAe342bd55bbcba0dd29902d38bf9f8baa21178486352902b6c60e5e19d2c670fc发现实际启动路径先运行quality.recover、后构造runtime，而scheduler构造不做ledger恢复；当前recover无旧组释放证明即把running quality写终态，且晚checkpoint失败的staged worker回执被统一失败回收，缺生产可达的原回执续交。二者按一个恢复边界缺陷处理，不当native运行反例或已验收。
+
+REF-R3-QUALITY-RECOVERY-C1-20261016 root quality-recovery-c1-binding.json SHA48a602643553b7b20270c5b85e89e5fbad212a5fec0276c48a14e55a21ee8a04只给同API四源main、creation/quality_inspection_use_case、device_scheduler和新focusedtest；其他12候选及原证据冻结，C1证据仅fresh-api-quality-recovery-c1/**。scheduler新增一个public非派发reconcile入口原样复用原filelock/ledger与DB释放核验，不选择/admit/grant新work、不改旧policy。quality恢复须先真实proof再同BEGIN IMMEDIATE核free防并发，随后仅原check/job/event联合终态；unknown/live/busy保留全部原事实/许可，缺runtime或proof不假释放；停止的runtime恢复后才允许dispatch，lazy入口同规则。已释放且校验通过的staged结果回执续交原check/job、worker计数不增，旧check不覆盖不同current；无回执则真实中断失败后用户明确重查，不自动重跑native。只重验因该改动受影响的唯一新metadata node、增加有限unknown→released原事实保护与不重跑断言；声明probe不冒充native。稳定17源联合release后root复审再单个独立晚SQL门，真实profile/native取消/fullPGID/物理闭环仍未接受；零旧矩阵/真实采样/媒体/GUI/私env用户DB/Git，短ACK直接C1无需第二START。
+
+### 质检独立许可与有限freshness原实施（已释放待C1）
 
 准备released995c9f41608943b7900e5949e7fab793b5115180c250efd425b53d9e4879386/package17b43155已root quality-resource-preparation-reviewed.json SHA01c439d92a1f0eef08581b1e9051e91cc1afcac29bf6d938512237253a814207核4artifact/21当前固定Git源/55命名文本与declaration AST、16算法constants；准备冻结归还。root决定D1仅批准独立QualityBudget及显式无默认配置/原coordinator注册Python-worker全组归属，不批准任何生产数值或借用render预算，未标定明确阻断、物理门未接受。D2按唯一architecture3.10补充保守身份回执协议：受许可完整前后hash验证登记摘要/身份，GET与prequeue仅metadata/stat；变更/缺失/未知/旧无回执stale需重查，同内容重写亦重查，摘要不符改在异步结束返回。原算法/阈值/公开字段及状态/权限/history fence保持，明确不声称旧GET hash或错误时点完全相同，不向UI暴露回执私有身份。此为满足原3.10实际版本/摘要与3.12全hash预算的具体接续，不另造产品成功或新质量能力。
 
