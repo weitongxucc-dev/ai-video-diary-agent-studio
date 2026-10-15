@@ -5,7 +5,7 @@ Run with::
 
     ./api-server                 # from dist/
     python server.py             # dev
-    uvicorn app.main:app         # dev (raw FastAPI)
+    uvicorn app.main:create_app --factory  # dev (raw FastAPI)
 """
 
 from __future__ import annotations
@@ -95,7 +95,8 @@ def main() -> None:
     port = int(os.environ.get("API_PORT", "8000"))
 
     uvicorn.run(
-        "app.main:app",
+        "app.main:create_app",
+        factory=True,
         host=host,
         port=port,
         log_level="info",

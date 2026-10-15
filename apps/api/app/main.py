@@ -622,7 +622,7 @@ def _initialize_runtime_dependencies() -> ModelInstaller:
     return ModelInstaller(model_catalog, on_complete=lambda: _reload_runtime_dependencies())
 
 
-model_installer = _initialize_runtime_dependencies()
+model_installer: ModelInstaller
 
 
 @app.on_event("startup")
@@ -1120,8 +1120,8 @@ def _publish_runtime_routes(routes) -> None:
     app.openapi_schema = None
 
 
-_bound_runtime_routes = _prepare_runtime_routes(_current_database_owners(), auth_context)
-app.router.routes.extend(_bound_runtime_routes)
+_runtime_routes_insert_at = len(app.router.routes)
+_bound_runtime_routes = []
 
 
 @app.get("/api/members")
@@ -12931,17 +12931,6 @@ def learn_creator_profile_endpoint(request: Request) -> CreatorProfileLearnResul
     raise HTTPException(status_code=410, detail="旧的历史自动学习入口已停用。请明确保存创作偏好；助手推测需要先由你采纳。")
 
 
-# ── Server entry point (for pyinstaller onefile binary) ─────────────
-if __name__ == "__main__":
-    import os
-
-    import uvicorn
-
-    host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
-
-
 @app.get(
     "/api/episodes/{episode_id}/production-chain",
     response_model=ProductionChainResponse,
@@ -13522,8 +13511,8 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
     return detail
 
 
-creation_execution = _new_creation_execution(production_repo)
-execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
+creation_execution: CreationExecution
+execution_worker: ThreadPoolExecutor | None = None
 material_ingestion = None
 material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
 creation_execution_mode: Literal["legacy", "scheduled"] = "legacy"
@@ -14781,6 +14770,18 @@ def reject_legacy_creation_write(legacy_path: str = "") -> None:
 
 
 
+def create_app() -> FastAPI:
+    """Compose this process's application once, before its ASGI lifespan."""
+    global model_installer, _bound_runtime_routes, creation_execution
+    model_installer = _initialize_runtime_dependencies()
+    _bound_runtime_routes = _prepare_runtime_routes(_current_database_owners(), auth_context)
+    app.router.routes[_runtime_routes_insert_at:_runtime_routes_insert_at] = _bound_runtime_routes
+    app.openapi_schema = None
+    creation_execution = _new_creation_execution(production_repo)
+    _start_execution_worker()
+    return app
+
+
 # ── Server entry point (for standalone API server) ──────────────────
 if __name__ == "__main__":
     import os
@@ -14789,4 +14790,4 @@ if __name__ == "__main__":
 
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(create_app(), host=host, port=port)

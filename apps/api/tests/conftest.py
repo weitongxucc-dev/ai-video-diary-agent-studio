@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-# app.main initializes repositories during import, before per-test monkeypatches.
-# Keep those initializers away from every developer/app database and output tree.
+# The explicit test-session composition runs before per-test monkeypatches.
+# Keep it away from every developer/app database and output tree.
 _test_directory = TemporaryDirectory(prefix="ai-video-tests-", dir=os.environ.get("TMPDIR"))
 _test_root = Path(_test_directory.name)
 (_test_root / "empty.env").touch()
@@ -42,7 +42,16 @@ os.environ.update({
 })
 
 
+def pytest_sessionstart(session):
+    from app.main import create_app
+
+    create_app()
+
+
 def pytest_sessionfinish(session, exitstatus):
+    from app.main import _stop_execution_worker
+
+    _stop_execution_worker()
     _test_directory.cleanup()
 
 

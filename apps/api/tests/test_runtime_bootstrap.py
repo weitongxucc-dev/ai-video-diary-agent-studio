@@ -470,3 +470,218 @@ def test_quiescence_preserves_primary_failure_and_reports_secondary_recovery(mon
             'fixture_boundary': 'Finite device/automation recovery ports and joinable stopped-thread port; no real threads, lifecycle replay or configuration persistence claimed.',
             'committed_forced_or_resume_skipped': False, 'native_models_resources_real_threads': 0,
         }, ensure_ascii=False, indent=2) + '\n')
+
+
+def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
+    """Fresh import stays inert; explicit composition builds the real finite graph."""
+    import ast
+    import subprocess
+    import sys
+    import textwrap
+
+    root = Path(__file__).resolve().parents[3]
+    main_tree = ast.parse((root / 'apps/api/app/main.py').read_text())
+    functions = {node.name: node for node in main_tree.body if isinstance(node, ast.FunctionDef)}
+    guards = [node for node in main_tree.body if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == '__name__']
+    assert len(guards) == 1
+    assert guards[0] is main_tree.body[-1]
+    assert functions['create_app'].lineno > max(node.lineno for name, node in functions.items() if name != 'create_app')
+    assert [ast.unparse(node) for node in guards[0].body] == [
+        'import os', 'import uvicorn', "host = os.getenv('HOST', '127.0.0.1')",
+        "port = int(os.getenv('PORT', '8000'))", 'uvicorn.run(create_app(), host=host, port=port)',
+    ]
+    server_tree = ast.parse((root / 'apps/api/server.py').read_text())
+    server_main = next(node for node in server_tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    assert [ast.unparse(node) for node in server_main.body[:3]] == [
+        "if sys.argv[1:2] == ['--grant-exec']:\n    _exec_granted_command(sys.argv[2:])\n    return",
+        "if sys.argv[1:]:\n    raise SystemExit('api-server accepts only its fixed --grant-exec child entry')",
+        '_configure_env()',
+    ]
+    run = server_main.body[-1].value
+    assert ast.unparse(run.func) == 'uvicorn.run' and ast.literal_eval(run.args[0]) == 'app.main:create_app'
+    options = {keyword.arg: ast.unparse(keyword.value) for keyword in run.keywords}
+    assert options == {'factory': 'True', 'host': 'host', 'port': 'port', 'log_level': "'info'", 'reload': 'False'}
+    assert json.loads((root / 'package.json').read_text())['scripts']['dev:api'] == (
+        'cd apps/api && uv run uvicorn app.main:create_app --factory --reload --port 8000')
+    budget_tree = ast.parse((root / 'apps/api/tests/test_device_runtime_wiring.py').read_text())
+    budget_node = next(node for node in budget_tree.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == '_CALIBRATED_ENV' for target in node.targets))
+    budget = ast.literal_eval(budget_node.value)
+    assert len(budget) == 37
+    env = {**os.environ, **budget}
+    child_root = tmp_path / 'cold-start'
+    child_root.mkdir()
+    for key, relative in {
+        'DATABASE_PATH': 'studio.sqlite3', 'VIDEO_INBOX_PATH': 'inbox', 'VIDEO_OUTPUT_PATH': 'output',
+        'DRAFT_OUTPUT_PATH': 'drafts', 'JIANYING_DRAFT_ROOT_PATH': 'jianying', 'MODEL_ROOT_PATH': 'models',
+        'TEMPORARY_ROOT_PATH': 'temporary', 'HERMES_RADAR_PATH': 'hermes', 'OBSIDIAN_VAULT_PATH': 'vault',
+        'AI_VIDEO_DIARY_WORKSPACE_CONFIG_ROOT': 'workspace-config',
+    }.items():
+        env[key] = str(child_root / relative)
+    dotenv = child_root / 'empty.env'
+    dotenv.write_text('')
+    env.update(AI_VIDEO_DIARY_DOTENV=str(dotenv), PYTHONDONTWRITEBYTECODE='1')
+    for key in ('MODEL_RUNTIME_PYTHON_PATH', 'VISUAL_MODEL_WORKER_PATH', 'VOICE_MODEL_WORKER_PATH',
+                'UNDERSTANDING_RUNTIME_PYTHON_PATH', 'UNDERSTANDING_WORKER_PATH'):
+        env.pop(key, None)
+    evidence = Path(env.get('EXPLICIT_COLD_START_EVIDENCE_DIR', str(tmp_path))) / 'child-normal.json'
+    script = textwrap.dedent(r'''
+        import atexit, inspect, json, os, runpy, socket, sqlite3, subprocess, sys, threading
+        from pathlib import Path
+        from concurrent.futures import ThreadPoolExecutor
+
+        root, evidence = Path(sys.argv[1]), Path(sys.argv[2])
+        database = Path(os.environ['DATABASE_PATH']).resolve()
+        activity = {'construction_order': [], 'database_calls': [], 'thread_starts': [],
+                    'native_commands': [], 'resource_samples': [], 'dispatches': [], 'network': []}
+        tracker = None
+        if os.environ.get('EXPLICIT_COLD_START_EXACT_LOADER'):
+            tracker = runpy.run_path(os.environ['EXPLICIT_COLD_START_EXACT_LOADER'])['install'](
+                root, Path(os.environ['EXPLICIT_COLD_START_SOURCE_BINDING']))
+
+        def finish():
+            module = sys.modules.get('app.main')
+            if module is not None and module.execution_worker is not None:
+                module._stop_execution_worker()
+            if tracker is not None:
+                activity['actual_source_loads'] = tracker.records
+                activity['actual_origins_post'] = tracker.origins()
+            evidence.write_text(json.dumps(activity, ensure_ascii=False, indent=2))
+
+        # Preserve telemetry even when an assertion fails; no lifecycle recovery is run.
+        atexit.register(finish)
+        original_connect = sqlite3.connect
+        def connect(*args, **kwargs):
+            assert Path(args[0]).resolve() == database, args[0]
+            activity['database_calls'].append(str(args[0]))
+            return original_connect(*args, **kwargs)
+        sqlite3.connect = connect
+        original_popen = subprocess.Popen
+        def popen(*args, **kwargs):
+            argv = kwargs.get('args', args[0] if args else None)
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == 'git':
+                return original_popen(*args, **kwargs)
+            activity['native_commands'].append(str(argv))
+            raise AssertionError('cold-start normal forbids native/model commands')
+        subprocess.Popen = popen
+        def no_thread(thread, *args, **kwargs):
+            activity['thread_starts'].append(thread.name)
+            raise AssertionError('cold-start normal must not start a driver or worker thread')
+        threading.Thread.start = no_thread
+        def no_network(*args, **kwargs):
+            activity['network'].append(str(args[1:]))
+            raise AssertionError('cold-start normal must not connect to accounts/providers')
+        socket.socket.connect = no_network
+
+        from app import bootstrap, creation_execution, knowledge_grant_routes, model_installer
+        from app import platform_publish as publish_routes
+        from app.host_resource_probes import HostResourceProbe
+        def no_sample(*args, **kwargs):
+            activity['resource_samples'].append(True)
+            raise AssertionError('cold-start normal must not sample host resources')
+        HostResourceProbe._sample = no_sample
+        def no_dispatch(*args, **kwargs):
+            activity['dispatches'].append(True)
+            raise AssertionError('cold-start normal must not dispatch work')
+        creation_execution.CreationJobUnitExecutor.execute = no_dispatch
+
+        graphs = []
+        prepare = bootstrap.prepare_runtime_dependencies
+        def prepare_graph(*args, **kwargs):
+            activity['construction_order'].append('graph')
+            result = prepare(*args, **kwargs)
+            graphs.append(result)
+            return result
+        bootstrap.prepare_runtime_dependencies = prepare_graph
+        def observe_init(cls, name):
+            original = cls.__init__
+            def initialize(self, *args, **kwargs):
+                activity['construction_order'].append(name)
+                original(self, *args, **kwargs)
+            cls.__init__ = initialize
+        observe_init(model_installer.ModelInstaller, 'installer')
+        observe_init(creation_execution.CreationExecution, 'creation')
+        observe_init(ThreadPoolExecutor, 'worker')
+        def observe_routes(module, symbol, name):
+            original = getattr(module, symbol)
+            def build(*args, **kwargs):
+                activity['construction_order'].append(name)
+                return original(*args, **kwargs)
+            setattr(module, symbol, build)
+        observe_routes(knowledge_grant_routes, 'knowledge_grant_router', 'knowledge_routes')
+        observe_routes(publish_routes, 'build_platform_publish_router', 'publish_routes')
+        assert 'app.main' not in sys.modules
+        import app.main as main
+        assert activity['construction_order'] == [] and activity['database_calls'] == []
+        assert not database.exists()
+        assert 'model_installer' not in vars(main) and 'creation_execution' not in vars(main)
+        assert 'settings' not in vars(main) and 'production_repo' not in vars(main)
+        assert main.execution_worker is None and main._bound_runtime_routes == []
+        assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
+        before = tuple(main.app.router.routes)
+        position = main._runtime_routes_insert_at
+        activity['pure_import'] = {'four_constructions': 0, 'database_calls': 0, 'drivers': 0,
+                                   'static_routes': len(before), 'runtime_route_slot': position}
+        if tracker is not None:
+            activity['actual_origins_after_pure_import'] = tracker.origins()
+
+        assert main.create_app() is main.app
+        assert activity['construction_order'] == ['graph', 'installer', 'knowledge_routes', 'publish_routes', 'creation', 'worker']
+        assert len(graphs) == 1
+        graph = graphs[0]
+        assert main.settings is graph.settings and main.production_repo is graph.database.production
+        assert main.source_repository is graph.database.sources and main.auth_context is graph.auth
+        assert main.model_catalog is graph.models.catalog and main.model_installer.catalog is graph.models.catalog
+        callback_calls = []
+        reload = main._reload_runtime_dependencies
+        main._reload_runtime_dependencies = lambda: callback_calls.append('original_reload_callback')
+        main.model_installer._on_complete()
+        main._reload_runtime_dependencies = reload
+        assert callback_calls == ['original_reload_callback']
+        execution = main.creation_execution
+        assert execution.repository is main.production_repo
+        assert execution.actions == {'narration': main._generate_creation_task_narration_for_workspace,
+            'montage_plan': main._create_creation_task_montage_plan_for_workspace,
+            'render': main._render_creation_task_montage_for_workspace}
+        assert execution.render_is_valid is main._creation_render_is_valid
+        worker = main.execution_worker
+        assert worker._max_workers == 1 and worker._thread_name_prefix == 'creation-execution'
+        assert worker._threads == set() and not worker._shutdown
+        assert main.model_installer._active_thread is None and main.model_installer._writer is None
+        bound = tuple(main._bound_runtime_routes)
+        after = tuple(main.app.router.routes)
+        assert bound and after[:position] == before[:position]
+        assert after[position:position + len(bound)] == bound
+        assert after[position + len(bound):] == before[position:]
+        assert main.app.openapi_schema is None
+        grant_route = next(route for route in bound if route.path == '/api/knowledge-items/{item_id}/grants' and 'GET' in route.methods)
+        grant_values = inspect.getclosurevars(grant_route.endpoint).nonlocals
+        assert grant_values['repository'] is graph.database.sources
+        assert grant_values['target_resolver'].local_mode == (not graph.auth.enabled)
+        publish_route = next(route for route in bound if route.path == '/api/publishing/tasks/{task_id}/publish')
+        publish_values = inspect.getclosurevars(publish_route.endpoint).nonlocals
+        assert publish_values['repository'] is graph.database.production
+        assert publish_values['auth_service'] is graph.database.platform_auth
+        assert publish_values['workspace_for'] is main.current_workspace_id
+        with sqlite3.connect(database) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {'creation_tasks', 'job_runs', 'assistant_conversations', 'source_items',
+                'creation_task_quality_checks'} <= tables
+        assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
+        assert all(activity[name] == [] for name in ('thread_starts', 'native_commands', 'resource_samples', 'dispatches', 'network'))
+        main._stop_execution_worker()
+        assert worker._shutdown and main.execution_worker is None
+        activity['explicit_factory'] = {'same_dependency_graph': True, 'original_callbacks': True,
+            'original_installer_reload_callback_forwarded': True, 'one_unstarted_worker_closed': True,
+            'runtime_routes': len(bound), 'static_route_and_handler_order_preserved': True,
+            'real_schema_tables': sorted(tables), 'original_37_value_profile': True,
+            'startup_shutdown_or_reload_executions': 0}
+    ''')
+    result = subprocess.run([sys.executable, '-c', script, str(root), str(evidence)],
+        cwd=root / 'apps/api', env=env, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(evidence.read_text())
+    assert report['pure_import']['four_constructions'] == report['pure_import']['database_calls'] == 0
+    assert report['explicit_factory']['same_dependency_graph']
