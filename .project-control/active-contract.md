@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 画面六源原release冻结；本次C1仅creation/visual_preview_use_case.py恢复原base guard顺序及fresh-api-visual-guard-order-c1/**新回执，其他五源只读。剩余三入口只读判断无产品写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-VISUAL-INDEPENDENT-20261015仅fresh-qa/visual-preview-independent/**新证据；复用作者194冻结源，最多三个关键反例，产品/作者与旧包只读，不重跑normal。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -104,6 +104,10 @@ API同时独占六源，双方不碰对方源；APInormal/后续独立族必须�
 ### 当前有界选帧未验边界实证
 
 `REF-R3-FRAME-LOOKUP-BOUNDARY-EVIDENCE-20261015` 仅Runtime新域test-runs/refactor-20261014/fresh-runtime/output-observation-frame-lookup-boundaries/**，所有产品/已审核原型/旧包只读。只复用原191精确snapshot/462024f9 tuple及原granted helper/Resources/synthetic render cap完整AST；不复制source/用户数据或重跑旧六目标、diagnostic、作者或QA门，不import app.main/WIP。一个新组合node、只两个新增自有≤2s/≤64参考帧来源：①带音频的普通H264 MP4（单video＋单audio）核-demux cap下selected packet计数是否足以证明EOF及最近前驱，②纯视频H264明确长GOP核16包/16filter可见帧未找到/未夹住时的真实拒绝。每源最多两新目标，包含尾部与一个GOP中段；现固定单一候选原样，不试其它seek/扫描/扩大cap/fps猜值/fallback。新source生成、有限独立参考及每target窗口/抽取均走原grant/原总deadline/单线程/stdout16KiB/stderr32KiB/原输出门；reference仅自有已知短输入验证，不用于选择、产品或任意源扫描。明确原型accepted/拒绝/错误和参考判定，错误EOF或错帧要如实失败保存，不以拒绝当产品通过，诊断通过与可行性分开；cap内找不到可以是本次实际结果，不更改机制求PASS。所有实际脚本/fixtures/source/import前后绑定、packet/framePTS与可区分参考PNG原始记录、完整组装/cap及登记PGID命令后释放记录；生产RSS/admission/inflightPGID/取消仍不接受。不改时间字段/去重/对象映射、产品预算/原资源门或公开业务。先语义REBASE_ACK后直接执行这个node，首失败保留只重验受影响未通过项；READONLY_NATIVE_BOUNDARY_RELEASE后全域冻结归还，主控据实际首决定再绑产品差额。
+
+### 画面候选单一 guard 顺序修正
+
+root补充核查发现原80c76a7d main._task_media_facts的expected/base_version guard在visual projection与字幕读取之前，新VisualPreviewUseCase.prepare_source把这两个原语句移到了project之后，改变过期版本与无效选择同时发生时的错误优先级和读取时点。原源码预审不因此视为最终门通过，QA已HOLD_FOR_AUTHORITY_UPDATE；旧release和root原proof保留。C1仅API可写apps/api/app/creation/visual_preview_use_case.py：原expected赋值及其完整guard前移到payload读取后、picture_candidates/visual_scope/project前，其他完整AST不变，不新增保护/默认/字段。只写fresh-api-visual-guard-order-c1/**精简回执，保存一个准确修正版源、六源SHA及194映射单项差额，复用旧362项证据，不复制全部源/AST或复跑已过normal。root核原语句AST和唯一顺序差额后，QA按193旧源＋1预封存overlay继续原三个代表，将新base与已失效选择的先后拒绝纳入原首代表；已实际执行如实保留，只复验受此差额影响的节点。此包语义ACK后直接修正并SOURCE_RELEASE，仍不stage/commit；root先恢复准确QA绑定再集成六源。
 
 ### 画面候选源码预审与关键独立族
 
