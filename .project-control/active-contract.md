@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1两源已SOURCE_RELEASE冻结/root源码通过，待QA原失败代表；当前无产品或旧证据写/执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1两源冻结待QA；另REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅fresh-api-explicit-cold-start-preparation/**只读准备证据写权，所有产品/旧证据只读，零import/测试/执行。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-PRIMARY-C1-INDEPENDENT-20261015仅新fresh-qa-late-runtime-activation-primary-c1/**，精确两overlay后仅复验原真实失败代表；其它源/旧证据冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -38,6 +38,12 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 显式冷启动剩余差额只读准备（与QA互斥产品写）
+
+REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅API新证据目录，root explicit-cold-start-preparation-binding.json SHA627f3e1ace8c418392fa55a63d425eb5f38de618b9851293a0e36e3e90b779a3固定当前main C1 overlay及bootstrap/server原Git字节；产品全部只读，QA两源候选继续冻结。目标只含main四处实际导入期运行构造：model_installer初始化、绑定runtime routes、creation_execution和ThreadPoolExecutor，以及原server ASGI和实际startup/shutdown先后。复用已审核R7准备中完整未变body/原37值，不重复旧构造或矩阵，不为行数拆模块。
+
+按architecture3.14/原R7目标给最小后续实施包：由现具体组装/生命周期显式承接上述运行构造的准确边界，原schema初始化/中断恢复/驱动start-stop与路由/安装器/业务全局consumer依赖和先后，明确旧导入期consumer退役及精确拟独占源，一个最小normal和关键生命周期差额。只按需读取三源目标及必要原runtime bootstrap/fixture consumer，source/script prepost最小记录；零app import/collect/test/model/native/用户配置/DB/账号，零全仓或完整AST副本。不得执行或改写C1候选，不设计通用容器/兼容lazy全局/新恢复政策；若无实际剩余差额给有限不存在证明而不捏造拆分。准备释放后冻结，必须root另给产品绑定才实施；短ACK后直接准备，无第二START，不阻塞独立QA。
 
 ### 晚激活主次异常稳定候选独立续验（当前有效）
 
