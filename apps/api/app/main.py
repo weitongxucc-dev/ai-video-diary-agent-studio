@@ -216,6 +216,7 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, ScriptLibraryEntry, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_allows_footage, material_segment_eligible)
+from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightRejected, CreationPlanPreflightUseCase, source_item_identity)
@@ -9711,40 +9712,20 @@ def _creation_task_output_path(workspace_id: str, task_id: str, *, subtitle: boo
 
 
 def _platform_publish_task_for_user(workspace_id: str, task_id: str, user_id: str) -> CreationTask:
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if not content_readable(
-        user_id=user_id, local_diagnostic=False,
-        visibility=task.visibility, owner_user_id=task.owner_user_id,
-    ):
-        raise PermissionError("当前成员无权查看此创作任务")
-    return task
+    return PublishOutputQualificationUseCase(production_repo).task_for_user(workspace_id, task_id, user_id)
 
 
 def _platform_publish_output_for(workspace_id: str, task_id: str, user_id: str) -> dict[str, object]:
     """Resolve only the current, authorized and already-validated task output."""
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if not content_readable(
-        user_id=user_id, local_diagnostic=False,
-        visibility=task.visibility, owner_user_id=task.owner_user_id,
-    ):
-        raise PermissionError("当前成员无权发布此创作任务")
-    if not task.output_ready or not task.current_timeline_version_id:
-        raise ValueError("当前创作任务尚无可发布的有效成片")
-    version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-    if version.task_id != task.id or not _creation_render_is_valid(
+    case = PublishOutputQualificationUseCase(production_repo)
+    task, version = case.source_version(workspace_id, task_id, user_id)
+    render_valid = _creation_render_is_valid(
         workspace_id, task_id, verify_media=False, timeline_version=version,
-    ):
-        raise ValueError("当前时间线版本没有已验证的有效成片")
-    ref = version.snapshot.get("montage", {}).get("output_path")
-    if not isinstance(ref, str) or ref not in version.snapshot.get("output_refs", []):
-        raise ValueError("当前时间线未登记成片")
+    )
+    case.require_render_valid(render_valid)
+    ref = case.output_reference(version)
     path = _creation_task_output_path(workspace_id, task_id, subtitle=False)
-    artifact = next((item for item in production_repo.list_artifact_records(workspace_id, task_id)
-                     if item.logical_ref == ref and item.kind == "rendered_video"), None)
-    if artifact is None or not path.is_file() or path.stat().st_size != artifact.size_bytes:
-        raise ValueError("当前成片文件与已登记产物不一致")
-    return {"task": task, "timeline_version_id": version.id, "logical_ref": ref,
-            "path": str(path), "sha256": artifact.sha256, "size_bytes": artifact.size_bytes}
+    return case.qualified_output(workspace_id, task_id, task, version, ref, path)
 
 
 def _quality_check_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
