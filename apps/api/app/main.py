@@ -216,6 +216,7 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, ScriptLibraryEntry, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_allows_footage, material_segment_eligible)
+from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightRejected, CreationPlanPreflightUseCase, source_item_identity)
 from app.creation.contracts import (EditCommand, ArtifactRecord, CoverAsset, DependencyEdge, EditIntent, EditOperation, EditProposal, JobRun, TaskEvent, TimelineVersion, SubtitleCue, SubtitleTrack, TransformRun)
@@ -1318,23 +1319,18 @@ def get_content_templates() -> ContentTemplatesResponse:
 
 
 def _builtin_video_templates(workspace_id: str) -> list[VideoTemplate]:
-    return [VideoTemplate(
-        id=f"builtin_{item.template_id}", workspace_id=workspace_id, version=1,
-        name=item.name, origin="built_in",
-        settings={"language": "zh-CN", "aspect_ratio": "9:16", "duration_target_seconds": 60,
-                  "script_structure": item.script_structure, "style_instruction": item.scenario,
-                  "fit_mode": "fill", "subtitle_style": _default_subtitle_style(), "voice": None},
-    ) for item in list_content_templates()]
+    return VideoTemplateUseCase(production_repo).builtin_templates(workspace_id)
 
 
 def _video_template_or_404(request: Request, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
-    for item in _builtin_video_templates(workspace_id):
-        if (item.id, item.version) == (template_id, version):
-            return item
+    case = VideoTemplateUseCase(production_repo)
+    item = case.builtin_template(workspace_id, template_id, version)
+    if item is not None:
+        return item
     try:
         item = production_repo.get_video_template(workspace_id, template_id, version)
-        if not _content_visible(request, workspace_id, item.visibility, item.owner_user_id):
-            raise KeyError(template_id)
+        user_id, local_diagnostic = _content_reader(request, workspace_id)
+        case.require_readable(item, template_id, reader_user_id=user_id, local_diagnostic=local_diagnostic)
         return item
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="当前工作区找不到这个模板版本。") from exc
@@ -1389,78 +1385,57 @@ def create_video_template_version(template_id: str, request: Request, payload: V
     workspace_id = current_workspace_id(request)
     user_id, _diagnostic = _content_reader(request, workspace_id)
     previous = _video_template_or_404(request,workspace_id,template_id,payload.expected_version)
-    if previous.origin != "user":
-        raise HTTPException(status_code=409,detail="内置模板只读，请从真实任务另存我的模板。")
-    if user_id is None or previous.owner_user_id != user_id:
-        raise HTTPException(status_code=403,detail="只有这个模板的所有者可以编辑并保存新版本。")
-    updated = replace(previous,version=payload.expected_version+1,name=payload.name,created_at=datetime.now(UTC),
-                      settings={**previous.settings,"style_instruction":payload.style_instruction})
+    case = VideoTemplateUseCase(production_repo)
     try:
-        saved = production_repo.save_video_template(updated,verified_owner_user_id=user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+        saved = case.append_version(previous, expected_version=payload.expected_version,
+            name=payload.name, style_instruction=payload.style_instruction, user_id=user_id)
+    except VideoTemplateRejected as exc:
+        status = {"field_builtin_readonly": 409, "field_not_owner": 403, "persist_conflict": 409}[exc.code]
+        failure = HTTPException(status_code=status, detail=exc.message)
+        if exc.__cause__ is not None:
+            raise failure from exc.__cause__
+        raise failure from None
     return {**asdict(saved),"can_edit":True}
 
 
 @app.post("/api/creation-tasks/{task_id}/templates")
 def save_creation_task_template(task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
+    case = VideoTemplateUseCase(production_repo)
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     try:
-        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=409, detail="先生成并检查一条成片，再保存模板。") from exc
-    if montage.status != "rendered" or not montage.output_path or not task.current_timeline_version_id:
-        raise HTTPException(status_code=409, detail="先生成并检查一条成片，再保存模板。")
-    try:
-        output = _creation_task_output_path(workspace_id, task_id, subtitle=False)
-        if output.stat().st_size == 0:
-            raise OSError("empty output")
-    except (HTTPException, OSError) as exc:
-        raise HTTPException(status_code=409, detail="当前成片文件不可用，请恢复文件或重新渲染后再保存模板。") from exc
-    if (payload.template_id is None) != (payload.expected_version is None):
-        raise HTTPException(status_code=422, detail="更新模板时需要同时指定模板和当前版本。")
-    if payload.template_id:
-        previous = _video_template_or_404(request, workspace_id, payload.template_id, payload.expected_version)
-        if previous.origin != "user":
-            raise HTTPException(status_code=409, detail="内置模板不可覆盖，请另存为我的模板。")
-        reader_id, _ = _content_reader(request, workspace_id)
-        if reader_id is None or previous.owner_user_id != reader_id:
-            raise HTTPException(status_code=403, detail="只有这个模板的所有者可以保存新版本。")
-    tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-    source_track = next((item for item in tracks if item.source_language is None), None)
-    scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
-    script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
-    color_settings = [reusable_color_settings(clip.visual_effects) for clip in montage.clips]
-    common_color = color_settings[0] if color_settings and all(
-        item == color_settings[0] for item in color_settings
-    ) else None
-    template = VideoTemplate(
-        id=payload.template_id or f"template_{uuid4().hex[:12]}", workspace_id=workspace_id,
-        version=(payload.expected_version or 0) + 1, name=payload.name.strip(), origin="user",
-        source_task_id=task_id, source_timeline_version_id=task.current_timeline_version_id,
-        settings={"language": plan.language, "aspect_ratio": montage.aspect_ratio,
-                  "duration_target_seconds": plan.duration_target_seconds,
-                  "presenter_share_target": plan.presenter_share_target,
-                  "lipsync_quality": plan.lipsync_quality,
-                  "voice": {"profile_id": plan.selected_voice.profile_id, "version": plan.selected_voice.version} if plan.selected_voice else None,
-                  "script_section_count": len(script.sections) if script else None,
-                  "style_instruction": payload.style_instruction.strip(),
-                  "fit_mode": "fit" if all(clip.fit_mode == "fit" for clip in montage.clips) else "fill",
-                  "color_style": common_color,
-                  "subtitle_style": dict(source_track.style) if source_track else _default_subtitle_style()},
-    )
-    # 新模板的归属只认这次请求解析出的可信身份；已有模板沿用库里那一版。
-    _, template_local_diagnostic = _content_reader(request, current_workspace_id(request))
-    try:
-        return asdict(production_repo.save_video_template(
-            template,
-            verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
-            local_diagnostic=template_local_diagnostic,
-        ))
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        montage = case.rendered_source(workspace_id, task_id, task)
+        try:
+            output = _creation_task_output_path(workspace_id, task_id, subtitle=False)
+            case.require_nonempty_output(output)
+        except (HTTPException, OSError) as exc:
+            raise HTTPException(status_code=409, detail="当前成片文件不可用，请恢复文件或重新渲染后再保存模板。") from exc
+        case.check_save_target(payload.template_id, payload.expected_version)
+        if payload.template_id:
+            previous = _video_template_or_404(request, workspace_id, payload.template_id, payload.expected_version)
+            case.check_save_template_origin(previous)
+            reader_id, _ = _content_reader(request, workspace_id)
+            case.require_save_owner(previous, reader_id=reader_id)
+        tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
+        template = case.build_from_task(workspace_id, task_id, task, plan, montage, tracks,
+            name=payload.name, style_instruction=payload.style_instruction,
+            template_id=payload.template_id, expected_version=payload.expected_version)
+        # Keep both trusted reads and their workspace resolution at the original late point.
+        _, template_local_diagnostic = _content_reader(request, current_workspace_id(request))
+        try:
+            return asdict(case.persist_task_template(template,
+                verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
+                local_diagnostic=template_local_diagnostic))
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VideoTemplateRejected as exc:
+        status = {"task_not_rendered": 409, "target_pair_incomplete": 422,
+            "task_builtin_overwrite": 409, "task_not_owner": 403, "persist_conflict": 409}[exc.code]
+        failure = HTTPException(status_code=status, detail=exc.message)
+        if exc.__cause__ is not None:
+            raise failure from exc.__cause__
+        raise failure from None
 
 
 @app.get(
