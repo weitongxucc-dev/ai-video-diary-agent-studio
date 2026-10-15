@@ -12,11 +12,11 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 画面六源原release冻结；本次C1仅creation/visual_preview_use_case.py恢复原base guard顺序及fresh-api-visual-guard-order-c1/**新回执，其他五源只读。剩余三入口只读判断无产品写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-VISUAL-INDEPENDENT-20261015仅fresh-qa/visual-preview-independent/**新证据；复用作者194冻结源，最多三个关键反例，产品/作者与旧包只读，不重跑normal。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMPOUND-SELECTION-EXECUTION-20261015独占main.py、task_audio.py、creation/editing/compound_use_case.py、media/picture_preview.py、creation/visual_preview_use_case.py及NEW tests/test_compound_preview_application.py六源与fresh-api-compound-selection-execution/**；先关闭复合选择旧执行入口，已集成画面/旧证据冻结不复跑。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 画面C1三个关键反例已审核集成db57f1fc并WRITE_LEASE_RETURN；当前产品/旧证据只读，无新执行写权，待复合选择稳定候选另绑最多两个特有反例。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
-| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白写边界已有限SCOPE_CLOSED/WRITE_LEASE_RETURN。本批REF-R4-PRONUNCIATION-RECORDS-20261015独占production.py、profiles/records.py、tests/test_profile_record_store.py三现源及fresh-r4-authorizations/pronunciation-records/**新证据；五原发音存取/适用方法与三个codec/validator集中现ProfileRecordStore，原规则/DDL/版本/作用域/事务不变，一个组合最小自测，root完整源审，不另加QA。API六冻结源互斥。 |
+| 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
@@ -39,7 +39,19 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 本批发音词典记录归属实施
+### 已集成画面与发音词典；接续复合选择入口
+
+画面C1准确六源已db57f1fcbe0451405c406e44007676ead06265fe集成；QA门ce2e62ddb8789a94a04d29148cd44020a756a119351e4501fa37a091808e508c已root visual-preview-independent-reviewed.json SHA7e5404680452241d1df3f774195a9c2bee0c82a7a291d5e72d7429fdb2a1b4c2核20artifact/5复用/194源/189实际imports/2脚本。三个特有反例首PASS20.80s；base与选择同失效时原guard先拒绝，公开cancel在完成首侧后阻后侧，physical before后原Transform INSERT同conn晚失败回滚、edges未到达，公开retry重测原before而不重render、另渲染缺after。36native/27登记/9原fixture未登记分列，非生产/GUI/fullPGID/全R3/R9接受；旧normal与旧门零复跑。作者/API与QA已即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN，旧所有证据冻结。
+
+发音词典三源已11c59ebed81433c181d2f51f0ab31f008a3bcb97集成/即时归还，release239f37d61b9ae9cf93510a3d3b1a024ee0892985b1d2473111f39161e8770965已root pronunciation-records-release-reviewed.json SHAef4aea02bbc33637f02266757a2469640ff40bf128f088c6f17fc4ef5b8a7428核30artifact、51源/48Git、49文件loader＋2namespace、8原完整body/非目标module/旧test前缀。唯一normal首PASS0.47s，root新测试/额外QA零，首次静态parse失败保留；非全R4/R9接受。
+
+`REF-R3-COMPOUND-SELECTION-EXECUTION-20261015` 固定产品db57f1fc，API只写角色表精确六源及test-runs/refactor-20261014/fresh-api-compound-selection-execution/**。root初始六源SHA/完整目标AST摘要及新test不存在见fresh-root-review/compound-selection-implementation-binding.json。现CompoundEditUseCase承接复合选择入口编排、选择facts和_save_compound_preview完整业务；复用prepare_selection/prepare_preview/save_preview，不新dispatcher/回调袋/业务到main/Request或新journal。原整片publish和公共picture资源计算完整body归现PicturePreviewRenderer，visual owner明确委托，两实际消费者共用，原renderer/资格/音轨/silence/full validator不变；最多按命名有限实参替换，不把视觉效果规则带入compound。共享body里的operation特有guard保持原调用者与先后时点，source/资格先于预算，base guard在投影前；不为归属搬迁改封存字段、candidate key、audio mix、预算或资格门。
+
+TaskMediaJobs明确执行/验证compound_selection，原raw路由只认证、prepare/queue/响应，退出该decorator/handler/伪Request/反射/ambient执行；command/exact原活跃路径保留，未授权同时搬迁。原完整proposal快照/status/base/原指令与included选择重算、actor字典形状/原source=None、无assistant来源继承、无request journal，以及intent＋proposal原同conn联合保存/CAS保持。context/job/event/actor显式传递，publication输入先持久/固定slot、文件与metadata不同阶段、原结果checkpoint/许可释放不改；旧_save_compound_preview等如还有消费者只留有限显式facade，原body唯一移交。只随本次改动清理这两个既有变动文件的尾空白/EOF空行，不触无关文件。
+
+一个真实正常组合：原复合提案重新选择后产生有声字幕before/after MP4，核原候选/回读/未应用时间线，原fixture有限身份/settings/media/profile和OS三端口层级披露。有限依赖/source-load或实际origin prepost绑定即可，不再复制194源/整仓或全AST；只记录准确源码/脚本差额与完整AST等价摘要。normal一过即release；root源码审核后另绑最多两个特有独立代表：首侧后真实原selection proposal/base失效拒后续；两媒体后复合intent＋proposal晚SQL联合回滚及公开retry复用原媒体。已过visual共享publication/cancel门在完整body/接线不变时复用，不重跑其三族；若新实际差额影响共同不变量，准确报差额由root决定最小补验。语义ACK核六源/初始字节/不变量后直接实施，无第二START；SOURCE_RELEASE即冻结，root审门后精确集成即时归还，不等用户再批准范围内接续。
+
+### 已履行发音词典记录归属实施
 
 `REF-R4-PRONUNCIATION-RECORDS-20261015` 仅资料准确三个现源apps/api/app/production.py、apps/api/app/profiles/records.py、apps/api/tests/test_profile_record_store.py和test-runs/refactor-20261014/fresh-r4-authorizations/pronunciation-records/**新证据。固定产品df1dd384b42e8aa135f92390fb026d2c5dd302c6，初始三源当前=固定Git/空index及11完整目标AST见fresh-root-review/pronunciation-records-implementation-binding.json SHA598781026c5f0ceb62748df4f30f5e2c115447865ccb2847f0e1f9ccf810e211。profiles/records.py现ProfileRecordStore已有连接工厂/原人物reader，不新增Store/class/factory/callback/deps袋。save_pronunciation_entry、get_pronunciation_entry、list_pronunciation_entries、list_pronunciation_entry_versions、list_applicable_pronunciation_entries五原完整body移到现store；原_payload/_from_payload/_validate完整body唯一移交，生产五公开facade仅传原实参调用store。root有限app/tests符号查找无其他三私有codec消费者，旧三个body退出Production，不加兼容影子实现；若出现实际新直接调用者先报精准差额，不扩大源码写域。
 
