@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 显式冷启动五源已release4ba2a17d冻结/root源码通过，等独立原ASGI生命周期门；当前无新产品/证据/执行写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-EXPLICIT-COLD-START-LIFECYCLE-INDEPENDENT-20261015仅新fresh-qa-explicit-cold-start-lifecycle/**；一个精确候选真实空队列原ASGI生命周期，所有产品/旧门只读冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 显式冷启动已cfb9b65d集成/即时归还；当前REF-R9-CORE-JOURNEY-PREPARATION-20261016仅fresh-api-core-journey-preparation/**只读证据，所有产品/旧门冻结，无执行权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 显式冷启动独立原ASGI生命周期已过，cfb9b65d精确集成/即时归还；所有已过/首败证据冻结，当前无新产品/证据/执行权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,11 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 显式冷启动稳定五源与关键生命周期独立门（当前有效）
+### 同候选核心任务闭环只读准备（当前有效）
 
-release4ba2a17df022ea48916b4e7a3e2eba94add03d740666026d736542143a8b7535五源TAB07c6aa67d49992131db9194925fa2bd633dce12e18991db288dbe1ba36986a55已root explicit-cold-start-release-reviewed.json SHAc542f3c0ec8cfe65afcc1cfe7b941784b54e5acd883609883218c4aff3fb9405核34artifact、634原main完整函数/11旧tests和原完整reload/C1/lifecycle保持、server/grant原前缀、secretfixture/37值、五源精确差额。唯一normal两实际：新增观察器误接submodule而非main实际package导出首败冻结，仅新test该import修正后PASS4.18s；每轮一个metadata Python child，父195精确loader/196origin、子193/193，199参与源fingerprint ffe5d6dd6f216c5344572d3a77baa83fbbab8aac024086f26b62e144c9d43084。真实main纯import四构造/DB0，显式factory原图/schema/installer和原callback/CreationExecution/一个未启动worker/slot8十runtime routes及291静态handler序列核过；所有驱动/native/models/resource/dispatch/network0。pytest自身直接加载conftest，live前后封存与一次显式session factory观察成立，其余精确loader记录单列，不夸大beforecompile覆盖。候选五源/原normal冻结，不算生命周期或完整R7/R9通过。
+REF-R9-CORE-JOURNEY-PREPARATION-20261016仅API新证据目录，root core-journey-preparation-binding.json SHA9eefaba833ef9525ef5e77ce40d69ee98b3e8bde1168f89a74c8aba0e313ef97固定cfb9b65d及九个已核直接入口字节；产品均只读。按product14，只为一条同候选新建/确认文案→精确或自然语言编辑→输出→原生保存→退出重启→版本恢复/撤销旅程找准确当前API/UI/native消费者、隔离执行配方及真实前提，不能机械重跑已过子批。入口限当前main/server、task page/CreationTaskWorkspace/output-saving、native-media/media-downloads/preload和原render_stage helper，必要直接creation task/plan客户端、任务控件、公开仓储/输出/desktop supervisor只按需读取。给简洁最小下一验收包、明确可执行片段和缺失资源/模型/身份/GUI条件，不做全仓/全R0R9重清点或状态副本。
 
-REF-R7-EXPLICIT-COLD-START-LIFECYCLE-INDEPENDENT-20261015仅QA新目录，root explicit-cold-start-lifecycle-independent-binding.json SHA1b7ec8e1465194ce5f9cd5d913cc5463efb7e3bca0ae45539e2183f465ecfcc4绑定上述五源、原199参与源与已知必要profile_preview_execution固定95c4875c Git（sha177846f6），其余确实必要新lifecycle import可按同base Git逐次on-demand核live/compile/origin，不复制源树。一个全新隔离空DB代表：显式factory一次，再原FastAPI ASGI lifespan enter/exit，真实原7startup/4shutdown body及注册顺序、schema/重启恢复/worker/device/material/automation/continuation先后和所启全部线程/worker/browser session清理如实。不得在pytest_sessionstart已组装后同一进程再当cold factory一次；可用独立fresh child精确隔离该入口。只允许原有限fixture路径/非秘密配置与原37预算，零用户数据/账号/凭据、外网、模型、native/资源/阶段dispatch；空队列原poll/run_once唤醒按事实与stage dispatch0分列。用前向原观察/trace，不替换lifecycle/恢复/守卫/伪成功/加回滚重建策略。所有实际自建线程成败均停；首失败保留交唯一API，不重跑作者normal、旧C1/busy/reload/资源矩阵。最小预封脚本/源/actual origin/启停记录，短ACK后直接唯一代表无第二START；SOURCE_GATE稳定后root精确核门/集成/即时归还，不提升整体接受。
+只核代码/Git/冻结引用，不import/collect/test、不启动服务/GUI/native/模型/资源采样，不读私人配置/用户DB/账号/凭据，不复制旧证据/数据库/源树/全AST、不猜预算。新建全流程、public-owner声明的已确认fixture、物理媒体、合成worker、原生壳替身/真对话框、生产资源和用户实际接受必须分列；已有首败/门和资源约束复用，不把seed任务当新建或替身当真实通过。准备完成READONLY release冻结，由root另绑实际执行或精确缺陷；一次语义ACK后直接准备，无第二START。
+
+### 显式冷启动已精确集成（冻结复用）
+
+五源已cfb9b65dd2e89086a318906c93b05bcac54fe9e4精确集成，index/commit/live等release4ba2a17df022ea48916b4e7a3e2eba94add03d740666026d736542143a8b7535与TAB07c6aa67d49992131db9194925fa2bd633dce12e18991db288dbe1ba36986a55，API/QA均已即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN。root源码回执explicit-cold-start-release-reviewed.json SHAc542f3c0ec8cfe65afcc1cfe7b941784b54e5acd883609883218c4aff3fb9405核34artifact/634原main函数/11旧tests、原C1/reload/lifecycle与37fixture保持；原normal观察器首败保留，仅新test导出import修正后同node通过，父195loads/196origin、子193/193、199参与source，真实纯import四构造/DB0、factory原图/schema/route slot/worker正常，未启动driver。
+
+独立gate b3c06cd0e9d68440c426bd702f895f5d3940be3325941de9999125c707026606经root explicit-cold-start-lifecycle-reviewed.json SHAf4cbd2dba67c69ec40796a845a9b63f34827cb2d8ec75da39e5da26bc429e9bd核14artifact/4refs、200预绑+1必要material_ingestion固定Git、195beforecompile及app191→193清单，另2model_workers只beforecompile与live post哈希实证单列。唯一fresh空DB原ASGI enter/exit首过6.07s，factory一次、原7startup/4shutdown、creation/platform恢复先于sole device.start、continuation最后，4实际后台线程/原app worker/空browser session全正常清理，poll2空、stage/native/外网/资源0。额外导入期未归属inert executor构造且无线程，以及原历史Episode schema日志单列，不声称全部transitive纯import/非空重启/生产或完整R7R9通过。回执explicit-cold-start-integrated.json SHAd2da277449eb48e201ed7dc939eabf2fcd49e45a586973931a63d24a1c49c446；所有旧通过与首败证据冻结，接续上项核心旅程准备。
 
 ### 显式冷启动五源实施（已履行冻结）
 
