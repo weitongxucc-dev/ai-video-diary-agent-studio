@@ -25,6 +25,7 @@ import psutil
 
 from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
 from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
+from app.quality_worker_runtime import QualityBudget, budget_identity
 
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,7 @@ class HostBudget:
     media_script: MediaScriptBudget | None = None
     observation: ObservationBudget | None = None
     clip_preview: CpuRenderBudget | None = None
+    quality: QualityBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -710,7 +712,29 @@ class HostResourceProbe:
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
-        if kind in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
+        if kind == "quality_check":
+            quality = self.budget.quality
+            if quality is None or resources.get("execution_mode") != "isolated_quality_python":
+                return decision(None, "quality_budget_or_execution_mode_unavailable")
+            if resources.get("budget_digest") != budget_identity(quality):
+                return decision(False, "quality_profile_changed")
+            bounds = {"input_bytes": quality.max_input_bytes, "timeout_seconds": quality.max_timeout_seconds,
+                      "threads": quality.decoder_threads, "max_output_bytes": quality.max_report_bytes,
+                      "max_pcm_bytes": quality.max_pcm_bytes, "max_frame_json_bytes": quality.max_frame_json_bytes,
+                      "max_stderr_bytes": quality.max_stderr_bytes}
+            for name, cap in bounds.items():
+                value = resources.get(name)
+                if type(value) not in ({int, float} if name == "timeout_seconds" else {int}) or not math.isfinite(value) or value <= 0:
+                    return decision(None, "quality_resource_fields_invalid")
+                if value > cap:
+                    return decision(False, "declared_resources_exceed_budget")
+            if resources["input_bytes"] > self.budget.max_unit_input_bytes:
+                return decision(False, "declared_resources_exceed_budget")
+            checks["quality_budget"] = {"max_process_rss_bytes": quality.max_process_rss_bytes,
+                                        "max_process_threads": quality.max_process_threads}
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else quality.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes + quality.additional_disk_bytes
+        elif kind in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 return decision(None, "render_budget_or_execution_mode_unavailable")
             numeric_fields = ("duration_seconds", "timeout_seconds")
@@ -926,7 +950,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render", "media_script"}
+            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check"}
             before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
@@ -1030,8 +1054,9 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render"}
-                and (self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check"}
+                and (self.budget.quality if resources["kind"] == "quality_check" else
+                     self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
             key = (grant.request_id, grant.generation)
             if key != self._running_io_key:
                 self._running_io.clear()
@@ -1050,6 +1075,12 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "quality_check":
+            quality = self.budget.quality
+            if quality is None or resources.get("budget_digest") != budget_identity(quality):
+                raise RecoveryBlocked("质检独立进程预算尚未标定或已经变化")
+            return SceneRuntimeLimits(quality.max_process_rss_bytes, quality.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, quality.runtime_sample_seconds)
         if purpose is not None:
             if (purpose != "audio_mix" or resources.get("kind") not in {"creation_render", "creation_presenter_render"}
                     or not isinstance(resources.get("audio_mix"), dict)
@@ -1113,6 +1144,8 @@ class HostResourceProbe:
         # DeviceScheduler before this per-unit resource lease is released.
         if resources is None:
             return None
+        if resources.get("kind") == "quality_check":
+            return True  # Scheduler separately proves the registered Python/native group exited.
         if resources.get("kind") in self._SUPPORTED_KINDS:
             return True
         if (resources.get("kind") == "task_output_observation"

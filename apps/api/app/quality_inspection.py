@@ -7,24 +7,16 @@ background completion cannot replace a newer request.
 
 from __future__ import annotations
 
-import hashlib
+from contextlib import nullcontext
 import json
 import sqlite3
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.montage import CreationTaskMontagePlan
-from app.quality_checks import QualityCheckError, inspect_media_quality, quality_report_evidence
-
-
-def compute_render_ref(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from app.quality_checks import quality_report_evidence
+from app.quality_worker_runtime import source_receipt
 
 
 class QualityCheckRepository:
@@ -59,31 +51,34 @@ class QualityCheckRepository:
         return conn
 
     def begin(self, workspace_id: str, task_id: str, timeline_version_id: str | None,
-              source_ref: str | None, render_ref: str | None) -> str:
+              source_ref: str | None, render_ref: str | None, *,
+              source_identity: dict | None = None, connection: sqlite3.Connection | None = None) -> str:
         check_id = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        evidence = json.dumps({"_source_input": source_receipt(source_identity, check_id)} if source_identity is not None else {}, ensure_ascii=False)
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             conn.execute("""
                 INSERT INTO creation_task_quality_checks
                 (workspace_id, task_id, check_id, timeline_version_id, source_ref,
-                 render_ref, check_state, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'checking', ?)
+                 render_ref, check_state, evidence, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'checking', ?, ?)
                 ON CONFLICT(workspace_id, task_id) DO UPDATE SET
                     check_id=excluded.check_id, timeline_version_id=excluded.timeline_version_id,
                     source_ref=excluded.source_ref, render_ref=excluded.render_ref,
-                    check_state='checking', result_status=NULL, evidence='{}',
+                    check_state='checking', result_status=NULL, evidence=excluded.evidence,
                     error=NULL, checked_at=NULL, updated_at=excluded.updated_at
-            """, (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, now))
+            """, (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, evidence, now))
             conn.execute("""INSERT INTO creation_task_quality_history
-                (workspace_id,task_id,check_id,timeline_version_id,source_ref,render_ref,check_state,updated_at)
-                VALUES (?,?,?,?,?,?,'checking',?)""",
-                (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, now))
+                (workspace_id,task_id,check_id,timeline_version_id,source_ref,render_ref,check_state,evidence,updated_at)
+                VALUES (?,?,?,?,?,?,'checking',?,?)""",
+                (workspace_id, task_id, check_id, timeline_version_id, source_ref, render_ref, evidence, now))
         return check_id
 
     def finish(self, workspace_id: str, task_id: str, check_id: str, *,
-               evidence: dict | None = None, error: str | None = None) -> None:
+               evidence: dict | None = None, error: str | None = None,
+               connection: sqlite3.Connection | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             conn.execute("""
                 UPDATE creation_task_quality_checks SET check_state=?, result_status=?,
                     evidence=?, error=?, checked_at=?, updated_at=?
@@ -98,8 +93,38 @@ class QualityCheckRepository:
                 ("failed" if error is not None else "done", None if error is not None else evidence["status"],
                  json.dumps(evidence or {}, ensure_ascii=False), error, now, now, workspace_id, task_id, check_id))
 
-    def get(self, workspace_id: str, task_id: str) -> dict | None:
+    def get_check(self, workspace_id: str, task_id: str, check_id: str,
+                  *, connection: sqlite3.Connection | None = None) -> dict:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            row = conn.execute("SELECT * FROM creation_task_quality_history WHERE workspace_id=? AND task_id=? AND check_id=?",
+                               (workspace_id, task_id, check_id)).fetchone()
+        if row is None:
+            raise KeyError(check_id)
+        record = dict(row)
+        record["evidence"] = json.loads(record["evidence"])
+        return record
+
+    def store_worker_result(self, workspace_id: str, task_id: str, check_id: str, result: dict) -> None:
+        """Stage a private released-worker receipt, without a terminal verdict."""
         with self._connect() as conn:
+            record = self.get_check(workspace_id, task_id, check_id, connection=conn)
+            value = {**record["evidence"], "_worker_result": result}
+            changed = conn.execute("UPDATE creation_task_quality_history SET evidence=? WHERE workspace_id=? AND task_id=? AND check_id=? AND check_state='checking'",
+                (json.dumps(value, ensure_ascii=False), workspace_id, task_id, check_id)).rowcount
+            if changed != 1:
+                raise ValueError("该检查已经结束，不能替换其 worker 回执")
+
+    def seal_request(self, workspace_id: str, task_id: str, check_id: str, request: dict,
+                     *, connection: sqlite3.Connection) -> None:
+        record = self.get_check(workspace_id, task_id, check_id, connection=connection)
+        value = json.dumps({**record["evidence"], "_request": request}, ensure_ascii=False)
+        connection.execute("UPDATE creation_task_quality_history SET evidence=? WHERE workspace_id=? AND task_id=? AND check_id=? AND check_state='checking'",
+                           (value, workspace_id, task_id, check_id))
+        connection.execute("UPDATE creation_task_quality_checks SET evidence=? WHERE workspace_id=? AND task_id=? AND check_id=? AND check_state='checking'",
+                           (value, workspace_id, task_id, check_id))
+
+    def get(self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection | None = None) -> dict | None:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute("""
                 SELECT * FROM creation_task_quality_checks WHERE workspace_id=? AND task_id=?
             """, (workspace_id, task_id)).fetchone()
@@ -118,10 +143,10 @@ class QualityCheckRepository:
                 (workspace_id, task_id, limit)).fetchall()
         return [{**dict(row), "evidence": json.loads(row["evidence"])} for row in rows]
 
-    def recover_interrupted(self) -> None:
+    def recover_interrupted(self, *, connection: sqlite3.Connection | None = None) -> None:
         """Called once on service startup, before new inspection requests arrive."""
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             conn.execute("""
                 UPDATE creation_task_quality_checks SET check_state='failed',
                     result_status=NULL, evidence='{}',
@@ -133,32 +158,10 @@ class QualityCheckRepository:
                 checked_at=?,updated_at=? WHERE check_state='checking'""", (now, now))
 
 
-def _inspect_and_finalize(repo: QualityCheckRepository, workspace_id: str, task_id: str,
-                          check_id: str, path: Path, render_ref: str) -> None:
-    try:
-        report = inspect_media_quality(path)
-        # Storage is immutable. Reject a deleted/replaced file during detection.
-        if compute_render_ref(path) != render_ref:
-            raise QualityCheckError("检查期间成片内容已变化，请重新检查当前成片。")
-    except (QualityCheckError, OSError, ValueError) as exc:
-        repo.finish(workspace_id, task_id, check_id, error=str(exc))
-        return
-    repo.finish(workspace_id, task_id, check_id, evidence=quality_report_evidence(report))
-
-
-def start_final_video_quality_check(repo: QualityCheckRepository, workspace_id: str,
-                                    task_id: str, timeline_version_id: str | None,
-                                    source_ref: str, path: Path, render_ref: str) -> str:
-    check_id = repo.begin(workspace_id, task_id, timeline_version_id, source_ref, render_ref)
-    threading.Thread(target=_inspect_and_finalize,
-                     args=(repo, workspace_id, task_id, check_id, path, render_ref),
-                     name=f"quality-{check_id}", daemon=True).start()
-    return check_id
-
-
 def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePlan | None,
                                 *, timeline_version_id: str | None,
-                                current_render_ref: str | None) -> dict:
+                                current_render_ref: str | None,
+                                current_source: dict | None = None) -> dict:
     payload = {
         "check_state": "none", "result_status": None, "stale": False,
         "check_id": None, "timeline_version_id": timeline_version_id,
@@ -172,6 +175,11 @@ def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePl
              or record["source_ref"] != (plan.output_path if plan else None)
              or record["render_ref"] != current_render_ref
              or (record["check_state"] == "done" and current_render_ref is None))
+    if record["check_state"] == "done":
+        receipt = record["evidence"].get("_source_receipt")
+        stale = stale or current_source is None or receipt != source_receipt(current_source, record["check_id"])
+    elif current_source is not None and record["evidence"].get("_source_input") is not None:
+        stale = stale or record["evidence"]["_source_input"] != source_receipt(current_source, record["check_id"])
     payload.update({key: record[key] for key in
                     ("check_state", "check_id", "render_ref", "checked_at", "error")})
     payload["stale"] = stale

@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from app.quality_worker_runtime import QualityWorkerContext
+
 PROBE_TIMEOUT_SECONDS = 30
 RUN_TIMEOUT_SECONDS = 180
 
@@ -151,13 +153,14 @@ def detect_black_frames(
     *,
     min_duration_seconds: float = DEFAULT_BLACK_MIN_SECONDS,
     pixel_threshold: float = DEFAULT_BLACK_PIXEL_THRESHOLD,
+    context: QualityWorkerContext | None = None,
 ) -> list[QualityFinding]:
     """全黑画面区间。没有检出返回空列表。"""
     completed = _run([
         "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
         "-vf", f"blackdetect=d={min_duration_seconds}:pix_th={pixel_threshold}",
         "-an", "-f", "null", "-",
-    ], RUN_TIMEOUT_SECONDS)
+    ], RUN_TIMEOUT_SECONDS, context=context)
     # 黑场一直延伸到片尾时 ffmpeg 也会给出 black_end（停在最后一个完整帧）。
     return [
         QualityFinding(
@@ -177,6 +180,7 @@ def detect_clipping(
     audio_start_seconds: float = 0.0,
     min_plateau_samples: int = DEFAULT_CLIP_MIN_PLATEAU_SAMPLES,
     full_scale_duty_threshold: float = DEFAULT_CLIP_FULL_SCALE_DUTY,
+    context: QualityWorkerContext | None = None,
 ) -> tuple[list[QualityFinding], list[QualityUnavailable], float | None]:
     """削波/削平：按**真实解码出的采样**判断。
 
@@ -188,12 +192,12 @@ def detect_clipping(
     `unavailable`，绝不返回空列表冒充"没问题"。
     """
     if sample_rate is None:
-        sample_rate = _probe_sample_rate(path)
+        sample_rate = _probe_sample_rate(path, context=context)
     if not sample_rate:
         return [], [QualityUnavailable(
             QUALITY_KIND_CLIPPING, "音频流没有采样率，无法按样本判断削平"
         )], None
-    samples = _decoded_pcm_samples(path, sample_rate)
+    samples = _decoded_pcm_samples(path, sample_rate, context=context)
     if samples is None:
         return [], [QualityUnavailable(
             QUALITY_KIND_CLIPPING, "音频解码不出采样，削平未知"
@@ -250,18 +254,16 @@ def detect_clipping(
 
 
 def _decoded_pcm_samples(
-    path: str | Path, sample_rate: int
+    path: str | Path, sample_rate: int,
+    *, context: QualityWorkerContext | None = None,
 ) -> list[int] | None:
     """解码音频为单声道有符号 16bit 采样。解不出来返回 None（未知）。"""
-    if shutil.which("ffmpeg") is None:
-        raise QualityCheckError("ffmpeg 不在 PATH，无法按样本判断削平")
+    if context is None:
+        raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
     try:
-        completed = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-nostats", "-v", "error",
+        completed = context.run(["ffmpeg", "-hide_banner", "-nostats", "-v", "error",
              "-i", str(path), "-vn", "-ac", "1", "-ar", str(sample_rate),
-             "-f", "s16le", "-"],
-            check=False, capture_output=True, timeout=RUN_TIMEOUT_SECONDS,
-        )
+             "-f", "s16le", "-"], RUN_TIMEOUT_SECONDS, pcm=True)
     except subprocess.TimeoutExpired as exc:
         raise QualityCheckError("ffmpeg 解码音频超时，削平检测未完成") from exc
     except OSError as exc:
@@ -293,29 +295,24 @@ def _clipping_finding(
     )
 
 
-def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], timeout: int, *, context: QualityWorkerContext | None = None) -> subprocess.CompletedProcess[str]:
+    if context is None:
+        raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
     binary = command[0]
-    if shutil.which(binary) is None:
-        raise QualityCheckError(f"{binary} 不在 PATH，无法做确定性媒体检查")
     try:
-        completed = subprocess.run(
-            command, check=False, capture_output=True, text=True, timeout=timeout
-        )
+        result = context.run(command, timeout)
+        completed = subprocess.CompletedProcess(command, result.returncode,
+            result.stdout.decode("utf-8"), result.stderr.decode("utf-8"))
     except subprocess.TimeoutExpired as exc:
-        # 超时是明确的"没测出来"，不能当成干净通过，也不能静默继续。
-        raise QualityCheckError(
-            f"{binary} 在 {timeout}s 内没有返回，检测未完成"
-        ) from exc
+        raise QualityCheckError(f"{binary} 在 {timeout}s 内没有返回，检测未完成") from exc
     except OSError as exc:
         raise QualityCheckError(f"{binary} 无法执行：{exc}") from exc
     if completed.returncode != 0:
-        raise QualityCheckError(
-            completed.stderr.strip() or f"{binary} failed with exit {completed.returncode}"
-        )
+        raise QualityCheckError(completed.stderr.strip() or f"{binary} failed with exit {completed.returncode}")
     return completed
 
 
-def _probe(path: str | Path) -> dict:
+def _probe(path: str | Path, *, context: QualityWorkerContext | None = None) -> dict:
     """读容器与流元数据。只用流自身的字段；容器 duration 仅作参考，不作结论依据。"""
     completed = _run([
         "ffprobe", "-v", "error",
@@ -323,7 +320,7 @@ def _probe(path: str | Path) -> dict:
         "format=duration:stream=codec_type,start_time,duration,duration_ts,time_base,"
         "sample_rate,nb_frames",
         "-of", "json", str(path),
-    ], PROBE_TIMEOUT_SECONDS)
+    ], PROBE_TIMEOUT_SECONDS, context=context)
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -367,7 +364,7 @@ def _stream_duration_seconds(stream: dict | None) -> float | None:
     return None
 
 
-def _decoded_stream_end_seconds(path: str | Path, kind: str) -> float | None:
+def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: QualityWorkerContext | None = None) -> float | None:
     """该流真正解到的末端：解码帧的时间加这一帧自己的长度，取所有帧的最大值。
 
     - 视频：每个解码帧的 `pts_time` + 该帧 `duration_time`。
@@ -388,7 +385,7 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str) -> float | None:
     completed = _run([
         "ffprobe", "-v", "error", "-select_streams", selector,
         "-show_entries", entries, "-of", "json", str(path),
-    ], PROBE_TIMEOUT_SECONDS)
+    ], PROBE_TIMEOUT_SECONDS, context=context)
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -397,7 +394,7 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str) -> float | None:
     if not isinstance(frames, list) or not frames:
         return None
 
-    sample_rate = _probe_sample_rate(path) if kind == "audio" else None
+    sample_rate = _probe_sample_rate(path, context=context) if kind == "audio" else None
     if kind == "audio" and not sample_rate:
         return None
 
@@ -427,8 +424,8 @@ def _frame_length_seconds(frame: dict, kind: str, sample_rate: int | None) -> fl
     return samples / sample_rate
 
 
-def _probe_sample_rate(path: str | Path) -> int | None:
-    payload = _probe(path)
+def _probe_sample_rate(path: str | Path, *, context: QualityWorkerContext | None = None) -> int | None:
+    payload = _probe(path, context=context)
     audio = _stream_of(payload, "audio")
     rate = _finite((audio or {}).get("sample_rate"))
     return int(rate) if rate and rate > 0 else None
@@ -454,6 +451,7 @@ def detect_truncation(
     payload: dict | None = None,
     origin: float | None = None,
     tolerance_seconds: float = DEFAULT_TAIL_GAP_TOLERANCE_SECONDS,
+    context: QualityWorkerContext | None = None,
 ) -> tuple[list[QualityFinding], list[QualityUnavailable]]:
     """尾部截断：**按真实解码终点**判定，不看容器时长差。
 
@@ -462,7 +460,7 @@ def detect_truncation(
     - 缺流、或某条流解不出终点时**不下截断结论**，如实记 `unavailable`：
       量不出来不是"没问题"。
     """
-    payload = payload if payload is not None else _probe(path)
+    payload = payload if payload is not None else _probe(path, context=context)
     if origin is None:
         origin = _timeline_origin(payload)
     video = _stream_of(payload, "video")
@@ -479,8 +477,8 @@ def detect_truncation(
     if unavailable:
         return [], unavailable
 
-    video_end = _decoded_stream_end_seconds(path, "video")
-    audio_end = _decoded_stream_end_seconds(path, "audio")
+    video_end = _decoded_stream_end_seconds(path, "video", context=context)
+    audio_end = _decoded_stream_end_seconds(path, "audio", context=context)
     if video_end is None:
         unavailable.append(QualityUnavailable(
             QUALITY_KIND_TRUNCATION, "视频流没有解出任何包，画面终点未知"
@@ -518,13 +516,14 @@ def detect_timestamp_offset(
     payload: dict | None = None,
     origin: float | None = None,
     tolerance_seconds: float = DEFAULT_START_OFFSET_TOLERANCE_SECONDS,
+    context: QualityWorkerContext | None = None,
 ) -> tuple[list[QualityFinding], list[QualityUnavailable]]:
     """**起点**时间戳错位。
 
     只说起点错了多少秒；起始差推不出"整段音画同步"的结论，措辞上也这么写。
     两条流的起点都减掉同一个时间轴原点，因此容器整体偏移不会污染这个判断。
     """
-    payload = payload if payload is not None else _probe(path)
+    payload = payload if payload is not None else _probe(path, context=context)
     video = _stream_of(payload, "video")
     audio = _stream_of(payload, "audio")
     if video is None or audio is None:
@@ -567,6 +566,7 @@ def inspect_media_quality(
     clip_full_scale_duty_threshold: float = DEFAULT_CLIP_FULL_SCALE_DUTY,
     truncation_tolerance_seconds: float = DEFAULT_TAIL_GAP_TOLERANCE_SECONDS,
     start_offset_tolerance_seconds: float = DEFAULT_START_OFFSET_TOLERANCE_SECONDS,
+    context: QualityWorkerContext | None = None,
 ) -> QualityReport:
     """跑完四类检出，返回一份冻结结果。
 
@@ -575,7 +575,7 @@ def inspect_media_quality(
     `unavailable`、`is_clean` 为 False：未知不会被说成通过。
     """
     target = Path(path)
-    payload = _probe(target)
+    payload = _probe(target, context=context)
     origin = _timeline_origin(payload)
     findings: list[QualityFinding] = []
     unavailable: list[QualityUnavailable] = []
@@ -585,21 +585,21 @@ def inspect_media_quality(
             target,
             min_duration_seconds=min_black_seconds,
             pixel_threshold=black_pixel_threshold,
-        ),
+        context=context),
         origin,
     ))
 
     truncation_findings, truncation_unavailable = detect_truncation(
         target, payload=payload, origin=origin,
         tolerance_seconds=truncation_tolerance_seconds,
-    )
+    context=context)
     findings.extend(truncation_findings)
     unavailable.extend(truncation_unavailable)
 
     offset_findings, offset_unavailable = detect_timestamp_offset(
         target, payload=payload, origin=origin,
         tolerance_seconds=start_offset_tolerance_seconds,
-    )
+    context=context)
     findings.extend(offset_findings)
     unavailable.extend(offset_unavailable)
 
@@ -612,11 +612,11 @@ def inspect_media_quality(
     else:
         clip_findings, clip_unavailable, clip_duty = detect_clipping(
             target,
-            sample_rate=_probe_sample_rate(target),
+            sample_rate=_probe_sample_rate(target, context=context),
             audio_start_seconds=(
                 _stream_start_seconds(audio) if _stream_start_known(audio) else 0.0
             ),
-        )
+        context=context)
         clip_findings = _shifted(clip_findings, origin)
         # 摘要先按**全部**事件算准，再对逐条证据限流：这样即便列举被截，
         # 总量仍然准确，丢失的条数也显式可查。

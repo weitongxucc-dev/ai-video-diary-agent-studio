@@ -71,15 +71,25 @@ class OutputObservationUseCase:
             raise OutputObservationRejected(status_code=404, detail='creation task output not found')
         return path
 
-    def quality_source(self, workspace_id: str, task_id: str):
+    def quality_source_metadata(self, workspace_id: str, task_id: str):
         task = self._task_or_404(workspace_id, task_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
         path = self.output_path(workspace_id, task_id, subtitle=False)
-        publication = self.artifact_store.describe(plan.output_path)
         registered = next((record for record in self.repository.list_artifact_records(workspace_id, task_id) if record.logical_ref == plan.output_path and record.kind == 'rendered_video'))
-        if publication.sha256 != registered.sha256 or publication.size_bytes != registered.size_bytes:
+        if path.stat().st_size != registered.size_bytes:
             raise ValueError('成片与登记产物不匹配，请重新生成。')
-        return (task, plan, path, publication.sha256)
+        return (task, plan, path, registered)
+
+    @staticmethod
+    def verify_registered_file(path, record, context):
+        from app.quality_worker_runtime import hash_file, QualityWorkerError
+        context.check()
+        try:
+            digest = hash_file(path, check=context.check, max_bytes=record.size_bytes)
+        except QualityWorkerError as exc:
+            raise ValueError('观察媒体与真实登记摘要不一致') from exc
+        if digest != record.sha256 or path.stat().st_size != record.size_bytes:
+            raise ValueError('观察媒体与真实登记摘要不一致')
 
     def published_outputs_current(self, job):
         records = [item for item in self.repository.list_artifact_records(job.workspace_id, job.task_id) if item.producer_job_id == job.id]
@@ -97,11 +107,10 @@ class OutputObservationUseCase:
             return False
         return True
 
-    def registered_output(self, workspace_id, task_id, target, actor):
+    def registered_output(self, workspace_id, task_id, target, actor, *, context=None):
         task = self.repository.get_creation_task(workspace_id, task_id)
         if target.kind == 'final':
-            _task, plan, path, _digest = self.quality_source(workspace_id, task_id)
-            record = next((item for item in self.repository.list_artifact_records(workspace_id, task_id) if item.logical_ref == plan.output_path and item.kind == 'rendered_video'))
+            _task, plan, path, record = self.quality_source_metadata(workspace_id, task_id)
             binding = {'kind': 'composed_output', 'montage': creation_task_montage_plan_to_payload(plan)}
             width, height = canvas_size(plan.aspect_ratio)
         else:
@@ -133,8 +142,9 @@ class OutputObservationUseCase:
                 raise ValueError('本轮只能观察登记 MP4 预览或 PNG 图片来源')
             if not self.published_outputs_current(job):
                 raise ValueError('原媒体输出已丢失或变化，不能观察旧成功状态')
-        publication = self.artifact_store.describe(record.logical_ref)
-        if (publication.sha256, publication.size_bytes) != (record.sha256, record.size_bytes):
+        if context is not None:
+            self.verify_registered_file(path, record, context)
+        if path.stat().st_size != record.size_bytes:
             raise ValueError('观察媒体与真实登记摘要不一致')
         stat = path.stat()
         output = {'artifact_id': record.id, 'artifact_kind': record.kind, 'sha256': record.sha256, 'registered_width': width, 'registered_height': height, 'size_bytes': record.size_bytes, 'producer_job_id': record.producer_job_id, 'logical_ref': record.logical_ref, 'mtime_ns': stat.st_mtime_ns, 'ctime_ns': stat.st_ctime_ns}
@@ -195,7 +205,7 @@ class OutputObservationUseCase:
             self.version(task, payload)
         except ValueError as exc:
             raise OutputObservationRejected(status_code=409, detail=str(exc)) from exc
-        path, output, binding = self.registered_output(task.workspace_id, task_id, payload.target, actor)
+        path, output, binding = self.registered_output(task.workspace_id, task_id, payload.target, actor, context=context)
         from app.granted_subprocess import run_granted_command
         def run_command(command, *, output_paths=()):
             context.check()

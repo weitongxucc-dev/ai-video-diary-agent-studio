@@ -41,6 +41,7 @@ from app.host_resource_probes import (
     CpuAudioBudget,
     MediaScriptBudget,
     ObservationBudget,
+    QualityBudget,
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
@@ -421,3 +422,19 @@ def observation_budget_from_env(env: Mapping[str, str] | None = None) -> Observa
         return ObservationBudget(**payload)
     except (TypeError, ValueError) as exc:
         raise HostBudgetUncalibrated(f"本地输出观察预算无效：{exc}") from None
+
+
+def quality_budget_from_env(env: Mapping[str, str] | None = None) -> QualityBudget | None:
+    environment = os.environ if env is None else env
+    names = {item.name: "DEVICE_QUALITY_" + item.name.upper() for item in fields(QualityBudget)}
+    if not any(environment.get(name, "").strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not environment.get(name, "").strip()]
+    if missing:
+        raise HostBudgetUncalibrated("质检独立预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        return QualityBudget(**{field: environment[name] if field.endswith(("_path", "_sha256"))
+            else float(environment[name]) if field.endswith("seconds") else int(environment[name])
+            for field, name in names.items()})
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(str(exc)) from None

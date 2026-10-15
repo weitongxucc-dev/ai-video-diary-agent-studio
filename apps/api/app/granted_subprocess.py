@@ -179,13 +179,14 @@ def run_granted_command(
     model_unit = (isinstance(grant, Grant) and (
         (grant.owner_type == "creation_job" and grant.unit_key.startswith(("narration:", "person_render:", "person_edit:")))
         or (grant.owner_type == "media_preview" and grant.unit_key.startswith(("voice:", "avatar_lipsync:")))))
-    if (scene_unit or model_unit) and not isinstance(resources, HostResourceProbe):
+    quality_unit = isinstance(grant, Grant) and grant.owner_type == "quality_check"
+    if (scene_unit or model_unit or quality_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     if resource_purpose is not None and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("组合音频用途缺少真实资源探针")
     scene_limits = (resources.scene_runtime_limits(grant, purpose=resource_purpose) if resource_purpose is not None else
                     resources.scene_runtime_limits(grant)) if isinstance(resources, HostResourceProbe) else None
-    if (scene_unit or model_unit) and scene_limits is None:
+    if (scene_unit or model_unit or quality_unit) and scene_limits is None:
         raise RecoveryBlocked("场景子进程缺少运行中资源预算")
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
@@ -225,7 +226,7 @@ def run_granted_command(
 
         def check_running_unit():
             nonlocal next_permission_sample
-            if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit) and time.monotonic() >= next_permission_sample:
+            if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit or quality_unit) and time.monotonic() >= next_permission_sample:
                 scheduler.assert_grant(grant)
                 next_permission_sample = time.monotonic() + 1.0
             if max_output_file_bytes is not None:

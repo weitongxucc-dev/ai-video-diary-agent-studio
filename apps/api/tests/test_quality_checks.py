@@ -32,6 +32,15 @@ from app.quality_checks import (
     inspect_media_quality,
     quality_report_evidence,
 )
+from test_quality_resource_owner import licensed_native_port
+
+
+@pytest.fixture(autouse=True)
+def _licensed_quality_transports(request, monkeypatch):
+    port = licensed_native_port(request)
+    for name in ("inspect_media_quality", "detect_truncation", "detect_timestamp_offset"):
+        monkeypatch.setitem(globals(), name, getattr(port, name))
+    monkeypatch.setitem(globals(), "_quality_native_command", port.command)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -42,7 +51,7 @@ SAMPLE_SECONDS = 2
 
 
 def _ffmpeg(arguments: list[str]) -> None:
-    subprocess.run(
+    _quality_native_command(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *arguments],
         check=True, capture_output=True, timeout=3,
     )

@@ -784,6 +784,72 @@ class DeviceScheduler:
         selected_key = next((key for key in keys if last is None or key > last), keys[0])
         return min(by_group[selected_key], key=lambda r: (r["first_ready_at_utc"], r["id"]))
 
+    def reconcile_released(self) -> int:
+        """Prove old groups released without selecting or admitting new work.
+
+        Return the reconciled free permit generation. An owner doing metadata
+        recovery must fence that generation under its own write transaction.
+        """
+        if self._held_fd is not None:
+            raise RecoveryBlocked("当前协调者仍持有设备许可，不能提前恢复业务终态")
+        fd, existed = self._acquire_file()
+        if fd is None:
+            raise RecoveryBlocked("设备锁仍被占用，旧执行单元尚不能恢复")
+        try:
+            data = self._recover_ledger(self._read_ledger(existed))
+            self._check_database_switch(data)
+            now = self._now()
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                permit = self._reconcile_local(conn, data, _stamp(now))
+                conn.commit()
+                return int(permit["generation"])
+        finally:
+            self._unlock(fd)
+
+    def complete_recovered_quality(self, connection: sqlite3.Connection, expected: VerifiedWork, *,
+                                   generation: int, checkpoint_ref: str,
+                                   status: Literal["succeeded", "failed", "cancelled"]) -> None:
+        """Close only an original quality request in its owner's recovery transaction."""
+        database = next(row[2] for row in connection.execute("PRAGMA database_list") if row[1] == "main")
+        if not connection.in_transaction or Path(database).resolve() != self.database_path:
+            raise ValueError("质检恢复终态必须使用同一 Production SQLite 写事务")
+        if expected.owner_type != "quality_check" or status not in {"succeeded", "failed", "cancelled"} or not checkpoint_ref:
+            raise ValueError("恢复终态仅属于封存的质检请求")
+        permit = connection.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
+        if permit is None or (permit["state"], permit["generation"]) != ("free", generation):
+            raise RecoveryBlocked("设备许可在质检恢复提交前已变化")
+        rows = connection.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='quality_check' AND owner_id=?",
+                                  (expected.workspace_id, expected.owner_id)).fetchall()
+        if not rows:
+            if status == "succeeded":
+                raise RecoveryBlocked("已完成质检缺少原设备请求，不能伪造检查点")
+            return  # A failed pre-submission reservation has no queue fact to close.
+        if len(rows) != 1:
+            raise RecoveryBlocked("质检恢复存在多个原设备请求")
+        row = rows[0]
+        request = self._request(row)
+        if (request.input_digest, request.unit_key, request.member_id, request.work_class,
+                request.resources, request.source_refs) != (expected.input_digest, expected.unit_key,
+                expected.member_id, expected.work_class, expected.resources, expected.source_refs):
+            raise PermissionError("质检恢复请求未绑定原输入、身份和来源")
+        state = "done" if status == "succeeded" else status
+        terminal_checkpoint = None if status == "failed" else checkpoint_ref
+        if row["state"] in {"done", "failed", "cancelled"} and row["checkpoint_ref"] is not None:
+            if (row["state"], row["checkpoint_ref"]) != (state, terminal_checkpoint):
+                raise RecoveryBlocked("原质检终态与检查点已存在，不能替换")
+            return
+        if row["state"] not in {"waiting", "blocked"} and not (row["state"] == state == "cancelled"):
+            raise RecoveryBlocked("原质检请求尚未处于可恢复的已释放状态")
+        now = _stamp(self._now())
+        if status == "failed":
+            self._record_event(connection, row, "failed", "quality_recovery_failed", None, now)
+        # Original complete/cancel has no success event; failure keeps its failed event.
+        # Last SQL write: rejection rolls back the owner's check/job/event as well.
+        connection.execute("UPDATE device_work_requests SET state=?,checkpoint_ref=?,wait_reason=?,retry_not_before_utc=NULL,last_failure_reason=CASE WHEN ?='failed' THEN 'quality_recovery_failed' ELSE last_failure_reason END,updated_at=? WHERE id=?",
+                           (state, terminal_checkpoint, "quality_recovery_failed" if status == "failed" else None,
+                            status, now, request.id))
+
     def pick_and_grant(self) -> Grant | None:
         if self._held_fd is not None:
             return None

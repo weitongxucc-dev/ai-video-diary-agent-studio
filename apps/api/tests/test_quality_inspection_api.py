@@ -15,10 +15,15 @@ from app.local_members import LocalMemberService
 from app.montage import creation_task_montage_plan_to_payload
 from app.production import ArtifactRecord, CreationPlan, CreationTask, JobRun, ProductionRepository, TimelineVersion
 from test_quality_inspection import montage
+from test_quality_resource_owner import (fixture_budget, licensed_native_port, metadata_result,
+    build_metadata_runtime)
+from app.creation.quality_inspection_use_case import QualityInspectionUseCase
+from app.creation_execution import CreationExecutionActor
+from app.quality_worker_runtime import source_receipt
 
 
 @pytest.fixture
-def system(tmp_path, monkeypatch):
+def system(tmp_path, monkeypatch, request):
     members = LocalMemberService(tmp_path / "studio.sqlite")
     owner, token = members.whoami(None)
     other, other_token = members.join(members.create_invite_code(), "另一个成员")
@@ -39,11 +44,18 @@ def system(tmp_path, monkeypatch):
         monkeypatch.setattr(main, name, value)
     # No lifespan: no production, scheduler, recovery or model workers.
     client = TestClient(main.app)
+    native = licensed_native_port(request) if request.node.name == "test_real_wil119_black_frame_persisted_and_locatable" else None
+    actor = CreationExecutionActor("local", owner.member_id)
+    service = QualityInspectionUseCase(repo, checks, main._output_observation_use_case(repo),
+        budget=native.budget if native else fixture_budget(), verify_identity=main._verify_creation_identity,
+        temporary_root=tmp_path / "quality-worker")
+    runtime = build_metadata_runtime(tmp_path, service, native.worker if native else lambda *args: metadata_result(args[1]),
+        resources=native.resources if native else None, processes=native.processes if native else None)
+    monkeypatch.setattr(main, "_quality_inspection_use_case", lambda repository=None: service)
+    monkeypatch.setattr(main, "device_runtime", runtime)
+    client.quality_runtime, client.quality_service, client.quality_actor, client.quality_native = runtime, service, actor, native
     yield client, repo, store, checks, {"X-Local-Member-Token": token}, other_token, tmp_path
-    for thread in threading.enumerate():
-        if thread.name.startswith("quality-"):
-            thread.join(5)
-            assert not thread.is_alive()
+    assert runtime.stop(1)
     client.close()
     assert other.member_id != owner.member_id
 
@@ -71,6 +83,7 @@ def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/
 def wait_result(client, headers):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
+        client.quality_runtime.run_once()
         response = client.get("/api/creation-tasks/task/quality-check", headers=headers)
         assert response.status_code == 200
         result = response.json()
@@ -83,7 +96,7 @@ def wait_result(client, headers):
 def test_real_wil119_black_frame_persisted_and_locatable(system):
     client, repo, store, checks, headers, _, tmp_path = system
     video = tmp_path / "black.mp4"
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+    client.quality_native.command(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "color=c=black:s=160x120:r=25:d=0.8", "-f", "lavfi", "-i",
                     "sine=frequency=440:sample_rate=48000:duration=0.8", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video)],
@@ -101,7 +114,7 @@ def test_real_wil119_black_frame_persisted_and_locatable(system):
     assert black["clip_ids"] == ["clip-1"]
     assert result["render_ref"] == publication.sha256
     assert checks.get("local", "task")["evidence"]["engine"] == "ffmpeg/ffprobe present"
-    main._start_creation_task_quality_check("local", "task")
+    main._start_creation_task_quality_check("local", "task", actor=client.quality_actor)
     assert checks.get("local", "task")["check_id"] == result["check_id"]
     monkey_repo = inspection.QualityCheckRepository(repo.database_path)
     assert monkey_repo.get("local", "task")["evidence"]["status"] == "issues_found"
@@ -155,10 +168,10 @@ def test_unreadable_or_unregistered_render_is_failed_not_clean(system, registere
 def test_polling_and_retry_reuse_active_check(system, monkeypatch):
     client, _, _, checks, headers, _, _ = system
     publication = seed_render(system)
-    check_id = checks.begin("local", "task", "v1", "artifacts/video.mp4", publication.sha256)
+    check_id = client.quality_service.start(client.quality_runtime, client.quality_actor, "local", "task", force=True)
     def forbidden(*args):
         pytest.fail("active check must not start twice")
-    monkeypatch.setattr(main, "start_final_video_quality_check", forbidden)
+    monkeypatch.setattr(client.quality_runtime.registrations["quality_check"].executor, "worker", forbidden)
     for method in (client.get, client.post):
         args = {"json": {}} if method == client.post else {}
         result = method("/api/creation-tasks/task/quality-check", headers=headers, **args).json()
@@ -172,7 +185,9 @@ def test_persisted_clean_never_survives_output_changes(system, change):
     client, repo, store, checks, headers, _, _ = system
     publication = seed_render(system)
     check_id = checks.begin("local", "task", "v1", "artifacts/video.mp4", publication.sha256)
-    checks.finish("local", "task", check_id, evidence={"status": "clean", "findings": [], "unavailable": []})
+    _, _, source = client.quality_service.source_metadata("local", "task")
+    checks.finish("local", "task", check_id, evidence={"status": "clean", "findings": [], "unavailable": [],
+        "_source_receipt": source_receipt(source, check_id)})
     url = "/api/creation-tasks/task/quality-check"
     assert client.get(url, headers=headers).json()["result_status"] == "clean"
     if change == "delete":

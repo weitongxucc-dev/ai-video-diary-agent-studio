@@ -5,6 +5,7 @@ from threading import Event
 import pytest
 
 import app.quality_inspection as inspection
+from test_quality_resource_owner import (QualityCheckFixtureRepository, finish_report_fixture, unit_hash, unit_projection)
 from app.montage import CreationTaskMontagePlan, MontageClip
 from app.quality_checks import QualityCheckError, QualityFinding, QualityReport, QualityUnavailable
 from app.schemas import CreationTaskQualityCheckResponse
@@ -31,16 +32,15 @@ def report(findings=(), unavailable=()):
             (QualityUnavailable("clipping", "缺少音频"),)), "issues_found"),
 ])
 def test_persisted_three_results_and_clip_intersection(tmp_path, monkeypatch, quality_report, expected):
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     path = tmp_path / "video.mp4"
     path.write_bytes(b"test render")
-    render_ref = inspection.compute_render_ref(path)
+    render_ref = unit_hash(path)
     check_id = repo.begin("local", "task", "v1", montage().output_path, render_ref)
     assert repo.get("local", "task")["check_state"] == "checking"
-    monkeypatch.setattr(inspection, "inspect_media_quality", lambda _path: quality_report)
-    inspection._inspect_and_finalize(repo, "local", "task", check_id, path, render_ref)
-    reopened = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
-    payload = inspection.final_quality_check_payload(reopened.get("local", "task"), montage(),
+    finish_report_fixture(repo, "local", "task", check_id, path, render_ref, inspector=lambda _path: quality_report)
+    reopened = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
+    payload = unit_projection(reopened.get("local", "task"), montage(),
                                                      timeline_version_id="v1", current_render_ref=render_ref)
     assert payload["check_state"] == "done"
     assert payload["result_status"] == expected
@@ -58,10 +58,10 @@ def test_persisted_three_results_and_clip_intersection(tmp_path, monkeypatch, qu
     ("v1", "artifacts/video.mp4", "new-hash"),
 ])
 def test_old_clean_invalidated_by_version_output_or_missing_content(tmp_path, version, output_path, render_ref):
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     check_id = repo.begin("local", "task", "v1", montage().output_path, "old-hash")
     repo.finish("local", "task", check_id, evidence=inspection.quality_report_evidence(report()))
-    payload = inspection.final_quality_check_payload(repo.get("local", "task"), replace(montage(), output_path=output_path),
+    payload = unit_projection(repo.get("local", "task"), replace(montage(), output_path=output_path),
                                                      timeline_version_id=version, current_render_ref=render_ref)
     assert payload["stale"] is True
     assert payload["result_status"] is None
@@ -69,13 +69,12 @@ def test_old_clean_invalidated_by_version_output_or_missing_content(tmp_path, ve
 
 
 def test_detection_failure_never_becomes_clean(tmp_path, monkeypatch):
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     check_id = repo.begin("local", "task", "v1", montage().output_path, "hash")
     def fail(_path):
         raise QualityCheckError("ffmpeg unavailable")
-    monkeypatch.setattr(inspection, "inspect_media_quality", fail)
-    inspection._inspect_and_finalize(repo, "local", "task", check_id, Path("unused"), "hash")
-    payload = inspection.final_quality_check_payload(repo.get("local", "task"), montage(),
+    finish_report_fixture(repo, "local", "task", check_id, Path("unused"), "hash", inspector=fail)
+    payload = unit_projection(repo.get("local", "task"), montage(),
                                                      timeline_version_id="v1", current_render_ref="hash")
     assert payload["check_state"] == "failed"
     assert payload["result_status"] is None
@@ -83,7 +82,7 @@ def test_detection_failure_never_becomes_clean(tmp_path, monkeypatch):
 
 
 def test_late_background_completion_cannot_overwrite_new_check(tmp_path, monkeypatch):
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     path = tmp_path / "video.mp4"
     path.write_bytes(b"first render")
     started, release = Event(), Event()
@@ -91,9 +90,11 @@ def test_late_background_completion_cannot_overwrite_new_check(tmp_path, monkeyp
         started.set()
         assert release.wait(5)
         return report()
-    monkeypatch.setattr(inspection, "inspect_media_quality", inspect)
-    old_id = inspection.start_final_video_quality_check(repo, "local", "task", "v1", "old.mp4", path,
-                                                        inspection.compute_render_ref(path))
+    old_id = repo.begin("local", "task", "v1", "old.mp4", unit_hash(path))
+    from threading import Thread
+    worker = Thread(target=finish_report_fixture, args=(repo, "local", "task", old_id, path, unit_hash(path)),
+        kwargs={"inspector": inspect}, name=f"quality-{old_id}")
+    worker.start()
     assert started.wait(5)
     new_id = repo.begin("local", "task", "v2", "new.mp4", "new-hash")
     repo.finish("local", "task", new_id, error="new render unavailable")
@@ -109,27 +110,26 @@ def test_late_background_completion_cannot_overwrite_new_check(tmp_path, monkeyp
 
 
 def test_content_changed_during_detection_is_failed(tmp_path, monkeypatch):
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     path = tmp_path / "video.mp4"
     path.write_bytes(b"original")
-    render_ref = inspection.compute_render_ref(path)
+    render_ref = unit_hash(path)
     check_id = repo.begin("local", "task", "v1", "video.mp4", render_ref)
     def mutate(_path):
         path.write_bytes(b"replacement")
         return report()
-    monkeypatch.setattr(inspection, "inspect_media_quality", mutate)
-    inspection._inspect_and_finalize(repo, "local", "task", check_id, path, render_ref)
+    finish_report_fixture(repo, "local", "task", check_id, path, render_ref, inspector=mutate)
     assert repo.get("local", "task")["check_state"] == "failed"
     assert repo.get("local", "task")["result_status"] is None
 
 
 def test_service_restart_exposes_interrupted_check_as_failed_and_retryable(tmp_path):
     database = tmp_path / "checks.sqlite"
-    repo = inspection.QualityCheckRepository(database)
+    repo = QualityCheckFixtureRepository(database)
     repo.begin("local", "task", "v1", montage().output_path, "hash")
-    restarted = inspection.QualityCheckRepository(database)
+    restarted = QualityCheckFixtureRepository(database)
     restarted.recover_interrupted()
-    payload = inspection.final_quality_check_payload(restarted.get("local", "task"), montage(),
+    payload = unit_projection(restarted.get("local", "task"), montage(),
                                                      timeline_version_id="v1", current_render_ref="hash")
     assert payload["check_state"] == "failed" and payload["result_status"] is None
     assert "服务中断" in payload["error"]
@@ -144,20 +144,20 @@ def test_clipping_summary_forwarded_without_loss_and_hidden_when_stale(tmp_path)
     findings = [QualityFinding("clipping", start, start + .1, "削平") for start in (0, .5, 1.2)]
     summary = _clipping_summary(findings, .25, limit=1, findings_limit=2)
     evidence = inspection.quality_report_evidence(replace(report(tuple(findings[:2])), clipping_summary=summary))
-    repo = inspection.QualityCheckRepository(tmp_path / "checks.sqlite")
+    repo = QualityCheckFixtureRepository(tmp_path / "checks.sqlite")
     check_id = repo.begin("local", "task", "v1", montage().output_path, "hash")
     repo.finish("local", "task", check_id, evidence=evidence)
     record = repo.get("local", "task")
-    payload = inspection.final_quality_check_payload(record, montage(),
+    payload = unit_projection(record, montage(),
                                                      timeline_version_id="v1", current_render_ref="hash")
     assert payload["clipping_summary"] == summary
     assert CreationTaskQualityCheckResponse.model_validate(payload).model_dump()["clipping_summary"] == summary
     assert summary["event_count"] == 3
     assert summary["truncated_event_count"] == 2
     assert summary["findings_truncated_count"] == 1
-    stale = inspection.final_quality_check_payload(record, montage(),
+    stale = unit_projection(record, montage(),
                                                    timeline_version_id="v2", current_render_ref="hash")
     assert stale["stale"] and stale["clipping_summary"] is None
-    missing = inspection.final_quality_check_payload(record, montage(),
+    missing = unit_projection(record, montage(),
                                                      timeline_version_id="v1", current_render_ref=None)
     assert missing["stale"] and missing["clipping_summary"] is None

@@ -130,7 +130,7 @@ from app.visual_effects import VisualEditRequest, VisualEffects, compile_crop_co
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
-from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy
+from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
     cpu_audio_budget_from_env,
     DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
@@ -139,6 +139,7 @@ from app.member_permits import (
     creation_stage_budgets_from_env, presenter_budgets_from_env,
     observation_budget_from_env,
     clip_preview_budget_from_env,
+    quality_budget_from_env,
 )
 from app.visual_understanding import LocalVisualUnderstanding
 from app.cover_generation import (
@@ -222,11 +223,9 @@ from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightRejected, CreationPlanPreflightUseCase, source_item_identity)
 from app.creation.contracts import (EditCommand, ArtifactRecord, CoverAsset, DependencyEdge, EditIntent, EditOperation, EditProposal, JobRun, TaskEvent, TimelineVersion, SubtitleCue, SubtitleTrack, TransformRun)
 from app.task_runtime import JobFailure, JobResult
-from app.quality_inspection import (
-    QualityCheckRepository,
-    final_quality_check_payload,
-    start_final_video_quality_check,
-)
+from app.quality_inspection import QualityCheckRepository
+from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
+from app.creation.quality_execution import quality_check_registration
 from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget, KnowledgeSearchResponse
 from app.media_link_import import (
     DEFAULT_MAX_BYTES,
@@ -9700,7 +9699,8 @@ def _render_creation_task_montage_for_workspace(
         plan = _render_stage_use_case().render(workspace_id, task_id, render_context=render_context)
     except RenderRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    _start_creation_task_quality_check(workspace_id, task_id)
+    _quality_inspection_use_case().start_for_render(device_runtime, workspace_id, task_id,
+        render_context.grant.owner_id if render_context is not None else None)
     return _creation_task_montage_response(plan)
 
 
@@ -9743,49 +9743,31 @@ def _quality_check_task_access(request: Request, workspace_id: str, task_id: str
 
 def _quality_check_source(workspace_id: str, task_id: str):
     try:
-        return _output_observation_use_case().quality_source(workspace_id, task_id)
+        return _output_observation_use_case().quality_source_metadata(workspace_id, task_id)
     except OutputObservationRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+def _quality_inspection_use_case(repository=None):
+    budget, error = None, None
+    try:
+        budget = quality_budget_from_env()
+    except HostBudgetUncalibrated as exc:
+        error = str(exc)
+    repo = production_repo if repository is None else repository
+    return QualityInspectionUseCase(repo, quality_check_repo, _output_observation_use_case(repo),
+        budget=budget, budget_error=error, verify_identity=_verify_creation_identity,
+        temporary_root=settings.effective_temporary_root_path / "quality-checks")
+
+
 def _creation_task_quality_check_response(workspace_id: str, task_id: str) -> CreationTaskQualityCheckResponse:
-    task = _creation_task_or_404(workspace_id, task_id)
-    try:
-        plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    except KeyError:
-        plan = None
-    try:
-        _, _, _, render_ref = _quality_check_source(workspace_id, task_id)
-    except (KeyError, HTTPException, OSError, ValueError):
-        # A missing, invalidated or replaced output cannot retain a clean result.
-        render_ref = None
-    return CreationTaskQualityCheckResponse.model_validate(final_quality_check_payload(
-        quality_check_repo.get(workspace_id, task_id), plan,
-        timeline_version_id=task.current_timeline_version_id, current_render_ref=render_ref))
+    _creation_task_or_404(workspace_id, task_id)
+    return CreationTaskQualityCheckResponse.model_validate(_quality_inspection_use_case().projection(workspace_id, task_id))
 
 
-def _start_creation_task_quality_check(workspace_id: str, task_id: str, *, force: bool = False) -> None:
-    task = _creation_task_or_404(workspace_id, task_id)
-    try:
-        task, plan, path, render_ref = _quality_check_source(workspace_id, task_id)
-    except (KeyError, HTTPException, OSError, ValueError) as exc:
-        try:
-            source_ref = production_repo.get_creation_task_montage_plan(workspace_id, task_id).get("output_path")
-        except KeyError:
-            source_ref = None
-        check_id = quality_check_repo.begin(workspace_id, task_id, task.current_timeline_version_id, source_ref, None)
-        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
-        quality_check_repo.finish(workspace_id, task_id, check_id, error=error)
-        return
-    current = final_quality_check_payload(quality_check_repo.get(workspace_id, task_id), plan,
-                                         timeline_version_id=task.current_timeline_version_id,
-                                         current_render_ref=render_ref)
-    if not current["stale"] and (current["check_state"] == "checking"
-                                 or (not force and current["check_state"] == "done")):
-        return
-    start_final_video_quality_check(quality_check_repo, workspace_id, task_id,
-                                   task.current_timeline_version_id, plan.output_path, path, render_ref)
+def _start_creation_task_quality_check(workspace_id: str, task_id: str, *,
+                                     actor: CreationExecutionActor, force: bool = False) -> None:
+    _quality_inspection_use_case().start(device_runtime, actor, workspace_id, task_id, force=force)
 
 
 @app.get("/api/creation-tasks/{task_id}/quality-check", response_model=CreationTaskQualityCheckResponse)
@@ -9795,9 +9777,8 @@ def get_creation_task_quality_check(task_id: str, request: Request) -> CreationT
     return _creation_task_quality_check_response(workspace_id, task_id)
 
 
-@app.on_event("startup")
-def recover_interrupted_quality_checks() -> None:
-    quality_check_repo.recover_interrupted()
+def recover_interrupted_quality_checks(runtime) -> None:
+    _quality_inspection_use_case().recover(runtime.scheduler if runtime is not None else None)
 
 
 @app.post("/api/creation-tasks/{task_id}/quality-check", response_model=CreationTaskQualityCheckResponse)
@@ -9805,7 +9786,8 @@ def check_creation_task_quality(task_id: str, request: Request,
                                 _payload: CreationTaskQualityCheckRequest) -> CreationTaskQualityCheckResponse:
     workspace_id = current_workspace_id(request)
     _quality_check_task_access(request, workspace_id, task_id)
-    _start_creation_task_quality_check(workspace_id, task_id, force=True)
+    _start_creation_task_quality_check(workspace_id, task_id,
+        actor=_require_permit_actor(request, workspace_id), force=True)
     return _creation_task_quality_check_response(workspace_id, task_id)
 
 
@@ -12896,11 +12878,15 @@ def _creation_runtime():
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except (RuntimeUnavailable, ValueError) as exc:
             raise HTTPException(status_code=503, detail=f"整机制作许可尚未就绪：{exc}") from exc
-        # 只有这一条驱动线程；在这里装好就直接起，免得建好却不派发。
-        runtime.start()
         device_runtime = runtime
     if runtime.last_error is not None or "creation_job" not in runtime.registrations:
         raise HTTPException(status_code=503, detail="整机制作许可已停止，须核查许可后才能继续")
+    if not runtime.running:
+        try:
+            recover_interrupted_quality_checks(runtime)
+        except RecoveryBlocked as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        runtime.start()
     return runtime
 
 
@@ -13131,6 +13117,9 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
         raise HTTPException(status_code=404, detail="该执行单元不存在") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    quality = runtime.registrations.get(QUALITY_KIND)
+    if quality is not None:
+        quality.executor.request_cancel(request_id, actor=actor)
     registration = runtime.registrations.get("creation_job")
     executor = getattr(registration, "executor", None)
     if isinstance(executor, CreationJobUnitExecutor):
@@ -13170,7 +13159,7 @@ class RenderStageRejected(RuntimeError):
 def _render_creation_stage_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext):
     try:
         plan = _render_stage_use_case().render(workspace_id, task_id, render_context=grant)
-        _start_creation_task_quality_check(workspace_id, task_id)
+        _quality_inspection_use_case().start_for_render(device_runtime, workspace_id, task_id, grant.grant.owner_id)
         return plan
     except (RenderRejected, HTTPException) as exc:
         raise RenderStageRejected(str(exc.detail)) from exc
@@ -13218,6 +13207,8 @@ def _build_device_components(*, repository: ProductionRepository):
     from app.member_permits import media_script_budget_from_env
     budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),
                      observation=observation_budget_from_env())
+    quality = _quality_inspection_use_case(repository)
+    budget = replace(budget, quality=quality.budget)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
@@ -13231,6 +13222,7 @@ def _build_device_components(*, repository: ProductionRepository):
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
+        QUALITY_KIND: quality_check_registration(quality),
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
@@ -13329,36 +13321,48 @@ def _stop_material_ingestion() -> None:
         service.stop()
 
 
-def _start_device_runtime(*, start: bool = True) -> None:
+def _start_device_runtime(*, start: bool = True) -> bool:
     """启动这一个整机驱动线程；预算没标定时明确说明，不静默降级。
 
     启动失败不影响其它路由——整机许可是可选能力，交互式制作相关路由会自己
     返回 503 并写清缺什么，而不是让整个服务起不来。
     """
     global device_runtime, material_ingestion
-    if device_runtime is not None:
-        return
+    runtime, material_service = device_runtime, None
+    if runtime is not None and runtime.running:
+        return True
+    if runtime is None:
+        try:
+            runtime, material_service = _build_device_components(repository=production_repo)
+        except HostBudgetUncalibrated as exc:
+            logger.warning("整机许可预算尚未标定，交互式制作许可不可用：%s", exc)
+            return False
+        except Exception as exc:
+            logger.warning("整机许可运行时未能启动，交互式制作许可不可用：%s", exc)
+            return False
+        device_runtime = runtime
+        if material_service is not None:
+            material_ingestion = material_service
     try:
-        runtime, material_service = _build_device_components(repository=production_repo)
-    except HostBudgetUncalibrated as exc:
-        logger.warning("整机许可预算尚未标定，交互式制作许可不可用：%s", exc)
-        return
-    except Exception as exc:
-        logger.warning("整机许可运行时未能启动，交互式制作许可不可用：%s", exc)
-        return
-    device_runtime = runtime
+        recover_interrupted_quality_checks(runtime)
+    except RecoveryBlocked as exc:
+        logger.warning("设备释放核验尚未完成，原检查与许可保持：%s", exc)
+        return False
     if material_service is not None:
-        material_ingestion = material_service
         if start:
             material_service.start()
     if start:
         runtime.start()
+    return True
 
 
 def _stop_device_runtime() -> None:
     global device_runtime
     runtime = device_runtime
     if runtime is not None:
+        quality = runtime.registrations.get(QUALITY_KIND)
+        if quality is not None:
+            quality.executor.request_stop()
         if not runtime.stop(timeout_seconds=30.0):
             raise RuntimeError("整机运行单元尚未退出，原许可与运行绑定保持。")
         device_runtime = None
@@ -14346,7 +14350,9 @@ def resume_persisted_creation_executions() -> None:
     try:
         # Register the runtime first, recover all persisted owner jobs while its
         # dispatch loop is still stopped, then allow any queued unit to run.
-        _start_device_runtime(start=False)
+        ready = _start_device_runtime(start=False)
+        if device_runtime is not None and not ready:
+            return  # Keep the stopped runtime and original work until release is provable.
         _start_material_ingestion()
         _recover_creation_executions()
         runtime = device_runtime
