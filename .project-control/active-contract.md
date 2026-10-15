@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-PERSON-STAGE-EXECUTION-20261015独占下述5源及fresh-api-person-stage-execution/**；配音已9cf8ee76集成/即时归还，其余旧批与证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 配音三特有代表已root审核并9cf8ee76集成/即时归还；当前无产品/证据/执行写权，原门冻结，待下一稳定候选。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源release372ec90已冻结待关键QA；仅另授下述montage制作只读准备及fresh-api-montage-stage-preparation/**新证据，不写产品。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-PERSON-STAGE-INDEPENDENT-20261015仅fresh-qa-person-stage/**证据/隔离执行，人物5源及195源tuple只读，最多三个特有代表；原通过批次冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,15 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物 normal 补齐真实当前成片前置（当前有效）
+### 人物候选关键独立门与下一制作阶段只读准备（当前有效）
+
+人物SOURCE_RELEASE SHA372ec90ba5178226638fbe248e0250fdfda00af79cdae58ee595c814ef59ae0a的5源TAB 2e79f8201a461ab528860cb977d4db4524e3e9ea265ffceca8b63ffb0ac20d43、195源fingerprint b0758440671793f946f512434a6c02511ebea988cfb6b1e8aaaa56bdb706fc0c已root person-stage-release-reviewed.json SHAb03286cff2efba176573b2343171473c9a46f849b664fad9197fa48afb501523核83artifact、194before-compile/195actual origins、8完整body/710既有函数/50端口与原PresenterBudget全部参数。一个normal两实际，首败缺rendered版本保留；仅新test补真实原队列/renderer当前成片后PASS6.71s call/15.45s process，一次入口前脚本错误零app/native。22native/14登记全部释放/1合成视频fixture及7原quality helper未登记命令如实分列，后7仅argv/源码静态归因、无runtime caller stack，不认全PGID/生产资源接受；local执行GET既有409仍待后续投影收敛。作者产品/原证据冻结，不再改动或重跑normal。
+
+REF-R3-PERSON-STAGE-INDEPENDENT-20261015仅当前QA线程fresh-qa-person-stage/**新证据与隔离env/DB/output/tmp执行权，所有产品只读。复用作者固定195源tuple与实际fixture签名，必要子入口单列SHA/实际来源，不复制全仓/旧证据。一个合并族最多三特有代表：①首真实child已ready/video/谱系/job durable后，真实固定profile或讲话来源撤权/改变在原final guard拒绝新成功，早child保留，无第二full段/加cap；②local真实新child/video/图谱durable后由独立native连接推进真实HEAD，原提交guard拒绝editorial、外部HEAD及早child保留；③原local checkpoint同conn实际写editorial后terminal job/event由真实SQLite晚失败，editorial和外层终态联合rollback，早ready PersonRender/child JobRun/Artifact/Transform/edges与物理视频保留。各代表如实际更早拒绝，准确列明已到达边界，不伪造后段成功或绕过守卫；只修失败探针或交单一API负责人修真实产品缺陷。local两代表需要的当前成片沿已批准原队列/renderer真实前置，不调用作者normal；保持所有原cap/OSfixture，fast外部synthetic worker明确替身、资格/service/probe/runner/checkpoint真实。预封存本族脚本/必要fixture，执行来源与前后字节、native/登记释放如实；未登记quality helper与生产资源/fullPGID分列，不复制共享矩阵。首失败保留，只复验失败或实际受影响节点，作者normal/旧门零新执行。简洁语义REBASE_ACK后直接做本族，无第二START。SOURCE_GATE后冻结，root审核通过即时精确集成人物5源并向API和QA SOURCE_INTEGRATED/WRITE_LEASE_RETURN。
+
+与此同时REF-R3-MONTAGE-STAGE-PREPARATION-20261015仅API线程fresh-api-montage-stage-preparation/**新证据写权，所有产品/人物候选只读；不等待人物QA空转，也不提前施工。只准备下一实际montage_plan阶段的完整_create_creation_task_montage_plan_for_workspace、_montage_stage_with_grant及必要直接caller/响应适配、现唯一PersonStage/Metadata/Planner/仓储公开端口和执行registration，不扩整条render/continuation大清点。给一个最小明确实施包：具体owner、依赖/原lazy读取/错误与提交时点、旧消费者退役、精确拟修改源及一个最小normal；如跨许可/来源/事务新增风险，只提本族独有必要QA，不复跑人物/配音或共享门。零app/import/collect/test/model/media/GUI/native、零产品修改和全仓/全AST复制；当前main人物全字节固定，准备后简短READONLY_PREPARATION_RELEASE，root据实际依赖另授产品绑定。无需重复ACK，直接准备。
+
+### 人物 normal 补齐真实当前成片前置（已履行冻结）
 
 用户再次批准先完成人物最小验证、关键独立QA与集成。candidate-01已实际完成一段full人物生成、ready图谱及子作业，三个登记子进程均释放；local preview被原rendered_version_required拒绝、尚未排队local。该首败原样冻结。允许同API负责人只在原五源中的新test补齐这个真实前提：在已声明的两秒蒙太奇上，经原制作队列/实际render阶段、原资格/service/renderer/发布/检查点产生当前成片，再走原selected local preview/confirm；不直接把status置rendered、不使用复制视频/伪成片替代渲染成功、不改产品门禁或预算/OSfixture。新增渲染仅这个失败normal的必要前置，不扩成全制作旅程；后续质量/其它阶段按原公开控制停止，实际到达阶段与子进程如实列明。所有原数值cap及一段full+一次local范围保持，若原资源门拒绝先报具体失败，不绕行、盲重试或提高上限。只复验同一失败node；此前full成功是该失败node的部分事实，不能算整个人物批次已通过，亦不重跑任何已封存通过批次。SOURCE_RELEASE稳定后按下列最多三特有关键反例独立QA，普通迁交仅完整body核对与这一个normal。无需重复ACK或第二START。
 
