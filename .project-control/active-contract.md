@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016仅fresh-api-r9-unclaimed-boundaries/**只读准备；产品/旧证据冻结，无执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-AUTOMATION-PLAN-BINDING-IMPLEMENTATION-20261016仅下节准确三product/二test及fresh-api-automation-plan-binding/**；一个元数据自测，其他产品/旧证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 原生保存实际Session/窗口四族独立门已root接受、八源0263663a集成/即时归还；全部证据冻结，当前无新写入/执行权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### R9未认领主入口职责的有限只读接续（当前有效）
+### 自动任务确认的单事务owner五源实施（当前有效）
+
+只读release fabf7daa41d6f5af03f7b8a5e54199ea00fada8f3786d4af317a69ceb4e6eac1已root r9-unclaimed-main-reviewed.json SHAcc58ff6ee94b6096644cf751351b3fc4404a2909a143b2d0803d45d9cdaf6f5f核4artifact/27源/18命名文本span/三初始字节及当前Python固定Git；并行native八源/合同HEAD变化未污染目标。有限已薄委托的成员/安装/设置/聚合入口无需机械拆；真实剩余为main方案预检、模板业务和发布输出资格，以及AutomationRuntime.confirm直接跨私有Plan/Task与runSQL写入。先收后者，原准备证据已即时READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN并冻结，不把四组整体算完成。
+
+REF-R9-AUTOMATION-PLAN-BINDING-IMPLEMENTATION-20261016独占apps/api/app/automation_runtime.py、automation_service.py、production.py和现tests/test_automation_api.py、test_creation_requests.py，证据仅fresh-api-automation-plan-binding/**。root automation-plan-binding-implementation-binding.json SHA561cd82f0ad5363f6f6e6e309a2828109826dde70fb1b6a93031f1b18c754355固定五源clean/current与0263663a产品基线，index空。AutomationService.bind_confirmed_plan明确负责原单个跨对象事务及run/definition SQL；Runtime.confirm保留原当前输入/preflight/result编排，退役该方法SQL/私有仓储调用。production两canonical方法仅公开命名为prepare_confirmed_creation_plan/insert_confirmed_creation_plan，完整body/装饰器/签名不改，三原内部命令和二测试hook准确接续，无旧私名alias/第二SQLwriter/通用callback容器。
+
+保持原快路径：已绑定run先比指纹并回读，早于可变输入检查；未绑定require_open/current_inputs/preflight/指纹、原deterministic IDs/时间和公开production准备在BEGIN前。新service该具体事务沿原sqlite3.connect(path)+Row默认语义，不改其余service.connect的timeout10；BEGIN IMMEDIATE后scoped run重读/并发已绑定指纹分支、原paused/window/require_actor，再同conn两个对象INSERT和runUPDATE一起提交，退出后原getrun/bound_result。Runtime构造本已显式同production.database_path，不加猜测DB/身份规则。其余runtime/service方法、准备/插入body和规则字面值、原material/actor/CAS/回执/幂等/错误保持，不动schema/用户数据/默认业务协议/main/UI/native/lifecycle/预算。
+
+作者只在二test之一追加一个metadata focused node：真实仓储和scoped run、明确actor/input/preflight替身，confirm→同指纹重复→新仓储回读同run/Plan/Task原IDs，仅一pair/一次revision增加，异指纹拒绝。不可依赖原automation_state物理视频fixture；旧二rollback测试只改hook名，断言/注入位置不改且不跑旧矩阵。隔离fresh Python/pytest/conftest显式factory可用，原37隔离值/私env路径门保持；引用既有accepted source tuple，只叠当前五源并按需精确新增actual import，源/script/fixture预封/actual beforecompile-origin和首败/结果最小证据即可，不复制全仓/AST/DB/旧证据。不启动原driver/service/Electron/native媒体/model/host采样/账号用户DB。稳定SOURCE_RELEASE后root源审，另绑一个实际Plan/Task已INSERT后的automation绑定晚SQL失败/全回滚/明确retry独立门；未过不集成，不让作者自验关键接受。短语义ACK后直接实施，无第二START；其余main预检/模板/发布无新产品写权。
+
+### R9未认领主入口职责的有限只读接续（已履行冻结）
 
 REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016只给API新准备目录，root r9-unclaimed-main-preparation-binding.json绑定cfb9b65d的main及方案5.2/5.3、架构目标章节三初始字节，准确SHA见该绑定。只读核当前main的模型/设置/能力预检、认证首启成员、模板自动化、发布聚合四组及必要直接imports/caller，找仍在入口内的业务计算/持久写和实际归属违规，区分薄transport/错误映射/组装生命周期。先rg目标route/symbol、再有限定义；不重清点已过编辑/执行/仓储/冷启动或当前native八源，不全AST/全仓/构建/旧证据/历史线程扫描。给简洁准确剩余symbol/caller/owner、一个最高优先可实施包和旧目标退役/最小自测；已经归属清楚则以有限事实关闭该明确范围，不为拆文件增加抽象或兼容层，不另造整体进度副本。
 
