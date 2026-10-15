@@ -911,14 +911,13 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object],
-                 render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool],
-                 stage_actions: dict | None = None, task_media=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], stage_actions: dict | None=None, task_media=None, narration_stage=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
         self.stage_actions = stage_actions or {}
         self.task_media = task_media
+        self.narration_stage = narration_stage
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
         self.last_resource_refusal: HostResourceRefusal | None = None
@@ -1019,120 +1018,84 @@ class CreationJobUnitExecutor:
 
     def _execute_upstream(self, grant, scheduler, stage):
         from app.granted_subprocess import GrantedCommandCancelled
-        if stage not in self.stage_actions:
-            raise PermissionError("该制作阶段没有受许可执行者")
+        if stage == 'narration' and self.narration_stage is None or (stage != 'narration' and stage not in self.stage_actions):
+            raise PermissionError('该制作阶段没有受许可执行者')
         with self.repository._connect() as conn:
-            row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
-            permit = conn.execute("SELECT granted_at_utc FROM device_permit WHERE id=1").fetchone()
-        if row is None or permit is None or not permit["granted_at_utc"]:
-            raise PermissionError("制作阶段缺少当前设备许可")
-        resources = json.loads(row["resources_json"])
-        if resources.get("kind") != f"creation_{stage}" or "timeout_seconds" not in resources:
-            raise PermissionError("制作阶段资源预算未标定")
-        elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
+            row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
+            permit = conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1').fetchone()
+        if row is None or permit is None or (not permit['granted_at_utc']):
+            raise PermissionError('制作阶段缺少当前设备许可')
+        resources = json.loads(row['resources_json'])
+        if resources.get('kind') != f'creation_{stage}' or 'timeout_seconds' not in resources:
+            raise PermissionError('制作阶段资源预算未标定')
+        elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
-        context = CreationStageGrantContext(scheduler, grant,
-            time.monotonic() + resources["timeout_seconds"] - elapsed,
-            resources["max_output_bytes"], resources.get("threads", 1), cancellation)
+        context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources['timeout_seconds'] - elapsed, resources['max_output_bytes'], resources.get('threads', 1), cancellation)
         with self._cancellation_lock:
             self._cancellations[grant.request_id] = cancellation
         job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
         try:
             context.check()
-            if job.status == "running":
+            if job.status == 'running':
                 with self.repository._connect() as conn:
-                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                                 (job.workspace_id, job.id))
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
             job = self.repository.claim_job_run(job.workspace_id, job.id)
-            if stage == "person_render":
-                self.repository.append_task_event(TaskEvent(
-                    id=f"event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}",
-                    workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
-                    event_type="creation_execution_stage", payload={"stage": stage, "status": "running"},
-                    created_at=datetime.now(timezone.utc)))
+            if stage == 'person_render':
+                self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}', workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage', payload={'stage': stage, 'status': 'running'}, created_at=datetime.now(timezone.utc)))
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             owner = scheduler.owners
-            if hasattr(owner, "registrations"):
+            if hasattr(owner, 'registrations'):
                 owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+
             def valid(current):
-                return (owner.person_valid(current) if stage == "person_render"
-                        else upstream_stage_valid(self.repository, current, stage)
-                        or (stage == "montage_plan" and montage_waiting_for_confirmation(self.repository, current)))
+                return owner.person_valid(current) if stage == 'person_render' else upstream_stage_valid(self.repository, current, stage) or (stage == 'montage_plan' and montage_waiting_for_confirmation(self.repository, current))
             if not valid(current_task):
-                self.stage_actions[stage](job.workspace_id, job.task_id, context)
+                if stage == 'narration':
+                    self.narration_stage.generate(job.workspace_id, job.task_id, grant_context=context)
+                else:
+                    self.stage_actions[stage](job.workspace_id, job.task_id, context)
             context.check()
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             if not valid(task):
-                raise ValueError("制作阶段未产生匹配当前文案的可用结果")
-            original = CreationExecutionActor.from_event(job.workspace_id,
-                self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start").payload)
+                raise ValueError('制作阶段未产生匹配当前文案的可用结果')
+            original = CreationExecutionActor.from_event(job.workspace_id, self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start').payload)
             next_intent = next_creation_intent(self.repository, scheduler, job)
-            output = (task.narration_cache_key if stage == "narration" else
-                      ",".join(item.id for item in self.repository.list_person_renders(task.workspace_id, task.id)
-                               if item.status == "ready") if stage == "person_render" else task.montage_plan_id)
-            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
-                    status="queued", output=output, stage=stage,
-                    reason="waiting_for_user" if next_intent is None else None),
-                next_intent=next_intent, actor=original)
+            output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='queued', output=output, stage=stage, reason='waiting_for_user' if next_intent is None else None), next_intent=next_intent, actor=original)
         except HostResourceRefusal as exc:
             self.last_resource_refusal = exc
             if not exc.recoverable_pressure:
-                raise  # Unknown measurements and declaration faults still stop the driver.
-            diagnostics = getattr(exc, "command_diagnostics", None)
-            natural_exit = diagnostics.get("before_termination_returncode") if diagnostics else None
+                raise
+            diagnostics = getattr(exc, 'command_diagnostics', None)
+            natural_exit = diagnostics.get('before_termination_returncode') if diagnostics else None
             if natural_exit is not None and natural_exit != 0:
-                # A worker's natural error exit must not be renamed resource waiting.
-                reason = diagnostics["stderr"].decode("utf-8", errors="replace")[-4000:]
-                scheduler.fail_unit(grant, reason=f"creation_{stage}_failed",
-                    failure_write=lambda conn, current: self._checkpoint(conn, current,
-                        status="failed", reason=reason or f"worker exit {natural_exit}", stage=stage))
-            elif self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled" or cancellation.is_set():
-                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                    checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
-                        status="cancelled", stage=stage), cancelled=True)
+                reason = diagnostics['stderr'].decode('utf-8', errors='replace')[-4000:]
+                scheduler.fail_unit(grant, reason=f'creation_{stage}_failed', failure_write=lambda conn, current: self._checkpoint(conn, current, status='failed', reason=reason or f'worker exit {natural_exit}', stage=stage))
+            elif self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled' or cancellation.is_set():
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', stage=stage), cancelled=True)
             else:
-                # defer_unit itself proves all registered groups and the host lock
-                # released; do not mutate the job before that proof succeeds.
-                scheduler.defer_unit(grant, reason="resource_pressure",
-                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
+                scheduler.defer_unit(grant, reason='resource_pressure', retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
                 with self.repository._connect() as conn:
-                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                                 (job.workspace_id, job.id))
-                    task_row = conn.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
-                                            (job.workspace_id, job.task_id)).fetchone()
-                    payload = json.loads(task_row["payload"])
-                    if payload["stage"] == stage and payload["stage_status"] == "running":
-                        # The aborted segment has no completed checkpoint. Reuse
-                        # the existing start state; sealed upstream stays intact.
-                        payload.update(stage_status="not_started", stage_reason="resource_pressure",
-                                       recovery_point=stage)
-                        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
-                                     (json.dumps(payload, ensure_ascii=False), job.workspace_id, job.task_id))
-                    conn.execute("INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) VALUES (?,?,?,?,?,?,?)",
-                        (f"event_{job.id}_pressure_{grant.generation}", job.workspace_id, job.task_id, job.id,
-                         "creation_execution_stage", json.dumps({"stage": stage, "status": "interrupted",
-                         "reason": "resource_pressure", "decision": asdict(exc.decision)}, ensure_ascii=False),
-                         datetime.now(timezone.utc).isoformat()))
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
+                    task_row = conn.execute('SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?', (job.workspace_id, job.task_id)).fetchone()
+                    payload = json.loads(task_row['payload'])
+                    if payload['stage'] == stage and payload['stage_status'] == 'running':
+                        payload.update(stage_status='not_started', stage_reason='resource_pressure', recovery_point=stage)
+                        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?', (json.dumps(payload, ensure_ascii=False), job.workspace_id, job.task_id))
+                    conn.execute('INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) VALUES (?,?,?,?,?,?,?)', (f'event_{job.id}_pressure_{grant.generation}', job.workspace_id, job.task_id, job.id, 'creation_execution_stage', json.dumps({'stage': stage, 'status': 'interrupted', 'reason': 'resource_pressure', 'decision': asdict(exc.decision)}, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
         except RecoveryBlocked:
             raise
         except GrantedCommandCancelled:
-            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
-                    status="cancelled", reason="user_cancelled", stage=stage), cancelled=True)
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', reason='user_cancelled', stage=stage), cancelled=True)
         except Exception as exc:
-            if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
-                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                    checkpoint_write=lambda conn, current: self._checkpoint(conn, current,
-                        status="cancelled", stage=stage), cancelled=True)
+            if self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled':
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', stage=stage), cancelled=True)
             elif isinstance(exc, PermissionError):
                 if not self._defer_permission_loss(grant, scheduler):
                     raise
             else:
                 reason = str(exc)
-                scheduler.fail_unit(grant, reason=f"creation_{stage}_failed",
-                    failure_write=lambda conn, current: self._checkpoint(conn, current,
-                        status="failed", reason=reason, stage=stage))
+                scheduler.fail_unit(grant, reason=f'creation_{stage}_failed', failure_write=lambda conn, current: self._checkpoint(conn, current, status='failed', reason=reason, stage=stage))
         finally:
             with self._cancellation_lock:
                 self._cancellations.pop(grant.request_id, None)
@@ -1261,46 +1224,38 @@ class CreationJobUnitExecutor:
         scheduler.assert_grant(grant)
         job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
         if job.kind != NARRATION_EDIT_KIND:
-            raise PermissionError("局部配音许可不属于配音编辑作业")
+            raise PermissionError('局部配音许可不属于配音编辑作业')
         token = set_workspace_context(grant.workspace_id)
         cancellation = threading.Event()
         with self._cancellation_lock:
             self._cancellations[grant.request_id] = cancellation
         try:
             with self.repository._connect() as conn:
-                row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
-                permit = conn.execute("SELECT granted_at_utc FROM device_permit WHERE id=1").fetchone()
-            resources = json.loads(row["resources_json"])
-            if resources.get("kind") != "creation_narration" or not permit["granted_at_utc"]:
-                raise PermissionError("配音编辑缺少专属配音资源许可")
-            elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit["granted_at_utc"])).total_seconds())
-            context = CreationStageGrantContext(scheduler, grant,
-                time.monotonic() + resources["timeout_seconds"] - elapsed,
-                resources["max_output_bytes"], resources["threads"], cancellation)
-            if job.status == "running":
+                row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
+                permit = conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1').fetchone()
+            resources = json.loads(row['resources_json'])
+            if resources.get('kind') != 'creation_narration' or not permit['granted_at_utc']:
+                raise PermissionError('配音编辑缺少专属配音资源许可')
+            elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
+            context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources['timeout_seconds'] - elapsed, resources['max_output_bytes'], resources['threads'], cancellation)
+            if job.status == 'running':
                 with self.repository._connect() as conn:
-                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                                 (job.workspace_id, job.id))
+                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
             job = self.repository.claim_job_run(job.workspace_id, job.id)
             context.check()
-            event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
-            commit = self.stage_actions["narration_edit"](job.workspace_id, job.task_id, context, event.payload["edit_proposal_id"])
+            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start')
+            commit = self.narration_stage.prepare_edit(job.workspace_id, job.task_id, context, event.payload['edit_proposal_id'])
             context.check()
-            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                checkpoint_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, "succeeded", commit=commit))
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, 'succeeded', commit=commit))
         except RecoveryBlocked:
             raise
         except Exception as exc:
-            cancelled = (isinstance(exc, GrantedCommandCancelled) or cancellation.is_set()
-                         or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == "cancelled")
+            cancelled = isinstance(exc, GrantedCommandCancelled) or cancellation.is_set() or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == 'cancelled'
             if cancelled:
-                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                    checkpoint_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, "cancelled", reason="user_cancelled"),
-                    cancelled=True)
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, 'cancelled', reason='user_cancelled'), cancelled=True)
             else:
                 reason = str(exc)
-                scheduler.fail_unit(grant, reason="narration_edit_failed",
-                    failure_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, "failed", reason=reason))
+                scheduler.fail_unit(grant, reason='narration_edit_failed', failure_write=lambda conn, current: self._narration_edit_checkpoint(conn, current, 'failed', reason=reason))
         finally:
             reset_workspace_context(token)
             with self._cancellation_lock:
