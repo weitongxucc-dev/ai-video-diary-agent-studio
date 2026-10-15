@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
 from app.creation.narration_stage_use_case import NarrationStageUseCase,NarrationStageRejected
 
@@ -198,7 +199,6 @@ from app.montage import (
     NarrationCue,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
-    select_presenter_sections,
     _validate_rendered_media,
 )
 from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService, compile_narration_command
@@ -8369,141 +8369,10 @@ def create_creation_task_montage_plan(
 
 def _create_creation_task_montage_plan_for_workspace(workspace_id: str, task_id: str,
     *, grant_context: CreationStageGrantContext | None = None) -> CreationTaskMontagePlanResponse:
-    task = _creation_task_or_404(workspace_id, task_id)
-    creation_plan = _creation_plan_for_task_or_404(workspace_id, task)
-    if grant_context is not None:
-        grant_context.check()
-    elif creation_plan.presenter_share_target:
-        raise HTTPException(status_code=409, detail="人物故事板必须通过当前任务的受许可连续制作入口")
-    if task.confirmed_script_id is None or task.narration_cache_key is None:
-        raise HTTPException(status_code=409, detail="confirmed script or narration missing")
     try:
-        task = production_repo.start_creation_task_montage(workspace_id, task.id)
-    except ValueError as exc:
-        raise _topic_failure_response(
-            status_code=409,
-            error="creation_task_montage_conflict",
-            reason="当前任务还不能生成故事板。",
-            impact="没有读取或改写剪辑计划。",
-            repair_action=str(exc),
-            retryable=False,
-        ) from exc
-    try:
-        script = production_repo.get_creation_task_script(
-            workspace_id, task.confirmed_script_id
-        )
-        narration = production_repo.get_narration_artifact(
-            workspace_id, task.narration_cache_key
-        )
-        if narration is None or narration.task_id != task.id:
-            raise ValueError("当前创作任务的配音产物不可用")
-        narration_segments = production_repo.list_narration_segments(
-            workspace_id, task.id, script.id
-        )
-        if not narration_segments or any(
-            segment.status != "ready"
-            or segment.audio_reference is None
-            or segment.duration_seconds is None
-            for segment in narration_segments
-        ):
-            raise ValueError("当前创作任务缺少可用的分段配音事实")
-        segments_by_section = {segment.source_section_id: segment for segment in narration_segments}
-        selected_sections = select_presenter_sections(
-            [(section.id, float(segments_by_section[section.id].duration_seconds or 0))
-             for section in script.sections],
-            creation_plan.presenter_share_target,
-        )
-        if selected_sections and creation_plan.selected_voice is None:
-            raise ValueError("露脸段落缺少当前任务已授权的人物和声音")
-        planner = montage_planner if grant_context is None else MontagePlanner()
-        montage = planner.build_for_creation_task(
-            duration_target_seconds=creation_plan.duration_target_seconds,
-            workspace_id=workspace_id,
-            task_id=task.id,
-            script=script,
-            profile=production_repo.get_profile(workspace_id),
-            assets=list({asset.id: asset for asset, _ in production_repo.automatic_material_segments(workspace_id, viewer_user_id=task.owner_user_id)}.values()),
-            media_reference_for_asset=lambda asset_id: production_repo.workspace_media_reference_for_asset(
-                workspace_id, asset_id
-            ),
-            narration_audio_path=production_repo.narration_artifact_reference(
-                narration.cache_key
-            ),
-            narration_duration_seconds=narration.duration_seconds,
-            narration_segment_ids_by_section={
-                segment.source_section_id: segment.id
-                for segment in narration_segments
-            },
-            narration_segment_durations_by_section={
-                segment.source_section_id: float(segment.duration_seconds or 0)
-                for segment in narration_segments
-            },
-            person_render_by_section={section_id: (f"pending:{section_id}", float(segments_by_section[section_id].duration_seconds or 0))
-                                      for section_id in selected_sections},
-            presenter_share_target=creation_plan.presenter_share_target,
-        )
-        for section_id in selected_sections:
-            segment = segments_by_section[section_id]
-            selected_voice = creation_plan.selected_voice
-            assert selected_voice is not None
-            if grant_context is None:
-                raise HTTPException(status_code=409, detail="人物故事板必须通过当前任务的受许可连续制作入口")
-            inputs = dict((item.id, request) for item, request in presenter_inputs(
-                production_repo, task, script, creation_plan, _presenter_model_ids()))
-            render = current_presenter_render(production_repo, task, segment, inputs[segment.id], _person_render_media_path)
-            grant_context.check()
-            if render is None or _person_render_media_path(render) is None:
-                raise ValueError("露脸段落的口型视频没有完成，请重试故事板")
-            for clip in montage.clips:
-                cue = next(item for item in montage.cues if item.id == clip.cue_id)
-                if cue.source_section_id == section_id:
-                    if clip.source_end_seconds > (render.duration_seconds or 0) + 1 / 30:
-                        raise ValueError("人物口型输出短于露脸段落，请重试或降低比例")
-                    clip.person_render_id = render.id
-                    clip.asset_id = f"person:{render.id}"
-                    clip.source_path = f"person-render://{render.id}"
-                    clip.source_end_seconds = min(clip.source_end_seconds, render.duration_seconds or 0)
-        actual = round(100 * sum(clip.timeline_end_seconds - clip.timeline_start_seconds
-                                 for clip in montage.clips if clip.person_render_id) / montage.duration_seconds, 1)
-        montage.message += f" 露脸目标 {montage.presenter_share_target}%，实际 {actual}%；仅为露脸段落制作口型。"
-        if grant_context is not None:
-            montage.message += " 本次受许可编排仅使用已授权素材元数据，未运行视觉语义模型。"
-        montage.aspect_ratio = creation_plan.aspect_ratio
-        for clip in montage.clips:
-            clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
-            if creation_plan.template_settings.get("color_style") is not None:
-                clip.visual_effects.update(reusable_color_settings(creation_plan.template_settings["color_style"]))
-        for cue in montage.cues:
-            cue.subtitle_style = dict(creation_plan.template_settings.get("subtitle_style", {}))
-        if grant_context is not None:
-            grant_context.check()
-            if len(json.dumps(creation_task_montage_plan_to_payload(montage)).encode()) > grant_context.max_output_bytes:
-                raise ValueError("故事板输出超过阶段预算")
-        task, _ = production_repo.save_creation_task_montage_plan(
-            workspace_id,
-            task.id,
-            montage.id,
-            creation_task_montage_plan_to_payload(montage),
-        )
-        _ensure_montage_base_version(workspace_id, task, montage)
-    except (KeyError, MediaAuthorityError, ValueError, HTTPException) as exc:
-        task = production_repo.fail_creation_task_stage(
-            workspace_id,
-            task.id,
-            stage="montage",
-            reason="montage_plan_failed",
-            impact="未生成可供审核的故事板和剪辑计划。",
-            repair_action=str(exc.detail) if isinstance(exc, HTTPException) else str(exc),
-            retryable=True,
-        )
-        raise _topic_failure_response(
-            status_code=409,
-            error="montage_plan_failed",
-            reason="素材或配音不满足剪辑计划要求。",
-            impact=task.stage_impact or "未生成剪辑计划。",
-            repair_action=task.stage_repair_action or "审核素材后重试。",
-            retryable=True,
-        ) from exc
+        montage = _montage_stage_use_case().generate(workspace_id, task_id, grant_context=grant_context)
+    except MontageStageRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return _creation_task_montage_response(montage)
 
 
@@ -8544,6 +8413,12 @@ def _edit_preview_response(
     return CreationTaskEditPreviewResponse.model_validate(
         {"intent": asdict(intent), "proposal": asdict(proposal)}
     )
+
+
+def _montage_stage_use_case(repository=None):
+    repository = repository if repository is not None else production_repo
+    person_stage = _person_stage_use_case(repository)
+    return MontageStageUseCase(repository, person_stage.metadata, person_stage, montage_planner)
 
 
 def _person_stage_use_case(repository=None):
@@ -14608,9 +14483,6 @@ def _presenter_model_ids():
 
 
 
-def _montage_stage_with_grant(workspace_id: str, task_id: str, context: CreationStageGrantContext):
-    return _create_creation_task_montage_plan_for_workspace(workspace_id, task_id, grant_context=context)
-
 
 def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
     valid = _creation_render_is_valid(workspace_id, task_id, render_context=grant)
@@ -14665,6 +14537,7 @@ def _build_device_components(*, repository: ProductionRepository):
             repository,
             task_media=task_media,
             person_stage=_person_stage_use_case(repository),
+            montage_stage=_montage_stage_use_case(repository),
             narration_stage=_narration_stage_use_case(repository,narration_budget=narration_budget),
             graphic_source_facts=lambda workspace_id, task_id, reference, *, actor: graphic_source_facts(
                 repository, artifact_store, workspace_id, task_id, reference, actor=actor),
@@ -14678,7 +14551,6 @@ def _build_device_components(*, repository: ProductionRepository):
             narration_budget=narration_budget, montage_budget=montage_budget,
             presenter_budget=presenter_budget, presenter_cpu_render_budget=presenter_cpu_render_budget,
             presenter_models=_presenter_model_ids(), resolve_presenter_output=_person_render_media_path,
-            stage_actions={'montage_plan': _montage_stage_with_grant},
         ),
     }
     from app.automation_runtime import restrict_automation_registration

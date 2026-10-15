@@ -911,11 +911,11 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], stage_actions: dict | None=None, task_media=None, narration_stage=None, person_stage=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
-        self.stage_actions = stage_actions or {}
+        self.montage_stage = montage_stage
         self.task_media = task_media
         self.narration_stage = narration_stage
         self.person_stage = person_stage
@@ -1019,7 +1019,7 @@ class CreationJobUnitExecutor:
 
     def _execute_upstream(self, grant, scheduler, stage):
         from app.granted_subprocess import GrantedCommandCancelled
-        if stage == 'person_render' and self.person_stage is None or (stage != 'person_render' and (stage == 'narration' and self.narration_stage is None or (stage != 'narration' and stage not in self.stage_actions))):
+        if stage == 'person_render' and self.person_stage is None or (stage != 'person_render' and (stage == 'narration' and self.narration_stage is None or (stage != 'narration' and (stage != 'montage_plan' or self.montage_stage is None)))):
             raise PermissionError('该制作阶段没有受许可执行者')
         with self.repository._connect() as conn:
             row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
@@ -1056,7 +1056,7 @@ class CreationJobUnitExecutor:
                 elif stage == 'narration':
                     self.narration_stage.generate(job.workspace_id, job.task_id, grant_context=context)
                 else:
-                    self.stage_actions[stage](job.workspace_id, job.task_id, context)
+                    self.montage_stage.generate(job.workspace_id, job.task_id, grant_context=context)
             context.check()
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             if not valid(task):
