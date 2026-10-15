@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality C3联合19源已SOURCE_RELEASE并root差额审阅；全部产品和作者证据冻结，无新增执行/产品写权，等待原失败独立单节点重验。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R3-QUALITY-TERMINAL-C3-INDEPENDENT-20261016仅fresh-qa-quality-terminal-c3/**；只重验原失败/观察不完整单节点，零产品写权/native执行。旧证据冻结。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 物理后段前提包已root核并归还/冻结，quality未进grant为真实源码阻断、实测profile未绑；当前零新写入/执行权，旧native/日志策略不恢复。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality联合19源已b04c5f86准确集成/SOURCE_INTEGRATED与WRITE_LEASE_RETURN即时发送；本批产品和作者证据冻结，零新增执行/产品写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-QUALITY-CALIBRATION-BASELINE-20261016仅fresh-runtime-quality-calibration/**；一个实际宿主基线/工具文件指纹与首受控标定方案，零产品写权/native/服务执行。quality旧daemon源码阻断已集成退役，数值profile仍未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -26,6 +26,12 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 质检19源已集成与资源标定接续
+
+联合19源已b04c5f86a6142efc6d9da87ad95699072a46d09e准确集成，cached/committed/live等release65553a14…/TAB5f2e9a02…；root quality-resource-integrated.json SHAa3369221844450975addedf52c846aa00f90648bc1e2f235594e5c50ee2a9478。SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA，早于本合同更新。C3独立gate f70ac5e3b8c0af06a939590a01f5a95799cdf08212fc2bdf42e9b616ca673a57已root quality-terminal-c3-independent-reviewed.json SHA85986c30a4955784b2138e25d2c6cd52ab0eed7d70780d37d23a3452e908c422核12artifact/19live/80actual/预封scripts；单节点首次2.007s通过，真实晚TaskEvent原ValueError+IntegrityError cause与runtime同对象，同writer check/history done、Job succeeded，独立reader仍checking/running；七表rollback等已落私有回执事实。停止自有runtime/锁后公开恢复同request/identity/source，done+原terminal-event checkpoint、permit free/成功无request-event，worker1。C1/C2/旧normal和矩阵0复跑；真实native/host/fullPGID/profile/GUI/整体验收未过。
+
+当前唯一工具线程REF-R9-QUALITY-CALIBRATION-BASELINE-20261016，root quality-calibration-baseline-binding.json SHA9f5b38ff614ca36b66e6682248ef16c7878e98e5aa745ebff3323201be70fb48限新证据目录：一次真实宿主CPU/内存/swap/磁盘/有限IO基线、确切工具文件hash及原profileloader/必要command差额，给首个同候选受控实验的数值来源/原grant/全PGID测量与停止/回收方案。先区分实验停止上限、实测峰值、生产profile，不猜/借fixture或render预算给quality，不提cap求绿；root核具体方案后直接绑实际测量，无重复询问继续。此阶段零native/模型/服务/GUI/product/Git/私env/用户DB执行，基线不是标定通过。旧readiness daemon结论已由本19源退役；dotenv入口曾仅核默认路径不存在，后续启动前再existence-only核，不读内容。固定原合成recipe/真实物理后段依赖与层级保持，不重做旧大清点/已过元数据或替身门。短ACK后直接有限基线，不等第二START。
 
 ### 质检C3源审通过与失败独立节点重验
 
