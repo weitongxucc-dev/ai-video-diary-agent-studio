@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-PUBLISH-OUTPUT-IMPLEMENTATION-20261016仅main与二NEW三源/fresh-api-publish-output-implementation/**；一个metadata normal，不执行真实发布，其余产品/旧证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 模板shared-reader独立门已root接受、三源a90dc4f6集成/即时归还；产品与全部证据冻结，当前无新写入/执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 发布资格三源releaseafe554f4已root源审；三源/全部作者证据冻结待单个私有Task权限门，无新产品或证据写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-PUBLISH-OUTPUT-INDEPENDENT-20261016仅fresh-qa-publish-output/**；一个OTHER读私有Task发布资格的早PermissionError门，零产品写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -51,7 +51,13 @@ release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04 / TAB40d
 
 REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。root video-template-independent-binding.json SHA2d9eef6dab164d10a3abd0eeec466d68d5229174f9a868c0fa014d0283b4cfa0绑定三源与candidate01 actual197 map。一个元数据代表：公开repo seed/set共享/read，OTHER声明可信reader经原task-save更新共享模板；原rendered_source真实解析/守卫、原非空stat先达（task/Plan/montage/output路径为声明qualified替身、文件为自有NONMEDIA），真实共享resolver可读通过后，原403「只有这个模板的所有者可以保存新版本。」在subtitle/script/build/late readers/persist前拒绝；原template版本/owner/settings等公开回读不变、0新写。禁止mock权限/readability/owner/save或rawSQL fixture writer，不为未改CAS另开门，不跑作者normal/旧测试。自有隔离DB，优先direct handler无factory/lifecycle；必要时原factory一次/原37值，零driver/native/probe/model/GUI/network/资源。预封source/script、actual beforecompile-origin/前后、197 map引用/必要fixed Git，不复制全源/AST/DB/旧证据；首败保留，只必要失败节点重验。一次短ACK后直接执行，无第二START；稳定SOURCE_GATE冻结，root核后精确集成/即时归还，未算整体R9。
 
-### 发布输出资格具体owner三源实施（当前有效）
+### 发布资格三源源审与私有Task单个独立门（当前有效）
+
+releaseafe554f497f09321e7e9872896aa6ec5d3796d99663f12260a8320825f5f7f61/TABe069d6c002506826a13af94400819208007da1242538958de477ab5d68e9e38f已root publish-output-release-reviewed.json SHAc176cde2ee93378a8ada23206a7caee181c6d8159288b4c45ad4e427db918109核18artifact/198actual beforecompile-origin、两完整body/member翻译与OR短路/两签名/其余main与callback/11 canonical源/模板非main二源/37值。一个metadata node首次通过(call.107s/pytest.18s/runner2.250s)，两个原callback及原task/version/artifact/is_file/stat/返回顺序，公开Plan/Task/Timeline/queued producer/Artifact与50字节NONMEDIA登记/fresh回读；计数不变/producer queued0/0/平台0/新写0。render/output端口明确替身，非真实render、worker/媒体、认证/GUI/resource接受。三源/作者证据冻结，未集成。
+
+REF-R9-PUBLISH-OUTPUT-INDEPENDENT-20261016仅当前QA写fresh-qa-publish-output/**；root publish-output-independent-binding.json SHA32cb31fe1add1a2467f7a36aaa606c34517e5191c9b0c25e37025077d0d3426b固定三源与candidate01 actual198 map引用。一个元数据代表：公开repo confirm创建真实PRIVATE Plan/Task，same workspace OTHER声明可信user_id，经原_platform_publish_output_for一次；真实getTask/canonical content_readable之后精确PermissionError「当前成员无权发布此创作任务」，早于readiness/timeline/render/ref/path/artifact/file阶段。合法owner源/公开Plan-Task全字段与计数不变，0新写/platform事件/任务，原权限/仓储不mock，不需假render成功或native文件。自有隔离DB/空media，优先cold import/direct callback无factory/lifecycle，零driver/native/probe/model/GUI/network/userDB/私env/资源/dispatch/platform；不跑作者normal/旧各矩阵。预封script/source/actual beforecompile-origin前后，引用198 map/必要fixedGit，不复制全源/AST/DB/旧证据；首败保留，只必要失败node修正。一短语义ACK直接执行，无第二START；stable gate冻结，root核后精确集成/即时归还，非整体R9接受。
+
+### 发布输出资格具体owner三源原实施（已源审冻结）
 
 准备release2bcb07de43430943bddfa759b197eddf197112a8af2243ac547cb6ed3035964b/package48b758ed4a8d221ba2db6353f981b649905ba07cee8cc8f5f47a272a238c815b已root publish-output-preparation-reviewed.json SHA060e0867e41be41b35e568624c0cd3d56e8ebe12b5e76d66cb233ed009f27502核4artifact/12当前Git源/26准确文本与declaration/call AST、四起始读期一致；模板a90dc4f6集成仅HEAD变。准备冻结/READONLY_PREPARATION_REVIEWED与WRITE_LEASE_RETURN随本绑定接续。
 
