@@ -770,19 +770,20 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     calls = []
     render_calls = []
 
-    def narration_action(*args):
+    def narration_action(workspace, current_task, *, grant_context):
         calls.append("narration")
-        result = main_module._narration_stage_with_grant(*args)
+        result = main_module._narration_stage_use_case(repo, narration_budget=narration).generate(
+            workspace, current_task, grant_context=grant_context)
         if stop == "commit_unknown":
             state["identity"] = "unknown"
         return result
 
-    def montage_action(*args):
+    def montage_action(workspace, current_task, *, grant_context):
         calls.append("montage_plan")
         state["montage_attempts"] += 1
         if state["montage_attempts"] == 1:
             raise ValueError("synthetic first montage failure")
-        return main_module._montage_stage_with_grant(*args)
+        return main_module._montage_stage_use_case(repo).generate(workspace, current_task, grant_context=grant_context)
 
     def render_action(*args):
         render_calls.append("render")
@@ -793,7 +794,8 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
     executor = CreationJobUnitExecutor(repo, render_action=render_action,
         render_is_valid=main_module._creation_stage_valid_with_grant,
-        stage_actions={"narration": narration_action, "montage_plan": montage_action})
+        narration_stage=SimpleNamespace(generate=narration_action),
+        montage_stage=SimpleNamespace(generate=montage_action))
     from app.device_runtime import OwnerRegistration, OwnerRouter
     from app.member_permits import MemberDeviceAccess
     registration = OwnerRegistration(owner, executor)
@@ -1821,7 +1823,8 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
     narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
-    resources = SimpleNamespace(admit=lambda request: request.resources.get("kind") == "creation_narration",
+    resources = SimpleNamespace(admit=lambda request: HostResourceDecision(
+        request.resources.get("kind") == "creation_narration", dict(request.resources), {}),
         continue_unit=lambda grant: True, released=lambda grant: True)
     failure = HostResourceRefusal(HostResourceDecision(None if after_wait == "unknown" else False,
         {}, {} if after_wait == "unknown" else {"disk_io_bytes_per_second": {"actual": 200, "maximum": 100, "passed": False}},
@@ -1861,7 +1864,9 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         with repo._connect() as conn:
             conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?", (json.dumps(asdict(task), default=str), workspace, current_task))
     executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail("not render"),
-        render_is_valid=lambda *args: False, stage_actions={"narration": action})
+        render_is_valid=lambda *args: False,
+        narration_stage=SimpleNamespace(generate=lambda workspace, current_task, *, grant_context:
+            action(workspace, current_task, grant_context)))
     runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
         device_access=access, registrations={"creation_job": OwnerRegistration(owner, executor)},
         resources=resources, processes=HostProcessProbe(), poll_interval_seconds=0.01)
