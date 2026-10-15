@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality联合19源已b04c5f86准确集成/SOURCE_INTEGRATED与WRITE_LEASE_RETURN即时发送；本批产品和作者证据冻结，零新增执行/产品写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-QUALITY-CALIBRATION-BASELINE-20261016仅fresh-runtime-quality-calibration/**；一个实际宿主基线/工具文件指纹与首受控标定方案，零产品写权/native/服务执行。quality旧daemon源码阻断已集成退役，数值profile仍未接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-QUALITY-MEASUREMENT-ONE-20261016仅fresh-runtime-quality-measurement/attempt-01/**；原worker身份一次与固定实验停止上限下一个原queued render/必要audio/quality测量，首败停、无第二normal。全部产品只读，无GUI/服务/模型权，生产profile未接受。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -26,6 +26,12 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 资源首轮实际测量（实验上限，非生产profile）
+
+基线准备release3ca568079c0a0e9bb9e404f59387f6c837d7f61ce5331f1e6280365db601cf13已root quality-calibration-baseline-reviewed.json SHAd0df71ece702d2fd06ad1e307699c58e2370c4fd22ead0701ca468abe0461eba核六artifact/12initial/5ref/21file47spans/6tool+3worker+2synthetic hash；宿主8核16GiB、available3.60–3.62GiB/swap11110318080B，两个1s CPU21.2/29.5与整机IO如实，未执行native。准备证据冻结/归还。root选择A用于仅本次实验：swap上限固定11110318080B、零增长，后快照超过即拒绝，不上移；未采用的B 8GiB不是既有生产门，不存在放宽原门。所有plan experimental_*数值是可失败的物理/输入导出停止配额，不是已校准预算/吞吐或生产profile，不晋升通过。
+
+当前REF-R9-QUALITY-MEASUREMENT-ONE-20261016，root quality-measurement-one-binding.json SHA1c40193dbb8e48f4b983dbb01abddb87d33f514e5bf6f9807661e010cb8cc45b唯一工具线程新attempt-01证据/自有运行目录、零产品写权：先封脚本和全部owned paths/原当前源码（不新overlay/全snapshot）→原worker_identity一次非native取得digest→按原四dict固定配额/原loader→原create_app/lifespan一次/真实本地诊断成员设备/公开fixture与准确preview→最多一个原queued render+必要audio+自动quality，所有native经原grant/真实HostResourceProbe和HostProcessProbe。仅确切两合成输入可单文件复用，不复制旧DB/身份/证据，原watcher不关闭且owned inbox留空；不替身worker/probe或强置上游/终态。60s active/30s shutdown，fullPGID成员/指纹/RSS/thread/cpu/OS IO/输出bytes/原决定/释放单列，漏短命成员/终态计数/采样>0.25s为UNKNOWN。首拒绝/超限/缺测即原owner取消/runtime停止，保留首败无normal重跑/上调cap/强free；只收自有已证组，unknown留绑定。真实成功则保留同DB/Vout供后续真实服务/Electron保存/播放/Quit/restart/undo，本段不启动服务/GUI、模型/私env/用户DB/Git。短ACK直接一次执行，无第二START；productionprofile/同候选真实物理闭环/整体R9均未接受。
 
 ### 质检19源已集成与资源标定接续
 
