@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R7-EXPLICIT-COLD-START-IMPLEMENTATION-20261015独占main.py/server.py/tests/conftest.py/tests/test_runtime_bootstrap.py及根package.json仅dev:api；新证据fresh-api-explicit-cold-start/**。旧准备和所有已过门冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 晚activation主次异常独立门已过，a63b9fc5精确集成/即时归还。所有原首败/通过证据冻结，当前无新产品/证据/执行写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 显式冷启动五源已release4ba2a17d冻结/root源码通过，等独立原ASGI生命周期门；当前无新产品/证据/执行写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-EXPLICIT-COLD-START-LIFECYCLE-INDEPENDENT-20261015仅新fresh-qa-explicit-cold-start-lifecycle/**；一个精确候选真实空队列原ASGI生命周期，所有产品/旧门只读冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 显式冷启动五源实施（当前有效）
+### 显式冷启动稳定五源与关键生命周期独立门（当前有效）
+
+release4ba2a17df022ea48916b4e7a3e2eba94add03d740666026d736542143a8b7535五源TAB07c6aa67d49992131db9194925fa2bd633dce12e18991db288dbe1ba36986a55已root explicit-cold-start-release-reviewed.json SHAc542f3c0ec8cfe65afcc1cfe7b941784b54e5acd883609883218c4aff3fb9405核34artifact、634原main完整函数/11旧tests和原完整reload/C1/lifecycle保持、server/grant原前缀、secretfixture/37值、五源精确差额。唯一normal两实际：新增观察器误接submodule而非main实际package导出首败冻结，仅新test该import修正后PASS4.18s；每轮一个metadata Python child，父195精确loader/196origin、子193/193，199参与源fingerprint ffe5d6dd6f216c5344572d3a77baa83fbbab8aac024086f26b62e144c9d43084。真实main纯import四构造/DB0，显式factory原图/schema/installer和原callback/CreationExecution/一个未启动worker/slot8十runtime routes及291静态handler序列核过；所有驱动/native/models/resource/dispatch/network0。pytest自身直接加载conftest，live前后封存与一次显式session factory观察成立，其余精确loader记录单列，不夸大beforecompile覆盖。候选五源/原normal冻结，不算生命周期或完整R7/R9通过。
+
+REF-R7-EXPLICIT-COLD-START-LIFECYCLE-INDEPENDENT-20261015仅QA新目录，root explicit-cold-start-lifecycle-independent-binding.json SHA1b7ec8e1465194ce5f9cd5d913cc5463efb7e3bca0ae45539e2183f465ecfcc4绑定上述五源、原199参与源与已知必要profile_preview_execution固定95c4875c Git（sha177846f6），其余确实必要新lifecycle import可按同base Git逐次on-demand核live/compile/origin，不复制源树。一个全新隔离空DB代表：显式factory一次，再原FastAPI ASGI lifespan enter/exit，真实原7startup/4shutdown body及注册顺序、schema/重启恢复/worker/device/material/automation/continuation先后和所启全部线程/worker/browser session清理如实。不得在pytest_sessionstart已组装后同一进程再当cold factory一次；可用独立fresh child精确隔离该入口。只允许原有限fixture路径/非秘密配置与原37预算，零用户数据/账号/凭据、外网、模型、native/资源/阶段dispatch；空队列原poll/run_once唤醒按事实与stage dispatch0分列。用前向原观察/trace，不替换lifecycle/恢复/守卫/伪成功/加回滚重建策略。所有实际自建线程成败均停；首失败保留交唯一API，不重跑作者normal、旧C1/busy/reload/资源矩阵。最小预封脚本/源/actual origin/启停记录，短ACK后直接唯一代表无第二START；SOURCE_GATE稳定后root精确核门/集成/即时归还，不提升整体接受。
+
+### 显式冷启动五源实施（已履行冻结）
 
 只读准备C1最终release edcae4ed6fefc689807fd1651ee06802755b9f61073911afa8274984921ce2c6与原包c8358b843903839ec901d0b05396c9dd85cb0b402ba1426d31a09daca82d7216/差额e240a466f07940686552d8563c655bc5b604f06ecbc719daf86745f42703d811已root explicit-cold-start-preparation-reviewed.json SHA9bdc07ec251ecaf6f6f036caeab2bc8a9f6e388f7f7a7721729fe63acecc5e13核6artifact/11源、22原完整body/37值，真实四构造仍在导入期。root有限直接consumer审补两必要差额：main有中段和EOF两份同body __main__ guard，必须退役中段仅留create_app定义之后的最终一份；根package.json dev:api仍指app.main:app，必须第五源只改该命令为app.main:create_app --factory，uv run/reload/port不变。不是照搬准备遗漏，也不另跑旧检查。
 
