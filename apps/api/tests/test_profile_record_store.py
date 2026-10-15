@@ -402,3 +402,89 @@ def test_four_raw_readers_see_caller_uncommitted_rows_observer_isolation_and_rol
         conn.rollback()
         assert read_all(conn) == [None, None, None, None]
     assert snapshot(database) == before
+
+
+def test_pronunciation_public_facades_keep_versions_scope_and_same_connection(tmp_path, monkeypatch):
+    from app.production import ProductionRepository, PronunciationEntry
+    from app.profiles.contracts import PronunciationEntry as CanonicalPronunciationEntry
+
+    repository = ProductionRepository(tmp_path / "pronunciation.sqlite3", tmp_path / "library")
+    assert isinstance(repository._profile_records, ProfileRecordStore)
+    assert PronunciationEntry is CanonicalPronunciationEntry
+    with repository._connect() as conn:
+        repository._profile_records._save_person_profile(
+            conn, profile("person", id="person", authorization=None),
+        )
+    clock = WHEN
+    monkeypatch.setattr(versioned_payloads, "utc_now", lambda: clock)
+    first = PronunciationEntry(
+        id="shared", workspace_id=WORKSPACE, term="重庆", language="zh",
+        target_pronunciation="chong qing", scope="workspace", scope_reference=None, version="v1",
+    )
+    assert repository.save_pronunciation_entry(first) is first
+    assert repository.save_pronunciation_entry(first) is first
+
+    connections = []
+
+    def observed_connect():
+        conn = repository._connect()
+        statements = []
+        conn.set_trace_callback(statements.append)
+        connections.append(statements)
+        return conn
+
+    monkeypatch.setattr(repository._profile_records, "_connect", observed_connect)
+    clock = WHEN + timedelta(seconds=1)
+    second = replace(first, version="v2", scope="person", scope_reference="person")
+    assert repository.save_pronunciation_entry(second) is second
+    assert len(connections) == 1
+    person_save_statements = list(connections[0])
+    assert any("FROM person_profiles" in statement for statement in person_save_statements)
+    assert any("INSERT INTO pronunciation_entries" in statement for statement in person_save_statements)
+
+    clock = WHEN + timedelta(seconds=2)
+    task = replace(first, id="task", term="SQLite", language="en", scope="task", scope_reference="episode-1")
+    workspace = replace(first, id="workspace", term="AI", language="zh-en")
+    foreign = replace(workspace, workspace_id="workspace-b")
+    for entry in (task, workspace, foreign):
+        assert repository.save_pronunciation_entry(entry) is entry
+    assert repository.get_pronunciation_entry(WORKSPACE, first.id) == second
+    assert repository.get_pronunciation_entry(WORKSPACE, first.id, "v1") == first
+    assert repository.list_pronunciation_entry_versions(WORKSPACE, first.id) == [second, first]
+    assert repository.list_pronunciation_entries(WORKSPACE) == [second, task, workspace]
+    assert repository.list_pronunciation_entries("workspace-b") == [foreign]
+    applicable = repository.list_applicable_pronunciation_entries(
+        workspace_id=WORKSPACE, person_profile_id="person", episode_id="episode-1",
+    )
+    assert applicable == [workspace, task, second]
+    # A superseded workspace version cannot reappear when its newer person version is inapplicable.
+    assert repository.list_applicable_pronunciation_entries(
+        workspace_id=WORKSPACE, person_profile_id=None, episode_id="episode-2",
+    ) == [workspace]
+    assert repository.list_applicable_pronunciation_entries(
+        workspace_id="workspace-b", person_profile_id=None, episode_id="episode-1",
+    ) == [foreign]
+    with pytest.raises(ValueError, match="语义变更必须使用新版本"):
+        repository.save_pronunciation_entry(replace(first, target_pronunciation="不能覆盖"))
+    assert repository.get_pronunciation_entry(WORKSPACE, first.id, "v1") == first
+    with pytest.raises(KeyError):
+        repository.get_pronunciation_entry("workspace-missing", first.id)
+    before_invalid = len(connections)
+    with pytest.raises(ValueError, match="发音词典作用域无效"):
+        repository.save_pronunciation_entry(replace(first, id="invalid", scope="invalid"))
+    assert len(connections) == before_invalid
+    with pytest.raises(KeyError):
+        repository.save_pronunciation_entry(
+            replace(first, id="missing-person", scope="person", scope_reference="absent"),
+        )
+    assert len(connections) == before_invalid + 1
+    assert not any("INSERT INTO pronunciation_entries" in statement for statement in connections[-1])
+    (tmp_path / "pronunciation-record-observations.json").write_text(json.dumps({
+        "repository_type": type(repository).__module__ + "." + type(repository).__qualname__,
+        "store_type": type(repository._profile_records).__module__ + "." + type(repository._profile_records).__qualname__,
+        "canonical_entry_identity": PronunciationEntry is CanonicalPronunciationEntry,
+        "person_save_connection_count": 1, "person_save_sql": person_save_statements,
+        "applicable_order": [[entry.id, entry.version] for entry in applicable],
+        "invalid_scope_opened_connection": False, "missing_person_inserted": False,
+        "scope": "Synthetic metadata in a fresh owned SQLite DB; no media/model or real authorization claim.",
+    }, ensure_ascii=False, indent=2) + "\n")

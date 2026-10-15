@@ -11,7 +11,7 @@ from app.models import utc_now
 from app.persistence_json import _required_text, _optional_string_tuple
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_from_payload
 from app.profiles.contracts import (
-    Authorization, PersonProfile, ProfileReference, VoiceProfile as VersionedVoiceProfile, _as_utc,
+    Authorization, PersonProfile, ProfileReference, PronunciationEntry, VoiceProfile as VersionedVoiceProfile, _as_utc,
 )
 from app.profiles.versioned_payloads import (
     _save_versioned_payload, _list_versioned_payloads, _versioned_row,
@@ -161,6 +161,110 @@ class ProfileRecordStore:
                 self._versioned_voice_profile_from_payload(conn, workspace_id, payload)
                 for payload in payloads
             ]
+
+    def save_pronunciation_entry(
+        self,
+        entry: PronunciationEntry,
+    ) -> PronunciationEntry:
+        _validate_pronunciation_entry(entry)
+        with self._connect() as conn:
+            if entry.scope == "person":
+                self._get_person_profile(conn, entry.workspace_id, entry.scope_reference or "")
+            _save_versioned_payload(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=entry.workspace_id,
+                record_id=entry.id,
+                version=entry.version,
+                payload=_pronunciation_entry_payload(entry),
+            )
+        return entry
+
+    def get_pronunciation_entry(
+        self,
+        workspace_id: str,
+        entry_id: str,
+        version: str | None = None,
+    ) -> PronunciationEntry:
+        with self._connect() as conn:
+            row = _versioned_row(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                record_id=entry_id,
+                version=version,
+            )
+        return self._pronunciation_entry_from_payload(json.loads(str(row["payload"])))
+
+    def list_pronunciation_entries(self, workspace_id: str) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            payloads = _list_versioned_payloads(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                current_only=True,
+            )
+        return [self._pronunciation_entry_from_payload(payload) for payload in payloads]
+
+    def list_pronunciation_entry_versions(
+        self,
+        workspace_id: str,
+        entry_id: str,
+    ) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            payloads = _list_versioned_payloads(
+                conn,
+                table="pronunciation_entries",
+                workspace_id=workspace_id,
+                record_id=entry_id,
+            )
+        return [self._pronunciation_entry_from_payload(payload) for payload in payloads]
+
+    def list_applicable_pronunciation_entries(
+        self,
+        *,
+        workspace_id: str,
+        person_profile_id: str | None,
+        episode_id: str,
+    ) -> list[PronunciationEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload FROM pronunciation_entries
+                WHERE workspace_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        entries = [self._pronunciation_entry_from_payload(json.loads(str(row["payload"]))) for row in rows]
+        latest_by_id: dict[str, PronunciationEntry] = {}
+        for entry in entries:
+            latest_by_id.setdefault(entry.id, entry)
+        return [
+            entry
+            for entry in latest_by_id.values()
+            if entry.applies_to(
+                workspace_id=workspace_id,
+                person_profile_id=person_profile_id,
+                task_id=episode_id,
+            )
+        ]
+
+    @staticmethod
+    def _pronunciation_entry_from_payload(data: dict[str, object]) -> PronunciationEntry:
+        scope_reference = data.get("scope_reference")
+        if scope_reference is not None and not isinstance(scope_reference, str):
+            raise ValueError("发音词典作用域引用无效")
+        return PronunciationEntry(
+            id=_required_text(data, "id"),
+            workspace_id=_required_text(data, "workspace_id"),
+            term=_required_text(data, "term"),
+            language=_required_text(data, "language"),  # type: ignore[arg-type]
+            target_pronunciation=_required_text(data, "target_pronunciation"),
+            scope=_required_text(data, "scope"),  # type: ignore[arg-type]
+            scope_reference=scope_reference,
+            version=_required_text(data, "version"),
+        )
 
     def _get_person_profile(
         self,
@@ -348,3 +452,31 @@ def _profile_reference_fields(data: dict[str, object], authorization: Authorizat
         "owner_user_id": data.get("owner_user_id"),
         "visibility": data.get("visibility", "private"),
     }
+
+
+def _pronunciation_entry_payload(entry: PronunciationEntry) -> dict[str, object]:
+    return {
+        "id": entry.id,
+        "workspace_id": entry.workspace_id,
+        "term": entry.term,
+        "language": entry.language,
+        "target_pronunciation": entry.target_pronunciation,
+        "scope": entry.scope,
+        "scope_reference": entry.scope_reference,
+        "version": entry.version,
+    }
+
+def _validate_pronunciation_entry(entry: PronunciationEntry) -> None:
+    if not all(
+        value.strip()
+        for value in (entry.id, entry.workspace_id, entry.term, entry.target_pronunciation, entry.version)
+    ):
+        raise ValueError("发音词典缺少必要标识或发音")
+    if entry.language not in {"zh", "en", "zh-en"}:
+        raise ValueError("发音词典语言必须是 zh、en 或 zh-en")
+    if entry.scope not in {"workspace", "person", "task"}:
+        raise ValueError("发音词典作用域无效")
+    if entry.scope == "workspace" and entry.scope_reference is not None:
+        raise ValueError("工作区发音词典不能绑定对象")
+    if entry.scope != "workspace" and not (entry.scope_reference or "").strip():
+        raise ValueError("对象或任务发音词典必须绑定作用域引用")
