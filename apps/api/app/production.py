@@ -4275,7 +4275,7 @@ class ProductionRepository:
             for item in conn.execute("SELECT * FROM creation_request_items WHERE window_id=? ORDER BY ordinal", (window_id,)).fetchall():
                 plan = self._creation_plan_from_payload(json.loads(item["plan_payload"]))
                 task = self._creation_task_from_payload(json.loads(item["task_payload"]))
-                plan,task = self._prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=owner,local_diagnostic=local_diagnostic)
+                plan,task = self.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=owner,local_diagnostic=local_diagnostic)
                 for match in plan.material_matches:
                     asset_row = self._material_assets._asset_payload_visibility_row_by_id(
                         conn, workspace_id, match.asset_ref.removeprefix("asset:"),
@@ -4292,7 +4292,7 @@ class ProductionRepository:
                     self.creation_plan_voice_reference(workspace_id,plan.selected_voice.profile_id,plan.selected_voice.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
                 if plan.selected_person:
                     self.creation_plan_person_reference(workspace_id,plan.selected_person.profile_id,plan.selected_person.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
-                self._insert_confirmed_creation_plan(conn,plan,task)
+                self.insert_confirmed_creation_plan(conn,plan,task)
             now = utc_now().isoformat()
             conn.execute("UPDATE creation_request_windows SET status='confirmed',confirmed_at=? WHERE id=?", (now,window_id))
             conn.execute("UPDATE creation_requests SET status='active',revision=revision+1,updated_at=? WHERE id=?", (now,request_id))
@@ -4337,12 +4337,12 @@ class ProductionRepository:
                 verified_owner_user_id=verified_owner_user_id,
                 local_diagnostic=local_diagnostic,
             )
-        plan, task = self._prepare_confirmed_creation_plan(
+        plan, task = self.prepare_confirmed_creation_plan(
             plan, task, verified_owner_user_id=verified_owner_user_id,
             local_diagnostic=local_diagnostic,
         )
         with self._connect() as conn:
-            self._insert_confirmed_creation_plan(conn, plan, task)
+            self.insert_confirmed_creation_plan(conn, plan, task)
         return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
 
     def confirm_creation_plan_from_reply(
@@ -4358,7 +4358,7 @@ class ProductionRepository:
         reference = _validated_assistant_reply_reference(reply_reference)
         if not request_id.strip():
             raise ValueError("确认方案请求身份不能为空")
-        plan, task = self._prepare_confirmed_creation_plan(
+        plan, task = self.prepare_confirmed_creation_plan(
             plan, task, verified_owner_user_id=verified_owner_user_id,
             local_diagnostic=local_diagnostic,
         )
@@ -4391,7 +4391,7 @@ class ProductionRepository:
                     raise ValueError("方案请求身份已用于不同的对话或方案输入")
                 replay_ids = (str(event.payload["plan_id"]), str(event.payload["task_id"]))
             else:
-                self._insert_confirmed_creation_plan(conn, plan, task)
+                self.insert_confirmed_creation_plan(conn, plan, task)
                 self.append_task_event(
                     TaskEvent(
                         id=event_id,
@@ -4418,7 +4418,7 @@ class ProductionRepository:
         return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
 
     @staticmethod
-    def _prepare_confirmed_creation_plan(
+    def prepare_confirmed_creation_plan(
         plan: CreationPlan,
         task: CreationTask,
         *,
@@ -4451,7 +4451,7 @@ class ProductionRepository:
             task = replace(task, owner_user_id=owner)
         return plan, task
 
-    def _insert_confirmed_creation_plan(
+    def insert_confirmed_creation_plan(
         self, conn: sqlite3.Connection, plan: CreationPlan, task: CreationTask,
     ) -> None:
         now = utc_now()

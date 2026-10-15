@@ -214,7 +214,7 @@ def test_window_bounds_independent_single_video_and_frozen_payload(repository):
 
 def test_failure_after_first_real_plan_insert_rolls_back_entire_window(repository, monkeypatch):
     request = save(repository, create(repository))
-    insert = repository._insert_confirmed_creation_plan
+    insert = repository.insert_confirmed_creation_plan
     inserted = []
     def fail_second(conn, plan, task):
         if inserted:
@@ -222,7 +222,7 @@ def test_failure_after_first_real_plan_insert_rolls_back_entire_window(repositor
         insert(conn, plan, task)
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 1
         inserted.append(task.id)
-    monkeypatch.setattr(repository, "_insert_confirmed_creation_plan", fail_second)
+    monkeypatch.setattr(repository, "insert_confirmed_creation_plan", fail_second)
     with pytest.raises(sqlite3.IntegrityError):
         confirm(repository, request)
     with repository._connect() as conn:

@@ -196,24 +196,8 @@ class AutomationRuntime:
         plan.created_at = plan.confirmed_at = now
         task = CreationTask(id="task_"+hashlib.sha256(run_id.encode()).hexdigest()[:24],workspace_id=actor.workspace_id,
             plan_id=plan.id,name=plan.name,scenario=plan.goal,created_at=now,updated_at=now)
-        plan,task = self.production._prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
-        with self.production._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            bound = conn.execute("SELECT * FROM automation_runs WHERE id=? AND workspace_id=? AND member_id=?",(run_id,actor.workspace_id,actor.member_id)).fetchone()
-            if bound is None:
-                raise KeyError(run_id)
-            bound = self.service.run(bound)
-            if bound["task_id"]:
-                if bound["confirmation"].get("plan",{}).get("fingerprint") != fingerprint:
-                    raise ValueError("本次运行已用不同输入确认")
-            else:
-                current = conn.execute("SELECT paused FROM automations WHERE id=?",(run["automation_id"],)).fetchone()
-                if current[0] or not AutomationTrigger.model_validate(run["definition"]["trigger"]).allows(utc_now()):
-                    raise ValueError("安排已暂停或窗口已关闭，未创建任务")
-                self.service.require_actor(actor)
-                self.production._insert_confirmed_creation_plan(conn,plan,task)
-                confirmation = {"plan":{"fingerprint":fingerprint,"confirmed_at":now.isoformat(),"member_id":actor.member_id}}
-                conn.execute("UPDATE automation_runs SET plan_id=?,task_id=?,confirmation_json=?,state='waiting_review',stage='topic',reason_code='topic_confirmation_required',reason='方案已确认，选题等待逐次确认',repair_action='打开创作任务继续',revision=revision+1,updated_at=? WHERE id=?",(plan.id,task.id,dump(confirmation),now.isoformat(),run_id))
+        plan,task = self.production.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
+        self.service.bind_confirmed_plan(self.production,actor,run_id,run,fingerprint,plan,task,now)
         return self.bound_result(actor,self.service.get_run(actor,run_id))
 
     def bound_result(self, actor, run):

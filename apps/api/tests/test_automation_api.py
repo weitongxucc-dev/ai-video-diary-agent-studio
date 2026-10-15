@@ -86,16 +86,16 @@ def test_atomic_confirm_rollback_does_not_leave_partial_plan_or_run_binding(auto
     production,template,client,actor,payload=automation_state
     definition,run=create_and_due(client,actor,payload)
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']
-    insert=production._insert_confirmed_creation_plan
+    insert=production.insert_confirmed_creation_plan
     def interrupted(conn,plan,task):
         insert(conn,plan,task)
         raise ValueError('crash before binding')
-    monkeypatch.setattr(production,'_insert_confirmed_creation_plan',interrupted)
+    monkeypatch.setattr(production,'insert_confirmed_creation_plan',interrupted)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==409
     with production._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_plans').fetchone()[0]==0
         assert conn.execute('SELECT task_id FROM automation_runs WHERE id=?',(run['id'],)).fetchone()[0] is None
-    monkeypatch.setattr(production,'_insert_confirmed_creation_plan',insert)
+    monkeypatch.setattr(production,'insert_confirmed_creation_plan',insert)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==200
 
 
@@ -269,3 +269,135 @@ def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automatio
     production.claim_job_run(actor.workspace_id,job.id)
     running=runtime.project_state(actor,bound)
     assert running['state']=='running' and running['job_id']==job.id
+
+
+def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, monkeypatch):
+    """Declared metadata ports; real scoped stores and original confirmation flow."""
+    from dataclasses import asdict
+    from datetime import timedelta
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    import sqlite3
+
+    from app.automation_runtime import AutomationRuntime
+    from app.automation_service import AutomationBlocked, AutomationCreate
+    from app.production import CreationPlan
+
+    database = tmp_path / 'binding.sqlite3'
+    production = ProductionRepository(database, tmp_path / 'media')
+    sources = SourceRepository(database)
+    actor = CreationExecutionActor('metadata-workspace', 'metadata-member')
+    template = production.save_video_template(VideoTemplate(
+        id='template-metadata-binding', workspace_id=actor.workspace_id, version=1,
+        name='声明的元数据模板', origin='user', settings={'language': 'zh-CN'}),
+        verified_owner_user_id=actor.member_id)
+    fingerprint = 'a' * 64
+    preflights = []
+
+    def preflight(request, workspace_id, payload, *, automation_scope):
+        assert request is None and workspace_id == actor.workspace_id
+        assert (payload.template_id, payload.template_version) == (template.id, template.version)
+        assert automation_scope == {'connector_ids': [], 'knowledge_ids': [], 'material_asset_ids': []}
+        preflights.append('declared_metadata_only')
+        return CreationPlan(
+            id='preflight-only', workspace_id=workspace_id, goal=payload.goal, name=payload.name,
+            target_count=1, language='zh-CN', aspect_ratio='9:16', duration_target_seconds=30,
+            knowledge_references=[], source_references=[], selected_voice=None,
+            pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
+            material_rule_summary='声明空素材范围；不调用模型', model_snapshot=[],
+            confirmation_points=[], blockers=[], preflight_fingerprint=fingerprint)
+
+    def runtime_for(repository, source_repository):
+        return AutomationRuntime(repository, source_repository,
+            verify_identity=lambda value: 'ready' if value == actor else 'forbidden',
+            list_templates=lambda value: repository.list_video_templates(
+                value.workspace_id, viewer_user_id=value.member_id),
+            preflight=preflight, preview_response=asdict,
+            plan_response=lambda plan, task: {'plan': asdict(plan), 'task': asdict(task)},
+            execution_status=lambda *args: None, sync_connector=lambda *args: None,
+            inspect_topic_route=lambda workspace_id: {'availability': 'ready'},
+            execution_available=lambda: False)
+
+    runtime = runtime_for(production, sources)
+    assert runtime.service.database_path == production.database_path
+    now = datetime.now(timezone.utc)
+    definition = runtime.service.create(actor, AutomationCreate(
+        name='单事务元数据确认', goal='仅检验持久绑定，不生成内容',
+        template_id=template.id, template_version=template.version,
+        trigger={'cadence': 'once', 'timezone': 'UTC',
+                 'start_local': (now - timedelta(seconds=1)).replace(tzinfo=None)},
+        source_scope={'connector_ids': [], 'knowledge_ids': [], 'material_asset_ids': []}))
+    runtime.service.tick(now=now)
+    runs = runtime.service.runs(actor, definition['id'])
+    assert len(runs) == 1 and runs[0]['state'] == 'waiting_review'
+    run = runs[0]
+    revision_before = run['revision']
+    connections, ordering = [], []
+    connect = sqlite3.connect
+
+    def observe_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        item = {'database': str(args[0]), 'keywords': dict(kwargs), 'sql': []}
+        connections.append(item)
+        connection.set_trace_callback(item['sql'].append)
+        return connection
+
+    prepare = production.prepare_confirmed_creation_plan
+    def observe_prepare(*args, **kwargs):
+        value = prepare(*args, **kwargs)
+        ordering.append('prepared_before_bind')
+        return value
+
+    monkeypatch.setattr(sqlite3, 'connect', observe_connect)
+    monkeypatch.setattr(production, 'prepare_confirmed_creation_plan', observe_prepare)
+    result = runtime.confirm(None, actor, run['id'], fingerprint)
+    bound = runtime.service.get_run(actor, run['id'])
+    plan_id = 'plan_' + hashlib.sha256(run['id'].encode()).hexdigest()[:24]
+    task_id = 'task_' + hashlib.sha256(run['id'].encode()).hexdigest()[:24]
+    assert (result['plan']['id'], result['task']['id']) == (plan_id, task_id)
+    assert (bound['plan_id'], bound['task_id'], bound['revision']) == (plan_id, task_id, revision_before + 1)
+    assert bound['confirmation']['plan']['fingerprint'] == fingerprint
+    transactions = [item for item in connections if 'BEGIN IMMEDIATE' in item['sql']]
+    assert len(transactions) == 1 and transactions[0]['keywords'] == {}
+    sql = transactions[0]['sql']
+    plan_insert = next(i for i, query in enumerate(sql) if query.lstrip().startswith('INSERT INTO creation_plans '))
+    task_insert = next(i for i, query in enumerate(sql) if query.lstrip().startswith('INSERT INTO creation_tasks '))
+    run_update = next(i for i, query in enumerate(sql) if query.lstrip().startswith('UPDATE automation_runs '))
+    assert sql.index('BEGIN IMMEDIATE') < plan_insert < task_insert < run_update < sql.index('COMMIT')
+    assert ordering == ['prepared_before_bind'] and len(preflights) == 1
+    # Pause via the actual public owner: require_open now rejects, but a bound
+    # replay still returns its durable result before mutable checks/preflight.
+    runtime.service.pause(actor, definition['id'], True, definition['revision'])
+    with pytest.raises(AutomationBlocked):
+        runtime.service.require_open(bound)
+    assert runtime.confirm(None, actor, run['id'], fingerprint) == result
+    with pytest.raises(ValueError, match='不同输入'):
+        runtime.confirm(None, actor, run['id'], 'b' * 64)
+    reopened = ProductionRepository(database, production.video_library_path)
+    fresh = runtime_for(reopened, SourceRepository(database))
+    assert fresh.confirm(None, actor, run['id'], fingerprint) == result
+    persisted = fresh.service.get_run(actor, run['id'])
+    assert persisted['revision'] == revision_before + 1
+    assert len(preflights) == 1 and ordering == ['prepared_before_bind']
+    with sqlite3.connect(database) as connection:
+        counts = {table: connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                  for table in ('creation_plans', 'creation_tasks', 'automation_runs', 'job_runs',
+                                'topic_generation_runs', 'script_generation_runs')}
+    assert counts == {'creation_plans': 1, 'creation_tasks': 1, 'automation_runs': 1,
+                      'job_runs': 0, 'topic_generation_runs': 0, 'script_generation_runs': 0}
+    assert runtime.thread is fresh.thread is None
+    destination = os.environ.get('AUTOMATION_PLAN_BINDING_EVIDENCE_DIR')
+    if destination:
+        Path(destination, 'NORMAL_SUMMARY.json').write_text(json.dumps({
+            'run_id': run['id'], 'plan_id': plan_id, 'task_id': task_id,
+            'original_default_connection_keywords': transactions[0]['keywords'],
+            'one_actual_connection_sql': sql, 'counts': counts,
+            'run_revision_before': revision_before, 'run_revision_after': persisted['revision'],
+            'preflight_calls': len(preflights), 'preparation_calls': len(ordering),
+            'duplicate_and_fresh_read_match': True, 'paused_public_guard_rejected': True,
+            'different_fingerprint_rejected': True, 'runtime_threads': 0,
+            'fixture_boundary': 'Real scoped SQLite/repositories/runtime/service; declared actor verifier and metadata preflight, empty real input scope. No production identity/model/media/resource acceptance.',
+            'late_failure_critical_gate_executed': False,
+        }, ensure_ascii=False, indent=2) + '\n')

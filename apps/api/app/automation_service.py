@@ -201,6 +201,29 @@ class AutomationService:
             raise KeyError(run_id)
         return self.run(row)
 
+    def bind_confirmed_plan(self, production, actor, run_id, run, fingerprint, plan, task, now):
+        """Bind the prepared Plan/Task and this occurrence on one connection."""
+        # Preserve this command's original default connection; other service
+        # operations retain their existing connect() timeout.
+        with sqlite3.connect(self.database_path) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
+            bound = conn.execute("SELECT * FROM automation_runs WHERE id=? AND workspace_id=? AND member_id=?",(run_id,actor.workspace_id,actor.member_id)).fetchone()
+            if bound is None:
+                raise KeyError(run_id)
+            bound = self.run(bound)
+            if bound["task_id"]:
+                if bound["confirmation"].get("plan",{}).get("fingerprint") != fingerprint:
+                    raise ValueError("本次运行已用不同输入确认")
+            else:
+                current = conn.execute("SELECT paused FROM automations WHERE id=?",(run["automation_id"],)).fetchone()
+                if current[0] or not AutomationTrigger.model_validate(run["definition"]["trigger"]).allows(utc_now()):
+                    raise ValueError("安排已暂停或窗口已关闭，未创建任务")
+                self.require_actor(actor)
+                production.insert_confirmed_creation_plan(conn,plan,task)
+                confirmation = {"plan":{"fingerprint":fingerprint,"confirmed_at":now.isoformat(),"member_id":actor.member_id}}
+                conn.execute("UPDATE automation_runs SET plan_id=?,task_id=?,confirmation_json=?,state='waiting_review',stage='topic',reason_code='topic_confirmation_required',reason='方案已确认，选题等待逐次确认',repair_action='打开创作任务继续',revision=revision+1,updated_at=? WHERE id=?",(plan.id,task.id,dump(confirmation),now.isoformat(),run_id))
+
     def write_run_state(self, run_id, *, state, stage, reason_code=None, reason=None, repair_action=None, snapshot=None, job_id=None, confirmation=None, execution=None, expected_revision=None):
         with self.connect() as conn:
             updated = conn.execute("UPDATE automation_runs SET state=?,stage=?,reason_code=?,reason=?,repair_action=?,input_snapshot_json=COALESCE(?,input_snapshot_json),job_id=COALESCE(?,job_id),confirmation_json=COALESCE(?,confirmation_json),execution_json=COALESCE(?,execution_json),revision=revision+1,updated_at=? WHERE id=? AND (? IS NULL OR revision=?)", (state,stage,reason_code,reason,repair_action,dump(snapshot) if snapshot is not None else None,job_id,dump(confirmation) if confirmation is not None else None,dump(execution) if execution is not None else None,utc_now().isoformat(),run_id,expected_revision,expected_revision))
