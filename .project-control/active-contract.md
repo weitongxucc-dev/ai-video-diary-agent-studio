@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-AUTOMATION-PLAN-BINDING-IMPLEMENTATION-20261016仅下节准确三product/二test及fresh-api-automation-plan-binding/**；一个元数据自测，其他产品/旧证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 原生保存实际Session/窗口四族独立门已root接受、八源0263663a集成/即时归还；全部证据冻结，当前无新写入/执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 自动任务确认五源release205acb15已root源审；五源/作者证据冻结，待单个独立晚SQL门，无新产品/证据写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-AUTOMATION-PLAN-BINDING-INDEPENDENT-20261016仅fresh-qa-automation-plan-binding/**；一个实际SQLite晚绑定失败/回滚/retry元数据门，产品和旧证据全冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,15 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 自动任务确认的单事务owner五源实施（当前有效）
+### 自动任务确认五源源审与单个独立事务门（当前有效）
+
+release205acb15b80312f732ba88f9d70288ca84d1953f0c1494b7ed4cfecb4aeb2fde、五源TAB356496365fa26fb47125e6561e65cb92a88d7ed07eeef9aac0cdca86939e60fc已root automation-plan-binding-release-reviewed.json SHAb6e2f650ba06021123072ac40ba1d239da1ffc4af32be452e0ef35c799e8d9b4核14artifact、原事务整body有限owner翻译/其余runtime-service整AST、production与旧hook仅公开命名字节差额。一个metadata normal首次通过（call .143s/pytest .27s/runner2.476s），198实际来源beforecompile/origin前后、三个必要固定Git、37值保持；同默认conn Plan/Task/run一提交，快重放/重开同IDs、一revision、异指纹拒绝。封存observer误把pytest current别名算双DB，仅resolve去重修正且首败保留，应用未重跑。作者五源/全部证据冻结，未集成；不等于真实身份/模型/素材/资源/GUI或整体R9。
+
+REF-R9-AUTOMATION-PLAN-BINDING-INDEPENDENT-20261016仅当前QA写fresh-qa-automation-plan-binding/**，零产品写权。root automation-plan-binding-independent-binding.json SHAe6dbbb4425f3720c6993a8c18c712d63d78325d539aa81a0e24cdf5c250aa7de固定五源与作者RESULT actual_origins_post引用。仅一个standalone fresh Python元数据代表：真实原Runtime.confirm/仓储/scoped run，在两个实际INSERT后AutomationRun UPDATE由SQLite真实trigger晚失败；同writer看到pair、独立observer只见原未绑定run/无pair，失败后全部回滚且原revision/confirmation保持；只移自己的失败trigger后明确retry原deterministic IDs，提交仅一pair/一次revision并回读无dispatch。原生connection的observer/UDF可记录，禁止mock业务守卫/插入/commit/资格，不绕actor/preflight或状态门；较早拒绝如实记录。
+
+声明actor/preflight/空输入端口与真实SQLite分层，自己隔离DB/空media根；不需main/conftest或服务，若配置import需要仍仅原37值。脚本/source预封、引用作者198映射只核实际加载与必要固定Git，不复制全源/AST/DB/旧证据；不得跑作者normal/旧automation或creation-request矩阵，不启动driver/native/probe/model/install/GUI/外网/用户DB/host采样。一次语义REBASE_ACK后直接执行，无第二START；保留首失败，仅本失败或新差额必要重验。稳定SOURCE_GATE后freeze，root核门后精确集成五源并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN与接续。其余main方案预检/模板/发布无新写权。
+
+### 自动任务确认的单事务owner五源原实施（已源审冻结）
 
 只读release fabf7daa41d6f5af03f7b8a5e54199ea00fada8f3786d4af317a69ceb4e6eac1已root r9-unclaimed-main-reviewed.json SHAcc58ff6ee94b6096644cf751351b3fc4404a2909a143b2d0803d45d9cdaf6f5f核4artifact/27源/18命名文本span/三初始字节及当前Python固定Git；并行native八源/合同HEAD变化未污染目标。有限已薄委托的成员/安装/设置/聚合入口无需机械拆；真实剩余为main方案预检、模板业务和发布输出资格，以及AutomationRuntime.confirm直接跨私有Plan/Task与runSQL写入。先收后者，原准备证据已即时READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN并冻结，不把四组整体算完成。
 
