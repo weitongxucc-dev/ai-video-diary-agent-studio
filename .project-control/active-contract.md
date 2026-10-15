@@ -12,12 +12,12 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物7444fd39已集成/即时归还；下述montage新5源独占绑定，先完成当前render只读准备并冻结再直接实施；人物及旧证据冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | montage release a131b504已冻结待root精确集成；root处理下述单一EOF差额和两个旧fixture断言，API暂无新增写/执行权，全部原证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物三个特有代表已root审核、7444fd39集成/即时归还；当前无新产品/证据/执行写权，全部原门冻结，不重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | REF-R3-MONTAGE-INTEGRATION-C1-20261015仅creation/montage_stage_use_case.py的EOF多余空行，以及tests/test_narration_stage_application.py、test_person_stage_application.py对已退役stage_actions的各一处夹具断言；无其它产品写权。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
 
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物已精确集成；接续故事板编排（当前有效）
+### 故事板稳定候选与最小集成差额（当前有效）
+
+montage release a131b50483cb73f26ea02053c240f7f1f239eb78fd535092c93f3a20365c84d9已root montage-stage-release-reviewed.json SHA5bcd35437b4234f7e310c59b44add43653343b9898d9b076cecc77a0ced2b87a核32artifact/196实际origins/195加载、721完整既有函数、原HostBudget六位置参数及MontageBudget AST；唯一metadata normal首轮PASS，零执行native（1条输入视频生成单列），无额外QA或旧门执行。root仅对rg返回的旧fixture行顺序做集合比较，不把并行输出顺序当源码差额。精确stage后git diff --cached --check发现新owner文件多余EOF空行，尚未commit，五个stage条目均为root本次登记的原release字节；不reset/丢弃或改原封存证据。
+
+REF-R3-MONTAGE-INTEGRATION-C1-20261015只给root独占上述3源：owner只去多余EOF空行，完整AST必须不变；两旧normal夹具各一处对registration.executor.stage_actions的断言改为检查旧registry已不存在，保留各自已有具体narration_stage/person_stage实例身份断言与其它全部body。API/QA全部对应源和旧证据冻结，不与root同时写；不恢复兼容registry，不扩大到旧test_creation_execution的历史两段callback wiring。验证仅精确字节/完整AST差额、语法compile及定向旧引用检查，不import/collect/执行旧normal/模型/native，也不把旧回执重封成新字节已跑。原正常运行196tuple如未加载两夹具须如实核明，原owner仅无语义EOF差额复用normal。先精确集成原5源加该EOF差额并即时向作者归还，再以独立最小夹具提交处理两断言；两旧callback测试wiring仍明确后续测试消费者差额，不宣称全测试套件通过。其后按已审核render准备实际当前四源另绑，不等待多余ACK或新用户批准。
+
+### 人物已精确集成；接续故事板编排（已履行冻结规约）
 
 人物最终5源已7444fd39e4519edf7d352f8ef72a46d35b2bf4d3精确集成，索引/commit/current逐字节等release372ec90，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API与QA。root person-stage-integrated.json SHAe5b6e7dd8865d6bfbe9497e0373640ea04f63731e2aef2f2459275413fb21a37；独立门0a171257a1011b34d9449d01cced685b19e9bb6778988eb64a3acbd3650d1ba5经root person-independent-reviewed.json SHA6ee750677b77409985bdc364b647afe2ccf48512e469a9920269d063a0775f26核50artifact/4refs、每会话195before-compile/196parent origins、额外固定Git子入口（不升级完整子进程来源跟踪）。3特有/5实际：HEAD首轮PASS冻结未重跑，首轮两真实内存阻断及一次执行前拒绝保留；用户要求复核后原门两次实际3549200384/3680354304字节满足，仅两个原失败node续验通过。full真实讲话源字节改变后原PermissionError/outer interrupted与request blocked，早child图谱保留；local HEAD由原current guard提前拒绝、未到commitCAS；local六editorial组与outer成功同conn实际已写、独立observer仍旧，terminal事件native IntegrityError后联合rollback，早ready PersonRender/child JobRun/Artifact/Transform/edges及视频保留。68native/42登记全部释放/5合成视频fixture与21原quality未登记命令分列，6合成worker调用；原预算、OSfixture、守卫未改，作者normal及旧门零新执行。local执行GET既有409、full interrupted时原stage投影仍running等状态差额留后续投影收敛，不冒称完整公开状态接受；真实模型/GUI/生产资源/fullPGID/同候选整体R0–R9未验。
 
