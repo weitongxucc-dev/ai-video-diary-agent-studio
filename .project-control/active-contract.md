@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality C1/C2联合18源已释放并root差额审阅；全源与作者证据冻结，无新增产品/执行权，待独立晚SQL/实际回执恢复与队列一致性门。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R3-QUALITY-TERMINAL-INDEPENDENT-20261016仅fresh-qa-quality-terminal/**；单个晚TaskEvent真实SQL回滚/原public恢复续交/queue事实门，零产品写权/native执行。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R3-QUALITY-QUEUE-C3-20261016仅device_scheduler.py的窄公开恢复终态口、quality_inspection_use_case.py的recover和NEW test_quality_recovery_terminal.py；其余16源/旧证据冻结。独立门实际发现Job成功而request waiting，唯一API修复。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 质检终态独立门FAIL已root核并冻结；零产品/新增执行权，待C3源审后只重验该失败及不完整观察节点，不重跑旧通过批次。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 物理后段前提包已root核并归还/冻结，quality未进grant为真实源码阻断、实测profile未绑；当前零新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -26,6 +26,12 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 质检独立门实际失败与单一负责人C3修复
+
+REF-R3-QUALITY-TERMINAL-INDEPENDENT-20261016实际FAIL，gate SHA0ebba1cb2efd052b7d4494dffe76faa030dc8de23ad986c905823244f0190b66，root quality-terminal-independent-failed-reviewed.json SHA0708abc7e30771bf11ca391ac8ea5492a0dfdfb8b98e086358f3cf314464ece4核45artifact、18源冻结与两个child各80 actual beforecompile/origin。原worker一次、真实晚TaskEvent INSERT经仓储ValueError包装原IntegrityError后整terminal事务回滚，私有回执持久；同DB公开恢复不重跑worker，check/history done、Job succeeded、terminal TaskEvent一条/permit free，但原request waiting/recovered、checkpoint NULL、request-events空。晚callback同writer/独立reader观察payload未序列化，完整观察门不通过；四个前置导入/隔离失败保留，零相关worker，不冒称全部QA过。
+
+当前仅唯一API REF-R3-QUALITY-QUEUE-C3-20261016，root quality-queue-c3-binding.json SHAfd019113fd2b402997a807fced811e1da260dfdfed799a1c7f38e1527dfa339d为确切三源与16冻结hash授权：device_scheduler.py窄公开所属恢复终态口、quality_inspection_use_case.py仅recover、NEW test_quality_recovery_terminal.py。先原released proof/同库free-generation fence，再同实际事务写check/history/Job/TaskEvent及匹配request/checkpoint/request-event；保留身份/原回执与unknown/live/busy不写终态、不重派或借当前预算。质量owner不能新增device rawSQL writer/通用恢复框架，不补修用户历史数据。一个新增metadata最小节点只核该queue终态/最晚实际request-event SQL拒绝回滚，不重跑C1/C2/旧作者normal或矩阵；QA冻结待准确C3 SOURCE_RELEASE/root源审后只重验其失败/不完整单节点。其他16源、作者和QA旧证据冻结，超三路径先报。短语义ACK后直接实施，无第二START；gate过才精确集成并即时归还，再接资源标定和同候选真实物理闭环。
 
 ### 内容原三条结构交叉已关闭与证据归还
 
