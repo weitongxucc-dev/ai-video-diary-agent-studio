@@ -11644,6 +11644,7 @@ class QuiescedRuntimeDrivers:
 @contextmanager
 def _quiesced_runtime_drivers():
     drivers = QuiescedRuntimeDrivers()
+    primary_failure: BaseException | None = None
     try:
         if device_runtime is not None:
             if not device_runtime.pause(30.0):
@@ -11658,6 +11659,9 @@ def _quiesced_runtime_drivers():
                 raise HTTPException(503, "对话结果仍在回填，配置未保存。")
             drivers.continuation = assistant_continuation_driver
         yield drivers
+    except BaseException as exc:
+        primary_failure = exc
+        raise
     finally:
         if not drivers.committed:
             failed = []
@@ -11669,7 +11673,13 @@ def _quiesced_runtime_drivers():
                     except RuntimeError as exc:
                         failed.append((name, exc))
             if failed:
-                raise RuntimeError("旧运行恢复失败，未创建替代协调者：" + ", ".join(name for name, _ in failed)) from failed[0][1]
+                if primary_failure is not None:
+                    for name, failure in failed:
+                        primary_failure.add_note(
+                            f"旧运行恢复失败，未创建替代协调者（{name}）：{type(failure).__name__}: {failure}"
+                        )
+                else:
+                    raise RuntimeError("旧运行恢复失败，未创建替代协调者：" + ", ".join(name for name, _ in failed)) from failed[0][1]
 
 
 def _prepare_runtime_reload(prospective_settings: Settings) -> PreparedRuntimeReload:

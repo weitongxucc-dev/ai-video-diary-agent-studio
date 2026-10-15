@@ -369,3 +369,104 @@ def test_terminal_device_during_quiescence_exposes_unrecoverable_owner(isolated_
     finally:
         device.stop(2)
         main.device_runtime = None
+
+
+def test_quiescence_preserves_primary_failure_and_reports_secondary_recovery(monkeypatch):
+    from fastapi import HTTPException
+
+    calls = []
+
+    class RecoveryOwner:
+        def __init__(self, name, failure=None):
+            self.name, self.failure = name, failure
+
+        def pause(self, timeout):
+            calls.append(('pause', self.name, timeout))
+            return True
+
+        def resume(self):
+            calls.append(('resume', self.name))
+            if self.failure is not None:
+                raise self.failure
+
+    device_failure = RuntimeError('isolated device recovery refused')
+    monkeypatch.setattr(main, 'device_runtime', RecoveryOwner('device', device_failure))
+    monkeypatch.setattr(main, 'automation_runtime', RecoveryOwner('automation'))
+
+    def stopped_continuation_fixture():
+        driver = main.AssistantContinuationDriver()
+        # A joinable/stopped thread port keeps this an exception-priority unit test.
+        # Original continuation pause/stop/resume bodies execute; no thread is started.
+        driver.thread = SimpleNamespace(join=lambda timeout: None, is_alive=lambda: False)
+        original_pause, original_resume = driver.pause, driver.resume
+        resume_failures = []
+
+        def observe_pause(timeout):
+            calls.append(('pause', 'continuation', timeout))
+            return original_pause(timeout)
+
+        def observe_resume():
+            calls.append(('resume', 'continuation'))
+            try:
+                return original_resume()
+            except RuntimeError as exc:
+                resume_failures.append(exc)
+                raise
+
+        monkeypatch.setattr(driver, 'pause', observe_pause)
+        monkeypatch.setattr(driver, 'resume', observe_resume)
+        monkeypatch.setattr(main, 'assistant_continuation_driver', driver)
+        return driver, original_resume, resume_failures
+
+    continuation, activation_resume, secondary_failures = stopped_continuation_fixture()
+    primary = HTTPException(503, '配置已保存，运行重载失败；请检查运行状态。')
+    activation_failures = []
+    with pytest.raises(HTTPException) as caught:
+        with main._quiesced_runtime_drivers() as drivers:
+            assert not drivers.committed
+            continuation.stop()
+            try:
+                activation_resume()
+            except RuntimeError as exc:
+                activation_failures.append(exc)
+                raise primary from exc
+    assert caught.value is primary and caught.value.status_code == 503
+    assert primary.__cause__ is activation_failures[0]
+    assert '已终止' in str(primary.__cause__)
+    assert primary.__cause__ is not secondary_failures[0]
+    assert calls == [('pause', 'device', 30.0), ('pause', 'automation', 10.0), ('pause', 'continuation', 5.0),
+        ('resume', 'continuation'), ('resume', 'automation'), ('resume', 'device')]
+    assert len(primary.__notes__) == 2
+    assert any('continuation' in note and str(secondary_failures[0]) in note for note in primary.__notes__)
+    assert any('device' in note and str(device_failure) in note for note in primary.__notes__)
+    assert not drivers.committed
+
+    calls.clear()
+    continuation, _, secondary_failures = stopped_continuation_fixture()
+    # An unrelated already-handled exception is not a pending body failure.
+    try:
+        raise LookupError('outer handled failure')
+    except LookupError:
+        with pytest.raises(RuntimeError, match='旧运行恢复失败.*continuation.*device') as recovery:
+            with main._quiesced_runtime_drivers() as no_primary_drivers:
+                continuation.stop()
+    assert recovery.value.__cause__ is secondary_failures[0]
+    assert calls == [('pause', 'device', 30.0), ('pause', 'automation', 10.0), ('pause', 'continuation', 5.0),
+        ('resume', 'continuation'), ('resume', 'automation'), ('resume', 'device')]
+    assert not no_primary_drivers.committed
+    assert continuation.thread.is_alive() is False
+
+    destination = os.environ.get('LATE_ACTIVATION_PRIMARY_C1_EVIDENCE_DIR')
+    if destination:
+        (Path(destination) / 'NORMAL_SUMMARY.json').write_text(json.dumps({
+            'primary_type': type(primary).__name__, 'primary_status': primary.status_code,
+            'same_primary_object': caught.value is primary,
+            'same_original_cause': primary.__cause__ is activation_failures[0],
+            'primary_cause': str(primary.__cause__), 'secondary_notes': primary.__notes__,
+            'without_primary_error': str(recovery.value),
+            'without_primary_cause_is_original_first_recovery_error': recovery.value.__cause__ is secondary_failures[0],
+            'resume_order_both_cases': ['continuation', 'automation', 'device'],
+            'actual_continuation_pause_stop_resume': True,
+            'fixture_boundary': 'Finite device/automation recovery ports and joinable stopped-thread port; no real threads, lifecycle replay or configuration persistence claimed.',
+            'committed_forced_or_resume_skipped': False, 'native_models_resources_real_threads': 0,
+        }, ensure_ascii=False, indent=2) + '\n')
