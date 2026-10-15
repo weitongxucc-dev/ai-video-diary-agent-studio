@@ -221,3 +221,116 @@ def test_uncalibrated_budget_refuses_to_build_a_runtime(
 
     with pytest.raises(HostBudgetUncalibrated, match="尚未标定"):
         main_module._build_device_components(repository=repository)
+
+
+def test_explicit_device_binding_uses_supplied_repository_and_shared_material_scheduler(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    import json
+    import os
+    from pathlib import Path
+
+    import app.device_runtime as device_module
+    import app.member_permits as probe_module
+    from app.bootstrap import bind_device_runtime
+    from app.creation_execution import CreationExecutionActor
+    from app.device_runtime import OwnerRegistration
+    from app.local_members import LocalMemberService
+    from app.material_ingestion import MaterialHashOwnerVerifier, MaterialHashUnitExecutor
+    from app.member_permits import MemberDeviceAccess, creation_job_registration
+
+    repository = ProductionRepository(tmp_path / 'explicit' / 'production.sqlite', tmp_path / 'explicit' / 'library')
+    members = LocalMemberService(repository.database_path)
+    member, _token = members.join(members.create_invite_code(), '显式构造 normal 合成成员')
+    assert repository is not main_module.production_repo and members is not main_module.local_members_service
+    assert repository.database_path.resolve() != Path(main_module.production_repo.database_path).resolve()
+    settings = replace(main_module.settings, database_path=str(repository.database_path),
+        video_inbox_path=str(repository.video_library_path), video_output_path=str(tmp_path / 'explicit-output'))
+    for name, value in _CALIBRATED_ENV.items():
+        monkeypatch.setenv(name, value)
+    cpu_budget = main_module.cpu_render_budget_from_env()
+    narration_budget, montage_budget = main_module.creation_stage_budgets_from_env()
+    budget = replace(main_module.host_budget_from_env(cpu_render=cpu_budget),
+        narration=narration_budget, montage=montage_budget)
+    identity_access = MemberDeviceAccess(members)
+    verify_identity = identity_access.verify_identity
+    assert verify_identity(CreationExecutionActor('local', member.member_id)) == 'ready'
+    media = main_module.TaskMediaJobs(repository, facts=main_module._task_media_facts,
+        verify_identity=verify_identity, on_settled=main_module._wake_assistant_continuations)
+    record_admission = media.record_admission
+    material_executor = MaterialHashUnitExecutor()
+    registrations = {
+        'creation_job': creation_job_registration(repository,
+            render_action=main_module._render_creation_stage_with_grant,
+            render_is_valid=main_module._creation_stage_valid_with_grant,
+            cpu_render_budget=cpu_budget, narration_budget=narration_budget, montage_budget=montage_budget,
+            verify_identity=verify_identity, task_media=media),
+        'material_asset': OwnerRegistration(MaterialHashOwnerVerifier(repository), material_executor),
+    }
+    observations = {}
+    steps = []
+    original_probes = probe_module.build_host_probes
+    original_runtime = device_module.build_device_runtime
+    original_bind = material_executor.bind
+
+    def observe_probes(**kwargs):
+        steps.append('host_probes')
+        value = original_probes(**kwargs)
+        observations['probe_arguments'] = kwargs
+        observations['probes'] = value
+        return value
+
+    def observe_runtime(**kwargs):
+        steps.append('device_runtime')
+        value = original_runtime(**kwargs)
+        observations['runtime_arguments'] = kwargs
+        return value
+
+    def observe_bind(service):
+        steps.append('material_bind')
+        return original_bind(service)
+
+    monkeypatch.setattr(probe_module, 'build_host_probes', observe_probes)
+    monkeypatch.setattr(device_module, 'build_device_runtime', observe_runtime)
+    monkeypatch.setattr(material_executor, 'bind', observe_bind)
+    runtime, service = bind_device_runtime(repository=repository, settings=settings, members=members,
+        registrations=registrations, budget=budget, material_executor=material_executor,
+        verify_identity=verify_identity, record_admission=record_admission)
+    try:
+        assert steps == ['host_probes', 'device_runtime', 'material_bind']
+        probe_arguments = observations['probe_arguments']
+        runtime_arguments = observations['runtime_arguments']
+        assert probe_arguments['budget'] is budget
+        assert probe_arguments['database_path'] == repository.database_path
+        assert probe_arguments['disk_paths'] == (repository.database_path.resolve().parent, Path(settings.video_output_path).expanduser())
+        assert runtime_arguments['registrations'] is registrations
+        assert runtime_arguments['resources'] is observations['probes'][0]
+        assert runtime_arguments['processes'] is observations['probes'][1]
+        assert runtime_arguments['device_access']._members is members
+        assert runtime_arguments['device_access']._identity_verifier is verify_identity
+        assert runtime_arguments['admission_recorder'] is record_admission
+        assert runtime_arguments['activity_source_reliable'] is True
+        assert runtime.scheduler.database_path == repository.database_path.resolve()
+        assert runtime.scheduler.lock_path == repository.database_path.resolve().parent / 'device-permit.lock'
+        assert not runtime.running
+        assert service._thread is None
+        assert all(runtime.registrations[name] is value for name, value in registrations.items())
+        assert service.repository is repository and service.execution_mode == 'scheduled'
+        assert service.scheduler is runtime.scheduler and material_executor._service is service
+        assert service.scan_interval_seconds == 60 and service.stable_seconds == 10
+        destination = os.environ.get('DEVICE_RUNTIME_ASSEMBLY_EVIDENCE_DIR')
+        if destination:
+            Path(destination, 'NORMAL_SUMMARY.json').write_text(json.dumps({
+                'explicit_database': str(runtime.scheduler.database_path),
+                'ambient_database': str(main_module.production_repo.database_path),
+                'lock_path': str(runtime.scheduler.lock_path), 'steps': steps,
+                'registered_roles': list(registrations), 'original_registration_objects': True,
+                'explicit_member_identity_admission_budget_refs': True,
+                'real_probe_types': [type(probe).__name__ for probe in observations['probes']],
+                'runtime_type': type(runtime).__name__, 'material_type': type(service).__name__,
+                'shared_scheduler': True, 'runtime_started': runtime.running,
+                'existing_calibrated_environment': _CALIBRATED_ENV, 'parsed_host_budget': asdict(budget),
+                'starts_dispatch_models_native_resource_samples': 0,
+                'observations': 'Forward original constructors/bind; no fake construction, guard or success result.',
+            }, ensure_ascii=False, indent=2) + '\n')
+    finally:
+        assert runtime.stop(1)

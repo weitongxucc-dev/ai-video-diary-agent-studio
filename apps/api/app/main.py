@@ -78,7 +78,7 @@ from app.auth import (
 )
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
 from app.artifact_store import ArtifactStore
-from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies
+from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies, bind_device_runtime
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
 from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
@@ -13521,7 +13521,6 @@ device_runtime = None
 
 
 #: 整机锁文件名。锁放在生产库同目录：换一台机、换一个库，就是另一把锁。
-_DEVICE_LOCK_FILENAME = "device-permit.lock"
 
 
 class RenderStageRejected(RuntimeError):
@@ -13553,8 +13552,6 @@ def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: Cpu
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _device_lock_path() -> Path:
-    return Path(production_repo.database_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME
 
 
 def _build_device_components(*, repository: ProductionRepository):
@@ -13637,30 +13634,11 @@ def _build_device_components(*, repository: ProductionRepository):
         registrations["material_asset"] = OwnerRegistration(
             MaterialHashOwnerVerifier(repository), material_executor,
         )
-    resources, processes = build_host_probes(
-        database_path=repository.database_path,
-        disk_paths=(Path(repository.database_path).expanduser().resolve().parent,
-                    Path(settings.video_output_path).expanduser()),
-        budget=budget,
+    runtime, material_service = bind_device_runtime(
+        repository=repository, settings=settings, members=local_members_service,
+        registrations=registrations, budget=budget, material_executor=material_executor,
+        verify_identity=_verify_creation_identity, record_admission=task_media.record_admission,
     )
-    runtime = build_device_runtime(
-        database_path=repository.database_path,
-        device_lock_path=_device_lock_path(),
-        device_access=MemberDeviceAccess(local_members_service, identity_verifier=_verify_creation_identity),
-        registrations=registrations,
-        resources=resources,
-        processes=processes,
-        admission_recorder=task_media.record_admission,
-        # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
-        activity_source_reliable=True,
-    )
-    if material_executor is not None:
-        # 素材服务要拿到同一张队列，所以只能在运行时装好之后再绑。
-        material_service = MaterialIngestionService(
-            repository, execution_mode="scheduled", scheduler=runtime.scheduler,
-            scan_interval_seconds=60, stable_seconds=10,
-        )
-        material_executor.bind(material_service)
     return runtime, material_service
 
 

@@ -39,6 +39,9 @@ from app.voice_clone import VoiceCloneProvider, voice_clone_provider_from_catalo
 from app.workflow import LangGraphEpisodeWorkflow
 
 
+_DEVICE_LOCK_FILENAME = "device-permit.lock"
+
+
 @dataclass(frozen=True)
 class DatabaseOwners:
     episodes: EpisodeRepository
@@ -163,3 +166,41 @@ def prepare_runtime_dependencies(
         settings, SupabaseAuthContext(settings), database, models, media,
         ContentServices(vault, episodes, LangGraphEpisodeWorkflow(episodes)),
     )
+
+
+def bind_device_runtime(
+    *, repository: ProductionRepository, settings: Settings, members: LocalMemberService,
+    registrations, budget, material_executor, verify_identity, record_admission,
+):
+    """Bind one unstarted device and its material service from explicit objects."""
+    from app.device_runtime import build_device_runtime
+    from app.member_permits import build_host_probes
+    from app.material_ingestion import MaterialIngestionService
+    from app.member_permits import MemberDeviceAccess
+
+    material_service = None
+    resources, processes = build_host_probes(
+        database_path=repository.database_path,
+        disk_paths=(Path(repository.database_path).expanduser().resolve().parent,
+                    Path(settings.video_output_path).expanduser()),
+        budget=budget,
+    )
+    runtime = build_device_runtime(
+        database_path=repository.database_path,
+        device_lock_path=Path(repository.database_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME,
+        device_access=MemberDeviceAccess(members, identity_verifier=verify_identity),
+        registrations=registrations,
+        resources=resources,
+        processes=processes,
+        admission_recorder=record_admission,
+        # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
+        activity_source_reliable=True,
+    )
+    if material_executor is not None:
+        # 素材服务要拿到同一张队列，所以只能在运行时装好之后再绑。
+        material_service = MaterialIngestionService(
+            repository, execution_mode="scheduled", scheduler=runtime.scheduler,
+            scan_interval_seconds=60, stable_seconds=10,
+        )
+        material_executor.bind(material_service)
+    return runtime, material_service
