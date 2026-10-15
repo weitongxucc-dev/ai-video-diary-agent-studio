@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMPOUND-SELECTION-EXECUTION-20261015独占main.py、task_audio.py、creation/editing/compound_use_case.py、media/picture_preview.py、creation/visual_preview_use_case.py及NEW tests/test_compound_preview_application.py六源与fresh-api-compound-selection-execution/**；先关闭复合选择旧执行入口，已集成画面/旧证据冻结不复跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMPOUND-SELECTION-INDEPENDENT-20261015仅fresh-qa/compound-selection-independent/**新证据；复用191源/185固定Git＋六冻结源，只两个特有反例，不跑作者normal或已过共享visual族。产品及旧证据只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-EXACT-PREVIEW-EXECUTION-20261015独占main.py、task_audio.py、creation/editing/metadata_use_case.py、creation/editing/subtitle_use_case.py及NEW creation/editing/exact_preview_use_case.py、tests/test_exact_preview_application.py六源与fresh-api-exact-preview-execution/**；完整关闭exact后接command，已集成旧包/证据不复跑。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 复合选择已root接受有观测限制的两业务反例并集成4bedf3d4/归还；首会话完整imports/native/登记清单仍UNKNOWN，未补造或复跑首项。所有旧包冻结，当前无新产品/证据执行租约，待exact稳定候选。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,19 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 复合选择候选已预审，绑定两个特有反例
+### 复合选择已集成；接续完整精确编辑入口
+
+复合选择六源已4bedf3d4eeee2e54ec9b5f1f375374b75ddd5b3a精确集成并即时归还。QA门4d88444869cded298d3b30d230d62eb2d97d95830cd97bc85fa11ed4588158ce已root compound-selection-independent-reviewed.json SHAbfd048c8a0952b2dcb931312e3573d2bbd4e8b158dcf63448602bec7669a5af3核26artifact/3复用/191源，两业务不变量成立：首侧后原仓储独立提交rejected拒后侧，早媒体/外部状态保留；两媒体后intent INSERT→proposal INSERT原IntegrityError同conn回滚、公开retry复用两slot不重render且联合保存成功、不应用timeline。首会话清理dir_fd观察器错误使完整imports/native/登记汇总缺失，仍UNKNOWN；有实际before-compile硬SHA guard、191源/fixture/script prepost及真实owner/数据/文件证据，root只接受这套明确限制的业务门，不接受首会话动态清单完整性。只修探针类型断言/自身清理FD解析后复验失败第二项1PASS15.26s，实际2代表3执行、首项0重跑；第二实录189source loads/190origins、21native/18登记/3fixture。原normal/visual共享族零复跑，非生产/GUI/fullPGID/R3/R9接受。
+
+`REF-R3-EXACT-PREVIEW-EXECUTION-20261015` 固定产品4bedf3d4，API准确六源如角色表，证据只写test-runs/refactor-20261014/fresh-api-exact-preview-execution/**；初始四源当前=Git/两NEW不存在/空index及剩余两旧route见fresh-root-review/exact-preview-implementation-binding.json。一个具体ExactPreviewUseCase接完整exact分派、typed source/request journal、prepare/queue/明确execute/result读取，直接调用已有业务owner；不反射、不构造Request、不以路由响应推持久事实、不新通用dispatcher/回调袋。旧main对应实现迁交后只保留其它活跃消费者的有限显式facade；command旧入口留下一批，实际共享消费者立即接同核。
+
+Metadata owner按实际图片职责接graphic/transition/canvas/metadata settings/exact montage及clip-update完整body，封面图片/标题提案计算也归该owner或exact编排，不塞进字幕owner；Subtitle owner接字幕样式媒体发布、显示、翻译预备与无track_id cue原body。共同exact提案编排/legacy intent_type和错误DTO保持，原独立intent与proposal保存不擅自改成联合事务。音频/visual/clip/linked及刚过picture publisher/resources原实现直接复用，不改其已过源或再复制业务。实际依赖超六源先给root精准差额，不扩大写域。
+
+GUI无envelope旧协议、typed source全部原字段/assistant来源核验及worker actor/media_job绑定，成员/来源/base/投影/预算读取与拒绝时点保持。request journal沿原preview phase、输入claim、200/202/原错误回执、重读与unknown拒绝，业务实现不得从ambient取source/execution，不新增或重写历史job/digest/默认资源/权限；原公共仓储/事务/文件与登记阶段保持。完整exact所有活跃分支有直接调用后，退役其decorator/handler/伪HTTP/反射/ambient worker与迁出的原main body，不以仅移外壳收口。
+
+一个组合normal：合法typed picture操作真实有声字幕双侧预览，核原source/journal公开查询/同请求重放/未应用timeline；已过其它分支按完整AST/必要实参与接线证明复用，不新增field矩阵。原有限fixture/OS端口、真实native与生产未验层级单列；有限source-load/origin prepost＋准确差额和AST摘要即可，不复制全仓/全部源/全AST。首失败保留、仅失败受影响normal复验，过即最简SOURCE_RELEASE；root另绑2–3特有代表，聚焦typed member/source/version失效、claim后unknown/晚保存失败不重复执行，共享publication/cancel/resource族不无故重跑。语义ACK核六源/初始字节/原journal与phase后直接实施，无第二START；release冻结后root审核/关键门/精确集成即时归还，继而收敛command，不需用户再次批准。
+
+### 已履行复合选择候选预审与两个特有反例
 
 `REF-R3-COMPOUND-SELECTION-INDEPENDENT-20261015` 仅QA写test-runs/refactor-20261014/fresh-qa/compound-selection-independent/**。作者release SHA3589fecc02c7ea590eec8699172936fe28203ac796790a77fd7c5890e7a117dd、六TAB407184ac8e1a88c36ac8d208793cde1cde69bdfaad143dfabe94fa10ab87a923、candidate-04/SOURCE_BINDING.json SHA24007cd11dfde7b723741eb9ad3ce09fb9bc7c45d880d5dc6f43429ee2158820。root compound-selection-release-reviewed.json SHAfe856df7644d04f568b9bbff355db80d337d3c5a4df9ae2a534f05dd65c77112含准确191源map与fingerprint926f08ef4edf310f50c738d7ad4049927e648450ebebd2696f8008462acdb1c0，核98artifact、185固定db57f1fc Git＋六冻结overlay、190实际source loads/191origins、709非目标完整函数、公共publish/resources与driver仅增compound分支后完整AST等价；已读六源diff，正常链路四实际后PASS14.93s（首collect误收.venv、原snapshot日期类型错、test误比public/storage三首失败保留），旧门0。实际13字段通过现persistence codec保留原持久值，修复新input digest与durable事件不一致；共享check/事务/许可/历史job与digest不改。父98项证据只读复用，不复制191源/全AST。
 
