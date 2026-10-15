@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源release372ec90已冻结待关键QA；仅另授下述montage制作只读准备及fresh-api-montage-stage-preparation/**新证据，不写产品。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-PERSON-STAGE-INDEPENDENT-20261015仅fresh-qa-person-stage/**证据/隔离执行，人物5源及195源tuple只读，最多三个特有代表；原通过批次冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源release372ec90冻结待关键QA；montage只读准备已root审核，所有产品/原证据冻结，待人物集成后精确实施绑定。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物HEAD独立代表首轮通过冻结；仅下述两项资源阻断节点在实际原内存门满足后定向续验，fresh-qa-person-stage/**隔离证据/执行，人物产品只读。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,15 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物候选关键独立门与下一制作阶段只读准备（当前有效）
+### 人物独立门部分通过；只续两项资源阻断节点（当前有效）
+
+人物QA首轮三个实际代表中local HEAD首轮PASS，早ready child/JobRun/Artifact/Transform/edges/视频保留，原current guard拒绝editorial，未进入提交CAS；其余full来源变化和local晚SQL均被实际可用内存不足原3221225472字节门阻断、各目标注入未到达，不能作业务失败或通过。RESOURCE_BLOCKER.json SHA89562e96e4a1a0289a7b51fc5c58ef9bc248643b5dda49ccea81c6af84d82657已root person-independent-resource-blocked-reviewed.json SHA234734e21605c25c3dbc2c8ef83cf862b5a39a026ca6a297ec8c5e373ac7bf41核11artifact、195实际加载/196父imports、源/脚本/3refs无漂移、42native/25登记全部释放/3fixture与14原quality probes单列。HEAD通过节点及attempt-01冻结，不重跑。暂未SOURCE_GATE、未集成，不能按整族PASS归还。
+
+原内存门及全部cap/OSfixture保持；root只读复核从2972598272、2994716672恢复到3236233216字节，实际环境条件已改变。直接允许当前QA用原封存脚本和同一候选只对test_full_source_change_after_durable_child_refuses_outer_success、test_local_terminal_SQL_rolls_back_editorial_but_retains_early_child各续验一次，新attempt隔离目录；执行前及执行中仍由原真实资源门决定，若再次不足如实封存阻断并停止新增执行，不盲循环或伪造available memory，也不退出用户程序/改进程。不得重跑HEAD、作者normal或旧门；若只一项通过，冻结该项后只保留另一项待原条件恢复。无重复ACK/第二START，SOURCE_GATE真实完整通过后再集成与即时双方归还。
+
+montage只读准备releaseb666316d25e577bb13817ea2ecc1196b4c20a5cbbbe1bd016ec9c7ba7c722bbb、包dbaae62c1de71d8a8edad4827f4f310d53fd5e857d1aa785f9a8755c92894312已root montage-stage-preparation-reviewed.json SHAeca3d4a5cbe6f4c19a3493d1900ade97280ec630c16bc013d2e10f05e1e55a1a核7artifact/12当前源/43完整body、人物候选未变及两目标body仍等原Git。该明确只读范围完成冻结：后续五源具体MontageStageUseCase/显式registration、原独立提交点保持，一个metadata normal、不另设复杂QA；产品实施仍须人物精确集成后新基线绑定。render/continuation/投影/lifecycle与同候选整体接受仍在后续，不因当前准备完成关闭。
+
+### 人物候选关键独立门与下一制作阶段只读准备（已履行冻结规约）
 
 人物SOURCE_RELEASE SHA372ec90ba5178226638fbe248e0250fdfda00af79cdae58ee595c814ef59ae0a的5源TAB 2e79f8201a461ab528860cb977d4db4524e3e9ea265ffceca8b63ffb0ac20d43、195源fingerprint b0758440671793f946f512434a6c02511ebea988cfb6b1e8aaaa56bdb706fc0c已root person-stage-release-reviewed.json SHAb03286cff2efba176573b2343171473c9a46f849b664fad9197fa48afb501523核83artifact、194before-compile/195actual origins、8完整body/710既有函数/50端口与原PresenterBudget全部参数。一个normal两实际，首败缺rendered版本保留；仅新test补真实原队列/renderer当前成片后PASS6.71s call/15.45s process，一次入口前脚本错误零app/native。22native/14登记全部释放/1合成视频fixture及7原quality helper未登记命令如实分列，后7仅argv/源码静态归因、无runtime caller stack，不认全PGID/生产资源接受；local执行GET既有409仍待后续投影收敛。作者产品/原证据冻结，不再改动或重跑normal。
 
