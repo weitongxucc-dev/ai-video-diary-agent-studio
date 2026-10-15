@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 模板三源release3e97d616已root源审/冻结待QA；当前REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅fresh-api-publish-output-preparation/**只读准备，零产品写权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅fresh-qa-video-template/**；单个shared reader经原task-save owner403门，零产品写权，其余证据冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 模板三源已a90dc4f6集成/即时归还；当前REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅fresh-api-publish-output-preparation/**只读准备，零产品写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 模板shared-reader独立门已root接受、三源a90dc4f6集成/即时归还；产品与全部证据冻结，当前无新写入/执行权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 模板三源源审与共享reader单个独立门（当前有效）
+### 视频模板三源已精确集成（冻结复用）
+
+三源已a90dc4f6cd9fecbaf1a32e12dfde4be78a436ef9精确集成，cached/committed/live等release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04/TAB40dd28173092a107c0ab537fd0ca1ad3d5c9242cd959f0a154e3e7104dd96b7d；root video-template-integrated.json SHAfb37229e9f76d45bfa0eae785cae6f7a02c9381e677b6a31adeda4d40655b867。SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA，早于本合同更新；本产品/全部模板证据冻结，API独立publish-output只读准备继续，不复跑旧normal/矩阵。
+
+gate510d9d3d9d103a643edbe500ae607406dba27044dcaa20925add6077fe595bcf已root video-template-independent-reviewed.json SHA5fe8fcb3a94977a9bf085de9bdd27b8633a0121bf65c3b4e5c25b0eca4db3192核12artifact/4ref/195 actual beforecompile-origin，单代表首次过(child8.995s/process9.269s)。公开repo seed→set共享→OTHER真实list/read，原rendered_source解析/守卫+真实Path.stat(43byte NONMEDIA)先达，原resolver/require_readable成功后OTHER原owner403且原message，在subtitle/script/build/late reader/persist前拒绝；两reader/一workspace照旧，原template所有字段/OTHER列表/版本1/owner/settings及Plan/Task/Timeline/Job0均保持，无新写。source task/Plan/montage/输出路径为明确qualified替身，非真实video/output授权；无factory/lifecycle/driver/native/model/host/旧门，非生产auth/JWT/GUI/resource或整体R9。剩余发布输出资格与整体接受继续；下节门已履行不恢复租约。
+
+### 模板三源源审与共享reader单个独立门（已履行冻结）
 
 release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04 / TAB40dd28173092a107c0ab537fd0ca1ad3d5c9242cd959f0a154e3e7104dd96b7d已root video-template-release-reviewed.json SHAcaf188b1f76e2a1f6d01cfd9f50d7285a125dd90726ef5f69285fa684e95fb3c核20artifact/197实际beforecompile-origin、四签名/装饰器/完整分段body有限翻译/其它main整AST、12直接canonical源和preflight非main四源/37值。一个metadata node首次过（call .126s/pytest .21s/runner2.419s），v1/v2真实SQLite/fresh回读、task settings/两late reader/一次builtin投影；38字节NONMEDIA只证明stat，不是视频/生产身份/GUI/资源接受。static observer首错取reader assignment而非return，修正观察器保留、0应用重跑。三源/作者证据冻结待门，未集成。
 
