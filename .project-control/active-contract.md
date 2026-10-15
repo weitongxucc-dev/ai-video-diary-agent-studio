@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源已7fbb44ec精确集成/即时归还；当前REF-R3-EXECUTION-CONTROL-20261015下述4源与fresh-api-execution-control/**独占实施，旧候选/证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | render两个特有代表已root审核/7fbb44ec集成并即时归还；当前无产品/证据/执行权，后续仅稳定控制候选的新取消缺口/恢复metadata代表另绑，旧门冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | execution-control四源7bd6e0a4已SOURCE_RELEASE/root源码审过，产品及旧证据冻结；仅下述组装/安全重载只读准备fresh-api-runtime-assembly-preparation/**，无产品/应用执行写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-EXECUTION-CONTROL-INDEPENDENT-20261015仅fresh-qa-execution-control/**，一个metadata取消提交缺口/恢复代表；四产品与198实际来源只读，作者normal/旧矩阵零重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 成片已集成；执行控制迁交（当前有效）
+### 执行控制源码已审核；一个取消提交缺口恢复门（当前有效）
+
+REF-R3-EXECUTION-CONTROL-INDEPENDENT-20261015绑定作者release7bd6e0a485c06e092206e3801290c50b936dccc6ee1604af05626497ff26c4dd、四源TAB597209eece262a5d3944975a0cab18aeab6b523dc839aa08a663bc3fd8439603、198实际来源fingerprint7248542482df25367132e31715d4009e7b22aca897dab9b48513d116208b8402。root execution-control-release-reviewed.json SHAf31535860b1f1a7c824c8df6c3b96e9b0bd032a277aa28e04c3a712c7f341e5b核26artifact/197before-compile/198origin、10完整body/626其它main函数、main其余module/production仅六原with只读查询、四引用constructor与原HTTP前缀/catch/身份/singleton/driver不变、fetchall闭conn再逐项decoder。唯一metadata normal首次PASS（call .448s/pytest6.59s/process9.155s），原公开重复start/绑定查询/cancel/recover/resume和六读取scope/order/Row或None通过；explicit interrupted/history-running/local-kind/read-order夹具如实，非实际worker中断。native/dispatch/model/resource sample均0，root应用执行0；首次静态只因recover docstring缩进，有限cleandoc规范化且首失败保留，不重跑作者normal。
+
+QA只写新test-runs/refactor-20261014/fresh-qa-execution-control/**，一个metadata独立代表：真实公开start形成原full JobRun/设备waiting请求；仅原runtime.scheduler.cancel外部边界一次故障，须在实际CreationExecution.cancel已提交JobRun=cancelled、请求仍waiting时观察独立DB。保留实际异常/HTTP结果不预设成功。移除自己故障后经原_recover_creation_executions facade，核用原start event完整持久actor取消原设备请求，job仍cancelled、无新job/request/阶段工作或旁路身份，重复查询/恢复不增执行；真正调用原scheduler.cancel，不能以直接改请求状态或mock业务守卫代替。不dispatch/run_once/start线程/模型/native、资源采样0，原预算/OS精确同值。只复用新test正常setup前缀/原finally及现实际真实仓储/actor/队列，不执行作者normal主体；198tuple直接引用作者RESULT actual_origins_post，必要额外固定Git源on-demand硬绑定，不复制全仓/全AST/旧证据。源/脚本预封、实际before-compile/origin与零native/dispatch计数最小证明；首失败保留仅失败影响node必要重验。简短语义ACK后直接执行无第二START，SOURCE_GATE后冻结；root过门即时四源集成/双方归还，不将metadata门升级为生产重启/真实资源/GUI或整体接受。
+
+### 组装与安全重载只读准备（可并行）
+
+REF-R7-RUNTIME-ASSEMBLY-PREPARATION-20261015仅API写新fresh-api-runtime-assembly-preparation/**，产品、控制198执行tuple及全部既有证据只读，零app import/collect/test/model/native/GUI/env/account用户DB/Git变更。按系统架构3.14及8，仅核main已知_publish_runtime_dependencies/_current_database_owners/_initialize_runtime_dependencies、_prepare_runtime_routes/_publish_runtime_routes、PreparedRuntimeReload/QuiescedRuntimeDrivers与_assert_runtime_reload_allowed/_quiesced_runtime_drivers/_prepare_runtime_reload/_activate_runtime_reload/_reload_runtime_dependencies、_build_device_components/_start_device_runtime/_stop_device_runtime/_creation_runtime/_new_creation_execution及必要实际startup/shutdown直接caller；app.bootstrap实际模块与原reload对应测试只取必需body/调用关系。给一个最小下一包：显式组装、实际依赖发布/激活与停旧驱动→持久配置→新驱动绑定的所有权和失败恢复边界，区分已迁交能力及真实剩余，不再重做已过reload批次。列准确拟源/退役目标/原语义与必要最小验证，未授权提前改导入启动、默认配置、身份/预算或生产数据，不造通用容器/第二调度/兼容registry。只做目标摘要与精确当前Git/读期冻结，不全main/全仓/全AST/历史长报告；root核准备后另绑产品与真正受影响门。
+
+### 成片已集成；执行控制原实施绑定（已履行冻结）
 
 成片四源已7fbb44ec081dc80d26fc5cad6b134e4e6c55e3a2精确提交，index/commit/live逐字节等原c340000c release，SOURCE_INTEGRATED/WRITE_LEASE_RETURN即时已发API和QA。root render-independent-reviewed.json SHA0506cae70c45398d8abd8dbecd5a84aa91f4f7d61188c9135933dec3c65fd3a1核独立gate148aad12e1eaeeff10d65baa5fd1c957a17e2273e9d92b96f1ed8adfe4708814、21artifact/3refs、197before-compile/198origin、两个首过代表与8native/6登记释放/2输入fixture。paired晚SQLite失败前同conn已写montage/task、另一observer只见旧值，rollback后原failed-save另行合法提交；早MP4/SRT/Artifact/Transform/6edges保留，后续成功event/cover/tracks/child/outer success与QC未到达。另一代表真实renderer交付处外部OSError，原独立新HEAD+montage提交后stale failed-save零保存，未发布staging被原cleanup删除如实。原normal/旧门零重跑，root未执行应用；回执render-stage-integrated.json SHAf56229f7d0452ae80183250929846d068cc98ab93476512f866eb95578ab810c。原quality未登记、子入口完整来源/fullPGID、GUI/真实模型/生产身份资源及整体接受仍未验。
 
