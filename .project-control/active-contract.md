@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-VIDEO-TEMPLATE-IMPLEMENTATION-20261016仅下节main与二NEW三源/fresh-api-video-template-implementation/**；一个metadata normal，旧产品/证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 方案预检撤grant独立门已root接受、五源6fb2d137集成/即时归还；产品与全部证据冻结，当前无新执行/写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 模板三源release3e97d616已root源审/冻结待QA；当前REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅fresh-api-publish-output-preparation/**只读准备，零产品写权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅fresh-qa-video-template/**；单个shared reader经原task-save owner403门，零产品写权，其余证据冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 视频模板具体owner三源实施（当前有效）
+### 模板三源源审与共享reader单个独立门（当前有效）
+
+release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04 / TAB40dd28173092a107c0ab537fd0ca1ad3d5c9242cd959f0a154e3e7104dd96b7d已root video-template-release-reviewed.json SHAcaf188b1f76e2a1f6d01cfd9f50d7285a125dd90726ef5f69285fa684e95fb3c核20artifact/197实际beforecompile-origin、四签名/装饰器/完整分段body有限翻译/其它main整AST、12直接canonical源和preflight非main四源/37值。一个metadata node首次过（call .126s/pytest .21s/runner2.419s），v1/v2真实SQLite/fresh回读、task settings/两late reader/一次builtin投影；38字节NONMEDIA只证明stat，不是视频/生产身份/GUI/资源接受。static observer首错取reader assignment而非return，修正观察器保留、0应用重跑。三源/作者证据冻结待门，未集成。
+
+REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。root video-template-independent-binding.json SHA2d9eef6dab164d10a3abd0eeec466d68d5229174f9a868c0fa014d0283b4cfa0绑定三源与candidate01 actual197 map。一个元数据代表：公开repo seed/set共享/read，OTHER声明可信reader经原task-save更新共享模板；原rendered_source真实解析/守卫、原非空stat先达（task/Plan/montage/output路径为声明qualified替身、文件为自有NONMEDIA），真实共享resolver可读通过后，原403「只有这个模板的所有者可以保存新版本。」在subtitle/script/build/late readers/persist前拒绝；原template版本/owner/settings等公开回读不变、0新写。禁止mock权限/readability/owner/save或rawSQL fixture writer，不为未改CAS另开门，不跑作者normal/旧测试。自有隔离DB，优先direct handler无factory/lifecycle；必要时原factory一次/原37值，零driver/native/probe/model/GUI/network/资源。预封source/script、actual beforecompile-origin/前后、197 map引用/必要fixed Git，不复制全源/AST/DB/旧证据；首败保留，只必要失败节点重验。一次短ACK后直接执行，无第二START；稳定SOURCE_GATE冻结，root核后精确集成/即时归还，未算整体R9。
+
+### 发布输出资格的只读接续（当前有效）
+
+REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅API写fresh-api-publish-output-preparation/**，root publish-output-preparation-binding.json SHAbd2ce49b4b5d700900de0c71a4090318f9be0ef7add040f92eff9c1fa2c20d65固定main/production/platform_publish/routes/output_observation四初始源，所有产品含模板三源冻结。只读_platform_publish_task_for_user/_platform_publish_output_for及真正必要直接access/output/version/logical-ref helper和_prepare_runtime_routes/_build_device_components准确callback接线；复用四组，不全platform/main/消费者重清。一个紧凑具体输出资格owner/精确文件/原身份版本与来源产物路径stat错误时点/有限依赖/退役包，一metadata自测和确有关键边界时最多一个独立代表。零产品/import/collect/test/DB/媒体native/platform执行/账号/env/lifecycle/GUI/网络/host资源，不新提交发布或unknown/retry政策、账号/设备注册变更，不复制全源/AST/旧证据。当前main为模板冻结候选，后续集成HEAD-only区分实际body/source变化；一次短ACK直接准备，release冻结root另绑产品。
+
+### 视频模板具体owner三源原实施（已源审冻结）
 
 准备release06ba2e0460c429b86f491ba44ec2d4a8c766ab43a345998808fa09c484cdd221 / package f74d1fee02c0817e5fab39e77e9fb1808231d6a874eae73354e37af7e3d5632f已root video-template-preparation-reviewed.json SHA98714a661add5c66543f9352a4a2de4703ed3a66cddf9957c726cdc1c0adcf79核4artifact/13当前Git源/27命名span、四初始读期一致；预检6fb2d137集成只改HEAD不改本组源字节。准备冻结/READONLY_PREPARATION_REVIEWED与WRITE_LEASE_RETURN随本新绑定接续，不重复大清点。
 
