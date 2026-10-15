@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | R7有限组装已dfcba3b4精确集成/即时归还；当前REF-R3-LEGACY-STAGE-TEST-WIRING-C1-20261015仅test_creation_execution.py两个旧stage_actions测试接线及下述新证据，全部app源只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | R7有限组装已dfcba3b4精确集成；两个旧stage测试接线C1已2c470297精确集成/即时归还。当前无新产品/证据/执行写权；待QA实际晚activation结果后单一缺陷再绑定。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-INDEPENDENT-20261015仅fresh-qa-late-runtime-activation/**，一项原先未验证的持久化后真实生命周期失败；app/旧证据只读，不导入/读取/监控API独占test_creation_execution.py，不重跑已过门。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -47,7 +47,7 @@ REF-R7-LATE-ACTIVATION-INDEPENDENT-20261015是尚缺的安全重载关键链路�
 
 核验已保存的失败必须如实报告，不能把已终止原循环称为恢复，也不能让finally次级恢复异常掩盖已保存的主失败；逐项记录实际持久env/workspace配置、当前settings/仓储/路由/installer绑定、旧/新device与continuation存活/closed引用和原主/次异常及HTTP/无HTTP事实。若实际不满足，首败冻结给唯一API负责人，不绕过真状态或为了绿加重建/回滚新政策；root据真实阶段另绑最小修复。全部DB/config/输出/临时目录只在QA隔离域，无用户/账号库/凭据、模型、媒体、外网或native；只准已知原37值fixture预算，不改门，不称生产校准。允许上述必要真实空闲驱动线程，禁止任何阶段/模型派发并证明空队列及零stage/native/resource采样；结束无论成败停自己的全部新旧线程，不覆盖原应用。一个代表首次失败保留，只失败受影响node必要续验；源/脚本预封/实际来源/构造与启停精确计数最小证据，不复制全仓/全AST/旧包。一次语义ACK后直接执行，无第二START；SOURCE_GATE后冻结，未验不计整体完成。
 
-REF-R3-LEGACY-STAGE-TEST-WIRING-C1-20261015仅API改apps/api/tests/test_creation_execution.py及新fresh-api-legacy-stage-test-wiring-c1/**；root legacy-stage-test-wiring-c1-binding.json SHAee6649ca2a3cf43be7279c03baabf7cc272b597ed07651e0b89c2aa0482cbce2核初始源526fd2ad和两个完整目标。只适配test_confirmed_script_only_runs_all_queue_stages_and_restores_original_account及test_resource_pressure_defers_original_job_and_revalidates_before_regrant的已退役stage_actions/旧montage helper，走现narration_stage/montage_stage明确generate端口；可用测试局部的原故障callback适配明确stage端口，第一原normal继续调用现具体owner，不增加产品兼容registry/公共抽象或删原参数矩阵/预算/故障/身份/回滚断言。其余整个测试module及helpers/全app只读不变。最小验证最多该pressure测试ordinary_error一个受改动影响的metadata node；不跑第一full媒体normal或其它参数/已过矩阵，不以fixture替身称真实模型或生产QA。两接线原完整body除必要端口/fixture差额、所有decorators/断言不变与最小node核过即release；超单文件或需native先报准确差额不扩大域。该文件不在组装196执行tuple内，可与上项互斥并行；ACK后直接实施，无第二START，root过门精确集成即时归还。
+REF-R3-LEGACY-STAGE-TEST-WIRING-C1-20261015已2c47029710312f9b6f2cc5790c4835eb54addf46单文件精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API，原产品和证据冻结。release c836a490834b3ef1700cd58b3055c94eac2020b7e039a6036f2765b66f7ebab9经root legacy-stage-test-wiring-c1-reviewed.json SHA993b476cc9563cf57331fea748635201bf2da5d1f63eea25e4b323f80112fec6核33artifact、两次196loader/197origin、六精确fixture差额、31其它完整函数/112断言及原参数矩阵/预算/故障action不变。仅ordinary_error一个metadata node两实际：旧bool admit先在dispatch前失败，最小HostResourceDecision返回形状修正后通过；零native/资源/模型，full媒体和其它参数未跑，无额外QA。回执legacy-stage-test-wiring-c1-integrated.json SHAbff1279290646627a62b7788193ab833e911729fb21de35457b9c9c4463e569b；全部app tuple不变，当前QA晚activation继续。原绑定、两目标完整AST/必要接线范围及互斥约束见冻结root legacy-stage-test-wiring-c1-binding.json SHAee6649ca2a3cf43be7279c03baabf7cc272b597ed07651e0b89c2aa0482cbce2。上述范围已履行，不恢复旧租约。
 
 ### 执行控制与设备组装原实施绑定（已履行冻结）
 
