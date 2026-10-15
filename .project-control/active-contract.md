@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 配音5源/证据冻结待QA；REF-R3-PERSON-STAGE-PREPARATION-20261015仅fresh-api-person-stage-preparation/**只读准备证据写权，无产品/执行写权，command旧批冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-NARRATION-STAGE-INDEPENDENT-20261015仅fresh-qa-narration-stage/**证据与隔离执行写权；产品5源只读，三特有代表见下；旧command/normal/共享门冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-PERSON-STAGE-EXECUTION-20261015独占下述5源及fresh-api-person-stage-execution/**；配音已9cf8ee76集成/即时归还，其余旧批与证据冻结。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 配音三特有代表已root审核并9cf8ee76集成/即时归还；当前无产品/证据/执行写权，原门冻结，待下一稳定候选。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,13 +39,27 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物制作与局部重做只读接续准备（当前活动）
+### 配音已集成；接续人物制作执行（当前优先）
+
+配音最终5源已9cf8ee765d76393b0527ac44050e11b9ce09e155精确集成，索引/提交/current逐字节等release6ef300...，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API和QA。root narration-stage-integrated.json SHAff9de178daf70c211676ad0543927f2713f4f7860711c753737e62b9ccc716a1；门7eab1c4914ed11971072d6f7f78d497d7cfb44a164508cb82f29ca5837a42dce经root narration-independent-reviewed.json SHA1890b3f1d666217d27143ee0b72e898d289e4374472713b9175bde7d68a914ce核28artifact/3refs、194before-compile parent/195origin prepost及固定Git子入口server.py（不升级整个子进程origin trace）。三代表首轮3PASS19.46s：full内部真实事务durable后外层事件SQL拒绝，早配音/分段/task保留，公开resume依真实valid-output选择下游且TTS2→2，未执行下游；local独立native HEAD推进，原current门提前拒绝/未进入commit CAS；local原checkpoint同conn八业务组与job已变但另一observer仍旧，terminal事件真实SQL失败后全部联合rollback/早WAV保留、原失败checkpoint/free。13native/10登记全释放/3原视频fixture，4合成TTS。原full /execution对local narration job GET409为真实既有投影缺口，列入后续R3/R9，不冒称成功公开状态、不得为本次gate临时绕过或改身份守卫。root观察器仅修source_files键及Python3.14元数据AST版本差额，未执行新产品测试。真实模型/GUI/生产资源/fullPGID/同候选整体R0–R9未验；以下配音旧绑定已履行冻结，不恢复写权。
+
+`REF-R3-PERSON-STAGE-EXECUTION-20261015` 固定产品9cf8ee76，API精确5源：现apps/api/app/main.py、creation_execution.py、member_permits.py；NEW apps/api/app/creation/person_stage_use_case.py与apps/api/tests/test_person_stage_application.py。证据仅test-runs/refactor-20261014/fresh-api-person-stage-execution/**。初始三现源=Git/两NEW absent/空index见fresh-root-review/person-stage-implementation-binding.json SHA304863a55b6b8afa6a319a52aec66c657810969f833d4e91c751d230d5f53c64。只读准备release37e0b4f2921334dc3617829bfff9445daafe59861717b53b4c0efe5482c7f7a8及IMPLEMENTATION_PACKAGE SHA7760692f1986a2b58e4bc9d9fe98966bf1e518272cb05b5db6ed42b005cc2a71已root person-stage-preparation-reviewed.json SHA02eb47e028fa5a58358dfc74e29b927217b76ad9fca0ed6d3b66eb964e4b564e核8artifact/16源/73完整body，只有已接受配音upstream/registration差额单列。按该具体包实施，超五源先报精准必要差额。配音owner、PersonPreview、仓储、VideoJobRunner/TaskRuntime、AvatarAndLipSyncService/providers/probe、身份/输入/资源事实、共享checkpoint/取消/恢复全部只读复用，不复跑旧门。
+
+具体PersonStageUseCase承接原完整generate_record/full loop/apply_segment_edit/prepare_edit；构造仅显式repository/同一metadata/同一PersonPreview/既有per-repository VideoJobRunner/原输出配置引用赋值，零IO/模型/新调度者。原配置只在原AvatarAndLipSyncService构造点读video_output_path，不提前捕获路径，不扩成通用配置依赖袋。复用PersonPreview唯一两provider选择与source_range/render_matches_narration、picture person_path、现presenter输入/资格/原byte cap；只在原阶段时点枚举两modelID，不预读全部profile/provider状态。main只零IOfactory、原raw无grant409/错误/result facade及实际HTTP确认adapter；原无grant且无可复用render的_submit_person_edit原位置改有限PersonEditGrantRequired信号，HTTP仍用原request/身份/submit；合格已有render仍可直接确认，不强制新增job。executor/register明确person_stage依赖，移除person_render/person_edit两stage_actions与旧stage符号，所有四旧业务body唯一归属，必要有限facade不复制规则，不为旧fixture保留影子实现。
+
+保留Task.owner_user_id/fixed person+voice版本/用途授权/讲话源语言与stat、原quality/model/motion/expression、provider.ready先于profile/audio读取、再生salt/child幂等与恢复、boundary_failure中RecoveryBlocked/PermissionError/GrantedCommandError原传播，原逐产物与full累计cap/context.check。full/local均先真实子JobRun与pending→文件→ArtifactStore/ArtifactRecord/TransformRun/DependencyEdge→ready PersonRender/bind→子job完成，各原提交时点不改；晚失败不删早child/视频/谱系。local仅后续editorial operation/version/montage/task与外层job/event在原checkpoint同conn联合事务；生成期PersonRender/child图谱不回滚成配音target元数据语义。原commit第二次读任务并重核base/目标/讲话/range，保持。
+
+唯一最小normal为新test一个合并node：声明两段已登记授权合成旁白/固定profile，不重跑配音normal；原公开execution/start实际person_render两段→公开停止下游→声明最小montage/base使用这两ready render→公开所选人物重做preview/confirm并实际local person_edit。只有fast外部synthetic worker按原SubprocessAvatarAndLipSyncProvider协议产生/复制匹配讲话时长的有限有效MP4，runtime marker/模型目录均明确测试域，不是真实模型；实际资格/AvatarAndLipSyncService/原probe/仓储/VideoJobRunner/child发布/联合检查点保留。原placeholder bytes、替换_probe_avatar_output、替换业务success_runner不能当正常通过；只复用数据与协议literal。预算及OS用原有限fixture域、所有实际native/子进程登记与释放如实，不猜生产预算/加cap求绿。核两full ready视频/谱系/子job、local再生只换选定clip/未选render和物理文件stat及旁白/cues保持、current版本/outer job一致、同排队重复同job/已完成confirm原拒绝与query实际可达边界/查询零新provider。high provider选择与argv/原规则完整AST复用，真实high模型/口型质量/生产资源/GUI/整体接受未验。首失败保留仅失败node复验，过即简短SOURCE_RELEASE冻结，旧normal/共享矩阵零新执行。
+
+稳定候选经root审核后另绑一个合并关键独立族最多三代表：full首child ready图谱真实durable后，唯一真实fixed-profile或讲话来源撤权/变化在下一段或final check失效，拒新成功保留早child；local真实child/video/图谱已durable后外部native HEAD CAS失效，editorial拒绝保留外部HEAD与早child；local checkpoint已写editorial后原terminal job/event真实晚SQL失败，联合rollback只覆盖editorial/outer终态，早ready PersonRender/child JobRun/ArtifactRecord/TransformRun/edges/视频保留。若原门更早拒绝，报准确到达/未达节点，不mock守卫或伪造checkpoint异常。QA当前无新执行权；普通搬迁最小验证不逐方法派门。API简短语义ACK核五源/不同于配音的持久边界/唯一normal/退役后直接实施，无第二START；通过root精确集成即时归还并接续R0–R9剩余。
+
+### 人物制作与局部重做只读接续准备（已审核冻结）
 
 `REF-R3-PERSON-STAGE-PREPARATION-20261015` 同API可只写test-runs/refactor-20261014/fresh-api-person-stage-preparation/**，所有产品与配音5源/作者证据冻结；不早施工。仅核main._generate_creation_task_person_render_record、_person_stage_with_grant、_apply_person_segment_edit、_person_edit_stage_with_grant及creation_execution对应person_render/person_edit真实输入/资格/检查点消费者；必要直接creation/person_renders.py、已有PersonPreviewUseCase、实际两provider和仓储公开端口。main上述原目标完整AST从固定3d2c24bb取并核当前目标未变，配音WIP只单列差额不执行；其余有限依赖按实际Git/SHA，不全仓/全AST复制或读私人env/模型/账号/用户数据，零import/collect/test/native/model/GUI。
 
 交一个高内聚具体人物制作执行owner最小实施包：共同身份/固定profile版本/讲话音频与画面资格、两provider显式选择、原grant/context/模型资源/路径物化和累计产物cap、full与local原持久化/检查点连接时点、现调用和旧消费者退役、准确拟独占文件及一个最小normal/必要合并关键族。只移交现完整body/实际规则，不新增通用registry/兼容callback/预算默认/第二调度者，不为真实模型/资源不可用假造成功；已过PersonPreview/profile仓储/配音/共享门只读复用。没有有收益的剩余边界时给具体有限不存在证明关闭该scope，不人为拆分。简洁准备回执，精确缺口与执行边界如实；准备释放后冻结，须root另绑产品才实施，不妨碍现配音QA/集成。
 
-### 配音制作稳定候选关键独立门（当前优先）
+### 配音制作稳定候选关键独立门（已集成冻结）
 
 `REF-R3-NARRATION-STAGE-INDEPENDENT-20261015` 绑定SOURCE_RELEASE6ef30009f74af921546156d05a0763cdfc9c71e58f9babd87f3962db9b36605e，最终5源TAB18da6cb6703c6a54d7c63c38bbda216f00cdb3abe8c1eb01f844f6aec80e031f及194源fingerprint b513b615535d8112cfbd70f19bc02c4b3a566885e78114669fbcad8c14861638；FINAL_SOURCE_MAP SHA9bcb8addc21e6faea6574a2f31138938eb8d4f25ee44a7b4d40f46464ebede9e、key actual_origin_source_map。root narration-stage-release-reviewed.json SHA475e9b3051fe0fc017486fe9d64d24ab7a0126fb207dbdc6df7470e984279599已核59artifact、194origin/193before-compile、7原完整迁交body、712未变完整函数、32实例方法与关键字端口、零IO四字段构造及原同一预算对象接线。唯一合并normal两实际，首OS fixture perdisk形状失败在准入前保留，最终PASS4.74s call/13.05s process；真实资格/仓储/generator/Qwen协议/concat/probe，3合成TTS/8native/7登记全释放/1原视频输入fixture；full后公开cancel停止下游再声明最小montage/base/subtitle fixture，未执行完整后续制作。真实模型/生产资源/GUI/整体R0–R9未知。
 
