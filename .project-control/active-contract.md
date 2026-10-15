@@ -39,6 +39,10 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
+### 人物 normal 补齐真实当前成片前置（当前有效）
+
+用户再次批准先完成人物最小验证、关键独立QA与集成。candidate-01已实际完成一段full人物生成、ready图谱及子作业，三个登记子进程均释放；local preview被原rendered_version_required拒绝、尚未排队local。该首败原样冻结。允许同API负责人只在原五源中的新test补齐这个真实前提：在已声明的两秒蒙太奇上，经原制作队列/实际render阶段、原资格/service/renderer/发布/检查点产生当前成片，再走原selected local preview/confirm；不直接把status置rendered、不使用复制视频/伪成片替代渲染成功、不改产品门禁或预算/OSfixture。新增渲染仅这个失败normal的必要前置，不扩成全制作旅程；后续质量/其它阶段按原公开控制停止，实际到达阶段与子进程如实列明。所有原数值cap及一段full+一次local范围保持，若原资源门拒绝先报具体失败，不绕行、盲重试或提高上限。只复验同一失败node；此前full成功是该失败node的部分事实，不能算整个人物批次已通过，亦不重跑任何已封存通过批次。SOURCE_RELEASE稳定后按下列最多三特有关键反例独立QA，普通迁交仅完整body核对与这一个normal。无需重复ACK或第二START。
+
 ### 人物 normal 保持原计数门的精确调整（当前有效）
 
 针对API已封存待主控决定的fresh-api-person-stage-execution/NORMAL_BUDGET_DELTA.json：原有限PresenterBudget的max_section_count=1，原计划两个full片段与此冲突；拒绝将1改2，未授权任何normal或生产预算cap放宽。人物完整产品迁交/五源租约不变，仅将当前唯一normal收敛为原cap内的一段真实full person_render→公开停止下游→声明最小montage/base→公开selected local person_edit。保持原全部数值budget/OSfixture与真实资格/service/probe/runner/child发表/检查点。未选对象可用同一实际ready render的合法不同范围两clip验证（必须满足原source_range和时长规则，不能重写计算器或虚构独立第二render）；若原契约不支持，使用原注册非人物clip作未选对象，并如实不声称验证第二PersonRender。两段full循环/累计计数的动态覆盖列未验，原完整body/累计cap静态保持；关键独立族第一代表用首child已durable后的原final guard真实失效，不为了next segment增加计数上限。不得通过拆成额外normal/后台绕过cap/伪造guard或调整采样求绿。
