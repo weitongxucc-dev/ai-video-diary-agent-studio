@@ -39,6 +39,12 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
+### 人物 normal 保持原计数门的精确调整（当前有效）
+
+针对API已封存待主控决定的fresh-api-person-stage-execution/NORMAL_BUDGET_DELTA.json：原有限PresenterBudget的max_section_count=1，原计划两个full片段与此冲突；拒绝将1改2，未授权任何normal或生产预算cap放宽。人物完整产品迁交/五源租约不变，仅将当前唯一normal收敛为原cap内的一段真实full person_render→公开停止下游→声明最小montage/base→公开selected local person_edit。保持原全部数值budget/OSfixture与真实资格/service/probe/runner/child发表/检查点。未选对象可用同一实际ready render的合法不同范围两clip验证（必须满足原source_range和时长规则，不能重写计算器或虚构独立第二render）；若原契约不支持，使用原注册非人物clip作未选对象，并如实不声称验证第二PersonRender。两段full循环/累计计数的动态覆盖列未验，原完整body/累计cap静态保持；关键独立族第一代表用首child已durable后的原final guard真实失效，不为了next segment增加计数上限。不得通过拆成额外normal/后台绕过cap/伪造guard或调整采样求绿。
+
+该调整只解决已知fixture容量与normal范围冲突，不减少原产品功能/身份/事务/资源门。API将pending差额明确记为未采用，修约定新test后仅跑这一收敛normal；此前零normal/native事实保留，无需重复ACK或等第二START。其它源码迁交、关键QA/集成/真实模型与整体未验约束沿下文。
+
 ### 配音已集成；接续人物制作执行（当前优先）
 
 配音最终5源已9cf8ee765d76393b0527ac44050e11b9ce09e155精确集成，索引/提交/current逐字节等release6ef300...，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API和QA。root narration-stage-integrated.json SHAff9de178daf70c211676ad0543927f2713f4f7860711c753737e62b9ccc716a1；门7eab1c4914ed11971072d6f7f78d497d7cfb44a164508cb82f29ca5837a42dce经root narration-independent-reviewed.json SHA1890b3f1d666217d27143ee0b72e898d289e4374472713b9175bde7d68a914ce核28artifact/3refs、194before-compile parent/195origin prepost及固定Git子入口server.py（不升级整个子进程origin trace）。三代表首轮3PASS19.46s：full内部真实事务durable后外层事件SQL拒绝，早配音/分段/task保留，公开resume依真实valid-output选择下游且TTS2→2，未执行下游；local独立native HEAD推进，原current门提前拒绝/未进入commit CAS；local原checkpoint同conn八业务组与job已变但另一observer仍旧，terminal事件真实SQL失败后全部联合rollback/早WAV保留、原失败checkpoint/free。13native/10登记全释放/3原视频fixture，4合成TTS。原full /execution对local narration job GET409为真实既有投影缺口，列入后续R3/R9，不冒称成功公开状态、不得为本次gate临时绕过或改身份守卫。root观察器仅修source_files键及Python3.14元数据AST版本差额，未执行新产品测试。真实模型/GUI/生产资源/fullPGID/同候选整体R0–R9未验；以下配音旧绑定已履行冻结，不恢复写权。
