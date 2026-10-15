@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | quality联合19源已b04c5f86准确集成/SOURCE_INTEGRATED与WRITE_LEASE_RETURN即时发送；本批产品和作者证据冻结，零新增执行/产品写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-SOURCE-CLOSEOUT-20261016只读核已知旧入口和最后四组迁移差额，仅fresh-api-source-closeout/**一份紧凑报告；零产品写权/import/test/native/全仓扫描。已过批次冻结复用。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-QUALITY-MEASUREMENT-ONE-20261016仅fresh-runtime-quality-measurement/attempt-01/**；原worker身份一次与固定实验停止上限下一个原queued render/必要audio/quality测量，首败停、无第二normal。全部产品只读，无GUI/服务/模型权，生产profile未接受。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 首轮实验因固定swap启动上限拒绝，零factory/DB/native，driver组已退出；证据冻结并归还，当前无新增执行权，不重复采样/重试或加cap。完整标定后置，最小实机闭环仍环境阻断。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -26,6 +26,14 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 当前加速收口决定（2026-10-16用户最新指令优先）
+
+用户要求尽快结束代码重构以接续新功能，减少不重要工作。本轮先完成源码收口与必要缺陷，普通拆分最小验证、已过证据冻结复用；完整性能标定、暂不用模型和手机/平台扩展验收后置，不追加普通包独立QA或重复三尺寸矩阵。R0–R9整体真实接受标准未伪降：最小真实运行/资源退出与同候选保存重启仍保留，环境阻断明列，不作为源码已完成的假证据，也不阻断独立源码收口。Web反馈既有三尺寸完整Shell/合成SQLite编辑回读撤销已独立验证，复用原接受；波形503和最新同候选真实媒体/GUI缺口单列。
+
+资源实验release c63b6db14796409406e18081c5b0627546a83ac681f368f4b72e4dd22c7729cf经root quality-measurement-first-refusal-reviewed.json核24artifact/22预封源；swap11740381184B高于固定11110318080B约600.875MiB，启动前拒绝。原worker指纹/loaders已核，factory/DB/native0，driver组ESRCH退出。原证据冻结/归还，无产品修复依据；不盲重试/移动上限/反复采样，完整标定后置，真实物理闭环环境阻断如实保留。
+
+REF-R9-SOURCE-CLOSEOUT-20261016仅当前API新fresh-api-source-closeout/**，产品全部只读。基线719e9d01cb9832b5d3a8205f32eca60ec1b896d6、产品b04c5f86；root确认tracked clean。复用r9-unclaimed-main-reviewed.json（原27源18锚点）与已集成四包46493fcb自动任务/6fb2d137预检/a90dc4f6模板/b76574da发布、最新b04c5f86质检及既有R1–R8证据，不重建消费者总清单。只定向核最后四组旧body归属及方案8已知旧目标：_execute_task_media_operation/_task_media_route的HTTP伪装/反射，main具体编辑/接续body与其必要公共owner调用，production已迁asset/profile私有写，import main启动副作用；允许真实transport/错误映射/生命周期薄facade，不按行数机械拆。仅当前目标定义+直接caller/必要import/已知owner文件按需rg/有限AST，禁止全main/production/全仓全AST/历史遍历或旧证据复制。无import/collect/test/DB/native/GUI/host采样/产品/docs/Git写入。交一份紧凑SOURCE_CLOSEOUT_RELEASE（HEAD、确切检查symbols/源hash、旧目标退役事实/允许薄入口、真实剩余缺口及最多一个必要精确修复包）；若已闭合直接关闭源码范围，不造下一拆分。普通只读核验不另开复杂QA，root审后归还；整体产品接受仍由独立真实闭环决定。短语义ACK后直接有限核验，无第二START。
 
 ### 资源首轮实际测量（实验上限，非生产profile）
 
