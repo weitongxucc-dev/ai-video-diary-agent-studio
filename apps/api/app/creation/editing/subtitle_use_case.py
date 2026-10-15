@@ -1,5 +1,9 @@
 """One finite subtitle family; publication and the existing joint save keep their owners."""
 from dataclasses import dataclass, replace
+import subprocess
+from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command
+from app.production import TimelineVersionConflict
+from app.subtitle_tracks import subtitle_translation_provider_from_settings
 from uuid import uuid4
 
 from app.canvas import canvas_size
@@ -13,7 +17,7 @@ from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.subtitle_changes import (prepare_subtitle_content_proposal,
     apply_subtitle_content_command, calculate_subtitle_style, prepare_subtitle_style_proposal,
     apply_subtitle_style_command)
-from app.creation.editing.subtitles import apply_subtitle_cue
+from app.creation.editing.subtitles import apply_subtitle_cue, subtitle_display_selection
 from app.creation.transactions import clone_subtitle_track, clone_cover_asset
 from app.compound_edits import synchronize_linked_subtitle_cue
 from app.models import utc_now
@@ -87,7 +91,7 @@ class SubtitleEditUseCase:
     def save_preview(self, prepared: PreparedSubtitleEdit):
         if prepared.proposal.operation['operation_type'] == 'UpdateSubtitleCue':
             # This original exact-cue inlet registers intent then proposal separately.
-            intent = self.repository.create_edit_intent(prepared.intent)
+            intent = self.repository.create_edit_intent(prepared.intent, source=prepared.intent.constraints.get('request_source'))
             proposal = self.repository.create_edit_proposal(prepared.proposal)
             return intent, proposal
         return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal,
@@ -307,3 +311,121 @@ class SubtitleEditUseCase:
             if montage_cue is not None:
                 montage_cue.text = str(text)
         return montage, [changed_track, *retained]
+
+
+    def legacy_description(self, task, montage, base_version, tracks, payload, settings):
+        if payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None:
+            selection = preview_subtitle_display_selection(tracks, payload.subtitle_display)
+            if all((track.style.get('enabled', True) == selection[track.id] for track in tracks)):
+                raise EditPreviewRejected(status_code=409, detail='字幕显示设置没有变化')
+            labels = {'none': '不显示字幕', 'zh': '仅中文字幕', 'en': '仅英文字幕', 'zh-en': '中英双语字幕'}
+            summary = f'成片改为{labels[payload.subtitle_display]}，保留字幕文字与时轴。'
+            target_refs = [f'subtitle-track:{track.id}' for track in tracks]
+            operation_payload = {'subtitle_display': payload.subtitle_display, 'base_version_id': base_version.id}
+            preview = {'before': {'ref': f'timeline:{base_version.id}', 'label': '当前显示', 'detail': '、'.join((track.language for track in tracks if track.style.get('enabled', True))) or '无字幕'}, 'after': {'ref': f'subtitle-display:{payload.subtitle_display}', 'label': '修改后', 'detail': labels[payload.subtitle_display]}}
+            effects = ['只修改字幕显示；不调用模型。关闭全部字幕后仍保留可下载的字幕文件。']
+        elif payload.operation_type == 'ConfigureSubtitleTrack':
+            source = next((track for track in tracks if track.language == 'zh-CN'), None)
+            if source is None:
+                raise edit_preview_failure(status_code=409, error='subtitle_source_missing', reason='当前时间线没有可用的中文字幕轨。', impact='没有调用文字模型，当前成片保持不变。', repair_action='先生成带中文字幕的成片，再启用双语字幕。', retryable=True)
+            if any((track.language == 'en-US' and track.status == 'valid' for track in tracks)):
+                raise edit_preview_failure(status_code=409, error='edit_no_change', reason='当前时间线已经启用中英双语字幕。', impact='没有创建新的时间线版本。', repair_action='可直接编辑具体字幕，或先撤销到上一版本。', retryable=False)
+            provider = subtitle_translation_provider_from_settings(settings)
+            if not provider.ready:
+                raise edit_preview_failure(status_code=409, error='subtitle_translation_unavailable', reason='文字模型翻译能力不可用。', impact='未生成英文字幕，中文字幕和成片保持不变。', repair_action=provider.message, retryable=True)
+            summary = '把当前中文字幕逐条翻译为英文，保持原时间轴，并启用中英双语字幕。'
+            target_refs = [f'subtitle-track:{source.id}']
+            operation_payload = {'source_track_id': source.id, 'target_language': 'en-US', 'base_version_id': base_version.id}
+            preview = {'before': {'ref': target_refs[0], 'label': '中文字幕', 'detail': f'{len(source.cues)} 条'}, 'after': {'ref': 'subtitle-track:en-US', 'label': '中英双语字幕', 'detail': '逐条对齐原时间轴，确认后调用一次文字模型'}}
+            effects = ['确认后调用一次当前已配置文字模型；不会改写字幕时间轴。']
+        elif payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None:
+            if not payload.cue_id:
+                raise EditPreviewRejected(status_code=422, detail='subtitle edit requires cue_id')
+            track = next((item for item in tracks if (payload.track_id is None or item.id == payload.track_id) and any((cue.id == payload.cue_id for cue in item.cues))), None)
+            if track is None:
+                raise EditPreviewRejected(status_code=404, detail='subtitle track or cue not found')
+            cue = next((cue for cue in track.cues if cue.id == payload.cue_id))
+            if track.language == 'en-US' and payload.style is not None and (payload.style != track.style):
+                raise EditPreviewRejected(status_code=422, detail='双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。')
+            normalized_text, normalized_line_breaks = preview_subtitle_text(payload.text if payload.text is not None else cue.text, payload.line_breaks if payload.line_breaks is not None else cue.line_breaks if payload.text is None or payload.text == cue.text else None)
+            start = payload.start_seconds if payload.start_seconds is not None else cue.start_seconds
+            end = payload.end_seconds if payload.end_seconds is not None else cue.end_seconds
+            candidate = replace(cue, text=normalized_text, start_seconds=start, end_seconds=end)
+            candidate_track = replace(track, cues=[candidate if item.id == cue.id else item for item in track.cues])
+            try:
+                subtitle_schedule([replace(track, status='valid', style={**track.style, 'enabled': True}, cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
+                changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds, invalidate_all_english_on_text_change=True)
+            except ValueError as exc:
+                raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
+            changed = start != cue.start_seconds or end != cue.end_seconds or normalized_text != cue.text or (normalized_line_breaks != cue.line_breaks) or (payload.emphasis is not None) or (payload.style is not None)
+            if not changed:
+                raise edit_preview_failure(status_code=409, error='edit_no_change', reason='字幕文字、时轴和样式没有变化。', impact='没有创建新的时间线版本。', repair_action='修改文字、断行、强调词或字幕样式后再预览。', retryable=False)
+            summary = '只修改所选字幕条目；配音、镜头和其他字幕保持不变。'
+            target_refs = [f'subtitle-cue:{track.id}:{cue.id}']
+            operation_payload = {'track_id': track.id, 'cue_id': cue.id, 'text': normalized_text, 'start_seconds': start, 'end_seconds': end, 'line_breaks': normalized_line_breaks, 'emphasis': payload.emphasis if payload.emphasis is not None else cue.emphasis, 'style': payload.style if payload.style is not None else track.style, 'expected_text': cue.text, 'base_version_id': base_version.id}
+            preview = {'before': {'ref': target_refs[0], 'label': '当前字幕', 'detail': f'{cue.start_seconds:.2f}–{cue.end_seconds:.2f} 秒 · {cue.text}'}, 'after': {'ref': target_refs[0], 'label': '修改后字幕', 'detail': f'{start:.2f}–{end:.2f} 秒 · {normalized_text}'}}
+            effects = ['确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。']
+            effects.extend((f"{('中文' if before.language == 'zh-CN' else '英文')}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。" for before in tracks for after in changed_tracks if before.id == after.id for start, end in new_subtitle_gap_intervals(before, after, montage.duration_seconds)))
+            if track.language == 'zh-CN' and normalized_text != cue.text and any((item.language == 'en-US' for item in tracks)):
+                effects.append('中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。')
+        return (summary, target_refs, operation_payload, preview, effects)
+
+
+    def preview(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):
+        values = subtitle_values(payload)
+        task = self.montage_edits.task_or_missing(workspace_id, task_id)
+        command = metadata_edit_command(task, identity, payload.operation_type, {'base_version_id': task.current_timeline_version_id, **values}, source=source)
+        case = self
+        try:
+            prepared = case.prepare_preview(command)
+            if prepared.style_change is not None:
+                changed = prepared.style_change
+                records = []
+                if not draft_only:
+                    records = [self.montage_edits.picture_renderer.publish_picture(workspace_id, prepared.task, prepared.base, prepared.montage, captions, kind='subtitle_style_preview', parameters={'side': side, 'style': changed.patch}, execution=execution) for side, captions in (('before', changed.original_tracks), ('after', changed.changed_tracks))]
+                proposal = replace(prepared.proposal, preview={**prepared.proposal.preview, **{side: {'ref': record.logical_ref, 'label': label, 'detail': '当前成片的字幕样式预览；文字、声音和镜头保持不变。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, label, record in zip(('before', 'after'), ('当前样式', '修改后样式'), records)}})
+                prepared = replace(prepared, proposal=proposal)
+            intent, proposal = case.save_preview(prepared)
+        except SubtitleNoChange as exc:
+            raise edit_preview_failure(**exc.details) from exc
+        except SubtitleTargetMissing as exc:
+            raise EditPreviewRejected(status_code=404, detail=exc.args[0]) from exc
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except (EditConflict, TimelineVersionConflict) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
+        return (intent, proposal)
+
+
+def subtitle_values(payload):
+    if payload.operation_type == 'ConfigureSubtitleTrack':
+        if payload.model_fields_set - {'operation_type', 'style'}:
+            raise EditPreviewRejected(status_code=422, detail='样式应用于全部字幕轨，不能同时翻译或切换显示')
+    elif payload.operation_type == 'ReplaceSubtitleText':
+        if not payload.track_id or payload.find_text is None or payload.replacement_text is None or payload.model_fields_set - {'operation_type', 'track_id', 'find_text', 'replacement_text'}:
+            raise EditPreviewRejected(status_code=422, detail='全文替换需要指定字幕轨、查找文字和替换文字')
+    elif payload.operation_type in {'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
+        allowed = {'operation_type', 'track_id', 'cue_id'}
+        if payload.operation_type == 'SplitSubtitleCue':
+            allowed |= {'split_offset', 'split_time_seconds'}
+        if not payload.track_id or not payload.cue_id or payload.model_fields_set - allowed:
+            raise EditPreviewRejected(status_code=422, detail='请指定当前语言轨和字幕，拆分时同时指定文字位置与时间')
+    return payload.model_dump(exclude_unset=True, exclude={'operation_type'})
+
+
+def preview_subtitle_text(text, line_breaks):
+    try:
+        return normalized_subtitle_text(text, line_breaks)
+    except ValueError as exc:
+        raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
+
+
+def preview_subtitle_display_selection(tracks, mode):
+    try:
+        return subtitle_display_selection(tracks, mode)
+    except EditConflict as exc:
+        raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc

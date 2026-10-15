@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 import hashlib
 import json
+import subprocess
+from urllib.parse import quote
+from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, ClipPreviewConflict, apply_clip_patch
+from app.creation.editing.picture import graphic_overlay_candidate
+from app.schemas import EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskMontageClipUpdateRequest
+from app.production import TimelineVersionConflict
 
 from app.creation.contracts import (EditCommand, EditIntent, EditProposal, SubtitleTrack,
     SubtitleCue, JobRun, ArtifactRecord, TransformRun, DependencyEdge, TimelineVersion)
@@ -27,7 +33,7 @@ from app.audio_timeline import narration_audio_timeline
 from app.graphic_sources import resolve_graphic_source
 from app.graphic_overlays import validate_overlays
 from app.transitions import dissolve_frames
-from app.visual_effects import fade_filters
+from app.visual_effects import fade_filters, clip_playback_rate
 from app.linked_timeline import reorder_linked_group
 from app.subtitle_edits import normalize_subtitle_text_and_breaks
 from app.subtitle_schedule import narration_schedule, retime_subtitle_tracks
@@ -40,6 +46,19 @@ if TYPE_CHECKING:
     from app.creation.contracts import TimelineVersion
     from app.montage import CreationTaskMontagePlan
     from app.audio_timeline import AudioTimeline
+
+
+
+class EditPreviewRejected(Exception):
+    def __init__(self, status_code, detail):
+        super().__init__(str(detail))
+        self.status_code, self.detail = status_code, detail
+
+
+def edit_preview_failure(*, status_code, error, reason, impact, repair_action, retryable):
+    return EditPreviewRejected(status_code=status_code, detail={
+        'error': error, 'reason': reason, 'impact': impact,
+        'repair_action': repair_action, 'retryable': retryable})
 
 
 class InvalidMontage(ValueError):
@@ -144,6 +163,8 @@ class MetadataEditUseCase:
         self.artifact_store = artifact_store
         self.output_root = output_root
         self.audio_service = audio_service
+        self.picture_renderer = None
+        self.preview_settings = None
 
     def current_narration_snapshot(self, workspace_id: str, task: CreationTask) -> dict[str, object]:
         if not task.confirmed_script_id:
@@ -465,3 +486,313 @@ class MetadataEditUseCase:
         current_task = self.repository.get_creation_task(workspace_id, task.id)
         current_narration = self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key) if current_task.narration_cache_key else None
         return MetadataEditResult(persisted_operation, persisted_plan, current_task, current_narration)
+
+
+    def preview_graphic_overlay(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):
+        if payload.model_fields_set - {'operation_type', 'overlay_action', 'graphic_overlay', 'overlay_id'}:
+            raise EditPreviewRejected(status_code=422, detail='图文叠加层编辑不能混入其他操作')
+        task = self.task_or_missing(workspace_id, task_id)
+        plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+        if plan.status == 'rendering':
+            raise EditPreviewRejected(status_code=409, detail='正在渲染，请完成后修改图文叠加层')
+        try:
+            edited = self.graphic_overlay_candidate(plan, payload)
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail=exc.args[0]) from exc
+        except ValueError as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
+        action = payload.overlay_action
+        identity = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
+        base = self.ensure_montage_base(workspace_id, task, plan)
+        tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        try:
+            for item in edited.graphic_overlays:
+                if item.get('kind') == 'image':
+                    resolve_graphic_source(self.repository, self.artifact_store, workspace_id, task_id, item['source_ref'])
+            records = []
+            if not draft_only:
+                records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='graphic_preview', parameters={'graphic_overlays': candidate.graphic_overlays}, execution=execution) for candidate in (plan, edited)]
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, (ValueError, OSError)) else '图文叠加层预览失败，请检查本机渲染器') from exc
+        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+            raise EditPreviewRejected(status_code=409, detail='预览期间时间线变化，请重新预览图文叠加层')
+        summary = {'add': '添加图文叠加层', 'update': '修改图文叠加层', 'delete': '删除图文叠加层'}[action]
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=summary, context_stage='montage', selected_object_refs=[f'overlay:{identity}'], playhead_ms=None, intent_type='graphic_overlay', scope={'kind': 'overlay', 'id': identity}, constraints={'preserve_narration': True}, confidence=1, status='interpreted'), source=source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'overlay:{identity}'], operation={'operation_type': 'EditGraphicOverlay', 'payload': {'base_version_id': base.id, 'graphic_overlays': edited.graphic_overlays}}, invalidated_refs=logical_montage_output_refs(plan), external_effects=[], preview={**{side: {'ref': f'timeline:{base.id}', 'label': label, 'detail': '草稿参数已计算；应用时保存新版本，不自动生成媒体。'} for side, label in (('before', '当前草稿'), ('after', '修改后草稿'))}, **{side: {'ref': record.logical_ref, 'label': '修改前' if side == 'before' else summary, 'detail': '完整成片视听预览；图文叠加层在指定区间显示，字幕、声音和镜头保持不变。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, record in zip(('before', 'after'), records)}}))
+        return (intent, proposal)
+
+
+    def preview_transition(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):
+        from copy import deepcopy
+        if not payload.clip_id or payload.transition_seconds is None or payload.model_fields_set - {'operation_type', 'clip_id', 'transition_seconds'}:
+            raise EditPreviewRejected(status_code=422, detail='转场需要后一个镜头和叠化秒数，不能混入其他操作')
+        task = self.task_or_missing(workspace_id, task_id)
+        plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+        index = next((i for i, clip in enumerate(plan.clips) if clip.id == payload.clip_id), -1)
+        if index <= 0:
+            raise EditPreviewRejected(status_code=422, detail='请选择第二个或之后的镜头，修改它与前一个镜头之间的转场')
+        targets = plan.clips[index - 1:index + 1]
+        if plan.status == 'rendering' or any((clip.locked for clip in targets)):
+            raise EditPreviewRejected(status_code=409, detail='正在渲染或转场镜头已锁定，请先解锁或等待完成')
+        if targets[1].transition_in_seconds == payload.transition_seconds:
+            raise EditPreviewRejected(status_code=422, detail='转场没有变化')
+        base = self.ensure_montage_base(workspace_id, task, plan)
+        edited = deepcopy(plan)
+        edited.clips[index].transition_in_seconds = payload.transition_seconds
+        tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        try:
+            dissolve_frames(edited.clips)
+            records = []
+            if not draft_only:
+                records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='transition_preview', parameters={'transition_seconds': candidate.clips[index].transition_in_seconds, 'clip_id': payload.clip_id}, execution=execution) for candidate in (plan, edited)]
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '本地转场预览失败，请检查源素材和FFmpeg') from exc
+        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+            raise EditPreviewRejected(status_code=409, detail='预览期间时间线变化，请重新预览转场')
+        refs = [f'clip:{clip.id}' for clip in targets]
+        source_command = metadata_edit_command(task, identity, 'SetClipTransition', {'base_version_id': base.id, 'clip_id': payload.clip_id, 'transition_seconds': payload.transition_seconds}, source=source)
+        source_verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
+        source_command = self.bind_affected_source_command(source_verifier, source_command, plan, edited)
+        source_scope = source_verifier.scope_payload(source_command)
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'叠化{payload.transition_seconds:g}秒', context_stage='montage', selected_object_refs=refs, playhead_ms=round(targets[1].timeline_start_seconds * 1000), intent_type='transition', scope={'kind': 'clips', 'clip_ids': [clip.id for clip in targets]}, constraints={'preserve_timing': True, 'preserve_audio': True, 'affected_source_scope': source_scope}, confidence=1, status='interpreted'), source=source)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=f'镜头 {index} → {index + 1}：' + (f'叠化 {payload.transition_seconds:g} 秒' if payload.transition_seconds else '硬切'), target_refs=refs, operation={'operation_type': 'SetClipTransition', 'payload': {'base_version_id': base.id, 'clip_id': payload.clip_id, 'transition_seconds': payload.transition_seconds, 'expected_clips': {clip.id: asdict(clip) for clip in targets}}}, invalidated_refs=logical_montage_output_refs(plan), external_effects=[], preview={**{side: {'ref': f'timeline:{base.id}', 'label': label, 'detail': '草稿参数已计算；应用时保存新版本，不自动生成媒体。'} for side, label in (('before', '当前草稿'), ('after', '修改后草稿'))}, **{side: {'ref': record.logical_ref, 'label': '当前转场' if side == 'before' else '修改后转场', 'detail': f'完整成片视听预览；转场从 {targets[1].timeline_start_seconds:.2f} 秒开始，读取前镜头结尾的真实素材余量，声音与字幕时轴不变。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, record in zip(('before', 'after'), records)}}))
+        return (intent, proposal)
+
+
+    def preview_canvas(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):
+        if payload.aspect_ratio is None or payload.model_fields_set - {'operation_type', 'aspect_ratio', 'fit_mode'}:
+            raise EditPreviewRejected(status_code=422, detail='画幅修改需要9:16、16:9或1:1，可同时指定填充或适应')
+        task = self.task_or_missing(workspace_id, task_id)
+        montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+        base = self.ensure_montage_base(workspace_id, task, montage)
+        if any((clip.locked for clip in montage.clips)):
+            raise EditPreviewRejected(status_code=422, detail='改变画幅会影响所有镜头，请先解锁镜头')
+        if montage.aspect_ratio == payload.aspect_ratio and (payload.fit_mode is None or all((clip.fit_mode == payload.fit_mode for clip in montage.clips))):
+            raise EditPreviewRejected(status_code=409, detail='画幅与适配方式没有变化')
+        clip = montage.clips[0]
+        try:
+            self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            records = []
+            if not draft_only:
+                from copy import deepcopy
+                changed = deepcopy(montage)
+                changed.aspect_ratio = payload.aspect_ratio
+                changed.clips = [replace(item, fit_mode=payload.fit_mode or item.fit_mode) for item in changed.clips]
+                tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
+                records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='canvas_preview', parameters={'side': side, 'aspect_ratio': candidate.aspect_ratio}, execution=execution) for side, candidate in (('before', montage), ('after', changed))]
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '画幅预览失败，请检查素材与本机FFmpeg') from exc
+        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+            raise EditPreviewRejected(status_code=409, detail='预览期间版本变化，请重新预览')
+        now = utc_now()
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'画幅改为{payload.aspect_ratio}', context_stage='montage', selected_object_refs=[], playhead_ms=None, intent_type='canvas', scope={'kind': 'timeline'}, constraints={'preserve_narration': True}, confidence=1, status='interpreted', created_at=now), source=source)
+        cover = self.cover_asset_for_version(workspace_id, task_id, base)
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=f'整片改为{payload.aspect_ratio}；配音、字幕文字和时轴不变。', target_refs=[f'timeline:{base.id}'], operation={'operation_type': 'ChangeCanvas', 'payload': {'base_version_id': base.id, 'aspect_ratio': payload.aspect_ratio, 'fit_mode': payload.fit_mode}}, invalidated_refs=[*logical_montage_output_refs(montage), *([cover.artifact_ref] if cover and cover.artifact_ref else [])], preview={**{side: {'ref': f'timeline:{base.id}', 'label': label, 'detail': '草稿参数已计算；应用时保存新版本，不自动生成媒体。'} for side, label in (('before', '当前草稿'), ('after', '修改后草稿'))}, **{side: {'ref': record.logical_ref, 'label': ratio, 'detail': '第一镜头最多5秒的静音画面预览；字幕将按新画幅重新排版。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, ratio, record in zip(('before', 'after'), (montage.aspect_ratio, payload.aspect_ratio), records)}}, external_effects=['影响所有镜头，封面需重新生成；撤销可恢复。', '适应模式完整保留画面，可能留黑边；填充模式按裁切位置裁掉超出部分。'], status='proposed', created_at=now, updated_at=now))
+        return (intent, proposal)
+
+
+    def preview_metadata_settings(self, task, operation_type, values, base_version_id, *, identity, source):
+        if base_version_id is None:
+            raise EditPreviewRejected(status_code=409, detail='当前故事板没有基础版本，请先保留当前故事板并建立版本')
+        command = metadata_edit_command(task, identity, operation_type, {'base_version_id': base_version_id, **values}, source=source)
+        try:
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id, task.id))
+            if operation_type in CLIP_SETTING_OPERATIONS:
+                pair, _changed, _tracks, _linkage = prepare_clip_command(task, plan, command, resolve_source=lambda clip, values: self.resolve_edit_clip_source(task, identity, clip, values), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
+            else:
+                pair, _changed = prepare_picture_command(task, plan, command, validate_graphic_sources=lambda overlays: self.validate_graphic_sources(task.workspace_id, task.id, overlays))
+            intent, proposal = pair
+            verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+            command = self.bind_affected_source_command(verifier, command, plan, _changed)
+            intent = replace(intent, constraints={**intent.constraints, 'affected_source_scope': verifier.scope_payload(command)})
+            proposal = replace(proposal, invalidated_refs=logical_montage_output_refs(plan))
+            return (*self.repository.save_clip_preview_proposal(intent, proposal, expected_version_id=base_version_id),)
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail=str(exc)) from exc
+        except (ValueError, EditConflict) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+
+
+    def preview_exact_montage(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):
+        task = self.task_or_missing(workspace_id, task_id)
+        if not payload.clip_id:
+            raise EditPreviewRejected(status_code=422, detail='visual edit requires clip_id')
+        try:
+            persisted_plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            before_clip = next((item for item in persisted_plan.clips if item.id == payload.clip_id))
+        except (KeyError, StopIteration) as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task montage clip not found') from exc
+        if payload.operation_type == 'ReplaceClip' and (payload.asset_id == before_clip.asset_id and payload.segment_id == before_clip.segment_id and (payload.source_start_seconds in {None, before_clip.source_start_seconds})):
+            raise edit_preview_failure(status_code=409, error='edit_no_change', reason='这个候选就是当前镜头。', impact='原镜头和成片保持不变。', repair_action='选择另一个片段，或调整裁剪起点。', retryable=True)
+        invalidated_refs = logical_montage_output_refs(persisted_plan)
+        if payload.operation_type == 'TrimClip' and task.current_timeline_version_id is None:
+            raise edit_preview_failure(status_code=409, error='timeline_version_required', reason='当前故事板还没有可撤销的初始版本。', impact='裁剪预览和有效时间线均未改变。', repair_action='点击“保留当前故事板并建立版本”，再预览裁剪。', retryable=True)
+        base_version = self.ensure_montage_base(workspace_id, task, persisted_plan)
+        task = self.repository.get_creation_task(workspace_id, task_id)
+        plan = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(persisted_plan))
+        supplied = {'fit_mode': payload.fit_mode, 'crop_x': payload.crop_x, 'crop_y': payload.crop_y, 'asset_id': payload.asset_id, 'segment_id': payload.segment_id, 'source_start_seconds': payload.source_start_seconds, 'split_time_seconds': payload.split_time_seconds, 'playback_rate': payload.playback_rate, 'position': payload.position, 'locked': payload.locked}
+        required = EXACT_MONTAGE_REQUIRED_FIELDS[payload.operation_type]
+        if any((supplied[key] is None for key in required)):
+            raise EditPreviewRejected(status_code=422, detail='exact edit is missing required values')
+        permitted = required | ({'source_start_seconds'} if payload.operation_type == 'ReplaceClip' else set())
+        if any((value is not None and key not in permitted for key, value in supplied.items())):
+            raise EditPreviewRejected(status_code=422, detail='exact edit mixes multiple operations')
+        update = CreationTaskMontageClipUpdateRequest(split_time_seconds=payload.split_time_seconds if payload.operation_type == 'SplitClip' else None, playback_rate=payload.playback_rate if payload.operation_type == 'ChangeClipSpeed' else None, fit_mode=payload.fit_mode if payload.operation_type == 'ChangeCrop' else None, crop_x=payload.crop_x if payload.operation_type == 'ChangeCrop' else None, crop_y=payload.crop_y if payload.operation_type == 'ChangeCrop' else None, asset_id=payload.asset_id if payload.operation_type == 'ReplaceClip' else None, segment_id=payload.segment_id if payload.operation_type == 'ReplaceClip' else None, source_start_seconds=payload.source_start_seconds if payload.operation_type in {'ReplaceClip', 'TrimClip'} else None, position=payload.position if payload.operation_type == 'ReorderClip' else None, locked=payload.locked if payload.operation_type == 'SetClipLock' else None, confirmed=True if payload.operation_type == 'ConfirmClip' else None)
+        plan, edited_tracks, linkage = self.apply_clip_update(workspace_id, task_id, plan, payload.clip_id, update, reader_identity=identity)
+        after_clip = next((item for item in plan.clips if item.id == payload.clip_id))
+        if creation_task_montage_plan_to_payload(plan)['clips'] == creation_task_montage_plan_to_payload(persisted_plan)['clips']:
+            raise edit_preview_failure(status_code=409, error='edit_no_change', reason='这项设置与当前镜头一致。', impact='没有创建新的时间线版本。', repair_action='调整镜头、裁剪位置、顺序或锁定状态后再试。', retryable=True)
+        labels = {'ChangeCrop': '调整画面适配', 'ReplaceClip': '替换镜头', 'TrimClip': '调整镜头起点', 'SplitClip': '分割镜头，保留配音与字幕时轴', 'ChangeClipSpeed': '改变画面速度，保留成片时长、声音和字幕', 'ReorderClip': '调整镜头顺序', 'SetClipLock': '更改镜头锁定状态', 'ConfirmClip': '确认当前镜头'}
+        operation_payload: dict[str, object] = {'clip_id': payload.clip_id, 'base_version_id': base_version.id, 'expected_asset_id': before_clip.asset_id, 'expected_segment_id': before_clip.segment_id}
+        for key, value in supplied.items():
+            if value is not None:
+                operation_payload[key] = value
+        if payload.operation_type == 'ReplaceClip':
+            operation_payload['source_start_seconds'] = after_clip.source_start_seconds
+        if payload.operation_type == 'ChangeCrop':
+            operation_payload.update(asset_id=before_clip.asset_id, segment_id=before_clip.segment_id, source_start_seconds=before_clip.source_start_seconds)
+
+        def describe_clip(clip, clips):
+            if payload.operation_type == 'ChangeClipSpeed':
+                return f'{clip_playback_rate(clip):.2f} 倍速 · 源素材 {clip.source_start_seconds:.3f}–{clip.source_end_seconds:.3f} 秒'
+            if payload.operation_type == 'SplitClip':
+                count = len(clips) - len(persisted_plan.clips) + 1
+                return f'{count} 个片段 · 成片 {before_clip.timeline_start_seconds:.3f}–{before_clip.timeline_end_seconds:.3f} 秒' + (f' · 分割点 {payload.split_time_seconds:.3f} 秒' if count == 2 else '')
+            if payload.operation_type == 'ReorderClip':
+                return f'第 {clips.index(clip) + 1} 个镜头'
+            if payload.operation_type == 'SetClipLock':
+                return '已锁定' if clip.locked else '未锁定'
+            if payload.operation_type == 'ConfirmClip':
+                return '待确认' if clip.needs_confirmation else '已确认'
+            if payload.operation_type == 'ChangeCrop':
+                if clip.fit_mode == 'fit':
+                    return '完整显示 · 裁剪位置已保留，在此模式下不生效'
+                return f'填满画面 · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}'
+            return f'{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒'
+        media_previews = {}
+        if payload.operation_type == 'TrimClip':
+            try:
+                for side, target in (('before', before_clip), ('after', after_clip)):
+                    cue = next((cue for cue in plan.cues if cue.id == target.cue_id))
+                    media_previews[side] = {'video_url': self.trim_clip_source_url(workspace_id, task_id, target, cue)}
+            except (KeyError, StopIteration, ValueError, OSError) as exc:
+                raise EditPreviewRejected(status_code=422, detail='裁剪源片段不可播放，请检查素材或人物口型产物') from exc
+            if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
+                raise EditPreviewRejected(status_code=409, detail='预览期间时间线已变化，请重新预览')
+        before_label = '人物口播' if before_clip.person_render_id else self.repository.get_asset(workspace_id, before_clip.asset_id).file_name
+        after_label = '人物口播' if after_clip.person_render_id else self.repository.get_asset(workspace_id, after_clip.asset_id).file_name
+        after_detail = describe_clip(after_clip, plan.clips)
+        if linkage:
+            after_detail = '\n'.join([after_detail, *self.linkage_lines(linkage)])
+        now = utc_now()
+        source_command = metadata_edit_command(task, identity, payload.operation_type, {'base_version_id': base_version.id, 'clip_id': payload.clip_id, **{key: value for key, value in supplied.items() if value is not None}}, source=source)
+        source_verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
+        source_command = self.bind_affected_source_command(source_verifier, source_command, persisted_plan, plan)
+        source_scope = source_verifier.scope_payload(source_command)
+        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'精确操作：{labels[payload.operation_type]}', context_stage='montage', selected_object_refs=[f'clip:{payload.clip_id}'], playhead_ms=round(after_clip.timeline_start_seconds * 1000), intent_type='exact_montage_edit', scope={'kind': 'clip', 'clip_id': payload.clip_id}, constraints={'preserve_narration': True, 'affected_source_scope': source_scope}, confidence=1.0, status='interpreted', created_at=now), source=source)
+        if linkage:
+            proposal_summary = '调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。'
+        elif payload.operation_type == 'ReorderClip' and after_clip.person_render_id is None and any((item.person_render_id for item in plan.clips)):
+            proposal_summary = '调整镜头顺序；本次移动的是纯素材镜头，按已冻结的纯素材默认只换画面，同片人物口型镜头的配音与字幕保持不变。'
+        else:
+            proposal_summary = f'{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。'
+        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=proposal_summary, target_refs=[f'clip:{payload.clip_id}'], operation={'operation_type': payload.operation_type, 'payload': operation_payload}, invalidated_refs=invalidated_refs, preview={'before': {'ref': f'clip:{before_clip.id}', 'label': before_label, 'detail': describe_clip(before_clip, persisted_plan.clips), **media_previews.get('before', {})}, 'after': {'ref': f'clip:{after_clip.id}', 'label': after_label, 'detail': after_detail, **media_previews.get('after', {})}}, external_effects=['这里播放的是原视频画面和原声；配音、字幕和画面效果以最终成片为准。当前任务版本未改变。'] if payload.operation_type == 'TrimClip' else ['已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。'] if media_previews else ['只更新任务版本；重新渲染前不会执行媒体进程。'], created_at=now, updated_at=now))
+        return (task, base_version, plan, intent, proposal)
+
+
+    def apply_clip_update(self, workspace_id, task_id, plan, clip_id, payload, *, reader_identity):
+        identity, diagnostic = (reader_identity['member_id'], reader_identity['local_diagnostic'])
+        task = self.repository.get_creation_task(workspace_id, task_id)
+        try:
+            edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True), resolve_source=lambda clip, values: self.repository.resolve_edit_clip_source(workspace_id, task_id, clip, values, user_id=identity, local_diagnostic=diagnostic), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail=str(exc)) from exc
+        except TimelineVersionConflict as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        except ClipPreviewConflict as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            status = 422 if payload.split_time_seconds is not None else 400
+            raise EditPreviewRejected(status_code=status, detail=str(exc)) from exc
+        refresh_montage_review_state(edited)
+        return (edited, tracks, linkage)
+
+
+    def trim_clip_source_url(self, workspace_id, task_id, clip, cue):
+        """Return an authorized source interval; browser playback does no media work."""
+        if clip.person_render_id:
+            render = self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)
+            if render.narration_segment_id != cue.narration_segment_id:
+                raise ValueError('人物口型镜头与当前配音段落不匹配')
+            synthetic_source = clip.asset_id == f'person:{render.id}' and clip.source_path == f'person-render://{render.id}'
+            legacy_source = clip.source_path == render.visual_reference and (not clip.asset_id.startswith('person:'))
+            if legacy_source:
+                self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            if not (synthetic_source or legacy_source):
+                raise ValueError('人物口型镜头来源不匹配')
+            path = self.picture_renderer.person_path(render)
+            if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + 0.001:
+                raise ValueError('人物口型源片段不可用')
+            route = f"/api/creation-tasks/{quote(task_id, safe='')}/person-renders/{quote(render.id, safe='')}/media"
+        else:
+            path = self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            path.relative_to(Path(self.preview_settings.video_inbox_path).expanduser().resolve())
+            route = f"/api/production/materials/{quote(clip.asset_id, safe='')}/media"
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError('镜头源片段不可用')
+        return f'{route}#t={clip.source_start_seconds:.3f},{clip.source_end_seconds:.3f}'
+
+
+    def linkage_lines(self, linkage):
+        """把关联对象与旧→新位置写成预览正文，不新增无人消费的字段。"""
+        lines = ['该人物镜头的配音与字幕按来源一并移动：']
+        for row in linkage:
+            old_ms = int(row['old_timeline_start_ms'])
+            new_ms = int(row['new_timeline_start_ms'])
+            source_ms = int(row['source_end_ms']) - int(row['source_start_ms'])
+            subtitles = '、'.join((str(item) for item in row['subtitle_cue_ids'])) or '无字幕'
+            lines.append(f"- 文案 {row['cue_id']}（配音分段 {row['narration_segment_id']}，音频 {row['audio_clip_id']}，音频来源 {row['source_ref']}）：源区间 {int(row['source_start_ms'])}–{int(row['source_end_ms'])} 毫秒保持不变，时间线 {round(old_ms / 1000, 3)} 秒 → {round(new_ms / 1000, 3)} 秒（时长 {round(source_ms / 1000, 3)} 秒）；字幕 {subtitles}。")
+        return lines
+
+
+    def bind_affected_source_command(self, verifier, command, before, after):
+        try:
+            return verifier.bind_affected(command, before, after)
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except (ValueError, KeyError, OSError) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+
+
+    def resolve_edit_clip_source(self, task, reader_identity, clip, values):
+        identity, diagnostic = (reader_identity['member_id'], reader_identity['local_diagnostic'])
+        return self.repository.resolve_edit_clip_source(task.workspace_id, task.id, clip, values, user_id=identity, local_diagnostic=diagnostic)
+
+
+    def graphic_overlay_candidate(self, plan, payload):
+        return graphic_overlay_candidate(plan, action=payload.overlay_action, value=payload.graphic_overlay.model_dump() if payload.graphic_overlay is not None else None, identity=payload.overlay_id)
+
+
+    def task_or_missing(self, workspace_id, task_id):
+        try:
+            return self.repository.get_creation_task(workspace_id, task_id)
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task not found') from exc
+
+
+    def cover_description(self, montage, base_version, payload):
+        if payload.title is None or payload.frame_time_seconds is None:
+            raise EditPreviewRejected(status_code=422, detail='cover edit requires title and frame_time_seconds')
+        if montage.status != 'rendered' or not montage.output_path:
+            raise edit_preview_failure(status_code=409, error='rendered_version_required', reason='当前任务没有可选帧的已渲染成片。', impact='没有生成封面，当前任务保持不变。', repair_action='先渲染当前成片，再选择画面和标题生成封面。', retryable=True)
+        position_label = '画面中部' if payload.title_position == 'center' else '画面底部'
+        summary = f'从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并在{position_label}叠加标题生成封面。'
+        target_refs = [montage.output_path]
+        operation_payload = {'source_video_ref': montage.output_path, 'aspect_ratio': montage.aspect_ratio, 'frame_time_seconds': payload.frame_time_seconds, 'title': payload.title, 'title_position': payload.title_position, 'base_version_id': base_version.id}
+        preview = {'before': {'ref': montage.output_path, 'label': '当前成片画面', 'detail': f'{payload.frame_time_seconds:.1f} 秒'}, 'after': {'ref': 'cover:preview', 'label': '封面标题', 'detail': f'{position_label} · {payload.title}'}}
+        effects = ['确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。']
+        return (summary, target_refs, operation_payload, preview, effects)

@@ -94,7 +94,7 @@ from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
     LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError)
 from app.creation.editing.metadata_use_case import (
-    MetadataEditUseCase, MetadataEditReplay, InvalidMontage, LegacyMontageReference,
+    MetadataEditUseCase, MetadataEditReplay, InvalidMontage, LegacyMontageReference, EditPreviewRejected,
     SubtitleNoChange, SubtitleTargetMissing,
     metadata_edit_command,
     default_subtitle_style as metadata_default_subtitle_style,
@@ -107,7 +107,8 @@ from app.creation.editing.metadata_use_case import (
 )
 from app.creation.editing.compound_use_case import (CompoundEditUseCase, CompoundPreviewCommand,
     CompoundSelectionCommand, CompoundProposalMissing, CompoundSelectionInputError)
-from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, SubtitlePreviewFailed, is_subtitle_edit)
+from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, SubtitlePreviewFailed, is_subtitle_edit, subtitle_values)
+from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import subtitle_display_selection
@@ -3578,70 +3579,38 @@ def _exact_edit_access(task_id, request, *, write=False):
     return task, member_id
 
 
-def _prepare_exact_edit_request(task_id, request, payload):
-    envelope = payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS
-    if not envelope:
-        return payload, None  # Existing precise GUI calls keep their protocol.
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if not {"expected_timeline_version_id", "expected_timeline_sequence"} <= payload.model_fields_set:
-        raise HTTPException(status_code=422, detail="类型化请求须绑定期望时间线版本和序号")
-    if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
-        raise HTTPException(status_code=409, detail="时间线已变化，请重新读取当前任务")
-    source = {"workspace_id": task.workspace_id, "task_id": task_id, "member_id": member_id,
-              "request_id": str(payload.request_id) if payload.request_id else None,
-              "expected_timeline_version_id": payload.expected_timeline_version_id,
-              "expected_timeline_sequence": payload.expected_timeline_sequence}
-    actor = _request_permit_actor(request, task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id, member_id)
-    if actor is not None:
-        source["actor_identity"] = actor.identity_payload()
-    if payload.assistant_turn_id:
-        try:
-            origin = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        snapshot = origin["context"].get("target_snapshot", {})
-        if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise HTTPException(status_code=409, detail="助手轮次的目标版本已失效")
-        source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin["conversation_id"], raw_command=origin["raw_command"])
-    clean = CreationTaskExactEditRequest.model_validate(payload.model_dump(mode="json", exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS))
-    source["action"] = clean.model_dump(mode="json", exclude_unset=True)
-    source["source_facts"] = _exact_edit_source_facts(task, clean, request)
-    return clean, source
-
-
-def _exact_edit_source_facts(task, payload, request):
-    """Bind the actual authorized material revision without exposing host paths."""
-    if payload.operation_type == "EditAudioTimeline":
-        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
-        graph = _effective_audio_timeline(montage)
-        edit = _audio_mix_request(payload, task.current_timeline_version_id)
-        try:
-            apply_audio_edit(graph, edit, round(montage.duration_seconds * 1000))
-            actor = _require_permit_actor(request, task.workspace_id)
-            facts = []
-            for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
-                stat = _task_audio().source(task.workspace_id, task.id, reference, actor=actor).stat()
-                facts.append({"reference": reference, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-                    "ctime_ns": stat.st_ctime_ns, "inode": stat.st_ino, "device": stat.st_dev})
-            return facts
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except (KeyError, ValueError, OSError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    ids = payload.clip_ids if payload.operation_type == "AdjustVisualEffects" else [payload.clip_id] if payload.clip_id else []
-    if not ids:
-        return []
-    user_id, diagnostic = _content_reader(request, task.workspace_id)
-    replacement = (payload.asset_id, payload.segment_id) if payload.asset_id is not None and payload.segment_id is not None else None
+def _prepare_exact_edit_request(task_id,request,payload):
+    if not payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS:
+        return payload,None
+    task,member_id=_exact_edit_access(task_id,request,write=True)
+    case=_exact_preview_use_case()
     try:
-        return production_repo.clip_edit_source_facts(task.workspace_id, task.id, clip_ids=ids,
-            replacement=replacement, user_id=user_id, local_diagnostic=diagnostic)
+        source,version=case.typed_source(task,payload,member_id)
+        actor=_request_permit_actor(request,task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id,member_id)
+        clean,source=case.complete_typed(task,payload,member_id,actor,source,version)
+        source['source_facts']=_exact_edit_source_facts(task,clean,request)
+        return clean,source
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+
+
+def _exact_edit_source_facts(task,payload,request):
+    case=_exact_preview_use_case()
+    try:
+        if payload.operation_type == 'EditAudioTimeline':
+            graph=case.audio_source_graph(task,payload)
+            actor=_require_permit_actor(request,task.workspace_id)
+            return case.audio_source_facts(task,graph,actor)
+        ids=payload.clip_ids if payload.operation_type == 'AdjustVisualEffects' else [payload.clip_id] if payload.clip_id else []
+        if not ids:return []
+        reader,diagnostic=_content_reader(request,task.workspace_id)
+        return case.source_facts(task,payload,{'member_id':reader,'local_diagnostic':diagnostic},None)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (KeyError, ValueError, OSError) as exc:
-        status = 404 if isinstance(exc, KeyError) and exc.args[0] == '当前任务镜头不存在' else 409
-        raise HTTPException(status_code=status, detail='镜头来源或使用状态已失效') from exc
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError,OSError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
 
 
 def _audio_mix_request(payload, base_version_id):
@@ -3649,22 +3618,20 @@ def _audio_mix_request(payload, base_version_id):
         target_id=payload.audio_edit.target_id, values=payload.audio_edit.values.model_dump(mode="json", exclude_unset=True))
 
 
-def _claim_edit_request(task, member_id, request_id, phase, inputs):
-    try:
-        return production_repo.claim_edit_request(task, member_id, request_id, phase, inputs)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+def _claim_edit_request(task,member_id,request_id,phase,inputs):
+    try:return _exact_preview_use_case().claim_request(task,member_id,request_id,phase,inputs)
+    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 def _save_edit_request_result(task, event_id, result):
     status = result.status_code if isinstance(result, JSONResponse) else 200
     content = json.loads(result.body) if isinstance(result, JSONResponse) else result.model_dump(mode="json")
-    production_repo.save_edit_request_result(task, event_id, status_code=status, response=content)
+    _exact_preview_use_case().record_request_result(task, event_id, status_code=status, response=content)
     _wake_assistant_continuations()
 
 
 def _read_edit_request_result(task, event_id):
-    recorded = production_repo.read_edit_request_result(task, event_id)
+    recorded = _exact_preview_use_case().read_request_result(task, event_id)
     return JSONResponse(status_code=recorded["status_code"], content=recorded["response"]) if recorded is not None else None
 
 
@@ -3858,22 +3825,6 @@ def _task_media_route(operation, result_kind):
             if TASK_MEDIA_CONTEXT.get() is not None or _TASK_MEDIA_SUBMISSION.get():
                 return function(*args, **kwargs)
             typed_source, edit_request_event = (None, None)
-            if operation == 'exact_edit_preview':
-                original = bound.arguments['payload']
-                if original.request_id is not None:
-                    task, member_id = _exact_edit_access(bound.arguments['task_id'], request, write=True)
-                    edit_request_event, fresh = _claim_edit_request(task, member_id, original.request_id, 'preview', original.model_dump(mode='json', exclude_unset=True))
-                    if not fresh:
-                        result = _read_edit_request_result(task, edit_request_event)
-                        if result is not None:
-                            return result
-                        raise HTTPException(status_code=409, detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
-                try:
-                    bound.arguments['payload'], typed_source = _prepare_exact_edit_request(bound.arguments['task_id'], request, original)
-                except HTTPException as exc:
-                    if edit_request_event:
-                        _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
-                    raise
             if operation == 'command_edit_preview':
                 task = _creation_task_or_404(current_workspace_id(request), bound.arguments['task_id'])
                 bound.arguments['payload'] = _bind_assistant_edit_instruction(request, task, bound.arguments['payload'])
@@ -3970,6 +3921,80 @@ def _compound_selection_facts(workspace_id, task_id, arguments, actor):
     return case.seal_resources(prepared, budget, cpu_audio_budget_from_env(), actor=actor)
 
 
+
+def _try_exact_preview(task_id,request,payload,*,source,execution,operation):
+    workspace_id=current_workspace_id(request)
+    if payload.operation_type in {'EditAudioTimeline','AdjustVisualEffects'}:
+        _exact_edit_access(task_id,request,write=True)
+    if payload.operation_type in {'ChangeLinkedSpeed','DeleteClip','DuplicateClip','InsertClip'}:
+        return _preview_linked_core(task_id,request,payload,source=source)
+    reader,diagnostic=_content_reader(request,workspace_id)
+    if source is not None:reader,diagnostic=_assistant_member_id(request,workspace_id),False
+    actor=_request_permit_actor(request,workspace_id) if payload.operation_type == 'EditAudioTimeline' else None
+    case=_exact_preview_use_case()
+    try:
+        outcome=case.preview(workspace_id,task_id,payload,identity={'member_id':reader,'local_diagnostic':diagnostic},
+            actor=actor,source=source,execution=execution,reader_identity=None,
+            draft_only=request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact'))
+        if isinstance(outcome,ClipPreviewCommand):
+            return _submit_exact_clip_preview(case,workspace_id,request,outcome,operation)
+        return _edit_preview_response(*outcome)
+    except (EditPreviewRejected,PicturePreviewRejected,AudioEditRejected) as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except (ClipPreviewUnavailable,HostBudgetUncalibrated) as exc:
+        raise HTTPException(status_code=503,detail=str(exc)) from exc
+    except (ClipPreviewConflict,TimelineVersionConflict) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+def _submit_exact_clip_preview(case,workspace_id,request,command,operation):
+    actor=_require_permit_actor(request,workspace_id)
+    try:
+        command=case.prepare_clip_submission(actor,command,original_command=getattr(request.state,'task_media_command',None))
+        runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+        job=case.submit_clip(runtime,media,actor,command,operation=operation)
+        receipt=_task_media_job_response(media,job,actor,runtime);receipt['result']=None
+        return JSONResponse(status_code=202,content=receipt)
+    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except (ClipPreviewUnavailable,HostBudgetUncalibrated) as exc:raise HTTPException(status_code=503,detail=str(exc)) from exc
+    except (ClipPreviewConflict,TimelineVersionConflict) as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
+    except PermissionError as exc:raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc:raise HTTPException(status_code=404,detail=str(exc)) from exc
+    except (ValueError,OSError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+
+def _queue_exact_preview(task_id,request,payload,*,source,media_kind):
+    workspace_id=current_workspace_id(request)
+    actor=_require_permit_actor(request,workspace_id)
+    case=_exact_preview_use_case()
+    try:
+        task,values=case.submission_arguments(workspace_id,task_id,actor,payload,media_kind=media_kind,
+            draft_only=request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact'),source=source)
+        runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+        job=case.submit(runtime,media,actor,task,values)
+        return _task_media_job_response(media,job,actor,runtime)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (ValueError,KeyError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+
+def _exact_preview_facts(workspace_id,task_id,arguments,actor):
+    case=_exact_preview_use_case()
+    prepared=case.prepare_source(workspace_id,task_id,arguments,actor)
+    if prepared[1] is None:raise ValueError('当前任务没有可预览的故事板')
+    budget=cpu_render_budget_from_env()
+    if budget is None:raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
+    if any(clip.person_render_id for clip in prepared[1].clips):
+        _,person_budget=presenter_budgets_from_env()
+        if person_budget is None:raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
+        budget=person_budget
+    resources=case.picture_resources(prepared,budget)
+    return case.seal_resources(prepared,resources,cpu_audio_budget_from_env(),actor=actor)
+
+
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == "compound_selection_preview":
         return _compound_selection_facts(workspace_id, task_id, arguments, actor)
@@ -3991,6 +4016,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
         if command.task_id != task_id or actor.workspace_id != workspace_id:
             raise PermissionError('镜头预览封存输入不属于当前成员和任务')
         return _clip_preview_use_case().seal(actor, command)
+    if operation == 'exact_edit_preview':
+        return _exact_preview_facts(workspace_id,task_id,arguments,actor)
     from app.canvas import canvas_size
     from app.member_permits import cpu_render_budget_from_env
     task = production_repo.get_creation_task(workspace_id, task_id)
@@ -4007,9 +4034,6 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     snapshot = {key: value for key, value in creation_task_montage_plan_to_payload(plan).items() if key not in transient} if plan else None
     payload = arguments.get('payload', {})
     picture_candidates = [plan] if plan is not None else []
-    if operation == 'exact_edit_preview' and payload.get('operation_type') == 'EditGraphicOverlay':
-        overlay_payload = CreationTaskExactEditRequest.model_validate(payload)
-        picture_candidates.append(_graphic_overlay_candidate(plan, overlay_payload))
     if plan is not None and arguments.get('_media_kind') == 'picture_preview' and operation == 'command_edit_preview':
         command_payload, included = (payload, None)
         compiled = compile_compound_edit(command_payload['raw_command'], plan, _effective_audio_timeline(plan), command_payload.get('selected_object_refs', []), task.current_timeline_version_id, command_payload.get('playhead_ms'), included)
@@ -4019,7 +4043,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if 'base_version_id' in payload and expected != task.current_timeline_version_id:
         raise ValueError('时间线已变化，请重新安排当前要求')
     visual_scope = None
-    visual_edit = operation == 'visual_edit_preview' or (operation == 'exact_edit_preview' and payload.get('operation_type') == 'AdjustVisualEffects')
+    visual_edit = operation == 'visual_edit_preview'
     if visual_edit and plan is not None and (arguments.get('_media_kind') == 'picture_preview'):
         tracks = _current_subtitle_tracks(workspace_id, task, montage=plan)
         representative, _after, projected = _visual_preview_projection(plan, payload['clip_ids'], payload['effects'], tracks)
@@ -4031,7 +4055,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
             picture_candidates = [candidate for candidate, _tracks in projected]
             visual_scope['subtitle_tracks'] = [{key: value for key, value in asdict(track).items() if key not in {'created_at', 'updated_at'}} for track in projected[0][1]]
     audio_operations = {'audio_extract', 'audio_edit_preview'}
-    exact_audio = operation == 'exact_edit_preview' and payload.get('operation_type') == 'EditAudioTimeline'
+    exact_audio = False
     if exact_audio:
         audio_operations.add(operation)
     if operation == 'command_edit_preview' and arguments.get('_media_kind') in {'audio_mix', 'audio_probe', 'audio_stretch'} and (not re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip())):
@@ -4140,6 +4164,8 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 def _execute_task_media_operation(job, event, actor):
+    if event['operation'] == 'exact_edit_preview':
+        raise ValueError('精确编辑必须通过明确用例，不能重入旧媒体路由')
     if event["operation"] == "compound_selection_preview":
         raise ValueError("复合选择必须通过明确用例，不能重入旧媒体路由")
     if event["operation"] == "visual_edit_preview":
@@ -4188,6 +4214,8 @@ def _execute_task_media_operation(job, event, actor):
 
 
 def _validate_task_media_result(job, event, result, context):
+    if event['operation'] == 'exact_edit_preview':
+        raise ValueError('精确编辑必须通过明确用例，不能重入旧媒体路由')
     if event["operation"] == "compound_selection_preview":
         raise ValueError("复合选择必须通过明确用例，不能重入旧媒体路由")
     if event["operation"] == "visual_edit_preview":
@@ -4547,7 +4575,17 @@ def _picture_preview_components(repository=None):
         output_root=Path(settings.video_output_path), portrait_worker_path=settings.native_portrait_worker_path,
         temporary_root=settings.effective_temporary_root_path)
     audio.picture_renderer = renderer.render_picture_input
+    metadata.picture_renderer = renderer
+    metadata.preview_settings = settings
     return audio, metadata, renderer
+
+
+def _exact_preview_use_case(repository=None):
+    repo = production_repo if repository is None else repository
+    audio, metadata, renderer = _picture_preview_components(repo)
+    return ExactPreviewUseCase(repo, metadata, SubtitleEditUseCase(repo,metadata),
+        LinkedTimelineEditUseCase(repo,metadata), AudioEditUseCase(repo,audio,metadata,creation_execution_mode),
+        VisualPreviewUseCase(repo,artifact_store,audio,metadata,renderer), _clip_preview_use_case(repo), conversation_repo, settings)
 
 
 def _visual_preview_use_case(repository=None):
@@ -8699,22 +8737,8 @@ def _apply_reorder_narration_linkage(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _linkage_lines(linkage: list[dict[str, object]]) -> list[str]:
-    """把关联对象与旧→新位置写成预览正文，不新增无人消费的字段。"""
-    lines = ["该人物镜头的配音与字幕按来源一并移动："]
-    for row in linkage:
-        old_ms = int(row["old_timeline_start_ms"])
-        new_ms = int(row["new_timeline_start_ms"])
-        source_ms = int(row["source_end_ms"]) - int(row["source_start_ms"])
-        subtitles = "、".join(str(item) for item in row["subtitle_cue_ids"]) or "无字幕"
-        lines.append(
-            f"- 文案 {row['cue_id']}（配音分段 {row['narration_segment_id']}，音频 {row['audio_clip_id']}"
-            f"，音频来源 {row['source_ref']}）："
-            f"源区间 {int(row['source_start_ms'])}–{int(row['source_end_ms'])} 毫秒保持不变，"
-            f"时间线 {round(old_ms/1000, 3)} 秒 → {round(new_ms/1000, 3)} 秒（时长 {round(source_ms/1000, 3)} 秒）；"
-            f"字幕 {subtitles}。"
-        )
-    return lines
+def _linkage_lines(linkage):
+    return _metadata_edit_use_case().linkage_lines(linkage)
 
 
 def _person_render_matches_narration(
@@ -9392,27 +9416,23 @@ def _linked_timeline_use_case():
 
 
 def _linked_timeline_values(payload):
-    if payload.operation_type == "ChangeLinkedSpeed":
-        if not payload.clip_id or payload.playback_rate is None or payload.model_fields_set - {"operation_type", "clip_id", "playback_rate"}:
-            raise HTTPException(status_code=422, detail="关联变速需要镜头和倍速，不混入其他操作")
-        return {"clip_id": payload.clip_id, "playback_rate": payload.playback_rate}
-    if payload.operation_type in {"DeleteClip", "DuplicateClip"}:
-        if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id"}:
-            raise HTTPException(status_code=422, detail="关联删除或复制只接受一个镜头，不混入其他修改")
-        return {"clip_id": payload.clip_id}
-    if not payload.clip_id or payload.model_fields_set - {"operation_type", "clip_id", "asset_id", "segment_id", "source_start_seconds"}:
-        raise HTTPException(status_code=422, detail="插入镜头只接受一个插入位置和一段素材，不混入其他修改")
-    return {"clip_id": payload.clip_id, "asset_id": payload.asset_id, "segment_id": payload.segment_id,
-        "source_start_seconds": payload.source_start_seconds}
+    try:
+        return _exact_preview_use_case().linked_values(payload)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
-def _linked_timeline_command(task, request, operation_type, values, *, source=None):
-    command = _metadata_edit_command(task, request, operation_type, values, source=source)
-    if operation_type == "InsertClip":
-        user_id, diagnostic = _content_reader(request, task.workspace_id)
-        command = replace(command, actor_identity={**command.actor_identity,
-            "material_reader_identity": {"member_id": user_id, "local_diagnostic": diagnostic}})
-    return command
+def _linked_timeline_command(task,request,operation_type,values,*,source=None):
+    member_id,diagnostic=_content_reader(request,task.workspace_id)
+    if source is not None:
+        member_id,diagnostic=_assistant_member_id(request,task.workspace_id),False
+    identity={'member_id':member_id,'local_diagnostic':diagnostic}
+    reader_identity=None
+    if operation_type == 'InsertClip':
+        reader,reader_diagnostic=_content_reader(request,task.workspace_id)
+        reader_identity={'member_id':reader,'local_diagnostic':reader_diagnostic}
+    return _exact_preview_use_case().linked_command(task,identity,operation_type,values,
+        source=source,reader_identity=reader_identity)
 
 
 def _linked_timeline_apply_command(task, proposal, request, payload=None):
@@ -9476,13 +9496,9 @@ def _validate_edit_graphic_sources(workspace_id, task_id, overlays):
     return _metadata_edit_use_case().validate_graphic_sources(workspace_id, task_id, overlays)
 
 
-def _bind_affected_source_command(verifier, command, before, after):
-    try:
-        return verifier.bind_affected(command, before, after)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+def _bind_affected_source_command(verifier,command,before,after):
+    try:return _metadata_edit_use_case().bind_affected_source_command(verifier,command,before,after)
+    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 def _edit_clip_source_bounds(task, request, clip):
@@ -9492,10 +9508,9 @@ def _edit_clip_source_bounds(task, request, clip):
     return selection.start_seconds, selection.end_seconds, selection.is_speech
 
 
-def _resolve_edit_clip_source(task, request, clip, values):
-    identity, diagnostic = _content_reader(request, task.workspace_id)
-    return production_repo.resolve_edit_clip_source(task.workspace_id, task.id, clip, values,
-        user_id=identity, local_diagnostic=diagnostic)
+def _resolve_edit_clip_source(task,request,clip,values):
+    reader,diagnostic=_content_reader(request,task.workspace_id)
+    return _metadata_edit_use_case().resolve_edit_clip_source(task,{'member_id':reader,'local_diagnostic':diagnostic},clip,values)
 
 
 def _link_reordered_edit(task, candidate):
@@ -9503,34 +9518,15 @@ def _link_reordered_edit(task, candidate):
 
 
 def _preview_metadata_settings(task, request, operation_type, values, base_version_id):
-    if base_version_id is None:
-        raise HTTPException(status_code=409, detail='当前故事板没有基础版本，请先保留当前故事板并建立版本')
-    command = _metadata_edit_command(task, request, operation_type,
-        {'base_version_id':base_version_id, **values}, source=EXACT_EDIT_SOURCE.get())
+    reader, diagnostic = _content_reader(request, task.workspace_id)
+    source = EXACT_EDIT_SOURCE.get()
+    if source is not None:
+        reader, diagnostic = _assistant_member_id(request, task.workspace_id), False
     try:
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(task.workspace_id, task.id))
-        if operation_type in CLIP_SETTING_OPERATIONS:
-            pair, _changed, _tracks, _linkage = prepare_clip_command(task, plan, command,
-                resolve_source=lambda clip, values:_resolve_edit_clip_source(task, request, clip, values),
-                link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
-        else:
-            pair, _changed = prepare_picture_command(task, plan, command,
-                validate_graphic_sources=lambda overlays:_validate_edit_graphic_sources(task.workspace_id, task.id, overlays))
-        intent, proposal = pair
-        verifier = EditSourceVerifier(production_repo, identity=command.actor_identity)
-        command = _bind_affected_source_command(verifier, command, plan, _changed)
-        intent = replace(intent, constraints={**intent.constraints,
-            'affected_source_scope':verifier.scope_payload(command)})
-
-        proposal = replace(proposal, invalidated_refs=_logical_montage_output_refs(plan))
-        return _edit_preview_response(*production_repo.save_clip_preview_proposal(intent, proposal,
-            expected_version_id=base_version_id))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (ValueError, EditConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _edit_preview_response(*_metadata_edit_use_case().preview_metadata_settings(task, operation_type, values, base_version_id,
+            identity={'member_id':reader,'local_diagnostic':diagnostic}, source=source))
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _save_direct_metadata_edit(task_id, request, payload):
@@ -10307,7 +10303,7 @@ def _preview_command_edit_request(task_id, request, payload):
         return _preview_canvas(task_id, request, CreationTaskExactEditRequest(operation_type='ChangeCanvas', aspect_ratio=canvas_commands[canvas_command], **{'fit_mode': 'fit'} if keep_picture else {}))
     display_commands = {'关闭字幕': 'none', '不显示字幕': 'none', '只显示中文字幕': 'zh', '只显示英文字幕': 'en', '显示中英双语字幕': 'zh-en'}
     if payload.context_stage in {'montage', 'review', 'subtitle_cover'} and command.rstrip('。！') in display_commands:
-        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='ConfigureSubtitleTrack', subtitle_display=display_commands[command.rstrip('。！')]))
+        return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type='ConfigureSubtitleTrack', subtitle_display=display_commands[command.rstrip('。！')]))
     if payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
         try:
             style_patch = compile_subtitle_style_command(command)
@@ -10415,7 +10411,7 @@ def _preview_command_edit_request(task_id, request, payload):
                 frame_time = min(clip.timeline_end_seconds - 0.05, clip.timeline_start_seconds + 0.2)
         if frame_time is None:
             frame_time = payload.playhead_ms / 1000 if payload.playhead_ms is not None else 0.0
-        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='GenerateCoverFromFrame', frame_time_seconds=frame_time, title=title))
+        return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type='GenerateCoverFromFrame', frame_time_seconds=frame_time, title=title))
     if selected_ref.startswith('clip:') and payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
         linked_speed = re.fullmatch('(?:把)?(?:这个|当前)?镜头(?:改成|改为|调到)\\s*(\\d+(?:\\.\\d+)?)\\s*倍速[，, ]*(?:声音和字幕一起|同步声音和字幕|连同声音字幕)[。！]?', command)
         if linked_speed:
@@ -10439,7 +10435,7 @@ def _preview_command_edit_request(task_id, request, payload):
         if split_match or split_here:
             if split_here and payload.playhead_ms is None:
                 raise HTTPException(status_code=422, detail='请先在播放器定位分割位置，或指定成片秒数。')
-            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='SplitClip', clip_id=selected_ref.removeprefix('clip:'), split_time_seconds=float(split_match.group(1)) if split_match else payload.playhead_ms / 1000))
+            return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type='SplitClip', clip_id=selected_ref.removeprefix('clip:'), split_time_seconds=float(split_match.group(1)) if split_match else payload.playhead_ms / 1000))
     batch_match = re.fullmatch('全文把[“"](.+?)[”"](?:替换成|替换为|改成|改为)[“"](.*)[”"][。！]?', command)
     if batch_match and payload.context_stage == 'subtitle_cover':
         montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
@@ -10465,7 +10461,7 @@ def _preview_command_edit_request(task_id, request, payload):
                 extra = {'split_offset': int(structure_command.group(1)), 'split_time_seconds': float(structure_command.group(2))}
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail='拆分时间须为有效秒数') from exc
-        return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type=operation, track_id=track_ref, cue_id=selected_ref.removeprefix('cue:'), **extra))
+        return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type=operation, track_id=track_ref, cue_id=selected_ref.removeprefix('cue:'), **extra))
     if selected_ref.startswith('cue:'):
         if payload.context_stage not in {'montage', 'review', 'subtitle_cover'}:
             raise _topic_failure_response(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改字幕。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一条字幕。', retryable=True)
@@ -10485,10 +10481,10 @@ def _preview_command_edit_request(task_id, request, payload):
                 edit = CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=cue.id, track_id=track.id, start_seconds=round(cue.start_seconds + offset, 3), end_seconds=round(cue.end_seconds + offset, 3))
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail='字幕移动后的时间必须有效，且不能早于成片开始。') from exc
-            return preview_creation_task_exact_edit(task_id, request, edit)
+            return _preview_exact_edit_request(task_id, request, edit)
         timing = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:的)?(?:时间)?(?:调整为|设为|改为|改成|从)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒?\\s*(?:到|至|–|-)\\s*(\\d+(?:\\.\\d+)?)\\s*秒[。！]?', command)
         if timing:
-            return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=selected_ref.removeprefix('cue:'), track_id=next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None), start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2))))
+            return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', cue_id=selected_ref.removeprefix('cue:'), track_id=next((ref.removeprefix('subtitle-track:') for ref in payload.selected_object_refs if ref.startswith('subtitle-track:')), None), start_seconds=float(timing.group(1)), end_seconds=float(timing.group(2))))
         new_text = _subtitle_text_from_command(command)
         if new_text is None:
             raise _topic_failure_response(status_code=409, error='edit_intent_unsupported', reason='没有识别出新的字幕文字。', impact='字幕和成片保持不变。', repair_action='输入“把这句字幕改成……”并保留要显示的完整文字。', retryable=True)
@@ -10501,7 +10497,7 @@ def _preview_command_edit_request(task_id, request, payload):
             if track_ref is not None and selected_track is None:
                 raise HTTPException(status_code=409, detail='所选字幕不属于当前语言轨，请重新选择')
             if selected_track is not None:
-                return preview_creation_task_exact_edit(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', track_id=selected_track.id, cue_id=cue_id, text=new_text))
+                return _preview_exact_edit_request(task_id, request, CreationTaskExactEditRequest(operation_type='UpdateSubtitleCue', track_id=selected_track.id, cue_id=cue_id, text=new_text))
             cue = next((item for item in montage.cues if item.id == cue_id))
         except (KeyError, StopIteration) as exc:
             raise HTTPException(status_code=404, detail='creation task subtitle edit target not found') from exc
@@ -11603,133 +11599,40 @@ def get_creation_task_edit_capabilities(task_id: str, request: Request):
         "preview_modes": {"draft": "只生成参数差异，不生成媒体", "media": "需现有设备许可和标定预算，返回实际预览或异步作业"}}
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/edits/exact/preview",
-    response_model=CreationTaskEditPreviewResponse,
-)
-@_task_media_route("exact_edit_preview", "edit_preview")
-def preview_creation_task_exact_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_exact_edit_request(task_id, request, payload)
-
-
-def _preview_exact_edit_request(task_id, request, payload):
-    if payload.operation_type in {'EditAudioTimeline', 'AdjustVisualEffects'}:
-        task, _member_id = _exact_edit_access(task_id, request, write=True)
-        if payload.operation_type == 'EditAudioTimeline':
-            return _preview_audio_edit_request(task_id, request, _audio_mix_request(payload, task.current_timeline_version_id), queue_on_required=False)
-        source = EXACT_EDIT_SOURCE.get()
-        return _preview_visual_request(task_id, request, VisualEditRequest(base_version_id=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id, clip_ids=payload.clip_ids, effects=payload.effects), execution=TASK_MEDIA_CONTEXT.get(), source=EXACT_EDIT_SOURCE.get())
-    if payload.operation_type == 'EditGraphicOverlay':
-        return _preview_graphic_overlay(task_id, request, payload)
-    if payload.operation_type == 'SetClipTransition':
-        return _preview_transition(task_id, request, payload)
-    if payload.operation_type == 'ChangeCanvas':
-        return _preview_canvas(task_id, request, payload)
-    if payload.operation_type == 'ConfigureSubtitleTrack' and payload.style is not None and (payload.target_language is None):
-        return _preview_subtitle_style(task_id, request, payload)
-    if payload.operation_type == 'ReplaceSubtitleText':
-        return _preview_subtitle_replace(task_id, request, payload)
-    if payload.operation_type in {'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
-        return _preview_subtitle_structure(task_id, request, payload)
-    if payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is not None:
-        return _preview_subtitle_cue(task_id, request, payload)
-    if payload.operation_type == 'ChangeLinkedSpeed':
-        return _preview_linked_timeline(task_id, request, payload)
-    if payload.operation_type in {'DeleteClip', 'DuplicateClip'}:
-        return _preview_linked_clip_edit(task_id, request, payload)
-    if payload.operation_type == 'InsertClip':
-        return _preview_insert(task_id, request, payload)
-    if payload.operation_type in CLIP_SETTING_OPERATIONS:
-        task = _creation_task_or_404(current_workspace_id(request), task_id)
-        source = EXACT_EDIT_SOURCE.get()
-        base_version_id = source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
-        fields = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if key not in {'operation_type', 'clip_id'} and value is not None}
-        if payload.operation_type in {'SetClipLock', 'ConfirmClip'}:
-            return _preview_metadata_settings(task, request, payload.operation_type, {'clip_id': payload.clip_id, **fields}, base_version_id)
-        return _submit_clip_preview(task_id, request, base_version_id=base_version_id, operation_type=payload.operation_type, clip_ids=[payload.clip_id], values=fields, raw_command='精确操作：' + payload.operation_type)
-    if payload.operation_type in {'ReplaceClip', 'TrimClip', 'SplitClip', 'ReorderClip'}:
-        _task, _base, _plan, intent, proposal = _preview_exact_montage_edit(task_id, request, payload)
-        return _edit_preview_response(intent, proposal)
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if payload.operation_type not in {'UpdateSubtitleCue', 'ConfigureSubtitleTrack', 'GenerateCoverFromFrame'}:
-        raise HTTPException(status_code=422, detail='该精确操作尚未迁移到预览确认入口')
+@app.post('/api/creation-tasks/{task_id}/edits/exact/preview',response_model=CreationTaskEditPreviewResponse)
+def preview_creation_task_exact_edit(task_id:str,request:Request,payload:CreationTaskExactEditRequest):
+    original=payload
+    edit_request_event=None
+    if original.request_id is not None:
+        task,member_id=_exact_edit_access(task_id,request,write=True)
+        edit_request_event,fresh=_claim_edit_request(task,member_id,original.request_id,'preview',original.model_dump(mode='json',exclude_unset=True))
+        if not fresh:
+            result=_read_edit_request_result(task,edit_request_event)
+            if result is not None:return result
+            raise HTTPException(status_code=409,detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
     try:
-        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail='creation task montage plan not found') from exc
-    base_version = _ensure_montage_base_version(workspace_id, task, montage)
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
-    now = utc_now()
-    if payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None:
-        selection = _subtitle_display_selection(tracks, payload.subtitle_display)
-        if all((track.style.get('enabled', True) == selection[track.id] for track in tracks)):
-            raise HTTPException(status_code=409, detail='字幕显示设置没有变化')
-        labels = {'none': '不显示字幕', 'zh': '仅中文字幕', 'en': '仅英文字幕', 'zh-en': '中英双语字幕'}
-        summary = f'成片改为{labels[payload.subtitle_display]}，保留字幕文字与时轴。'
-        target_refs = [f'subtitle-track:{track.id}' for track in tracks]
-        operation_payload = {'subtitle_display': payload.subtitle_display, 'base_version_id': base_version.id}
-        preview = {'before': {'ref': f'timeline:{base_version.id}', 'label': '当前显示', 'detail': '、'.join((track.language for track in tracks if track.style.get('enabled', True))) or '无字幕'}, 'after': {'ref': f'subtitle-display:{payload.subtitle_display}', 'label': '修改后', 'detail': labels[payload.subtitle_display]}}
-        effects = ['只修改字幕显示；不调用模型。关闭全部字幕后仍保留可下载的字幕文件。']
-    elif payload.operation_type == 'ConfigureSubtitleTrack':
-        source = next((track for track in tracks if track.language == 'zh-CN'), None)
-        if source is None:
-            raise _topic_failure_response(status_code=409, error='subtitle_source_missing', reason='当前时间线没有可用的中文字幕轨。', impact='没有调用文字模型，当前成片保持不变。', repair_action='先生成带中文字幕的成片，再启用双语字幕。', retryable=True)
-        if any((track.language == 'en-US' and track.status == 'valid' for track in tracks)):
-            raise _topic_failure_response(status_code=409, error='edit_no_change', reason='当前时间线已经启用中英双语字幕。', impact='没有创建新的时间线版本。', repair_action='可直接编辑具体字幕，或先撤销到上一版本。', retryable=False)
-        provider = subtitle_translation_provider_from_settings(settings)
-        if not provider.ready:
-            raise _topic_failure_response(status_code=409, error='subtitle_translation_unavailable', reason='文字模型翻译能力不可用。', impact='未生成英文字幕，中文字幕和成片保持不变。', repair_action=provider.message, retryable=True)
-        summary = '把当前中文字幕逐条翻译为英文，保持原时间轴，并启用中英双语字幕。'
-        target_refs = [f'subtitle-track:{source.id}']
-        operation_payload = {'source_track_id': source.id, 'target_language': 'en-US', 'base_version_id': base_version.id}
-        preview = {'before': {'ref': target_refs[0], 'label': '中文字幕', 'detail': f'{len(source.cues)} 条'}, 'after': {'ref': 'subtitle-track:en-US', 'label': '中英双语字幕', 'detail': '逐条对齐原时间轴，确认后调用一次文字模型'}}
-        effects = ['确认后调用一次当前已配置文字模型；不会改写字幕时间轴。']
-    elif payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None:
-        if not payload.cue_id:
-            raise HTTPException(status_code=422, detail='subtitle edit requires cue_id')
-        track = next((item for item in tracks if (payload.track_id is None or item.id == payload.track_id) and any((cue.id == payload.cue_id for cue in item.cues))), None)
-        if track is None:
-            raise HTTPException(status_code=404, detail='subtitle track or cue not found')
-        cue = next((cue for cue in track.cues if cue.id == payload.cue_id))
-        if track.language == 'en-US' and payload.style is not None and (payload.style != track.style):
-            raise HTTPException(status_code=422, detail='双语字幕共用样式，请在中文轨调整；英文轨支持文字、断行和强调词。')
-        normalized_text, normalized_line_breaks = _normalize_subtitle_text_and_breaks(payload.text if payload.text is not None else cue.text, payload.line_breaks if payload.line_breaks is not None else cue.line_breaks if payload.text is None or payload.text == cue.text else None)
-        start = payload.start_seconds if payload.start_seconds is not None else cue.start_seconds
-        end = payload.end_seconds if payload.end_seconds is not None else cue.end_seconds
-        candidate = replace(cue, text=normalized_text, start_seconds=start, end_seconds=end)
-        candidate_track = replace(track, cues=[candidate if item.id == cue.id else item for item in track.cues])
-        try:
-            subtitle_schedule([replace(track, status='valid', style={**track.style, 'enabled': True}, cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
-            changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds, invalidate_all_english_on_text_change=True)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        changed = start != cue.start_seconds or end != cue.end_seconds or normalized_text != cue.text or (normalized_line_breaks != cue.line_breaks) or (payload.emphasis is not None) or (payload.style is not None)
-        if not changed:
-            raise _topic_failure_response(status_code=409, error='edit_no_change', reason='字幕文字、时轴和样式没有变化。', impact='没有创建新的时间线版本。', repair_action='修改文字、断行、强调词或字幕样式后再预览。', retryable=False)
-        summary = '只修改所选字幕条目；配音、镜头和其他字幕保持不变。'
-        target_refs = [f'subtitle-cue:{track.id}:{cue.id}']
-        operation_payload = {'track_id': track.id, 'cue_id': cue.id, 'text': normalized_text, 'start_seconds': start, 'end_seconds': end, 'line_breaks': normalized_line_breaks, 'emphasis': payload.emphasis if payload.emphasis is not None else cue.emphasis, 'style': payload.style if payload.style is not None else track.style, 'expected_text': cue.text, 'base_version_id': base_version.id}
-        preview = {'before': {'ref': target_refs[0], 'label': '当前字幕', 'detail': f'{cue.start_seconds:.2f}–{cue.end_seconds:.2f} 秒 · {cue.text}'}, 'after': {'ref': target_refs[0], 'label': '修改后字幕', 'detail': f'{start:.2f}–{end:.2f} 秒 · {normalized_text}'}}
-        effects = ['确认后只重建字幕产物并使当前视频输出失效；不会重新生成配音或镜头。']
-        effects.extend((f"{('中文' if before.language == 'zh-CN' else '英文')}字幕新增无字幕时段：{start:.2f}–{end:.2f} 秒。" for before in tracks for after in changed_tracks if before.id == after.id for start, end in new_subtitle_gap_intervals(before, after, montage.duration_seconds)))
-        if track.language == 'zh-CN' and normalized_text != cue.text and any((item.language == 'en-US' for item in tracks)):
-            effects.append('中文内容已改变，旧英文翻译将移除；需要重新翻译后才能输出双语字幕。')
-    else:
-        if payload.title is None or payload.frame_time_seconds is None:
-            raise HTTPException(status_code=422, detail='cover edit requires title and frame_time_seconds')
-        if montage.status != 'rendered' or not montage.output_path:
-            raise _topic_failure_response(status_code=409, error='rendered_version_required', reason='当前任务没有可选帧的已渲染成片。', impact='没有生成封面，当前任务保持不变。', repair_action='先渲染当前成片，再选择画面和标题生成封面。', retryable=True)
-        position_label = '画面中部' if payload.title_position == 'center' else '画面底部'
-        summary = f'从成片 {payload.frame_time_seconds:.1f} 秒选择真实画面，并在{position_label}叠加标题生成封面。'
-        target_refs = [montage.output_path]
-        operation_payload = {'source_video_ref': montage.output_path, 'aspect_ratio': montage.aspect_ratio, 'frame_time_seconds': payload.frame_time_seconds, 'title': payload.title, 'title_position': payload.title_position, 'base_version_id': base_version.id}
-        preview = {'before': {'ref': montage.output_path, 'label': '当前成片画面', 'detail': f'{payload.frame_time_seconds:.1f} 秒'}, 'after': {'ref': 'cover:preview', 'label': '封面标题', 'detail': f'{position_label} · {payload.title}'}}
-        effects = ['确认后只运行一次本机 FFmpeg 与图片排版；不会调用 AI 生图模型。']
-    intent = production_repo.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'精确操作：{summary}', context_stage='review' if task.stage == 'review' else 'montage', selected_object_refs=target_refs, playhead_ms=round((payload.frame_time_seconds or 0) * 1000) if payload.operation_type == 'GenerateCoverFromFrame' else None, intent_type='exact_subtitle_cover_edit', scope={'kind': payload.operation_type}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=1.0, status='interpreted', created_at=now))
-    proposal = production_repo.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=target_refs, operation={'operation_type': payload.operation_type, 'payload': operation_payload}, invalidated_refs=_logical_montage_output_refs(montage) if payload.operation_type != 'GenerateCoverFromFrame' else [], preview=preview, external_effects=effects, created_at=now, updated_at=now))
-    return _edit_preview_response(intent, proposal)
+        payload,source=_prepare_exact_edit_request(task_id,request,original)
+    except HTTPException as exc:
+        if edit_request_event:_save_edit_request_result(task,edit_request_event,JSONResponse(status_code=exc.status_code,content={'detail':exc.detail}))
+        raise
+    try:
+        result=_try_exact_preview(task_id,request,payload,source=source,execution=None,operation='exact_edit_preview')
+        if edit_request_event:_save_edit_request_result(task,edit_request_event,result)
+        return result
+    except HTTPException as exc:
+        if edit_request_event:_save_edit_request_result(task,edit_request_event,JSONResponse(status_code=exc.status_code,content={'detail':exc.detail}))
+        raise
+    except TaskMediaRequired as required:
+        media_kind=required.kind
+    receipt=_queue_exact_preview(task_id,request,payload,source=source,media_kind=media_kind)
+    if edit_request_event:_save_edit_request_result(task,edit_request_event,JSONResponse(status_code=202,content=receipt))
+    receipt['result']=None
+    return JSONResponse(status_code=202,content=receipt)
+
+
+def _preview_exact_edit_request(task_id,request,payload):
+    return _try_exact_preview(task_id,request,payload,source=EXACT_EDIT_SOURCE.get(),
+        execution=TASK_MEDIA_CONTEXT.get(),operation=_TASK_MEDIA_SUBMISSION.get() or 'exact_edit_preview')
 
 
 @app.post(
@@ -11916,151 +11819,46 @@ def _preview_compound_edit(task,request,payload,included_step_indices=None,selec
         raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
 
 
-def _graphic_overlay_candidate(plan, payload):
-    return graphic_overlay_candidate(plan, action=payload.overlay_action,
-        value=payload.graphic_overlay.model_dump() if payload.graphic_overlay is not None else None,
-        identity=payload.overlay_id)
+def _graphic_overlay_candidate(plan,payload):
+    return _metadata_edit_use_case().graphic_overlay_candidate(plan,payload)
 
-def _preview_graphic_overlay(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    if payload.model_fields_set-{"operation_type","overlay_action","graphic_overlay","overlay_id"}:
-        raise HTTPException(status_code=422,detail="图文叠加层编辑不能混入其他操作")
-    workspace_id=current_workspace_id(request)
-    task=_creation_task_or_404(workspace_id,task_id)
-    plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-    if plan.status=="rendering":
-        raise HTTPException(status_code=409,detail="正在渲染，请完成后修改图文叠加层")
-    try:
-        edited = _graphic_overlay_candidate(plan, payload)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    action = payload.overlay_action
-    identity = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
-    base=_ensure_montage_base_version(workspace_id,task,plan)
-    tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
-    try:
-        for item in edited.graphic_overlays:
-            if item.get('kind')=='image':
-                resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,item['source_ref'])
-        records=[]
-        if not draft_only:
-            records=[_publish_task_picture_preview(workspace_id,task,base,candidate,tracks,kind="graphic_preview",
-                parameters={"graphic_overlays":candidate.graphic_overlays}) for candidate in (plan,edited)]
-    except (ValueError,OSError,subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,(ValueError,OSError)) else "图文叠加层预览失败，请检查本机渲染器") from exc
-    if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
-        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览图文叠加层")
-    summary={"add":"添加图文叠加层","update":"修改图文叠加层","delete":"删除图文叠加层"}[action]
-    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
-        raw_command=summary,context_stage="montage",selected_object_refs=[f"overlay:{identity}"],playhead_ms=None,
-        intent_type="graphic_overlay",scope={"kind":"overlay","id":identity},constraints={"preserve_narration":True},confidence=1,status="interpreted"))
-    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
-        summary=summary,target_refs=[f"overlay:{identity}"],operation={"operation_type":"EditGraphicOverlay","payload":{
-            "base_version_id":base.id,"graphic_overlays":edited.graphic_overlays}},invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
-        preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":"修改前" if side=="before" else summary,
-            "detail":"完整成片视听预览；图文叠加层在指定区间显示，字幕、声音和镜头保持不变。",
-            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}}))
-    return _edit_preview_response(intent,proposal)
-
-
-def _preview_transition(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    from copy import deepcopy
-    if not payload.clip_id or payload.transition_seconds is None or payload.model_fields_set - {"operation_type","clip_id","transition_seconds"}:
-        raise HTTPException(status_code=422,detail="转场需要后一个镜头和叠化秒数，不能混入其他操作")
-    workspace_id=current_workspace_id(request)
-    task=_creation_task_or_404(workspace_id,task_id)
-    plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-    index=next((i for i,clip in enumerate(plan.clips) if clip.id==payload.clip_id),-1)
-    if index<=0:
-        raise HTTPException(status_code=422,detail="请选择第二个或之后的镜头，修改它与前一个镜头之间的转场")
-    targets=plan.clips[index-1:index+1]
-    if plan.status=="rendering" or any(clip.locked for clip in targets):
-        raise HTTPException(status_code=409,detail="正在渲染或转场镜头已锁定，请先解锁或等待完成")
-    if targets[1].transition_in_seconds==payload.transition_seconds:
-        raise HTTPException(status_code=422,detail="转场没有变化")
-    base=_ensure_montage_base_version(workspace_id,task,plan)
-    edited=deepcopy(plan)
-    edited.clips[index].transition_in_seconds=payload.transition_seconds
-    tracks=_current_subtitle_tracks(workspace_id,task,current_version=base,montage=plan)
-    try:
-        dissolve_frames(edited.clips)
-        records=[]
-        if not draft_only:
-            records=[_publish_task_picture_preview(workspace_id,task,base,candidate,tracks,kind="transition_preview",
-                parameters={"transition_seconds":candidate.clips[index].transition_in_seconds,"clip_id":payload.clip_id}) for candidate in (plan,edited)]
-    except (ValueError,OSError,subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地转场预览失败，请检查源素材和FFmpeg") from exc
-    if production_repo.get_creation_task(workspace_id,task_id).current_timeline_version_id!=base.id:
-        raise HTTPException(status_code=409,detail="预览期间时间线变化，请重新预览转场")
-    refs=[f"clip:{clip.id}" for clip in targets]
-    source_command = _metadata_edit_command(task, request, 'SetClipTransition',
-        {'base_version_id':base.id, 'clip_id':payload.clip_id, 'transition_seconds':payload.transition_seconds},
-        source=EXACT_EDIT_SOURCE.get())
-    source_verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
-    source_command = _bind_affected_source_command(source_verifier, source_command, plan, edited)
-    source_scope = source_verifier.scope_payload(source_command)
-    intent=production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
-        raw_command=f"叠化{payload.transition_seconds:g}秒",context_stage="montage",selected_object_refs=refs,
-        playhead_ms=round(targets[1].timeline_start_seconds*1000),intent_type="transition",scope={"kind":"clips","clip_ids":[clip.id for clip in targets]},
-        constraints={"preserve_timing":True,"preserve_audio":True,"affected_source_scope":source_scope},confidence=1,status="interpreted"))
-    proposal=production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
-        summary=f"镜头 {index} → {index+1}："+(f"叠化 {payload.transition_seconds:g} 秒" if payload.transition_seconds else "硬切"),target_refs=refs,
-        operation={"operation_type":"SetClipTransition","payload":{"base_version_id":base.id,"clip_id":payload.clip_id,
-            "transition_seconds":payload.transition_seconds,"expected_clips":{clip.id:asdict(clip) for clip in targets}}},
-        invalidated_refs=_logical_montage_output_refs(plan),external_effects=[],
-        preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":"当前转场" if side=="before" else "修改后转场",
-            "detail":f"完整成片视听预览；转场从 {targets[1].timeline_start_seconds:.2f} 秒开始，读取前镜头结尾的真实素材余量，声音与字幕时轴不变。",
-            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"} for side,record in zip(("before","after"),records)}}))
-    return _edit_preview_response(intent,proposal)
-
-
-def _preview_canvas(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    if payload.aspect_ratio is None or payload.model_fields_set - {"operation_type", "aspect_ratio", "fit_mode"}:
-        raise HTTPException(status_code=422, detail="画幅修改需要9:16、16:9或1:1，可同时指定填充或适应")
+def _preview_graphic_overlay(task_id, request, payload):
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-    base = _ensure_montage_base_version(workspace_id, task, montage)
-    if any(clip.locked for clip in montage.clips):
-        raise HTTPException(status_code=422, detail="改变画幅会影响所有镜头，请先解锁镜头")
-    if montage.aspect_ratio == payload.aspect_ratio and (payload.fit_mode is None or all(clip.fit_mode == payload.fit_mode for clip in montage.clips)):
-        raise HTTPException(status_code=409, detail="画幅与适配方式没有变化")
-    clip = montage.clips[0]
+    reader, diagnostic = _content_reader(request, workspace_id)
+    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
     try:
-        production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-        records=[]
-        if not draft_only:
-            from copy import deepcopy
-            changed = deepcopy(montage)
-            changed.aspect_ratio = payload.aspect_ratio
-            changed.clips = [replace(item, fit_mode=payload.fit_mode or item.fit_mode) for item in changed.clips]
-            tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
-            records = [_publish_task_picture_preview(workspace_id, task, base, candidate, tracks,
-                kind="canvas_preview", parameters={"side": side, "aspect_ratio": candidate.aspect_ratio})
-                for side, candidate in (("before", montage), ("after", changed))]
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc,ValueError) else "画幅预览失败，请检查素材与本机FFmpeg") from exc
-    if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
-        raise HTTPException(status_code=409, detail="预览期间版本变化，请重新预览")
-    now = utc_now()
-    intent = production_repo.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
-        raw_command=f"画幅改为{payload.aspect_ratio}",context_stage="montage",selected_object_refs=[],playhead_ms=None,
-        intent_type="canvas",scope={"kind":"timeline"},constraints={"preserve_narration":True},confidence=1,status="interpreted",created_at=now))
-    cover = _cover_asset_for_version(workspace_id,task_id,base)
-    proposal = production_repo.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,intent_id=intent.id,
-        summary=f"整片改为{payload.aspect_ratio}；配音、字幕文字和时轴不变。",target_refs=[f"timeline:{base.id}"],
-        operation={"operation_type":"ChangeCanvas","payload":{"base_version_id":base.id,"aspect_ratio":payload.aspect_ratio,"fit_mode":payload.fit_mode}},
-        invalidated_refs=[*_logical_montage_output_refs(montage), *([cover.artifact_ref] if cover and cover.artifact_ref else [])],
-        preview={**{side: {"ref": f"timeline:{base.id}", "label": label, "detail": "草稿参数已计算；应用时保存新版本，不自动生成媒体。"} for side, label in (("before", "当前草稿"), ("after", "修改后草稿"))}, **{side:{"ref":record.logical_ref,"label":ratio,"detail":"第一镜头最多5秒的静音画面预览；字幕将按新画幅重新排版。",
-            "video_url":f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
-            for side,ratio,record in zip(("before","after"),(montage.aspect_ratio,payload.aspect_ratio),records)}},
-        external_effects=["影响所有镜头，封面需重新生成；撤销可恢复。", "适应模式完整保留画面，可能留黑边；填充模式按裁切位置裁掉超出部分。"],
-        status="proposed",created_at=now,updated_at=now))
-    return _edit_preview_response(intent,proposal)
+        outcome = _metadata_edit_use_case().preview_graphic_overlay(workspace_id, task_id, payload,
+            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=TASK_MEDIA_CONTEXT.get(),
+            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
+        return _edit_preview_response(*outcome)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _preview_transition(task_id, request, payload):
+    workspace_id = current_workspace_id(request)
+    reader, diagnostic = _content_reader(request, workspace_id)
+    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
+    try:
+        outcome = _metadata_edit_use_case().preview_transition(workspace_id, task_id, payload,
+            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=TASK_MEDIA_CONTEXT.get(),
+            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
+        return _edit_preview_response(*outcome)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _preview_canvas(task_id, request, payload):
+    workspace_id = current_workspace_id(request)
+    reader, diagnostic = _content_reader(request, workspace_id)
+    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
+    try:
+        outcome = _metadata_edit_use_case().preview_canvas(workspace_id, task_id, payload,
+            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=TASK_MEDIA_CONTEXT.get(),
+            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
+        return _edit_preview_response(*outcome)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _preview_subtitle_alignment(task, request, payload, language_label):
@@ -12072,19 +11870,8 @@ def _subtitle_edit_use_case():
 
 
 def _subtitle_values(payload):
-    if payload.operation_type == "ConfigureSubtitleTrack":
-        if payload.model_fields_set - {"operation_type", "style"}:
-            raise HTTPException(status_code=422, detail="样式应用于全部字幕轨，不能同时翻译或切换显示")
-    elif payload.operation_type == "ReplaceSubtitleText":
-        if not payload.track_id or payload.find_text is None or payload.replacement_text is None or payload.model_fields_set - {"operation_type", "track_id", "find_text", "replacement_text"}:
-            raise HTTPException(status_code=422, detail="全文替换需要指定字幕轨、查找文字和替换文字")
-    elif payload.operation_type in {"SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue"}:
-        allowed = {"operation_type", "track_id", "cue_id"}
-        if payload.operation_type == "SplitSubtitleCue":
-            allowed |= {"split_offset", "split_time_seconds"}
-        if not payload.track_id or not payload.cue_id or payload.model_fields_set - allowed:
-            raise HTTPException(status_code=422, detail="请指定当前语言轨和字幕，拆分时同时指定文字位置与时间")
-    return payload.model_dump(exclude_unset=True, exclude={"operation_type"})
+    try:return subtitle_values(payload)
+    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 def _subtitle_proposal_command(task, proposal, request):
@@ -12103,40 +11890,18 @@ def _confirm_subtitle_response(task, proposal, request):
 
 
 def _preview_subtitle_edit(task_id, request, payload):
-    values = _subtitle_values(payload)
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    command = _metadata_edit_command(task, request, payload.operation_type,
-        {"base_version_id": task.current_timeline_version_id, **values}, source=EXACT_EDIT_SOURCE.get())
-    case = _subtitle_edit_use_case()
+    reader, diagnostic = _content_reader(request, workspace_id)
+    source = EXACT_EDIT_SOURCE.get()
+    if source is not None:
+        reader, diagnostic = _assistant_member_id(request, workspace_id), False
     try:
-        prepared = case.prepare_preview(command)
-        if prepared.style_change is not None:
-            draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-            changed = prepared.style_change
-            records = []
-            if not draft_only:
-                records = [_publish_task_picture_preview(workspace_id, prepared.task, prepared.base, prepared.montage, captions,
-                    kind="subtitle_style_preview", parameters={"side": side, "style": changed.patch})
-                    for side, captions in (("before", changed.original_tracks), ("after", changed.changed_tracks))]
-            proposal = replace(prepared.proposal, preview={**prepared.proposal.preview, **{
-                side: {"ref": record.logical_ref, "label": label,
-                    "detail": "当前成片的字幕样式预览；文字、声音和镜头保持不变。",
-                    "video_url": f"/api/creation-tasks/{task_id}/visual/artifacts/{record.id}"}
-                for side, label, record in zip(("before", "after"), ("当前样式", "修改后样式"), records)}})
-            prepared = replace(prepared, proposal=proposal)
-        intent, proposal = case.save_preview(prepared)
-    except SubtitleNoChange as exc:
-        raise _topic_failure_response(**exc.details) from exc
-    except SubtitleTargetMissing as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (EditConflict, TimelineVersionConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _edit_preview_response(intent, proposal)
+        return _edit_preview_response(*_subtitle_edit_use_case().preview(workspace_id, task_id, payload,
+            identity={'member_id':reader,'local_diagnostic':diagnostic}, source=source,
+            execution=TASK_MEDIA_CONTEXT.get(),
+            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')))
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
@@ -12155,32 +11920,19 @@ def _preview_subtitle_cue(task_id: str, request: Request, payload: CreationTaskE
     return _preview_subtitle_edit(task_id, request, payload)
 
 
-def _preview_linked_timeline(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    if payload.operation_type == "ChangeLinkedSpeed":
-        task = _creation_task_or_404(current_workspace_id(request), task_id)
-        values = _linked_timeline_values(payload)
-    else:
-        values = _linked_timeline_values(payload)
-        task = _creation_task_or_404(current_workspace_id(request), task_id)
-    command = _linked_timeline_command(task, request, payload.operation_type,
-        {"base_version_id": task.current_timeline_version_id, **values}, source=EXACT_EDIT_SOURCE.get())
+def _preview_linked_timeline(task_id,request,payload):
+    return _preview_linked_core(task_id,request,payload,source=EXACT_EDIT_SOURCE.get())
+
+
+def _preview_linked_core(task_id,request,payload,*,source):
+    case=_exact_preview_use_case()
     try:
-        intent, proposal = _linked_timeline_use_case().preview(command)
-    except LinkedEditInputError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except InsertMaterialMissing as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except InsertSourceRangeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (EditConflict, KeyError, TimelineVersionConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        if payload.operation_type == "ChangeLinkedSpeed":
-            raise HTTPException(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "关联变速预览失败，请检查本地素材和FFmpeg") from exc
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _edit_preview_response(intent, proposal)
+        task,values=case.prepare_linked(current_workspace_id(request),task_id,payload)
+        command=_linked_timeline_command(task,request,payload.operation_type,
+            {'base_version_id':task.current_timeline_version_id,**values},source=source)
+        return _edit_preview_response(*case.preview_linked(command,payload))
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 def _preview_remove_silence(task, request, payload):
@@ -12265,250 +12017,21 @@ def _preview_insert(task_id: str, request: Request, payload: CreationTaskExactEd
     return _preview_linked_timeline(task_id, request, payload)
 
 
-def _trim_clip_source_url(workspace_id: str, task_id: str, clip: MontageClip, cue: NarrationCue) -> str:
-    """Return an authorized source interval; browser playback does no media work."""
-    if clip.person_render_id:
-        render = production_repo.get_person_render(workspace_id, task_id, clip.person_render_id)
-        if render.narration_segment_id != cue.narration_segment_id:
-            raise ValueError("人物口型镜头与当前配音段落不匹配")
-        synthetic_source = clip.asset_id == f"person:{render.id}" and clip.source_path == f"person-render://{render.id}"
-        legacy_source = clip.source_path == render.visual_reference and not clip.asset_id.startswith("person:")
-        if legacy_source:
-            production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-        if not (synthetic_source or legacy_source):
-            raise ValueError("人物口型镜头来源不匹配")
-        path = _person_render_media_path(render)
-        if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + .001:
-            raise ValueError("人物口型源片段不可用")
-        route = f"/api/creation-tasks/{quote(task_id, safe='')}/person-renders/{quote(render.id, safe='')}/media"
-    else:
-        path = production_repo.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-        path.relative_to(Path(settings.video_inbox_path).expanduser().resolve())
-        route = f"/api/production/materials/{quote(clip.asset_id, safe='')}/media"
-    if not path.is_file() or path.stat().st_size == 0:
-        raise ValueError("镜头源片段不可用")
-    return f"{route}#t={clip.source_start_seconds:.3f},{clip.source_end_seconds:.3f}"
+def _trim_clip_source_url(workspace_id,task_id,clip,cue):
+    return _metadata_edit_use_case().trim_clip_source_url(workspace_id,task_id,clip,cue)
 
 
-def _preview_exact_montage_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
+def _preview_exact_montage_edit(task_id, request, payload):
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if not payload.clip_id:
-        raise HTTPException(status_code=422, detail="visual edit requires clip_id")
+    reader, diagnostic = _content_reader(request, workspace_id)
+    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
     try:
-        persisted_plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-        )
-        before_clip = next(item for item in persisted_plan.clips if item.id == payload.clip_id)
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    if payload.operation_type == "ReplaceClip" and (
-        payload.asset_id == before_clip.asset_id
-        and payload.segment_id == before_clip.segment_id
-        and payload.source_start_seconds in {None, before_clip.source_start_seconds}
-    ):
-        raise _topic_failure_response(
-            status_code=409, error="edit_no_change",
-            reason="这个候选就是当前镜头。", impact="原镜头和成片保持不变。",
-            repair_action="选择另一个片段，或调整裁剪起点。", retryable=True,
-        )
-    invalidated_refs = _logical_montage_output_refs(persisted_plan)
-    if payload.operation_type == "TrimClip" and task.current_timeline_version_id is None:
-        raise _topic_failure_response(
-            status_code=409,
-            error="timeline_version_required",
-            reason="当前故事板还没有可撤销的初始版本。",
-            impact="裁剪预览和有效时间线均未改变。",
-            repair_action="点击“保留当前故事板并建立版本”，再预览裁剪。",
-            retryable=True,
-        )
-    base_version = _ensure_montage_base_version(workspace_id, task, persisted_plan)
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    plan = creation_task_montage_plan_from_payload(
-        creation_task_montage_plan_to_payload(persisted_plan)
-    )
-    supplied = {
-        "fit_mode": payload.fit_mode,
-        "crop_x": payload.crop_x,
-        "crop_y": payload.crop_y,
-        "asset_id": payload.asset_id,
-        "segment_id": payload.segment_id,
-        "source_start_seconds": payload.source_start_seconds,
-        "split_time_seconds": payload.split_time_seconds,
-        "playback_rate": payload.playback_rate,
-        "position": payload.position,
-        "locked": payload.locked,
-    }
-    required = EXACT_MONTAGE_REQUIRED_FIELDS[payload.operation_type]
-    if any(supplied[key] is None for key in required):
-        raise HTTPException(status_code=422, detail="exact edit is missing required values")
-    permitted = required | (
-        {"source_start_seconds"} if payload.operation_type == "ReplaceClip" else set()
-    )
-    if any(value is not None and key not in permitted for key, value in supplied.items()):
-        raise HTTPException(status_code=422, detail="exact edit mixes multiple operations")
-    update = CreationTaskMontageClipUpdateRequest(
-        split_time_seconds=payload.split_time_seconds if payload.operation_type == "SplitClip" else None,
-        playback_rate=payload.playback_rate if payload.operation_type == "ChangeClipSpeed" else None,
-        fit_mode=payload.fit_mode if payload.operation_type == "ChangeCrop" else None,
-        crop_x=payload.crop_x if payload.operation_type == "ChangeCrop" else None,
-        crop_y=payload.crop_y if payload.operation_type == "ChangeCrop" else None,
-        asset_id=payload.asset_id if payload.operation_type == "ReplaceClip" else None,
-        segment_id=payload.segment_id if payload.operation_type == "ReplaceClip" else None,
-        source_start_seconds=(
-            payload.source_start_seconds
-            if payload.operation_type in {"ReplaceClip", "TrimClip"}
-            else None
-        ),
-        position=payload.position if payload.operation_type == "ReorderClip" else None,
-        locked=payload.locked if payload.operation_type == "SetClipLock" else None,
-        confirmed=True if payload.operation_type == "ConfirmClip" else None,
-    )
-    plan, edited_tracks, linkage = _apply_creation_task_montage_clip_update(
-        workspace_id, task_id, plan, payload.clip_id, update, request=request,
-    )
-    after_clip = next(item for item in plan.clips if item.id == payload.clip_id)
-    if creation_task_montage_plan_to_payload(plan)["clips"] == creation_task_montage_plan_to_payload(persisted_plan)["clips"]:
-        raise _topic_failure_response(
-            status_code=409,
-            error="edit_no_change",
-            reason="这项设置与当前镜头一致。",
-            impact="没有创建新的时间线版本。",
-            repair_action="调整镜头、裁剪位置、顺序或锁定状态后再试。",
-            retryable=True,
-        )
-    labels = {
-        "ChangeCrop": "调整画面适配",
-        "ReplaceClip": "替换镜头",
-        "TrimClip": "调整镜头起点",
-        "SplitClip": "分割镜头，保留配音与字幕时轴",
-        "ChangeClipSpeed": "改变画面速度，保留成片时长、声音和字幕",
-        "ReorderClip": "调整镜头顺序",
-        "SetClipLock": "更改镜头锁定状态",
-        "ConfirmClip": "确认当前镜头",
-    }
-    operation_payload: dict[str, object] = {
-        "clip_id": payload.clip_id,
-        "base_version_id": base_version.id,
-        "expected_asset_id": before_clip.asset_id,
-        "expected_segment_id": before_clip.segment_id,
-    }
-    for key, value in supplied.items():
-        if value is not None:
-            operation_payload[key] = value
-    if payload.operation_type == "ReplaceClip":
-        operation_payload["source_start_seconds"] = after_clip.source_start_seconds
-    if payload.operation_type == "ChangeCrop":
-        operation_payload.update(asset_id=before_clip.asset_id, segment_id=before_clip.segment_id,
-                                 source_start_seconds=before_clip.source_start_seconds)
-    def describe_clip(clip, clips):
-        if payload.operation_type == "ChangeClipSpeed":
-            return f"{clip_playback_rate(clip):.2f} 倍速 · 源素材 {clip.source_start_seconds:.3f}–{clip.source_end_seconds:.3f} 秒"
-        if payload.operation_type == "SplitClip":
-            count = len(clips) - len(persisted_plan.clips) + 1
-            return f"{count} 个片段 · 成片 {before_clip.timeline_start_seconds:.3f}–{before_clip.timeline_end_seconds:.3f} 秒" + (
-                f" · 分割点 {payload.split_time_seconds:.3f} 秒" if count == 2 else "")
-        if payload.operation_type == "ReorderClip":
-            return f"第 {clips.index(clip) + 1} 个镜头"
-        if payload.operation_type == "SetClipLock":
-            return "已锁定" if clip.locked else "未锁定"
-        if payload.operation_type == "ConfirmClip":
-            return "待确认" if clip.needs_confirmation else "已确认"
-        if payload.operation_type == "ChangeCrop":
-            if clip.fit_mode == "fit":
-                return "完整显示 · 裁剪位置已保留，在此模式下不生效"
-            return f"填满画面 · 水平 {clip.crop_x:.0%} · 垂直 {clip.crop_y:.0%}"
-        return f"{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒"
-
-    media_previews = {}
-    if payload.operation_type == "TrimClip":
-        try:
-            for side, target in (("before", before_clip), ("after", after_clip)):
-                cue = next(cue for cue in plan.cues if cue.id == target.cue_id)
-                media_previews[side] = {"video_url": _trim_clip_source_url(workspace_id, task_id, target, cue)}
-        except (KeyError, StopIteration, ValueError, OSError) as exc:
-            raise HTTPException(status_code=422, detail="裁剪源片段不可播放，请检查素材或人物口型产物") from exc
-        if production_repo.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
-            raise HTTPException(status_code=409, detail="预览期间时间线已变化，请重新预览")
-    before_label = "人物口播" if before_clip.person_render_id else production_repo.get_asset(workspace_id, before_clip.asset_id).file_name
-    after_label = "人物口播" if after_clip.person_render_id else production_repo.get_asset(workspace_id, after_clip.asset_id).file_name
-    after_detail = describe_clip(after_clip, plan.clips)
-    if linkage:
-        after_detail = "\n".join([after_detail, *_linkage_lines(linkage)])
-    now = utc_now()
-    source_command = _metadata_edit_command(task, request, payload.operation_type,
-        {'base_version_id':base_version.id, 'clip_id':payload.clip_id,
-         **{key:value for key,value in supplied.items() if value is not None}}, source=EXACT_EDIT_SOURCE.get())
-    source_verifier = EditSourceVerifier(production_repo, identity=source_command.actor_identity)
-    source_command = _bind_affected_source_command(source_verifier, source_command, persisted_plan, plan)
-    source_scope = source_verifier.scope_payload(source_command)
-    intent = production_repo.create_edit_intent(
-        EditIntent(
-            id=f"intent_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            raw_command=f"精确操作：{labels[payload.operation_type]}",
-            context_stage="montage",
-            selected_object_refs=[f"clip:{payload.clip_id}"],
-            playhead_ms=round(after_clip.timeline_start_seconds * 1000),
-            intent_type="exact_montage_edit",
-            scope={"kind": "clip", "clip_id": payload.clip_id},
-            constraints={"preserve_narration": True, "affected_source_scope":source_scope},
-            confidence=1.0,
-            status="interpreted",
-            created_at=now,
-        )
-    )
-    # The frozen picture-only default is claimed per reordered object, so the summary names the
-    # object the linkage rule was applied to rather than leaving it as background metadata.
-    # That sentence is only about a reorder; a crop or trim on a material shot keeps its own label.
-    if linkage:
-        proposal_summary = "调整镜头顺序；该人物镜头的配音与字幕已按来源一并移动，文案和其他镜头不变。"
-    elif (payload.operation_type == "ReorderClip"
-            and after_clip.person_render_id is None
-            and any(item.person_render_id for item in plan.clips)):
-        proposal_summary = ("调整镜头顺序；本次移动的是纯素材镜头，按已冻结的纯素材默认只换画面，"
-            "同片人物口型镜头的配音与字幕保持不变。")
-    else:
-        proposal_summary = f"{labels[payload.operation_type]}；文案、配音和其他镜头保持不变。"
-    proposal = production_repo.create_edit_proposal(
-        EditProposal(
-            id=f"proposal_{uuid4().hex}",
-            workspace_id=workspace_id,
-            task_id=task_id,
-            intent_id=intent.id,
-            summary=proposal_summary,
-            target_refs=[f"clip:{payload.clip_id}"],
-            operation={
-                "operation_type": payload.operation_type,
-                "payload": operation_payload,
-            },
-            invalidated_refs=invalidated_refs,
-            preview={
-                "before": {
-                    "ref": f"clip:{before_clip.id}",
-                    "label": before_label,
-                    "detail": describe_clip(before_clip, persisted_plan.clips),
-                    **media_previews.get("before", {}),
-                },
-                "after": {
-                    "ref": f"clip:{after_clip.id}",
-                    "label": after_label,
-                    "detail": after_detail,
-                    **media_previews.get("after", {}),
-                },
-            },
-            external_effects=(["这里播放的是原视频画面和原声；配音、字幕和画面效果以最终成片为准。当前任务版本未改变。"]
-                if payload.operation_type == "TrimClip" else
-                ["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"]
-                if media_previews else ["只更新任务版本；重新渲染前不会执行媒体进程。"]),
-            created_at=now,
-            updated_at=now,
-        )
-    )
-
-    return task, base_version, plan, intent, proposal
+        outcome = _metadata_edit_use_case().preview_exact_montage(workspace_id, task_id, payload,
+            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=TASK_MEDIA_CONTEXT.get(),
+            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
+        return outcome
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 @app.post(
     "/api/creation-tasks/{task_id}/timeline/undo",
@@ -12561,27 +12084,11 @@ def _timeline_restore_use_case():
     return TimelineRestoreUseCase(production_repo, _metadata_edit_use_case())
 
 
-def _apply_creation_task_montage_clip_update(workspace_id, task_id, plan, clip_id, payload, *, request):
-    identity, diagnostic = _content_reader(request, workspace_id)
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    try:
-        edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True),
-            resolve_source=lambda clip, values:production_repo.resolve_edit_clip_source(workspace_id, task_id,
-                clip, values, user_id=identity, local_diagnostic=diagnostic),
-            link_reordered=lambda candidate:_link_reordered_edit(task, candidate))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except TimelineVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ClipPreviewConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        status = 422 if payload.split_time_seconds is not None else 400
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
-    _refresh_montage_review_state(edited)
-    return edited, tracks, linkage
+def _apply_creation_task_montage_clip_update(workspace_id,task_id,plan,clip_id,payload,*,request):
+    reader,diagnostic=_content_reader(request,workspace_id)
+    try:return _metadata_edit_use_case().apply_clip_update(workspace_id,task_id,plan,clip_id,payload,
+        reader_identity={'member_id':reader,'local_diagnostic':diagnostic})
+    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 @app.patch(
@@ -17193,6 +16700,7 @@ def _build_device_components(*, repository: ProductionRepository):
         media_script=_media_script_use_case(repository),
         visual_preview=_visual_preview_use_case(repository),
         compound_selection=_compound_edit_use_case(repository),
+        exact_preview=_exact_preview_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     registrations = {
