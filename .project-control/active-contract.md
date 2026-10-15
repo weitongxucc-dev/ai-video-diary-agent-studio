@@ -13,8 +13,8 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 核心旅程只读准备已root核验/即时归还；所有产品与旧证据冻结，当前无新写入或执行权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 元数据两进程编辑/撤销联合门已root接受/即时归还；全部新旧证据冻结，当前无新产品/证据/执行权，待原生保存稳定候选的精确独立门。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-NATIVE-SAVE-AUTH-IMPLEMENTATION-20261016独占下节准确五product/三test及fresh-runtime-native-save-auth-implementation/**；只最小局部Node/Vitest自测，旧native/日志策略和其它源只读。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-NATIVE-SAVE-SESSION-INDEPENDENT-20261016仅fresh-qa-native-save-session/**新证据/隔离Electron四代表族，产品只读；元数据及其它已过门冻结不重跑。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存八源SOURCE_RELEASE已root源审、冻结待精确独立门；当前无新增写入/执行权，缺陷由root另绑本owner，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 原生保存认证传输八源实施（当前有效）
+### 原生保存八源已源审，实际Session与窗口边界独立门（当前有效）
+
+八源release 491f1aaeaae7c0d6e28950a3e9395843ad11df6de46683729b320d189d9d0b52、candidate50849f991326c8b738c56ec4628728820ed3bf0f97ee1b7846b6e249c03159cd已root native-save-auth-release-reviewed.json SHAec5a947b00bde729909f26ac0d96a240210535fa20236644a632ff1b75d35e82核29artifact/准确八源/起始Git、原素材导入和其它IPC/非目标lifecycle/auth策略保持、裸直连退役。作者初六语法/desktop focused首过；复核后就绪门收回请求入口并补服务下载后失效不误拒绝，仅受影响desktop包补验，当前4CJS编译源与Web5pretransform源等最终字节，Web11例首次过无复跑。Node24替身/局部middleware不是Electron33真实session/cookie/frame或JWT/nativeGUI接受；root应用测试0。八源/新旧证据冻结，未集成，待下门。
+
+REF-R9-NATIVE-SAVE-SESSION-INDEPENDENT-20261016仅QA新目录，root native-save-session-independent-binding.json SHAff2963e701355e32d7765c376403b6a73e18955a23079078bc1976de273b14d6固定release/源审、八源digest和作者19直接源map引用。只一个自有隔离installed Electron33.4.11进程、hidden真实BrowserWindow/webContents/mainFrame/session、原preload/三个IPC/NativeMedia/downloaders，准确actual Electron/Chromium/Node及executable/源bytes/origins。显式user-data/sessionData/logs/cache/run在app ready前绑定，不能默认/复制用户session，全部owned窗口/server/进程由本次正常quit与父进程回收；不触碰原应用。自己的Web-origin HTTP节点以小Node适配层调用当前真实middleware+NextRequest/Response，再由原proxy fetch访问自有合成backend，local/API_PORT显式、无dotenv。此为actual middleware invocation，不冒称实际Next部署/API业务授权；仅必要TS编译/缓存放自己的run，不全量build。
+
+四个新代表族：①实际主frame preload IPC保存三格式，原cookie helper生成同端口Path=/api SameSite=Strict合成A cookie、真实Chromium cookie jar/Session.fetch→原middleware注入A头→合成backend返回声明媒体字节，核路径/MIME/字幕版本query和落盘hash；改B/缺cookie/错误端口不能借旧A，拒绝后无final/partial，renderer额外URL/Authorization不能改传输。②同源真实第二BrowserWindow调用原IPC须在dialog/request/file前拒绝。③实际主窗口跨文档同源导航分别在dialog及下载后提交前使保存失效，无final/partial/监听泄漏，不手发假导航事件。④一个actual Session.fetch own-loopback重定向拒绝，不能follow/落盘，错误按实际记录。真实OS dialog仅显式自有目的地替身、API就绪仅ready fixture、backend身份/媒体为声明替身；不得替换session.fetch/middleware/cookie owner或手工塞Cookie/member头。作者normal/旧Web/lifecycle/metadata矩阵0新执行，首实际失败封存，只必要失败节点修正；产品缺陷交唯一Runtime owner，QA产品只读。
+
+仅四族原生运行差额、准确脚本/输入preseal、actual source/origin/计数/首败/清理最小证据；必要新直接import按需绑定，不复制全仓/AST/旧证据。原生媒体FFmpeg/probe、生产阶段/model/host采样、真实Next/API服务/外网账号/Supabase/JWT/用户DB/私人env/真实dialog/可见产品GUI、签名打包均不执行；没有新数值资源预算。门只覆盖新Session/frame/IPC/stream和actual local middleware传输，真实API/JWT隔离、OS对话框、生产媒体/资源及整体R9仍单列未验。SOURCE_GATE释放冻结，由root审核后精确集成八源并即时归还，不能将替身backend算真实业务授权。短语义ACK后直接执行，无第二START。
+
+### 原生保存认证传输八源实施（已履行冻结）
 
 只读准备release bd175be3202ed1b7d688aa81b6b97e6c9297b84f1a2e28f65d96ea9a9deef2e4已root native-save-auth-preparation-reviewed.json SHA83e93bd631f6f64571e073f738bbde8da624a520104a171ef2aab3ab27b03021核4artifact、14原源+15必要依赖/installed types/现测试、fixedGit/current及最终捕获区间prepost（不追认早先全部研究读期）。Electron33.4.11确有Session.fetch，Response.url/type不可作信任证明；导航现代details可用。准备冻结、READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN已即时发工具线程；实际认证/native运行未验。
 
