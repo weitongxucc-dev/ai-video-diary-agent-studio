@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 模板三源已a90dc4f6集成/即时归还；当前REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅fresh-api-publish-output-preparation/**只读准备，零产品写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-PUBLISH-OUTPUT-IMPLEMENTATION-20261016仅main与二NEW三源/fresh-api-publish-output-implementation/**；一个metadata normal，不执行真实发布，其余产品/旧证据冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 模板shared-reader独立门已root接受、三源a90dc4f6集成/即时归还；产品与全部证据冻结，当前无新写入/执行权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -51,7 +51,19 @@ release3e97d61697c7f33aff5a80991a65e5c5cb23188aa865b492b71abd48c81fec04 / TAB40d
 
 REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。root video-template-independent-binding.json SHA2d9eef6dab164d10a3abd0eeec466d68d5229174f9a868c0fa014d0283b4cfa0绑定三源与candidate01 actual197 map。一个元数据代表：公开repo seed/set共享/read，OTHER声明可信reader经原task-save更新共享模板；原rendered_source真实解析/守卫、原非空stat先达（task/Plan/montage/output路径为声明qualified替身、文件为自有NONMEDIA），真实共享resolver可读通过后，原403「只有这个模板的所有者可以保存新版本。」在subtitle/script/build/late readers/persist前拒绝；原template版本/owner/settings等公开回读不变、0新写。禁止mock权限/readability/owner/save或rawSQL fixture writer，不为未改CAS另开门，不跑作者normal/旧测试。自有隔离DB，优先direct handler无factory/lifecycle；必要时原factory一次/原37值，零driver/native/probe/model/GUI/network/资源。预封source/script、actual beforecompile-origin/前后、197 map引用/必要fixed Git，不复制全源/AST/DB/旧证据；首败保留，只必要失败节点重验。一次短ACK后直接执行，无第二START；稳定SOURCE_GATE冻结，root核后精确集成/即时归还，未算整体R9。
 
-### 发布输出资格的只读接续（当前有效）
+### 发布输出资格具体owner三源实施（当前有效）
+
+准备release2bcb07de43430943bddfa759b197eddf197112a8af2243ac547cb6ed3035964b/package48b758ed4a8d221ba2db6353f981b649905ba07cee8cc8f5f47a272a238c815b已root publish-output-preparation-reviewed.json SHA060e0867e41be41b35e568624c0cd3d56e8ebe12b5e76d66cb233ed009f27502核4artifact/12当前Git源/26准确文本与declaration/call AST、四起始读期一致；模板a90dc4f6集成仅HEAD变。准备冻结/READONLY_PREPARATION_REVIEWED与WRITE_LEASE_RETURN随本绑定接续。
+
+REF-R9-PUBLISH-OUTPUT-IMPLEMENTATION-20261016独占现apps/api/app/main.py、NEW apps/api/app/creation/publish_output_qualification_use_case.py、apps/api/tests/test_publish_output_qualification_use_case.py，证据fresh-api-publish-output-implementation/**。root publish-output-implementation-binding.json SHA5b0582d35a0a9b60561af723e978a32616c99cac1f600beadf194cd1c0ba2c63固定a90dc4f6/main clean Git一致/二NEW absent/index空。具体PublishOutputQualificationUseCase仅当前ProductionRepository引用，按已审package分段传task/version/ref/已解析Path，不新DTO/默认/callback袋/Settings/HTTP或反向main依赖。
+
+完整迁交两原body：task_for_user原查task/可读性/view PermissionError；source_version原task→publish权限→output_ready/current HEAD→准确timeline/task mismatch（先拒绝不调render）；main保留原render调用verify_media=False/same version→owner false guard→原ref字符串/output_refs资格→main原output helper→owner首个ref+kind artifact/原is_file/stat/size短路/原返回dict。原错误类/字面值/cause/时点、registered SHA/size、重复current读取和OR短路不改，不加hash/锁/缓存/新path==ref规则。非目标main整AST、route/device callback与全部canonical render/output/仓储/权限/队列/账号/provider/unknown-retry/注册和旧tests冻结；不真实发布或连接账号。
+
+一个新metadata node仅两个原callback（authorized read→qualify），公开repo真实Plan/Task/TimelineVersion/producer JobRun元数据/ArtifactRecord及原ArtifactStore.publish_bytes登记自有小NONMEDIA文件，零rawSQL fixture writer；output_ready/version为声明事实，render=true与output helper为明确qualified端口，核same version/verify_media=False、原metadata/file stat-size/result trace/fresh read和计数不变/无platform任务事件。非真实render/模型/生产身份/资源接受。fresh隔离Python/source-script预封/actual beforecompile-origin，引用template map/delta加三源/必要fixedGit，不复制全源/AST/DB/旧证据；必要时原factory一次/原37值，零driver/native/probe/model/install/GUI/network/userDB/私env/host/dispatch/platform。不猜预算或降门，首败保留仅受影响node重验；旧门不跑。
+
+稳定release root源审后单个独立同workspace私有task OTHER原publish PermissionError门：原公开task读/canonical权限实际执行，在timeline/render/path/artifacts前拒绝，owner源/计数不变，无平台动作；作者不自验/不按method另开QA。超三源先报实际必要差额。一短语义ACK直接实施，无第二START；门过准确集成/即时归还；整体R9/真实闭环接受仍单列。
+
+### 发布输出资格的只读接续（已审核冻结）
 
 REF-R9-PUBLISH-OUTPUT-PREPARATION-20261016仅API写fresh-api-publish-output-preparation/**，root publish-output-preparation-binding.json SHAbd2ce49b4b5d700900de0c71a4090318f9be0ef7add040f92eff9c1fa2c20d65固定main/production/platform_publish/routes/output_observation四初始源，所有产品含模板三源冻结。只读_platform_publish_task_for_user/_platform_publish_output_for及真正必要直接access/output/version/logical-ref helper和_prepare_runtime_routes/_build_device_components准确callback接线；复用四组，不全platform/main/消费者重清。一个紧凑具体输出资格owner/精确文件/原身份版本与来源产物路径stat错误时点/有限依赖/退役包，一metadata自测和确有关键边界时最多一个独立代表。零产品/import/collect/test/DB/媒体native/platform执行/账号/env/lifecycle/GUI/网络/host资源，不新提交发布或unknown/retry政策、账号/设备注册变更，不复制全源/AST/旧证据。当前main为模板冻结候选，后续集成HEAD-only区分实际body/source变化；一次短ACK直接准备，release冻结root另绑产品。
 
