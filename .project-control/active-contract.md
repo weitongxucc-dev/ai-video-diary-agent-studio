@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源c340000c已SOURCE_RELEASE/root源码审核，产品及作者证据冻结待两特有独立门；无新产品写权，待准确后续绑定。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源c340000c已SOURCE_RELEASE/root审核，全部产品及旧证据冻结；仅下述执行控制接续只读准备fresh-api-execution-control-preparation/**，无产品/应用执行写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-RENDER-STAGE-INDEPENDENT-20261015仅新fresh-qa-render-stage/**，下述最多两个新仓储事务特有代表；四产品及197来源只读，作者normal/旧门零重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -38,6 +38,10 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 执行控制接续只读准备（可与成片独立门并行）
+
+REF-R3-EXECUTION-CONTROL-PREPARATION-20261015仅API写新test-runs/refactor-20261014/fresh-api-execution-control-preparation/**，不写产品/import/collect/test/native/模型/GUI或环境。只定位当前main的_new_creation_execution、_recover_creation_executions、_creation_runtime、_creation_execution_status、preview/get/start/resume/cancel_creation_execution、_creation_job_for_request、_read_bound_execution_result及这些符号真正必要直接caller；creation_execution.py、member_permits.py与device_scheduler.py仅所需对应公开端口/原规则。给一个最小下一实施包的精确文件/归属/原顺序/仓储边界/退役目标与最小验证，不扩成全main/全仓/历史大清点、不复制全AST或旧证据。当前人物已记录的local job_id查询409与full interrupted仍有running阶段分别核原身份语义/实际消费者，区分现有边界和新回归，不预设放宽身份门或新增产品策略。准备用当前Git与目标body摘要，只读期间render四源/197执行tuple不得改变；不把本准备当产品通过，root核后另绑准确产品范围，无重复ACK/START。
 
 ### 成片源码已审核；两个特有独立事务门（当前有效）
 
