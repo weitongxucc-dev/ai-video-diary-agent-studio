@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 自动任务确认五源release205acb15已root源审；五源/作者证据冻结，待单个独立晚SQL门，无新产品/证据写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 自动任务确认五源/作者证据冻结待QA；当前REF-R9-CREATION-PLAN-PREFLIGHT-PREPARATION-20261016仅fresh-api-plan-preflight-preparation/**只读准备，无产品写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-AUTOMATION-PLAN-BINDING-INDEPENDENT-20261016仅fresh-qa-automation-plan-binding/**；一个实际SQLite晚绑定失败/回滚/retry元数据门，产品和旧证据全冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -38,6 +38,12 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 方案预检具体归属的只读接续（当前有效）
+
+REF-R9-CREATION-PLAN-PREFLIGHT-PREPARATION-20261016仅当前API写fresh-api-plan-preflight-preparation/**。root plan-preflight-preparation-binding.json SHA600754716db0c5c849b42bd0ddb83ee74f8af3d8eee613c6ba9df82f1f51b0eb固定初始四源；所有产品、自动确认五源及旧证据只读，QA独占目录互斥。复用已审27源/四组准备，不重复大清点；只定位main._creation_plan_preflight与preview_creation_plan/confirm_creation_plan/AutomationRuntime准确消费者及真正必要直接helper/type。给一个紧凑可实施包：新具体owner/精确文件、原模板继承与身份解析/固定引用/素材/模型及lazy口型provider调用时点、明确输入输出、迁交完整body与旧消费者退役、一个最小metadata normal和最多一个关键独立反例。无第二事实源/通用callback配置袋/反向main/HTTP重入，不改权限/资源/模型/协议/schema。
+
+仅命名目标span/body摘要与读期核验，零产品/import/collect/test/DB/media/native/model/driver/env/GUI/resource执行或全源/AST/旧证据复制；不重复ACK历史/已过门。自动确认集成的HEAD-only变化按实际路径区分，不能把只读准备当产品完成。一次简短语义ACK后直接准备、稳定READONLY_PREPARATION_RELEASE即freeze；root审核另绑产品，不需第二START。此接续不影响QA现晚SQL门，也不提前恢复任何旧租约。
 
 ### 自动任务确认五源源审与单个独立事务门（当前有效）
 
