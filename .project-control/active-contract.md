@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R3-QUALITY-RECOVERY-C1-20261016仅main/quality_inspection_use_case/device_scheduler/新focusedtest四源及fresh-api-quality-recovery-c1/**；修启动恢复先证释放与已释放worker回执续交，其余12候选源/原证据冻结，无native/标定权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 先完成并冻结C1准确四源；随后REF-R3-QUALITY-PRESSURE-C2-20261016仅quality_execution与NEW test_quality_resource_pressure两源/fresh-api-quality-pressure-c2/**，修未来重试时点，一个新增非native分支门，C1和其它源冻结；零native/标定权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 发布资格单个私有Task门已root接受/随b76574da集成并归还；证据冻结，无产品或新执行权，待真正关键接受差额。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 物理后段前提包已root核并归还/冻结，quality未进grant为真实源码阻断、实测profile未绑；当前零新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -54,6 +54,10 @@ REF-R9-VIDEO-TEMPLATE-INDEPENDENT-20261016仅QA写fresh-qa-video-template/**。r
 ### 发布输出资格三源已精确集成（冻结复用）
 
 准确三源b76574da1996e36cb83a4d116049959e32b8684e已cached/committed/live核一致；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API/QA。作者releaseafe554f4与源审c176cde2冻结复用；gatef3b5e070e10d5da4de56f5322ee8c1efa4982ddf4274eb387e999a8d56c091d6已root publish-output-independent-reviewed.json SHA8ab7be3a6d7a177b5dd70769ab5260642845b66016a35dde18d88b8bd96b2876核11artifact/4ref/196actual beforecompile-origin，单代表首次过child8.559s/process8.869s。公开repo真实private Plan/Task；OTHER经原callback、真实getTask、canonical权限false，同一原PermissionError早于readiness/全部输出门；owner Plan/Task/list全字段、计数保持，0新写/平台动作。只声明可信caller与隔离repo，无factory/lifecycle/driver/native/model/network/预算或旧门，非生产JWT/真实成片/GUI资源/整体R9。receipt publish-output-integrated.json SHA75a4f0f41cbe6c157a2e43d0cf5c4330a22d5a65ce97016d299983258b15a303。此前有限清点的四个真实剩余职责已分别46493fcb/6fb2d137/a90dc4f6/b76574da迁交；复用各批有限退役证据，不将该明确范围当整体RETIRED或重启全仓清点。
+
+### 质检压力延期时点C2（C1冻结后顺序生效）
+
+API在冻结源中报告quality_execution可恢复资源压力分支传datetime.now，root核原DeviceScheduler.defer_unit要求retry_at严格晚于后续_now，因而实际会ValueError/fault而不进入预期blocked/interrupted。REF-R3-QUALITY-PRESSURE-C2-20261016 root quality-pressure-c2-binding.json SHA25c6e40f18b3aeee5e3cfb7e285e717f06dabb44d138cfe8fe6273ea28de3891仅quality_execution.py及NEW tests/test_quality_resource_pressure.py两源、证据fresh-api-quality-pressure-c2/**。先完成C1唯一受影响node并冻结release，C2 READ_START记录其精确SHA；随后C1四源归还冻结，C2只加timedelta并复用现CreationJob/TaskMedia资源压力已有30秒未来间隔，不设新预算/开关/重试policy。一个新非native节点经真实repo/原scheduler/runtime和声明pressure worker端口核blocked/resource_pressure+future gate、Job interrupted/check未终态/permit free/源不变/worker1；不重跑C1 normal或旧矩阵。准确两overlay/actual origins最小证据，首败保留；稳定18源联合release后root复审C1及C2差额，再单个独立晚SQL门。仅该明确例外可修改原C1 frozen quality_execution，其余冻结不变；零真实native/采样/标定/GUI/用户env数据/Git，一短ACK后按序直接接续，无第二START。原16减C1三重叠源为13冻结源（scheduler为第四新增修改文件），此前文字12为计数笔误，以精确路径映射和本C2例外为准，不扩大其它写权。
 
 ### 质检恢复源码审核C1（当前有效）
 
