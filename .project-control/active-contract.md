@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMPOUND-SELECTION-EXECUTION-20261015独占main.py、task_audio.py、creation/editing/compound_use_case.py、media/picture_preview.py、creation/visual_preview_use_case.py及NEW tests/test_compound_preview_application.py六源与fresh-api-compound-selection-execution/**；先关闭复合选择旧执行入口，已集成画面/旧证据冻结不复跑。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 画面C1三个关键反例已审核集成db57f1fc并WRITE_LEASE_RETURN；当前产品/旧证据只读，无新执行写权，待复合选择稳定候选另绑最多两个特有反例。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-LOG-C1-20261015仅fresh-runtime/output-observation-trim-last-frame-log-c1/**；V1已审归还冻结。只减少无用上游checksum日志、修实际调用观察器，原32KiB stderr及所有门不变；跳过已匹配.93，先受影响1.87，再只执行尚未运行目标。产品/字段/profile只读。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 资产原id-by-path三源63874c46…已7ae4eff精确集成/WRITE_LEASE_RETURN；主控当前无产品写权，只审核/协调/集成。原sameconn/SQL/Row-or-None保持，R4注册只读准备可复用已存在接口，不重跑旧门。 |
@@ -73,7 +73,13 @@ TaskMediaJobs明确执行/验证compound_selection，原raw路由只认证、pre
 
 `REF-R4-NARRATION-READS-20261015` 三源已df1dd384b42e8aa135f92390fb026d2c5dd302c6精确集成，cached/committed字节等SOURCE_RELEASE SHA36ad19d7d21e79f9fa164ce960cf92d402c2ae1aa9b3eac88986d86e2607f6f9；即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN已发资料。root narration-reads-release-reviewed.json SHAd552ad15f2d7ec35ad3ed80ea854d2b61fdd9858ef13b2bc7ccf5b924522be19核29artifact、51源48固定Git、2attempt全prepost/7脚本/2fixtureAST、50→51真实imports/49源与2namespace loader守卫，whole Production只两导入与sameconn读表达式、raw module只两原SQL/参数/fetch/signature，原selector/None-only/after-with错误DTO、所有写及旧测试AST/bytes保留。首次namespace origin=None收集错误新node未执行；证据守卫修正后仅该node1PASS0.50s。root新产品测试0、普通读取不另加QA；全旁白仓储/R4/R9未接受。原三源/证据冻结不复跑，root集成记录narration-reads-integrated.json SHA39aaf43383ee7bd0e678b85c363d2532e78fd9e21b0461acc498171cd3e8dde5。API正在实施六源仍固定80c76a7d加自身overlay，资料独立集成差额单列，不要求它混入另批live源码或重复ACK/normal；全HEAD同候选接受仍在后续。
 
-### 本批最后帧假设有限实测
+### 最后帧实验日志单一差额接续
+
+`REF-R3-TRIM-LAST-FRAME-LOG-C1-20261015` 只写test-runs/refactor-20261014/fresh-runtime/output-observation-trim-last-frame-log-c1/**；V1 release0e0dda5eba84b3cbf1fbee7344f59a66d653d7bba7b789fd401690d683bd4be1已root output-observation-trim-last-native-reviewed.json SHA59ef910a160b0f5712575e77a91480975a61b33bb7cfcab119573f25df3abfea与pixels-reviewed.json SHA3f5704b0915f1df0fba3e9cab6cd1e2af914120138e966dcb8c4020305e978a7有限接受.93→.92，同时1.87真实stderr超原32768拒绝，短源/B-VFR/取消未运行；旧原始失败缺失的stderr前缀不回填。当前新包仅原算法上游showinfo@pre改checksum=0，保留下游checksum、PTS/timebase/trim cutoff、key seek/passthrough/atomic PNG、原完整budget/grant/deadline/thread/32MiB输出与临时文件计量，stderr32768/stdout65536不变。可用一次原许可下showinfo help确认本机选项，不安装或猜配置；修观察器使其确实包住test调用的run_granted_command原符号，原helper继续真实执行。
+
+复用V1准确源码/输入与已过.93/独立reference只读证据，不复制191源/全AST或重跑已匹配目标。预封存自身差额、一个合并node首先尝试受影响1.87；失败保留即释放，不追加替代算法/加预算盲跑。若通过，只接续原尚未运行的短.17、唯一≤2秒/64可见帧自有nonzero+B/VFR源与取消/stop代表，分别记实际PTS/最终PNG身份/atomic临时文件及同许可实际登记与afterrun释放；内容相同的短帧不得假称像素能区分身份，postrun进程缺席不得冒称inflight全部后代证明。依然是原合成资源域的有限实验，不是采样产品修复或生产profile/fullPGID/RSS/任意输入接受。简洁语义ACK后直接执行，无第二START；新release冻结由root核真实结果，缺口保留，不阻断API复合选择源码。
+
+### 已履行最后帧假设有限实测
 
 `REF-R3-TRIM-LAST-FRAME-NATIVE-20261015` 仅Runtime新test-runs/refactor-20261014/fresh-runtime/output-observation-trim-last-frame-native/**原型/脚本/夹具/证据。产品、字段、请求语义、预算/profile与旧包全部只读；不先部署采样修复。前述只读release4cc34dc6011efbaed978103a97d6bf76cdfedb77f3324f1f8c6e0be433b14055已root output-observation-trim-last-frame-preparation-reviewed.json SHAed8026c40a8910b290ae7c59bd59b6514e48e1eeaf6083295d2c475e341e8996核5artifact/3源等起始Git/4完整AST/封存prepost/两个官方来源，FIRST未证明前提而非真实媒体失败，WRITE_LEASE_RETURN已即时发。root决定只进行有限可推翻实验，不再要求先用静态资料证明任意解码器/输入；一般呈现前缀与真实EOF仍须按实际证据保留未知。
 
