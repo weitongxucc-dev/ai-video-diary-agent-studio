@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 显式冷启动已cfb9b65d集成/即时归还；当前REF-R9-CORE-JOURNEY-PREPARATION-20261016仅fresh-api-core-journey-preparation/**只读证据，所有产品/旧门冻结，无执行权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 显式冷启动独立原ASGI生命周期已过，cfb9b65d精确集成/即时归还；所有已过/首败证据冻结，当前无新产品/证据/执行权。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 核心旅程只读准备已root核验/即时归还；所有产品与旧证据冻结，当前无新写入或执行权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-METADATA-RESTART-UNDO-INDEPENDENT-20261016仅fresh-qa-metadata-restart-undo/**新证据/隔离fixture与一次两进程精确编辑重启撤销联合门；产品只读，旧门冻结。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-NATIVE-SAVE-AUTH-TRANSPORT-PREPARATION-20261016仅fresh-runtime-native-save-auth-preparation/**只读准备，无产品/执行权；旧日志策略首败冻结不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 同候选核心任务闭环只读准备（当前有效）
+### 同候选闭环接续：认证保存准备与非空元数据重启独立门（当前有效）
+
+核心旅程release 0d4b858384e6f5c4e6ccc87f4ee5813e0ffaf63ee0c8e4912d91772038b1abfc已root core-journey-preparation-reviewed.json SHA3963013c21090a980b6a76bfb691a8c1d777423649ed7050970482271da34a89核4artifact/36当前源=cfb9b65d固定Git及九完整入口AST，READONLY_PREPARATION_REVIEWED/WRITE_LEASE_RETURN已即时发送API。只读准备无产品集成或运行接受。root静态纠正原配方：helper六秒视频分三段，首段仅两秒，原两秒镜头从0移到0.25会越界且应拒绝；下一单列元数据门采用一秒旁白/镜头，不改范围守卫。当前media-downloads直连API只有Accept、缺可信认证上下文为静态条件缺口，尚无实际401。
+
+工具线程REF-R9-NATIVE-SAVE-AUTH-TRANSPORT-PREPARATION-20261016只写新准备目录，root native-save-auth-preparation-binding.json SHA07b8601895696fc02d06f4444e93ebd6e4e3e75ec58eb91cf9708928e4a5e182绑定当前14个直接源。核现可信窗口Electron session、固定同源Next认证/本地member cookie链、installed Electron types和原三个保存消费者，给最小准确修复文件/退役直连及最小自测和独立认证反例。优先评估现Session.fetch，不先定实现；不经IPC传凭据、renderer任意URL/header/token或新身份源，不放宽API授权。保留原保存签名/对话框取消/partial流式落盘及rename清理、MIME/status/非空、字幕timeout错误语义；拟只当前可信主窗口frame/origin能保存且对话框后复核。只读静态，不import/运行Electron或app/collect/test/network/native/GUI/私有配置账号；仅必要直接imports、现测试和本地types按需读取，不扫依赖/构建树。一次语义ACK后直接准备，无第二START；稳定只读release后root另绑产品。
+
+QA的REF-R9-METADATA-RESTART-UNDO-INDEPENDENT-20261016只写新目录，root metadata-restart-undo-independent-binding.json SHA84a0f5e8c0539bff7c33edff53f88d4af2380707ff6b56d1769ab49f36aa09cc绑定cfb9b65d和前一空队列gate b3c06cd0e9d68440c426bd702f895f5d3940be3325941de9999125c707026606作源码/37隔离值引用，不重跑旧门。一个新联合代表：公开owner新Plan/Task→公开topic/script start/complete/confirm（实际updated_at）→声明一秒合成旁白与一秒B-roll镜头，实际HTTP TrimClip 0→0.25→第一独立Python API进程原生命周期完全退出→第二fresh Python API进程同DB/文件/本地成员/配置原create_app/lifespan→原版本回读→HTTP undo一次→新恢复operation/version指向内容父快照及原零offset。字幕/旁白/素材/档案/许可均走现所属公开owner，不能raw SQL/private writer或mock守卫/强推状态；fixture生成/分析事实明确合成，非N1–N3模型新建。仅必要输入视频可沿现write_synthetic_video精确命令seconds=6生成一次、stdlib wave写一秒WAV；不运行旧helper私有写/旧normal，不额外native probe/render/model/host采样/生产预算。该有限fixture命令不代表生产准入/fullPGID。真实守卫需额外native则记录缺项，不绕过求绿。
+
+QA两进程保留实际原启动/关闭及空可执行队列，所有已完成fixture generation为terminal；不start生产/run_once/阶段dispatch，真实owned线程/worker清理及进程退出须观察。合成token仅自己的隔离run文件保存且输出脱敏，不复制实际凭据。旧精确source tuple/37值只引用，实际app/model_workers导入前核固定Git/字节，必要新依赖on-demand绑定，不复制全仓/AST/旧证据。一个脚本/fixture预封、两phase事实/首败最小证据足够；仅真实失败受影响节点必要重验，SOURCE_GATE后冻结，缺陷归单一产品owner。此门只接受非空元数据重启/撤销片段，不接受成片、原生保存、Electron退出重启、生产JWT/资源或整体R9；工具准备与QA证据互斥，所有产品仍只读。一次语义ACK后直接执行，无第二START。
+
+### 同候选核心任务闭环只读准备（已履行冻结）
 
 REF-R9-CORE-JOURNEY-PREPARATION-20261016仅API新证据目录，root core-journey-preparation-binding.json SHA9eefaba833ef9525ef5e77ce40d69ee98b3e8bde1168f89a74c8aba0e313ef97固定cfb9b65d及九个已核直接入口字节；产品均只读。按product14，只为一条同候选新建/确认文案→精确或自然语言编辑→输出→原生保存→退出重启→版本恢复/撤销旅程找准确当前API/UI/native消费者、隔离执行配方及真实前提，不能机械重跑已过子批。入口限当前main/server、task page/CreationTaskWorkspace/output-saving、native-media/media-downloads/preload和原render_stage helper，必要直接creation task/plan客户端、任务控件、公开仓储/输出/desktop supervisor只按需读取。给简洁最小下一验收包、明确可执行片段和缺失资源/模型/身份/GUI条件，不做全仓/全R0R9重清点或状态副本。
 
