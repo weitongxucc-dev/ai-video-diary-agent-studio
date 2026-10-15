@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | R7有限组装已dfcba3b4精确集成；两个旧stage测试接线C1已2c470297精确集成/即时归还。当前无新产品/证据/执行写权；待QA实际晚activation结果后单一缺陷再绑定。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-INDEPENDENT-20261015仅fresh-qa-late-runtime-activation/**，一项原先未验证的持久化后真实生命周期失败；app/旧证据只读，不导入/读取/监控API独占test_creation_execution.py，不重跑已过门。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R7-LATE-ACTIVATION-PRIMARY-FAILURE-C1-20261015仅main.py的_quiesced_runtime_drivers错误优先级及test_runtime_bootstrap.py一个新最小回归node；证据仅fresh-api-late-activation-primary-failure-c1/**。其它源/旧证据只读。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 晚activation真实首败已封存FIRST_FAILURE_SEAL/归还执行权，零新写/执行；待API稳定最小修复后root只重绑原失败代表。所有产品和旧证据只读。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 有限组装已集成；安全重载晚失败与旧测试消费者（当前有效）
+### 晚激活真实首败与最小修复（当前有效）
+
+QA FIRST_FAILURE_SEAL SHA4a08da34109183ff816fa53f143a98e86e2ffad05d3b440cf7826fefd77c083b、BLOCKER SHAf5d9b83effaf62e40348bbe301ac5e8eb1b6bb53da4dbcb52f5bb1e35420b63a已冻结/归还，root late-activation-failure-reviewed.json SHA7780b0b4e71c66f4abb75921aae26bdd13eb97aa906b9e44dd42e0f18aedafdd核30artifact/3refs、196复用+3必要固定Git、199loader/198→200imports、一个代表两实际。首轮缺cold profile_preview_execution在启动前拒绝，补唯一必要Git依赖后原test字节不变；实际次轮配置确实durable、暂停后原continuation真实stop、原activation关闭旧device并发布prepared绑定/启动新device，continuation.resume原拒绝产生已保存HTTP503；finally两原resume失败的RuntimeError覆盖主错误成公开HTTP500。两device/原continuation均已停，stage/native/resources/queued work均0。此关键门FAIL，不伪称安全重载完成或恢复。
+
+REF-R7-LATE-ACTIVATION-PRIMARY-FAILURE-C1-20261015固定1d8565a8，仅API上述两源及新证据目录；root binding late-activation-primary-failure-c1-binding.json SHA8b49a5269f22cf39199d1b326edcfc27c14b5630427c0a8c4ded6c26061fa757核初始精确字节/目标AST/空index。只修_quiesced_runtime_drivers在原恢复尝试中的主次错误优先级：保持pending原异常对象、原cause/已保存503为主，同时保留次级恢复诊断；无原异常时原恢复失败仍显式抛错。原pause/resume对象和顺序、全部尝试、committed设置/activation/save/prepare/guards/构造/预算/数据不变，不fake committed、不跳生命周期、不创建替代协调者或新增回滚/重建政策。其余完整main与已有bootstrap测试AST不变，只加一个最小回归node核原主异常/cause/次诊断与无主异常失败。只跑此新node，隔离fixture，零媒体/native/模型/资源采样，已过旧node/normal/矩阵不重跑；最小源码/脚本/实际origin即可，不复制旧包或全AST。一次语义ACK后直接实施无第二START；稳定SOURCE_RELEASE后root精确审核，再给QA原真实失败node的精确新源绑定续验，未授权前QA不复跑。门通过精确集成即时归还并接续整体剩余，原首次失败冻结。
+
+### 有限组装已集成；安全重载晚失败与旧测试消费者（原绑定，首败见上）
 
 R7普通构造原三源已dfcba3b4c05e633f6af5dcd7af827dfb2fd710d3精确集成/即时向API归还，index/commit/live等release13c6f4c06a51120a577ae7e7b5a58b2a269a1e555a1b769cdc6a2a6d56202d15。root device-runtime-assembly-reviewed.json SHA98b0b1704601dd2c5103e9df9a5d92d558858933d88236302d046db6d6ba7463核22artifact/195before-compile/195→196实际来源、完整tail/624其它main函数、旧bootstrap和tests全部AST/37预算值；唯一真实隔离repo/member/probe/runtime/material构造首过，start/dispatch/native/resource均0，无额外复杂QA或旧矩阵。回执device-runtime-assembly-integrated.json SHA90183947d6202632157021484a0d53acfb8a0381103a336ca10e654714117ebd，所有旧证据冻结；只闭有限构造，未闭整体R7/R9。
 
