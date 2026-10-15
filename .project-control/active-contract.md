@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | exact六源含linked C1已SOURCE_RELEASE冻结待QA/集成；当前仅可只读command及直接消费者，以简洁消息给最小下一包范围/唯一normal/特有风险，不写产品或新证据、不运行app/test/native。exact通过集成后另绑command，旧包冻结不复跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-EXACT-PREVIEW-INDEPENDENT-20261015仅写fresh-qa/exact-preview-independent/**；最终六源C1及全部产品/旧证据只读，只执行下述两个metadata特有代表，不重跑graphic normal或共享旧门。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMMAND-PREVIEW-EXECUTION-20261015独占下述11源及fresh-api-command-preview-execution/**；完整关闭最后command旧执行入口，唯一normal，旧exact/其它已集成批与证据冻结复用。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | exact两个特有门已root核过并3ec7a1bc精确集成、即时归还；两首探针失败保留/只复验两失败项。当前无新产品/证据执行租约，待command稳定候选，仅关键特有风险另绑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,21 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 复合选择已集成；接续完整精确编辑入口
+### 精确编辑已集成；接续自然语言入口（当前优先）
+
+exact最终六源已3ec7a1bc60630c632120fee55b080c756c87ed2b精确集成并向API/QA即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN。独立门c69084a092c0b22d9718b3a75fca884a65af035308305be8bc5b68b37ff60ffe已root exact-preview-independent-reviewed.json SHAe11a00614d8809aa85f9f7c842182ed0a4828100ef1d01bbd932cd1413c3e8ac核28artifact/3复用、最终192源＋4固定Git fixture、两会话193实际imports/192before-compile加载、零源/fixture/script漂移与零媒体/旧门执行。原claim提交后native CAS先于typed来源校验，409错误回执可重放且他人成员404/不新增claim；首次wire原error+detail与cache仅detail区别如实保留。journal晚失败的原ValueError.__cause__为native IntegrityError；intent/proposal已同conn提交并从独立连接可见，后续journal自身回滚，提案保留，公开unknown不再preview/不应用timeline。两个首失败仅投影断言误设，helper/源码不变，最终两项复验2PASS7.67s/共4实际；root新app/test/native零。原graphic PASS15.11s及linked C1仅复用未影响行为，非最终新SHA重跑或整体同候选接受。集成回执exact-preview-integrated.json SHA9bf63203239517b4b21740ff7059e12899fa2dcb004d1738e54e34ae8fa18838；下方exact/C1/QA旧段全部已履行冻结，不续旧租约。当前仅一个旧decorated route command_edit_preview；整体R3/R9及R0–R9未完成。
+
+`REF-R3-COMMAND-PREVIEW-EXECUTION-20261015` 固定产品3ec7a1bc，API精确11源：现apps/api/app/main.py、task_audio.py、creation/editing/metadata_use_case.py、subtitle_use_case.py、linked_timeline_use_case.py、conversation_repository.py；NEW creation/editing/command_compile.py、command_preview_use_case.py、narration_preview_use_case.py、person_preview_use_case.py及apps/api/tests/test_command_preview_application.py。证据仅test-runs/refactor-20261014/fresh-api-command-preview-execution/**。初始六现源=固定Git/五NEW不存在/空index及唯一旧route见fresh-root-review/command-preview-implementation-binding.json SHAdcec14ebcdbfc90ba43bddf7c2992b567bd3e6501a75b255bf094fabf69ddd46。exact_preview_use_case.py、picture/visual/audio已过具体owner源只读；需要超11源时先报精确必要差额，不扩大写域。
+
+完整command分派、assistant原始指令绑定与事实/资源准备、明确execute/result归具体CommandPreviewUseCase；纯command_compile只承接真实需要的解析规则，保留原优先级/逐分支lazy读取，不预读全部素材、人物、模型或预算，不新通用dispatcher/registry/回调袋。旁白提案原body归NarrationPreviewUseCase，人物提案/露脸比例归PersonPreviewUseCase；替换候选/原提案归现Metadata，command特有cue fallback归现Subtitle，静音分析及同步删时段归现Linked；indexed reorder按原共同不变量接现有metadata/linked核心。完整原body唯一迁交，旧实际消费者只保留有限显式facade，不把308行混合body搬成新大类。已过音频/compound/exact/picture核心直接复用，不复制或默改规则。main仅认证/原请求转换/有限配置组装/prepare-submit-response；worker显式传actor、source、job/event/context，禁止伪Request、反射或ambient业务取值。
+
+conversation_repository.py只新增一个所属公开reader，承接原_bind_assistant_edit_instruction中按turn_id/conversation_id/workspace_id/member_id及outcome consumed的原SELECT+decode，原缺失→{}与连接关闭、turn/context/选择/playhead检查、版本检查及最后task_turn_source再核原文的先后保持；现request_context参数和task_turn_source更早拒绝不能替代旧读取。Command owner不得访问仓储私有连接或直写SQL；HTTP保留原会话认证/访问边界，worker用真实event身份和原公开仓储/名册端口复核同一成员/来源，不信任payload原文。不改现仓储body/DDL/写入、对话状态/幂等或加强成新联合快照。command原无edit-request journal，保持无journal；原base/选择快照、路径禁入/有限文本箭头例外、source资格、能力拒绝、原保存事务/早媒体/许可与资源读取时点均保持，不新增默认/配置门或改历史job/digest。
+
+所有活跃command分支直接接核心后，退出最后decorator/handler、main完整领域实现、伪HTTP/反射及该worker ambient；定向查真实消费者后退役无消费者的旧execute/validate桥与driver fallback，不为测试夹具保留产品业务影子，也不顺带移除仍有真实消费者的外部路径。共享TaskAudio发布、预算、输入封存、journal/checkpoint、取消/恢复状态和各已过owner保持完整body；driver仅必要command直接分支/实际死桥退役，未涉及部分以完整AST+参数核对复用，不重跑旧矩阵。
+
+唯一normal：原自然语言“字幕字号改为64”经原公共入口→具体command worker→现exact/Subtitle核心→真实有声字幕双侧预览，核真实字形变化、原source/固定输入digest、公开查询/同job重放不再渲染及未应用timeline；复用合成fixture域，实际业务/renderer/资格/状态机保持，不以旧adapter伪成功或202→200改写。源/脚本/必要fixture执行前hard SHA与实际origin prepost、准确两侧文件/原native登记与释放实录即可，不复制整仓/全source/全AST或扩展字段矩阵。首失败保留，仅失败受影响node复验，过即简短SOURCE_RELEASE冻结。root源码审核后另绑最多两个特有独立族：assistant原指令/选择/版本在排队前后失效；静音分析真实结果到动态候选/预算与恢复阶段的不变量。共享已过门/normal不复跑；普通纯body归属只完整AST和最小必要自测，不逐拆分另设QA。生产认证、GUI、资源标定/fullPGID及整体同候选真实旅程单列未知，不放宽预算求绿。先简洁语义REBASE_ACK核11源/初始字节、原阶段和唯一normal后直接实施，无第二START；SOURCE_RELEASE后精确审核/关键门/集成即时归还，并接续实际满足依赖的剩余R0–R9工作，不将此单包当整体完成。
+
+### 复合选择与精确编辑历史绑定（已履行冻结）
 
 `REF-R3-EXACT-PREVIEW-INDEPENDENT-20261015` 绑定原release SHA843ee1fa2d00ee7536f311f88a22e0a669b0acb6b6276bb3b5ba53c71c028cc0及C1 release SHA36066dcf1454db7605077aab4022c5adac4dc820e23f358d137090f0bd2cb807，最终六源TAB b36d33e6aee5b3bedc1ae6aa92146891c30b27be1724b3ffdf938c2e7a837b7c、派生192源fingerprint 0a750c7a8c4c9d835bf2da8dbde312d947d89fb87c4f36b8aeb07f8fd5e2d872。root exact-preview-release-reviewed.json SHAfee3cd89360cac66bef37b03be5a4969981096459cdb847685218e7bfb3d4e71已核65artifact/192实际源/186固定Git/191before-compile loads/16完整迁交body及689未变完整函数，真实两MP4/帧已核；23native/20登记/3原fixture未登记、首次setup失败及15.11s正常节点复验均保留。root exact-linked-facade-c1-reviewed.json SHAee2c96890479da885a79c5d9674134ee3554e1a58ceb563a57d00446db298a0d核9新artifact、两源/完整module精确差额、三个旧linked helper归唯一具体owner、原顺序及Insert两身份端口；旧graphic可达body与端口不变仅复用其行为，最终新SHA未重跑normal，不宣称同候选整体接受。业务错误类型、journal raw receipt先保存后清首次wire result、metadata不提前device actor及Trim配置读取原时点已源码核实。原65artifact及另外四源不变；C1执行脚本来自前一指令下的原子目录，等SHA归档在新C1包，仅接受真实来源，不冒称新目录重新执行。
 
