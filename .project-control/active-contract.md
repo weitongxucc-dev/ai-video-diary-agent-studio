@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | montage c760b8ec已集成/即时归还；当前REF-R3-RENDER-STAGE-EXECUTION-20261015下述4源独占实施与fresh-api-render-stage-execution/**，旧候选/证据冻结。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物三个特有代表已root审核、7444fd39集成/即时归还；当前无新产品/证据/执行写权，全部原门冻结，不重跑。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | render四源c340000c已SOURCE_RELEASE/root源码审核，产品及作者证据冻结待两特有独立门；无新产品写权，待准确后续绑定。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-RENDER-STAGE-INDEPENDENT-20261015仅新fresh-qa-render-stage/**，下述最多两个新仓储事务特有代表；四产品及197来源只读，作者normal/旧门零重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,15 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 故事板已集成；接续成片执行（当前有效）
+### 成片源码已审核；两个特有独立事务门（当前有效）
+
+REF-R3-RENDER-STAGE-INDEPENDENT-20261015绑定作者SOURCE_RELEASE SHA c340000cf16e74a9f6d28e1da0d4585b4a9420a5994fe6b42f2604a9397c21cd、四源TAB dfcfb4228871df6ac060c317703397730eea45511ad59c1f3233511135662ffa、197实际来源fingerprint db3486d2c8b894cd407141cbe89580ceb37d9781578207064b5cb0cbd209b8d8。root render-stage-release-reviewed.json SHA f0349c02f889e786a59c86808d9d133128256b19ef6ba5a7b80979df6ff3b880核34artifact、196 before-compile/197实际来源与固定Git、8完整迁交body/628其它main函数、production整module仅两原with公开端口差额，五引用constructor零IO、原三成功QC及worker拒绝语义、原预算/OS八赋值AST不变。唯一真实队列normal首次PASS（call1.849s/pytest7.36s/process9.372s），物理MP4/SRT SHA/size、Artifact/Transform/edges、sealed inputs/版本/外层checkpoint与查询不重复均核；12native=4登记释放+1输入fixture+7原quality未登记，后者不是fullPGID/生产资源接受。root只修观察器len整数与quality文件名单复数断言，无产品/import/test/native复跑。
+
+QA仅新test-runs/refactor-20261014/fresh-qa-render-stage/**证据/脚本/隔离DB/媒体执行权，全部产品与作者34artifact、原已过门只读，复用作者candidate-01/RESULT.json#actual_origins_post来源映射，不复制全仓/全AST/旧证据。最多两个特有代表：①原真实render流程到达publish_creation_task_render，同conn已写montage/task后TimelineVersion INSERT由SQLite真实晚失败，独立observer在失败前只见旧数据，paired rollback且早MP4/SRT/Artifact/Transform/edges保留；准确记录已到达/未到达的event/cover/subtitle/child/outer阶段。②原真实失败路径到达save_failed_creation_task_render_if_current前，独立原生连接实际提交较新HEAD及montage；原stale条件跳过保存，较新HEAD/montage保留。不mock业务守卫/成功发布、不绕过身份/事实/版本/资格/原外层状态机；注入仅明确原外部执行失败或晚SQL边界，保留真实阶段，原公共预算/OS值不变不求绿。若较早门拒绝，记录而不绕过。
+
+只执行本族两个代表，作者normal、原renderer/许可/取消/恢复/事务矩阵零新执行；执行前脚本/source硬SHA、实际origin与before-compile、原登记后释放记录按现精确方案，固定Git额外必要依赖on-demand，不复制197源。语义REBASE_ACK核本绑定/四源/互斥/阶段后直接执行，无第二START；首失败保留，仅失败或新差额影响的节点重验。SOURCE_GATE稳定即冻结，root有限核门后精确集成四源、即时向API和QA发SOURCE_INTEGRATED/WRITE_LEASE_RETURN并接续实际剩余。GUI/真实模型/生产资源/fullPGID、continuation/状态投影/显式组装安全重载/旧测试消费者及整体R0–R9仍未接受。
+
+### 故事板已集成；成片原实施绑定（已履行冻结）
 
 montage最终5源已c760b8ec3a10818a03ba5fc3991f848de80a9f3c精确集成并即时向API SOURCE_INTEGRATED/WRITE_LEASE_RETURN。root montage-stage-integrated.json SHA255ba440cabc110a125e0b8d53d14a6e6c4bcb8644b73fd0949365e33bdd292f；原release a131b504、normal/32artifact冻结。唯一EOF差额经root montage-eof-c1-reviewed.json SHA2e9642baa974524d03a2965796517da2c1cb352c942e7c91f75630b16b3b4632证全module AST不变，最终5源TAB ab24dcfac1d39ef680cd4298720204f6c61d68b6d9b23d06cff9bd23399c3138同index/commit/current；不称最终EOF字节重跑了normal。721既有函数完整不变，195加载/196实际来源；normal首次metadata PASS（call .493s/process8.19s，pytest报告6.13s分别记录）、1条输入fixture native/执行native0、原waiting_for_user/保存-版本分步/查询零重复；原HostBudget六值与MontageBudget确为既有旁白fixture域复用，不算生产资源接受。无新增独立QA、旧normal或共享矩阵重跑。
 
