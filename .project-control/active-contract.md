@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMMAND-PREVIEW-EXECUTION-20261015独占下述11源及fresh-api-command-preview-execution/**；完整关闭最后command旧执行入口，唯一normal，旧exact/其它已集成批与证据冻结复用。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | command11源/作者证据SOURCE_RELEASE冻结待QA/集成；REF-R3-NARRATION-STAGE-PREPARATION-20261015仅fresh-api-narration-stage-preparation/**只读准备证据写权，零产品/执行写权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMMAND-INDEPENDENT-20261015：只读冻结command11源；仅fresh-qa-command-preview/**新脚本/隔离证据写权，两个特有族见下；旧exact/共享门与normal冻结复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -53,6 +53,12 @@ conversation_repository.py只新增一个所属公开reader，承接原_bind_ass
 
 唯一normal：原自然语言“字幕字号改为64”经原公共入口→具体command worker→现exact/Subtitle核心→真实有声字幕双侧预览，核真实字形变化、原source/固定输入digest、公开查询/同job重放不再渲染及未应用timeline；复用合成fixture域，实际业务/renderer/资格/状态机保持，不以旧adapter伪成功或202→200改写。源/脚本/必要fixture执行前hard SHA与实际origin prepost、准确两侧文件/原native登记与释放实录即可，不复制整仓/全source/全AST或扩展字段矩阵。首失败保留，仅失败受影响node复验，过即简短SOURCE_RELEASE冻结。root源码审核后另绑最多两个特有独立族：assistant原指令/选择/版本在排队前后失效；静音分析真实结果到动态候选/预算与恢复阶段的不变量。共享已过门/normal不复跑；普通纯body归属只完整AST和最小必要自测，不逐拆分另设QA。生产认证、GUI、资源标定/fullPGID及整体同候选真实旅程单列未知，不放宽预算求绿。先简洁语义REBASE_ACK核11源/初始字节、原阶段和唯一normal后直接实施，无第二START；SOURCE_RELEASE后精确审核/关键门/集成即时归还，并接续实际满足依赖的剩余R0–R9工作，不将此单包当整体完成。
 
+
+### 配音制作与局部再生成只读接续准备（当前活动）
+
+`REF-R3-NARRATION-STAGE-PREPARATION-20261015` 同API线程仅新test-runs/refactor-20261014/fresh-api-narration-stage-preparation/**证据写权。产品全部只读；command最终11源保持99f930release冻结供QA。目标仅main._generate_creation_task_narration_for_workspace、_generate_narration_edit_with_grant、_narration_stage_with_grant、_narration_edit_stage_with_grant及creation_execution.py对应narration/narration_edit阶段实际输入/检查点消费者，必要直接narration.py/ProfileRecordStore/事务公开端口。main目标函数从固定3ec7a1bc取原完整AST，核其当前目标AST未变并单列command WIP不执行；其余直接依赖按实际Git/SHA。定位现存最小测试和有限fixture，不import/collect/test/执行模型、native或读私人env/账号/用户数据；不得全仓/全AST快照。
+
+交一个具体高内聚制作执行owner的最小实施包：原完整body唯一归属、显式repo/模型/工具/actor/grant/配置端口、跨对象同conn提交与early文件保留时点、现路由/worker有限组装及旧消费者退役、准确拟独占文件和一个最小normal＋必要合并关键独立族。不加通用registry/callback bag/第二调度者；不改变原身份资格、版本、产物缓存/未知恢复、资源cap与provider调用。若实际共同不变量须分开owner，给最小有收益边界，不按行数拆。报告精准依赖及未验证项；只读准备释放后冻结，须主控另绑实施文件才可施工，不恢复旧产品租约、不妨碍当前QA/集成。
 
 ### 自然语言入口关键独立门（当前活动）
 
