@@ -13,8 +13,8 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016仅fresh-api-r9-unclaimed-boundaries/**只读准备；产品/旧证据冻结，无执行权。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-NATIVE-SAVE-SESSION-INDEPENDENT-20261016仅fresh-qa-native-save-session/**新证据/隔离Electron四代表族，产品只读；元数据及其它已过门冻结不重跑。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存八源SOURCE_RELEASE已root源审、冻结待精确独立门；当前无新增写入/执行权，缺陷由root另绑本owner，旧native/日志策略不恢复。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 原生保存实际Session/窗口四族独立门已root接受、八源0263663a集成/即时归还；全部证据冻结，当前无新写入/执行权。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 原生保存准确八源已0263663a集成/SOURCE_INTEGRATED/WRITE_LEASE_RETURN；源/证据冻结，无新写入/执行权，旧native/日志策略不恢复。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -45,7 +45,15 @@ REF-R9-UNCLAIMED-MAIN-BOUNDARIES-PREPARATION-20261016只给API新准备目录，
 
 初始三源/必要按需直接源Git/hash和目标anchors足够，静态准备不需200执行tuple。零产品修改/import/collect/test/service/GUI/native/model/network/host采样/私人env账号用户DB/Git修改，只新证据写权。稳定只读release冻结，由root另绑精确产品。native-save八源及QA绑定完全不变，无HOLD/重复ACK/旧门重跑；本新工作一次语义ACK后直接准备，无第二START。
 
-### 原生保存八源已源审，实际Session与窗口边界独立门（当前有效）
+### 原生保存八源已精确集成（冻结复用）
+
+八源已0263663a33658f65c1685b800052a6f119892bbe精确集成，cached/committed/live等release491f1aaeaae7c0d6e28950a3e9395843ad11df6de46683729b320d189d9d0b52及candidate50849f991326c8b738c56ec4628728820ed3bf0f97ee1b7846b6e249c03159cd，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发Runtime/QA。集成回执native-save-auth-integrated.json SHA131608b55ba3ab699e3d37dddd6ae26b2c0c37f70156b1d5a4dcf378f1b386c0；root产品测试0，未复跑旧门。API上述四组main只读准备不受影响，Python/其初始三源仍为绑定字节，HEAD的本次八源/合同提交变化不当作该范围漂移。
+
+独立gate070a3aaff10090812bf3b0c14eda6afffd4125e9feace41172e52f02a552ce31已root native-save-session-reviewed.json SHAdca7ae987b654dbf9154dcfa7f5b82c60aefbe3d9f154cf9de8234bcd4ef507b核28artifact/3refs/20源map、3原CJS实际beforecompile、原sandbox preload配置/真实contextBridge、7原TS变换及5实际servermodule origin。真实Electron33.4.11/Node20.18.3单进程四族10次实际IPC首次通过：原cookie owner/browserjar→actual middleware适配→Session流，A三格式hash、B/缺/错端口video拒绝，同源第二窗口dialog前拒绝，2次真实跨文档导航分别dialog及原stat完成/提交前拒绝，ownWeb302未follow，监听恢复/失败final与partial均无；两窗口destroy、before/will/quit0、两个观察到的renderer和Node双server全退出。root首metadata读取因PASS的JSON.stringify省略undefined failure键，改summary get后继续，未执行产品或改旧证据。
+
+实际Web origin为own127.0.0.1，产品localhost/真实Next部署未执行；OS dialog/APIready/backend身份与媒体为声明替身，未接受真实API/JWT/用户账户隔离、OS保存GUI、生产media/资源/fullPGID或整体R9，Web proxy内部backend redirect也未覆盖。不将此门和三合成传输文件当完整真实成片保存；源/证据及所有已过门冻结，接续上述有限main准备。
+
+### 原生保存八源源审与Session独立门（已履行冻结）
 
 八源release 491f1aaeaae7c0d6e28950a3e9395843ad11df6de46683729b320d189d9d0b52、candidate50849f991326c8b738c56ec4628728820ed3bf0f97ee1b7846b6e249c03159cd已root native-save-auth-release-reviewed.json SHAec5a947b00bde729909f26ac0d96a240210535fa20236644a632ff1b75d35e82核29artifact/准确八源/起始Git、原素材导入和其它IPC/非目标lifecycle/auth策略保持、裸直连退役。作者初六语法/desktop focused首过；复核后就绪门收回请求入口并补服务下载后失效不误拒绝，仅受影响desktop包补验，当前4CJS编译源与Web5pretransform源等最终字节，Web11例首次过无复跑。Node24替身/局部middleware不是Electron33真实session/cookie/frame或JWT/nativeGUI接受；root应用测试0。八源/新旧证据冻结，未集成，待下门。
 
