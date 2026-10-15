@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 配音5源及fresh-api-narration-stage-execution/**已SOURCE_RELEASE冻结，root源码审核通过待关键独立门；当前无产品续写权，command已集成批冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 配音5源/证据冻结待QA；REF-R3-PERSON-STAGE-PREPARATION-20261015仅fresh-api-person-stage-preparation/**只读准备证据写权，无产品/执行写权，command旧批冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-NARRATION-STAGE-INDEPENDENT-20261015仅fresh-qa-narration-stage/**证据与隔离执行写权；产品5源只读，三特有代表见下；旧command/normal/共享门冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -38,6 +38,12 @@
 对原三条交叉及必要直接消费者给一个bounded REPORT/PACKAGE/READONLY_PREPARATION_RELEASE：若真实循环、重复类型/DDL/用途事实源或所属对象外私有写消费者仍存在，只交一个最小可实施包/精准依赖及原权限/用途、固定引用修订/撤权、事务边界与拟最小验证；不为了行数重拆高内聚SourceRepository。若已归属清楚且实际旧写/反向依赖已退出，给具体有限不存在证明、准确symbols/current Git/AST/读期prepost直接关闭该明确范围，不补抽象/compat层或捏造下一包；这不自动等于全R4/同候选真实接受。TYPE_CHECKING类型链接与真实runtime依赖区分，不靠函数内隐藏import假清除循环。
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
+
+### 人物制作与局部重做只读接续准备（当前活动）
+
+`REF-R3-PERSON-STAGE-PREPARATION-20261015` 同API可只写test-runs/refactor-20261014/fresh-api-person-stage-preparation/**，所有产品与配音5源/作者证据冻结；不早施工。仅核main._generate_creation_task_person_render_record、_person_stage_with_grant、_apply_person_segment_edit、_person_edit_stage_with_grant及creation_execution对应person_render/person_edit真实输入/资格/检查点消费者；必要直接creation/person_renders.py、已有PersonPreviewUseCase、实际两provider和仓储公开端口。main上述原目标完整AST从固定3d2c24bb取并核当前目标未变，配音WIP只单列差额不执行；其余有限依赖按实际Git/SHA，不全仓/全AST复制或读私人env/模型/账号/用户数据，零import/collect/test/native/model/GUI。
+
+交一个高内聚具体人物制作执行owner最小实施包：共同身份/固定profile版本/讲话音频与画面资格、两provider显式选择、原grant/context/模型资源/路径物化和累计产物cap、full与local原持久化/检查点连接时点、现调用和旧消费者退役、准确拟独占文件及一个最小normal/必要合并关键族。只移交现完整body/实际规则，不新增通用registry/兼容callback/预算默认/第二调度者，不为真实模型/资源不可用假造成功；已过PersonPreview/profile仓储/配音/共享门只读复用。没有有收益的剩余边界时给具体有限不存在证明关闭该scope，不人为拆分。简洁准备回执，精确缺口与执行边界如实；准备释放后冻结，须root另绑产品才实施，不妨碍现配音QA/集成。
 
 ### 配音制作稳定候选关键独立门（当前优先）
 
