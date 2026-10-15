@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物5源及montage准备冻结；当前仅REF-R3-RENDER-STAGE-PREPARATION-20261015成片执行只读准备/new fresh-api-render-stage-preparation/**，不写产品。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物HEAD首轮PASS冻结；续验前内存检查再拒绝、零新测试，暂只读等待原资源门稳定恢复后两节点精确续验，不盲重试。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 人物7444fd39已集成/即时归还；下述montage新5源独占绑定，先完成当前render只读准备并冻结再直接实施；人物及旧证据冻结。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 人物三个特有代表已root审核、7444fd39集成/即时归还；当前无新产品/证据/执行写权，全部原门冻结，不重跑。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 人物内存门再拒绝；保持候选与通过节点冻结（当前有效）
+### 人物已精确集成；接续故事板编排（当前有效）
+
+人物最终5源已7444fd39e4519edf7d352f8ef72a46d35b2bf4d3精确集成，索引/commit/current逐字节等release372ec90，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发API与QA。root person-stage-integrated.json SHAe5b6e7dd8865d6bfbe9497e0373640ea04f63731e2aef2f2459275413fb21a37；独立门0a171257a1011b34d9449d01cced685b19e9bb6778988eb64a3acbd3650d1ba5经root person-independent-reviewed.json SHA6ee750677b77409985bdc364b647afe2ccf48512e469a9920269d063a0775f26核50artifact/4refs、每会话195before-compile/196parent origins、额外固定Git子入口（不升级完整子进程来源跟踪）。3特有/5实际：HEAD首轮PASS冻结未重跑，首轮两真实内存阻断及一次执行前拒绝保留；用户要求复核后原门两次实际3549200384/3680354304字节满足，仅两个原失败node续验通过。full真实讲话源字节改变后原PermissionError/outer interrupted与request blocked，早child图谱保留；local HEAD由原current guard提前拒绝、未到commitCAS；local六editorial组与outer成功同conn实际已写、独立observer仍旧，terminal事件native IntegrityError后联合rollback，早ready PersonRender/child JobRun/Artifact/Transform/edges及视频保留。68native/42登记全部释放/5合成视频fixture与21原quality未登记命令分列，6合成worker调用；原预算、OSfixture、守卫未改，作者normal及旧门零新执行。local执行GET既有409、full interrupted时原stage投影仍running等状态差额留后续投影收敛，不冒称完整公开状态接受；真实模型/GUI/生产资源/fullPGID/同候选整体R0–R9未验。
+
+REF-R3-MONTAGE-STAGE-EXECUTION-20261015固定人物产品基线7444fd39，API独占现apps/api/app/main.py、creation_execution.py、member_permits.py及NEW apps/api/app/creation/montage_stage_use_case.py、apps/api/tests/test_montage_stage_application.py；证据仅新fresh-api-montage-stage-execution/**。初始三现源=Git/两NEW absent/空index见fresh-root-review/montage-stage-implementation-binding.json；仅当前已在做的render只读准备先按原范围收完并冻结，再核这个新5源绑定做一次简短语义REBASE_ACK后直接实施，无第二START，不并行改两批同文件。已审核准备b666316d/包dbaae62c/root回执eca3d4a5冻结复用，超5源先报精确必要差额。
+
+按该最小包由具体MontageStageUseCase承接原完整生成body：仅显式repository/同一Metadata/同一PersonStage/原ungranted configured planner引用赋值，零IO；原granted分支仍在原点新建metadata-only MontagePlanner，原未授予分支用原配置planner，不提前读素材/profile/人物/model/预算或引入业务上下文袋。保留Task→plan→原grant/前提→start→script/narration/segment/真实授权素材及owner→placeholder→仅选中段绑定既有可信PersonRender→template/cap→save montage→ensure base的全部顺序/错误与独立提交点；不合并原保存与建版本事务、不增CAS或回滚早事实，不运行人物生成。原PersonStage模型ID及Metadata.picture_renderer/ensure_montage_base公开端口、Planner/仓储/身份/输入/预算/共享checkpoint/取消恢复只读复用，不复制规则。main仅零IOfactory/原DTO与status/detail错误facade，保留真实CreationExecution诊断消费者和raw montage/plan原409拒绝；worker直接montage_stage.generate。定向退役最后_montage_stage_with_grant及apps/api/app现stage_actions构造/字段/参数/dispatch，不保留registry影子或改render/CreationExecution.actions等无关桥；非montage driver完整body保持。
+
+普通完整职责迁交仅新test一个metadata normal：原公开execution/start实际只执行montage_plan，真实Planner/授权素材公开仓储/Metadata base与原检查点；已登记合成旁白及B-roll、presenter_share_target=0沿原finite fixture、MontageBudget及全部host/OS值，无模型/渲染/人物执行。核逻辑refs、cue/clip/template/降级、task/montage/base/event及重复queued同job/查询零重复planning-save-version，原低置信等待用户不可自动置ready；必要synthetic media数据准备与metadata执行分列，不假称真实媒体/模型接受。作者一个normal首败保留仅失败node必要复验，原选中人物/ungranted planner支路完整body/显式端口静态复用，不重跑人物/配音/编辑或共享矩阵；不另设复杂独立QA。SOURCE_RELEASE后root精确源码/normal审核，通过立即集成/归还接续render。此包不关闭render/continuation/投影/组装安全重载/剩余仓储旧消费者或整体接受。
+
+### 人物内存门再拒绝；保持候选与通过节点冻结（已履行冻结）
 
 root原单次恢复测量后，QA执行前实际available_memory又降到2916204544字节，小于原3221225472，PRE_EXECUTION_MEMORY-02.json SHA8ef4ab1af33248b23cddfb76fcc236e2697517b7d74799584daa084865ad4cb4：两原脚本SHA不变、app_execution_started=false，本次零应用/测试/native新增。原HEAD PASS及首次两阻断事实不变，仍无完整SOURCE_GATE，人物5源不stage/集成。后续监督只低频只读检查实际资源；原门真实稳定恢复后（两次分开的实际读数均满足原门，执行中仍由原probe决定）再通知当前QA仅续验下列两原失败节点，不重复HEAD/normal/旧门或协议ACK；若不足继续等待、不调预算/伪造OS或退出用户进程。无需用户再次批准继续；整体R0–R9未完成，监督保持。
 
