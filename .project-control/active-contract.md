@@ -13,7 +13,7 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-COMMAND-PREVIEW-EXECUTION-20261015独占下述11源及fresh-api-command-preview-execution/**；完整关闭最后command旧执行入口，唯一normal，旧exact/其它已集成批与证据冻结复用。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | exact两个特有门已root核过并3ec7a1bc精确集成、即时归还；两首探针失败保留/只复验两失败项。当前无新产品/证据执行租约，待command稳定候选，仅关键特有风险另绑。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-COMMAND-INDEPENDENT-20261015：只读冻结command11源；仅fresh-qa-command-preview/**新脚本/隔离证据写权，两个特有族见下；旧exact/共享门与normal冻结复用。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -52,6 +52,15 @@ conversation_repository.py只新增一个所属公开reader，承接原_bind_ass
 所有活跃command分支直接接核心后，退出最后decorator/handler、main完整领域实现、伪HTTP/反射及该worker ambient；定向查真实消费者后退役无消费者的旧execute/validate桥与driver fallback，不为测试夹具保留产品业务影子，也不顺带移除仍有真实消费者的外部路径。共享TaskAudio发布、预算、输入封存、journal/checkpoint、取消/恢复状态和各已过owner保持完整body；driver仅必要command直接分支/实际死桥退役，未涉及部分以完整AST+参数核对复用，不重跑旧矩阵。
 
 唯一normal：原自然语言“字幕字号改为64”经原公共入口→具体command worker→现exact/Subtitle核心→真实有声字幕双侧预览，核真实字形变化、原source/固定输入digest、公开查询/同job重放不再渲染及未应用timeline；复用合成fixture域，实际业务/renderer/资格/状态机保持，不以旧adapter伪成功或202→200改写。源/脚本/必要fixture执行前hard SHA与实际origin prepost、准确两侧文件/原native登记与释放实录即可，不复制整仓/全source/全AST或扩展字段矩阵。首失败保留，仅失败受影响node复验，过即简短SOURCE_RELEASE冻结。root源码审核后另绑最多两个特有独立族：assistant原指令/选择/版本在排队前后失效；静音分析真实结果到动态候选/预算与恢复阶段的不变量。共享已过门/normal不复跑；普通纯body归属只完整AST和最小必要自测，不逐拆分另设QA。生产认证、GUI、资源标定/fullPGID及整体同候选真实旅程单列未知，不放宽预算求绿。先简洁语义REBASE_ACK核11源/初始字节、原阶段和唯一normal后直接实施，无第二START；SOURCE_RELEASE后精确审核/关键门/集成即时归还，并接续实际满足依赖的剩余R0–R9工作，不将此单包当整体完成。
+
+
+### 自然语言入口关键独立门（当前活动）
+
+`REF-R3-COMMAND-INDEPENDENT-20261015` 绑定SOURCE_RELEASE SHA99f93007571b99b3f69bde232b6cc7e99935c95a72fba21ce06ec3cb9f5edebb、最终11源TAB fcd52610091af2f925a7d5d5230b9b850cee1ab1e576a24c14596da17e21b05d及196实际源fingerprint 9f4706e396b8b40e51142d6e91ddc7df20ac4f1d3f180b76e196f6a78a9a5bed；root command-preview-release-reviewed.json SHAd16047f91ab48e82db3c7c93030365018484766e74ceb44c7e588e47f83d1f3c已核119artifact、196origin/195before-compile、完整原分派/绑定/事实/解析与13迁交组。一个normal三实际：首错fixture名称、次command已成功而帧检查旧构造参数失败、最终PASS8.09s call；两首失败保留。23native/20登记释放/3原合成fixture；重放零native、不应用timeline。最终仅overlay局部名改动，字幕原branch复用、不声称最终整体SHA重新执行。
+
+QA只写test-runs/refactor-20261014/fresh-qa-command-preview/**，产品与作者原证据冻结。最多两特有代表：①原公共入口的assistant consumed指令/selection/version在排队前不一致原409无job；有效原指令封存后将真实turn结束或修改活态上下文，worker仍执行封存原payload、不重新读取绑定，不新增turn状态拒绝。复用现真实command应用与有限原fixture组装，实际media/资格/状态机，不跑作者normal。②真实静音源→原analysis发布与真实detector→silence_analysis_result durable→同步动态候选/原预算→原预览/恢复。选择一个真实可达晚失败或预算节点，保留已durable产物/事件，移除自己注入后只公开retry，核原缓存/slot/digest复用、不重启已完成分析publication；detector按原行为可再次读取，不能虚称整个分析阶段不重复。原预算若更早拒绝，记录具体未到达节点，不mock探测/增预算/改OS求绿。已有共享身份/资源/事务矩阵冻结，不再另测。
+
+沿原隔离env/DB/output/tmp、固定Git非overlay、执行前硬SHA/实际origin prepost及精确源脚本封存；不复制整仓/全AST/旧证据，原fixture仅适配已退役构造/验证桥的有限组装差额、记录完整AST摘要/签名。生产认证/GUI/HostResourceProbe/fullPGID及整体R0–R9单列未验。简洁语义REBASE_ACK核原排队前后语义、最终11源与互斥范围后直接执行，无第二START；首失败保留，只失败受影响node复验。SOURCE_GATE后冻结，主控核门、精确集成11源并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN。
 
 ### 复合选择与精确编辑历史绑定（已履行冻结）
 
