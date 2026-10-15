@@ -13,7 +13,7 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R3-VISUAL-EDIT-EXECUTION-20261015独占main.py、task_audio.py、media/clip_preview.py及NEW creation/visual_preview_use_case.py、media/picture_preview.py、tests/test_visual_preview_application.py六源与fresh-api-visual-edit-execution/**新证据；80c76a7d基线，一个short＋完整tail-fade真实媒体normal，源release后另绑关键独立族。已过与准备包冻结不复跑。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 媒体脚本三个代表已核门、四源80c76a7d已集成/WRITE_LEASE_RETURN；本族及所有旧包冻结，当前无产品/新证据写权，待下一稳定候选。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R3-VISUAL-INDEPENDENT-20261015仅fresh-qa/visual-preview-independent/**新证据；复用作者194冻结源，最多三个关键反例，产品/作者与旧包只读，不重跑normal。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-TRIM-LAST-FRAME-NATIVE-20261015仅fresh-runtime/output-observation-trim-last-frame-native/**新有限原型与证据；先只读ACK，root核后执行一个合并node尝试推翻单一trim/last PNG假设。旧包冻结、产品/字段/profile只读；原grant/deadline/byte/thread门不变，不把有限实测当任意输入或生产证明。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 旁白写边界已有限SCOPE_CLOSED/WRITE_LEASE_RETURN。本批REF-R4-PRONUNCIATION-RECORDS-20261015独占production.py、profiles/records.py、tests/test_profile_record_store.py三现源及fresh-r4-authorizations/pronunciation-records/**新证据；五原发音存取/适用方法与三个codec/validator集中现ProfileRecordStore，原规则/DDL/版本/作用域/事务不变，一个组合最小自测，root完整源审，不另加QA。API六冻结源互斥。 |
@@ -104,6 +104,12 @@ API同时独占六源，双方不碰对方源；APInormal/后续独立族必须�
 ### 当前有界选帧未验边界实证
 
 `REF-R3-FRAME-LOOKUP-BOUNDARY-EVIDENCE-20261015` 仅Runtime新域test-runs/refactor-20261014/fresh-runtime/output-observation-frame-lookup-boundaries/**，所有产品/已审核原型/旧包只读。只复用原191精确snapshot/462024f9 tuple及原granted helper/Resources/synthetic render cap完整AST；不复制source/用户数据或重跑旧六目标、diagnostic、作者或QA门，不import app.main/WIP。一个新组合node、只两个新增自有≤2s/≤64参考帧来源：①带音频的普通H264 MP4（单video＋单audio）核-demux cap下selected packet计数是否足以证明EOF及最近前驱，②纯视频H264明确长GOP核16包/16filter可见帧未找到/未夹住时的真实拒绝。每源最多两新目标，包含尾部与一个GOP中段；现固定单一候选原样，不试其它seek/扫描/扩大cap/fps猜值/fallback。新source生成、有限独立参考及每target窗口/抽取均走原grant/原总deadline/单线程/stdout16KiB/stderr32KiB/原输出门；reference仅自有已知短输入验证，不用于选择、产品或任意源扫描。明确原型accepted/拒绝/错误和参考判定，错误EOF或错帧要如实失败保存，不以拒绝当产品通过，诊断通过与可行性分开；cap内找不到可以是本次实际结果，不更改机制求PASS。所有实际脚本/fixtures/source/import前后绑定、packet/framePTS与可区分参考PNG原始记录、完整组装/cap及登记PGID命令后释放记录；生产RSS/admission/inflightPGID/取消仍不接受。不改时间字段/去重/对象映射、产品预算/原资源门或公开业务。先语义REBASE_ACK后直接执行这个node，首失败保留只重验受影响未通过项；READONLY_NATIVE_BOUNDARY_RELEASE后全域冻结归还，主控据实际首决定再绑产品差额。
+
+### 画面候选源码预审与关键独立族
+
+`REF-R3-VISUAL-INDEPENDENT-20261015` 仅当前QA线程写test-runs/refactor-20261014/fresh-qa/visual-preview-independent/**，全部产品及作者证据只读。作者SOURCE_RELEASE SHA0be815cfef56e2bd0175ef69a3aaa7e0bcd90e7c11c06b137889699dfa7b696c、六源TAB 0d02dad32ab23b7cf8c4149b6705699b6dd89d646bdabede224f778fbb408efd；candidate-10的194源fingerprint eaa468c503cd24021ca9b4e46a8d1c33b56e2d689e09bae90f3b603093d4685d及source-binding SHA14b7c571c40eda1fcd737bdd3ef641f0ecd1b77d9d9abefdc0b58d9d6fe23187直接复用。root visual-edit-execution-release-reviewed.json SHA6003007feeb63fffe93f762dc469414745bd09a821e01e4aeef69f0ed58c7503已核362artifact、194源/188固定Git、190实际imports、十次历史执行及完整非目标函数/七个renderer与projection原body/公共validator等价；root新执行零。作者一个normal通过不替代此独立门。
+
+仅执行下节已约定的三个共同不变量代表：首侧真实发布后实际base/source失效；首侧后公开cancel；physical MP4后原publication metadata晚SQL失败与公开retry同slot测量复用、禁止第二次render。使用原业务/身份/资格/状态机，真实SQLite与原native媒体；原有限trusted身份/合成settings、profile及三个全局OS指标替身逐项披露，不扩大或冒称生产资源。若原守卫更早拒绝，记录实际阶段，不绕过以凑预期；失败交单一API owner。直接复用作者冻结源和必要旧fixture，不为本族再复制全仓/194源或重生成全套AST；仅封存自身脚本/fixture与差额、核actualimports/source prepost。三个代表预先确定，首失败保留、只重验受修复影响的失败node，不跑作者normal或旧矩阵。语义REBASE_ACK核合同/六源/tuple/写域与三代表后直接执行，不等第二START；SOURCE_GATE冻结后root审门、精确六源集成并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN。不是生产/GUI/全R3/R9接受。
 
 ### 当前画面编辑显式执行实施包
 
