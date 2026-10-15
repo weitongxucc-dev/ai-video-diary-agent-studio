@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1已a63b9fc5集成/即时归还；当前REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅fresh-api-explicit-cold-start-preparation/**只读准备证据写权，所有产品/旧证据只读，零import/测试/执行。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R7-EXPLICIT-COLD-START-IMPLEMENTATION-20261015独占main.py/server.py/tests/conftest.py/tests/test_runtime_bootstrap.py及根package.json仅dev:api；新证据fresh-api-explicit-cold-start/**。旧准备和所有已过门冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 晚activation主次异常独立门已过，a63b9fc5精确集成/即时归还。所有原首败/通过证据冻结，当前无新产品/证据/执行写权。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -39,7 +39,17 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 显式冷启动剩余差额只读准备（与QA互斥产品写）
+### 显式冷启动五源实施（当前有效）
+
+只读准备C1最终release edcae4ed6fefc689807fd1651ee06802755b9f61073911afa8274984921ce2c6与原包c8358b843903839ec901d0b05396c9dd85cb0b402ba1426d31a09daca82d7216/差额e240a466f07940686552d8563c655bc5b604f06ecbc719daf86745f42703d811已root explicit-cold-start-preparation-reviewed.json SHA9bdc07ec251ecaf6f6f036caeab2bc8a9f6e388f7f7a7721729fe63acecc5e13核6artifact/11源、22原完整body/37值，真实四构造仍在导入期。root有限直接consumer审补两必要差额：main有中段和EOF两份同body __main__ guard，必须退役中段仅留create_app定义之后的最终一份；根package.json dev:api仍指app.main:app，必须第五源只改该命令为app.main:create_app --factory，uv run/reload/port不变。不是照搬准备遗漏，也不另跑旧检查。
+
+REF-R7-EXPLICIT-COLD-START-IMPLEMENTATION-20261015固定95c4875c，API仅上述五源及新证据，root binding explicit-cold-start-implementation-binding.json SHA7b967da062d7005a740962b9a54211adc779604be7f6e2dca99995c8b89d711a核五源=Git/空index。main.create_app作为原单个FastAPI app的显式进程组装入口：四原构造移入，保持_initialize依赖/installer→原runtime routes→CreationExecution→同原worker构造先后。原route声明位置留纯len索引/空list，factory在该位置插入原runtime routes并失效OpenAPI，前后静态route/handler序列保持；原_publish_runtime_routes及reload保持完整。model_installer/creation_execution仅声明，不填虚假运行事实，execution_worker=None；不在导入、请求钩子或属性fallback暗中初始化。一个进程/pytest session一次显式组装，不当作reload/retry，不加通用容器/代理/默认预算/第二协调者。
+
+server只将原ASGI字符串改factory并加factory=True，_configure_env与固定--grant-exec早分支、host/port/reload协议不变；main退役重复中段guard，最终guard在全部定义及create_app后用原HOST/PORT和uvicorn.run(create_app(),...)，不字符串再导入第二main。conftest保留全部临时环境设置和原fixture/secret工具完整body，在明确pytest_sessionstart组装一次且不跑startup/recovery/driver，sessionfinish先原stop worker再原cleanup；此有意替代旧95直接import等consumer依赖导入即构造，不机械改全部tests。只追加一个正常node，旧所有tests不变。
+
+唯一normal在隔离原路径/原37值的fresh Python child：真实import main后核四构造和DB/驱动0，再create_app一次，核真实schema/installer原reload callback、同图原CreationExecution callback/一个未启动worker、正确route顺序/仓储auth绑定，并静态核server/main/dev脚本准确入口和grant早分支。只必要Python元数据子进程另记，零stage/native/model/resource/driver start；不启动服务或测真媒体，首失败保留只失败受影响node续验。完整原业务/构造/recovery/startup/shutdown及C1主次异常body不变，bootstrap/已过资源owner/其它源只读，source/script/实际origin最小证据，不全仓/全AST副本/旧矩阵。稳定SOURCE_RELEASE后root审源码，再独立QA仅一个同候选真实空队列原ASGI lifespan代表，核factory先于原7startup/4shutdown、恢复先于device dispatch start/continuation最后、真实空闲线程全停，不由作者自验关键接受。QA未新绑前无执行权。短语义ACK核五源和root两修正后直接实施无第二START；精确门过即时集成归还并继续整体剩余。
+
+### 显式冷启动剩余差额只读准备（已审核冻结）
 
 REF-R7-EXPLICIT-COLD-START-PREPARATION-20261015仅API新证据目录，root explicit-cold-start-preparation-binding.json SHA627f3e1ace8c418392fa55a63d425eb5f38de618b9851293a0e36e3e90b779a3固定当前main C1 overlay及bootstrap/server原Git字节；产品全部只读，QA两源候选继续冻结。目标只含main四处实际导入期运行构造：model_installer初始化、绑定runtime routes、creation_execution和ThreadPoolExecutor，以及原server ASGI和实际startup/shutdown先后。复用已审核R7准备中完整未变body/原37值，不重复旧构造或矩阵，不为行数拆模块。
 
