@@ -12,8 +12,8 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | REF-R7-LATE-ACTIVATION-PRIMARY-FAILURE-C1-20261015仅main.py的_quiesced_runtime_drivers错误优先级及test_runtime_bootstrap.py一个新最小回归node；证据仅fresh-api-late-activation-primary-failure-c1/**。其它源/旧证据只读。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 晚activation真实首败已封存FIRST_FAILURE_SEAL/归还执行权，零新写/执行；待API稳定最小修复后root只重绑原失败代表。所有产品和旧证据只读。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 主次异常C1两源已SOURCE_RELEASE冻结/root源码通过，待QA原失败代表；当前无产品或旧证据写/执行权。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | REF-R7-LATE-ACTIVATION-PRIMARY-C1-INDEPENDENT-20261015仅新fresh-qa-late-runtime-activation-primary-c1/**，精确两overlay后仅复验原真实失败代表；其它源/旧证据冻结。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 日志C1首败已root审/WRITE_LEASE_RETURN，12artifact/3实际同grant命令；1.87仍超原32768，剩余未跑，未放宽门或接受目标PNG。两次同类失败后停止该日志策略；当前无新产品/证据/native写权。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
@@ -39,7 +39,13 @@
 
 只读准备零产品修改/import/collect/test/model/media/GUI/native/env/account用户DB/host资源/全仓snapshot，旧失败和所有source release冻结不重封。资料用实际已存在公共owner，不能新政策/迁移历史数据/默认共享范围/复复制安全规则。语义REBASE_ACK后直接核验，无第二START；准确产品租约或明确范围关闭由root核证据后另行决定，API输出观察四源绑定3a93de66与其全部条件不变、不需再次ACK。
 
-### 晚激活真实首败与最小修复（当前有效）
+### 晚激活主次异常稳定候选独立续验（当前有效）
+
+API release9336eaab609f297d67d02dbb4832b3110b6a10d7c9e8163869ac966fc6986503两源TAB6bb1a9df8a5f38107e18c13e59870121d5b2393d81680580638f21b3307da09c，经root late-activation-primary-c1-reviewed.json SHAe45851558fbaf1296267910c44038ac9fc511c29bd7026bfecd44789bd432118核14artifact、195loader/196origin、完整原pause/yield/恢复loop/无主异常抛错及624其它main函数/15旧tests不变。新单node首过，仅原continuation pause/stop/resume与stopped-thread/有限其它owner fixture，真实线程/native/资源/模型/dispatch0；不能代替真实持久化后失败门。两源和作者证据冻结。
+
+REF-R7-LATE-ACTIVATION-PRIMARY-C1-INDEPENDENT-20261015仅QA新目录，root late-activation-primary-c1-independent-binding.json SHA826287dfe8fca7e452c859e7ab259ef4eeafcbd2ac842c04d18f464cf8d516e3精确两overlay（main e64f6541、bootstrap test d578157b）覆盖原196+3固定Git对应条目，其余不变；原FIRST_FAILURE_SEAL/全部旧证据只读。只重验原失败test_saved_settings_then_real_terminated_continuation_preserves_primary_failure，一个原同DB保存后真实stop的完整生命周期代表，保留原case、注入、保存、激活、启动/恢复和清理语义。两个执行脚本定向复用，runner仅新binding路径及MAPPING显式overlay优先；可在原errors观察函数添加__notes__遥测/有限主异常诊断断言，不改变已冻结脚本或删除首次失败。核公开503已保存主失败及原cause、原continuation/device次恢复诊断，持久配置/当前新绑定/终止旧循环真实如前，不能声称原驱动恢复或新成功/回滚。只必要真实空闲线程且全部结束清理，零stage/模型/native/资源，原37预算不动。首失败保留；旧normal/作者新node/旧矩阵不跑，source/script/actual origin最小证据。语义ACK后直接执行，无第二START；稳定SOURCE_GATE后root精确核门/集成/即时归还。
+
+### 晚激活真实首败与最小修复（首败与实施原绑定）
 
 QA FIRST_FAILURE_SEAL SHA4a08da34109183ff816fa53f143a98e86e2ffad05d3b440cf7826fefd77c083b、BLOCKER SHAf5d9b83effaf62e40348bbe301ac5e8eb1b6bb53da4dbcb52f5bb1e35420b63a已冻结/归还，root late-activation-failure-reviewed.json SHA7780b0b4e71c66f4abb75921aae26bdd13eb97aa906b9e44dd42e0f18aedafdd核30artifact/3refs、196复用+3必要固定Git、199loader/198→200imports、一个代表两实际。首轮缺cold profile_preview_execution在启动前拒绝，补唯一必要Git依赖后原test字节不变；实际次轮配置确实durable、暂停后原continuation真实stop、原activation关闭旧device并发布prepared绑定/启动新device，continuation.resume原拒绝产生已保存HTTP503；finally两原resume失败的RuntimeError覆盖主错误成公开HTTP500。两device/原continuation均已停，stage/native/resources/queued work均0。此关键门FAIL，不伪称安全重载完成或恢复。
 
