@@ -232,7 +232,7 @@ def test_topic_inputs_allow_reference_only_unknown_license_and_block_automation_
         source_references=[CreationPlanSourceReference(
             id=source.id, connector_id=source.connector_id, source_label=source.source_label,
             title=source.title, license=source.license,
-            identity=main_module._source_item_identity(source),
+            identity=main_module.source_item_identity(source),
         )],
     )
     task = SimpleNamespace(id="topic-task", plan_id=plan.id, owner_user_id=owner_id)

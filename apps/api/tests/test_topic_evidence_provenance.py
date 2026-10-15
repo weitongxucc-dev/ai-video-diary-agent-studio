@@ -40,7 +40,7 @@ def evidence_context(tmp_path, monkeypatch):
         language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
         knowledge_references=[CreationPlanKnowledgeReference(knowledge.id, "1", knowledge.title, "", "")],
         source_references=[CreationPlanSourceReference(source.id, source.connector_id, "手工来源",
-                           source.title, source.license, main._source_item_identity(source))],
+                           source.title, source.license, main.source_item_identity(source))],
         selected_voice=None, pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary="无媒体", model_snapshot=[], confirmation_points=[], blockers=[],
         preflight_fingerprint="fixture",
