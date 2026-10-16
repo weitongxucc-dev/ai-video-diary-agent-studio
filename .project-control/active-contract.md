@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段B独占main仅四字幕+silence确认body/有限接线及原准备四源，按原source guard顺序完成五源、两个新最小node后快速release。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 字幕/固定停顿五源已41a05058精确集成并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN；两个新增metadata节点首次通过复用，当前零产品/执行权，不重跑或恢复旧租约。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | goal单个释放顺序门已root核/66227f9c精确集成并即时归还；当前零产品/执行权，全部旧证据冻结，待真正下一关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R3-COVER-OWNER-20261016阶段A仅独占NEW creation/cover_use_case.py，静态实现有限封面owner；所有现有源/main及执行只读，阶段B另等API集成后root真实交接。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | REF-R3-COVER-OWNER-20261016阶段B独占cover-owner-phase-b-binding.json精确十源；API五源已集成/main真实交出，封面注册/许可worker/原事务与同步采用接线，production仅新增封面Job+输入原子提交，原其他源只读。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -26,6 +26,14 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 字幕/停顿已集成，封面执行阶段B（当前）
+
+字幕/固定停顿五源release17125993181ae158a59eebc97be89687219484d4ab2e6f313974179a0dbe3116已41a05058a04fc43098951fcc7695674fdbe90f51精确集成并即时归还；root核16artifact、12实际compile前/11与12前后origin、main非目标字节及原source guard保持，四A1/A2源未变。两个新增metadata节点首次PASS复用，display无cover、silence为空音轨/固定ranges，不冒充真实媒体。receipt fresh-root-review/legacy-confirm-integrated.json SHA1f96629d83893bbf9091b9fa8aabc63230e254e49b056c0e8569053956972895；API零新写权。
+
+封面阶段A a0d93a84d20202cf5b29a7f69b8a6540f0b542c39f10f13804a3604e0de1e906仅静态未接线owner准备，不算源/行为关闭。现正式把main及精确十源交唯一工具线程，绑定fresh-root-review/cover-owner-phase-b-binding.json。除原九源外，明确增加production.py仅新增ProductionRepository.create_cover_generation_job(run,payload,*,expected_version_id)，复用现公开create_job_run/append_task_event，在所属仓储同BEGIN IMMEDIATE连接核当前任务版本/成员并原子提交原Job+封存输入事件；不改既有方法、schema或新增私有外部SQL。新owner现prepare/_bound/read_staged调用ArtifactStore.describe会完整哈希，真实执行必须修正：重哈希仍由同grant完整worker执行，提交前/释放后只用原已登记摘要及有限文件身份/回执核验，不在HTTP或采用事务重新扫整片；来源和保守freshness不能放宽，若现公开metadata接口不足先报确切symbol。其他原同步DTO、Job/digest/ref/原请求unknown恢复、独立无默认CoverBudget、同PGID完整worker和释放后同conn采用规则沿下文，不另起coordinator。
+
+直接阶段B，无第二START/ACK；作者只一个新metadata声明worker最小node，稳定精确release后交一个必要晚采用SQL/原回执续交独立门，已过字幕/goal/quality/旧cover批次不重跑。无host采样/真实native/模型/GUI，生产标定及同候选物理接受仍未验证。QA当前仍零执行权，待稳定candidate再绑定。所有现有其他线程只读，不并写main/production/shared imports。
 
 ### goal集成后的真实主入口交接（当前API阶段B）
 
