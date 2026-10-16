@@ -13,11 +13,11 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 字幕/固定停顿五源已41a05058精确集成并即时SOURCE_INTEGRATED/WRITE_LEASE_RETURN；两个新增metadata节点首次通过复用，当前零产品/执行权，不重跑或恢复旧租约。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R3-COVER-INDEPENDENT-20261016按cover-independent-binding.json十源冻结候选执行一个关键晚采用SQL/释放/回执续交代表；产品全只读，仅新fresh-qa-cover-recovery证据，旧normal不跑。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 封面十源release428a6890已冻结归还；root有限源审及C1后交关键独立门，当前零产品/执行权，旧作者normal不再运行。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 封面单关键独立门99e326b4已首次通过/root审核并601f0c9a精确集成/即时SOURCE_INTEGRATED与WRITE_LEASE_RETURN；当前零产品/执行/新证据写权，旧门冻结。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 封面十源含root C1已601f0c9a精确集成/即时SOURCE_INTEGRATED与WRITE_LEASE_RETURN；当前零产品/执行写权。物理资源首拒绝冻结，不重采样/盲重试或复活旧绑定。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
-| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 封面_start旧Job缺事件C1已单源静态compile/逆差额核通过并冻结；当前零产品写权，核十源独立门后精确集成，保护并行改动。 |
+| 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | 封面十源601f0c9a已精确集成/即时归还，当前无产品写权；必要源码收口包冻结，仅监督确切新差额和未完成真实接受前提。 |
 
 `REF-R3-MEDIA-SCRIPT-INDEPENDENT-20261015` 绑定作者SOURCE_RELEASE SHA8b4967829130994314ec8379483a8b5d1d006b902828bbe1f308672adc2e0419、四源TAB bf149328ba8265d0bf85b61fcfb3b30fb2cf2163853cb076605622f5bc25480c，192源fingerprint b537d05cf8f1327043a41c4314b3d549d007439bc8b8b6a6ac7d91eec044db12、source-binding SHAde57b9ede2a401af5abff7852d5448b901ca860c362dad2c6706942014ac116b。主控预审fresh-root-review/media-script-execution-release-reviewed.json SHA20d6e586047523af8ca3fa75d0e33e77b7fd5ec6e56a78006a2c235981450d75核59artifact、192源/188固定Git、188实际imports/3精确脚本归档、完整四AST及643/28/5未变函数；原execute_script去前三条ambient取值后整个body相同，配方展开/产物验证整个body或loop仅命名端口替换。作者一个normal两实际（首次fixture缺worker字段FAIL、补新test fixture后PASS3.79s）；首次源绑定遗漏及封存manifest相对/绝对路径失败均保留，不认额外应用执行。生产组装只静态，native脚本执行零，未作资源接受。
 
@@ -26,6 +26,14 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 当前必要源码包已集成；真实接受保持阻断
+
+封面精确十源含root C1已601f0c9a496ab61607546686e1ba2ba037f23dbe集成；候选089cff1dbc007fb3394a08e8c325e56757c4b8b7534f591d2aabab14c71a2d83与cached/committed/live一致。receipt fresh-root-review/cover-owner-integrated.json SHA28e2155509258f2eb17baaafc739de0680b149dd8f36ca38f1481da84757ea0a；SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发送作者和QA。QA SOURCE_GATE SHA99e326b414fab2bf1d324dabb84f2e356cfea34fe78517bff11c695fe60102c4首次单case通过，root核11artifact/94实际compile前与前后live来源（92 app/2 worker只import、7候选overlay/87固定Git）。旧child active时原release门拒绝且14表不变；晚cover INSERT在artifact/transform/edge/adopted event/op/version实际写后失败并联合回滚，proposal/current/Job成功/request done尚未到达，随后仅原defer事件/blocked/free按公开路径落盘。移除自有trigger，原runtime同request/Job/receipt续交，worker/claim1→1、一次op/version/cover，queue done/permit free，重扫不变；旧Job缺新event的C1明确unknown零写。全部声明metadata/NONMEDIA/资源进程worker身份替身，不是物理媒体或生产资源接受。
+
+当前已确认的必要源码残留包metadata/goal/旧字幕/固定停顿/封面均已集成，复用前source-closeout与已过R1–R8事实，不再开启重复总清点、普通拆分或旧矩阵。所有可见实施线程零新写/执行权，无新的独立已授权源码工作；新真实缺陷按精确symbol单一负责人再绑定。完整性能标定、暂不用模型/手机/平台继续后置。
+
+整体R0–R9不标完成：最小真实native执行/取消退出/全进程组资源释放，以及最新同候选可见保存播放/Quit重启/回读撤销仍待验。原资源attempt-01固定swap首拒绝、0factory/DB/native、driver已退出证据继续冻结；宿主条件未有确证改变时不采样、不重试、不移动上限、不填生产CoverBudget或借旧source/profile假通过。没有独立已授权工作或可行动变化时监督保持安静；只有实际前提变化、真实缺陷或用户新决定才接续必要工作，不以源码集成冒充整体完成，也不因此停掉整体监督。
 
 ### 封面单个关键独立门（当前）
 
