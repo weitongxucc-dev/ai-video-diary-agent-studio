@@ -55,14 +55,13 @@ from app.conversation_repository import (
     ConversationTurnRequestConflict,
 )
 
-from app.subtitle_alignment import apply_aligned_timings, synchronize_translated_subtitles
 from app.compound_edits import compile_compound_edit, compile_compound_selection, apply_compound_subtitles, is_indexed_subtitle_command, synchronize_linked_subtitle_cue
 from app.graphic_overlays import validate_overlays, compile_overlay_command
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source, graphic_source_facts
 from app.transitions import dissolve_frames, extend_dissolve_sources
 from app.visual_effects import clip_playback_rate, reusable_color_settings
 from app.speech_timing import estimate_speech_seconds
-from app.linked_timeline import remove_time_ranges, reorder_linked_group
+from app.linked_timeline import reorder_linked_group
 from app.canvas import canvas_size
 from app.subtitle_style import compile_subtitle_style_command
 from app.subtitle_edits import normalize_subtitle_text_and_breaks, update_subtitle_cue
@@ -235,7 +234,6 @@ from app.subtitle_tracks import (
     SubtitleCue as SubtitleExecutionCue,
     SubtitleStyle as SubtitleExecutionStyle,
     SubtitleTrack as SubtitleExecutionTrack,
-    SubtitleTranslationService,
     render_bilingual_srt,
     render_srt,
     subtitle_translation_provider_from_settings,
@@ -8904,19 +8902,16 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
         except InvalidMontage as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _metadata_edit_response(outcome)
-    if operation_type == 'AlignSubtitleTiming' and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload['base_version_id']:
-            raise HTTPException(status_code=409, detail='时间线已变化，请重新校准字幕')
-        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
-        track = next((item for item in tracks if item.id == operation_payload['track_id']), None)
-        if track is None:
-            raise HTTPException(status_code=409, detail='字幕轨已变化，请重新校准')
-        changed = apply_aligned_timings(track, operation_payload['timings'], montage.duration_seconds)
-        changed_tracks = synchronize_translated_subtitles(tracks, changed, montage.duration_seconds) if operation_payload.get('include_translation') else [changed if item.id == track.id else item for item in tracks]
-        _prepare_changed_montage(montage, message='字幕时间已校准，可重新渲染；撤销恢复原时间。')
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=montage, operation_type='AlignSubtitleTiming', operation_payload=operation_payload, edited_subtitle_tracks=changed_tracks)
+    if operation_type in {'AlignSubtitleTiming', 'ConfigureSubtitleTrack', 'UpdateSubtitleCue'} and isinstance(operation_payload, dict):
+        try:
+            outcome = _subtitle_edit_use_case().confirm_legacy(task, proposal, settings=settings)
+        except EditPreviewRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except LegacyMontageReference as exc:
+            raise _topic_failure_response(**exc.details) from exc
+        except InvalidMontage as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _metadata_edit_response(outcome)
     if operation_type == 'EditAudioTimeline' and isinstance(operation_payload, dict):
         actor = _require_permit_actor(request, workspace_id)
         try:
@@ -8928,51 +8923,6 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _metadata_edit_response(outcome)
-    if operation_type == 'ConfigureSubtitleTrack' and isinstance(operation_payload, dict) and ('subtitle_display' in operation_payload):
-        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
-            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
-        base_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
-        selection = _subtitle_display_selection(tracks, operation_payload['subtitle_display'])
-        version_id = f'timeline_{uuid4().hex}'
-        updated_tracks = [_clone_subtitle_track(track, timeline_version_id=version_id, style={**track.style, 'enabled': selection[track.id]}) for track in tracks]
-        cover = _cover_asset_for_version(workspace_id, task.id, base_version)
-        _prepare_changed_montage(montage, message='字幕显示已更新，请重新渲染成片。')
-        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload, subtitle_tracks=updated_tracks, cover_asset=_clone_cover_asset(cover, timeline_version_id=version_id) if cover else None, updated_plan=montage)
-    if operation_type == 'ConfigureSubtitleTrack' and isinstance(operation_payload, dict):
-        source_track_id = operation_payload.get('source_track_id')
-        base_version_id = operation_payload.get('base_version_id')
-        if not isinstance(source_track_id, str) or not source_track_id or (not isinstance(base_version_id, str)) or (not base_version_id) or (operation_payload.get('target_language') != 'en-US'):
-            raise HTTPException(status_code=409, detail='invalid subtitle track configuration')
-        if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
-        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
-        try:
-            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-        except KeyError as exc:
-            raise HTTPException(status_code=409, detail='subtitle edit base no longer exists') from exc
-        current_tracks = _current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
-        source = next((track for track in current_tracks if track.id == source_track_id), None)
-        if source is None or source.language != 'zh-CN' or source.status != 'valid':
-            raise HTTPException(status_code=409, detail='subtitle source track has changed')
-        result_version_id = f'timeline_{uuid4().hex}'
-        service = SubtitleTranslationService(subtitle_translation_provider_from_settings(settings))
-        execution = service.translate_zh_to_en(_execution_subtitle_track(source), translated_track_id=f'subtitle_{result_version_id}_en-us', timeline_version_id=result_version_id)
-        production_repo.append_task_event(TaskEvent(id=f'event_{execution.execution_id}', workspace_id=workspace_id, task_id=task.id, job_id=None, event_type='subtitle_translation_returned', payload={'proposal_id': proposal.id, 'source_track_id': source.id, 'provider_name': execution.provider_name, 'model_id': execution.model_id, 'status': execution.status, 'failure_code': execution.failure_code, 'failure_reason': execution.failure_reason, 'impact': execution.impact, 'repair_action': execution.repair_action, 'retryable': execution.retryable}))
-        if execution.status != 'succeeded' or execution.translated_track is None:
-            raise _topic_failure_response(status_code=503, error=execution.failure_code or 'subtitle_translation_failed', reason=execution.failure_reason or '英文字幕没有生成可信结果。', impact=execution.impact or '中文字幕和当前成片保持不变。', repair_action=execution.repair_action or '检查文字模型后重试。', retryable=bool(execution.retryable))
-        try:
-            english_ref, transform_id = _publish_subtitle_text(workspace_id=workspace_id, task_id=task.id, proposal_id=proposal.id, kind='subtitle_translation', input_refs=[source.artifact_ref or f'subtitle-track:{source.id}'], content=render_srt(execution.translated_track), engine=f'{execution.provider_name}:{execution.model_id}', parameters={'prompt_schema_version': execution.prompt_schema_version, 'provider_execution_id': execution.provider_execution_id, 'source_track_id': source.id, 'target_language': 'en-US'})
-        except (OSError, ValueError) as exc:
-            raise _topic_failure_response(status_code=503, error='subtitle_artifact_failed', reason='英文字幕已返回，但未能保存为可信字幕产物。', impact='当前时间线和成片保持不变。', repair_action=str(exc), retryable=True) from exc
-        translated = execution.translated_track
-        english_track = SubtitleTrack(id=translated.id, workspace_id=workspace_id, task_id=task.id, timeline_version_id=result_version_id, language='en-US', source_language='zh-CN', style=asdict(translated.style), cues=[SubtitleCue(id=cue.id, source_cue_id=cue.source_cue_id, text=cue.text, start_seconds=cue.start_seconds, end_seconds=cue.end_seconds, speaker=cue.speaker, line_breaks=list(cue.line_breaks), emphasis=list(cue.emphasis)) for cue in translated.cues], generation_method='translation', model_id=execution.model_id, artifact_ref=english_ref, transform_id=transform_id, status='valid')
-        chinese_track = _clone_subtitle_track(source, timeline_version_id=result_version_id, track_id=f'subtitle_{result_version_id}_zh-cn')
-        current_cover = _cover_asset_for_version(workspace_id, task.id, base_version)
-        carried_cover = _clone_cover_asset(current_cover, timeline_version_id=result_version_id) if current_cover is not None else None
-        montage, _ = _prepare_changed_montage(montage, message='中英字幕已生成并保持原时间轴；请重新渲染以写入成片。')
-        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=result_version_id, operation_type='ConfigureSubtitleTrack', operation_payload=dict(operation_payload), subtitle_tracks=[chinese_track, english_track], cover_asset=carried_cover, updated_plan=montage)
     if operation_type == 'GenerateCoverFromFrame' and isinstance(operation_payload, dict):
         _require_automation_task_open(request, workspace_id, task_id)
         title_position = operation_payload.get('title_position', 'bottom')
@@ -9009,44 +8959,19 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
     if operation_type in {'ChangePersonSegment', 'RegeneratePersonRender'} and isinstance(operation_payload, dict):
         _require_automation_task_open(request, workspace_id, task_id)
         return _apply_person_segment_edit(workspace_id, task, proposal, request)
-    if operation_type == 'UpdateSubtitleCue' and isinstance(operation_payload, dict):
-        cue_id = operation_payload.get('cue_id')
-        text = operation_payload.get('text')
-        expected_text = operation_payload.get('expected_text')
-        base_version_id = operation_payload.get('base_version_id')
-        if any((not isinstance(value, str) or not value for value in (cue_id, text, expected_text, base_version_id))):
-            raise HTTPException(status_code=409, detail='invalid subtitle edit operation')
-        if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
-        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
-        try:
-            montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-            cue = next((item for item in montage.cues if item.id == cue_id))
-        except (KeyError, StopIteration) as exc:
-            raise HTTPException(status_code=409, detail='subtitle edit base no longer exists') from exc
-        if cue.text != expected_text:
-            raise HTTPException(status_code=409, detail='subtitle edit target has changed')
-        cue.text = text
-        _refresh_montage_review_state(montage)
-        montage, _ = _prepare_changed_montage(montage, message='字幕已修改；配音和镜头保持不变，可以重新渲染。')
-        narration_segments = production_repo.list_narration_segments(workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, updated_plan=montage, operation_type='UpdateSubtitleCue', operation_payload=dict(operation_payload), narration_segments=narration_segments)
     if operation_type == 'RegenerateNarrationSegment' and isinstance(operation_payload, dict):
         _require_automation_task_open(request, workspace_id, task_id)
         return _submit_narration_edit(workspace_id, task, proposal, request)
     if operation_type == 'RemoveSilence' and isinstance(operation_payload, dict):
-        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
-            raise HTTPException(status_code=409, detail='时间线已变化，请重新预览停顿剪辑。')
-        base = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        plan = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task.id))
-        tracks = _current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         try:
-            updated, tracks = remove_time_ranges(plan, tracks, _effective_audio_timeline(plan), operation_payload['removed_ranges_ms'])
-            _task_audio().validate(workspace_id, task.id, updated.audio_timeline, updated.duration_seconds, draft_only=True)
-            _prepare_changed_montage(updated, message='停顿剪辑已应用；声音、字幕与画面同步缩短，请重新渲染。')
-        except (KeyError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _persist_typed_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=updated, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+            outcome = _linked_timeline_use_case().confirm_remove_silence(task, proposal)
+        except EditPreviewRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except LegacyMontageReference as exc:
+            raise _topic_failure_response(**exc.details) from exc
+        except InvalidMontage as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _metadata_edit_response(outcome)
     raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 

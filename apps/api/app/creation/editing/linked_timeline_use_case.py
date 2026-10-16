@@ -18,7 +18,7 @@ from app.creation.editing.linked import (prepare_linked_speed, apply_linked_spee
 from app.creation.editing.metadata import check_command
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditResult, effective_audio_timeline,
-    logical_montage_output_refs, prepare_changed_montage,
+    logical_montage_output_refs, prepare_changed_montage, LegacyMontageReference, InvalidMontage,
 )
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
@@ -183,6 +183,30 @@ class LinkedTimelineEditUseCase:
     def read_result(self, command: LinkedEditApplyCommand) -> LinkedEditSavedResult:
         task, proposal, _intent, source = self._binding(command)
         return LinkedEditSavedResult(proposal, self.input_digest(task, proposal, source), self._saved_result(task, proposal))
+
+    def confirm_remove_silence(self, task, proposal):
+        workspace_id, task_id = task.workspace_id, task.id
+        operation_type = proposal.operation.get('operation_type')
+        operation_payload = proposal.operation.get('payload')
+        if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+            raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新预览停顿剪辑。')
+        base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+        tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
+        try:
+            updated, tracks = remove_time_ranges(plan, tracks, effective_audio_timeline(plan), operation_payload['removed_ranges_ms'])
+            self.montage_edits.audio_service.validate(workspace_id, task.id, updated.audio_timeline, updated.duration_seconds, draft_only=True)
+            prepare_changed_montage(updated, message='停顿剪辑已应用；声音、字幕与画面同步缩短，请重新渲染。')
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        try:
+            return self.montage_edits.persist_montage_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, updated_plan=updated, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks)
+        except (LegacyMontageReference, InvalidMontage):
+            raise
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
     def confirm(self, control: LinkedEditApplyCommand) -> LinkedEditApplicationResult:
         task, proposal, intent, source = self._binding(control)

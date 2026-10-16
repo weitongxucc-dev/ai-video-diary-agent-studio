@@ -195,3 +195,52 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     assert restored["subtitle_tracks"][0]["style"] == before["subtitle_tracks"][0]["style"]
     assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"][0]["style"]["font_size"] == 64
+
+
+def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_path):
+    import json
+    import os
+    from pathlib import Path
+    from app.creation.editing.metadata import make_metadata_proposal
+    from app.creation.editing.metadata_use_case import metadata_edit_command
+    from app.creation.editing.subtitle_use_case import SubtitleEditUseCase, is_subtitle_edit
+    from app.schemas import CreationTaskExactEditRequest
+    from app.production import ProductionRepository
+    from test_metadata_edit_use_case import metadata_state
+
+    state = metadata_state(tmp_path)
+    case = SubtitleEditUseCase(state.repo, state.case)
+    payload = CreationTaskExactEditRequest(operation_type='ConfigureSubtitleTrack', subtitle_display='none')
+    summary, refs, values, _preview, _effects = case.legacy_description(state.task, state.plan,
+        state.base, [state.track], payload, None)
+    assert is_subtitle_edit(payload.operation_type, values) is False
+    command = metadata_edit_command(state.task, state.identity, payload.operation_type, values)
+    intent, proposal = make_metadata_proposal(command, refs, summary, values)
+    state.repo.create_edit_intent(intent)
+    state.repo.create_edit_proposal(proposal)
+    before = len(state.repo.list_timeline_versions('ws', state.task.id))
+    result = case.confirm_legacy(state.task, proposal, settings=None)
+    fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
+    task = fresh.get_creation_task('ws', state.task.id)
+    version = fresh.get_timeline_version('ws', task.current_timeline_version_id)
+    tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
+    operations = fresh.list_edit_operations('ws', task.id)
+    assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
+    assert len(operations) == 1 and operations[0].proposal_id == proposal.id
+    assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id
+    assert version.parent_version_id == state.base.id and version.sequence == 2
+    assert len(tracks) == 1 and tracks[0].style['enabled'] is False
+    assert [asdict(cue) for cue in tracks[0].cues] == [asdict(cue) for cue in state.track.cues]
+    assert tracks[0].artifact_ref == state.track.artifact_ref
+    assert fresh.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert state.track.style.get('enabled', True) is True
+    assert result.montage.narration_audio_path == state.plan.narration_audio_path
+    assert case.montage_edits.cover_asset_for_version('ws', task.id, version) is None
+    assert fresh.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert len(fresh.list_edit_operations('ws', task.id)) == 1
+    evidence = os.environ.get('LEGACY_SUBTITLE_EVIDENCE_DIR')
+    if evidence:
+        Path(evidence, 'NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,
+            'operation': operations[0].id, 'base_version': state.base.id, 'result_version': version.id,
+            'versions_added': 1, 'operations': 1, 'display_enabled': False, 'fresh_readback': True,
+            'translation_ASR_native_calls': 0}, indent=2))

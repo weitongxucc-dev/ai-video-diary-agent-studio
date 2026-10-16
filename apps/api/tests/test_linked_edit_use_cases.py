@@ -234,3 +234,61 @@ def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_s
     assert response.status_code == 409, response.text
     assert repo.list_edit_intents("local", "task") == repo.list_edit_proposals("local", "task") == []
     assert repo.get_creation_task("local", "task").current_timeline_version_id == "concurrent-version"
+
+
+def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
+    import json
+    import os
+    from pathlib import Path
+    from app.audio_timeline import AudioTimeline
+    from app.creation.editing.linked_timeline_use_case import LinkedTimelineEditUseCase
+    from app.creation.editing.metadata import make_metadata_proposal
+    from app.creation.editing.metadata_use_case import metadata_edit_command
+    from app.production import ProductionRepository
+    from test_metadata_edit_use_case import metadata_state
+
+    state = metadata_state(tmp_path)
+    # A declared silent editorial graph keeps this node metadata-only.
+    state.plan.audio_timeline = AudioTimeline(tracks=[])
+    payload = creation_task_montage_plan_to_payload(state.plan)
+    state.repo.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    base = TimelineVersion('silence-base', 'ws', state.task.id, state.base.id, 2,
+        {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['silence-zh']}, None)
+    state.repo.create_timeline_version(base)
+    state.repo.create_subtitle_track(replace(state.track, id='silence-zh', timeline_version_id=base.id))
+    task = state.repo.get_creation_task('ws', state.task.id)
+    values = {'base_version_id': base.id, 'removed_ranges_ms': [[1000, 1500]]}
+    command = metadata_edit_command(task, state.identity, 'RemoveSilence', values)
+    intent, proposal = make_metadata_proposal(command, ['clip:clip'], '采用既有固定停顿范围', values)
+    state.repo.create_edit_intent(intent)
+    state.repo.create_edit_proposal(proposal)
+    source_identity = (state.source.stat().st_size, state.source.stat().st_mtime_ns)
+    before = len(state.repo.list_timeline_versions('ws', task.id))
+    case = LinkedTimelineEditUseCase(state.repo, state.case)
+    result = case.confirm_remove_silence(task, proposal)
+    fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
+    current = fresh.get_creation_task('ws', task.id)
+    version = fresh.get_timeline_version('ws', current.current_timeline_version_id)
+    operations = fresh.list_edit_operations('ws', task.id)
+    tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
+    assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
+    assert len(operations) == 1 and operations[0].proposal_id == proposal.id
+    assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id
+    assert version.parent_version_id == base.id and version.sequence == 3
+    assert result.montage.duration_seconds == 3.5
+    assert sum(clip.timeline_end_seconds - clip.timeline_start_seconds for clip in result.montage.clips) == 3.5
+    assert version.snapshot['montage']['duration_seconds'] == 3.5
+    assert tracks and max(cue.end_seconds for track in tracks for cue in track.cues) <= 3.5
+    assert result.montage.audio_timeline.tracks == []
+    assert result.montage.narration_audio_path == state.plan.narration_audio_path
+    assert fresh.get_timeline_version('ws', base.id).snapshot == base.snapshot
+    assert fresh.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert source_identity == (state.source.stat().st_size, state.source.stat().st_mtime_ns)
+    assert len(fresh.list_edit_operations('ws', task.id)) == 1
+    evidence = os.environ.get('LEGACY_CONFIRM_EVIDENCE_DIR')
+    if evidence:
+        Path(evidence, 'SILENCE_NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,
+            'operation': operations[0].id, 'base_version': base.id, 'result_version': version.id,
+            'versions_added': 1, 'operations': 1, 'fixed_ranges_ms': values['removed_ranges_ms'],
+            'result_duration_seconds': 3.5, 'graph': 'declared silent editorial fixture',
+            'fresh_readback': True, 'detection_native_ASR_calls': 0}, indent=2))
