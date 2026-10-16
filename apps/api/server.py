@@ -85,6 +85,9 @@ def main() -> None:
     if sys.argv[1:2] == ["--grant-exec"]:
         _exec_granted_command(sys.argv[2:])
         return
+    if sys.argv[1:2] == ["--cover-worker"]:
+        from app.cover_generation import cover_worker_main
+        raise SystemExit(cover_worker_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--quality-worker"]:
         from app.quality_worker import main as quality_worker_main
         raise SystemExit(quality_worker_main(sys.argv[2:]))

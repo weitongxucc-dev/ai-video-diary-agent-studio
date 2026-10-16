@@ -7,6 +7,7 @@ is deliberately unsupported until an owner can measure and release it.
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import logging
 import math
@@ -29,6 +30,38 @@ from app.quality_worker_runtime import QualityBudget, budget_identity
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CoverBudget:
+    max_input_bytes: int
+    max_output_bytes: int
+    max_receipt_bytes: int
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    decoder_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        for name, value in vars(self).items():
+            if name.endswith("seconds"):
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Cover timing limits must be explicitly positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Cover limits must be explicitly positive integers")
+        if (self.additional_memory_bytes < self.max_process_rss_bytes
+                or self.max_process_threads < self.decoder_threads
+                or self.runtime_sample_seconds > .25):
+            raise ValueError("Cover needs reserved group memory and bounded thread sampling")
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -305,6 +338,7 @@ class HostBudget:
     observation: ObservationBudget | None = None
     clip_preview: CpuRenderBudget | None = None
     quality: QualityBudget | None = None
+    cover: CoverBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -712,7 +746,28 @@ class HostResourceProbe:
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
-        if kind == "quality_check":
+        if kind == "cover_generation":
+            cover = self.budget.cover
+            if cover is None or resources.get("execution_mode") != "isolated_cover_python":
+                return decision(None, "cover_budget_or_execution_mode_unavailable")
+            if resources.get("budget_digest") != cover.digest:
+                return decision(False, "cover_profile_changed")
+            bounds = {"input_bytes": cover.max_input_bytes, "timeout_seconds": cover.max_timeout_seconds,
+                      "threads": cover.decoder_threads, "max_output_bytes": cover.max_output_bytes,
+                      "max_receipt_bytes": cover.max_receipt_bytes,
+                      "max_stdout_bytes": cover.max_stdout_bytes, "max_stderr_bytes": cover.max_stderr_bytes}
+            for name, cap in bounds.items():
+                value = resources.get(name)
+                if type(value) not in ({int, float} if name == "timeout_seconds" else {int}) or not math.isfinite(value) or value <= 0:
+                    return decision(None, "cover_resource_fields_invalid")
+                if value > cap:
+                    return decision(False, "declared_resources_exceed_budget")
+            if resources["input_bytes"] > self.budget.max_unit_input_bytes:
+                return decision(False, "declared_resources_exceed_budget")
+            checks["cover_budget"] = {"limits": asdict(cover)}
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else cover.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes + cover.additional_disk_bytes + cover.max_output_bytes + cover.max_receipt_bytes
+        elif kind == "quality_check":
             quality = self.budget.quality
             if quality is None or resources.get("execution_mode") != "isolated_quality_python":
                 return decision(None, "quality_budget_or_execution_mode_unavailable")
@@ -950,7 +1005,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check"}
+            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check", "cover_generation"}
             before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
@@ -1054,8 +1109,9 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check"}
-                and (self.budget.quality if resources["kind"] == "quality_check" else
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation"}
+                and (self.budget.cover if resources["kind"] == "cover_generation" else
+                     self.budget.quality if resources["kind"] == "quality_check" else
                      self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
             key = (grant.request_id, grant.generation)
             if key != self._running_io_key:
@@ -1075,6 +1131,12 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "cover_generation":
+            cover = self.budget.cover
+            if cover is None or resources.get("budget_digest") != cover.digest:
+                raise RecoveryBlocked("封面独立进程预算尚未标定或已经变化")
+            return SceneRuntimeLimits(cover.max_process_rss_bytes, cover.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, cover.runtime_sample_seconds)
         if resources.get("kind") == "quality_check":
             quality = self.budget.quality
             if quality is None or resources.get("budget_digest") != budget_identity(quality):
@@ -1144,7 +1206,7 @@ class HostResourceProbe:
         # DeviceScheduler before this per-unit resource lease is released.
         if resources is None:
             return None
-        if resources.get("kind") == "quality_check":
+        if resources.get("kind") in {"quality_check", "cover_generation"}:
             return True  # Scheduler separately proves the registered Python/native group exited.
         if resources.get("kind") in self._SUPPORTED_KINDS:
             return True

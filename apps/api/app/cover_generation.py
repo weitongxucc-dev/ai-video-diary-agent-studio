@@ -116,9 +116,15 @@ def unconfigured_image_generation_capability() -> ImageGenerationCapability:
 class CoverGenerationService:
     """Generate immutable frame-based covers below one controlled output root."""
 
-    def __init__(self, output_root: str | Path) -> None:
+    def __init__(self, output_root: str | Path, *, decoder_threads: int | None = None, temporary_root: str | Path | None = None) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
         self.artifact_store = ArtifactStore(self.output_root)
+        if decoder_threads is not None and (type(decoder_threads) is not int or decoder_threads <= 0):
+            raise ValueError("封面解码线程必须由独立profile显式提供")
+        self.decoder_threads = decoder_threads
+        self.temporary_root = self.output_root if temporary_root is None else Path(temporary_root).resolve()
+        if not self.temporary_root.is_relative_to(self.output_root):
+            raise ValueError("封面临时目录必须位于受控输出根内")
 
     def generate(self, request: CoverGenerationRequest) -> GeneratedCover:
         source = self._validated_source(request.source_video_path)
@@ -126,7 +132,7 @@ class CoverGenerationService:
         title = _normalized_title(request.title)
         size = canvas_size(request.aspect_ratio)
         request.safe_area.validate(size)
-        source_summary = self._probe_source(source)
+        source_summary = self._probe_source(source, threads=self.decoder_threads)
         timestamp = float(request.frame_time_seconds)
         if timestamp >= source_summary[0]:
             raise ValueError("封面选帧时间必须早于成片结束时间")
@@ -137,12 +143,12 @@ class CoverGenerationService:
 
         with TemporaryDirectory(
             prefix=".cover-generation-",
-            dir=self.output_root,
+            dir=self.temporary_root,
         ) as temporary_directory:
             temporary_root = Path(temporary_directory)
             selected_frame = temporary_root / "selected-frame.png"
             composed_cover = temporary_root / f"cover.{output_format}"
-            self._extract_frame(source, timestamp, selected_frame, size=size)
+            self._extract_frame(source, timestamp, selected_frame, size=size, threads=self.decoder_threads)
             font, font_path = _layout_cover(
                 selected_frame,
                 composed_cover,
@@ -235,7 +241,7 @@ class CoverGenerationService:
         raise ValueError("封面产物只支持 PNG 或 JPEG")
 
     @staticmethod
-    def _probe_source(source: Path) -> tuple[float, int, int]:
+    def _probe_source(source: Path, *, threads: int | None = None) -> tuple[float, int, int]:
         command = [
             "ffprobe",
             "-v",
@@ -248,6 +254,8 @@ class CoverGenerationService:
             "json",
             str(source),
         ]
+        if threads is not None:
+            command[-1:-1] = ["-threads", str(threads)]
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode:
             raise CoverGenerationError(
@@ -268,7 +276,7 @@ class CoverGenerationService:
         return duration, width, height
 
     @staticmethod
-    def _extract_frame(source: Path, timestamp: float, output_path: Path, *, size=(COVER_WIDTH,COVER_HEIGHT)) -> None:
+    def _extract_frame(source: Path, timestamp: float, output_path: Path, *, size=(COVER_WIDTH,COVER_HEIGHT), threads: int | None = None) -> None:
         command = [
             "ffmpeg",
             "-hide_banner",
@@ -288,6 +296,9 @@ class CoverGenerationService:
             ),
             str(output_path),
         ]
+        if threads is not None:
+            command[1:1] = ["-threads", str(threads), "-filter_threads", str(threads)]
+            command[-1:-1] = ["-threads", str(threads)]
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode:
             raise CoverGenerationError(
@@ -468,3 +479,36 @@ def _tool_version(tool: str) -> str:
         text=True,
     )
     return completed.stdout.splitlines()[0].strip()
+
+
+def cover_worker_main(arguments: list[str]) -> int:
+    """Fixed private entry: all original generation and hashing stays in this PGID."""
+    from datetime import datetime, timezone
+    from app.creation.cover_use_case import CoverCommand, CoverStagedReceipt, file_identity
+    if len(arguments) != 2:
+        raise ValueError("cover worker requires its sealed request and output root")
+    request_path, output_root = map(Path, arguments)
+    control = json.loads(request_path.read_bytes())
+    command = CoverCommand.from_payload(control["command"])
+    store = ArtifactStore(output_root)
+    source = store.resolve_file(command.operation["source_video_ref"])
+    if file_identity(source) != command.source_identity or _sha256(source) != command.source_sha256:
+        raise ValueError("封面源文件已偏离原登记摘要或封存身份")
+    job_id = control["job_id"]
+    generated = CoverGenerationService(output_root, decoder_threads=control["threads"],
+        temporary_root=request_path.parent).generate(
+        CoverGenerationRequest(source, f"artifacts/{command.task_id}/{job_id}/cover.png",
+            float(command.operation["frame_time_seconds"]), command.operation["title"],
+            aspect_ratio=command.operation.get("aspect_ratio", "9:16"),
+            title_position=command.operation["title_position"]))
+    if (file_identity(source) != command.source_identity
+            or generated.evidence.input_digest != command.source_sha256
+            or generated.evidence.output_size_bytes > control["max_output_bytes"]):
+        raise ValueError("封面生成源身份变化或输出超出原profile")
+    receipt = CoverStagedReceipt(command, job_id, generated.evidence, datetime.now(timezone.utc),
+                                file_identity(Path(generated.output_path)))
+    encoded = json.dumps(receipt.payload(), ensure_ascii=False, sort_keys=True).encode()
+    if len(encoded) > control["max_receipt_bytes"]:
+        raise ValueError("封面结果回执超出原profile")
+    store.publish_bytes(f"artifacts/{command.task_id}/{job_id}/cover-receipt.json", encoded)
+    return 0

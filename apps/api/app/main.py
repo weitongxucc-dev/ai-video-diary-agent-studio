@@ -138,11 +138,11 @@ from app.member_permits import (
     observation_budget_from_env,
     clip_preview_budget_from_env,
     quality_budget_from_env,
+    cover_budget_from_env,
 )
 from app.visual_understanding import LocalVisualUnderstanding
+from app.creation.cover_use_case import CoverUseCase, CoverUnavailable, CoverUnresolved, COVER_JOB_KIND, COVER_OPERATION
 from app.cover_generation import (
-    CoverGenerationRequest,
-    CoverGenerationService,
     CoverSafeArea,
     unconfigured_image_generation_capability,
 )
@@ -8063,6 +8063,50 @@ def _narration_stage_use_case(repository=None,*,narration_budget=None):
     return NarrationStageUseCase(repository,narration_generator,_picture_preview_components(repository)[1],narration_budget)
 
 
+def _cover_use_case(repository=None, *, budget=None):
+    repo = production_repo if repository is None else repository
+    return CoverUseCase(repo, artifact_store, _picture_preview_components(repo)[1],
+        verify_identity=_verify_creation_identity, output_root=settings.video_output_path,
+        budget=cover_budget_from_env() if budget is None else budget,
+        on_settled=_wake_assistant_continuations)
+
+
+def _cover_confirm_response(result):
+    montage = creation_task_montage_plan_from_payload(result.version.snapshot["montage"])
+    return CreationTaskEditConfirmResponse(operation=asdict(result.operation),
+        montage=_creation_task_montage_response(montage), narration=None)
+
+
+def _confirm_cover_response(task, proposal, request, *, request_id=None):
+    _require_automation_task_open(request, task.workspace_id, task.id)
+    actor = _require_permit_actor(request, task.workspace_id)
+    try:
+        owner = _cover_use_case()
+        previous = owner.original_result(actor, task.id, proposal.id)
+        if previous is not None:
+            return _cover_confirm_response(previous)
+        owner.require_budget()
+        source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get('request_source')
+        if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
+            raise ValueError('预览后的源文件或片段修订已变化，请重新预览')
+        runtime = _creation_runtime()
+        registered = runtime.registrations["creation_job"].owner.cover
+        return _cover_confirm_response(registered.submit(runtime, actor, task.id, proposal.id,
+                                                         request_id=request_id))
+    except CoverUnavailable as exc:
+        raise _topic_failure_response(status_code=503, error='cover_budget_unavailable', reason=str(exc),
+            impact='当前时间线和已有成片保持不变。', repair_action='先完成独立封面资源标定。', retryable=False) from exc
+    except CoverUnresolved as exc:
+        raise HTTPException(status_code=503, detail={'error': 'cover_generation_unknown',
+            'reason': str(exc), 'job_id': exc.job.id, 'status': exc.job.status,
+            'request_id': request_id, 'impact': '当前时间线保持不变，未伪造采用或释放。',
+            'repair_action': '查询原封面请求与设备许可，续交原固定回执，不重复生成。', 'retryable': False}) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def _metadata_edit_use_case():
     return _picture_preview_components()[1]
 
@@ -8834,6 +8878,11 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
         {"proposal_id": proposal.id, "base_version_id": base, "input_digest": digest,
          "request": payload.model_dump(mode="json", exclude_unset=True)})
     previous = _read_edit_request_result(task, event_id)
+    if proposal.operation.get("operation_type") == COVER_OPERATION:
+        result = _confirm_cover_response(task, proposal, request, request_id=payload.request_id)
+        _save_edit_request_result(task, event_id, result)
+        _wake_assistant_continuations()
+        return result
     if is_subtitle_edit(proposal.operation.get("operation_type"), proposal.operation.get("payload", {})):
         try:
             outcome = _subtitle_edit_use_case().read_result(_subtitle_proposal_command(task, proposal, request), proposal.id)
@@ -8873,6 +8922,8 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
         proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='creation task edit proposal not found') from exc
+    if proposal.task_id == task_id and proposal.operation.get('operation_type') == COVER_OPERATION:
+        return _confirm_cover_response(task, proposal, request)
     if proposal.task_id != task_id or proposal.status != 'proposed':
         raise HTTPException(status_code=409, detail='creation task edit proposal is not confirmable')
     if proposal.operation.get('operation_type') in LINKED_EDIT_OPERATIONS:
@@ -8923,39 +8974,6 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _metadata_edit_response(outcome)
-    if operation_type == 'GenerateCoverFromFrame' and isinstance(operation_payload, dict):
-        _require_automation_task_open(request, workspace_id, task_id)
-        title_position = operation_payload.get('title_position', 'bottom')
-        operation_payload = {**operation_payload, 'title_position': title_position}
-        base_version_id = operation_payload.get('base_version_id')
-        source_video_ref = operation_payload.get('source_video_ref')
-        title = operation_payload.get('title')
-        frame_time_seconds = operation_payload.get('frame_time_seconds')
-        if not isinstance(base_version_id, str) or not isinstance(source_video_ref, str) or (not isinstance(title, str)) or (not isinstance(frame_time_seconds, (int, float))):
-            raise HTTPException(status_code=409, detail='invalid cover generation operation')
-        if task.current_timeline_version_id != base_version_id:
-            raise HTTPException(status_code=409, detail='creation task edit proposal is stale')
-        base_version = production_repo.get_timeline_version(workspace_id, base_version_id)
-        job = production_repo.create_job_run(JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, kind='cover_frame_generation', idempotency_key=f'cover:{proposal.id}', input_digest=hashlib.sha256(json.dumps(operation_payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()))
-        running = production_repo.claim_job_run(workspace_id, job.id)
-        cover_ref = f'artifacts/{task.id}/{job.id}/cover.png'
-        try:
-            generated = CoverGenerationService(settings.video_output_path).generate(CoverGenerationRequest(source_video_path=artifact_store.resolve_file(source_video_ref), output_ref=cover_ref, frame_time_seconds=float(frame_time_seconds), title=title, safe_area=CoverSafeArea(), aspect_ratio=operation_payload.get('aspect_ratio', '9:16'), title_position=title_position))
-            evidence = generated.evidence
-            artifact = production_repo.create_artifact_record(ArtifactRecord(id=f'artifact_{job.id}_cover', workspace_id=workspace_id, task_id=task.id, kind='cover_image', logical_ref=evidence.output_ref, sha256=evidence.output_sha256, size_bytes=evidence.output_size_bytes, producer_job_id=job.id, input_refs=[source_video_ref]))
-            transform = production_repo.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task.id, job_id=job.id, transform_type='cover_from_frame', input_digest=job.input_digest, input_refs=[source_video_ref], output_refs=[artifact.logical_ref], engine=f'{evidence.engine}+{evidence.layout_engine}', parameters=evidence.parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
-            production_repo.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_cover', workspace_id=workspace_id, task_id=task.id, upstream_ref=source_video_ref, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
-            production_repo.finish_job_run(workspace_id, job.id, status='succeeded', output_refs=[artifact.logical_ref])
-        except Exception as exc:
-            try:
-                production_repo.finish_job_run(workspace_id, job.id, status='failed', failure_reason=str(exc) or type(exc).__name__, impact='当前时间线和已有成片保持不变。', repair_action='检查成片、选帧时间与 FFmpeg 后重试。')
-            except (KeyError, ValueError):
-                pass
-            raise _topic_failure_response(status_code=503, error='cover_generation_failed', reason='封面没有生成可信图片产物。', impact='当前时间线和已有成片保持不变。', repair_action=str(exc), retryable=True) from exc
-        result_version_id = f'timeline_{uuid4().hex}'
-        tracks = [_clone_subtitle_track(track, timeline_version_id=result_version_id) for track in _current_subtitle_tracks(workspace_id, task, current_version=base_version)]
-        cover = CoverAsset(id=f'cover_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, timeline_version_id=result_version_id, source_video_ref=source_video_ref, frame_time_seconds=float(frame_time_seconds), title=title, safe_area={key: float(value) for key, value in asdict(CoverSafeArea()).items()}, layout={'title_position': title_position, 'text_align': 'center'}, generation_method='video_frame', model_or_engine=f'{generated.evidence.engine}+{generated.evidence.layout_engine}', artifact_ref=generated.evidence.output_ref, transform_id=transform.id, status='valid')
-        return _persist_subtitle_cover_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, result_version_id=result_version_id, operation_type='GenerateCoverFromFrame', operation_payload=dict(operation_payload), subtitle_tracks=tracks, cover_asset=cover)
     if operation_type in {'ChangePersonSegment', 'RegeneratePersonRender'} and isinstance(operation_payload, dict):
         _require_automation_task_open(request, workspace_id, task_id)
         return _apply_person_segment_edit(workspace_id, task, proposal, request)
@@ -12942,7 +12960,12 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
         job = _creation_job_for_request(workspace_id, request_id)
         if job is not None:
             try:
-                if job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND}:
+                if job.kind == COVER_JOB_KIND:
+                    if detail["state"] == "cancelled" and job.status in {"queued", "interrupted"}:
+                        production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
+                            failure_reason="user_cancelled", impact="当前时间线保持不变。",
+                            repair_action="查询原封面请求后重新发起。")
+                elif job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND}:
                     if job.status in {"queued", "interrupted", "running"}:
                         production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
                             failure_reason="user_cancelled", impact="目标片段和当前版本保持不变。",
@@ -13024,7 +13047,8 @@ def _build_device_components(*, repository: ProductionRepository):
     budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),
                      observation=observation_budget_from_env())
     quality = _quality_inspection_use_case(repository)
-    budget = replace(budget, quality=quality.budget)
+    cover = _cover_use_case(repository)
+    budget = replace(budget, quality=quality.budget, cover=cover.budget)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
@@ -13042,6 +13066,7 @@ def _build_device_components(*, repository: ProductionRepository):
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
+            cover=cover,
             person_stage=_person_stage_use_case(repository),
             montage_stage=_montage_stage_use_case(repository),
             narration_stage=_narration_stage_use_case(repository,narration_budget=narration_budget),

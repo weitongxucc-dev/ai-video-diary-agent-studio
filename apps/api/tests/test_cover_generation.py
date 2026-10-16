@@ -278,3 +278,145 @@ def test_ai_image_generation_is_explicitly_unavailable():
     assert "ImageGenerationProvider" in capability.failure_reason
     assert "不提供 AI 生图" in capability.impact
     assert "验真" in capability.remediation
+
+
+def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp_path, monkeypatch):
+    """Metadata-only worker/process ports; no native, host, model or main import."""
+    import json
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from app.artifact_store import ArtifactStore
+    from app.cover_generation import CoverGenerationEvidence
+    from app.creation.contracts import ArtifactRecord, EditIntent, EditProposal, JobRun, TimelineVersion
+    from app.creation.cover_use_case import (CoverCommand, CoverStagedReceipt, CoverUnavailable,
+        CoverUseCase, file_identity)
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation_execution import CreationExecutionActor
+    from app.device_runtime import build_device_runtime
+    from app.device_scheduler import ProcessIdentity
+    from app.granted_subprocess import GrantedCommandResult
+    from app.host_resource_probes import CoverBudget, HostResourceDecision
+    from app.member_permits import creation_job_registration
+    from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
+    from app.production import CreationPlan, CreationTask, ProductionRepository
+
+    assert "app.main" not in sys.modules
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("metadata node invoked native"))
+    root = tmp_path / "output"
+    store = ArtifactStore(root)
+    library = tmp_path / "library"
+    library.mkdir()
+    repo = ProductionRepository(tmp_path / "cover.sqlite3", library)
+    plan = CreationPlan("plan", "workspace", "制作封面", "cover", 1, "zh-CN", "9:16", 15,
+        [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
+    task = CreationTask("task", "workspace", plan.id, plan.name, "declared-cover-fixture")
+    repo.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    montage = CreationTaskMontagePlan("montage", "workspace", task.id, "script", "cover", "rendered", [], [], 1.0, 0)
+    base = repo.create_timeline_version(TimelineVersion("base", "workspace", task.id, None, 1,
+        {"montage": creation_task_montage_plan_to_payload(montage), "subtitle_track_ids": []}, None))
+    published = store.publish_bytes("artifacts/task/source/current.mp4", b"declared source metadata")
+    source_job = repo.create_job_run(JobRun("source", "workspace", task.id, "declared_render_metadata",
+        "fixture:source", published.sha256))
+    repo.claim_job_run("workspace", source_job.id)
+    repo.create_artifact_record(ArtifactRecord("source-artifact", "workspace", task.id, "rendered_video",
+        published.logical_ref, published.sha256, published.size_bytes, source_job.id, []))
+    repo.finish_job_run("workspace", source_job.id, status="succeeded", output_refs=[published.logical_ref])
+    intent = repo.create_edit_intent(EditIntent("intent", "workspace", task.id, "选帧封面", "review", [], None,
+        "GenerateCoverFromFrame", {}, {}, 1.0, "proposed"))
+    operation = {"base_version_id": base.id, "source_video_ref": published.logical_ref,
+                 "frame_time_seconds": 0.25, "title": " 声明  封面 ", "title_position": "bottom", "aspect_ratio": "9:16"}
+    proposal = repo.create_edit_proposal(EditProposal("proposal", "workspace", task.id, intent.id, "封面", [published.logical_ref],
+        {"operation_type": "GenerateCoverFromFrame", "payload": operation}, [], {}, []))
+    actor = CreationExecutionActor("workspace", "member")
+    verify = lambda value: "ready" if value == actor else "unauthorized"
+    metadata = MetadataEditUseCase(repo, store, output_root=root, audio_service=None)
+    unconfigured = CoverUseCase(repo, store, metadata, verify_identity=verify, output_root=root)
+    with pytest.raises(CoverUnavailable):
+        unconfigured.submit(None, actor, task.id, proposal.id, request_id="original-request")
+    assert len(repo.list_job_runs("workspace", task.id)) == 1
+
+    # Explicit declaration for this metadata fixture; these are not host measurements.
+    budget = CoverBudget(1024, 4096, 32768, 1024, 1024, 1, 10.0, 1048576, 4, .01, 1048576, 65536)
+    owner = CoverUseCase(repo, store, metadata, verify_identity=verify, output_root=root, budget=budget)
+    registration = creation_job_registration(repo, render_action=lambda *a: pytest.fail("render invoked"),
+        render_is_valid=lambda *a: False, verify_identity=verify, cover=owner)
+
+    class DeclaredResources:
+        def admit(self, request):
+            assert request.resources["kind"] == "cover_generation"
+            return HostResourceDecision(True, request.resources, {"declared_metadata": {"passed": True}})
+        def continue_unit(self, grant):
+            return True
+        def released(self, grant):
+            return True
+
+    class DeclaredProcesses:
+        active = False
+        def current(self):
+            return ProcessIdentity(73001, "declared-holder", "declared-boot")
+        def children_released(self, children):
+            return not self.active
+        def recovery_state(self, holder, children):
+            return "owned" if self.active else "released"
+
+    processes = DeclaredProcesses()
+    access = SimpleNamespace(verify_session=lambda *a: pytest.fail("session invoked"),
+                             can_view_device_summary=lambda *a: False)
+    runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
+        device_access=access, registrations={"creation_job": registration}, resources=DeclaredResources(),
+        processes=processes, activity_source_reliable=True, poll_interval_seconds=budget.runtime_sample_seconds)
+    # Wake drives the actual public one-unit dispatcher synchronously in this fixture.
+    monkeypatch.setattr(runtime, "wake", runtime.run_once)
+    phase = {"name": "parent"}
+    hashes = []
+    original_describe = ArtifactStore._describe
+    def audited_describe(logical_ref, path):
+        if logical_ref.endswith(("current.mp4", "cover.png")):
+            hashes.append((logical_ref, phase["name"]))
+            assert phase["name"] == "declared_worker", "parent performed a full media hash"
+        return original_describe(logical_ref, path)
+    monkeypatch.setattr(ArtifactStore, "_describe", staticmethod(audited_describe))
+    calls = []
+    def declared_worker(scheduler, grant, argv, **limits):
+        calls.append(grant.request_id)
+        assert argv[-3] == "--cover-worker"
+        assert limits["max_output_file_bytes"] == budget.additional_disk_bytes + budget.max_output_bytes + budget.max_receipt_bytes
+        scheduler.register_child(grant, ProcessIdentity(73002, "declared-child", "declared-boot"))
+        processes.active = True
+        control = json.loads(Path(argv[-2]).read_bytes())
+        command = CoverCommand.from_payload(control["command"])
+        job = repo.get_job_run(command.workspace_id, control["job_id"])
+        phase["name"] = "declared_worker"
+        assert hashlib.sha256(store.resolve_file(published.logical_ref).read_bytes()).hexdigest() == command.source_sha256
+        output = store.publish_bytes(owner.output_ref(job), b"declared image metadata; not a physical PNG")
+        evidence = CoverGenerationEvidence(published.logical_ref, published.sha256, published.size_bytes,
+            1.0, 2, 2, "ffmpeg", "declared", "Pillow", "declared", "declared", "declared-font",
+            {"frame_time_seconds": .25, "title": "声明 封面", "safe_area": asdict(CoverSafeArea()),
+             "title_position": "bottom", "canvas": {"width": 1080, "height": 1920}},
+            output.logical_ref, output.sha256, output.size_bytes, 1080, 1920, "png")
+        receipt = CoverStagedReceipt(command, job.id, evidence, datetime.now(timezone.utc),
+            file_identity(store.resolve_file(output.logical_ref)))
+        store.publish_bytes(owner.receipt_ref(job), json.dumps(receipt.payload(), ensure_ascii=False).encode())
+        phase["name"] = "parent"
+        processes.active = False
+        return GrantedCommandResult(0, b"", b"")
+    monkeypatch.setattr("app.granted_subprocess.run_granted_command", declared_worker)
+    try:
+        result = owner.submit(runtime, actor, task.id, proposal.id, request_id="original-request")
+        again = owner.submit(runtime, actor, task.id, proposal.id, request_id="original-request")
+        assert result.operation.id == again.operation.id
+        assert result.version.id == again.version.id
+        assert repo.get_creation_task("workspace", task.id).current_timeline_version_id == result.version.id
+        assert result.job.status == "succeeded" and len(calls) == 1
+        assert result.job.idempotency_key == "cover:proposal"
+        assert result.job.input_digest == hashlib.sha256(json.dumps(operation, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        assert len(repo.list_job_runs("workspace", task.id)) == 2
+        assert len(repo.list_edit_operations("workspace", task.id)) == 1
+        states = repo.list_creation_job_request_states("workspace", result.job.id)
+        assert len(states) == 1 and states[0]["id"] == calls[0] and states[0]["state"] == "done"
+        runtime.scheduler.reconcile_released()
+        assert hashes and all(label == "declared_worker" for _, label in hashes)
+        assert "app.main" not in sys.modules
+    finally:
+        runtime.stop(timeout_seconds=1)

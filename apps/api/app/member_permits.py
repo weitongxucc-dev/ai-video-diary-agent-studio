@@ -42,6 +42,7 @@ from app.host_resource_probes import (
     MediaScriptBudget,
     ObservationBudget,
     QualityBudget,
+    CoverBudget,
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
@@ -163,13 +164,13 @@ def cpu_render_limits_from_budget(
     )
 
 
-def creation_job_registration(repository, *, render_action: Callable[[str, str, object], object], render_is_valid: Callable[[str, str, object], bool], cpu_render_budget: CpuRenderBudget | None=None, verify_identity: Callable[[CreationExecutionActor], str] | None=None, narration_budget: NarrationBudget | None=None, montage_budget: MontageBudget | None=None, montage_stage=None, presenter_budget: PresenterBudget | None=None, presenter_cpu_render_budget: CpuRenderBudget | None=None, presenter_models: dict | None=None, resolve_presenter_output=None, task_media=None, graphic_source_facts=None, audio_mix_facts=None, narration_stage=None, person_stage=None) -> OwnerRegistration:
+def creation_job_registration(repository, *, render_action: Callable[[str, str, object], object], render_is_valid: Callable[[str, str, object], bool], cpu_render_budget: CpuRenderBudget | None=None, verify_identity: Callable[[CreationExecutionActor], str] | None=None, narration_budget: NarrationBudget | None=None, montage_budget: MontageBudget | None=None, montage_stage=None, presenter_budget: PresenterBudget | None=None, presenter_cpu_render_budget: CpuRenderBudget | None=None, presenter_models: dict | None=None, resolve_presenter_output=None, task_media=None, graphic_source_facts=None, audio_mix_facts=None, narration_stage=None, person_stage=None, cover=None) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
     ``cpu_render_budget`` 为 ``None`` 表示这台机器还没有标定 CPU 成片预算；
     成片阶段会因此拒绝准入，而不是被放行。
     """
-    return OwnerRegistration(CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget), verify_identity=verify_identity, narration_budget=narration_budget, montage_budget=montage_budget, presenter_budget=presenter_budget, presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget), presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media, graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts), CreationJobUnitExecutor(repository, render_action=render_action, render_is_valid=render_is_valid, montage_stage=montage_stage, task_media=task_media, narration_stage=narration_stage, person_stage=person_stage))
+    return OwnerRegistration(CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget), verify_identity=verify_identity, narration_budget=narration_budget, montage_budget=montage_budget, presenter_budget=presenter_budget, presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget), presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media, graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts, cover=cover), CreationJobUnitExecutor(repository, render_action=render_action, render_is_valid=render_is_valid, montage_stage=montage_stage, task_media=task_media, narration_stage=narration_stage, person_stage=person_stage, cover=cover))
 
 
 #: 整机预算的标定项。这些值必须由这台设备的标定结果显式给出，没有内置默认值。
@@ -436,5 +437,20 @@ def quality_budget_from_env(env: Mapping[str, str] | None = None) -> QualityBudg
         return QualityBudget(**{field: environment[name] if field.endswith(("_path", "_sha256"))
             else float(environment[name]) if field.endswith("seconds") else int(environment[name])
             for field, name in names.items()})
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(str(exc)) from None
+
+
+def cover_budget_from_env(env: Mapping[str, str] | None = None) -> CoverBudget | None:
+    environment = os.environ if env is None else env
+    names = {item.name: "DEVICE_COVER_" + item.name.upper() for item in fields(CoverBudget)}
+    if not any(environment.get(name, "").strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not environment.get(name, "").strip()]
+    if missing:
+        raise HostBudgetUncalibrated("封面独立预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        return CoverBudget(**{field: float(environment[name]) if field.endswith("seconds") else int(environment[name])
+                              for field, name in names.items()})
     except ValueError as exc:
         raise HostBudgetUncalibrated(str(exc)) from None

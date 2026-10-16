@@ -579,7 +579,7 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None, audio_mix_facts=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None, cover=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -592,6 +592,7 @@ class CreationJobOwnerVerifier:
         self.task_media = task_media
         self.graphic_source_facts = graphic_source_facts
         self.audio_mix_facts = audio_mix_facts
+        self.cover = cover
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None):
         # Person composition never inherits the pure-material caps.
@@ -674,6 +675,8 @@ class CreationJobOwnerVerifier:
         return job, task, event, script, plan
 
     def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
+        if intent.unit_key.startswith("cover:") and self.cover is not None:
+            return self.cover.verify_submission(intent, actor)
         if intent.unit_key.startswith("task_media:") and self.task_media is not None:
             return self.task_media.verify_submission(intent, actor)
         if (not isinstance(actor, CreationExecutionActor) or not actor.member_id
@@ -762,6 +765,8 @@ class CreationJobOwnerVerifier:
         return "ready"
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
+        if request.unit_key.startswith("cover:") and self.cover is not None:
+            return self.cover.check_current(request, conn)
         if request.unit_key.startswith("task_media:") and self.task_media is not None:
             return self.task_media.check_current(request, conn)
         if (request.owner_type != DEVICE_OWNER_TYPE
@@ -814,6 +819,8 @@ class CreationJobOwnerVerifier:
             self.verify_identity is None or self.verify_identity(actor) == "ready")
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection) -> str:
+        if request.unit_key.startswith("cover:") and self.cover is not None:
+            raise PermissionError("封面只能续交原请求的固定回执，不能盲重试生成")
         if request.unit_key.startswith("task_media:") and self.task_media is not None:
             return self.task_media.verify_retry(request, actor, reason, conn)
         raise PermissionError("请通过已确认任务的继续制作入口重试")
@@ -911,12 +918,13 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
         self.montage_stage = montage_stage
         self.task_media = task_media
+        self.cover = cover
         self.narration_stage = narration_stage
         self.person_stage = person_stage
         self._cancellations: dict[str, threading.Event] = {}
@@ -1257,6 +1265,8 @@ class CreationJobUnitExecutor:
                 self._cancellations.pop(grant.request_id, None)
 
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("cover:") and self.cover is not None:
+            return self.cover.execute(grant, scheduler, self)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("task_media:") and self.task_media is not None:
             return self.task_media.execute(grant, scheduler, self)
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
