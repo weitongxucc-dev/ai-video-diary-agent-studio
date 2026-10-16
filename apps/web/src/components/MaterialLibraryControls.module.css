@@ -348,3 +348,13 @@
 .tagSuggestions button:hover { background: var(--surface-2); }
 .tagSuggestions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tagSuggestions button:disabled { opacity: .5; cursor: wait; }
+
+.referenceEntry { position:relative; min-width:0; }
+.workspace .results .referenceEntry > .materialCard { width:100%; height:100%; }
+.referenceButton, .inspector :global(.library-segments) .referenceButton { position:absolute; top:8px; right:8px; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; min-height:32px; padding:0; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-2); cursor:pointer; }
+.referenceButton:hover { color:var(--text-1); background:var(--surface-2); }
+.referenceButton:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.workspace .objectList .referenceButton { top:12px; }
+.workspace .objectList .referenceEntry:has(.referenceButton) .materialCard { padding-right:48px; }
+.inspector :global(.library-segments) .referenceEntry:has(.referenceButton) > button:first-child { padding-right:44px; }
+.inspector :global(.library-segments) .referenceButton { top:12px; right:0; }

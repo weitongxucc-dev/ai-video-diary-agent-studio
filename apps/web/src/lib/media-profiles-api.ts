@@ -59,6 +59,32 @@ export type VoiceReferenceImport = {
   reference: string; file_name: string; size_bytes: number; duration_seconds: number;
 };
 
+export type VoiceSamplingTask = {
+  id: string; workspace_id: string; owner_user_id: string; request_id: string;
+  purpose: "voice_profile"; display_name: string; language: "zh" | "en" | "zh-en";
+  reference_text: string; text_version: string; status: "awaiting_sample" | "received";
+  created_at: string; updated_at: string; received_at: string | null;
+  source_device: "desktop" | "import" | "mobile" | null;
+  submission_request_id: string | null; audio_sha256: string | null;
+  duration_seconds: number | null; size_bytes: number | null;
+  voice_profile_id: string | null; voice_version: string | null;
+  last_error: string | null; failed_request_id: string | null;
+};
+
+export const listVoiceSamplingTasks = () => request<{ items: VoiceSamplingTask[]; total_count: number }>("/api/media/voice-sampling-tasks");
+export const getVoiceSamplingTask = (id: string) => request<VoiceSamplingTask>(`/api/media/voice-sampling-tasks/${encodeURIComponent(id)}`);
+export const createVoiceSamplingTask = (input: { request_id: string; display_name: string; language: VoiceSamplingTask["language"]; purpose: "voice_profile" }) =>
+  request<VoiceSamplingTask>("/api/media/voice-sampling-tasks", { method: "POST", body: JSON.stringify(input) });
+export const submitVoiceSample = (task: VoiceSamplingTask, input: { request_id: string; source_device: "desktop" | "import"; audio: Blob }) => {
+  const body = new FormData();
+  body.append("audio", input.audio, "voice-sample.wav");
+  body.append("request_id", input.request_id);
+  body.append("text_version", task.text_version);
+  body.append("purpose", task.purpose);
+  body.append("source_device", input.source_device);
+  return request<VoiceSamplingTask>(`/api/media/voice-sampling-tasks/${encodeURIComponent(task.id)}/sample`, { method: "POST", body });
+};
+
 export class MediaProfilesApiError extends Error {
   constructor(public readonly status: number, message: string, public readonly code: string | null = null, public readonly impact: string | null = null, public readonly repairAction: string | null = null) {
     super(message); this.name = "MediaProfilesApiError";

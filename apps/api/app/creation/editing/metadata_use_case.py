@@ -33,7 +33,7 @@ from app.creation.transactions import (clone_subtitle_track, clone_cover_asset,
     prepare_change_set, commit_direct_change, commit_change_set)
 from app.creation.editing.metadata import (check_command, prepare_subtitle_display_command,
     prepare_clip_command, prepare_picture_command, prepare_audio_command,
-    make_metadata_proposal, metadata_request_identity, PICTURE_METADATA_OPERATIONS, apply_clip_proposal, apply_picture_metadata)
+    make_metadata_proposal, PICTURE_METADATA_OPERATIONS, apply_clip_proposal, apply_picture_metadata)
 from app.creation.editing.clips import CLIP_METADATA_OPERATIONS
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
@@ -326,26 +326,28 @@ class MetadataEditUseCase:
         version = TimelineVersion(id=f'timeline_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, parent_version_id=None, sequence=1, snapshot={'montage': creation_task_montage_plan_to_payload(plan), **self.current_narration_snapshot(workspace_id, task)}, created_by_operation_id=None)
         return self.repository.create_timeline_version(version)
 
-    def begin(self, task, member_id, request_id, inputs):
+    def begin(self, task, member_id, request_id, inputs, *, phase="preview"):
         if request_id is None:
             return None, None
-        event_id, fresh = self.repository.claim_edit_request(task, member_id, request_id, 'preview', inputs)
+        event_id, fresh = self.repository.claim_edit_request(task, member_id, request_id, phase, inputs)
         if fresh:
             return event_id, None
         recorded = self.repository.read_edit_request_result(task, event_id)
         if recorded is not None:
             return event_id, MetadataEditReplay(recorded)
-        identity = metadata_request_identity({'workspace_id':task.workspace_id, 'task_id':task.id,
-            'member_id':member_id, 'request_id':str(request_id)})
-        try:
-            proposal = self.repository.get_edit_proposal(task.workspace_id, 'proposal_metadata_' + identity)
-        except KeyError as exc:
-            raise EditConflict('原保存结果尚未确定，请查询原请求，不重复执行') from exc
-        operations = [item for item in self.repository.list_edit_operations(task.workspace_id, task.id)
-            if item.proposal_id == proposal.id]
-        if not operations:
+        # Recover an applied direct command whose projection was interrupted.
+        # Linked/subtitle commands keep the same original source in their intent.
+        operation = None
+        for candidate in self.repository.list_edit_operations(task.workspace_id, task.id):
+            proposal = self.repository.get_edit_proposal(task.workspace_id, candidate.proposal_id)
+            intent = self.repository.get_edit_intent(task.workspace_id, proposal.intent_id)
+            source = intent.constraints.get('request_source') or {}
+            if (source.get('request_id'), source.get('member_id')) == (str(request_id), member_id):
+                if candidate.status == 'applied' and candidate.result_version_id:
+                    operation = candidate
+                break
+        if operation is None:
             raise EditConflict('原保存结果尚未确定，请查询原请求，不重复执行')
-        operation = operations[0]
         version = self.repository.get_timeline_version(task.workspace_id, operation.result_version_id)
         plan = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return event_id, MetadataEditReplay(None, MetadataEditResult(operation, plan, task, None))

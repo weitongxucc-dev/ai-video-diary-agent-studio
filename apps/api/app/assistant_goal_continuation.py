@@ -149,6 +149,7 @@ class GoalRequestResult:
     locator: dict
     preview: tuple | None = None
     job: Any = None
+    applied: Any = None
 
 
 @dataclass
@@ -655,7 +656,22 @@ class GoalResultProjection:
         current = task.current_timeline_version_id == source["expected_timeline_version_id"]
         if recorded is not None and recorded["status_code"] < 400:
             actual = recorded["response"]
-            if actual.get("proposal"):
+            if locator["phase"] == "apply" and "operation_type" in claim.payload["inputs"] and actual.get("operation"):
+                operation = self.production.get_edit_operation(workspace_id, actual["operation"]["id"])
+                proposal = self.production.get_edit_proposal(workspace_id, operation.proposal_id)
+                intent = self.production.get_edit_intent(workspace_id, proposal.intent_id)
+                origin = intent.constraints.get("request_source") or {}
+                if (operation.task_id != task_id or operation.status != "applied"
+                        or not operation.result_version_id
+                        or operation.base_version_id != source["expected_timeline_version_id"]
+                        or origin.get("assistant_turn_id") != source["assistant_turn_id"]
+                        or origin.get("request_id") != locator["request_id"]
+                        or claim.payload["inputs"].get("assistant_turn_id") != source["assistant_turn_id"]
+                        or claim.payload["inputs"].get("operation_type") != operation.operation_type):
+                    self.mark(candidate)
+                    return True
+                result.applied = operation
+            elif actual.get("proposal"):
                 proposal = self.production.get_edit_proposal(workspace_id, actual["proposal"]["id"])
                 if proposal.task_id != task_id:
                     self.mark(candidate)
@@ -674,6 +690,20 @@ class GoalResultProjection:
 
     def request_projection(self, context, result, patch):
         source, binding = context.source, context.binding
+        if result.applied is not None:
+            operation=result.applied
+            current=context.task.current_timeline_version_id == operation.result_version_id
+            status="stopped" if binding["status"] == "stopped" else "confirmed" if current else "stale"
+            if current:
+                patch={**patch,"timeline_action":"apply","edit_preview":None}
+            event={"type":"business_result","event_id":context.candidate["event_id"],"phase":"apply",
+                "task_id":context.candidate["task_id"],"request_id":result.locator["request_id"],
+                "base_version_id":operation.base_version_id,"result_version_id":operation.result_version_id,
+                "proposal_id":operation.proposal_id,"operation_id":operation.id,
+                "status":status,"edit_request":result.locator,"actionable":False,
+                "waiting_reason":"原直接编辑回执已核验；后续版本变化不改绑原请求。"}
+            return GoalProjection(event,patch,"原直接编辑已保存并回读，可整项撤销；尚未重新生成视频。" if current
+                else "原直接编辑的保存结果已回读；当前已有后续版本，保留为历史回执。")
         status = result.locator["status"] if context.task.current_timeline_version_id == source["expected_timeline_version_id"] else "stale"
         event = {"type": "business_result", "event_id": context.candidate["event_id"], "phase": "request",
             "task_id": context.candidate["task_id"], "request_id": result.locator["request_id"],

@@ -1,12 +1,14 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationPanel } from "../AssistantConversationPanel";
-import { referenceAssistantKnowledge, referenceAssistantMaterial } from "@/lib/assistant-reference";
+import { referenceAssistantKnowledge, referenceAssistantMaterial, referenceAssistantProfile, referenceAssistantSelection } from "@/lib/assistant-reference";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantStreamEvent, ResourceAdmissionReceipt } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
+  enqueueAssistantInput: vi.fn(),
+  withdrawAssistantInput: vi.fn(),
   getAssistantCapabilities: vi.fn(),
   getCurrentAssistantConversation: vi.fn(),
   listAssistantConversations: vi.fn(),
@@ -26,15 +28,21 @@ vi.mock("@/lib/api", async importOriginal => ({
   taskMediaResourceCheckLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaResourceCheckLabel,
   getAssistantCapabilities: api.getAssistantCapabilities.mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
-    pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0",
-      runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查",
-      product_mode: "headless", reason: "不接通", commands: ["/session"] },
+    runtime: { owner: "pi-coding-agent-sdk", version: "1.3.0", status: "ready", reason: "已就绪" },
+    pi_tui_commands: { available: false, reason: "不接通", commands: [] },
     extension_commands: { available: false, reason: "当前不可用" },
-    skills: { available: false, reason: "当前不可用" },
-    prompt_templates: { available: false, reason: "当前不可用" },
+    skills: { available: true, names: ["source-speech","narration-materials","local-edit"], reason: "按需加载" },
+    prompt_templates: { available: true, names: ["review-result"], reason: "按需回读" },
     business_tools: { home: ["read_workspace_context"] },
   }),
 }));
+
+vi.mock("@/lib/api/assistant", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/api/assistant")>(),
+  enqueueAssistantInput: api.enqueueAssistantInput, withdrawAssistantInput: api.withdrawAssistantInput,
+}));
+
+vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
 
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token: "trusted-member" }) }));
 
@@ -953,7 +961,7 @@ describe("AssistantConversationPanel", () => {
     fireEvent.click(diagnostics);
     expect(diagnostics).toHaveAttribute("aria-expanded", "true");
     expect(document.getElementById(diagnostics.getAttribute("aria-controls")!)).toBeInTheDocument();
-    expect(screen.getByText(/本机版本未确认或与清单基线不同/)).toBeInTheDocument();
+    expect(screen.getByText(/创作技能：原声口播、旁白配素材、局部改片/)).toBeInTheDocument();
   });
 
   it("uses the complete persisted assistant text when it extends past streamed deltas", () => {
@@ -1077,7 +1085,7 @@ describe("AssistantConversationPanel", () => {
 
   it.each([
     ["busy", false, true, "本轮正在处理，请稍后再发送"],
-    ["running", true, false, "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"],
+    ["running", true, false, "引用版本尚未恢复，请稍后发送。"],
   ] as const)("does not repeat ordinary sends while %s", async (_stateName, running, busy, reason) => {
     const current = state({ conversation: running ? {
       ...conversation(), turns: [{ ...conversation().turns[0], status: "running" as const }],
@@ -1667,14 +1675,14 @@ describe("persistent workbench conversation and command completion", () => {
     const view = render(<AssistantConversationProvider><Consumer key="knowledge"/></AssistantConversationProvider>);
     await screen.findByRole("textbox");
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",locator:"第1段",label:"第一版资料"}));
-    expect(screen.getByText(/第一版资料 · 版本 1 · 第1段/)).toBeVisible();
+    expect(screen.getByText(/第一版资料/)).toBeVisible();
     view.rerender(<AssistantConversationProvider><Consumer key="profiles"/></AssistantConversationProvider>);
-    expect(screen.getByText(/第一版资料 · 版本 1 · 第1段/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button",{name:"取消知识引用"}));
-    expect(screen.queryByText(/第一版资料 · 版本 1/)).not.toBeInTheDocument();
+    expect(screen.getByText(/第一版资料/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
+    expect(screen.queryByText(/第一版资料/)).not.toBeInTheDocument();
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",label:"第一版资料"}));
     act(() => referenceAssistantMaterial({selection:{scope:"asset",asset_id:"asset-real",expected_updated_at:"2026-10-10T00:00:00Z"},label:"明确素材"}));
-    expect(screen.queryByText(/第一版资料 · 版本 1/)).not.toBeInTheDocument();
+    expect(screen.getByText(/第一版资料/)).toBeVisible();
     expect(screen.getByText(/明确素材/)).toBeVisible();
   });
 
@@ -1688,16 +1696,16 @@ describe("persistent workbench conversation and command completion", () => {
     const first=render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
     await waitFor(() => expect(api.getAssistantConversationReference).toHaveBeenCalled());
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",label:"固定旧版"}));
-    await waitFor(() => expect(api.referenceSaved.get("conversation-one")?.selected_reference).toEqual({kind:"knowledge",knowledge_item_id:"knowledge-real",version:"1",label:"固定旧版"}));
+    await waitFor(() => expect(api.referenceSaved.get("conversation-one")?.selected_reference).toEqual({kind:"selection",items:[{kind:"knowledge",knowledge_item_id:"knowledge-real",version:"1",label:"固定旧版"}]}));
     first.unmount();
     const second=render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
-    expect(await screen.findByText(/固定旧版 · 版本 1/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button",{name:"取消知识引用"}));
+    expect(await screen.findByText(/固定旧版/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
     await waitFor(() => expect(api.referenceSaved.get("conversation-one")?.selected_reference).toBeNull());
     second.unmount();
     render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
     await waitFor(() => expect(api.getAssistantConversationReference).toHaveBeenCalledTimes(3));
-    expect(screen.queryByText(/固定旧版 · 版本 1/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/固定旧版/)).not.toBeInTheDocument();
   });
 
   it("restores each conversation's own fixed reference when resuming after an explicit selection", async () => {
@@ -1713,12 +1721,12 @@ describe("persistent workbench conversation and command completion", () => {
     render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
     await waitFor(() => expect(api.getAssistantConversationReference).toHaveBeenCalled());
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",label:"第一段固定资料"}));
-    await waitFor(() => expect(api.referenceSaved.get("conversation-one")?.selected_reference?.label).toBe("第一段固定资料"));
+    await waitFor(() => expect(JSON.stringify(api.referenceSaved.get("conversation-one")?.selected_reference)).toContain("第一段固定资料"));
     fireEvent.click(screen.getByRole("button",{name:"第二段"}));
     await waitFor(() => expect(api.getAssistantConversationReference).toHaveBeenCalledWith("conversation-two"));
     await waitFor(() => expect(screen.queryByText(/第一段固定资料 ·/)).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("button",{name:"第一段"}));
-    expect(await screen.findByText(/第一段固定资料 · 版本 1/)).toBeVisible();
+    expect(await screen.findByText(/第一段固定资料/)).toBeVisible();
   });
 
   it("does not revive an older selected reference when its save returns after cancel", async () => {
@@ -1735,7 +1743,7 @@ describe("persistent workbench conversation and command completion", () => {
     const selected={kind:"knowledge" as const,knowledge_item_id:"knowledge-real",version:"1",label:"不能复活"};
     act(() => referenceAssistantKnowledge(selected));
     await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button",{name:"取消知识引用"}));
+    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
     expect(screen.queryByText(/不能复活/)).not.toBeInTheDocument();
     await act(async () => resolveSave({selected_reference:selected,reference_version:1,status:"ready",reason:null}));
     await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenLastCalledWith("conversation-one",null,1));
@@ -1764,5 +1772,82 @@ describe("persistent workbench conversation and command completion", () => {
     render(<AssistantConversationPanel state={state({conversation:running,createNew})} input="/new" onInput={vi.fn()} onSend={vi.fn()} busy configured scopeLabel="工作区"/>);
     await screen.findByRole("option", {name:/新对话/}); fireEvent.keyDown(screen.getByRole("textbox"), {key:"Enter"});
     expect(createNew).not.toHaveBeenCalled(); expect(screen.getByRole("option", {name:/新对话/})).toHaveAttribute("aria-disabled","true");
+  });
+});
+
+
+it("retries an unknown running-input receipt with its original request id and frozen versions", async () => {
+  const running = conversation(); running.turns[0].status="running";
+  api.getCurrentAssistantConversation.mockResolvedValue(running);
+  api.listAssistantConversations.mockResolvedValue({items:[running]});
+  api.getAssistantConversation.mockResolvedValue(running);
+  api.enqueueAssistantInput.mockRejectedValueOnce(new TypeError("连接断开"))
+    .mockResolvedValueOnce({input_id:"receipt",status:"accepted"});
+  const hook=renderHook(()=>useAssistantConversation({scope_kind:"home",scope_id:"home"}));
+  await waitFor(()=>expect(hook.result.current.loading).toBe(false));
+  act(()=>hook.result.current.setDraftText("字幕缩短"));
+  await act(async()=>{await expect(hook.result.current.sendInput("字幕缩短","steer",2)).rejects.toThrow("连接断开");});
+  const first=api.enqueueAssistantInput.mock.calls[0][1];
+  await act(async()=>{await hook.result.current.sendInput("字幕缩短","steer",3);});
+  expect(api.enqueueAssistantInput.mock.calls[1][1]).toEqual(first);
+  expect(first.expected_reference_version).toBe(2);
+  expect(api.updateAssistantConversation).toHaveBeenCalledTimes(1);
+});
+
+it("delivers running input while retaining stop and preventing duplicate Enter", async () => {
+  const running=conversation();running.turns[0].status="running";
+  api.getCurrentAssistantConversation.mockResolvedValue(running);
+  api.listAssistantConversations.mockResolvedValue({items:[running]});
+  let resolve!:()=>void;
+  const sendInput=vi.fn(()=>new Promise<void>(done=>{resolve=done;}));
+  const onSend=vi.fn();
+  render(<AssistantConversationProvider><AssistantConversationPanel state={state({conversation:running,sendInput})}
+    input="字幕缩短" onInput={vi.fn()} onSend={onSend} configured busy scopeLabel="当前任务"/></AssistantConversationProvider>);
+  const send=screen.getByRole("button",{name:"追加要求"});
+  await waitFor(()=>expect(send).toBeEnabled());
+  fireEvent.click(send);
+  await waitFor(()=>expect(sendInput).toHaveBeenCalledWith("字幕缩短","steer",0));
+  fireEvent.keyDown(screen.getByRole("textbox",{name:"对话要求"}),{key:"Enter"});
+  expect(sendInput).toHaveBeenCalledTimes(1);expect(onSend).not.toHaveBeenCalled();
+  expect(screen.getByRole("button",{name:"停止本轮"})).toBeEnabled();
+  await act(async()=>resolve());
+});
+
+
+it("composes explicit references, preserves other kinds on ordinary selection, and removes only one chip", async () => {
+  const saved=conversation();
+  api.getCurrentAssistantConversation.mockResolvedValue(saved);
+  api.listAssistantConversations.mockResolvedValue({items:[saved]});
+  function SelectionConsumer() { const shared=useAssistantConversation({scope_kind:"home",scope_id:"home"});
+    return <AssistantConversationPanel state={shared} input="" onInput={vi.fn()} onSend={vi.fn()} configured busy={false} scopeLabel="当前工作区"/>; }
+  render(<AssistantConversationProvider><SelectionConsumer/></AssistantConversationProvider>);
+  await waitFor(()=>expect(api.getAssistantConversationReference).toHaveBeenCalled());
+  act(()=>{
+    referenceAssistantProfile({kind:"voice",profile_id:"v1",version:"1",label:"声音甲"});
+    referenceAssistantMaterial({selection:{scope:"asset",asset_id:"a1",expected_updated_at:"now"},label:"素材甲"});
+    referenceAssistantMaterial({selection:{scope:"asset",asset_id:"a2",expected_updated_at:"now"},label:"素材乙"},true);
+    referenceAssistantProfile({kind:"person",profile_id:"p1",version:"1",label:"人物甲"},true);
+  });
+  await waitFor(()=>expect(api.referenceSaved.get(saved.id)?.selected_reference).toMatchObject({kind:"selection",items:expect.any(Array)}));
+  const final=api.referenceSaved.get(saved.id)?.selected_reference;
+  expect(final?.kind === "selection" && final.items).toHaveLength(4);
+  fireEvent.click(screen.getByRole("button",{name:"+1"}));
+  expect(screen.getByText("人物甲")).toBeVisible();
+  fireEvent.click(screen.getByRole("button",{name:"取消素材引用：素材甲"}));
+  expect(screen.queryByText("素材甲")).not.toBeInTheDocument();
+  expect(screen.getByText("声音甲")).toBeVisible();expect(screen.getByText("素材乙")).toBeVisible();
+  act(()=>{
+    referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c1",version:"v",label:"镜头甲"}]);
+    referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c2",version:"v",label:"镜头乙"}],true);
+    referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c2",version:"v",label:"镜头乙"}],true);
+  });
+  await waitFor(()=>{
+    const value=api.referenceSaved.get(saved.id)?.selected_reference;
+    expect(value?.kind === "selection" && value.items).toHaveLength(5);
+  });
+  act(()=>referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c3",version:"v",label:"镜头丙"}]));
+  await waitFor(()=>{
+    const value=api.referenceSaved.get(saved.id)?.selected_reference;
+    expect(value?.kind === "selection" && value.items).toHaveLength(4);
   });
 });

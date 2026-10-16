@@ -28,8 +28,9 @@ vi.mock("@/lib/api", () => ({ listLocalMembers: membersApi,
   listAssistantConversations: vi.fn().mockResolvedValue({ items: [] }),
   getAssistantCapabilities: vi.fn().mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
-    pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] },
-    extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {},
+    runtime: { owner: "pi-coding-agent-sdk", version: "1.3.0", status: "ready", reason: "已就绪" },
+    pi_tui_commands: { available: false, reason: "终端命令不在此运行", commands: [] },
+    extension_commands: { available: false, reason: "未接通" }, skills: { available: true, reason: "按需加载", names: ["local-edit"] }, prompt_templates: { available: true, reason: "按需加载", names: ["review-result"] }, business_tools: {},
   } satisfies import("@/lib/types").AssistantCapabilities),
 }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({

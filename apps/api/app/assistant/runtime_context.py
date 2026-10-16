@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.assistant.runtime_checks import sdk_module
 
 import json
 import os
@@ -62,13 +63,8 @@ def prepare_runtime(*, root: Path, pi_executable: str, base_url: str, model: str
 
     }
     # Resolve only the selected Pi installation, never personal extensions or arbitrary modules.
-    for parent in Path(pi_executable).resolve().parents:
-        if parent.name == "pi-coding-agent" and parent.parent.name == "@earendil-works":
-            module = parent / "dist" / "index.js"
-            if module.is_file():
-                env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(module)
-            break
-    if not env["AI_VIDEO_DIARY_AGENT_PI_MODULE"]:
-        tool_names = ",".join(name for name in tool_names.split(",") if name != "codemode")
+    module = sdk_module(pi_executable)
+    if module:
+        env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(module)
     env["AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS"] = tool_names
     return runtime_root, env, tool_names, session_id

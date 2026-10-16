@@ -14,7 +14,7 @@ from app.assistant.failures import (AssistantUnavailable, _fail, _classify_outpu
     _FAILURES, FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING,
     FAILURE_TOOL_FAILED, FAILURE_UNKNOWN)
 from app.assistant.projection import _safe_tool_result_summary, _business_event_lines, _PiStreamProjector
-from app.assistant.result_projection import _last_answer_and_preview
+from app.assistant.result_projection import read_sdk_result
 from app.assistant.service_observations import _record_service
 from app.assistant.turn_control import AssistantStopped, TurnControl, _terminate_process_group
 from app.assistant.sessions import SessionLocks
@@ -48,11 +48,11 @@ def pi_runtime_checks() -> list[dict]:
     return runtime_checks(_extension_path(), _pi_executable)
 
 def _run_pi_streaming(cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
-    timeout_seconds: int, on_event, turn_id: str | None = None, keep_turn_control: bool = False,
+    timeout_seconds: int, on_event, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None,
 ) -> subprocess.CompletedProcess[str]:
     return run_pi_streaming(cmd, message=message, env=env, cwd=cwd, timeout_seconds=timeout_seconds,
         on_event=on_event, turn_id=turn_id, keep_turn_control=keep_turn_control, control=_turn_control,
-        terminate=_terminate_process_group, projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines)
+        terminate=_terminate_process_group, projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines, input_handler=input_handler)
 
 def _read_task_before_pi(extension: Path, env: dict[str, str], cwd: Path) -> dict:
     return read_task_before_pi(extension, env, cwd, run_process=_run_pi_streaming)
@@ -93,6 +93,8 @@ def run_task_turn(
     task_version: dict[str, object] | None = None,
     material_selection: dict[str, str] | None = None,
     continuation_context: dict[str, object] | None = None,
+    selected_references: list[dict] | None = None,
+    input_handler=None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
@@ -112,7 +114,7 @@ def run_task_turn(
                      if conversation_id else f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"),
         turn_id=turn_id, profile_reference=profile_reference, knowledge_reference=knowledge_reference, task_version=task_version,
         material_selection=_material_tool_selection(material_selection),
-        continuation_context=continuation_context,
+        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler,
     )
 
 
@@ -132,6 +134,8 @@ def run_plan_turn(
     knowledge_reference: dict[str, object] | None = None,
     creation_request: dict[str, object] | None = None,
     keep_turn_control: bool = False,
+    selected_references: list[dict] | None = None,
+    input_handler=None,
 ) -> tuple[str, dict | None]:
     tools = ASSISTANT_BUSINESS_TOOLS["home"]
     if creation_request is not None:
@@ -145,7 +149,7 @@ def run_plan_turn(
         prompt=PLAN_PROMPT, tool_names=",".join(tools) + (",read_selected_profile" if profile_reference else "") + (",read_selected_knowledge" if knowledge_reference else ""),
         preview_kind="plan_preview", session_key=f"conversation:{conversation_id}", turn_id=turn_id, profile_reference=profile_reference, knowledge_reference=knowledge_reference,
         creation_request=creation_request,
-        keep_turn_control=keep_turn_control,
+        keep_turn_control=keep_turn_control, selected_references=selected_references, input_handler=input_handler,
     )
 
 
@@ -162,6 +166,8 @@ def run_material_turn(
     caller_user_id: str | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     turn_id: str | None = None,
+    selected_references: list[dict] | None = None,
+    input_handler=None,
 ) -> tuple[str, dict | None]:
     tool_selection = _material_tool_selection(selection)
     return _run_turn(
@@ -171,11 +177,11 @@ def run_material_turn(
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event, prompt=MATERIAL_PROMPT,
         tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["material"] if selection is not None
-                            else ("read_material_library_status", "search_material_library") + MEMORY_TOOLS),
+                            else ("read_material_library_status", "search_material_library", "read_selected_reference") + MEMORY_TOOLS),
         preview_kind="material_result",
         session_key=f"conversation:{conversation_id}",
         material_selection=tool_selection,
-        turn_id=turn_id,
+        turn_id=turn_id, selected_references=selected_references, input_handler=input_handler,
     )
 
 
@@ -205,11 +211,13 @@ def _run_turn(
     keep_turn_control: bool = False,
     turn_id: str | None = None,
     continuation_context: dict[str, object] | None = None,
+    selected_references: list[dict] | None = None,
+    input_handler=None,
 ) -> tuple[str, dict | None]:
     return run_turn(settings, check_runtime=pi_runtime_checks, find_pi=_pi_executable,
         extension=_extension_path(), configure_model=_configured_model, agent_root=_agent_root,
         read_task=_read_task_before_pi, read_memory=_read_memory_before_pi, run_process=_run_pi_streaming,
-        record_service=_record_service, parse_result=_last_answer_and_preview, classify_output=_classify_output,
+        record_service=_record_service, parse_result=read_sdk_result, classify_output=_classify_output,
         sessions=_session_control, control=_turn_control,
         workspace_id=workspace_id, task_id=task_id, message=message, stage=stage, selected_refs=selected_refs,
         playhead_ms=playhead_ms, authorization=authorization, cookie=cookie, local_member_token=local_member_token,
@@ -217,4 +225,4 @@ def _run_turn(
         session_key=session_key, on_event=on_event, material_selection=material_selection,
         profile_reference=profile_reference, knowledge_reference=knowledge_reference, task_version=task_version,
         creation_request=creation_request, keep_turn_control=keep_turn_control, turn_id=turn_id,
-        continuation_context=continuation_context)
+        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler)

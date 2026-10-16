@@ -1,4 +1,5 @@
 .page { width: min(100%, 1160px); margin: 0 auto; padding: 16px 20px 24px; container-type: inline-size; }
+.optionalSetup { margin: 8px 0 14px; color: var(--text-2); font-size: 13px; }
 .sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
@@ -140,9 +141,11 @@
 
 /* Profiles share the same compact object rows and side-card form. */
 .page { font-size:13px; }
-.sectionHeader { align-items:center; justify-content:flex-start; gap:10px; padding:12px 0; }
+.sectionHeader { align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:10px; padding:12px 0; }
 .sectionHeader h2 { margin-right:auto; }
 .sectionHeader button, .importActions button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:32px; }
+.sectionHeader button { flex-shrink:0; white-space:nowrap; }
+.sectionHeader button svg { flex-shrink:0; }
 .workspace { border:0; border-radius:0; }
 .objectRail { background:transparent; }
 .objectRail > button { grid-template-columns:32px minmax(0,1fr); align-items:center; min-height:56px; padding:8px; gap:8px; }
@@ -181,8 +184,13 @@
 .intakeRepair p { margin:0; overflow-wrap:anywhere; line-height:1.5; color:var(--text-2); }
 .intakeRepair button { min-height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); }
 
-.profileSearch { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-2); margin-top:12px; }
+.profileSearch { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--text-2); margin-top:12px; white-space:nowrap; }
 .profileSearch input { width:min(100%,260px); min-width:0; height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); font-size:13px; }
+@container (max-width:440px) {
+  .sectionHeader > h2, .sectionHeader > div { flex-basis:100%; }
+  .profileSearch { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
+  .profileSearch input { width:100%; }
+}
 .stage { padding:0; }
 .objectRail > button { height:56px; }
 .objectInfo strong { line-height:18px; }

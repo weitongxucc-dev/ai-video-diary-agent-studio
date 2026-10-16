@@ -10,7 +10,7 @@ import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { CreationRequestPanel } from "@/components/CreationRequestPanel";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
-import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
+import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 
@@ -65,6 +65,7 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
 }
 
 export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext }: HomeCommandComposerProps) {
+  const selectionState = useAssistantSelection();
   const materialReference = useAssistantMaterialReference();
   const profileReference = useAssistantProfileReference()?.reference;
   const knowledgeReference = useAssistantKnowledgeReference()?.reference;
@@ -180,7 +181,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       if (materialContext) {
         const selection = materialContext.selection;
         const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection,
-          turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent, selectionState?.version);
         if (!assistant.isCurrentConversation(turn.conversationId)) return;
         if (selection && result.material_result) materialContext.onResult(selection, result.material_result);
       } else if (task) {
@@ -189,6 +190,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           message: command, context_stage: task.stage,
           client_request_id: turn.clientRequestId,
           expected_draft_version: expectedDraftVersion,
+          expected_reference_version: selectionState?.version,
           expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence,
           ...(profileReference ? {selected_profile_reference:{kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version}} : {}),
           ...(knowledgeReference ? {selected_knowledge_reference:{knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})}} : {}),
@@ -198,10 +200,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
-        if (result.execution_action || result.topic_candidates) onTaskUpdated?.();
+        if (result.execution_action || result.topic_candidates || result.timeline_action) onTaskUpdated?.();
       } else {
         const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
-          turn.clientRequestId, expectedDraftVersion, onStreamEvent, profileReference ? {kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version} : undefined, knowledgeReference ? {knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})} : undefined);
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent, profileReference ? {kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version} : undefined, knowledgeReference ? {knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})} : undefined, selectionState?.version);
         if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setRequestBinding(result.creation_request ? { id: result.creation_request.id, conversationId: turn.conversationId, revision } : null);

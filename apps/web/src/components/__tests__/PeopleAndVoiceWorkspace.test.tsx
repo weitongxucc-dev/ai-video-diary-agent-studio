@@ -2,19 +2,59 @@ import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import {act,fireEvent,render,screen,waitFor,cleanup} from "@testing-library/react";
 import {afterEach,beforeEach,describe,expect,it,vi} from "vitest";
 const api=vi.hoisted(()=>({listPersonProfiles:vi.fn(),listVoiceProfiles:vi.fn(),getDefaultVoice:vi.fn(),listPronunciationEntries:vi.fn(),listAuthorizations:vi.fn(),listMediaPreviews:vi.fn(),listPersonProfileVersions:vi.fn(),listVoiceProfileVersions:vi.fn(),getPersonProfile:vi.fn(),getVoiceProfile:vi.fn(),getReferenceMaterial:vi.fn(),listReferenceMaterials:vi.fn(),savePersonProfile:vi.fn(),saveVoiceProfile:vi.fn(),setDefaultVoice:vi.fn(),importVoiceReference:vi.fn(),createVoicePreview:vi.fn(),createAvatarLipsyncPreview:vi.fn(),scanReferenceMaterials:vi.fn(),getMediaCapability:vi.fn(),cancelPreview:vi.fn(),savePronunciationEntry:vi.fn(),mediaProfilesErrorMessage:vi.fn(cause=>cause instanceof Error?cause.message:"请求失败")}));
-vi.mock("@/lib/media-profiles-api",()=>api);
+vi.mock("@/lib/media-profiles-api",async importOriginal=>({...await importOriginal<typeof import("@/lib/media-profiles-api")>(),...api}));
 const referenceProfile=vi.hoisted(()=>vi.fn());
-vi.mock("@/lib/assistant-reference",()=>({referenceAssistantProfile:referenceProfile}));
+vi.mock("@/lib/assistant-reference",async importOriginal=>({...await importOriginal<typeof import("@/lib/assistant-reference")>(),referenceAssistantProfile:referenceProfile}));
+const navigation=vi.hoisted(()=>({query:""}));
+vi.mock("next/navigation",()=>({useSearchParams:()=>new URLSearchParams(navigation.query)}));
 const intake=vi.hoisted(()=>({getMaterialIntakeStatus:vi.fn(),bindMaterialIntake:vi.fn()}));
 vi.mock("@/lib/api",()=>intake);
 const importer=vi.hoisted(()=>vi.fn());
 vi.mock("@/lib/directoryPicker",()=>({importLocalMaterials:importer}));
 vi.mock("@/components/AppShell",()=>({AppShell:({children}:{children:React.ReactNode})=><>{children}</>}));
 import {PeopleAndVoiceWorkspace} from "../PeopleAndVoiceWorkspace";
+import {MediaProfilesApiError} from "@/lib/media-profiles-api";
+import {assistantReferenceHref} from "@/lib/assistant-reference";
 const person={id:"person",version:"p1",display_name:"人物",authorization:null,current_authorization:null,runnable:true,reference_url:"/reference/person",reference:{asset_id:"visual"},use_state:"available"};
 const voice={id:"voice",version:"v1",display_name:"独立声音",person_profile_id:"",person_version:"",authorization:null,current_authorization:null,runnable:true,reference_url:"/reference/voice",reference:{asset_id:"audio"},use_state:"available",reference_audio_path:"workspace://saved.wav",reference_text:"参考原句",model_id:"model",language:"zh"};
 const audio={id:"audio",file_name:"合成声音.wav",media_type:"audio",workspace_reference:"workspace://audio.wav",duration_seconds:2,segments:[],use_state:"available"};
 const visual={...audio,id:"visual",file_name:"合成照片.png",media_type:"image",workspace_reference:"workspace://portrait.png",duration_seconds:null};
+beforeEach(()=>{navigation.query="";});
+it("opens the frozen version from the durable navigation hint again after remount",async()=>{
+  navigation.query=assistantReferenceHref({kind:"voice",profile_id:"voice",version:"v0",label:"旧版本声音"}).split("?")[1];
+  const first=render(<PeopleAndVoiceWorkspace/>);
+  await waitFor(()=>expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value","v0"));
+  expect(api.getVoiceProfile).toHaveBeenCalledWith("voice","v0");
+  first.unmount();
+  render(<PeopleAndVoiceWorkspace/>);
+  await waitFor(()=>expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value","v0"));
+  expect(api.getVoiceProfile.mock.calls.filter(([id,version])=>id==="voice"&&version==="v0")).toHaveLength(2);
+  expect(referenceProfile).not.toHaveBeenCalled();
+});
+it.each([[404,"引用的档案版本不存在或已不可访问"],[403,"当前成员无权查看这个档案版本"]] as const)("reports locator access failure %s without opening a latest-version fallback",async(status,message)=>{
+  navigation.query=assistantReferenceHref({kind:"person",profile_id:"unavailable",version:"p-old",label:"不可用档案"}).split("?")[1];
+  api.getPersonProfile.mockRejectedValue(new MediaProfilesApiError(status,"server diagnostic"));
+  render(<PeopleAndVoiceWorkspace/>);
+  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(api.getPersonProfile).toHaveBeenCalledWith("unavailable","p-old");
+  expect(screen.queryByRole("heading",{name:"人物"})).not.toBeInTheDocument();
+  expect(referenceProfile).not.toHaveBeenCalled();
+});
+it("rejects a profile navigation hint without a frozen version before reading the object",async()=>{
+  navigation.query=new URLSearchParams({locate_ref:JSON.stringify({kind:"voice",profile_id:"voice",label:"无版本"})}).toString();
+  render(<PeopleAndVoiceWorkspace/>);
+  expect(await screen.findByRole("alert")).toHaveTextContent("档案引用缺少固定版本或标识");
+  expect(api.getVoiceProfile).not.toHaveBeenCalled();
+});
+it("locates a frozen voice version from the conversation without replacing its reference",async()=>{
+  render(<PeopleAndVoiceWorkspace/>);
+  await waitFor(()=>expect(api.listVoiceProfiles).toHaveBeenCalled());
+  await act(async()=>{window.dispatchEvent(new CustomEvent("yaohe:assistant-locate-reference",{detail:{kind:"voice",profile_id:"voice",version:"v0",label:"旧版本声音"}}));});
+  await screen.findByRole("heading",{name:"独立声音"});
+  expect(api.getVoiceProfile).toHaveBeenCalledWith("voice","v0");
+  expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value","v0");
+  expect(referenceProfile).not.toHaveBeenCalled();
+});
 beforeEach(()=>{vi.resetAllMocks();api.listPersonProfiles.mockResolvedValue({items:[person]});api.listVoiceProfiles.mockResolvedValue({items:[voice]});api.getDefaultVoice.mockResolvedValue(voice);api.listPronunciationEntries.mockResolvedValue({items:[]});api.listAuthorizations.mockResolvedValue({items:[]});api.listMediaPreviews.mockResolvedValue({items:[]});api.listPersonProfileVersions.mockResolvedValue({items:[person]});api.listVoiceProfileVersions.mockResolvedValue({items:[voice,{...voice,version:"v0"}]});api.getVoiceProfile.mockImplementation((id,version)=>Promise.resolve({...voice,id,version}));api.getPersonProfile.mockImplementation((id,version)=>Promise.resolve({...person,id,version}));api.getReferenceMaterial.mockImplementation(id=>Promise.resolve(id==="audio"?audio:visual));api.listReferenceMaterials.mockResolvedValue({assets:[audio,visual],total_count:2});api.getMediaCapability.mockResolvedValue({available:true,model_id:null,message:"未配置模型"});vi.stubGlobal("URL",{...URL,createObjectURL:vi.fn(()=>"blob:synthetic-audio"),revokeObjectURL:vi.fn()});api.mediaProfilesErrorMessage.mockImplementation(cause=>cause instanceof Error?cause.message:"请求失败");});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 async function openProfile(name:string) { fireEvent.click(await screen.findByRole("button",{name:new RegExp(`^${name}.*参考`)}));await screen.findByRole("heading",{name}); }
@@ -68,7 +108,7 @@ describe("independent profile consumers",()=>{
  });
 
  it("references the exact historical profile version without inventing an asset selection",async()=>{
-  render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");fireEvent.click(screen.getByRole("button",{name:"引用当前档案到对话"}));expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v1",label:"独立声音"});await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");await waitFor(()=>expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v0",label:"独立声音"}));expect(referenceProfile.mock.calls.at(-1)![0]).not.toHaveProperty("asset_id");
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");fireEvent.click(screen.getByRole("button",{name:"引用当前档案到对话"}));expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v1",label:"独立声音"},true);await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");await waitFor(()=>expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v0",label:"独立声音"}));expect(referenceProfile.mock.calls.at(-1)![0]).not.toHaveProperty("asset_id");
  });
 
  it("shows the persisted audition text separately from newly edited input and keeps its output identity",async()=>{

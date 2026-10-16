@@ -4,8 +4,10 @@ import json
 from app.assistant.projection import _business_event_lines
 from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
 
-def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[str, dict | None]:
-    answer = ""
+def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[str, dict | None]:
+    """Project typed SDK completion and real business receipts, never CLI history."""
+    answer = result["answer"]
+    output = json.dumps(result, ensure_ascii=False)
     preview = None
     media_job = None
     action_result = None
@@ -17,7 +19,7 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
     material_write_attempted = False
     material_failed = False
     material_result_invalid = False
-    settled = False
+    settled = result["status"] == "settled"
     render_configuration_failed = False
     request_planning_failed = False
     edit_control_result = None
@@ -30,9 +32,10 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
     orchestration_failed = False
     unresolved_syntax_error = False
     edit_request_status = None
+    edit_applied = None
     script_tool_result = None
     script_tool_status = None
-    for line in _business_event_lines(output):
+    for line in _business_event_lines("\n".join(json.dumps(event) for event in result["tool_results"])):
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
@@ -40,10 +43,13 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 FAILURE_UNKNOWN,
                 explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
             ) from exc
-        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"apply_typed_edit", "preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
             status_details = (event.get("result") or {}).get("details") or {}
             if status_details.get("kind") == "edit_request_status":
                 edit_request_status = status_details
+            elif status_details.get("kind") == "edit_applied" and not event.get("isError"):
+                edit_applied = status_details
+                edit_request_status = None
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {"save_media_script_tool", "update_media_script_tool", "revoke_media_script_tool", "read_media_script_tool_creation"}:
             tool_details = (event.get("result") or {}).get("details") or {}
             if tool_details.get("kind") == "media_script_tool_result" and not event.get("isError"):
@@ -153,16 +159,6 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                     preview = details.get("preview")
                     if kind == "topic_generation":
                         preview = {"kind": "topic_generation", "topics": details.get("topics")}
-        if event.get("type") == "message_end":
-            message = event.get("message") or {}
-            if message.get("role") == "assistant" and message.get("stopReason") == "stop":
-                answer = "".join(
-                    block.get("text", "")
-                    for block in message.get("content", [])
-                    if block.get("type") == "text"
-                ).strip()
-        if event.get("type") == "agent_settled":
-            settled = True
     if (action_failed and action_result is None) or topic_failed:
         if render_configuration_failed:
             raise _fail(FAILURE_TOOL_FAILED, explanation="本机渲染尚未完成配置，本轮未生成新成片；当前修改已保留。",
@@ -176,6 +172,8 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
                 explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
             )
         raise _fail(cause)
+    if edit_applied is not None:
+        return "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。", edit_applied
     if script_tool_status is not None and preview is None:
         if media_job is not None:
             script_tool_status = {**script_tool_status, "related_media_job": media_job}
@@ -314,3 +312,24 @@ def _last_answer_and_preview(output: str, kind: str = "edit_preview") -> tuple[s
     if (orchestration_failed or unresolved_syntax_error) and preview is not None:
         answer = "后续工具编排未完成；已经返回的真实预览保留，尚未应用修改。\n" + answer
     return answer, preview
+
+
+def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict | None]:
+    result = None
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise _fail(FAILURE_UNKNOWN, explanation="创作会话返回了无法读取的协议消息。") from exc
+        if event.get("type") == "creation_session_result":
+            if result is not None or event.get("protocol") != 1:
+                raise _fail(FAILURE_UNKNOWN, explanation="创作会话结果协议或身份不可核验。")
+            result = event
+    if (result is None or result.get("owner") != "pi-coding-agent-sdk"
+            or result.get("status") not in {"settled", "failed"}
+            or not isinstance(result.get("answer"), str)
+            or not isinstance(result.get("tool_results"), list)
+            or any(not isinstance(item, dict) or item.get("type") != "tool_execution_end"
+                   for item in result["tool_results"])):
+        raise _fail(FAILURE_UNKNOWN, explanation="创作会话没有返回可核验的完成结果，请查询已有操作回执。")
+    return project_business_result(result, kind)

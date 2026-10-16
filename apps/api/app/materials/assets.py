@@ -104,7 +104,10 @@ class MaterialAssetStore:
                 source_url=source_url,
             )
         else:
-            existing.file_name = resolved.name
+            # An application import may retain the original display filename
+            # while its immutable stored path uses a deduplicated identity.
+            if not resolved.name.startswith("discovery-"):
+                existing.file_name = resolved.name
             existing.size_bytes = stat.st_size
             existing.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
             # A later scan must not erase a recorded media type or provenance.
@@ -576,6 +579,32 @@ class MaterialAssetStore:
                 current.updated_at = asset.updated_at
                 asset = current
             self._write_asset(conn, asset)
+        return asset
+
+    def save_received_asset(
+        self, conn: sqlite3.Connection, asset: MaterialAsset, *,
+        workspace_id: str, owner_user_id: str,
+    ) -> MaterialAsset:
+        """Register a complete received file inside the caller's transaction.
+
+        The caller verifies membership and file publication. Replays preserve
+        existing analysis/corrections rather than upserting an empty aggregate.
+        """
+        if not conn.in_transaction:
+            raise ValueError("接收素材必须在调用方事务中保存")
+        if not workspace_id or not owner_user_id or (asset.workspace_id, asset.owner_user_id) != (workspace_id, owner_user_id):
+            raise ValueError("接收素材的工作区或成员归属不匹配")
+        rows = conn.execute(
+            "SELECT payload, visibility FROM material_assets WHERE id=? OR (workspace_id=? AND file_path=?)",
+            (asset.id, workspace_id, asset.path),
+        ).fetchall()
+        if rows:
+            current = self._asset_from_row(rows[0])
+            if len(rows) != 1 or (current.id, current.workspace_id, current.owner_user_id, current.path, current.size_bytes, current.modified_at, current.media_type) != (asset.id, workspace_id, owner_user_id, asset.path, asset.size_bytes, asset.modified_at, asset.media_type):
+                raise ValueError("接收素材身份或文件修订发生冲突")
+            return current
+        asset.updated_at = utc_now()
+        self._write_asset(conn, asset)
         return asset
 
     @staticmethod

@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import sdk_completed
 """Current-turn capabilities across one conversation; no service or model calls."""
 
 import json
@@ -29,6 +30,7 @@ TOOL_SELECTION = {
 def captured_runtime(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(pi, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     monkeypatch.setattr(pi, "_pi_executable", lambda: sys.executable)
     monkeypatch.setattr(pi, "_configured_model", lambda _: ("https://synthetic.invalid", "fixture", ""))
     monkeypatch.setattr(pi, "_agent_root", lambda *_: tmp_path / "agent")
@@ -43,7 +45,7 @@ def captured_runtime(monkeypatch, tmp_path):
 
     def capture(cmd, **kwargs):
         calls.append({"cmd": cmd, **kwargs})
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {
                 "role": "assistant", "stopReason": "stop",
                 "content": [{"type": "text", "text": "已读取本轮对象。"}],
@@ -56,6 +58,7 @@ def captured_runtime(monkeypatch, tmp_path):
 
 
 def envelope(text):
+    if text.lstrip().startswith("{"): text=json.loads(text)["message"]
     return json.loads(text.split("本轮能力与对象（JSON）：\n", 1)[1].splitlines()[0])
 
 
@@ -70,24 +73,24 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
                      turn_id="turn-task", **common)
     pi.run_material_turn(settings, message="读取素材库", turn_id="turn-material-again", **common)
 
-    sessions = [call["cmd"][call["cmd"].index("--session-id") + 1] for call in calls]
+    sessions = [json.loads(call["message"])["sessionId"] for call in calls]
     assert len(set(sessions)) == 1
     contexts = []
     for call in calls:
         cmd = call["cmd"]
-        current = envelope(call["message"])
-        assert current == envelope(cmd[cmd.index("--system-prompt") + 1])
-        assert current["tool_names"] == cmd[cmd.index("--tools") + 1].split(",")
-        assert "历史真实提案、修改和作业保留其当时的事实" in call["message"]
-        assert "历史工具清单、失败及助手解释不能定义本轮工具可用性" in call["message"]
+        current = envelope(json.loads(call["message"])["message"])
+        assert current == envelope(json.loads(call["message"])["systemPrompt"])
+        assert current["tool_names"] == json.loads(call["message"])["tools"]
+        assert "历史真实提案、修改和作业保留其当时的事实" in json.loads(call["message"])["message"]
+        assert "历史工具清单、失败及助手解释不能定义本轮工具可用性" in json.loads(call["message"])["message"]
         contexts.append(current)
     assert contexts[0]["scope_kind"] == "material" and contexts[0]["task_id"] is None
     assert "preview_edit" not in contexts[0]["tool_names"]
     assert contexts[1]["scope_kind"] == "task" and contexts[1]["task_id"] == "task-current"
     assert "preview_edit" not in contexts[1]["tool_names"]
     assert {"preview_typed_edit", "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
-    assert "不自行重新生成或用同名图替换" in calls[1]["cmd"][calls[1]["cmd"].index("--system-prompt") + 1]
-    prompt = calls[1]["cmd"][calls[1]["cmd"].index("--system-prompt") + 1]
+    assert "不自行重新生成或用同名图替换" in json.loads(calls[1]["message"])["systemPrompt"]
+    prompt = json.loads(calls[1]["message"])["systemPrompt"]
     assert "不对这些对象JSON.parse；CLI stdout才是JSON文本" in prompt
     assert "工具ID可直接只读describe" in prompt
     assert contexts[1]["selected_object_refs"] == ["clip:clip-current"]
@@ -99,7 +102,7 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     assert "read_clip_candidates" not in contexts[2]["tool_names"]
     assert json.loads(calls[1]["env"]["AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION"]) == TOOL_SELECTION
     assert calls[1]["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == original
-    task_input = json.loads(calls[1]["message"].split("本轮输入（JSON）：\n", 1)[1])
+    task_input = json.loads(json.loads(calls[1]["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert task_input["original_user_instruction"] == original
 
 
@@ -126,17 +129,17 @@ def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, 
     assert expected in tools and excluded not in tools
     assert "preview_edit" not in tools
     assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
-    prompt = calls[0]["cmd"][calls[0]["cmd"].index("--system-prompt") + 1]
+    prompt = json.loads(calls[0]["message"])["systemPrompt"]
     assert "parameters是API parameters参数对象" in prompt
     assert "inputs[name]按input_refs的name" in prompt and "Image.open(inputs[name])" in prompt
     assert "outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串" in prompt
     assert "image.save(outputs['name.png'])" in prompt
     assert "不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称" in prompt
-    assert "找不到或同名歧义时说明具体缺口或询问" in calls[0]["cmd"][calls[0]["cmd"].index("--system-prompt") + 1]
+    assert "找不到或同名歧义时说明具体缺口或询问" in json.loads(calls[0]["message"])["systemPrompt"]
 
 
 @pytest.mark.parametrize("scope,tool_scope", [("asset", "material"), ("segment", "task_edit")])
-def test_current_cli_allowlist_has_registered_business_implementations(scope, tool_scope):
+def test_current_sdk_allowlist_has_registered_business_implementations(scope, tool_scope):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is required to register the shipped TypeScript tools")
@@ -145,6 +148,7 @@ def test_current_cli_allowlist_has_registered_business_implementations(scope, to
     script = "const {default:register}=await import(process.argv[1]);const names=[];await register({registerTool:tool=>names.push(tool.name)});console.log(JSON.stringify(names));"
     from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS, MediaScriptPreviewRequest, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
     capability = {"schema": CreationTaskExactEditRequest.model_json_schema(), "supported_operations": list(EXACT_EDIT_FIELDS)}
+    capability["direct_apply"]={"endpoint":"/api/creation-tasks/task-current/edits/exact", "operations":[{"operation_type":"UpdateSubtitleCue","parameter_fields":["cue_id","text"]}]}
     modules = sorted((Path.home() / ".nvm/versions/node").glob("*/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js"))
     if not modules:
         pytest.skip("Installed Pi is required to declare the codemode tool")

@@ -1,4 +1,8 @@
 "use client";
+
+import { readAssistantLocateReference, referenceAssistantSelection, type SelectedAssistantReference } from "@/lib/assistant-reference";
+import { useSearchParams } from "next/navigation";
+import type { AssistantTimelineReference } from "@/lib/types/assistant";
 import { canOpenStage } from "./creation-task/stage-navigation";
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
@@ -17,7 +21,7 @@ import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { Undo2, Redo2, CheckCircle2, Clapperboard, FileText, History, LoaderCircle, Mic, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
-import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
+import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
@@ -326,12 +330,31 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }
         : null;
 
-  const selectedTaskReference = selectedEditContext && selectedEditContext.ref !== detachedReference ? selectedEditContext : null;
+  const selectionState = useAssistantSelection();
+  const locateSearch = useSearchParams();
+  const [addReferences, setAddReferences] = useState(false);
+  function publishSelection(kind:AssistantTimelineReference["kind"], object_id:string, label:string, range?:{start_ms:number;end_ms:number}) {
+    if (!task.current_timeline_version_id) return;
+    referenceAssistantSelection([{kind,object_id,task_id:task.id,version:task.current_timeline_version_id,label,...range}],addReferences);
+  }
   useEffect(() => {
-    // A material reference restored after the editor selection must not leave two
-    // active targets. The provider owns its existing CAS and late-read protection.
-    if (selectedTaskReference && selectedMaterialReference) materialReference?.setReference(null);
-  }, [selectedTaskReference?.ref, selectedMaterialReference, materialReference?.setReference]);
+    const locate = () => {
+      let item: SelectedAssistantReference | null;
+      try { item = readAssistantLocateReference(locateSearch); } catch (error) { setNotice(error instanceof Error ? error.message : "引用定位不可用。"); return; }
+      if (!item) return;
+      if (!("task_id" in item) || item.task_id !== task.id) return;
+      if (item.version !== task.current_timeline_version_id) { setNotice("引用来自旧版本，请重新选择；没有改绑当前对象。"); return; }
+      setActiveView(item.kind === "subtitle" ? "subtitle_cover" : item.kind === "narration" ? "narration" : "montage");
+      setSelectedClipId(item.kind === "shot" ? item.object_id : null);
+      setSelectedCueId(item.kind === "subtitle" ? item.object_id : null);
+      setSelectedNarrationSegmentId(item.kind === "narration" ? item.object_id : null);
+      setSelectedOverlayId(item.kind === "effect" ? item.object_id : null);
+      setSelectedAudioId(item.kind === "audio" ? item.object_id : null);
+      if (item.start_ms !== undefined && montageVideoRef.current) { montageVideoRef.current.currentTime=item.start_ms/1000; playheadRef.current=item.start_ms/1000; }
+    };
+    locate();
+  },[task.id,task.current_timeline_version_id,locateSearch]);
+  const selectedTaskReference = selectedEditContext && selectedEditContext.ref !== detachedReference ? selectedEditContext : null;
 
   function invalidateEditPreview() {
     mediaController.current?.abort();
@@ -570,11 +593,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   function activateTaskSelection() {
     if (detachedReference !== null) invalidateEditPreview();
     setDetachedReference(null);
-    if (selectedMaterialReference) materialReference?.setReference(null);
   }
 
   function selectOverlay(id: string|null) {
-    if (id) activateTaskSelection();
+    if (id) { activateTaskSelection(); publishSelection("effect",id,workspace.montage?.graphic_overlays?.find(item=>item.id===id)?.kind ?? "效果"); }
     invalidateEditPreview(); setEditorDraft(false); setSelectedOverlayId(id); setSelectedAudioId(null);
     const item=workspace.montage?.graphic_overlays?.find(value=>value.id===id);
     if(item){const time=(item.start_seconds+item.end_seconds)/2;playheadRef.current=time;
@@ -583,6 +605,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   function selectClip(clipId: string) {
     activateTaskSelection();
+    const chosen=workspace.montage?.clips.find(item=>item.id===clipId);
+    publishSelection("shot",clipId,`镜头 ${(workspace.montage?.clips.findIndex(item=>item.id===clipId) ?? 0)+1}`,chosen ? {start_ms:Math.round(chosen.timeline_start_seconds*1000),end_ms:Math.round(chosen.timeline_end_seconds*1000)} : undefined);
     if(selectedOverlayId){setEditorDraft(false);invalidateEditPreview();}
     setSelectedOverlayId(null);
     setSelectedAudioId(null);
@@ -627,6 +651,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCue(cueId: string) {
+    publishSelection("subtitle",cueId,`字幕 ${(activeSubtitleTrack?.cues.findIndex(item=>item.id===cueId) ?? 0)+1}`);
     activateTaskSelection();
     setSelectedAudioId(null);
     if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId || selectedAudioId) invalidateEditPreview();
@@ -637,6 +662,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectNarrationSegment(segmentId: string) {
+    publishSelection("narration",segmentId,`配音 ${(workspace.narration?.segments.findIndex(item=>item.id===segmentId) ?? 0)+1}`);
     activateTaskSelection();
     if (selectedNarrationSegmentId !== segmentId || selectedClipId || selectedCueId) invalidateEditPreview();
     setSelectedClipId(null);
@@ -733,9 +759,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function askAssistant() {
     const message = editCommand.trim();
     if (!message) return;
-    const selectedReference = selectedTaskReference;
-    const materialSnapshot = selectedReference ? null : selectedMaterialReference?.selection ?? null;
-    const snapshotPlayhead = selectedReference?.kind === "clip" && playheadRef.current !== null ? Math.round(playheadRef.current * 1000) : null;
+    const taskReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
+    const selectedReference = taskReferences[0];
+    const materialSnapshot = taskReferences.length ? null : selectedMaterialReference?.selection ?? null;
+    const snapshotPlayhead = selectedReference?.kind === "shot" && playheadRef.current !== null ? Math.round(playheadRef.current * 1000) : null;
     if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
     invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -762,7 +789,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         return;
       }
       if (materialSnapshot) {
-        await sendMaterialAssistantTurn(message, turn.conversationId, materialSnapshot, turn.clientRequestId, expectedDraftVersion, onStreamEvent);
+        await sendMaterialAssistantTurn(message, turn.conversationId, materialSnapshot, turn.clientRequestId, expectedDraftVersion, onStreamEvent, selectionState?.version);
         if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
         return;
       }
@@ -770,15 +797,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         conversation_id: turn.conversationId,
         client_request_id: turn.clientRequestId,
         expected_draft_version: expectedDraftVersion,
+        expected_reference_version: selectionState?.version,
         expected_timeline_version_id: task.current_timeline_version_id,
         expected_timeline_sequence: task.timeline_sequence,
         ...(selectedKnowledgeReference ? { selected_knowledge_reference: { knowledge_item_id: selectedKnowledgeReference.knowledge_item_id, version: selectedKnowledgeReference.version, ...(selectedKnowledgeReference.locator ? { locator: selectedKnowledgeReference.locator } : {}) } } : {}),
         ...(selectedProfileReference ? {selected_profile_reference:{kind:selectedProfileReference.kind,profile_id:selectedProfileReference.profile_id,version:selectedProfileReference.version}} : {}),
         message,
         context_stage: activeView,
-        selected_object_refs: selectedReference
-          ? [selectedReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])]
-          : [],
+        // The API derives object refs from the frozen selection CAS, including multi-select.
+        selected_object_refs: [],
         playhead_ms: snapshotPlayhead,
       }, onStreamEvent);
       if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
@@ -952,6 +979,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectAudio(id: string, time?: number) {
+    publishSelection("audio",id,"选中音轨");
     activateTaskSelection();
     setSelectedOverlayId(null);
     invalidateEditPreview(); setEditorDraft(false); setSelectedAudioId(id);
@@ -1250,7 +1278,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
+    ? <><button type="button" aria-pressed={addReferences} onClick={()=>setAddReferences(value=>!value)}>{addReferences ? "多选引用中" : "多选引用"}</button><ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} /></>
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (

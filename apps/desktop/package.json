@@ -64,6 +64,7 @@
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },
       { "from": "../api/agent_tools", "to": "agent-tools", "filter": ["**/*.ts"] },
+      { "from": "../api/agent_runtime", "to": "agent_runtime", "filter": ["**/*.mjs", "**/*.md"] },
       { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] }
     ],
     "publish": {

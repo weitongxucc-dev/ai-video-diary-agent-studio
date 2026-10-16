@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed, install_sdk_fixture
 import json
 import shutil
 import subprocess
@@ -19,7 +20,6 @@ from app.assistant_pi import (
     AssistantStopped,
     AssistantUnavailable,
     _PiStreamProjector,
-    _last_answer_and_preview,
     _run_pi_streaming,
     _safe_tool_result_summary,
     register_turn_control,
@@ -33,6 +33,7 @@ from app.config import Settings
 
 @pytest.fixture(autouse=True)
 def isolated_host_preflight(monkeypatch):
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     # This file isolates Pi subprocess behavior. The shipped Node and real HTTP
     # preflight are exercised without this seam in test_pi_instruction_closure.
     monkeypatch.setattr(pi_module, "_read_task_before_pi", lambda _extension, env, _cwd: {
@@ -246,7 +247,7 @@ def test_pi_events_return_final_answer_and_preview(operation_type, before, after
          "content": [{"type": "text", "text": model_text}]}},
         {"type": "agent_settled"},
     ])
-    reply, returned_preview = _last_answer_and_preview(output)
+    reply, returned_preview = project_event_fixture(output)
     assert returned_preview == preview
     assert f"修改前：{before}" in reply and f"修改后：{after}" in reply
     assert "本次实际修改" in reply
@@ -268,7 +269,7 @@ def test_pi_events_leave_failed_edit_reply_without_a_proposal():
          "content": [{"type": "text", "text": "没有明确裁剪位置，请先说明百分比。"}]}},
         {"type": "agent_settled"},
     ])
-    assert _last_answer_and_preview(output) == ("没有明确裁剪位置，请先说明百分比。", None)
+    assert project_event_fixture(output) == ("没有明确裁剪位置，请先说明百分比。", None)
 
 
 def test_material_read_preserves_pi_clarification_and_requires_settled_turn():
@@ -281,12 +282,12 @@ def test_material_read_preserves_pi_clarification_and_requires_settled_turn():
          "content": [{"type": "text", "text": pi_answer}]}},
         {"type": "agent_settled"},
     ]
-    assert _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events), "material_result") == (
+    assert project_event_fixture("\n".join(json.dumps(event, ensure_ascii=False) for event in events), "material_result") == (
         pi_answer,
         {"kind": "material_result", "material_result": material},
     )
     with pytest.raises(AssistantUnavailable):
-        _last_answer_and_preview("\n".join(json.dumps(event, ensure_ascii=False) for event in events[:-1]), "material_result")
+        project_event_fixture("\n".join(json.dumps(event, ensure_ascii=False) for event in events[:-1]), "material_result")
 
 
 def test_material_saved_update_reply_comes_from_write_readback():
@@ -301,7 +302,7 @@ def test_material_saved_update_reply_comes_from_write_readback():
          "content": [{"type": "text", "text": "我已经把未确认的请求写进去了。"}]}},
         {"type": "agent_settled"},
     ])
-    reply, result = _last_answer_and_preview(output, "material_result")
+    reply, result = project_event_fixture(output, "material_result")
     assert reply == "整条素材的我的标签已保存并回读：成片素材。"
     assert result == {"kind": "material_result", "material_result": details}
 
@@ -315,7 +316,7 @@ def test_material_tool_success_without_exact_object_readback_is_not_claimed():
         {"type": "agent_settled"},
     ])
     with pytest.raises(AssistantUnavailable):
-        _last_answer_and_preview(output, "material_result")
+        project_event_fixture(output, "material_result")
 
 
 def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monkeypatch, tmp_path):
@@ -343,7 +344,7 @@ def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monke
 
 def test_pi_events_reject_incomplete_turn():
     with pytest.raises(AssistantUnavailable):
-        _last_answer_and_preview('{"type":"agent_settled"}')
+        project_event_fixture('{"type":"agent_settled"}')
 
 
 def test_pi_stream_projects_only_text_and_safe_business_tool_status():
@@ -499,7 +500,7 @@ def test_pi_execution_action_reply_uses_returned_job_state_not_model_claim():
          "content": [{"type": "text", "text": "成片已经做好了。"}]}},
         {"type": "agent_settled"},
     ])
-    assert _last_answer_and_preview(output, "execution_action") == (
+    assert project_event_fixture(output, "execution_action") == (
         "连续制作已提交并排队，尚未完成；可在任务页查看实际进度。",
         {"kind": "execution_action", "action": "start",
          "status": {"job": {"status": "queued"}, "video_ready": False}},
@@ -520,7 +521,7 @@ def test_creation_execution_read_canonical_rejects_model_claim_of_new_submission
     output = "\n".join(json.dumps(item) for item in [{"type":"tool_execution_end", "toolName":name,
         "isError":False,"result":result}, {"type":"message_end", "message":{"role":"assistant", "stopReason":"stop",
         "content":[{"type":"text", "text":"已按指令提交了恢复，渲染再次失败。"}]}}, {"type":"agent_settled"}])
-    answer, preview = _last_answer_and_preview(output)
+    answer, preview = project_event_fixture(output)
     assert preview == {"kind":"execution_result", "action":None, "status":details["status"]}
     assert "已查询原制作作业" in answer and "本轮未提交新的开始或恢复请求" in answer
     assert "已按指令提交" not in answer and "已提交并排队" not in answer
@@ -538,7 +539,7 @@ def test_creation_execution_read_after_submission_preserves_write_action_and_ori
                 "tool_call_id":"nested-read", "is_error":False, "result":{"kind":"execution_result", "status":observed}}]}}},
         {"type":"message_end", "message":{"role":"assistant", "stopReason":"stop", "content":[{"type":"text","text":"仅查询了旧作业。"}]}},
         {"type":"agent_settled"}])
-    answer, preview = _last_answer_and_preview(output)
+    answer, preview = project_event_fixture(output)
     assert preview == {"kind":"execution_action", "action":"resume", "status":observed if read_id=="submitted-job" else written}
     assert "本轮未提交" not in answer
 
@@ -554,7 +555,7 @@ def test_pi_topic_generation_reply_preserves_real_candidates_and_unconfirmed_sta
          "content": [{"type": "text", "text": "已经替你选好了。"}]}},
         {"type": "agent_settled"},
     ])
-    reply, generated = _last_answer_and_preview(output, "topic_generation")
+    reply, generated = project_event_fixture(output, "topic_generation")
     assert reply == "已为当前任务生成 1 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。"
     assert generated == {"kind": "topic_generation", "topics": topics}
 
@@ -595,7 +596,7 @@ def test_observation_job_is_an_actual_receipt_and_never_a_completed_visual_judgm
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
          "content": [{"type": "text", "text": "画面完全正确。"}]}}, {"type": "agent_settled"},
     ])
-    answer, preview = _last_answer_and_preview(output, "edit_preview")
+    answer, preview = project_event_fixture(output, "edit_preview")
     assert preview == {"kind": "media_job", "media_job": job}
     assert "尚未取得成功检查结果" in answer and "画面完全正确" not in answer
 
@@ -608,15 +609,13 @@ def test_pi_events_keep_plan_preview_separate_from_edit_preview():
          "content": [{"type": "text", "text": "请检查新任务预检。"}]}},
         {"type": "agent_settled"},
     ])
-    assert _last_answer_and_preview(output, "plan_preview") == ("请检查新任务预检。", {"name": "新任务"})
-    assert _last_answer_and_preview(output, "edit_preview") == ("请检查新任务预检。", None)
+    assert project_event_fixture(output, "plan_preview") == ("请检查新任务预检。", {"name": "新任务"})
+    assert project_event_fixture(output, "edit_preview") == ("请检查新任务预检。", None)
 
 
 def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
@@ -624,9 +623,9 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
 
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        commands.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+        commands.append(json.loads(_kwargs["input"]))
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "tool_execution_end", "toolName": "preview_script_draft",
                         "isError": False, "result": {"details": {"kind": "script_draft",
                         "preview": {"script_id": "draft-one"}}}}),
@@ -640,16 +639,16 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
         reply, preview = run_task_turn(settings, workspace_id="workspace-one", task_id=task_id,
                                        message="把开头改短", stage="script", selected_refs=[], playhead_ms=None)
         assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one"})
-    assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
-    assert commands[0][commands[0].index("--session-id") + 1] != commands[2][commands[2].index("--session-id") + 1]
-    tools = commands[0][commands[0].index("--tools") + 1].split(",")
+    assert commands[0]["sessionId"] == commands[1]["sessionId"]
+    assert commands[0]["sessionId"] != commands[2]["sessionId"]
+    tools = commands[0]["tools"]
     assert {"read_current_task", "preview_script_draft", "preview_typed_edit", "read_task_object"} <= set(tools)
     assert "generate_creation_task_topics" not in tools
     _, edit_preview = run_task_turn(settings, workspace_id="workspace-one", task_id="task-one",
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
     assert edit_preview is None
-    assert commands[3][commands[3].index("--session-id") + 1] != commands[0][commands[0].index("--session-id") + 1]
-    edit_tools = set(commands[3][commands[3].index("--tools") + 1].split(","))
+    assert commands[3]["sessionId"] != commands[0]["sessionId"]
+    edit_tools = set(commands[3]["tools"])
     assert {"preview_typed_edit", "read_task_edit_capabilities", "read_task_object", "start_creation_execution"} <= edit_tools
     assert "generate_creation_task_topics" not in edit_tools and "preview_script_draft" not in edit_tools
 
@@ -658,9 +657,7 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
 def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_path):
     """已验证的本地成员令牌必须进到工具运行环境，否则工具回调会变成匿名 local 读取。"""
     (tmp_path / "models").mkdir()
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
@@ -668,9 +665,9 @@ def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_
 
     def fake_run(cmd, **kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         envs.append(kwargs["env"])
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
             '{"type":"agent_settled"}',
@@ -692,9 +689,7 @@ def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_
 
 def test_trusted_callers_do_not_share_the_pi_session(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
@@ -702,9 +697,9 @@ def test_trusted_callers_do_not_share_the_pi_session(monkeypatch, tmp_path):
 
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        sessions.append(cmd[cmd.index("--session-id") + 1])
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+        sessions.append(json.loads(_kwargs["input"])["sessionId"])
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
             '{"type":"agent_settled"}',
@@ -728,17 +723,15 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     model_root.mkdir()
     settings = Settings(model_root_path=str(model_root), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     captured = {}
 
     def fake_run(cmd, **kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
         captured.update(cmd=cmd, kwargs=kwargs)
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "收到。"}]}}),
             '{"type":"agent_settled"}',
@@ -749,12 +742,13 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
                                     message="请说明当前任务", stage="montage",
                                     selected_refs=["clip:clip-1"], playhead_ms=1200)
     assert (answer, preview) == ("收到。", None)
-    model_input = json.loads(captured["kwargs"]["input"].split("本轮输入（JSON）：\n", 1)[1])
+    model_input = json.loads(json.loads(captured["kwargs"]["input"])["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert model_input["original_user_instruction"] == "请说明当前任务"
     assert captured["kwargs"]["env"]["PATH"].split(__import__("os").pathsep)[0] == str(fake_pi.parent)
     assert captured["kwargs"]["env"]["AI_VIDEO_DIARY_LLM_KEY"] == "private-test-key"
     assert "private-test-key" not in " ".join(captured["cmd"])
-    assert {"--print", "--no-builtin-tools", "--no-context-files", "--no-extensions"} <= set(captured["cmd"])
+    assert len(captured["cmd"]) == 2 and captured["cmd"][1].endswith("agent_runtime/host.mjs")
+    assert "--print" not in captured["cmd"]
     runtime_root = Path(captured["kwargs"]["cwd"])
     assert runtime_root.parent.parent == tmp_path / "agent" / "workspaces" / "workspace-1"
     assert "private-test-key" not in (runtime_root / "models.json").read_text()
@@ -767,7 +761,7 @@ def test_continuation_input_preserves_authorization_without_replaying_its_first_
     captured = {}
     def completed(_cmd, **kwargs):
         captured.update(kwargs)
-        return subprocess.CompletedProcess(_cmd, 0, stdout="\n".join([
+        return sdk_completed(_cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
                 "content": [{"type": "text", "text": "依据实际完成来源继续。"}]}}), '{"type":"agent_settled"}']), stderr="")
     monkeypatch.setattr(pi_module.subprocess, "run", completed)
@@ -776,7 +770,7 @@ def test_continuation_input_preserves_authorization_without_replaying_its_first_
                "completed_source_slots": [{"name": "title.png", "source_ref": "artifacts/actual/title.png"}]}
     run_task_turn(settings, workspace_id="local", task_id="task", message=raw, stage="montage", selected_refs=[],
         playhead_ms=None, continuation_context=context)
-    payload = json.loads(captured["input"].split("本轮输入（JSON）：\n", 1)[1])
+    payload = json.loads(json.loads(captured["input"])["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert payload["original_authorization_context"] == raw and "original_user_instruction" not in payload
     assert payload["trusted_continuation_checkpoint"] == context
     assert captured["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == raw
@@ -790,7 +784,7 @@ def test_pi_events_keep_thinking_outside_answer_without_rewriting_text():
                      {"type": "text", "text": text}]}},
         {"type": "agent_settled"},
     ])
-    assert _last_answer_and_preview(output) == (text, None)
+    assert project_event_fixture(output) == (text, None)
 
 
 @pytest.mark.parametrize("provider,model", [
@@ -817,9 +811,7 @@ def test_pi_reasoning_split_does_not_change_other_models(monkeypatch, tmp_path, 
 
 def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_provider="minimax")
     with pytest.raises(AssistantUnavailable, match="API Key"):
@@ -859,14 +851,14 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "_assistant_task_clip_material_selection", lambda *_args: None)
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event))
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event, list_subtitle_tracks=lambda *_: []))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
     message = "请检查镜头"
     saved = repo.save_draft(conversation["id"], "workspace-a", "member-caller", message, 0)
     payload = {"conversation_id": conversation["id"], "message": message, "context_stage": "montage",
                "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
-               "selected_object_refs": ["clip:clip-1"], "playhead_ms": 1200}
+               "selected_object_refs": [], "playhead_ms": 1200, "expected_reference_version":0}
     denied = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload,
                          headers={"x-test-workspace": "workspace-b"})
     assert denied.status_code == 404
@@ -875,7 +867,7 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     assert accepted.status_code == 200
     assert accepted.json()["reply"] == "收到。"
     assert seen[0]["workspace_id"] == "workspace-a"
-    assert seen[0]["selected_refs"] == ["clip:clip-1"]
+    assert seen[0]["selected_refs"] == []
 
 
 def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp_path):
@@ -943,9 +935,7 @@ def test_new_plan_turn_uses_workspace_and_conversation_boundary(monkeypatch, tmp
 
 def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_api_key="private-test-key",
                         llm_api_key_provider="minimax")
@@ -953,9 +943,9 @@ def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
 
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        sessions.append(cmd[cmd.index("--session-id") + 1])
-        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join([
+            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+        sessions.append(json.loads(_kwargs["input"])["sessionId"])
+        return sdk_completed(cmd, 0, stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "请补充目标。"}]}}),
             '{"type":"agent_settled"}',

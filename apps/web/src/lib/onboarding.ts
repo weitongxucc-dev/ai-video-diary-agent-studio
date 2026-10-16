@@ -514,9 +514,9 @@ export function buildOnboardingSnapshot(input: {
     sections = [
       {
         id: "required",
-        title: "开始创作所需",
+        title: "工作区存储",
         description:
-          "只有这些本地视频流水线条件会阻止进入工作台。",
+          "既定工作区存储必须可用；身份和成员关系由服务端核实。",
         entries: preflightEntries.filter((entry) => entry.required),
       },
       {
@@ -534,19 +534,17 @@ export function buildOnboardingSnapshot(input: {
     (entry) => entry.state === "ready",
   ).length;
   const blockingCount = allEntries.filter(
-    (entry) => entry.state === "missing",
+    (entry) => entry.required === true && entry.state !== "ready",
   ).length;
   const attentionCount = allEntries.filter(
-    (entry) => entry.state === "attention" || entry.state === "unknown",
+    (entry) => entry.required !== true && entry.state !== "ready",
   ).length;
   const total = allEntries.length;
   const percent = total === 0 ? 0 : Math.round((readyCount / total) * 100);
 
   return {
     ready:
-      input.preflight === undefined
-        ? blockingCount === 0 && attentionCount === 0
-        : input.preflight?.overall === "ready",
+      input.preflight?.overall === "ready",
     completion: { ready: readyCount, total, percent },
     blockingCount,
     attentionCount,
@@ -580,25 +578,28 @@ export function summarizeOnboardingHealth(snapshot: OnboardingSnapshot): {
   headline: string;
   detail: string;
 } {
+  if (!snapshot.sources.preflight) {
+    return { tone: "red", headline: "无法确认工作区存储", detail: "请重新检查。可选配置状态不能代替工作区存储检查。" };
+  }
   if (snapshot.ready) {
     if (snapshot.attentionCount > 0) {
       return {
         tone: "yellow",
         headline: "已可进入工作台",
-        detail: `核心环境已就绪，还有 ${snapshot.attentionCount} 项增强能力可稍后配置。`,
+        detail: `工作区存储已就绪，还有 ${snapshot.attentionCount} 项增强能力可稍后配置。`,
       };
     }
     return {
       tone: "green",
-      headline: "创作环境已就绪",
-      detail: `${snapshot.completion.ready}/${snapshot.completion.total} 项就绪，可以开始今日工作。`,
+      headline: "工作区可用",
+      detail: "可以进入工作台，各项能力在使用时检查实际条件。",
     };
   }
   if (snapshot.blockingCount > 0) {
     return {
       tone: "red",
       headline: `还有 ${snapshot.blockingCount} 项必须配置`,
-      detail: `在它们补齐之前，AI 流水线会持续报错。${
+      detail: `请恢复原工作区存储后重试。${
         snapshot.attentionCount > 0
           ? `另有 ${snapshot.attentionCount} 项建议关注。`
           : ""

@@ -22,6 +22,7 @@ export function localMemberTokenCookieAssignment(
 }
 
 const NATIVE_MEDIA_PATHS = [
+  /^\/api\/production\/materials\/discovery\/[^/]+\/candidates\/[^/]+\/preview$/,
   /^\/api\/media\/(?:person-profiles|voice-profiles)\/[^/]+\/reference$/,
   /^\/api\/media\/previews\/(?:voice|avatar_lipsync)\/[^/]+\/media$/,
   /^\/api\/creation-tasks\/[^/]+\/person-renders\/[^/]+\/media$/,

@@ -100,13 +100,13 @@ describe("buildOnboardingSnapshot", () => {
       generated_at: "2026-08-13T00:00:00Z",
       checks: [
         {
-          id: "deepseek",
-          label: "DeepSeek",
+          id: "workspace_storage",
+          label: "工作区存储",
           status: "missing",
-          summary: "尚未配置",
-          impact: "无法生成内容。",
-          repair_action: "打开设置填写 API Key。",
-          settings_target: "deepseek_api_key",
+          summary: "存储不可用",
+          impact: "无法保存工作区数据。",
+          repair_action: "连接原磁盘。",
+          settings_target: null,
           required: true,
         },
       ],
@@ -127,11 +127,11 @@ describe("buildOnboardingSnapshot", () => {
     expect(snapshot.ready).toBe(false);
     expect(snapshot.sections).toHaveLength(2);
     expect(snapshot.sections[0]?.entries[0]).toMatchObject({
-      id: "deepseek",
+      id: "workspace_storage",
       state: "missing",
-      detail: "尚未配置",
+      detail: "存储不可用",
     });
-    expect(snapshot.sections[0]?.entries[0]?.impact).toContain("打开设置填写 API Key");
+    expect(snapshot.sections[0]?.entries[0]?.impact).toContain("连接原磁盘");
   });
 
   it("returns ready=false when any entry is missing but keeps totals consistent", () => {
@@ -231,7 +231,7 @@ describe("buildOnboardingSnapshot", () => {
     expect(entry?.state).toBe("attention");
   });
 
-  it("flags missing entries as blocking and never includes secret values", () => {
+  it("never infers an entry gate from optional diagnostics or exposes secrets", () => {
     const snapshot = buildOnboardingSnapshot({
       setup: null,
       setupError: "is_setup down",
@@ -249,7 +249,7 @@ describe("buildOnboardingSnapshot", () => {
       statusError: null,
     });
 
-    expect(snapshot.blockingCount).toBeGreaterThan(0);
+    expect(snapshot.blockingCount).toBe(0);
     expect(snapshot.ready).toBe(false);
     const json = JSON.stringify(snapshot);
     expect(json).not.toContain("super-secret-leak");

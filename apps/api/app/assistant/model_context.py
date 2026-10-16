@@ -22,7 +22,7 @@ def capability_envelope(*, tool_names, task_id, stage, selected_refs, material_s
     capability_envelope = (
         "以下是宿主绑定的本轮工具和对象事实。只使用本轮声明的工具；具体对象、版本和能力条件由实际工具回执判断。"
         "历史工具清单、失败及助手解释不能定义本轮工具可用性；历史真实提案、修改和作业保留其当时的事实，不能因本轮工具不同而称其为演示或伪造。"
-        "用户已委托挑选替换镜头且本轮有候选和修改预览入口时，按真实候选完成选择并生成待确认修改，不追加必须手动选新素材的限制。"
+        "用户已委托挑选替换镜头且本轮有候选和编辑入口时，按真实候选完成选择，在API直接能力与明确授权内保存修改，其他动作准备提案，不追加必须手动选新素材的限制。"
         "普通回复用镜头顺序、内容和可见变化说明结果，不展示cue、asset、segment、clip、proposal等内部编号、字段名或操作类型；原始工具结果仍作为证据保留。\n"
         "本轮能力与对象（JSON）：\n" + json.dumps(capability_context, ensure_ascii=False) + "\n"
     )
@@ -36,19 +36,19 @@ def enrich_prompt(prompt, envelope, *, continuation_context, task_id, knowledge_
                    "先读取当前事实、原请求结果和实际输出检查，再判断原要求剩余步骤；已成功的来源创建、保存或制作不得重放。"
                    "结果未知只查询原请求。已核验未提交/拒绝且没有副作用时可修正输入，成功结果确有质量问题时可在原授权内准备新的修改，均受本轮限额。"
                    "普通制作作业用read_creation_execution读取原job_id；read_task_media_job仅供预览、图片来源和观察作业，不能混用。"
-                   "PNG完成后若原要求是放入画面，应继续准备实际图层修改，并等待真实采用；只生成PNG不算完成画面要求。"
+                   "PNG完成后若原要求是放入画面，在API direct_apply声明与明确授权内保存图层；能力要求提案时等待实际采用；只生成PNG不算完成画面要求。"
                    "completed_source_slots是宿主核验的已完成来源；按name和固定input_refs复用其真实source_ref/artifact/hash，"
                    "不得因为旧原句要求先创建而重做同槽，也不得换一段代码、调用ID或输出名绕过完成记录。不同合法来源仍按原授权和实际输入处理。"
-                   "宿主核验实际采用后，原要求明确包含生成成片才继续制作，不把事件文本或模型推断当新确认。"
+                   "宿主核验真实保存或采用后，原要求明确包含生成成片才在新版本继续制作，不把事件文本或模型推断当新确认。"
                    "proposed、预览成功和观察完成都不是采用；没有真实confirmed/applied且当前版本匹配的采用事实时，不能启动后续制作或声称已采用。"
                    "观察样本的object_refs只表示时间线计划关联，不能说像素中检出了图层、图层已消失或位置正确；"
                    "像素均值/极值不能证明边框为2px，程序要求也不代表输出检查已证明。只报告实际测量，语义/OCR/听感unavailable时明确保留。"
                    "已满足原要求则报告实际结果并结束；无进展、缺少必要选择或权限则说明具体阻断，不无限轮询。\n"
                    "宿主核验的接续上下文（JSON）：\n" + json.dumps(continuation_context, ensure_ascii=False) + "\n")
     if task_id:
-        prompt += "\n音频混音和画面效果沿共同preview_typed_edit目录，不造字段或使用旧固定中文命令绕路。先按真实ID读取音轨/片段/镜头当前值及版本。EditAudioTimeline的audio_edit指定action=update(片段)或track(音轨)、target_id及非空values；音乐片段降低6dB是当前片段gain_db减6后的绝对值，音轨gain单独保留，降低到−6dB才直接设−6。片段淡入/淡出单位毫秒，loudness_target_lufs显式null可清除目标，duck_under_voice只音乐音轨。AdjustVisualEffects指定clip_ids及非空effects，只传用户要求的字段；未提到的颜色、几何、淡入淡出保留，每个镜头分别merge，不提交一整套默认值。画面fade用秒，曝光EV、旋转度、缩放倍率和位置比例按真实API units；效果时钟事实是只读依据，不放进effects patch。本轮音量关键点只读、不开放solo持久化或独立音频retime；人像美化不宣称可执行，仍由API实际许可决定。类型化预览和实际前后试听/视频不是已经采用；等普通界面真实采用后，原要求明确包含生成成片才继续已有制作动作。"
+        prompt += "\n音频混音和画面效果按共同API能力：明确动作且direct_apply已声明时用apply_typed_edit保存；必要提案用preview_typed_edit，不造字段或使用旧固定中文命令绕路。先按真实ID读取音轨/片段/镜头当前值及版本。EditAudioTimeline的audio_edit指定action=update(片段)或track(音轨)、target_id及非空values；音乐片段降低6dB是当前片段gain_db减6后的绝对值，音轨gain单独保留，降低到−6dB才直接设−6。片段淡入/淡出单位毫秒，loudness_target_lufs显式null可清除目标，duck_under_voice只音乐音轨。AdjustVisualEffects指定clip_ids及非空effects，只传用户要求的字段；未提到的颜色、几何、淡入淡出保留，每个镜头分别merge，不提交一整套默认值。画面fade用秒，曝光EV、旋转度、缩放倍率和位置比例按真实API units；效果时钟事实是只读依据，不放进effects patch。本轮音量关键点只读、不开放solo持久化或独立音频retime；人像美化不宣称可执行，仍由API实际许可决定。类型化预览、前后试听或视频不代替保存回执。提案须实际采用；直接编辑须原journal核验。若原要求包含生成成片，保存后只能由真实apply事件携带原授权接续到新版本，本轮不可自行换CAS或绕过写入锁。"
         prompt += "\ncodemode中的read_task_graphic_sources、list_media_script_tools、describe_media_script_tool、preview_media_script_tool、read_task_media_job返回结构化对象，不是JSON文本。直接读sourcePage.items、toolPage.items、tool.version/parameter_schema和result.media_job，不对这些对象JSON.parse；CLI stdout才是JSON文本。用户明确给出的工具ID可直接只读describe，由后端核权限，不要求先列举；调用和CAS写仍需本轮回读的真实元数据、版本及当前授权。"
-        prompt += "\n当前阶段只排序已有对象的读取和预览能力。source_start/end仅是当前取用区间，不是全部可用范围；未知范围不能断言素材不足。ChangeClipSpeed固定slot时sourceSpan=slotSpan*rate，linkedSpeed另循API实际说明。音频存在性看narration摘要及montage逻辑引用，0segments/空selected_voice不代表无配音。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。parameters是API parameters参数对象；inputs[name]按input_refs的name映射授权PNG的可信读取路径字符串，用Image.open(inputs[name])读取。outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串；用Pillow图像对象的image.save(outputs['name.png'])写声明PNG，name.png须与声明名称一致。不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称。实际source_ref可供EditGraphicOverlay/ImageOverlay后续类型化提案，不自动采用或生成成片。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
+        prompt += "\n当前阶段只排序已有对象的读取和预览能力。source_start/end仅是当前取用区间，不是全部可用范围；未知范围不能断言素材不足。ChangeClipSpeed固定slot时sourceSpan=slotSpan*rate，linkedSpeed另循API实际说明。音频存在性看narration摘要及montage逻辑引用，0segments/空selected_voice不代表无配音。图片程序沿read_media_script_capabilities/preview_media_script/read_task_media_job，succeeded graphic_source只代表可编辑PNG来源。parameters是API parameters参数对象；inputs[name]按input_refs的name映射授权PNG的可信读取路径字符串，用Image.open(inputs[name])读取。outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串；用Pillow图像对象的image.save(outputs['name.png'])写声明PNG，name.png须与声明名称一致。不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称。实际source_ref可供EditGraphicOverlay/ImageOverlay；按direct_apply与明确授权保存，必要提案等待采用，来源生成不等于图层已保存或成片已生成。原程序请求定位phase=script；未知仅回读，不重POST，不猜配方路由。"
         prompt += "\n用户明确复用已有指定图片来源时，按本轮真实列表的source_ref、artifact_id及sha256/size_bytes修订使用原来源，不自行重新生成或用同名图替换。找不到或同名歧义时说明具体缺口或询问，不能把另一个来源说成原输入。"
     if knowledge_reference:
         prompt += "\n本轮用户明确引用了知识固定版本和范围。涉及这份资料的事实先调用 read_selected_knowledge，不能用 find_knowledge 的其他版本或定位替代；工具不可访问时说明引用不可读取。"
@@ -82,7 +82,7 @@ def task_message(facts, message, continuation_context):
         model_message = (
             "这是宿主真实业务事件触发的接续。原始授权保留完整目标和限制，不是要求从第一步重新执行。"
             "本轮只评估可信检查点的剩余动作，先复用已完成来源，再依据当前事实继续；阶段性的旧句“提交后本轮结束”已完成。"
-            "等待实际采用时停止动作；观察完成、计划关联或模型回复不能代替采用或像素检测。\n"
+            "提案尚未采用时停止动作；已核验直接保存后从其result_version继续。观察完成、计划关联或模型回复不能代替保存或实际产物检查。\n"
             "本轮输入（JSON）：\n" + json.dumps({"current_task_facts": facts,
                 "original_authorization_context": message, "trusted_continuation_checkpoint": continuation_context}, ensure_ascii=False)
         )

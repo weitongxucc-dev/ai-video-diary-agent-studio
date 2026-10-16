@@ -120,6 +120,12 @@ def prepare_runtime_dependencies(
         visual_understanding=LocalVisualUnderstanding(
             catalog, settings.effective_temporary_root_path, settings.native_ocr_worker_path,
         ),
+        discovery_excluded_roots=(
+            Path(settings.video_output_path).expanduser(),
+            Path(settings.draft_output_path).expanduser(),
+            Path(settings.model_root_path).expanduser(),
+            settings.effective_temporary_root_path,
+        ),
     )
     same_database = current_database is not None and (
         Path(current_database.production.database_path).expanduser().resolve()

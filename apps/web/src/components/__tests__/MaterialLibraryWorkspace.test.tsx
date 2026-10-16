@@ -3,6 +3,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MaterialAsset, MaterialIntakeStatus, MaterialSegment } from "@/lib/types";
 import type { DesktopVoiceRecorderProps } from "@/components/DesktopVoiceRecorder";
+const navigation = vi.hoisted(() => ({ query: "", push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: navigation.push }), useSearchParams: () => new URLSearchParams(navigation.query) }));
+vi.mock("@/components/material-library/MaterialDiscoveryPanel", () => ({ MaterialDiscoveryPanel: () => <span>候选扫描独立组件</span> }));
+vi.mock("@/lib/api/materials", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/api/materials")>(), getProductionMaterial: vi.fn() }));
+import { getProductionMaterial } from "@/lib/api/materials";
 const recorder = vi.hoisted(() => ({ props: null as DesktopVoiceRecorderProps | null }));
 const assistantFixtures = vi.hoisted(() => ({
   conversations: new Map<string, import("@/lib/types").AssistantConversation>(),
@@ -72,7 +77,7 @@ import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeSt
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
-import { AssistantConversationProvider, useAssistantMaterialReference } from "@/components/AssistantConversationProvider";
+import { AssistantConversationProvider, useAssistantMaterialReference, useAssistantSelection } from "@/components/AssistantConversationProvider";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", visibility:"private", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
   usage_role_reason:"", review_status:"approved", use_state:"available", analysis_status:"ready", analysis_message:"", segments:[], created_at:"2026-09-20", updated_at:"2026-09-20" };
@@ -92,6 +97,7 @@ const intakeReady: MaterialIntakeStatus = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  navigation.query = "";
   assistantFixtures.conversations.clear();
   assistantFixtures.current.clear();
   assistantFixtures.sequence = 0;
@@ -215,7 +221,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
     "给片段加上产品演示", expect.any(String), { scope: "segment", asset_id: "asset", segment_id: "segment" },
-    expect.any(String), expect.any(Number), expect.any(Function),
+    expect.any(String), expect.any(Number), expect.any(Function), undefined,
   ));
   fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
   resolveTurn({
@@ -244,7 +250,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
   fireEvent.submit(screen.getByRole("textbox", { name: "素材对话" }).closest("form")!);
   await waitFor(() => expect(sendMaterialAssistantTurn).toHaveBeenCalledWith(
     "给整条素材添加整条AI标签", expect.any(String), { scope: "asset", asset_id: "asset" },
-    expect.any(String), expect.any(Number), expect.any(Function),
+    expect.any(String), expect.any(Number), expect.any(Function), undefined,
   ));
   await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条AI标签")).toBeInTheDocument());
 });
@@ -676,6 +682,7 @@ it("keeps failed intake visible and retries the selected asset", async () => {
   render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets:[failed] }} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
   fireEvent.click(screen.getByRole("button", { name: "导入素材" }));
   expect((await screen.findAllByText("本地分析服务暂不可用；检查服务后重试。")).length).toBeGreaterThan(0);
+  fireEvent.click(within(screen.getByRole("dialog", { name:"导入素材" })).getByRole("button", { name:"关闭卡片" }));
   fireEvent.click(screen.getByRole("button", { name:"重试分析" }));
   await waitFor(() => expect(retryMaterialIntake).toHaveBeenCalledWith("asset"));
   await waitFor(() => expect(screen.queryByRole("button", { name:"重试分析" })).not.toBeInTheDocument());
@@ -1150,6 +1157,7 @@ it("previews an imported image with its own element and shows the recorded sourc
   };
   vi.mocked(getProductionMaterials).mockResolvedValue(stillLibrary);
   renderBound({ initialLibrary: stillLibrary });
+  fireEvent.click(within(await screen.findByRole("dialog", { name:"导入素材" })).getByRole("button", { name:"关闭卡片" }));
 
   const preview = await screen.findByAltText(/原素材预览：link-abcd\.jpg/);
   expect(preview).toHaveAttribute("src", "/api/production/materials/asset-still/media");
@@ -1627,11 +1635,11 @@ it("publishes only explicit material references with actual versions and leaves 
   }
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={{...library, assets:[fractional]}} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /><ReferenceProbe /></AssistantConversationProvider>);
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
-  fireEvent.click(screen.getByRole("button", { name:/local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name:/^0:04local\.mp4/ }));
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"整条素材 · local.mp4", selection:{scope:"asset", asset_id:"asset", expected_updated_at:fractional.updated_at}}));
-  fireEvent.click(screen.getByRole("button", { name:/0:01.25.*0:03.75/ }));
+  fireEvent.click(screen.getByRole("button", { name:/^0:01.25.*0:03.75/ }));
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"local.mp4 · 片段 0:01.25–0:03.75", selection:{scope:"segment", asset_id:"asset", segment_id:"segment", expected_updated_at:fractional.updated_at, expected_segment_updated_at:"2026-10-10T02:00:00Z"}}));
-  fireEvent.click(screen.getByRole("button", { name:"取消素材引用" }));
+  fireEvent.click(screen.getByRole("button", { name:/^取消素材引用：/ }));
   await waitFor(() => expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null"));
   fireEvent.click(screen.getByRole("button", { name:"对象列表" }));
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
@@ -1640,7 +1648,7 @@ it("publishes only explicit material references with actual versions and leaves 
   fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
   await waitFor(() => expect(screen.getByRole("button", { name:"刷新素材列表" })).not.toBeDisabled());
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
-  fireEvent.click(screen.getByRole("button", { name:/0:01.25.*0:03.75/ }));
+  fireEvent.click(screen.getByRole("button", { name:/^0:01.25.*0:03.75/ }));
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!).selection).toEqual({scope:"segment", asset_id:"asset", segment_id:"segment", expected_updated_at:refreshed.updated_at, expected_segment_updated_at:refreshed.segments[0].updated_at}));
 });
 
@@ -1854,4 +1862,41 @@ it("material scan cannot reset a reopened identical query after its old intake c
   await act(async () => old.resolve(library));
   expect(materialListCards()).toEqual(["reopened.mp4"]);
   expect(getProductionMaterials).toHaveBeenCalledTimes(2);
+});
+
+it("locates a capsule across pages without changing its frozen version", async () => {
+  navigation.query = new URLSearchParams({ locate_ref: JSON.stringify({kind:"material",label:"原片段",selection:{scope:"segment",asset_id:otherAsset.id,segment_id:otherSegment.id,expected_updated_at:"old-version"}}) }).toString();
+  vi.mocked(getProductionMaterial).mockResolvedValue(otherAsset);
+  render(<MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  await screen.findByText("已定位原对象；对象已更新，胶囊仍保留原版本，请明确重新选择后再编辑。");
+  expect(getProductionMaterial).toHaveBeenCalledWith(otherAsset.id);
+  expect(screen.getByText("当前范围：0:01–0:03")).toBeInTheDocument();
+});
+
+
+it("appends explicit asset and segment references while ordinary selection replaces only materials", async () => {
+  function SelectionProbe() {
+    const selection = useAssistantSelection();
+    return <><button type="button" onClick={() => selection?.select([{kind:"voice",profile_id:"voice",version:"v1",label:"我的声音"}], true)}>引用声音</button><output aria-label="全部引用">{JSON.stringify(selection?.items ?? [])}</output></>;
+  }
+  render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /><SelectionProbe /></AssistantConversationProvider>);
+  await screen.findByRole("button", { name:"引用到对话：local.mp4" });
+  fireEvent.click(screen.getByRole("button", { name:"引用声音" }));
+  fireEvent.click(screen.getByRole("button", { name:"引用到对话：local.mp4" }));
+  fireEvent.click(screen.getByRole("button", { name:"引用到对话：自造素材B.mp4" }));
+  fireEvent.click(screen.getByRole("button", { name:"引用到对话：local.mp4 · 片段 0:01–0:03" }));
+  const read = () => JSON.parse(screen.getByLabelText("全部引用").textContent!);
+  await waitFor(() => expect(read()).toEqual([
+    {kind:"voice",profile_id:"voice",version:"v1",label:"我的声音"},
+    {kind:"material",label:"整条素材 · local.mp4",selection:{scope:"asset",asset_id:asset.id,expected_updated_at:asset.updated_at}},
+    {kind:"material",label:"整条素材 · 自造素材B.mp4",selection:{scope:"asset",asset_id:otherAsset.id,expected_updated_at:otherAsset.updated_at}},
+    {kind:"material",label:"local.mp4 · 片段 0:01–0:03",selection:{scope:"segment",asset_id:asset.id,segment_id:segment.id,expected_updated_at:asset.updated_at,expected_segment_updated_at:segment.updated_at}},
+  ]));
+  fireEvent.click(screen.getByRole("button", { name:"引用到对话：local.mp4" }));
+  await waitFor(() => expect(read()).toHaveLength(4));
+  fireEvent.click(screen.getByRole("button", { name:/0:04自造素材B\.mp4/ }));
+  await waitFor(() => expect(read()).toEqual([
+    {kind:"voice",profile_id:"voice",version:"v1",label:"我的声音"},
+    {kind:"material",label:"整条素材 · 自造素材B.mp4",selection:{scope:"asset",asset_id:otherAsset.id,expected_updated_at:otherAsset.updated_at}},
+  ]));
 });

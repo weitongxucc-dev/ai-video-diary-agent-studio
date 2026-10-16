@@ -21,7 +21,7 @@ const api = vi.hoisted(() => ({
   listScriptLibraryEntries: vi.fn(),
   getScriptLibrarySources: vi.fn(),
 }));
-vi.mock("@/lib/assistant-reference", () => ({ referenceAssistantKnowledge: api.referenceAssistantKnowledge }));
+vi.mock("@/lib/assistant-reference", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/assistant-reference")>(), referenceAssistantKnowledge: api.referenceAssistantKnowledge }));
 vi.mock("@/lib/source-api", () => ({
   listKnowledgeItems: api.listKnowledgeItems,
   getKnowledgeItem: api.getKnowledgeItem,
@@ -31,7 +31,7 @@ vi.mock("@/lib/source-api", () => ({
   findCitedVersion: api.findCitedVersion,
   parseKnowledgeReferenceId: api.parseKnowledgeReferenceId,
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), useSearchParams: () => new URLSearchParams(window.location.search) }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
   listScriptLibraryEntries: api.listScriptLibraryEntries,
@@ -79,6 +79,32 @@ beforeEach(() => {
   api.getScriptLibrarySources.mockResolvedValue([]);
 });
 describe("KnowledgePage", () => {
+  it("locates the frozen capsule version after navigation without selecting it again", async () => {
+    const reference = { kind: "knowledge", knowledge_item_id: item.id, version: "v1", label: "原资料" };
+    window.history.replaceState({}, "", `/knowledge?locate_ref=${encodeURIComponent(JSON.stringify(reference))}`);
+    api.getKnowledgeItem.mockResolvedValue({ ...item, versions: [{
+      version: "v1", title: "旧版设备说明", body: "固定版本的原文", saved_at: item.created_at,
+      content_hash: "old-hash", source_item_id: "old-source", file_reference: null,
+      sections: [], parameters: [], source_url: null, fetched_at: null,
+    }] });
+    render(<KnowledgePage />);
+    const detail = await screen.findByRole("complementary", { name: "来源详情" });
+    expect(detail).toHaveTextContent("固定版本的原文");
+    expect(detail).toHaveTextContent("v1");
+    expect(detail).not.toHaveTextContent(item.body!);
+    expect(api.referenceAssistantKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable capsule version without displaying current content as that version", async () => {
+    const reference = { kind: "knowledge", knowledge_item_id: item.id, version: "retired", label: "原资料" };
+    window.history.replaceState({}, "", `/knowledge?locate_ref=${encodeURIComponent(JSON.stringify(reference))}`);
+    api.getKnowledgeItem.mockResolvedValue({ ...item, versions: [] });
+    render(<KnowledgePage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("引用的资料版本已不可用");
+    expect(screen.queryByRole("complementary", { name: "来源详情" })).not.toBeInTheDocument();
+    expect(api.referenceAssistantKnowledge).not.toHaveBeenCalled();
+  });
+
   it("shows actual source content and leaves unsupported use categories unclassified", async () => {
     render(<KnowledgePage />);
     const listModes = screen.getByRole("group", { name:"资料列表显示方式" });
@@ -125,9 +151,9 @@ describe("KnowledgePage", () => {
     expect(detail).toHaveTextContent("版本 2 ·");
     expect(api.referenceAssistantKnowledge).not.toHaveBeenCalled();
     fireEvent.click(within(detail).getByRole("button", { name: "引用第2段" }));
-    expect(api.referenceAssistantKnowledge).toHaveBeenCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title, locator: "第2段" });
+    expect(api.referenceAssistantKnowledge).toHaveBeenCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title, locator: "第2段" }, true);
     fireEvent.click(within(detail).getByRole("button", { name: "引用当前查看版本到对话" }));
-    expect(api.referenceAssistantKnowledge).toHaveBeenLastCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title });
+    expect(api.referenceAssistantKnowledge).toHaveBeenLastCalledWith({ knowledge_item_id: item.id, version: "v2", label: item.title }, true);
   });
 
   it("keeps the add-source action without an empty relation or question panel", async () => {
@@ -303,9 +329,9 @@ describe("knowledge workspace grants", () => {
     await chooseSelectValue(target, "workspace-two");
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));
     expect(api.grantKnowledgeToWorkspace).not.toHaveBeenCalled();
-    const confirmation = screen.getByRole("dialog", { name: "跨空间授权确认" });
+    const confirmation = screen.getByRole("alertdialog", { name: "跨空间授权确认" });
     expect(confirmation).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toHaveFocus());
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(target).toHaveAttribute("data-selected-value", "workspace-two");
     fireEvent.click(screen.getByRole("button", { name: "授予读取与引用" }));

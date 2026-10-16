@@ -4,13 +4,14 @@ import queue
 import subprocess
 import threading
 import time
+import json
 from collections import deque
 from pathlib import Path
 from app.assistant.turn_control import AssistantStopped, TurnControl, _capture_process_group, _process_group_released, _require_process_group_platform
 
 def run_pi_streaming(
     cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
-    timeout_seconds: int, on_event, control: TurnControl, terminate, projector_factory, business_event_lines, turn_id: str | None = None, keep_turn_control: bool = False,
+    timeout_seconds: int, on_event, control: TurnControl, terminate, projector_factory, business_event_lines, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None,
 ) -> subprocess.CompletedProcess[str]:
     stop_event = control.begin(turn_id) if turn_id else None
     _require_process_group_platform()
@@ -49,11 +50,13 @@ def run_pi_streaming(
         assert process.stdin is not None
         try:
             process.stdin.write(message)
+            process.stdin.flush()
         except BrokenPipeError:
             pass
         finally:
             try:
-                process.stdin.close()
+                if input_handler is None:
+                    process.stdin.close()
             except BrokenPipeError:
                 pass
         deadline = time.monotonic() + timeout_seconds
@@ -75,6 +78,13 @@ def run_pi_streaming(
                     raise AssistantStopped("assistant turn stopped")
                 break
             output_lines.append(line)
+            if input_handler is not None:
+                event = json.loads(line)
+                if event.get("type") == "diary_input_checkpoint":
+                    result = input_handler(event["phase"], event.get("input_id"), event.get("mode"))
+                    process.stdin.write(json.dumps({"type": "diary_input_response", "checkpoint_id": event["checkpoint_id"], "result": result}, ensure_ascii=False) + "\n")
+                    process.stdin.flush()
+                    continue
             for business_line in business_event_lines(line, seen_business_calls):
                 event = projector.project(business_line)
                 if event is not None:

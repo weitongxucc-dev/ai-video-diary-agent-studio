@@ -387,6 +387,10 @@ class ProfileRecordStore:
             payload=_person_profile_payload(person),
         )
 
+    def save_received_voice(self, conn: sqlite3.Connection, voice: VersionedVoiceProfile) -> None:
+        """Persist a registration-validated voice in the sampling owner's transaction."""
+        self._save_versioned_voice_profile(conn, voice)
+
     def _save_versioned_voice_profile(self, conn: sqlite3.Connection, voice: VersionedVoiceProfile) -> None:
         _save_versioned_payload(
             conn,

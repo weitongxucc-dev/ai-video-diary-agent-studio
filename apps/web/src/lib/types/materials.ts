@@ -238,3 +238,34 @@ export type MaterialAssetNote = {
     user_description: string;
     upload_context: string;
 };
+
+export type DiscoveryCandidate = {
+  id: string;
+  file_name: string;
+  location: string;
+  media_type: "video" | "audio" | "image";
+  size_bytes: number;
+  duration_seconds: number | null;
+  state: "candidate" | "receiving" | "received" | "failed";
+  asset_id: string | null;
+  error: string | null;
+  excluded: boolean;
+  duplicate_asset_id?: string | null;
+};
+export type MaterialDiscovery = {
+  id: string;
+  state: "scanning" | "paused" | "cancelled" | "completed";
+  exclusions: string[];
+  visited_count: number;
+  skipped_count: number;
+  issues: { location: string; message: string }[];
+  updated_at: string;
+  candidates: DiscoveryCandidate[];
+  total_count: number;
+  offset: number;
+  has_more: boolean;
+};
+export type DiscoveryRoots = {
+  roots: { id: string; label: string; display_path: string; available: boolean }[];
+  exclusions: string[];
+};

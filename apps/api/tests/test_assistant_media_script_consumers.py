@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture
 """API doubles and installed QuickJS only; never execute Python, model, or real media."""
 import json
 import os
@@ -158,7 +159,7 @@ def test_source_success_is_not_parsed_as_proposal_or_applied_edit(stage_kind):
          "result": {"details": {"kind": "task_media_job", "media_job": job}}},
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "fake applied"}]}},
         {"type": "agent_settled"}])
-    answer, result = host._last_answer_and_preview(output, stage_kind)
+    answer, result = project_event_fixture(output, stage_kind)
     assert "PNG来源已生成" in answer and "尚未应用" in answer and result == {"kind": "media_job", "media_job": job}
 
 
@@ -183,7 +184,7 @@ def _settled_events(*events):
 
 
 def test_recovered_pre_call_syntax_error_does_not_mislabel_the_actual_source_receipt():
-    answer, result = host._last_answer_and_preview(_settled_events(_syntax_before_calls(), _completed_source_codemode()))
+    answer, result = project_event_fixture(_settled_events(_syntax_before_calls(), _completed_source_codemode()))
     assert "后续工具编排未完成" not in answer
     assert "PNG来源已生成" in answer and "尚未应用" in answer
     assert result["media_job"]["result"] == SOURCE
@@ -198,7 +199,7 @@ def test_recovered_pre_call_syntax_error_does_not_mislabel_the_actual_source_rec
 ])
 def test_later_success_does_not_erase_other_orchestration_failures(failure):
     failed = {"type": "tool_execution_end", "toolName": "codemode", "isError": True, "result": failure}
-    answer, result = host._last_answer_and_preview(_settled_events(failed, _completed_source_codemode()))
+    answer, result = project_event_fixture(_settled_events(failed, _completed_source_codemode()))
     assert "后续工具编排未完成" in answer
     assert result["media_job"]["result"] == SOURCE
 
@@ -206,7 +207,7 @@ def test_later_success_does_not_erase_other_orchestration_failures(failure):
 def test_last_syntax_error_and_empty_success_do_not_count_as_recovered_business_work():
     empty = {"type": "tool_execution_end", "toolName": "codemode", "isError": False,
         "result": {"details": {"calls": [], "business_receipts": [], "incomplete_calls": False}}}
-    answer, result = host._last_answer_and_preview(_settled_events(_completed_source_codemode(), _syntax_before_calls(), empty))
+    answer, result = project_event_fixture(_settled_events(_completed_source_codemode(), _syntax_before_calls(), empty))
     assert "后续工具编排未完成" in answer and result["media_job"]["result"] == SOURCE
 
 
@@ -216,7 +217,7 @@ def test_json_parsing_error_after_real_read_is_not_cleared_by_later_success():
             "details":{"calls":[{"name":"read_task_graphic_sources","status":"ok"}], "incomplete_calls":False,
                 "business_receipts":[{"tool_name":"read_task_graphic_sources","tool_call_id":"source-page", "is_error":False,
                     "result":{"items":[SOURCE], "total_count":1}}]}}}
-    answer, result = host._last_answer_and_preview(_settled_events(failed, _completed_source_codemode()))
+    answer, result = project_event_fixture(_settled_events(failed, _completed_source_codemode()))
     assert "后续工具编排未完成" in answer
     assert result["media_job"]["status"] == "succeeded" and result["media_job"]["result"] == SOURCE
 
@@ -233,6 +234,6 @@ def test_later_unknown_overlay_keeps_both_original_locator_and_successful_source
         _completed_source_codemode("later-read"),
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "later failed"}]}},
         {"type": "agent_settled"}])
-    answer, result = host._last_answer_and_preview(output)
+    answer, result = project_event_fixture(output)
     assert result == {**locator, "related_media_job": job}
     assert "不重复提交" in answer and "作业回执仍保留" in answer

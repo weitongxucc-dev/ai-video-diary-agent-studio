@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture
 """Normal HTTP, persistent business events and lifecycle driver; bounded model seam."""
 import time
 import json
@@ -522,7 +523,7 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
                 "tool_call_id":"nested-read", "is_error":False,"result":{"kind":"execution_result", "status":read.json()}}]}}},
             {"type":"message_end","message":{"role":"assistant", "stopReason":"stop",
                 "content":[{"type":"text","text":"已提交恢复，已经完成。"}]}}, {"type":"agent_settled"}]
-        return pi._last_answer_and_preview("\n".join(json.dumps(item) for item in events))
+        return project_event_fixture("\n".join(json.dumps(item) for item in events))
     monkeypatch.setattr(main, "run_task_turn", model)
     chat = state.conversations.get(state.conversation["id"],state.workspace_id,state.member.member_id)
     chat = state.conversations.save_draft(chat["id"],state.workspace_id,state.member.member_id,"继续生成并检查输出",chat["draft_version"])

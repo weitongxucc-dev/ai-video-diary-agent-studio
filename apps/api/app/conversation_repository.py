@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
+from app.assistant.inputs import active_input
 
 
 def _now() -> str:
@@ -293,6 +294,8 @@ class ConversationRepository:
 
     def save_reference(self, conversation_id: str, workspace_id: str, member_id: str,
                        reference: dict | None, expected_reference_version: int) -> dict | None:
+        from app.assistant.references import normalize_selection
+        reference = normalize_selection(reference)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?", (conversation_id, workspace_id, member_id)).fetchone()
@@ -305,9 +308,35 @@ class ConversationRepository:
             saved = conn.execute("SELECT * FROM assistant_conversations WHERE id=?", (conversation_id,)).fetchone()
         return self._conversation(saved)
 
+    def enqueue_input(self, conversation_id, workspace_id, member_id, **input_fields):
+        from app.assistant.inputs import enqueue_input
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return enqueue_input(conn, conversation_id=conversation_id, workspace_id=workspace_id,
+                                 member_id=member_id, **input_fields)
+
+    def list_inputs(self, conversation_id, workspace_id, member_id):
+        from app.assistant.inputs import list_inputs
+        with self._connect() as conn:
+            return list_inputs(conn, conversation_id, workspace_id, member_id)
+
+    def transition_input(self, conversation_id, workspace_id, member_id, input_id, status, *, reason=None):
+        from app.assistant.inputs import transition_input
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            item = transition_input(conn, conversation_id=conversation_id, workspace_id=workspace_id,
+                                    member_id=member_id, input_id=input_id, status=status, reason=reason)
+            if status == "consumed":
+                root = self._goal_root(conn, item["target_turn_id"])
+                if root is not None:
+                    self._write_goal(conn, root, {**root["goal"], "status":"invalidated",
+                        "waiting_reason":"consumed_input_superseded_business_goal", "unfinished_steps":[]})
+            return item
+
     def create_turn_idempotent(
         self, conversation_id: str, workspace_id: str, member_id: str, user_message: str,
         client_request_id: str, expected_draft_version: int, request_context: dict | None = None,
+        *, expected_reference_version: int | None = None,
     ) -> tuple[dict | None, bool]:
         """Atomically consume a draft version and create at most one turn per request ID.
 
@@ -352,6 +381,13 @@ class ConversationRepository:
                 return dict(turn), False
 
             current = self._conversation(conversation)
+            if expected_reference_version is not None:
+                if current["reference_version"] != expected_reference_version:
+                    raise ConversationReferenceVersionConflict("引用已变化，本轮没有发送，请检查后重新发送。")
+                if (request_context or {}).get("selected_reference") != current["selected_reference"]:
+                    raise ConversationReferenceVersionConflict("已核验引用与保存引用不一致，本轮没有发送。")
+            elif (request_context or {}).get("selected_reference") is not None:
+                raise ConversationReferenceVersionConflict("发送引用需要明确引用版本，本轮没有发送。")
             if current["draft_version"] != expected_draft_version:
                 raise ConversationDraftVersionConflict(current)
             if current["draft_text"] != user_message:
@@ -476,7 +512,7 @@ class ConversationRepository:
         """Read the consumed, trusted task snapshot for an active tool call."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT t.user_message,t.status,r.request_context_json,t.conversation_id "
+                "SELECT t.user_message,t.status,t.events_json,r.request_context_json,t.conversation_id "
                 "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                 "WHERE t.id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
                 (turn_id, workspace_id, member_id),
@@ -484,6 +520,13 @@ class ConversationRepository:
         context = json.loads(row["request_context_json"]) if row else {}
         if row is None or row["status"] != "running" or context.get("kind") != "task" or context.get("task_id") != task_id:
             raise ValueError("类型化编辑不属于当前有效助手轮次")
+        active = active_input(json.loads(row["events_json"]))
+        if active:
+            context = active["request_context"]
+            if context.get("kind") != "task" or context.get("task_id") != task_id:
+                raise ValueError("追加输入不属于当前工具目标")
+            return {"context": context, "raw_command": active["message"],
+                    "conversation_id": row["conversation_id"], "input_id": active["input_id"]}
         original = row["user_message"]
         if context.get("source_kind") == "business_event":
             with self._connect() as conn:
@@ -577,6 +620,11 @@ class ConversationRepository:
                            "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                            "WHERE t.id=? AND r.outcome='consumed'", (turn_id,)).fetchone()
         if row is None or row["status"] not in ({"running", "completed", "failed"} if running_execution else {"completed"}) or not row["user_message"]:
+            return None
+        # SDK input processing is durable, but an old business goal must not
+        # revive after a newer consumed instruction changed its authorization.
+        # Per-input business-goal continuation requires its own source binding.
+        if active_input(json.loads(row["events_json"])) is not None:
             return None
         context, result = json.loads(row["request_context_json"]), json.loads(row["result_json"] or "{}")
         if running_execution:
@@ -861,13 +909,16 @@ class ConversationRepository:
     def business_turn_context(self, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT t.status,t.conversation_id,r.request_context_json FROM assistant_conversation_turns t "
+                "SELECT t.status,t.conversation_id,t.events_json,r.request_context_json FROM assistant_conversation_turns t "
                 "JOIN assistant_conversations c ON c.id=t.conversation_id "
                 "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.conversation_id=c.id "
                 "WHERE t.id=? AND c.workspace_id=? AND c.member_id=? AND r.workspace_id=c.workspace_id "
                 "AND r.member_id=c.member_id AND r.outcome='consumed'", (turn_id, workspace_id, member_id),
             ).fetchone()
         context = json.loads(row["request_context_json"]) if row else {}
+        active = active_input(json.loads(row["events_json"])) if row else None
+        if active:
+            context = active["request_context"]
         if row is None or context.get("kind") != "task" or context.get("task_id") != task_id:
             return None
         return {"status": row["status"], "conversation_id": row["conversation_id"], "context": context}
@@ -991,6 +1042,12 @@ class ConversationRepository:
             conn.execute("BEGIN IMMEDIATE")
             fields = ["status=?", "updated_at=?"]
             values: list[str] = [status, _now()]
+            previous_events = conn.execute("SELECT events_json FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
+            if previous_events is not None:
+                from app.assistant.inputs import settle_inputs
+                fields.append("events_json=?")
+                values.append(json.dumps(settle_inputs(json.loads(previous_events["events_json"]),
+                    "turn_ended_before_input_receipt"), ensure_ascii=False))
             if assistant_text is not None:
                 fields.append("assistant_text=?")
                 values.append(assistant_text)
@@ -1012,11 +1069,12 @@ class ConversationRepository:
         now = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute("SELECT id,result_json FROM assistant_conversation_turns WHERE status='running'").fetchall()
+            rows = conn.execute("SELECT id,result_json,events_json FROM assistant_conversation_turns WHERE status='running'").fetchall()
             for row in rows:
+                from app.assistant.inputs import settle_inputs
                 result = self._preserve_execution_result(json.loads(row["result_json"] or "{}"), {"reason": "api_restarted"})
-                conn.execute("UPDATE assistant_conversation_turns SET status='failed',result_json=?,updated_at=? WHERE id=?",
-                    (json.dumps(result, ensure_ascii=False), now, row["id"]))
+                conn.execute("UPDATE assistant_conversation_turns SET status='failed',result_json=?,events_json=?,updated_at=? WHERE id=?",
+                    (json.dumps(result, ensure_ascii=False), json.dumps(settle_inputs(json.loads(row["events_json"]), "api_restarted"), ensure_ascii=False), now, row["id"]))
             conn.execute(
                 "UPDATE assistant_conversations SET updated_at=? WHERE id IN "
                 "(SELECT DISTINCT conversation_id FROM assistant_conversation_turns WHERE updated_at=? AND status='failed')",
@@ -1037,6 +1095,10 @@ class ConversationRepository:
 
     def consumed_turn_request_context(self, turn_id, conversation_id, workspace_id, member_id):
         with self._connect() as conn:
-            receipt = conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts WHERE turn_id=? AND conversation_id=? AND workspace_id=? AND member_id=? AND outcome='consumed'", (turn_id, conversation_id, workspace_id, member_id)).fetchone()
+            receipt = conn.execute("SELECT r.request_context_json,t.events_json FROM assistant_conversation_request_receipts r "
+                "JOIN assistant_conversation_turns t ON t.id=r.turn_id AND t.conversation_id=r.conversation_id "
+                "WHERE r.turn_id=? AND r.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (turn_id, conversation_id, workspace_id, member_id)).fetchone()
         context = json.loads(receipt['request_context_json']) if receipt else {}
-        return context
+        active = active_input(json.loads(receipt["events_json"])) if receipt else None
+        return active["request_context"] if active else context

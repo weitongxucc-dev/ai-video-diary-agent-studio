@@ -3,6 +3,20 @@ import { isLocalAuthMode } from "../auth/routing";
 import type { WorkspaceAssistantPlanTurnResponse, AssistantStreamEvent, AssistantConversation, AssistantConversationScope, AssistantCapabilities } from '../types/assistant';
 import type { MaterialAssistantSelection, MaterialAssistantTurnResponse } from '../types/materials';
 import { creationPlanRequest, assistantStreamRequest } from './creation-transport';
+import type { AssistantInputReceipt } from '../types/assistant';
+
+export async function enqueueAssistantInput(conversationId: string, input: {
+    client_request_id: string; target_turn_id: string; message: string; mode: "steer" | "follow_up";
+    expected_draft_version: number; expected_reference_version: number;
+}): Promise<AssistantInputReceipt> {
+    const result = await creationPlanRequest<{input: AssistantInputReceipt; draft_version: number}>(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/inputs`, {
+        method: "POST", body: JSON.stringify(input),
+    });
+    return result.input;
+}
+export function withdrawAssistantInput(conversationId: string, inputId: string): Promise<AssistantInputReceipt> {
+    return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/inputs/${encodeURIComponent(inputId)}/withdraw`, { method: "POST" });
+}
 export async function getCurrentAssistantConversation(scope: AssistantConversationScope): Promise<AssistantConversation> {
     if (typeof window !== "undefined" && isLocalAuthMode() && !readLocalMemberToken())
         await ensureLocalMemberIdentity();
@@ -81,15 +95,15 @@ export function sendWorkspaceAssistantPlanTurn(message: string, conversationId: 
     knowledge_item_id: string;
     version: string;
     locator?: string;
-} | null): Promise<WorkspaceAssistantPlanTurnResponse> {
+} | null, expectedReferenceVersion?: number): Promise<WorkspaceAssistantPlanTurnResponse> {
     const input = { message, conversation_id: conversationId, client_request_id: clientRequestId,
-        expected_draft_version: expectedDraftVersion, ...(profileReference ? { selected_profile_reference: profileReference } : {}),
+        expected_draft_version: expectedDraftVersion, expected_reference_version: expectedReferenceVersion, ...(profileReference ? { selected_profile_reference: profileReference } : {}),
         ...(knowledgeReference ? { selected_knowledge_reference: knowledgeReference } : {}) };
     if (onEvent)
         return assistantStreamRequest<WorkspaceAssistantPlanTurnResponse>("/api/assistant/plan/turn", input, onEvent);
     return creationPlanRequest<WorkspaceAssistantPlanTurnResponse>("/api/assistant/plan/turn", { method: "POST", body: JSON.stringify(input) });
 }
-export function sendMaterialAssistantTurn(message: string, conversationId: string, selection: MaterialAssistantSelection | null, clientRequestId: string, expectedDraftVersion: number, onEvent: (event: AssistantStreamEvent) => void): Promise<MaterialAssistantTurnResponse> {
+export function sendMaterialAssistantTurn(message: string, conversationId: string, selection: MaterialAssistantSelection | null, clientRequestId: string, expectedDraftVersion: number, onEvent: (event: AssistantStreamEvent) => void, expectedReferenceVersion?: number): Promise<MaterialAssistantTurnResponse> {
     return assistantStreamRequest<MaterialAssistantTurnResponse>("/api/assistant/material/turn", { message, conversation_id: conversationId, selection, client_request_id: clientRequestId,
-        expected_draft_version: expectedDraftVersion }, onEvent);
+        expected_draft_version: expectedDraftVersion, expected_reference_version: expectedReferenceVersion }, onEvent);
 }

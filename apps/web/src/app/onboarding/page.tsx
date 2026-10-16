@@ -76,8 +76,8 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
               <span className="section-kicker">首次设置</span>
               <h1 id="onboarding-heading">准备你的创作工作区</h1>
               <p>
-                先确认素材输入、成片输出和视频处理环境。
-                语音识别、知识库等增强功能可以进入工作台后再配置。
+                先确认既定工作区存储可用。
+                模型、人物、声音、素材与媒体工具都可以在需要时配置。
               </p>
             </div>
             {snapshot.ready ? (
@@ -159,12 +159,12 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
 
           <div className="onboarding-completion-gate">
             <strong>
-              {snapshot.ready ? "核心环境已就绪" : "还有必需项未就绪"}
+              {snapshot.ready ? "工作区存储已就绪" : "还有必需项未就绪"}
             </strong>
             <span>
               {snapshot.ready
-                ? `可以开始创作。${snapshot.attentionCount > 0 ? ` ${snapshot.attentionCount} 项增强能力不会影响进入，可以稍后完成。` : ""}`
-                : "请只处理上方「开始创作所需」中的阻断项，然后重新检查。"}
+                ? `可以进入工作台。${snapshot.attentionCount > 0 ? ` ${snapshot.attentionCount} 项增强能力不会影响进入，可以稍后完成。` : ""}`
+                : "请只处理上方「工作区存储」中的阻断项，然后重新检查。"}
             </span>
             {snapshot.ready ? (
               <form action={completeOnboardingAction}>

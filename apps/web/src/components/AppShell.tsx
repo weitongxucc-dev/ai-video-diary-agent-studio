@@ -109,6 +109,7 @@ export type AppShellProps = {
   inspector?: ReactNode;
   inspectorConfirmation?: ReactNode;
   inspectorConfirmationKey?: string;
+  inspectorOpenKey?: string;
   quickInspector?: (openDetails: () => void) => ReactNode;
   quickInspectorKey?: string;
   quickInspectorLabel?: string;
@@ -196,6 +197,7 @@ export function AppShell({
   inspector: providedInspector,
   inspectorConfirmation,
   inspectorConfirmationKey,
+  inspectorOpenKey,
   quickInspector,
   quickInspectorKey,
   quickInspectorLabel,
@@ -252,6 +254,9 @@ export function AppShell({
   useEffect(() => {
     if (inspectorConfirmationKey && !quickOpen) setDetailsOpen(true);
   }, [inspectorConfirmationKey, quickOpen]);
+  useEffect(() => {
+    if (inspectorOpenKey) { setQuickOpen(false); setDetailsOpen(true); }
+  }, [inspectorOpenKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
   useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
 
@@ -478,7 +483,7 @@ export function AppShell({
       <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} />
       {providedInspector ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
         {providedInspector}
-        {inspectorConfirmation}
+        {detailsOpen && !quickOpen ? inspectorConfirmation : null}
       </HomeCardDialog> : null}
       {quickOpen && quickInspector && !panels.workspaceCollapsed ? <HomeCardDialog kind="config" title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>
         {quickInspector(() => { setQuickOpen(false); setDetailsOpen(true); })}

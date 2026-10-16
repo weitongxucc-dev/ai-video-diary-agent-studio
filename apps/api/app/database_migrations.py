@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 18
+PRODUCTION_SCHEMA_VERSION = 20
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -41,6 +42,21 @@ CREATE TABLE IF NOT EXISTS local_adoption_receipts (
     manifest_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
     applied_at TEXT NOT NULL
+);
+"""
+
+
+VOICE_SAMPLING_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS voice_sampling_tasks (
+    workspace_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, id),
+    UNIQUE (workspace_id, owner_user_id, request_id)
 );
 """
 
@@ -791,6 +807,8 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         """,
     ),
     (18, LOCAL_ADOPTION_RECEIPTS_DDL),
+    (19, VOICE_SAMPLING_TASKS_DDL),
+    (20, DISCOVERY_SCHEMA),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。

@@ -1,5 +1,6 @@
 """N06 stage 1: real extension with synthetic HTTP responses, never Pi/media/services."""
 from __future__ import annotations
+from assistant_sdk_fixtures import project_event_fixture
 
 import copy
 import json
@@ -9,7 +10,7 @@ import subprocess
 
 import pytest
 
-from app.assistant_pi import AssistantUnavailable, _last_answer_and_preview, _safe_tool_result_summary, run_material_turn
+from app.assistant_pi import AssistantUnavailable, _safe_tool_result_summary, run_material_turn
 from app.config import Settings
 
 EXTENSION = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
@@ -241,7 +242,7 @@ def test_library_tool_failure_cannot_settle_as_a_successful_material_answer(tool
     events = [{"type": "tool_execution_end", "toolName": tool, "isError": True, "result": {"details": {}}},
               {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "不能冒称成功"}]}}, {"type": "agent_end"}]
     with pytest.raises(AssistantUnavailable):
-        _last_answer_and_preview("\n".join(json.dumps(event) for event in events), "material_result")
+        project_event_fixture("\n".join(json.dumps(event) for event in events), "material_result")
 
 def test_library_tool_summary_uses_actual_counts_and_never_claims_ocr_is_ready():
     summary = _safe_tool_result_summary("read_material_library_status", {"details": {"total_count": 151, "analysis_counts": {"ready": 1}}}, False)

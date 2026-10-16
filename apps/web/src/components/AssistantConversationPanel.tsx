@@ -1,7 +1,9 @@
 "use client";
 
+import { ReferenceChips } from "./ui/reference-chips";
+
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference, useAssistantReferenceStatus } from "./AssistantConversationProvider";
+import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference, useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCardDialog } from "./HomeCardDialog";
 import "./AssistantConversation.css";
 import { Plus, History, Pencil, CircleHelp, ArrowUp, ArrowDown, MessageCircleDashed, LoaderCircle, Copy, Check, MoreHorizontal, Square, X } from "lucide-react";
@@ -367,7 +369,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       ? `${result.scope === "segment" ? "当前片段" : "整条素材"}标签已回读${result.changed === true ? "，内容有变化。" : result.changed === false ? "，内容没有变化。" : "。"}`
       : result?.kind === "task_turn"
         ? [result.topic_candidates === true ? "已生成选题候选" : null,
-          result.timeline_action === "undo" ? "已整体撤销上一步编辑" : result.timeline_action === "redo" ? "已重做上一步编辑" : result.timeline_action === "reject" ? "已取消待确认修改" : null,
+          result.timeline_action === "apply" ? "修改已保存，可撤销；成片尚未重新生成" : result.timeline_action === "undo" ? "已整体撤销上一步编辑" : result.timeline_action === "redo" ? "已重做上一步编辑" : result.timeline_action === "reject" ? "已取消待确认修改" : null,
           typeof result.script_draft === "string" ? "文案草稿已保存" : null,
           typeof result.execution_action === "string" ? `已提交${result.execution_action === "start" ? "开始制作" : result.execution_action === "resume" ? "继续制作" : "取消制作"}${typeof result.execution_status === "string" ? `（作业${executionStatusLabels[result.execution_status] ?? result.execution_status}）` : ""}` : null,
           result.edit_preview === true ? "已生成待确认修改提案" : null].filter(Boolean).join("；") || null
@@ -424,6 +426,9 @@ export function AssistantConversationPanel({
   const selectedMaterial = useAssistantMaterialReference();
   const selectedKnowledge = useAssistantKnowledgeReference();
   const referenceStatus = useAssistantReferenceStatus();
+  const selection = useAssistantSelection();
+  const [inputMode,setInputMode]=useState<"steer"|"follow_up">("steer");
+  const [sendingInput,setSendingInput]=useState(false);
   const [capabilities, setCapabilities] = useState<Awaited<ReturnType<typeof getAssistantCapabilities>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
@@ -485,12 +490,12 @@ export function AssistantConversationPanel({
   latestHistoryContent.current = historyContent;
   const isLocalCommand = input.trim().startsWith("/");
   const commandDisabled = state.loading || !conversation || busy || currentRunning || composing;
-  const sendLabel = currentRunning && !isLocalCommand ? "本轮运行中" : busy && !isLocalCommand ? "正在处理" : "发送";
-  const sendDisabled = commandDisabled || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || !configured));
+  const sendLabel = currentRunning && !isLocalCommand ? inputMode === "follow_up" ? "排入后续" : "追加要求" : busy && !isLocalCommand ? "正在处理" : "发送";
+  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (currentRunning && selection !== null && selection.version === undefined) || (busy && !currentRunning)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || !configured));
   const sendReason = state.loading || !conversation ? "正在恢复对话"
     : composing ? "中文组合输入中，请先完成输入"
     : !input.trim() ? "先填写对话要求"
-      : currentRunning ? "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"
+      : currentRunning ? "追加要求在安全点核验后处理；已提交动作不会追改"
         : busy ? "本轮正在处理，请稍后再发送"
           : isLocalCommand ? "Enter 执行本地会话操作；无效命令不会发送给模型"
             : referenceStatus.pending ? "正在保存或核验引用"
@@ -585,9 +590,9 @@ export function AssistantConversationPanel({
     const text = (commandText ?? input).trim();
     if (!text || composing) return;
     const localCommand = text.startsWith("/");
-    if (state.loading || !conversation) { setError(sendReason); return; }
+    if (state.loading || !conversation || sendingInput || (busy && !currentRunning)) { setError(sendReason); return; }
     if (!localCommand && !configured) { setError(sendReason); return; }
-    if (busy || currentRunning) { setError(localCommand ? "本轮运行中，可继续编辑草稿；停止后再执行。" : sendReason); return; }
+    if (localCommand && (busy || currentRunning)) { setError(localCommand ? "本轮运行中，可继续编辑草稿；停止后再执行。" : sendReason); return; }
     if (localCommand) {
       const [command, ...rest] = text.split(/\s+/);
       const value = rest.join(" ").trim();
@@ -617,15 +622,20 @@ export function AssistantConversationPanel({
       focus?.focus();
       return;
     }
-    if (currentRunning || referenceStatus.pending || referenceStatus.reason) {
+    if (referenceStatus.pending || referenceStatus.reason) {
       setError(sendReason);
       return;
     }
     setError(null);
     try {
-      await onSend(text);
+      if (currentRunning) {
+        if (selection?.version === undefined) throw new Error("引用版本尚未恢复，请稍后发送。");
+        setSendingInput(true);
+        await state.sendInput(text,inputMode,selection.version);
+      } else await onSend(text);
       focus?.focus();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "对话没有完成。"); }
+    finally { setSendingInput(false); }
   }
 
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -674,10 +684,12 @@ export function AssistantConversationPanel({
     {showJumpToLatest && turns.length ? <button className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); }}><ArrowDown size={16} aria-hidden="true"/></button> : null}
     </div>
     {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><button type="button" onClick={referenceStatus.cancel}>清除不可用引用</button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
+    {turns.flatMap(turn=>turn.events.filter(event=>event.type === "assistant_input")).map(item=> item.type === "assistant_input" ? <div className="assistant-input-receipt" key={item.input_id}>
+      <p>{item.message}</p><span>{{accepted:"已接收，等待安全点",consumed:"已生效，正在处理",completed:"本次要求已处理",withdrawn:"已撤回",rejected:"未执行",interrupted:"处理已中断"}[item.status]}</span>
+      {item.reason ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <button type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</button> : null}
+    </div> : null)}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}>
-      {selectedMaterial?.reference ? <p className="assistant-reference" aria-label="当前素材对话范围" title={selectedMaterial.reference.label}><span>{selectedMaterial.reference.label}</span><button className="assistant-icon-action" type="button" aria-label="取消素材引用" title="取消引用" onClick={() => { selectedMaterial.setReference(null); focus?.focus(); }}><X size={13}/></button></p> : null}
-      {selectedKnowledge?.reference ? <p className="assistant-reference" title={`${selectedKnowledge.reference.label} · 版本 ${selectedKnowledge.reference.version}${selectedKnowledge.reference.locator ? ` · ${selectedKnowledge.reference.locator}` : ""}`}><span>{selectedKnowledge.reference.label} · 版本 {selectedKnowledge.reference.version}{selectedKnowledge.reference.locator ? ` · ${selectedKnowledge.reference.locator}` : ""}</span><button className="assistant-icon-action" type="button" aria-label="取消知识引用" title="取消引用" onClick={() => { selectedKnowledge.setReference(null); focus?.focus(); }}><X size={13}/></button></p> : null}
-      {selectedProfile?.reference ? <p className="assistant-reference" title={`固定版本身份：${selectedProfile.reference.version}`}><span>{selectedProfile.reference.label}{/第\s*\d+\s*版|版本\s*\d+/.test(selectedProfile.reference.label) ? "" : /^\d+$/.test(selectedProfile.reference.version) ? ` · 版本 ${selectedProfile.reference.version}` : " · 固定版本"}</span><button className="assistant-icon-action" type="button" aria-label="取消档案引用" title="取消引用" onClick={() => { selectedProfile.setReference(null); focus?.focus(); }}><X size={13}/></button></p> : null}
+      {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); focus?.focus(); }}/> : null}
       {menuOpen ? <div className="assistant-slash-menu" role="listbox" aria-label="对话命令" id={`${diagnosticsId}-commands`} style={{ maxHeight: menuMaxHeight }}>
         {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <button role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
           <Icon size={16}/><span><strong>{item.title}</strong><small>{item.description}</small></span><code>{item.syntax}</code>
@@ -685,22 +697,22 @@ export function AssistantConversationPanel({
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
       <textarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
+      {currentRunning ? <label className="assistant-input-mode">追加要求<select aria-label="追加要求处理方式" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点调整当前目标</option><option value="follow_up">本轮完成后处理</option></select></label> : null}
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <button className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></button>
-          : <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></button>}
+          : null}
+        <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></button>
       </div>
       <span className="assistant-visually-hidden" id={`${diagnosticsId}-input-help`}>Enter 发送，Shift+Enter 换行；中文组合输入不会发送。{sendDisabled ? sendReason : "输入 / 查找命令。"}</span>
     </form>
       {capabilities && diagnosticsExpanded ? <HomeCardDialog title="对话诊断" onClose={() => setDiagnosticsExpanded(false)}><div className="assistant-capability-diagnostics" id={diagnosticsId}>
-        {selectedMaterial?.reference ? <p>引用素材：{selectedMaterial.reference.selection.asset_id} / {selectedMaterial.reference.selection.scope}。</p> : null}
-        {selectedKnowledge?.reference ? <p>引用知识：{selectedKnowledge.reference.knowledge_item_id} / {selectedKnowledge.reference.version} / {selectedKnowledge.reference.locator ?? "整条"}。</p> : null}
-        {selectedProfile?.reference ? <p>引用档案：{selectedProfile.reference.kind} / {selectedProfile.reference.profile_id} / {selectedProfile.reference.version}（只读引用，不表示用于任务）。</p> : null}
-        <p>{capabilities.pi_tui_commands.inventory_source}（命令清单基线 v{capabilities.pi_tui_commands.inventory_version}）：{capabilities.pi_tui_commands.commands.join("、")}</p>
-        <p>本机 Pi 隔离版本检查：{capabilities.pi_tui_commands.runtime_version ?? "未确认"}（{capabilities.pi_tui_commands.runtime_status}）；{capabilities.pi_tui_commands.runtime_reason} {capabilities.pi_tui_commands.runtime_check}。{capabilities.pi_tui_commands.runtime_version === capabilities.pi_tui_commands.inventory_version ? "本机版本号与清单基线相同。" : "本机版本未确认或与清单基线不同；命令清单仅适用于所示基线。"}当前产品模式：{capabilities.pi_tui_commands.product_mode}；这些 TUI 命令未接通。</p>
-        <p>扩展命令：{capabilities.extension_commands.available ? "可用" : capabilities.extension_commands.reason}；技能：{capabilities.skills.available ? "可用" : capabilities.skills.reason}；模板：{capabilities.prompt_templates.available ? "可用" : capabilities.prompt_templates.reason}</p>
-        {Object.entries(capabilities.business_tools).map(([scope, tools]) => <p key={scope}>{scope} 工具：{tools.join("、")}</p>)}
+        <p>对话服务：{capabilities.runtime.status === "ready" ? "已就绪" : capabilities.runtime.reason}</p>
+        <p>可用命令：{capabilities.application_commands.join("、")}</p>
+        <p>创作技能：{capabilities.skills.available ? capabilities.skills.names.map(name => ({"source-speech":"原声口播", "narration-materials":"旁白配素材", "local-edit":"局部改片"}[name] ?? name)).join("、") : "当前不可用"}。{capabilities.skills.reason}</p>
+        <p>{capabilities.prompt_templates.reason}</p>
+        <p>引用会固定到选中时的版本；版本变化后需要重新选择。助手会区分工具回执与实际画面、声音的检查结果。</p>
       </div></HomeCardDialog> : null}
     {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">{state.conversations.map(item => <button type="button" key={item.id} onClick={() => void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); focus?.focus(); }).catch(cause => setError(cause.message))}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></button>)}</div></HomeCardDialog> : null}
     {error || state.error ? <div className="assistant-conversation-error" role="alert"><AssistantFailureMessage message={error ?? state.error ?? ""}/></div> : null}

@@ -8,6 +8,7 @@ import { MaterialUsageEvidence } from "./material-library/MaterialUsageEvidence"
 import { MaterialAssetTags } from "./material-library/MaterialAssetTags";
 import { MaterialCollectionPicker } from "./material-library/MaterialCollectionPicker";
 import { MaterialResults } from "./material-library/MaterialResults";
+import { MaterialDiscoveryPanel } from "./material-library/MaterialDiscoveryPanel";
 import { MaterialIntakePanel } from "./material-library/MaterialIntakePanel";
 import { MediaLinkImportPanel } from "./material-library/MediaLinkImportPanel";
 import { useMediaLinkImport } from "./material-library/useMediaLinkImport";
@@ -20,10 +21,14 @@ import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw,
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { useAssistantMaterialReference } from "./AssistantConversationProvider";
+import { useAssistantMaterialReference, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import styles from "./MaterialLibraryControls.module.css";
+import { getProductionMaterial } from "@/lib/api/materials";
+import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference } from "@/lib/assistant-reference";
+import { useSearchParams } from "next/navigation";
+import type { AssistantReferenceItem } from "@/lib/types/assistant";
 import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
 import { analyzeProductionMaterial, createMaterialCollection, getMaterialLibraryInsights, getProductionMaterials, reviewProductionMaterial, retryMaterialIntake, scanMaterialIntake, updateProductionMaterialSegment, updateMaterialUseState, updateMaterialAssetTags } from "@/lib/api";
 
@@ -46,7 +51,12 @@ export function MaterialLibraryWorkspace({
   // 来自 /library?tag= 的精确标签筛选；URL 是唯一来源，清除后由页面重挂载恢复
   initialTag?: string;
 }) {
+  const searchParams = useSearchParams();
+  const locateQuery = searchParams?.get("locate_ref") ?? "";
   const [assets, setAssets] = useState(initialLibrary.assets);
+  const [locatedAsset, setLocatedAsset] = useState<MaterialAsset | null>(null);
+  const locatedAssetRef = useRef(locatedAsset);
+  locatedAssetRef.current = locatedAsset;
   const assetsRef = useRef(assets);
   assetsRef.current = assets;
   const [totalCount, setTotalCount] = useState(initialLibrary.total_count);
@@ -80,6 +90,7 @@ export function MaterialLibraryWorkspace({
   const { linkUrl, changeLinkUrl, linkBusy, linkCheck, linkImport, linkError, runLinkCheck, runLinkImport } = useMediaLinkImport(scan);
   const [detailError, setDetailError] = useState("");
   const persistentReference = useAssistantMaterialReference();
+  const referenceSelection = useAssistantSelection();
   const setMaterialReference = persistentReference?.setReference;
   const lastPublishedSelection = useRef<MaterialAssistantSelection | null>(null);
   const [assistantSelection, setAssistantSelection] = useState<MaterialAssistantSelection | null>(null);
@@ -123,12 +134,12 @@ export function MaterialLibraryWorkspace({
   const explicitlySelectedAssetId = assistantSelection?.asset_id;
   const assistantSelectionLost =
     Boolean(explicitlySelectedAssetId) &&
-    !assets.some((asset) => asset.id === explicitlySelectedAssetId);
-  const editAnchorLost = Boolean(editAnchor) && !assets.some((asset) => asset.id === editAnchor?.assetId);
+    !assets.some((asset) => asset.id === explicitlySelectedAssetId) && locatedAsset?.id !== explicitlySelectedAssetId;
+  const editAnchorLost = Boolean(editAnchor) && !assets.some((asset) => asset.id === editAnchor?.assetId) && locatedAsset?.id !== editAnchor?.assetId;
   const selectionLost = assistantSelectionLost || editAnchorLost;
   const selected = selectionLost
     ? null
-    : assets.find((asset) => asset.id === selectedId) ?? assets[0] ?? null;
+    : assets.find((asset) => asset.id === selectedId) ?? (locatedAsset?.id === selectedId ? locatedAsset : null) ?? assets[0] ?? null;
   // 请求发出时记住目标素材，回来时用它判断这条结果还属不属于用户眼前的素材。
   const currentAssetIdRef = useRef<string | null>(null);
   currentAssetIdRef.current = selected?.id ?? null;
@@ -178,6 +189,48 @@ export function MaterialLibraryWorkspace({
     const segment = materialAssistantSelection.scope === "segment" ? selected.segments.find(item => item.id === materialAssistantSelection.segment_id) : null;
     setMaterialReference?.({label: materialAssistantLabel, selection: { ...materialAssistantSelection, expected_updated_at: selected.updated_at, ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}) }});
   }, [materialAssistantSelection, materialAssistantLabel, selected, setMaterialReference]);
+
+  useEffect(() => {
+    let active = true;
+    let locateRevision = 0;
+    const locate = async (event: Event) => {
+      const reference = (event as CustomEvent<AssistantReferenceItem>).detail;
+      if (reference?.kind !== "material") return;
+      const request = ++locateRevision;
+      const selectionAtRequest = ++selectionRevision.current;
+      const target = reference.selection;
+      try {
+        const asset = await getProductionMaterial(target.asset_id);
+        if (!active || request !== locateRevision || selectionAtRequest !== selectionRevision.current) return;
+        const segment = target.scope === "segment" ? asset.segments.find(item => item.id === target.segment_id) : asset.segments[0];
+        if (target.scope === "segment" && !segment) throw new Error("引用的片段已不存在，请重新选择。");
+        // Locating an existing capsule must not silently freeze a newer version.
+        lastPublishedSelection.current = target;
+        setLocatedAsset(asset);
+        setAssets(current => current.map(item => item.id === asset.id ? asset : item));
+        setSelectedId(asset.id); setSelectedSegmentId(segment?.id ?? "");
+        setAssistantSelection(target); setPreviewErrorId(null);
+        setDescriptionDraft(segment?.description ?? ""); setTranscriptDraft(segment?.transcript ?? "");
+        setUsageRoleDraft(segment?.usage_role ?? "unassigned");
+        setCollectionDraft(segment?.collection_ids[0] ?? "");
+        editAnchorRef.current = null; setEditAnchor(null);
+        setDetailError((target.expected_updated_at && target.expected_updated_at !== asset.updated_at) || (target.expected_segment_updated_at && target.expected_segment_updated_at !== segment?.updated_at)
+          ? "已定位原对象；对象已更新，胶囊仍保留原版本，请明确重新选择后再编辑。" : "");
+        const media = asset.media_type === "audio" ? sourceAudio.current : sourceVideo.current;
+        if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA && currentAssetIdRef.current === asset.id) media.currentTime = target.scope === "segment" ? segment?.start_seconds ?? 0 : 0;
+      } catch (cause) {
+        if (active && request === locateRevision && selectionAtRequest === selectionRevision.current) setError(visibleError(cause, "无法定位这条素材引用，请检查权限或重新选择。"));
+      }
+    };
+    window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
+    try {
+      const fromUrl = readAssistantLocateReference(new URLSearchParams(locateQuery ? { locate_ref: locateQuery } : {}));
+      if (fromUrl?.kind === "material") void locate(new CustomEvent(ASSISTANT_LOCATE_REFERENCE_EVENT, { detail: fromUrl }));
+    } catch (cause) {
+      setError(visibleError(cause, "引用定位格式不可用。"));
+    }
+    return () => { active = false; window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate); };
+  }, [locateQuery]);
 
   useEffect(() => {
     if (!intake?.bound_to_current_workspace || busy !== null) return;
@@ -278,21 +331,24 @@ export function MaterialLibraryWorkspace({
     setAssets((current) =>
       current.map((asset) => (asset.id === updated.id ? updated : asset)),
     );
+    setLocatedAsset(current => current?.id === updated.id ? updated : current);
   }
 
   function applyMaterialAssistantResult(selection: MaterialAssistantSelection, result: MaterialAssistantResult) {
     if (result.scope !== selection.scope || result.asset_ref !== `asset:${selection.asset_id}`
       || result.segment_ref !== (selection.scope === "segment" ? `segment:${selection.segment_id}` : null)) return;
-    const current = assetsRef.current.find((asset) => asset.id === selection.asset_id);
+    const current = assetsRef.current.find((asset) => asset.id === selection.asset_id) ?? (locatedAssetRef.current?.id === selection.asset_id ? locatedAssetRef.current : null);
     if (!current) return;
     assetWriteRevision.current += 1;
-    setAssets((latest) => latest.map((asset) => {
+    const apply = (asset: MaterialAsset): MaterialAsset => {
       if (asset.id !== selection.asset_id) return asset;
       if (selection.scope === "asset") return { ...asset, user_tags: result.user_tags };
       return { ...asset, segments: asset.segments.map((segment) => segment.id === selection.segment_id
         ? { ...segment, user_tags: result.user_tags, ...(result.system_tags ? { system_tags: result.system_tags } : {}) }
         : segment) };
-    }));
+    };
+    setAssets((latest) => latest.map(apply));
+    setLocatedAsset(current => current ? apply(current) : current);
     if (result.action && result.changed) void refreshInsights();
   }
 
@@ -340,6 +396,7 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectAsset(asset: MaterialAsset, explicit = true) {
+    setLocatedAsset(null);
     resetVoiceNote();
     selectionRevision.current += 1;
     const first = asset.segments[0];
@@ -359,6 +416,21 @@ export function MaterialLibraryWorkspace({
     setCollectionDraft(first?.collection_ids[0] ?? "");
     setCollectionQuery("");
     setDetailError("");
+  }
+
+  function appendMaterialReference(asset: MaterialAsset, segment?: MaterialSegment) {
+    referenceSelection?.select([{
+      kind: "material",
+      label: segment
+        ? `${fileLabel(asset.file_name)} · 片段 ${duration(segment.start_seconds)}–${duration(segment.end_seconds)}`
+        : `整条素材 · ${fileLabel(asset.file_name)}`,
+      selection: {
+        ...(segment ? { scope: "segment" as const, asset_id: asset.id, segment_id: segment.id }
+          : { scope: "asset" as const, asset_id: asset.id }),
+        expected_updated_at: asset.updated_at,
+        ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}),
+      },
+    }], true);
   }
 
   function seekSelectedSegment(media: HTMLMediaElement) {
@@ -672,7 +744,7 @@ export function MaterialLibraryWorkspace({
 
   const inspector = selected ? (
     <div className={`library-inspector ${styles.inspector}`}>
-      <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} />
+      <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} onReferenceSegment={referenceSelection ? segment => appendMaterialReference(selected, segment) : undefined} />
       <details className={styles.detailSection}><summary>原文件与来源</summary><p>文件名：{selected.file_name}</p><p>原文件：{selected.path}</p>{selected.source_url ? <p>来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a></p> : null}</details>
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
@@ -834,7 +906,7 @@ export function MaterialLibraryWorkspace({
           </div>
         ) : null}
 
-        <MaterialResults assets={visible} selectedId={selected?.id ?? null} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
+        <MaterialResults assets={visible} selectedId={selected?.id ?? null} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onReference={referenceSelection ? appendMaterialReference : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
         {hasMore ? (
           <div className="library-load-more">
             <button
@@ -865,7 +937,10 @@ export function MaterialLibraryWorkspace({
         </details>
 
         {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>
+        <MaterialDiscoveryPanel onReceived={() => { void refreshLibrary(); void refreshInsights(); }} />
+        <details><summary>从接收目录或链接导入</summary>
         <MaterialIntakePanel intake={intake} intakeError={intakeError} intakeBusy={intakeBusy} busy={busy} importBusy={importBusy} importResult={importResult} onRefresh={() => void refreshIntakeStatus()} onBind={() => void bindIntake()} onLocalImport={() => void runImport()} onScan={() => void scan()} onConfirmCopy={file => void confirmCopy(file)} mediaLinkImport={<MediaLinkImportPanel linkUrl={linkUrl} linkBusy={linkBusy} linkCheck={linkCheck} linkImport={linkImport} linkError={linkError} disabled={busy !== null} onUrlChange={changeLinkUrl} onCheck={() => void runLinkCheck()} onImport={() => void runLinkImport()} />} />
+        </details>
         </HomeCardDialog> : null}
         {statisticsOpen ? <HomeCardDialog kind="detail" title="素材统计" onClose={() => setStatisticsOpen(false)}>
         <section className={styles.statistics} aria-label="素材覆盖"><p>{insights.asset_count} 个可见文件 · {insights.segment_count} 个片段</p><div className={styles.statTags}>{insights.tags.filter(entry => entry.asset_count > 0).map(entry => <Link key={entry.tag} href={"/library?tag=" + encodeURIComponent(entry.tag)}>{tagLabel(entry.tag)}<small>{entry.asset_count} 份素材</small></Link>)}</div><p>此处统计已有内容；具体缺口会在制作任务检查素材时显示。</p></section>        </HomeCardDialog> : null}

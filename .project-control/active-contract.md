@@ -1,6 +1,6 @@
 # 当前主控与执行边界
 
-## 当前决定与状态
+## 上一轮重构收口与主控归属
 
 用户已决定：收口已完成的代码重构，真实验收和环境阻断单独保留，先不反复重试，准备新功能开发。
 
@@ -46,13 +46,21 @@
 
 用户已明确批准：先提交文档基线，再新建A、B、C三条可见开发线程，主控审核、集成并持续推进完整目标。文档基线为 `0f683b8f`；产品起点仍为上方已集成基线。三线共用当前 `main`，按下方独占文件工作，不恢复旧五条线程或旧lease。主控统一提交；实施线程不得自行stage、commit、reset、checkout、rebase或push，不触碰原有未跟踪资料。普通模块完成不是再次请求用户批准的节点。
 
+### 当前集成检查点
+
+A/B/C 已将首个候选交回主控统一提交，实施写入暂冻结；所有原有未跟踪资料仍保留。B/C 的首启、扫描接收与声音采样已完成隔离页面走查；A 的 SDK 工具到业务 HTTP/SQLite 编辑、回读和撤销已完成限定验证。它们不代表外部真实模型、原生媒体或桌面闭环通过。
+
+主控提交后沿 A 继续补“运行中追加输入 → 后台业务接续”的新授权绑定：先停用被改口取代的旧目标，随后以已消费输入回执绑定接续；不得恢复旧目标或重放已提交操作。该差额可独立开发，不归入环境阻断。四个被旧媒体夹具接口失配影响的测试也须核对和修复，不能以排除测试代替通过。
+
+真实成片、声音生成、画面语义/听感与同候选 Quit/重启仍未接受；所需模型与可信资源配置沿下方验收前提处理，不能用合成模型/音频输入和普通网页刷新替代。手机仍按0.12边界推进。
+
 ### 首个交付目标
 
 新用户进入工作台并跳过人物/声音设置 → 主动扫描、选素材入库 → 对话确定目标与实际文案 → 连续制作一条可播放视频 → 选中镜头/配音/字幕/效果显示胶囊 → 两轮明确改片并可撤销 → 保存 → 真正退出、重启并恢复正确版本。
 
 这是一项近期桌面里程碑，不等于0.11全部交付。完整范围与未决事项仍见[版本开发清单](0.11-development-plan.md)，三平台发布等既有交付要求不因此后移或删减；手机继续按0.12边界安排。
 
-### 当前代码差额与复用入口
+### 开发起点与复用入口
 
 | 入口 | 本次静态核对 | 对下一批的影响 |
 | --- | --- | --- |
@@ -62,7 +70,7 @@
 | `AssistantConversationPanel.tsx`、`HomeCardDialog.tsx` | 引用仍为整行块，应用浮层仍使用固定几何 | 胶囊须连真实对象/版本；标准组件迁移须删除旧几何消费者和相应测试假设 |
 | `task_observation.py` | 明确标记画面语义与听感不可用 | 不能把已有抽帧/技术测量算作Agent已看懂或听懂；结果观察单列真实能力验收 |
 
-上述是代码事实，不是本轮运行通过；无需重新审计整个仓库或重做已有效能力。
+上述是开发起点的静态核对，不是当前完成状态或运行通过；无需重新审计整个仓库或重做已有效能力。
 
 ### 顺序、工作包与退出条件
 
@@ -92,10 +100,10 @@ Pi候选验证只做一个真实编辑纵向切片，比较会话、插话、工
 
 | 角色 / 线程 | 独占产品路径（含该命名空间新增文件） | 验收及禁止边界 |
 | --- | --- | --- |
-| A：Agent会话与改片 / `01a14301-2730-7440-ab61-69fd35d9c341` | `apps/api/app/assistant/`、`assistant_pi.py`、`assistant_goal_continuation.py`、`conversation_repository.py`、`task_observation.py`；`apps/api/agent_tools/`；Web的`AssistantConversationPanel.tsx`、`AssistantConversationProvider.tsx`、`AssistantConversationContext.ts`、`useAssistantConversation.ts`、`AssistantConversation.css`、`CreationTaskWorkspace.tsx`及其module.css、`components/creation-task/`、`HomeCardDialog.tsx`、`SideCards.module.css`、`components/ui/`、`lib/assistant-reference.ts`、`lib/api/assistant.ts`、`lib/types/assistant.ts`；Agent运行桥新增文件只在`apps/api/agent_runtime/`；相关assistant/conversation及CreationTaskWorkspace/SideCards/Assistant开头测试 | A1后沿同线推进A2；单一Pi生产Owner、胶囊、直接改片、撤销、steering/follow-up、观察真实性；公共浮层底座由A维护，B/C消费。依赖清单/锁文件、全局CSS及共享入口只提变更给主控。 |
+| A：Agent会话与改片 / `01a14301-2730-7440-ab61-69fd35d9c341` | `apps/api/app/assistant/`、`assistant_pi.py`、`assistant_goal_continuation.py`、`conversation_repository.py`、`task_observation.py`；`apps/api/agent_tools/`；Web的`AssistantConversationPanel.tsx`、`AssistantConversationProvider.tsx`、`AssistantConversationContext.ts`、`useAssistantConversation.ts`、`AssistantConversation.css`、`HomeCommandComposer.tsx`、`CreationTaskWorkspace.tsx`及其module.css、`components/creation-task/`、`HomeCardDialog.tsx`、`SideCards.module.css`、`components/ui/`、`lib/assistant-reference.ts`、`lib/api/assistant.ts`、`lib/types/assistant.ts`；Agent运行桥新增文件只在`apps/api/agent_runtime/`；相关assistant/conversation及CreationTaskWorkspace/HomeCommandComposer/SideCards/Assistant开头测试 | A1后沿同线推进A2；单一Pi生产Owner、胶囊、直接改片、撤销、steering/follow-up、观察真实性；公共浮层底座由A维护，B/C消费。依赖清单/锁文件、全局CSS及共享入口只提变更给主控。 |
 | B：首启与素材 / `01a14301-7591-74f1-b240-d3643b78ecfe` | `apps/web/src/app/welcome/`、`app/onboarding/`、`components/OnboardingChecklist.tsx`、`components/MaterialLibraryWorkspace.tsx`、`components/MaterialLibraryControls.module.css`、`components/material-library/`、`lib/onboarding.ts`、`lib/api/materials.ts`、`lib/types/materials.ts`；`apps/api/app/preflight.py`、`app/materials/`；新增首启组件只在`components/onboarding/`；相关onboarding/preflight/material及MaterialLibrary开头测试 | 最小首启、候选发现/排除/暂停/取消/恢复、勾选接收和去重；不改变可信身份/workspace归属。欢迎页唯一Owner，声音模块通过C的组件契约接入。 |
 | C：人物与声音 / `01a14301-b182-7a92-a973-66fe11baf450` | `apps/web/src/components/PeopleAndVoiceWorkspace.tsx`及module.css、`DesktopVoiceRecorder.tsx`及module.css、新增`components/voice-sampling/`、`lib/api/profiles.ts`、`lib/types/profiles.ts`、`lib/profile-api.ts`、`lib/media-profiles-api.ts`；`apps/api/app/profiles/`、`voice.py`、`voice_clone.py`、`profile_preview_execution.py`、`profile_reference_media.py`；相关profile/voice和PeopleAndVoice/DesktopVoiceRecorder测试 | 采样任务用途/同文版本、录制试听重录/提交、档案可用性真实回执；可跳过返回，不把本地录音等同克隆成功；本波次暂不写手机。 |
-| 主控：本聊天 | 全部共享文档；`apps/api/app/main.py`、`schemas.py`、`database_migrations.py`、`production.py`、`auth.py`及共享组装入口；Web的`lib/api.ts`、`lib/types.ts`、`AppShell.tsx`、`AppShellCompact.module.css`、全局CSS；package清单/锁文件；其余活动浮层消费者和共享集成测试 | 共享接口接入、必要数据结构、授权与版本核验、diff审核及统一提交；产品改动前指出具体独占路径；不并行修改A/B/C文件。 |
+| 主控：本聊天 | 全部共享文档；`apps/api/app/main.py`、`schemas.py`、`database_migrations.py`、`production.py`、`auth.py`、`bootstrap.py`、`creation/editing/metadata_use_case.py`（直接编辑请求journal阶段）及共享组装入口；Web的`lib/api.ts`、`lib/api/creation-tasks.ts`、`lib/types.ts`、`lib/native-media-auth.ts`及其测试、`AppShell.tsx`、`AppShellCompact.module.css`、全局CSS；package清单/锁文件、`apps/desktop/scripts/generate-build-identity.js`及对应测试；`apps/web/src/app/knowledge/KnowledgeWorkspace.tsx`、其余活动浮层消费者和共享集成测试（本波次`test_development_wave_api.py`及身份边界测试） | 共享接口接入、必要数据结构、授权与版本核验、diff审核及统一提交；产品改动前指出具体独占路径；不并行修改A/B/C文件。 |
 
 表中后端裸文件名均相对`apps/api/app/`，Web裸组件名相对`apps/web/src/components/`；Web的`lib/`相对`apps/web/src/`。测试仅同职责文件；含多个领域的共享测试由主控协调分配，未命中明确范围先提出所需路径。文件写权发生改变时由主控原位调整并通知受影响线程。
 

@@ -3,15 +3,15 @@
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, ArrowRight, BookOpen, CircleCheck, CircleMinus, FileText, Grid2X2, Link2, List, LoaderCircle, RefreshCw, RotateCcw, Search, Video } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiRequestError, getKnowledgeReferenceVersion, getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry, getKnowledgeGrants, grantKnowledgeToWorkspace, revokeKnowledgeGrant } from "@/lib/api";
 import type { ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CardSelect, HomeCardDialog } from "@/components/HomeCardDialog";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
 import { editKnowledgeItem, getKnowledgeItem, parseKnowledgeReferenceId, setKnowledgeItemVisibility, sourceErrorMessage } from "@/lib/source-api";
-import { referenceAssistantKnowledge } from "@/lib/assistant-reference";
+import { readAssistantLocateReference, referenceAssistantKnowledge } from "@/lib/assistant-reference";
 import styles from "./KnowledgeWorkspace.module.css";
 
 type KnowledgeDisplayItem = KnowledgeItem & {
@@ -53,7 +53,11 @@ function formatFetchTime(value: string | null) {
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
 }
 
-export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMode = false, exampleLabel }: {
+export function KnowledgeWorkspace(props: Parameters<typeof KnowledgeWorkspaceContent>[0]) {
+  return <Suspense fallback={<p role="status">正在读取资料…</p>}><KnowledgeWorkspaceContent {...props} /></Suspense>;
+}
+
+function KnowledgeWorkspaceContent({ items, loading, error, onRefresh, exampleMode = false, exampleLabel }: {
   items: KnowledgeDisplayItem[];
   loading: boolean;
   error: string | null;
@@ -61,6 +65,14 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
   exampleMode?: boolean;
   exampleLabel?: string;
 }) {
+  const search = useSearchParams();
+  const locateRaw = search.get("locate_ref");
+  const location = useMemo(() => {
+    try {
+      const reference = readAssistantLocateReference(new URLSearchParams(locateRaw ? { locate_ref: locateRaw } : {}));
+      return { reference: reference?.kind === "knowledge" ? reference : null, error: null };
+    } catch { return { reference: null, error: "资料引用定位格式不可用。" }; }
+  }, [locateRaw]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<KnowledgeItemDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -70,16 +82,35 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     let active = true;
     setDetail(null); setDetailError(null); setViewVersion(null);
     getKnowledgeItem(selectedId)
-      .then(result => { if (active && result.id === selectedId) setDetail(result); })
+      .then(result => {
+        if (!active || result.id !== selectedId) return;
+        const ref = location.reference?.knowledge_item_id === selectedId ? location.reference : null;
+        if (ref) {
+          const fixed = result.version === ref.version ? result : result.versions.find(version => version.version === ref.version);
+          if (!fixed) throw new Error("引用的资料版本已不可用；没有替换成当前版本。");
+          if (ref.locator && !fixed.sections.some(section => section.locator === ref.locator)
+              && !fixed.parameters.some(parameter => parameter.locator === ref.locator)) {
+            throw new Error("引用的资料范围已不可用；没有改绑其他片段。");
+          }
+          setViewVersion(result.version === ref.version ? null : ref.version);
+        }
+        setDetail(result);
+      })
       .catch(cause => { if (active) setDetailError(cause instanceof Error ? cause.message : "知识详情读取失败"); });
     return () => { active = false; };
-  }, [selectedId, exampleMode]);
+  }, [selectedId, exampleMode, location.reference]);
   // 详情可能晚于列表刷新到达；只展示与当前选中条目一致的详情。
   const shownDetail = detail && detail.id === selectedId ? detail : null;
   const [query, setQuery] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState<string>("全部");
   const [collection, setCollection] = useState<"sources" | "scripts">("sources");
+  useEffect(() => {
+    if (location.reference && !exampleMode) {
+      setSelectedId(location.reference.knowledge_item_id);
+      setCollection("sources"); setQuery(""); setCategory("全部");
+    }
+  }, [location.reference, exampleMode]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("entry_id")) setCollection("scripts");
   }, []);
@@ -89,17 +120,18 @@ export function KnowledgeWorkspace({ items, loading, error, onRefresh, exampleMo
     const searchable = [item.title, item.body, item.file_reference].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesCategory && searchable.includes(query.trim().toLocaleLowerCase());
   }), [items, category, query, exampleMode]);
-  const selected = items.find((item) => item.id === selectedId) ?? null;
+  const selected = items.find((item) => item.id === selectedId) ?? shownDetail;
   // 可见范围变更用 PUT 返回的服务端值回写，不另发一轮 GET：
 // 只更新同 id 的当前详情，保留已加载的版本历史；列表由页面刷新时取真实值。
   function applyVisibilityUpdate(updated: KnowledgeItem) {
     if (updated.id !== selectedId) return;
     setDetail((current) => current && current.id === updated.id ? { ...current, visibility: updated.visibility } : current);
   }
-  const inspector = selected ? <KnowledgeInspector key={selected.id} detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} onContentSaved={(updated) => { setDetail(updated); setViewVersion(null); onRefresh(); }} /> : undefined;
+  const inspector = selected && (!location.reference || shownDetail) ? <KnowledgeInspector key={selected.id} detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} onContentSaved={(updated) => { setDetail(updated); setViewVersion(null); onRefresh(); }} /> : undefined;
 
-  return <AppShell inspector={inspector} inspectorTitle="资料详情">
+  return <AppShell inspector={inspector} inspectorTitle="资料详情" inspectorOpenKey={shownDetail && location.reference ? locateRaw ?? undefined : undefined}>
     <div className={styles.page}>
+      {location.error || (location.reference && detailError) ? <p role="alert">{location.error ?? detailError}</p> : null}
       {exampleMode ? <div className={styles.exampleBanner}>{exampleLabel ?? "隔离视觉示例"} · 所有名称、分类、摘要和状态均非真实服务数据</div> : null}
       {!exampleMode ? <nav aria-label="知识库集合" className={styles.collectionTabs}><button aria-pressed={collection === "sources"} onClick={() => setCollection("sources")} type="button">资料</button><button aria-pressed={collection === "scripts"} onClick={() => setCollection("scripts")} type="button">文案库</button></nav> : null}
       <div hidden={collection !== "sources"}>
@@ -229,7 +261,7 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
   const shownFetchedAt = isHistorical ? selectedVersion?.fetched_at ?? null : detail?.fetched_at ?? item.fetched_at ?? null;
   function referenceShown(locator?: string) {
     if (!detail || exampleMode) return;
-    referenceAssistantKnowledge({ knowledge_item_id: item.id, version: shown.version, label: shown.title, ...(locator ? { locator } : {}) });
+    referenceAssistantKnowledge({ knowledge_item_id: item.id, version: shown.version, label: shown.title, ...(locator ? { locator } : {}) }, true);
   }
   return <div className={styles.inspector}>
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
@@ -256,7 +288,7 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
       </> : grantState ? <p>原工作空间：{grantState.source_workspace_id}。当前可读取资料，无权向其他空间授予或转移归属。</p> : !grantError ? <p>正在读取授权状态…</p> : null}
       {grantError ? <p role="alert">{grantError}</p> : null}
     </section>
-    {grantConfirmation ? <HomeCardDialog kind="modal" title={"workspaceId" in grantConfirmation ? "跨空间授权确认" : "撤销跨空间授权"} onClose={() => setGrantConfirmation(null)} footer={<><button data-card-cancel type="button" disabled={grantBusy} onClick={() => setGrantConfirmation(null)}>取消</button><button type="button" disabled={grantBusy} onClick={async () => {
+    {grantConfirmation ? <HomeCardDialog kind="confirmation" title={"workspaceId" in grantConfirmation ? "跨空间授权确认" : "撤销跨空间授权"} onClose={() => setGrantConfirmation(null)} footer={<><button data-card-cancel type="button" disabled={grantBusy} onClick={() => setGrantConfirmation(null)}>取消</button><button type="button" disabled={grantBusy} onClick={async () => {
       if ("workspaceId" in grantConfirmation) await grantToWorkspace(grantConfirmation.workspaceId);
       else await revokeGrant(grantConfirmation.grantId);
       setGrantConfirmation(null);

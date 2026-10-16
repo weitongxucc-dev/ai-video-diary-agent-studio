@@ -21,6 +21,7 @@ import type {
 } from "@/lib/types";
 
 import { AssistantConversationContext } from "./AssistantConversationContext";
+import { enqueueAssistantInput, withdrawAssistantInput } from "@/lib/api/assistant";
 
 export function assistantTaskTurnResult(turn: AssistantConversationTurn) {
   return turn.result?.kind === "task_turn" ? turn.result as AssistantTaskTurnResult : null;
@@ -144,6 +145,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const historyFollowBottom = useRef(new Map<string, boolean>());
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const pendingInputs = useRef(new Map<string, Parameters<typeof enqueueAssistantInput>[1]>());
   const revision = useRef(0);
   const loadedScope = useRef<string | null>(null);
   const streamRevision = useRef(0);
@@ -701,6 +703,49 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     if (isCurrentConversation(current.id)) await refresh();
   }, [refresh, isCurrentConversation]);
 
+  const sendInput = useCallback(async (message:string, mode:"steer"|"follow_up", referenceVersion:number) => {
+    const current=conversationRef.current;
+    const pending=current ? pendingInputs.current.get(current.id) : undefined;
+    const target=pending ? current?.turns.find(turn=>turn.id===pending.target_turn_id) : current?.turns.at(-1);
+    if (!current || !target || (!pending && (target.status!=="running" || target.id.startsWith("pending-")))) throw new Error("正在确认本轮身份，请稍后发送；草稿仍保留。");
+    if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current=null; }
+    const draftRevision=draftRevisionFor(draftRevisionByConversation.current,current.id);
+    let payload=pendingInputs.current.get(current.id);
+    if (payload && (payload.message!==message || payload.mode!==mode || payload.target_turn_id!==target.id)) {
+      const receipts=await getAssistantConversation(current.id);
+      const acknowledged=receipts.turns.some(turn=>turn.events.some(event=>event.type === "assistant_input" && event.input_id===payload!.client_request_id));
+      if (!acknowledged) throw new Error("上一条追加要求的结果尚未确认，请保留原要求重试后再发送其他内容。");
+      pendingInputs.current.delete(current.id); payload=undefined;
+    }
+    if (!payload) {
+      const saved=await saveDraftValue(current.id,message);
+      payload={client_request_id:crypto.randomUUID(),target_turn_id:target.id,message,mode,
+        expected_draft_version:saved.draft_version,expected_reference_version:referenceVersion};
+      pendingInputs.current.set(current.id,payload);
+    }
+    let receipt;
+    try { receipt=await enqueueAssistantInput(current.id,payload); }
+    catch (cause) {
+      if (cause instanceof Error && "status" in cause && typeof cause.status === "number" && cause.status>=400 && cause.status<500) pendingInputs.current.delete(current.id);
+      throw cause;
+    }
+    pendingInputs.current.delete(current.id);
+    const saved={draft_version:payload.expected_draft_version};
+    draftVersionByConversation.current.set(current.id,saved.draft_version+1);
+    if (conversationRef.current?.id===current.id && draftValue.current===message
+        && draftRevisionFor(draftRevisionByConversation.current,current.id)===draftRevision) {
+      draftValue.current=""; setDraftTextState("");
+      replace({...conversationRef.current,draft_text:"",draft_version:saved.draft_version+1});
+    }
+    await refresh();
+    return receipt;
+  },[saveDraftValue,refresh,replace]);
+  const withdrawInput = useCallback(async (inputId:string) => {
+    const id=conversationRef.current?.id;
+    if (!id) return;
+    await withdrawAssistantInput(id,inputId);
+    await refresh();
+  },[refresh]);
   const running = conversation?.turns.at(-1)?.status === "running";
   const pendingResults = assistantConversationRefreshTurns(conversation)
     .map(turn => [turn.id, assistantTurnGoalRefreshState(turn)?.status,
@@ -738,7 +783,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
 
   return {
     conversation, conversations, draftText, setDraftText, loading, error, setError,
-    beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn,
+    beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn, sendInput, withdrawInput,
     flushDraft, refresh, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
     businessRefreshPaused,
   };

@@ -53,6 +53,8 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return f"新建方案预检已返回，{len(blockers)} 项需处理；尚未创建任务。"
     if tool_name == "preview_script_draft":
         return "文案草稿已保存，尚待你检查和确认。"
+    if tool_name == "apply_typed_edit":
+        return "修改保存请求已返回；以原请求回读的时间线版本为准，可整项撤销。"
     if tool_name == "preview_typed_edit":
         return "修改预览已生成；草稿尚未应用。"
     if tool_name in {"undo_last_edit", "redo_last_edit", "discard_edit_proposal"}:
@@ -112,7 +114,7 @@ def _business_event_lines(output: str, seen: set[str] | None = None):
 
 
 class _PiStreamProjector:
-    """Project Pi 1.1 JSON events into a small UI-safe event vocabulary."""
+    """Project SDK events into a small UI-safe event vocabulary."""
 
     def __init__(self) -> None:
         self._calls: dict[str, tuple[int, str, str]] = {}
@@ -122,7 +124,7 @@ class _PiStreamProjector:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return None  # The final existing event parser reports malformed output.
+            return None  # The SDK result reader reports malformed protocol messages.
         event_type = event.get("type")
         if event_type == "message_update":
             update = event.get("assistantMessageEvent")

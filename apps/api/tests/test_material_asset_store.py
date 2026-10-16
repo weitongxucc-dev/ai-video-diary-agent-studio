@@ -1052,3 +1052,33 @@ def test_visual_feature_store_keeps_raw_projection_conflict_key_and_caller_trans
         conn.rollback()
     with connect() as conn:
         assert [tuple(row) for row in conn.execute("SELECT * FROM material_segment_features ORDER BY rowid")] == before
+
+
+def test_received_asset_joins_callers_transaction_and_rolls_back(database):
+    connect, _ = database
+    store = MaterialAssetStore(connect)
+    asset = _asset()
+    with pytest.raises(RuntimeError):
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.save_received_asset(conn, asset, workspace_id="workspace-a", owner_user_id="owner-a")
+            raise RuntimeError("synthetic failure of the paired sampling receipt")
+    with connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM material_assets").fetchone()[0] == 0
+
+
+def test_received_asset_replay_preserves_corrections_and_rejects_rebinding(database):
+    connect, _ = database
+    store = MaterialAssetStore(connect)
+    original = _asset()
+    original.user_tags = ["人工标记"]
+    store.save_asset(original)
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = store.save_received_asset(conn, _asset(), workspace_id="workspace-a", owner_user_id="owner-a")
+        assert replay.user_tags == ["人工标记"]
+        with pytest.raises(ValueError, match="归属"):
+            store.save_received_asset(conn, _asset(), workspace_id="workspace-a", owner_user_id="other")
+    with connect() as conn:
+        with pytest.raises(ValueError, match="事务"):
+            store.save_received_asset(conn, _asset(), workspace_id="workspace-a", owner_user_id="owner-a")

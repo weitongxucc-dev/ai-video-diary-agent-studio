@@ -1,5 +1,5 @@
 "use client";
-import { ChevronRight, Play } from "lucide-react";
+import { ChevronRight, MessageSquarePlus, Play } from "lucide-react";
 import type { RefObject } from "react";
 import type { MaterialAsset, MaterialSegment } from "@/lib/types";
 import { duration, fileLabel, mediaLabel, roleLabel, reviewLabel, analysisSummary } from './material-labels';
@@ -21,8 +21,9 @@ type Props = {
     startSegmentPlayback: (media: HTMLMediaElement) => void;
     onSelectAsset: () => void;
     onSelectSegment: (segment: MaterialSegment) => void;
+    onReferenceSegment?: (segment: MaterialSegment) => void;
 };
-export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSegmentId, disabled, previewFailed, previewReadTick, sourceAudio, sourceVideo, onPreviewError, onRetryPreview, seekSelectedSegment, constrainSegmentPlayback, startSegmentPlayback, onSelectAsset, onSelectSegment }: Props) {
+export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSegmentId, disabled, previewFailed, previewReadTick, sourceAudio, sourceVideo, onPreviewError, onRetryPreview, seekSelectedSegment, constrainSegmentPlayback, startSegmentPlayback, onSelectAsset, onSelectSegment, onReferenceSegment }: Props) {
     return <>
     <div className={`library-preview ${styles.preview}`}>
         {asset.media_type === "image" ? (<img alt={`原素材预览：${fileLabel(asset.file_name)}`} key={`${asset.id}:${previewReadTick}`} src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onPreviewError()}/>) : asset.media_type === "audio" ? (<audio ref={sourceAudio} onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)} aria-label="原素材预览" onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)} onPlay={event => startSegmentPlayback(event.currentTarget)} controls key={`${asset.id}:${previewReadTick}`} preload="metadata" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onPreviewError()}/>) : (<video ref={sourceVideo} aria-label="原素材预览" onTimeUpdate={event => constrainSegmentPlayback(event.currentTarget)} onPlay={event => startSegmentPlayback(event.currentTarget)} onLoadedMetadata={event => seekSelectedSegment(event.currentTarget)} controls key={`${asset.id}:${previewReadTick}`} preload="metadata" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onPreviewError()}/>)}
@@ -47,7 +48,7 @@ export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSeg
         </div>) : null}
       {asset.segments.length ? (<div className="library-segments">
           <h3>识别片段</h3>
-          {asset.segments.map((segment) => (<button className={segmentScope && selectedSegmentId === segment.id ? "is-selected" : ""} aria-pressed={segmentScope && selectedSegmentId === segment.id} disabled={disabled} key={segment.id} onClick={() => onSelectSegment(segment)} type="button">
+          {asset.segments.map((segment) => (<div className={styles.referenceEntry} key={segment.id}><button className={segmentScope && selectedSegmentId === segment.id ? "is-selected" : ""} aria-pressed={segmentScope && selectedSegmentId === segment.id} disabled={disabled} onClick={() => onSelectSegment(segment)} type="button">
               <span>
                 {duration(segment.start_seconds)}–
                 {duration(segment.end_seconds)}
@@ -59,7 +60,7 @@ export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSeg
                     "等待补充片段描述"}
               </p>
               <ChevronRight size={14}/>
-            </button>))}
+            </button>{onReferenceSegment ? <button className={styles.referenceButton} type="button" title="引用到对话" aria-label={`引用到对话：${fileLabel(asset.file_name)} · 片段 ${duration(segment.start_seconds)}–${duration(segment.end_seconds)}`} onClick={() => onReferenceSegment(segment)}><MessageSquarePlus size={16} /></button> : null}</div>))}
         </div>) : null}
   </>;
 }

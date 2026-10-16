@@ -5,6 +5,7 @@ from dataclasses import replace
 import sqlite3
 from app.creation.contracts import CreationPlanVoiceReference, CreationPlanPersonReference
 from app.materials.assets import MaterialAssetStore
+from app.materials.contracts import MaterialAsset
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 from app.profiles.authorizations import MediaAuthorizationStore
 from app.profiles.contracts import Authorization, PersonProfile, ProfileReference, VoiceProfile as VersionedVoiceProfile
@@ -29,6 +30,29 @@ class ProfileRegistrationUseCase:
         self._references = references
         self._workspace_references = workspace_references
         self._assets = assets
+
+    def register_received_voice(self, conn: sqlite3.Connection, voice: VersionedVoiceProfile,
+                                source: MaterialAsset) -> None:
+        """Join a validated sampling reception to its source and profile atomically.
+
+        Sampling owns the transaction and validates the complete PCM input. This
+        entry only accepts its new private, independently named voice source.
+        """
+        _validate_versioned_voice_profile(voice)
+        if (not source.owner_user_id or voice.owner_user_id != source.owner_user_id
+                or voice.workspace_id != source.workspace_id
+                or voice.reference != ProfileReference(asset_id=source.id)
+                or voice.person_profile_id or voice.authorization is not None
+                or voice.visibility != "private" or source.visibility != "private"):
+            raise PermissionError("采样来源与声音档案归属不一致")
+        path = self._workspace_references.resolve_workspace_media_reference(voice.workspace_id, voice.reference_audio_path)
+        if str(path) != source.path or not path.is_file():
+            raise ValueError("完整声音样本尚未保存")
+        self._assets.save_received_asset(conn, source, workspace_id=voice.workspace_id,
+                                         owner_user_id=voice.owner_user_id)
+        self._workspace_references.claim_workspace_media_reference(
+            conn, workspace_id=voice.workspace_id, reference=voice.reference_audio_path)
+        self._records.save_received_voice(conn, voice)
 
     def save_person_profile(
         self, person: PersonProfile, *, verified_owner_user_id: str | None = None,

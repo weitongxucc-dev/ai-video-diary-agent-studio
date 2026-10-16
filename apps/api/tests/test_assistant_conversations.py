@@ -8,13 +8,13 @@ from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
 
-def test_assistant_capabilities_separates_static_pi_inventory_from_runtime_version(tmp_path, monkeypatch):
+def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypatch):
     members = LocalMemberService(tmp_path / "capability-members.sqlite3")
     _member, token = members.join(members.create_invite_code(), "成员甲")
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace-one")
     monkeypatch.setattr(main_module, "pi_runtime_checks", lambda: [{
-        "id": "pi", "status": "ready", "version": "1.2.3", "reason": "隔离版本检查已通过。",
+        "id": "pi", "status": "ready", "version": "1.3.0", "reason": "隔离版本检查已通过。",
     }])
     response = TestClient(main_module.app).get(
         "/api/assistant/capabilities", headers={"X-Local-Member-Token": token},
@@ -22,11 +22,14 @@ def test_assistant_capabilities_separates_static_pi_inventory_from_runtime_versi
     assert response.status_code == 200
     capability = response.json()["pi_tui_commands"]
     assert capability["available"] is False
-    assert capability["inventory_version"] == "1.1.0"
-    assert "public interactive-mode command registry" in capability["inventory_source"]
-    assert capability["runtime_version"] == "1.2.3"
-    assert capability["product_mode"] == "headless --print --mode json"
-    assert "/arminsayshi" in capability["commands"]
+    assert capability["commands"] == []
+    assert "inventory_version" not in capability
+    assert response.json()["runtime"] == {
+        "owner": "pi-coding-agent-sdk", "version": "1.3.0", "status": "ready",
+        "reason": "隔离版本检查已通过。",
+    }
+    assert response.json()["skills"]["names"] == ["source-speech", "narration-materials", "local-edit"]
+    assert response.json()["prompt_templates"]["names"] == ["review-result"]
     assert response.json()["business_tools"] == {
         scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()
     }

@@ -156,6 +156,7 @@ export function sendCreationTaskAssistantTurn(taskId: string, input: {
     message: string;
     client_request_id: string;
     expected_draft_version: number;
+    expected_reference_version?: number;
     expected_timeline_version_id?: string | null;
     expected_timeline_sequence?: number;
     selected_profile_reference?: {

@@ -320,7 +320,7 @@ def test_incomplete_onboarding_can_reach_repair_endpoints(auth_ctx, monkeypatch)
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
         main_module,
-        "setup_preflight",
+        "workspace_preflight",
         lambda current_settings: {"overall": "blocked", "checks": []},
     )
 
@@ -352,7 +352,7 @@ def test_onboarding_completion_rechecks_preflight_before_writing(
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
         main_module,
-        "setup_preflight",
+        "workspace_preflight",
         lambda current_settings: {"overall": "blocked", "checks": []},
     )
 
@@ -380,7 +380,7 @@ def test_onboarding_completion_persists_only_after_ready_preflight(
     monkeypatch.setattr(main_module, "repo", repo)
     monkeypatch.setattr(
         main_module,
-        "setup_preflight",
+        "workspace_preflight",
         lambda current_settings: {"overall": "ready", "checks": []},
     )
 
@@ -405,7 +405,7 @@ def test_local_onboarding_completion_uses_local_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(main_module, "repo", local_repo)
     monkeypatch.setattr(
         main_module,
-        "setup_preflight",
+        "workspace_preflight",
         lambda current_settings: {"overall": "ready", "checks": []},
     )
 

@@ -1,10 +1,12 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { ASSISTANT_LOCATE_REFERENCE_EVENT, assistantReferenceHref } from "@/lib/assistant-reference";
 import { AssistantConversationContext } from "./AssistantConversationContext";
 import { useScopedAssistantConversation } from "./useAssistantConversation";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
-import { ASSISTANT_MATERIAL_REFERENCE_EVENT, ASSISTANT_PROFILE_REFERENCE_EVENT, ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, type AssistantKnowledgeReference, type AssistantMaterialReference, type AssistantProfileReference } from "@/lib/assistant-reference";
+import { ASSISTANT_SELECTION_EVENT, assistantReferenceItems, assistantReferenceKey, type SelectedAssistantReference, ASSISTANT_MATERIAL_REFERENCE_EVENT, ASSISTANT_PROFILE_REFERENCE_EVENT, ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, type AssistantKnowledgeReference, type AssistantMaterialReference, type AssistantProfileReference } from "@/lib/assistant-reference";
 
 import { getAssistantConversationReference, saveAssistantConversationReference } from "@/lib/api";
 import type { AssistantSavedReference } from "@/lib/types";
@@ -21,9 +23,19 @@ export function useAssistantProfileReference() { return useContext(ProfileRefere
 const KnowledgeReferenceContext = createContext<{reference:AssistantKnowledgeReference|null;setReference:(value:AssistantKnowledgeReference|null)=>void}|null>(null);
 export function useAssistantKnowledgeReference() { return useContext(KnowledgeReferenceContext); }
 
+const SelectionContext = createContext<{items:SelectedAssistantReference[];version:number|undefined;select:(items:SelectedAssistantReference[],additive?:boolean)=>void;remove:(item:SelectedAssistantReference)=>void}|null>(null);
+export function useAssistantSelection() { return useContext(SelectionContext); }
+
 function MemberConversation({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  useEffect(() => {
+    const locate = (event: Event) => router.push(assistantReferenceHref((event as CustomEvent<SelectedAssistantReference>).detail));
+    window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
+    return () => window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
+  }, [router]);
   const state = useScopedAssistantConversation({ scope_kind: "home", scope_id: "home" });
   const [savedReference, setSavedReference] = useState<AssistantSavedReference | null>(null);
+  const itemsRef = useRef(assistantReferenceItems(savedReference));
   const [referenceStatus, setReferenceStatus] = useState({pending:true,reason:null as string|null});
   const activeId = useRef<string | null>(null);
   const explicitReferenceId = useRef<string|null>(null);
@@ -34,6 +46,9 @@ function MemberConversation({ children }: { children: ReactNode }) {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const pendingBeforeLoad = useRef<{value:AssistantSavedReference|null}|null>(null);
   const selectReference = useCallback((value:AssistantSavedReference|null) => {
+    // Events can arrive in the same React batch (for example cross-page handoff).
+    // The next selection must compose with the optimistic selection immediately.
+    itemsRef.current=assistantReferenceItems(value);
     const id = activeId.current;
     if (!id) { pendingBeforeLoad.current={value}; setSavedReference(value); setReferenceStatus({pending:true,reason:null}); return; }
     explicitReferenceId.current=id;
@@ -78,12 +93,39 @@ function MemberConversation({ children }: { children: ReactNode }) {
       if (activeId.current === id && referenceRevision.current === revision) setReferenceStatus({pending:false,reason:cause instanceof Error ? cause.message : "引用未能恢复，请重新查看或取消。"});
     });
   }, [state.conversation?.id, selectReference]);
-  const reference = savedReference?.kind === "material" ? {selection:savedReference.selection,label:savedReference.label} : null;
-  const profileReference = savedReference?.kind === "person" || savedReference?.kind === "voice" ? savedReference : null;
-  const knowledgeReference = savedReference?.kind === "knowledge" ? savedReference : null;
-  const selectMaterial = useCallback((value:AssistantMaterialReference|null) => selectReference(value ? {kind:"material",...value} : null),[selectReference]);
-  const selectProfile = useCallback((value:AssistantProfileReference|null) => selectReference(value),[selectReference]);
-  const selectKnowledge = useCallback((value:AssistantKnowledgeReference|null) => selectReference(value ? {kind:"knowledge",...value} : null),[selectReference]);
+  const items = assistantReferenceItems(savedReference);
+  itemsRef.current = items;
+  const selectItems = useCallback((next:SelectedAssistantReference[], additive = false) => {
+    const unique = new Map((additive ? [...itemsRef.current,...next] : next).map(item=>[assistantReferenceKey(item),item]));
+    const values = [...unique.values()];
+    selectReference(values.length ? {kind:"selection",items:values} : null);
+  },[selectReference]);
+  const removeItem = useCallback((item:SelectedAssistantReference) => selectItems(itemsRef.current.filter(value=>assistantReferenceKey(value)!==assistantReferenceKey(item))),[selectItems]);
+  const material = items.find(item=>item.kind === "material");
+  const reference = material?.kind === "material" ? {selection:material.selection,label:material.label} : null;
+  const profile = items.find(item=>item.kind === "person" || item.kind === "voice");
+  const profileReference = profile && "profile_id" in profile ? profile : null;
+  const knowledge = items.find(item=>item.kind === "knowledge");
+  const knowledgeReference = knowledge?.kind === "knowledge" ? knowledge : null;
+  const selectMaterial = useCallback((value:AssistantMaterialReference|null) => selectItems([
+    ...itemsRef.current.filter(item=>item.kind!=="material"),...(value ? [{kind:"material" as const,...value}] : []),
+  ]),[selectItems]);
+  const selectProfile = useCallback((value:AssistantProfileReference|null) => selectItems([
+    ...itemsRef.current.filter(item=>value ? item.kind!==value.kind : item.kind!=="person" && item.kind!=="voice"),...(value ? [value] : []),
+  ]),[selectItems]);
+  const selectKnowledge = useCallback((value:AssistantKnowledgeReference|null) => selectItems([
+    ...itemsRef.current.filter(item=>item.kind!=="knowledge"),...(value ? [{kind:"knowledge" as const,...value}] : []),
+  ]),[selectItems]);
+  useEffect(() => {
+    const receive = (event:Event) => {
+      const value=(event as CustomEvent<{items:SelectedAssistantReference[];additive:boolean}>).detail;
+      const taskSelection=value.items.some(item=>"task_id" in item);
+      selectItems(taskSelection && !value.additive
+        ? [...itemsRef.current.filter(item=>!("task_id" in item)),...value.items] : value.items,value.additive);
+    };
+    window.addEventListener(ASSISTANT_SELECTION_EVENT,receive);
+    return () => window.removeEventListener(ASSISTANT_SELECTION_EVENT,receive);
+  },[selectItems]);
   useEffect(() => {
     const receiveKnowledge = (event: Event) => selectKnowledge((event as CustomEvent<AssistantKnowledgeReference | null>).detail);
     window.addEventListener(ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, receiveKnowledge);
@@ -100,11 +142,11 @@ function MemberConversation({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
   }, [selectMaterial]);
   return <AssistantConversationContext.Provider value={state}><ReferenceStatusContext.Provider value={{...referenceStatus,cancel:()=>selectReference(null)}}>
-    <MaterialReferenceContext.Provider value={{reference,setReference:selectMaterial}}>
+    <SelectionContext.Provider value={{items,version:activeId.current ? versions.current.get(activeId.current) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference,setReference:selectMaterial}}>
       <ProfileReferenceContext.Provider value={{reference:profileReference,setReference:selectProfile}}>
         <KnowledgeReferenceContext.Provider value={{reference:knowledgeReference,setReference:selectKnowledge}}>{children}</KnowledgeReferenceContext.Provider>
       </ProfileReferenceContext.Provider>
-    </MaterialReferenceContext.Provider>
+    </MaterialReferenceContext.Provider></SelectionContext.Provider>
   </ReferenceStatusContext.Provider></AssistantConversationContext.Provider>;
 }
 

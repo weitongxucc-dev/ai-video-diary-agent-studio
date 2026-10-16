@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture
 """Run the shipped Node extension across task/material operations, without a model."""
 import json
 import os
@@ -138,7 +139,7 @@ def test_candidate_read_does_not_allow_a_typed_write_after_task_version_changes(
 
 @pytest.mark.parametrize('failed', [False, True])
 def test_task_tag_reply_comes_from_verified_write_not_model_claims(failed):
-    from app.assistant_pi import _last_answer_and_preview, AssistantUnavailable
+    from app.assistant_pi import AssistantUnavailable
     details = {'scope':'segment','asset_ref':'asset:opaque-a','segment_ref':'segment:opaque-s',
                'user_tags':['空镜头'],'system_tags':['用途:b_roll'],'action':'add','changed':True}
     events = [{'type':'tool_execution_end','toolName':'update_selected_material_tags','isError':failed,'result':{'details':details}},
@@ -147,9 +148,9 @@ def test_task_tag_reply_comes_from_verified_write_not_model_claims(failed):
     output = '\n'.join(json.dumps(event) for event in events)
     if failed:
         with pytest.raises(AssistantUnavailable):
-            _last_answer_and_preview(output)
+            project_event_fixture(output)
     else:
-        reply,preview = _last_answer_and_preview(output)
+        reply,preview = project_event_fixture(output)
         assert '空镜头' in reply and '已保存并回读' in reply
         assert 'opaque-a' not in reply and 'b_roll' not in reply and preview is None
 

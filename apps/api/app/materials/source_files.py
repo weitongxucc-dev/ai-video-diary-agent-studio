@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 
-from app.video import SUPPORTED_VIDEO_EXTENSIONS
-from app.materials.contracts import MaterialAsset
+from app.materials.contracts import MaterialAsset, MATERIAL_MEDIA_BY_SUFFIX
 from app.media_link_import import _probe_file_media_type
 
 
@@ -48,7 +47,7 @@ class MaterialSourceFileAccess:
             path.relative_to(self.video_library_path.resolve())
         except ValueError as exc:
             raise ValueError("素材文件不在配置的素材库中") from exc
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+        if not path.is_file() or path.suffix.lower() not in MATERIAL_MEDIA_BY_SUFFIX:
             raise ValueError("素材文件不存在或格式不支持")
         return path
 

@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture
 """Recipe proxies consume actual DTOs; HTTP doubles, no producer/runtime execution."""
 import json
 import os
@@ -196,7 +197,7 @@ def test_metadata_receipt_keeps_the_actual_generated_source(recorded):
          "content": [{"type": "text", "text": "model text is not the receipt"}]}},
         {"type": "agent_settled"},
     ]
-    _answer, actual = host._last_answer_and_preview("\n".join(json.dumps(event) for event in events))
+    _answer, actual = project_event_fixture("\n".join(json.dumps(event) for event in events))
     assert actual == {**receipt, "related_media_job": job}
 
 
@@ -210,5 +211,5 @@ def test_actual_query_receipt_replaces_the_prior_unknown_save():
          "content": [{"type": "text", "text": "actual query completed"}]}},
         {"type": "agent_settled"},
     ]
-    _answer, actual = host._last_answer_and_preview("\n".join(json.dumps(event) for event in events))
+    _answer, actual = project_event_fixture("\n".join(json.dumps(event) for event in events))
     assert actual["kind"] == "media_script_tool_result" and actual["action"] == "query"

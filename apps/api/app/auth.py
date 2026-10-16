@@ -169,7 +169,7 @@ class SupabaseAuthContext:
         workspace_id: str,
         access_token: str,
     ) -> None:
-        """Persist completion after the API has recomputed a ready preflight.
+        """Persist initialization after the API verifies minimum workspace storage.
 
         The RPC verifies ``auth.uid()`` and the caller's workspace membership.
         The desktop never receives or stores a service-role secret.

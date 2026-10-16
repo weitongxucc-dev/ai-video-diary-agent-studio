@@ -46,6 +46,20 @@ async function beginRecording(buttonName = "开始录音") {
 }
 
 describe("DesktopVoiceRecorder", () => {
+  it("labels reusable sampling separately from this video's narration", async () => {
+    microphone();
+    const onRecorded = vi.fn();
+    render(<DesktopVoiceRecorder purpose="voice-sample" onRecorded={onRecorded} onCancel={vi.fn()}/>);
+    expect(screen.getByRole("heading", {name:"录制我的声音样本"})).toBeInTheDocument();
+    expect(screen.queryByText("为这条视频录音")).not.toBeInTheDocument();
+    await beginRecording();
+    fireEvent.click(screen.getByRole("button", {name:"停止录音"}));
+    expect(screen.getByRole("link",{name:"另存录音到电脑"})).toHaveAttribute("download","声音样本.webm");
+    expect(screen.getByText(/录音暂存本页，尚未发送/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"提交声音样本"}));
+    await screen.findByText("声音样本已由主机接收；声音生成状态请查看采样回执。");
+    expect(onRecorded).toHaveBeenCalledOnce();
+  });
   beforeEach(() => {
     TestMediaRecorder.instances = [];
     trackStop.mockClear();

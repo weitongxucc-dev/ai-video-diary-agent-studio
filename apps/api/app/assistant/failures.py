@@ -32,7 +32,7 @@ _FAILURES: dict[str, dict[str, object]] = {
     FAILURE_RUNTIME_MISSING: {
         "service_contacted": False,
         "explanation": "对话没能在本机跑起来，所以这一轮根本没碰到密钥和网络。",
-        "next_step": "安装 Node.js 22.19 或更高版本，再执行 npm install -g @earendil-works/pi-coding-agent；确认 node --version 和 pi --version 可运行后重新打开应用。桌面安装包尚不自带 Node/Pi。",
+        "next_step": "安装 Node.js 22.19 或更高版本，再执行 npm install -g @earendil-works/pi-coding-agent@1.3.0；确认 node --version 和 pi --version 可运行后重新打开应用。桌面安装包尚不自带 Node/Pi。",
     },
     FAILURE_TOOL_FAILED: {
         "service_contacted": False,

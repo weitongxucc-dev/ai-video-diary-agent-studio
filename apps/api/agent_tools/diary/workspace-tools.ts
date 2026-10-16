@@ -24,7 +24,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
   pi.registerTool({
     name: "read_clip_candidates",
     label: "查找替换镜头",
-    description: "为当前任务事实中的clip_id读取候选；未指定时才用真实界面选择，不修改selected_refs：使用范围、当前文件修订及时间槽由服务端校验，自动选择排除不要自动选用的素材。用户让助手决定时可按任务内容与已存标签选择一个候选，再调用preview_typed_edit提交待确认替换；不需要用户先手选素材。候选不是画质评分或已修改结果。无可用候选须明确说明实际条件，不把零候选说成空库。",
+    description: "为当前任务事实中的clip_id读取候选；未指定时才用真实界面选择，不修改selected_refs：使用范围、当前文件修订及时间槽由服务端校验，自动选择排除不要自动选用的素材。用户让助手决定时可按任务内容与已存标签选择一个候选，在API直接能力和明确授权内保存替换，必要提案才用preview_typed_edit；不需要用户先手选素材。候选不是画质评分或已修改结果。无可用候选须明确说明实际条件，不把零候选说成空库。",
     parameters: {type: "object", properties: getEditCapabilities() ? {clip_id: structuredClone(getEditCapabilities().schema.properties.clip_id)} : {}, additionalProperties: false},
     execute: async (_id: string, params: {clip_id?: string} = {}) => {
       if (!taskId || !isTaskRead()) throw new Error("请先读取当前任务镜头");
@@ -52,7 +52,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
           reasons: candidate.reasons });
       }
       return { content: [{ type: "text", text: JSON.stringify({ matches, candidate_count: candidates.length, truncated: candidates.length > 24,
-        instruction: "这是其他可用片段的有限候选，尚未替换；依据当前任务表达与标签选择后生成提案。不要向用户展示编号、字段名或把匹配分数当画质概率。" }) }], details: { matches, candidate_count: candidates.length, truncated: candidates.length > 24 } };
+        instruction: "这是其他可用片段的有限候选，尚未替换；依据当前任务表达与标签选择后，按API直接能力保存或准备必要提案。不要向用户展示编号、字段名或把匹配分数当画质概率。" }) }], details: { matches, candidate_count: candidates.length, truncated: candidates.length > 24 } };
     },
   });
   pi.registerTool({

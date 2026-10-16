@@ -1854,7 +1854,46 @@ class AssistantSavedKnowledgeReference(BaseModel):
     locator: str | None = Field(default=None, min_length=1, max_length=500)
 
 
-AssistantSavedReference = Annotated[AssistantSavedMaterialReference | AssistantSavedProfileReference | AssistantSavedKnowledgeReference, Field(discriminator="kind")]
+class AssistantSavedTimelineReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["shot", "narration", "audio", "subtitle", "effect"]
+    object_id: str = Field(min_length=1, max_length=120)
+    task_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=240)
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if (self.start_ms is None) != (self.end_ms is None):
+            raise ValueError("选中时间范围需要同时提供开始和结束")
+        if self.start_ms is not None and self.end_ms <= self.start_ms:
+            raise ValueError("选中时间范围的结束必须晚于开始")
+        return self
+
+
+AssistantSavedReferenceItem = Annotated[
+    AssistantSavedMaterialReference | AssistantSavedProfileReference
+    | AssistantSavedKnowledgeReference | AssistantSavedTimelineReference,
+    Field(discriminator="kind"),
+]
+
+
+class AssistantSavedSelectionReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["selection"]
+    items: list[AssistantSavedReferenceItem] = Field(min_length=1, max_length=32)
+
+
+AssistantSavedReference = Annotated[
+    AssistantSavedMaterialReference | AssistantSavedProfileReference
+    | AssistantSavedKnowledgeReference | AssistantSavedTimelineReference
+    | AssistantSavedSelectionReference,
+    Field(discriminator="kind"),
+]
 
 
 class AssistantConversationReferenceRequest(BaseModel):
@@ -1944,6 +1983,17 @@ class AssistantConversationStopRequest(BaseModel):
     turn_id: UUID
 
 
+class AssistantConversationInputRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_request_id: UUID
+    target_turn_id: UUID
+    mode: Literal["steer", "follow_up"]
+    message: str = Field(min_length=2, max_length=4000)
+    expected_draft_version: int = Field(ge=0)
+    expected_reference_version: int = Field(ge=0)
+
+
 class AssistantProfileReferenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["person", "voice"]
@@ -1965,6 +2015,7 @@ class CreationTaskAssistantTurnRequest(BaseModel):
     message: str = Field(min_length=2, max_length=1000)
     client_request_id: UUID
     expected_draft_version: int = Field(ge=0)
+    expected_reference_version: int | None = Field(default=None, ge=0)
     expected_timeline_version_id: str | None = None
     expected_timeline_sequence: int | None = Field(default=None, ge=0)
     selected_profile_reference: AssistantProfileReferenceRequest | None = None
@@ -2129,7 +2180,7 @@ class AssistantEditRequestLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: str = Field(min_length=1, max_length=120)
     request_id: UUID
-    phase: Literal["preview", "script", "observation"] = "preview"
+    phase: Literal["preview", "apply", "script", "observation"] = "preview"
     status: Literal["recorded", "unknown", "rejected", "not_submitted"]
     query_url: str
     input_digest: str | None = None
@@ -2163,7 +2214,7 @@ class CreationTaskAssistantTurnResponse(BaseModel):
     execution_action: Literal["start", "resume", "cancel"] | None = None
     execution_status: dict[str, object] | None = None
     topic_candidates: CreationTaskTopicsResponse | None = None
-    timeline_action: Literal["undo", "redo", "reject"] | None = None
+    timeline_action: Literal["apply", "undo", "redo", "reject"] | None = None
     turn_id: UUID | None = None
     turn_status: Literal["running", "completed", "stopped"] = "completed"
     draft_version: int | None = Field(default=None, ge=0)
@@ -2373,6 +2424,7 @@ class WorkspaceAssistantPlanTurnRequest(BaseModel):
     conversation_id: UUID
     client_request_id: UUID
     expected_draft_version: int = Field(ge=0)
+    expected_reference_version: int | None = Field(default=None, ge=0)
     selected_profile_reference: AssistantProfileReferenceRequest | None = None
     selected_knowledge_reference: AssistantKnowledgeReferenceRequest | None = None
 
@@ -2397,6 +2449,7 @@ class MaterialAssistantTurnRequest(BaseModel):
     conversation_id: UUID
     client_request_id: UUID
     expected_draft_version: int = Field(ge=0)
+    expected_reference_version: int | None = Field(default=None, ge=0)
     selection: MaterialAssistantSelectionRequest | None = None
 
 
@@ -3226,6 +3279,35 @@ class VoiceReferenceImportResponse(BaseModel):
     file_name: str
     size_bytes: int = Field(gt=0)
     duration_seconds: float = Field(gt=0)
+
+
+class VoiceSamplingTaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    display_name: str = Field(min_length=1, max_length=300)
+    language: Literal["zh", "en", "zh-en"] = "zh"
+    purpose: Literal["voice_profile"] = "voice_profile"
+
+
+class MaterialDiscoveryStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_ids: list[str] = Field(min_length=1, max_length=64)
+    exclusions: list[str] | None = Field(default=None, max_length=256)
+
+
+class MaterialDiscoveryControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["pause", "resume", "cancel", "exclude"]
+    exclusions: list[str] | None = Field(default=None, max_length=256)
+
+
+class MaterialDiscoveryReceiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 class PronunciationEntryResponse(BaseModel):

@@ -41,8 +41,9 @@ vi.mock("@/lib/api", () => ({
   listAssistantConversations: vi.fn().mockResolvedValue({ items: [] }),
   getAssistantCapabilities: vi.fn().mockResolvedValue({
     application_commands: ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
-    pi_tui_commands: { available: false, inventory_source: "静态命令清单", inventory_version: "1.1.0", runtime_version: null, runtime_status: "missing", runtime_reason: "未确认", runtime_check: "隔离检查", product_mode: "headless", reason: "未接通", commands: [] },
-    extension_commands: { available: false, reason: "未接通" }, skills: { available: false, reason: "未接通" }, prompt_templates: { available: false, reason: "未接通" }, business_tools: {},
+    runtime: { owner: "pi-coding-agent-sdk", version: "1.3.0", status: "ready", reason: "已就绪" },
+    pi_tui_commands: { available: false, reason: "终端命令不在此运行", commands: [] },
+    extension_commands: { available: false, reason: "未接通" }, skills: { available: true, reason: "按需加载", names: ["local-edit"] }, prompt_templates: { available: true, reason: "按需加载", names: ["review-result"] }, business_tools: {},
   } satisfies import("@/lib/types").AssistantCapabilities),
 }));
 
@@ -124,7 +125,7 @@ describe("AppShell", () => {
   it("keeps conversation visible and opens object details only in a dismissible card", () => {
     const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
     expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
-    expect(screen.queryByText("镜头属性")).not.toBeInTheDocument();
+    expect(screen.getByText("镜头属性")).not.toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "镜头一" }));
     expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("镜头属性");
     view.rerender(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
@@ -551,14 +552,15 @@ describe("AppShell", () => {
     expect(screen.queryByRole("dialog", { name: "搜索页面和创作任务" })).not.toBeInTheDocument();
   });
 
-  describe("v5.1 explicit object cards", () => {
-    it("does not open details or parameters when a shot is selected", () => {
+  describe("standard object overlays", () => {
+    it("does not open details or parameters when a shot is selected", async () => {
       render(<AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="镜头草稿" defaultValue="保留" />} inspectorTitle="镜头详情" conversation={<p>任务对话</p>}><video /><button data-editor-transport>播放</button></AppShell>);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", {name:"编辑镜头参数"}));
       expect(screen.queryByRole("dialog", {name:"镜头详情"})).not.toBeInTheDocument();
-      expect(screen.getByRole("dialog", {name:"镜头参数"})).toHaveAttribute("data-card-kind","config");
-      fireEvent.keyDown(document.activeElement!, {key:"Escape"});
+      expect(screen.getByRole("dialog", {name:"镜头参数"})).toHaveAttribute("aria-modal","true");
+      fireEvent.click(screen.getByRole("button", {name:"关闭卡片"}));
+      await waitFor(() => expect(screen.queryByRole("dialog", {name:"镜头参数"})).not.toBeInTheDocument());
       fireEvent.click(screen.getByRole("button", {name:"查看详情"}));
       fireEvent.change(screen.getByLabelText("镜头草稿"), {target:{value:"新草稿"}});
       fireEvent.click(screen.getByRole("button", {name:"关闭卡片"}));
@@ -566,10 +568,10 @@ describe("AppShell", () => {
       expect(screen.getByLabelText("镜头草稿")).toHaveValue("新草稿");
       expect(screen.getByRole("button", {name:"播放"})).toBeInTheDocument();
     });
-    it("keeps the quick card as the proposal parent while preserving its draft on close", () => {
+    it("keeps the quick dialog as the proposal parent while preserving its draft on close", async () => {
       function ConfirmationSurface() {
         const [confirmationOpen, setConfirmationOpen] = useState(false);
-        return <AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" defaultValue="待保存" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="config" title="选择应用到草稿" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button><video /></AppShell>;
+        return <AppShell editorLayout quickInspector={() => <><input aria-label="快速草稿" defaultValue="待保存" /><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button></>} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="config" title="选择应用到草稿" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><video /></AppShell>;
       }
       render(<ConfirmationSurface />);
       fireEvent.click(screen.getByRole("button", { name: "编辑镜头参数" }));
@@ -577,10 +579,10 @@ describe("AppShell", () => {
       fireEvent.change(screen.getByLabelText("快速草稿"), { target: { value: "保留快速草稿" } });
       fireEvent.click(screen.getByRole("button", { name: "确认草稿" }));
       expect(screen.queryByRole("dialog", { name: "镜头详情" })).not.toBeInTheDocument();
-      expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
-      expect(screen.getByRole("dialog", { name: "选择应用到草稿" })).toHaveAttribute("data-card-kind", "config");
-      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-      expect(screen.queryByRole("dialog", { name: "选择应用到草稿" })).not.toBeInTheDocument();
+      expect(quick).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "选择应用到草稿" })).toHaveAttribute("aria-modal", "true");
+      fireEvent.click(within(screen.getByRole("dialog", { name: "选择应用到草稿" })).getByRole("button", { name: "关闭卡片" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "选择应用到草稿" })).not.toBeInTheDocument());
       expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
       expect(screen.getByLabelText("快速草稿")).toHaveValue("保留快速草稿");
     });

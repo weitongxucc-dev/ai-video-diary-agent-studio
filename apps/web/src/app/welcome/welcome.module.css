@@ -1,0 +1,13 @@
+.page { width: min(900px, 100%); margin: 0 auto; padding: 32px 24px; min-height: 100dvh; display: flex; flex-direction: column; gap: 24px; font-size: 13px; }
+.page h1 { font-size: 26px; margin: 8px 0; font-weight: 500; }
+.page h2 { font-size: 17px; margin: 0 0 10px; }
+.page p { color: var(--text-2); line-height: 1.65; }
+.steps { display: flex; flex-wrap: wrap; gap: 8px; }
+.steps button { background: transparent; border: 1px solid var(--border-1); border-radius: 8px; padding: 7px 12px; color: inherit; }
+.steps button[aria-current="step"] { background: var(--surface-2); border-color: currentColor; }
+.stage { padding: 24px; border: 1px solid var(--border-1); border-radius: 14px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+.actions span { color: var(--text-2); }
+.consent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 20px 0; }
+.error { border: 1px solid var(--danger); border-radius: 8px; padding: 12px; }
+@media (max-width: 600px) { .page { padding: 20px 12px; gap: 18px; } .stage { padding: 16px; } .page h1 { font-size: 22px; } }

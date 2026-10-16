@@ -6,7 +6,7 @@ import type { CreationRequest } from './creation-requests';
 export type AssistantEditRequest = {
     task_id: string;
     request_id: string;
-    phase: "preview" | "apply" | "script";
+    phase: "preview" | "apply" | "script" | "observation";
     status: "recorded" | "unknown" | "rejected" | "not_submitted";
     query_url: string;
     input_digest?: string | null;
@@ -50,7 +50,7 @@ export type CreationTaskAssistantTurnResponse = {
     execution_action: "start" | "resume" | "cancel" | null;
     execution_status: CreationExecutionStatus | null;
     topic_candidates: CreationTaskTopicsResponse | null;
-    timeline_action?: "undo" | "redo" | "reject" | null;
+    timeline_action?: "apply" | "undo" | "redo" | "reject" | null;
     turn_id?: string | null;
     turn_status?: "running" | "completed" | "stopped";
     draft_version?: number | null;
@@ -128,13 +128,24 @@ export type AssistantTurnActivity = {
     tools: AssistantToolActivity[];
     events: (Extract<AssistantStreamEvent, {
         type: "text_delta" | "tool_start" | "tool_end";
-    }> | AssistantBusinessResultEvent | {
+    }> | AssistantBusinessResultEvent | AssistantInputReceipt | {
         type: "goal_continuation_started";
         source_kind: "business_event";
         original_turn_id: string;
         source_turn_id: string;
         event_id: string;
     })[];
+};
+export type AssistantInputReceipt = {
+    type: "assistant_input";
+    input_id: string;
+    target_turn_id: string;
+    message: string;
+    mode: "steer" | "follow_up";
+    status: "accepted" | "consumed" | "completed" | "withdrawn" | "rejected" | "interrupted";
+    reason: string | null;
+    created_at: string;
+    updated_at: string;
 };
 export type AssistantConversationTurn = {
     id: string;
@@ -147,7 +158,7 @@ export type AssistantConversationTurn = {
     created_at: string;
     updated_at: string;
 };
-export type AssistantSavedReference = {
+export type AssistantReferenceItem = {
     kind: "material";
     selection: MaterialAssistantSelection;
     label: string;
@@ -162,6 +173,19 @@ export type AssistantSavedReference = {
     version: string;
     locator?: string;
     label: string;
+};
+export type AssistantTimelineReference = {
+    kind: "shot" | "narration" | "audio" | "subtitle" | "effect";
+    object_id: string;
+    task_id: string;
+    version: string;
+    label: string;
+    start_ms?: number;
+    end_ms?: number;
+};
+export type AssistantSavedReference = AssistantReferenceItem | AssistantTimelineReference | {
+    kind: "selection";
+    items: (AssistantReferenceItem | AssistantTimelineReference)[];
 };
 export type AssistantConversationReferenceState = {
     selected_reference: AssistantSavedReference | null;
@@ -186,15 +210,9 @@ export type AssistantConversation = {
 export type AssistantConversationScope = Pick<AssistantConversation, "scope_kind" | "scope_id">;
 export type AssistantCapabilities = {
     application_commands: string[];
+    runtime: { owner: "pi-coding-agent-sdk"; version: string | null; status: string; reason: string };
     pi_tui_commands: {
         available: boolean;
-        inventory_source: string;
-        inventory_version: string;
-        runtime_version: string | null;
-        runtime_status: string;
-        runtime_reason: string;
-        runtime_check: string;
-        product_mode: string;
         reason: string;
         commands: string[];
     };
@@ -204,10 +222,12 @@ export type AssistantCapabilities = {
     };
     skills: {
         available: boolean;
+        names: string[];
         reason: string;
     };
     prompt_templates: {
         available: boolean;
+        names: string[];
         reason: string;
     };
     business_tools: Record<string, string[]>;

@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal
+from types import SimpleNamespace
 from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from weakref import WeakSet
@@ -204,7 +205,14 @@ from app.montage import (
 )
 from app.narration import NarrationArtifact, NarrationGenerator, VoicePreviewService, compile_narration_command
 from app.preference_memory import PreferenceState, build_preference_memory
-from app.preflight import setup_preflight
+from app.preflight import setup_preflight, workspace_preflight
+from app.profiles.voice_sampling import VoiceSamplingConflict, VoiceSamplingTask, MAX_SAMPLE_BYTES
+from app.assistant.references import AssistantReferenceConflict, normalize_selection, validate_timeline_reference, timeline_object_refs
+from app.assistant.inputs import AssistantInputConflict
+from app.assistant.input_delivery import AssistantInputDelivery
+from app.schemas import (VoiceSamplingTaskCreateRequest, MaterialDiscoveryStartRequest,
+                         MaterialDiscoveryControlRequest, MaterialDiscoveryReceiveRequest,
+                         AssistantConversationInputRequest)
 from app.product_hunt import ProductHuntClient
 from app.scheduled_tasks import (
     ScheduledTaskCreateRequest,
@@ -2045,6 +2053,75 @@ async def import_media_voice_reference(
         size_bytes=size_bytes,
         duration_seconds=duration_seconds,
     )
+
+
+def _member_owned_content_scope(request: Request) -> tuple[str, str]:
+    workspace_id = current_workspace_id(request)
+    owner, _diagnostic = _content_reader(request, workspace_id)
+    if not owner:
+        raise HTTPException(status_code=403, detail="请先确认当前成员身份，再操作私人素材。")
+    return workspace_id, owner
+
+
+@app.post("/api/media/voice-sampling-tasks", response_model=VoiceSamplingTask, status_code=201)
+def create_voice_sampling_task(request: Request, payload: VoiceSamplingTaskCreateRequest):
+    workspace_id, owner = _member_owned_content_scope(request)
+    try:
+        return production_repo.voice_sampling.create(
+            workspace_id, owner, request_id=str(payload.request_id),
+            display_name=payload.display_name, language=payload.language, purpose=payload.purpose,
+        )
+    except VoiceSamplingConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/media/voice-sampling-tasks")
+def list_voice_sampling_tasks(request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    items = production_repo.voice_sampling.list(workspace_id, owner)
+    return {"items": [asdict(item) for item in items], "total_count": len(items)}
+
+
+@app.get("/api/media/voice-sampling-tasks/{task_id}", response_model=VoiceSamplingTask)
+def get_voice_sampling_task(task_id: str, request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    try:
+        return production_repo.voice_sampling.get(workspace_id, owner, task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="声音采样任务不存在或当前不可访问。") from exc
+
+
+@app.post("/api/media/voice-sampling-tasks/{task_id}/sample", response_model=VoiceSamplingTask)
+async def receive_voice_sampling_sample(
+    task_id: str, request: Request,
+    request_id: UUID = Form(...), text_version: str = Form(...),
+    purpose: Literal["voice_profile"] = Form(...),
+    source_device: Literal["desktop", "import"] = Form(...),
+    audio: UploadFile = File(...),
+):
+    workspace_id, owner = _member_owned_content_scope(request)
+    try:
+        # Resolve ownership before reading an uploaded sample into memory.
+        service = production_repo.voice_sampling
+        service.get(workspace_id, owner, task_id)
+        content = await audio.read(MAX_SAMPLE_BYTES + 1)
+        return service.receive(
+            workspace_id, owner, task_id, request_id=str(request_id), text_version=text_version,
+            purpose=purpose, source_device=source_device, content=content,
+            model_id=voice_clone_provider.model_id if voice_clone_provider.ready else "",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="声音采样任务不存在或当前不可访问。") from exc
+    except VoiceSamplingConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="声音样本未保存，请检查原素材目录和磁盘后重试。") from exc
 
 
 @app.get("/api/media/voice-profiles", response_model=VersionedVoiceProfilesResponse)
@@ -5085,6 +5162,13 @@ def update_assistant_plan_preview(
 def _validate_saved_assistant_reference(request: Request, reference: dict | None) -> dict | None:
     if reference is None:
         return None
+    if reference["kind"] == "selection":
+        try:
+            return normalize_selection({"kind": "selection", "items": [
+                _validate_saved_assistant_reference(request, item) for item in reference["items"]
+            ]})
+        except AssistantReferenceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     workspace_id = current_workspace_id(request)
     if _assistant_text_without_credentials(reference["label"], workspace_id) != reference["label"]:
         raise HTTPException(status_code=422, detail="引用名称不能包含密钥或口令。")
@@ -5094,6 +5178,14 @@ def _validate_saved_assistant_reference(request: Request, reference: dict | None
         reference = {**reference, "selection":{key:value for key,value in selection.items() if key not in ("start_seconds","end_seconds")}}
     elif reference["kind"] == "knowledge":
         _assistant_knowledge_snapshot(request, reference["knowledge_item_id"], reference["version"], reference.get("locator"))
+    elif reference["kind"] in {"shot", "narration", "audio", "subtitle", "effect"}:
+        task, _member_id = _exact_edit_access(reference["task_id"], request)
+        version = _timeline_version_or_404(workspace_id, task.id, reference["version"])
+        try:
+            return validate_timeline_reference(reference, task=task, timeline=version,
+                subtitle_tracks=production_repo.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=version.id))
+        except AssistantReferenceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
         _assistant_profile_snapshot(request, reference["kind"], reference["profile_id"], reference["version"])
     return reference
@@ -5205,6 +5297,56 @@ def stop_assistant_conversation_turn(
     return {"turn_id": str(payload.turn_id), "status": "stopping"}
 
 
+@app.get("/api/assistant/conversations/{conversation_id}/inputs")
+def list_assistant_inputs(conversation_id: str, request: Request):
+    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
+    return {"items": conversation_repo.list_inputs(conversation_id, workspace_id, member_id)}
+
+
+@app.post("/api/assistant/conversations/{conversation_id}/inputs")
+def enqueue_assistant_input(conversation_id: str, request: Request, payload: AssistantConversationInputRequest):
+    workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
+    if _assistant_text_without_credentials(payload.message, workspace_id) != payload.message:
+        raise HTTPException(status_code=422, detail="请勿在对话中粘贴密钥或口令。")
+    context = conversation_repo.consumed_turn_request_context(
+        str(payload.target_turn_id), conversation_id, workspace_id, member_id)
+    if not context:
+        raise HTTPException(status_code=404, detail="目标轮次不存在或当前不可访问。")
+    previous = next((item for item in conversation_repo.list_inputs(conversation_id, workspace_id, member_id)
+                     if item["input_id"] == str(payload.client_request_id)), None)
+    if previous is not None:
+        context = previous["request_context"]
+    else:
+        if conversation["reference_version"] != payload.expected_reference_version:
+            raise HTTPException(status_code=409, detail="选中引用已变化，请重新读取后发送。")
+        reference = _validate_saved_assistant_reference(request, conversation["selected_reference"])
+        context = _assistant_input_context(request, context, reference)
+        context["expected_reference_version"] = payload.expected_reference_version
+    try:
+        item, _created = conversation_repo.enqueue_input(
+            conversation_id, workspace_id, member_id,
+            target_turn_id=str(payload.target_turn_id), client_request_id=str(payload.client_request_id),
+            message=payload.message, mode=payload.mode, expected_draft_version=payload.expected_draft_version,
+            expected_reference_version=payload.expected_reference_version, request_context=context,
+        )
+    except AssistantInputConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="目标会话或轮次不存在。") from exc
+    return {"input": item, "draft_version": payload.expected_draft_version + 1}
+
+
+@app.post("/api/assistant/conversations/{conversation_id}/inputs/{input_id}/withdraw")
+def withdraw_assistant_input(conversation_id: str, input_id: str, request: Request):
+    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
+    try:
+        return conversation_repo.transition_input(conversation_id, workspace_id, member_id, input_id, "withdrawn")
+    except AssistantInputConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="追加输入不存在。") from exc
+
+
 @app.get("/api/assistant/capabilities")
 def assistant_capabilities(request: Request):
     workspace_id = current_workspace_id(request)
@@ -5212,21 +5354,17 @@ def assistant_capabilities(request: Request):
     pi_check = next(check for check in pi_runtime_checks() if check["id"] == "pi")
     return {
         "application_commands": ["/new", "/name <名称>", "/resume <会话ID>", "/help"],
-        "pi_tui_commands": {
-            "available": False,
-            "inventory_source": "Pi 1.1.0 public interactive-mode command registry; static inventory, not proof of the installed executable",
-            "inventory_version": "1.1.0",
-            "runtime_version": pi_check["version"],
-            "runtime_status": pi_check["status"],
-            "runtime_reason": pi_check["reason"],
-            "runtime_check": "pi_runtime_checks isolated --version; actual conversation is not checked",
-            "product_mode": "headless --print --mode json",
-            "commands": ["/settings", "/scoped-models", "/model", "/thinking", "/export", "/import", "/share", "/bug", "/copy", "/name", "/session", "/changelog", "/hotkeys", "/fork", "/clone", "/tree", "/trust", "/login", "/logout", "/new", "/compact", "/reload", "/debug", "/arminsayshi", "/dementedelves", "/resume", "/quit"],
-            "reason": "当前产品以无交互调用运行Pi；以上交互式Pi命令均未接通，不能从对话输入中调用。",
-        },
-        "extension_commands": {"available": False, "commands": [], "reason": "扩展仅注册受限业务工具，没有注册命令或任意文件/终端入口。"},
-        "skills": {"available": False, "reason": "当前Pi启动参数关闭skills。"},
-        "prompt_templates": {"available": False, "reason": "当前Pi启动参数关闭prompt templates。"},
+        "runtime": {"owner": "pi-coding-agent-sdk", "version": pi_check["version"],
+                    "status": pi_check["status"], "reason": pi_check["reason"]},
+        "pi_tui_commands": {"available": False, "commands": [],
+                            "reason": "请使用本产品的会话命令；终端专用命令不在此运行。"},
+        "extension_commands": {"available": False, "commands": [],
+                               "reason": "创作工具由助手按任务调用。"},
+        "skills": {"available": pi_check["status"] == "ready",
+                   "names": ["source-speech", "narration-materials", "local-edit"],
+                   "reason": "创作技能在任务需要时加载；具体制作能力仍依赖已连接模型和媒体工具。"},
+        "prompt_templates": {"available": pi_check["status"] == "ready", "names": ["review-result"],
+                             "reason": "结果回读模板由创作流程按需使用。"},
         "business_tools": {scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()},
     }
 
@@ -5234,18 +5372,47 @@ def assistant_capabilities(request: Request):
 def _begin_assistant_turn(
     request: Request, conversation_id: str, scope_kind: str, scope_id: str | None,
     message: str, client_request_id: UUID, expected_draft_version: int,
-    request_context: dict[str, object], on_event,
+    request_context: dict[str, object], on_event, *, expected_reference_version: int | None = None,
 ) -> tuple[str, bool, dict]:
     workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
     # Scope is historical metadata. The destination route has already verified
     # this turn's business object; conversation ownership grants no object access.
     if _assistant_text_without_credentials(message, workspace_id) != message:
         raise HTTPException(status_code=422, detail="请勿在对话中粘贴密钥或口令。")
+    previous = conversation_repo.request_context(str(client_request_id), conversation_id, workspace_id, member_id)
+    if expected_reference_version is None:
+        if any(request_context.get(key) for key in ("selection", "profile_reference", "knowledge_reference", "selected_object_refs")):
+            raise HTTPException(status_code=409, detail="请重新读取当前选中引用后再发送。")
+        reference = None
+    elif previous is not None:
+        reference = previous.get("selected_reference")
+    else:
+        if conversation["reference_version"] != expected_reference_version:
+            raise HTTPException(status_code=409, detail="选中引用已变化，请重新读取后再发送。")
+        reference = _validate_saved_assistant_reference(request, conversation["selected_reference"])
+    if expected_reference_version is not None:
+        request_context = {**request_context, "selected_reference": reference,
+            "expected_reference_version": expected_reference_version}
+        target = dict(request_context.get("target_snapshot") or {})
+        target["selected_references"] = reference["items"] if reference and reference["kind"] == "selection" else [reference] if reference else []
+        request_context["target_snapshot"] = target
+        if previous is not None:
+            request_context["target_snapshot"] = previous.get("target_snapshot")
+            if request_context.get("kind") == "task":
+                request_context["selected_object_refs"] = previous.get("selected_object_refs", [])
+        elif request_context.get("kind") == "task":
+            frozen = _assistant_input_context(request, request_context, reference)
+            request_context["selected_object_refs"] = frozen["selected_object_refs"]
+            request_context["target_snapshot"] = {**target,
+                "material_selection": frozen["target_snapshot"].get("material_selection")}
     try:
         turn, created = conversation_repo.create_turn_idempotent(
             conversation_id, workspace_id, member_id, message, str(client_request_id),
             expected_draft_version, request_context,
+            expected_reference_version=expected_reference_version,
         )
+    except ConversationReferenceVersionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConversationTurnAlreadyRunning as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConversationDraftVersionConflict as exc:
@@ -5268,6 +5435,90 @@ def _begin_assistant_turn(
         if not created and turn["status"] != "running":
             on_event({"type": "turn_status", "turn_id": turn["id"], "turn_state": turn["status"]})
     return turn["id"], created, turn
+
+
+def _assistant_input_context(request: Request, context: dict, reference: dict | None) -> dict:
+    items = reference["items"] if reference and reference["kind"] == "selection" else [reference] if reference else []
+    workspace_id = current_workspace_id(request)
+    snapshot = {"selected_references": items}
+    context = {**context, "selected_reference": reference}
+    profiles = [item for item in items if item["kind"] in {"person", "voice"}]
+    knowledge = [item for item in items if item["kind"] == "knowledge"]
+    profile = profiles[0] if len(profiles) == 1 else None
+    knowledge_item = knowledge[0] if len(knowledge) == 1 else None
+    context["profile_reference"] = ({key: profile[key] for key in ("kind", "profile_id", "version")} if profile else None)
+    context["knowledge_reference"] = ({key: knowledge_item[key] for key in ("knowledge_item_id", "version", "locator") if key in knowledge_item} if knowledge_item else None)
+    snapshot["profile_reference"] = (_assistant_profile_snapshot(request, profile["kind"], profile["profile_id"], profile["version"]) if profile else None)
+    snapshot["knowledge_reference"] = (_assistant_knowledge_snapshot(request, knowledge_item["knowledge_item_id"], knowledge_item["version"], knowledge_item.get("locator")) if knowledge_item else None)
+    if context["kind"] == "task":
+        task, _member_id = _exact_edit_access(context["task_id"], request)
+        tracks = production_repo.list_subtitle_tracks(workspace_id, task.id)
+        try:
+            refs = timeline_object_refs(items, task.id, subtitle_tracks=tracks)
+        except AssistantReferenceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        stage, refs = _assistant_turn_scope(workspace_id, task, SimpleNamespace(
+            context_stage=context["stage"], selected_object_refs=refs, playhead_ms=None))
+        version = (_timeline_version_or_404(workspace_id, task.id, task.current_timeline_version_id)
+                   if task.current_timeline_version_id else None)
+        context.update(stage=stage, selected_object_refs=refs, playhead_ms=None,
+                       expected_timeline_version_id=task.current_timeline_version_id,
+                       expected_timeline_sequence=version.sequence if version else 0)
+        snapshot.update(timeline_version_id=task.current_timeline_version_id,
+                        timeline_sequence=version.sequence if version else 0,
+                        material_selection=_assistant_task_clip_material_selection(request, task, refs))
+    elif context["kind"] == "material":
+        materials = [item for item in items if item["kind"] == "material"]
+        selection = materials[0]["selection"] if len(materials) == 1 else None
+        context["selection"] = selection
+        if selection:
+            selection, _asset = _assistant_material_selection_snapshot(request, selection)
+            snapshot.update(selection)
+    context["target_snapshot"] = snapshot
+    return context
+
+
+def _assistant_input_delivery(request: Request, conversation_id: str, turn_id: str):
+    workspace_id, member_id, _conversation = _assistant_conversation_for_request(request, conversation_id)
+
+    def verify(item):
+        try:
+            current_workspace, current_member, _current = _assistant_conversation_for_request(request, conversation_id)
+            if (current_workspace, current_member) != (workspace_id, member_id):
+                raise PermissionError("当前成员或工作区已变化，请重新发送。")
+            frozen = item["request_context"]
+            reference = _validate_saved_assistant_reference(request, frozen.get("selected_reference"))
+            fresh = _assistant_input_context(request, frozen, reference)
+            snapshot = fresh["target_snapshot"]
+            if frozen["kind"] == "task" and any(snapshot.get(key) != frozen["target_snapshot"].get(key)
+                    for key in ("timeline_version_id", "timeline_sequence")):
+                raise ValueError("接收追加输入后任务版本发生变化，请重新查看对象后发送；未改绑新版。")
+        except HTTPException as exc:
+            raise ValueError(str(exc.detail)) from exc
+        material = snapshot.get("material_selection") if fresh["kind"] == "task" else fresh.get("selection")
+        delta = {
+            "USER_INSTRUCTION": item["message"], "SELECTED_REFS": json.dumps(fresh.get("selected_object_refs", [])),
+            "SELECTED_REFERENCES": json.dumps(snapshot.get("selected_references", []), ensure_ascii=False),
+            "PLAYHEAD_MS": "", "MATERIAL_SELECTION": json.dumps(material) if material else "",
+            "PROFILE_REFERENCE": json.dumps(snapshot["profile_reference"]) if snapshot.get("profile_reference") else "",
+            "KNOWLEDGE_REFERENCE": json.dumps(snapshot["knowledge_reference"]) if snapshot.get("knowledge_reference") else "",
+            "TASK_VERSION": json.dumps({key: snapshot[key] for key in ("timeline_version_id", "timeline_sequence")}) if fresh["kind"] == "task" else "",
+            "TASK_READ_READY": "", "SCRIPT_DRAFT_UPDATED_AT": "", "EDIT_CAPABILITIES": "",
+            "MEDIA_SCRIPT_CAPABILITIES": "", "SCRIPT_TOOL_CAPABILITIES": "",
+        }
+        return {"environment": {f"AI_VIDEO_DIARY_AGENT_{key}": value for key, value in delta.items()},
+                "frozen_context": {"kind": fresh["kind"], "task_id": fresh.get("task_id"),
+                    "selected_object_refs": fresh.get("selected_object_refs", []), "target_snapshot": snapshot}}
+
+    return AssistantInputDelivery(conversation_repo, conversation_id=conversation_id, workspace_id=workspace_id,
+        member_id=member_id, turn_id=turn_id, verify=verify)
+
+
+def _frozen_assistant_references(request: Request, conversation_id: str, turn_id: str) -> list[dict]:
+    workspace_id, member_id = _member_owned_content_scope(request)
+    context = conversation_repo.consumed_turn_request_context(
+        turn_id, conversation_id, workspace_id, member_id)
+    return (context.get("target_snapshot") or {}).get("selected_references", [])
 
 
 def _replay_assistant_turn(turn_id: str, response_model, *, provider: str, model: str,
@@ -5324,6 +5575,7 @@ def _workspace_assistant_plan_turn(
     turn_id, created, turn = _begin_assistant_turn(
         request, str(payload.conversation_id), "home", "home", payload.message.strip(),
         payload.client_request_id, payload.expected_draft_version, {"kind": "home", "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, "target_snapshot": {"profile_reference": profile_reference, "knowledge_reference": knowledge_reference}}, on_event,
+        expected_reference_version=payload.expected_reference_version,
     )
     if not created:
         settings_for_replay = _workspace_settings_for(workspace_id)
@@ -5346,6 +5598,8 @@ def _workspace_assistant_plan_turn(
             cookie=request.headers.get("cookie"),
             on_event=on_event,
             turn_id=turn_id,
+            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
+            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
             profile_reference=profile_reference,
             knowledge_reference=knowledge_reference,
             keep_turn_control=True,
@@ -5363,6 +5617,8 @@ def _workspace_assistant_plan_turn(
                         conversation_id=str(payload.conversation_id), message=payload.message.strip(),
                         authorization=request.headers.get("authorization"), cookie=request.headers.get("cookie"),
                         on_event=on_event, turn_id=turn_id, profile_reference=profile_reference,
+                        selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
+                        input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
                         knowledge_reference=knowledge_reference,
                         creation_request=_creation_request_response(latest).model_dump(mode="json"),
                         keep_turn_control=True,
@@ -5498,6 +5754,7 @@ def _material_assistant_turn(
         payload.client_request_id, payload.expected_draft_version,
         {"kind": "material", "selection": payload.selection.model_dump(mode="json", exclude_none=True) if payload.selection else None,
          "target_snapshot": selection}, on_event,
+        expected_reference_version=payload.expected_reference_version,
     )
     if not created:
         if turn["status"] == "failed":
@@ -5529,6 +5786,8 @@ def _material_assistant_turn(
             cookie=request.headers.get("cookie"),
             on_event=on_event,
             turn_id=turn_id,
+            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
+            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
         )
     except AssistantStopped:
         saved = conversation_repo.get_turn(turn_id)
@@ -7106,7 +7365,7 @@ def _resolve_assistant_edit_request(task_id, request, turn_id, details):
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="编辑请求定位缺少有效请求身份") from exc
     phase = details.get("phase", "preview")
-    if phase not in {"preview", "script", "observation"}:
+    if phase not in {"preview", "apply", "script", "observation"}:
         raise HTTPException(status_code=502, detail="编辑请求定位phase不可核验")
     query_url = f"/api/creation-tasks/{quote(task_id, safe='')}/assistant/edit-requests/{request_id}?phase={phase}"
     if details.get("task_id", task_id) != task_id or details.get("query_url") != query_url:
@@ -7140,6 +7399,24 @@ def _resolve_assistant_edit_request(task_id, request, turn_id, details):
         "conversation_id": binding["conversation_id"], "assistant_turn_id": turn_id,
         "expected_timeline_version_id": snapshot["timeline_version_id"], "expected_timeline_sequence": snapshot["timeline_sequence"],
         "actor_identity": actor.identity_payload() if actor else None}
+    if phase == "apply" and "operation_type" in (locator.submitted_input or {}):
+        submitted = locator.submitted_input
+        # A later consumed input may already own this turn. The journal keeps
+        # the edit's original version; a confirmed intent keeps its exact source.
+        source.update(assistant_turn_id=submitted.get("assistant_turn_id"),
+                      expected_timeline_version_id=submitted.get("expected_timeline_version_id"),
+                      expected_timeline_sequence=submitted.get("expected_timeline_sequence"))
+        recorded_operation = (locator.result or {}).get("operation")
+        if locator.result_status_code == 200 and isinstance(recorded_operation, dict):
+            operation = production_repo.get_edit_operation(workspace_id, recorded_operation["id"])
+            proposal = production_repo.get_edit_proposal(workspace_id, operation.proposal_id)
+            intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
+            original = intent.constraints.get("request_source")
+            if (operation.task_id != task_id or not original
+                    or (original.get("workspace_id"), original.get("task_id"), original.get("member_id"), original.get("request_id"))
+                        != (workspace_id, task_id, member_id, str(request_id))):
+                raise HTTPException(status_code=502, detail="原编辑操作与请求来源不一致")
+            source = original
     production_repo.append_task_event(TaskEvent(id=f"event_edit_locator_{turn_id}_{request_id}", workspace_id=workspace_id,
         task_id=task_id, job_id=None, event_type="assistant_edit_request_located",
         payload={"source": source, "locator": locator.model_dump(mode="json"),
@@ -7326,6 +7603,7 @@ def _creation_task_assistant_turn(
          "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None,
          "target_snapshot": {**task_version, "profile_reference": profile_reference, "knowledge_reference": knowledge_reference,
                              **({"material_selection": material_selection} if len(trusted_refs) == 1 and trusted_refs[0].startswith("clip:") else {})}}, on_event,
+        expected_reference_version=payload.expected_reference_version,
     )
     if not created:
         replay_settings = _workspace_settings_for(workspace_id)
@@ -7335,6 +7613,10 @@ def _creation_task_assistant_turn(
             model=replay_settings.effective_llm_model,
             draft_version=payload.expected_draft_version + 1,
         )
+    frozen_context = conversation_repo.consumed_turn_request_context(
+        turn_id, str(payload.conversation_id), workspace_id, member_id)
+    trusted_refs = frozen_context.get("selected_object_refs", trusted_refs)
+    material_selection = (frozen_context.get("target_snapshot") or {}).get("material_selection")
     try:
         reply, preview = run_task_turn(
             _workspace_settings_for(workspace_id),
@@ -7351,6 +7633,8 @@ def _creation_task_assistant_turn(
             cookie=request.headers.get("cookie"),
             on_event=on_event,
             turn_id=turn_id,
+            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
+            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
             profile_reference=profile_reference,
             knowledge_reference=knowledge_reference,
             task_version=task_version,
@@ -7391,6 +7675,22 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if preview.get("related_media_job") is not None:
             media_job = _assistant_related_media_job(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
         edit_preview = None
+    elif isinstance(preview, dict) and preview.get("kind") == "edit_applied":
+        edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
+        if edit_request.phase != "apply" or edit_request.status != "recorded" or edit_request.result_status_code != 200:
+            raise HTTPException(status_code=502, detail="直接编辑尚无可核验的完成回执")
+        confirmed = CreationTaskEditConfirmResponse.model_validate(edit_request.result)
+        actual = production_repo.get_edit_operation(workspace_id, confirmed.operation.id)
+        source_input = edit_request.submitted_input or {}
+        if (actual.task_id != task_id or actual.status != "applied" or not actual.result_version_id
+                or source_input.get("assistant_turn_id") != turn_id
+                or source_input.get("operation_type") != actual.operation_type
+                or source_input.get("expected_timeline_version_id") != actual.base_version_id
+                or confirmed.operation.result_version_id != actual.result_version_id):
+            raise HTTPException(status_code=502, detail="直接编辑回执与当前输入及实际操作不一致")
+        timeline_action = "apply"
+        edit_preview = None
+        reply = "修改已保存，可撤销；重新生成后可播放更新的成片。"
     elif isinstance(preview, dict) and preview.get("kind") == "edit_request_status":
         edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
         if preview.get("related_media_job") is not None:
@@ -8233,10 +8533,11 @@ def _save_direct_metadata_edit(task_id, request, payload):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     case = _metadata_edit_use_case()
+    event_id = None
     try:
         event_id, replay = case.begin(task,
             _exact_edit_access(task_id, request, write=True)[1] if payload.request_id is not None else None,
-            payload.request_id, payload.model_dump(mode='json', exclude_unset=True))
+            payload.request_id, payload.model_dump(mode='json', exclude_unset=True), phase='apply')
         if replay is not None:
             result = _metadata_edit_response(replay)
             if replay.recorded_projection is None:
@@ -8259,16 +8560,21 @@ def _save_direct_metadata_edit(task_id, request, payload):
             audio_actor=_require_permit_actor(request, workspace_id) if clean.operation_type == 'EditAudioTimeline' else None)
         result = _metadata_edit_response(outcome)
         case.record_result(task, event_id, status_code=200, response=result.model_dump(mode='json'))
-    except (LegacyMontageReference, SubtitleNoChange) as exc:
-        raise _topic_failure_response(**exc.details) from exc
-    except SubtitleTargetMissing as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except InvalidMontage as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (EditConflict, ValueError, KeyError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (HTTPException, LegacyMontageReference, SubtitleNoChange, SubtitleTargetMissing,
+            InvalidMontage, PermissionError, EditConflict, ValueError, KeyError, OSError) as exc:
+        if isinstance(exc, HTTPException):
+            failure = exc
+        elif isinstance(exc, (LegacyMontageReference, SubtitleNoChange)):
+            failure = _topic_failure_response(**exc.details)
+        else:
+            code = (404 if isinstance(exc, SubtitleTargetMissing) else
+                    422 if isinstance(exc, InvalidMontage) else
+                    403 if isinstance(exc, PermissionError) else 409)
+            failure = HTTPException(status_code=code,
+                detail=exc.args[0] if isinstance(exc, SubtitleTargetMissing) else str(exc))
+        if event_id is not None:
+            case.record_result(task, event_id, status_code=failure.status_code, response={"detail": failure.detail})
+        raise failure from exc
     _wake_assistant_continuations()
     return result
 
@@ -9023,6 +9329,20 @@ def get_creation_task_edit_capabilities(task_id: str, request: Request):
         "timeline_sequence": version.sequence if version else 0,
         "schema": CreationTaskExactEditRequest.model_json_schema(),
         "supported_operations": list(EXACT_EDIT_FIELDS), "operations": operations,
+        "direct_apply": {
+            "endpoint": f"/api/creation-tasks/{quote(task.id, safe='')}/edits/exact",
+            "operations": [
+                {**item, "parameter_fields": (
+                    ["cue_id", "text"] if item["operation_type"] == "UpdateSubtitleCue" else
+                    ["subtitle_display"] if item["operation_type"] == "ConfigureSubtitleTrack" else
+                    item["parameter_fields"]),
+                 "required_fields": (
+                    ["cue_id", "text"] if item["operation_type"] == "UpdateSubtitleCue" else
+                    ["subtitle_display"] if item["operation_type"] == "ConfigureSubtitleTrack" else
+                    item["required_fields"])}
+                for item in operations if item["operation_type"] != "GenerateCoverFromFrame"
+            ],
+        },
         "units": {"source_start_seconds": "源片段起点，秒；TrimClip 保留镜头时长与旁白",
                   "start_seconds": "时间轴秒", "end_seconds": "时间轴秒", "split_time_seconds": "时间轴秒",
                   "playback_rate": "0.25–4，语义按operation区分。ChangeClipSpeed：绝对画面速度，每1秒timeline消耗rate秒source；source_span=timeline_span*rate。0.7减速、2加速；2.5秒槽@0.7消耗2.5*0.7=1.75秒源片段，保留时间槽、旁白和字幕。ChangeLinkedSpeed：相对当前速度倍率，联动改变时轴，不是绝对速度。",
@@ -9093,12 +9413,49 @@ def apply_creation_task_exact_edit(
     request: Request,
     payload: CreationTaskExactEditRequest,
 ) -> CreationTaskEditConfirmResponse:
+    if payload.assistant_turn_id is not None and payload.request_id is None:
+        raise HTTPException(status_code=422, detail="助手直接编辑需要原请求身份")
     if (payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS or (payload.operation_type == 'EditAudioTimeline' and payload.audio_edit.action in {'update', 'track'}) or (payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None)) or (payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None):
         return _save_direct_metadata_edit(task_id, request, payload)
+    # The same exact-edit endpoint binds deterministic edits to their original
+    # assistant request. Domain use cases still own all timeline mutations.
+    if payload.request_id is None and payload.assistant_turn_id is None:
+        return _apply_exact_edit_body(task_id, request, payload, source=EXACT_EDIT_SOURCE.get())
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    case = _metadata_edit_use_case()
+    event_id = None
+    try:
+        event_id, replay = case.begin(task, member_id, payload.request_id,
+            payload.model_dump(mode="json", exclude_unset=True), phase="apply")
+        if replay is not None:
+            result = _metadata_edit_response(replay)
+            if replay.recorded_projection is None:
+                _save_edit_request_result(task, event_id, result)
+            return result
+        clean, source = _prepare_exact_edit_request(task_id, request, payload)
+        fields = clean.model_dump(mode="json", exclude_unset=True)
+        if set(fields) - {"operation_type"} - EXACT_EDIT_FIELDS.get(clean.operation_type, set()):
+            raise HTTPException(status_code=422, detail="精确编辑不能混入其他操作字段")
+        result = _apply_exact_edit_body(task_id, request, clean, source=source)
+        if event_id is not None:
+            _save_edit_request_result(task, event_id, result)
+        return result
+    except HTTPException as exc:
+        if event_id is not None:
+            case.record_result(task, event_id, status_code=exc.status_code, response={"detail": exc.detail})
+        raise
+    except (EditConflict, ValueError, KeyError, OSError) as exc:
+        failure = HTTPException(status_code=409, detail=str(exc))
+        if event_id is not None:
+            case.record_result(task, event_id, status_code=409, response={"detail": failure.detail})
+        raise failure from exc
+
+
+def _apply_exact_edit_body(task_id, request, payload, *, source):
     if payload.operation_type in LINKED_EDIT_OPERATIONS:
         task = _creation_task_or_404(current_workspace_id(request), task_id)
         command = _linked_timeline_command(task, request, payload.operation_type,
-            {"base_version_id": task.current_timeline_version_id, **_linked_timeline_values(payload)}, source=EXACT_EDIT_SOURCE.get())
+            {"base_version_id": task.current_timeline_version_id, **_linked_timeline_values(payload)}, source=source)
         try:
             return _metadata_edit_response(_linked_timeline_use_case().apply(command))
         except LinkedEditInputError as exc:
@@ -9119,7 +9476,7 @@ def apply_creation_task_exact_edit(
         values = _subtitle_values(payload)
         task = _creation_task_or_404(current_workspace_id(request), task_id)
         command = _metadata_edit_command(task, request, payload.operation_type,
-            {"base_version_id": task.current_timeline_version_id, **values}, source=EXACT_EDIT_SOURCE.get())
+            {"base_version_id": task.current_timeline_version_id, **values}, source=source)
         try:
             return _metadata_edit_response(_subtitle_edit_use_case().apply(command))
         except SubtitleNoChange as exc:
@@ -9164,7 +9521,7 @@ def apply_creation_task_exact_edit(
             ),
         )
         return _confirm_creation_task_edit(task_id, preview.proposal.id, request)
-    preview = _preview_exact_edit_request(task_id, request, payload)
+    preview = _try_exact_preview(task_id, request, payload, source=source, execution=None, operation="exact_edit_apply")
     return _confirm_creation_task_edit(task_id, preview.proposal.id, request)
 
 
@@ -10504,6 +10861,85 @@ def set_production_material_visibility(
     return _material_asset_response(asset)
 
 
+@contextmanager
+def _material_discovery_errors():
+    try:
+        yield
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="扫描任务或候选素材不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="无法读取所选位置，请检查目录权限。") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="媒体目录暂不可用，请连接原磁盘后重试。") from exc
+
+
+@app.get("/api/production/materials/discovery/roots")
+def material_discovery_roots(request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        discovery = production_repo.material_discovery
+        return {"roots": discovery.roots(), "exclusions": discovery.store.exclusions(workspace_id, owner)}
+
+
+@app.get("/api/production/materials/discovery/latest")
+def latest_material_discovery(request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        return production_repo.material_discovery.latest(workspace_id, owner)
+
+
+@app.post("/api/production/materials/discovery", status_code=201)
+def start_material_discovery(request: Request, payload: MaterialDiscoveryStartRequest):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        return production_repo.material_discovery.start(workspace_id, owner,
+            root_ids=payload.root_ids, exclusions=payload.exclusions)
+
+
+@app.get("/api/production/materials/discovery/{session_id}")
+def get_material_discovery(session_id: str, request: Request, offset: int = 0):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        return production_repo.material_discovery.snapshot(session_id, workspace_id, owner, offset=offset)
+
+
+@app.post("/api/production/materials/discovery/{session_id}/advance")
+def advance_material_discovery(session_id: str, request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        return production_repo.material_discovery.advance(session_id, workspace_id, owner)
+
+
+@app.post("/api/production/materials/discovery/{session_id}/control")
+def control_material_discovery(session_id: str, request: Request, payload: MaterialDiscoveryControlRequest):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        return production_repo.material_discovery.control(session_id, workspace_id, owner,
+            payload.action, exclusions=payload.exclusions)
+
+
+@app.post("/api/production/materials/discovery/{session_id}/receive")
+def receive_discovered_materials(session_id: str, request: Request, payload: MaterialDiscoveryReceiveRequest):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        repository = production_repo
+        result = repository.material_discovery.receive(session_id, workspace_id, owner, payload.candidate_ids)
+        # Reception is durable even when the independent analysis driver is unavailable.
+        if material_ingestion is not None and material_ingestion.repository is repository:
+            material_ingestion.wake()
+        return result
+
+
+@app.get("/api/production/materials/discovery/{session_id}/candidates/{candidate_id}/preview")
+def preview_discovered_material(session_id: str, candidate_id: str, request: Request):
+    workspace_id, owner = _member_owned_content_scope(request)
+    with _material_discovery_errors():
+        path = production_repo.material_discovery.preview_path(session_id, candidate_id, workspace_id, owner)
+        return FileResponse(path, filename=path.name, content_disposition_type="inline")
+
+
 @app.get(
     "/api/production/materials/{asset_id}",
     response_model=MaterialAssetResponse,
@@ -10972,12 +11408,18 @@ def get_setup_preflight() -> SetupPreflightResponse:
     response_model=OnboardingCompletionResponse,
 )
 def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
-    """Complete onboarding only after a fresh trusted preflight succeeds."""
-    preflight = setup_preflight(settings)
+    """Initialize the trusted workspace after its minimum storage check."""
+    principal = getattr(request.state, "principal", None)
+    if auth_context.enabled and (
+        principal is None or not principal.user_id or not principal.workspace_id
+    ):
+        raise HTTPException(status_code=403, detail="workspace context is required")
+
+    preflight = workspace_preflight(settings)
     if preflight.get("overall") != "ready":
         raise HTTPException(
             status_code=409,
-            detail="setup preflight is still blocked",
+            detail="workspace storage is not ready",
         )
 
     if not auth_context.enabled:
@@ -10985,10 +11427,6 @@ def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
             workspace_id=LEGACY_WORKSPACE_ID,
             completed=True,
         )
-
-    principal = getattr(request.state, "principal", None)
-    if principal is None or not principal.user_id or not principal.workspace_id:
-        raise HTTPException(status_code=403, detail="workspace context is required")
 
     try:
         auth_context.complete_onboarding(
@@ -13475,6 +13913,8 @@ def _run_goal_turn(claim, fresh):
             cookie=request.headers.get("cookie"), on_event=on_event, turn_id=turn_id,
             profile_reference=fresh["facts"].get("profile_reference"), knowledge_reference=fresh["facts"].get("knowledge_reference"),
             task_version=fresh["task_version"], material_selection=material_selection,
+            selected_references=_frozen_assistant_references(request, goal["conversation_id"], turn_id),
+            input_handler=_assistant_input_delivery(request, goal["conversation_id"], turn_id),
             continuation_context={"original_turn_id": goal["original_turn_id"], "business_event": claim["event"],
                                   "current_facts": fresh["facts"], "round_count": goal["round_count"],
                                   "goal_checkpoint": {key: goal[key] for key in ("target_snapshot", "unfinished_steps", "handled_event_ids")},
@@ -13506,8 +13946,8 @@ def _goal_request_result(task_id, request_id, request, phase):
     except GoalProjectionRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc.__cause__
     inputs = event.payload["inputs"]
-    if phase in {"preview", "script", "observation"}:
-        fields = (CreationTaskExactEditRequest.model_fields if phase == "preview" else
+    if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
+        fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
                   CreationTaskObservationRequest.model_fields if phase == "observation" else
                   MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
         submitted_input = {key: value for key, value in inputs.items() if key in fields}

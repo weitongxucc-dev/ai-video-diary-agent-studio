@@ -3,6 +3,9 @@ export type { MaterialAssetNote } from '../types/materials';
 import type { BusinessObjectKind, MaterialBusinessObject, MaterialBusinessObjects, MaterialUsageRecords, MaterialIntakeStatus, MaterialCopyCompleteInput, MaterialAsset, MaterialCollection, MaterialCollections, MaterialLibrary, MaterialLibraryInsights } from '../types/materials';
 import type { ContentVisibility } from '../types/common';
 import { apiUrl, request, authorizedFetch } from './transport';
+export function getProductionMaterial(assetId: string): Promise<MaterialAsset> {
+    return request(`/api/production/materials/${encodeURIComponent(assetId)}`);
+}
 export function getProductionMaterials(input?: {
     limit?: number;
     offset?: number;
@@ -167,4 +170,30 @@ export function updateProductionMaterialSegment(assetId: string, segmentId: stri
         method: "PUT",
         body: JSON.stringify(input),
     });
+}
+
+const discoveryBase = "/api/production/materials/discovery";
+export function getDiscoveryRoots(): Promise<import('../types/materials').DiscoveryRoots> {
+    return request(`${discoveryBase}/roots`);
+}
+export function getLatestDiscovery(): Promise<import('../types/materials').MaterialDiscovery | null> {
+    return request(`${discoveryBase}/latest`);
+}
+export function getMaterialDiscovery(id: string, offset = 0): Promise<import('../types/materials').MaterialDiscovery> {
+    return request(`${discoveryBase}/${encodeURIComponent(id)}?offset=${offset}`);
+}
+export function startMaterialDiscovery(rootIds: string[], exclusions: string[]): Promise<import('../types/materials').MaterialDiscovery> {
+    return request(discoveryBase, { method: "POST", body: JSON.stringify({ root_ids: rootIds, exclusions }) });
+}
+export function advanceMaterialDiscovery(id: string): Promise<import('../types/materials').MaterialDiscovery> {
+    return request(`${discoveryBase}/${encodeURIComponent(id)}/advance`, { method: "POST" });
+}
+export function controlMaterialDiscovery(id: string, action: "pause" | "resume" | "cancel" | "exclude", exclusions?: string[]): Promise<import('../types/materials').MaterialDiscovery> {
+    return request(`${discoveryBase}/${encodeURIComponent(id)}/control`, { method: "POST", body: JSON.stringify({ action, exclusions }) });
+}
+export function receiveDiscoveryCandidates(id: string, candidateIds: string[]): Promise<import('../types/materials').MaterialDiscovery> {
+    return request(`${discoveryBase}/${encodeURIComponent(id)}/receive`, { method: "POST", body: JSON.stringify({ candidate_ids: candidateIds }) });
+}
+export function discoveryPreviewUrl(sessionId: string, candidateId: string): string {
+    return apiUrl(`${discoveryBase}/${encodeURIComponent(sessionId)}/candidates/${encodeURIComponent(candidateId)}/preview`);
 }

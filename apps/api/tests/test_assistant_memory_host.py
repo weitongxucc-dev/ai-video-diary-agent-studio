@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import sdk_completed
 """Shipped Node extension reads the actual member-scoped API before a model call."""
 import json
 import os
@@ -67,6 +68,7 @@ def test_invalid_member_blocks_host_preflight_instead_of_using_other_memory(memo
 
 def test_each_model_turn_receives_current_memory_as_data_and_keeps_original_instruction(tmp_path, monkeypatch):
     monkeypatch.setattr(pi, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     monkeypatch.setattr(pi, "_pi_executable", lambda: "/controlled/pi")
     monkeypatch.setattr(pi, "_configured_model", lambda _settings: ("http://synthetic.invalid", "fixture", ""))
     monkeypatch.setattr(pi, "_agent_root", lambda *_args: tmp_path / "agent")
@@ -76,9 +78,9 @@ def test_each_model_turn_receives_current_memory_as_data_and_keeps_original_inst
     sent = []
 
     def run(_command, *, input, env, **_kwargs):
-        sent.append((input, env["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"]))
+        sent.append((json.loads(input)["message"], env["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"]))
         result = {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "受控回复"}], "stopReason": "stop"}}
-        return __import__("subprocess").CompletedProcess([], 0, json.dumps(result) + "\n" + json.dumps({"type": "agent_settled"}), "")
+        return sdk_completed(_command, 0, json.dumps(result) + "\n" + json.dumps({"type": "agent_settled"}), "")
 
     monkeypatch.setattr(pi.subprocess, "run", run)
     settings = Settings(model_root_path=str(tmp_path), database_path=str(tmp_path / "db.sqlite"))

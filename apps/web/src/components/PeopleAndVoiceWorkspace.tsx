@@ -3,12 +3,14 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AudioLines, Plus, MessageSquarePlus, RefreshCw, ShieldCheck, UserRound, Upload } from "lucide-react";
 import { type FormEvent, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
-import { referenceAssistantProfile } from "@/lib/assistant-reference";
+import { useSearchParams } from "next/navigation";
+import { referenceAssistantProfile, readAssistantLocateReference, ASSISTANT_LOCATE_REFERENCE_EVENT, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { getMaterialIntakeStatus, bindMaterialIntake } from "@/lib/api";
 import type { MaterialIntakeStatus } from "@/lib/types";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
+import { VoiceSamplingSetup } from "@/components/voice-sampling";
 import {
   type MediaAuthorization, type MediaPreview, type PersonProfile, type VoiceProfile, type PronunciationEntry,
   type ProfileReference, type ReferenceMaterial, type MediaCapability, type VoiceReferenceImport,
@@ -17,7 +19,7 @@ import {
   savePersonProfile, saveVoiceProfile, importVoiceReference, getDefaultVoice, setDefaultVoice,
   listPronunciationEntries, listAuthorizations, savePronunciationEntry,
   listMediaPreviews, createVoicePreview, createAvatarLipsyncPreview, getMediaCapability, cancelPreview,
-  mediaProfilesErrorMessage,
+  mediaProfilesErrorMessage, MediaProfilesApiError,
 } from "@/lib/media-profiles-api";
 import styles from "./PeopleAndVoiceWorkspace.module.css";
 
@@ -42,6 +44,7 @@ const id = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const viewLabel: Record<View, string> = { people: "人物形象", voices: "声音", dictionary: "朗读替换", authorizations: "授权记录" };
 
 export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = false, returnTaskId }: { initialView?: View; embedded?: boolean; returnTaskId?: string }) {
+  const locateQuery = useSearchParams().get("locate_ref");
   const [view, setView] = useState<View>(initialView);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -60,6 +63,7 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   useEffect(() => { let active = true; void Promise.all([getMediaCapability("voice-clone"), getMediaCapability("avatar-lipsync")]).then(([voice, person]) => { if (active) setCapabilities({ voice, person }); }).catch(cause => { if (active) setError(mediaProfilesErrorMessage(cause)); }); return () => { active = false; }; }, []);
   const [showDetail, setShowDetail] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showSampling, setShowSampling] = useState(false);
   const [editorProfile, setEditorProfile] = useState<PersonProfile | VoiceProfile | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +74,39 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   const latestSelection = useRef({view,person:selectedPerson,voice:selectedVoice});
   latestSelection.current = {view,person:selectedPerson,voice:selectedVoice};
   const editorTicket = editorGeneration.current;
+  useEffect(() => {
+    let active = true;
+    const locate = (reference: SelectedAssistantReference | null) => {
+      if (!reference || (reference.kind !== "person" && reference.kind !== "voice")) return;
+      const ticket = ++editorGeneration.current;
+      setError(null); setShowCreate(false); setShowSampling(false); setShowDetail(false);
+      if (typeof reference.profile_id !== "string" || !reference.profile_id.trim() || typeof reference.version !== "string" || !reference.version.trim()) {
+        setError("档案引用缺少固定版本或标识，请重新从对话选择档案。");
+        return;
+      }
+      const read = reference.kind === "voice" ? getVoiceProfile : getPersonProfile;
+      void read(reference.profile_id, reference.version).then(object => {
+        if (!active || editorGeneration.current !== ticket) return;
+        setView(reference.kind === "voice" ? "voices" : "people");
+        if (reference.kind === "voice") setVoice(object as VoiceProfile); else setPerson(object as PersonProfile);
+        setShowDetail(true);
+      }).catch(cause => {
+        if (!active || editorGeneration.current !== ticket) return;
+        setError(cause instanceof MediaProfilesApiError && cause.status === 404
+          ? "引用的档案版本不存在或已不可访问，请重新选择有效档案。"
+          : cause instanceof MediaProfilesApiError && cause.status === 403
+            ? "当前成员无权查看这个档案版本，请返回有权访问的档案。"
+            : mediaProfilesErrorMessage(cause));
+      });
+    };
+    const onLocate = (event: Event) => locate((event as CustomEvent<SelectedAssistantReference>).detail);
+    window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, onLocate);
+    if (locateQuery) {
+      try { locate(readAssistantLocateReference(new URLSearchParams({ locate_ref: locateQuery }))); }
+      catch { setShowDetail(false); setError("引用定位格式不可用，请重新从对话选择档案。"); }
+    }
+    return () => { active = false; window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, onLocate); };
+  }, [locateQuery]);
   async function refresh() {
     const before=latestSelection.current;
     try {
@@ -135,18 +172,20 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
         }
       }}/></HomeCardDialog> : null;
   const body = <div className={styles.page}>
+    {showSampling ? <HomeCardDialog title="制作我的声音" onClose={() => setShowSampling(false)}><VoiceSamplingSetup onSkip={() => setShowSampling(false)} onReceived={() => { void refresh(); }}/></HomeCardDialog> : null}
     {returnTaskId ? <Link className={styles.returnLink} href={`/tasks/${encodeURIComponent(returnTaskId)}`}>返回当前任务</Link> : null}
     <nav className={styles.workspaceTabs}>{(embedded ? ["voices"] as View[] : Object.keys(viewLabel) as View[]).map(key => <button key={key} type="button" onClick={() => { ++editorGeneration.current;setView(key);setQuery("");setShowCreate(false);setShowDetail(false); }} aria-pressed={view===key}>{viewLabel[key]}</button>)}</nav>
     {error ? error.includes("预算尚未标定") ? <section><p role="alert">本机生成资源限额尚未配置，参考已保存。 <Link href="/health">查看运行条件</Link></p><details><summary>资源限额诊断</summary><p>{error}</p></details></section> : <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {view === "dictionary" ? <Dictionary entries={entries} onSubmit={entry} busy={busy}/> : view === "authorizations" ? <AuthorizationList authorizations={authorizations}/> : <>
-      <header className={styles.sectionHeader}><h2>{viewLabel[view]}</h2><button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(null);setShowDetail(false);setShowCreate(true); }}><Plus size={16}/>新增{view === "voices" ? "声音" : "人物"}</button><button type="button" aria-label="刷新列表" title="刷新列表" onClick={() => { setError(null); void refresh(); }}><RefreshCw size={16}/></button></header>
+      <header className={styles.sectionHeader}><h2>{viewLabel[view]}</h2>{view === "voices" ? <button type="button" onClick={() => { setShowDetail(false); setShowCreate(false); setShowSampling(true); }}>录制我的声音</button> : null}<button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(null);setShowDetail(false);setShowCreate(true); }}><Plus size={16}/>新增{view === "voices" ? "声音" : "人物"}</button><button type="button" aria-label="刷新列表" title="刷新列表" onClick={() => { setError(null); void refresh(); }}><RefreshCw size={16}/></button></header>
+      <p className={styles.optionalSetup}>{view === "voices" ? "自己的声音可稍后设置；原声素材剪辑不需要先创建声音档案。" : "人物形象可稍后添加；不出镜的视频不需要人物档案。添加参考后仍需实际预览验证生成能力。"}</p>
       <label className={styles.profileSearch}>搜索名称<input aria-label="搜索人物与声音名称" type="search" placeholder="输入名称" value={query} onChange={event=>setQuery(event.target.value)}/></label>
       {loading ? <p role="status">正在读取档案…</p> : null}
       <div className={styles.workspace}><aside className={styles.objectRail}>{(view === "voices" ? voices : people).filter(item=>(item.display_name||"").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(item => <button key={item.id} type="button" aria-pressed={selected?.id===item.id} onClick={() => { ++editorGeneration.current;if (view === "voices") setVoice(item as VoiceProfile); else setPerson(item as PersonProfile); referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:item.id,version:item.version,label:item.display_name||"未命名档案"}); setShowCreate(false);setShowDetail(true); }}><span className={styles.objectIcon}>{view === "voices" ? <AudioLines size={16}/> : <UserRound size={16}/>}</span><span className={styles.objectInfo}><strong>{item.display_name || "未命名档案"}</strong><small>{item.runnable ? "参考已保存" : "参考需要处理"}</small></span></button>)}</aside></div>
       {!loading && !error && !(view==="voices"?voices:people).length ? <Empty title="还没有档案" text="登记有效参考即可保存，人物关联与模型不是登记前提。"/> : null}
       {!loading && query.trim() && (view==="voices"?voices:people).length>0 && !(view==="voices"?voices:people).some(item=>(item.display_name||"").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) ? <p>没有匹配的档案，请换个名称或清空搜索。</p> : null}
       {showDetail && selected ? <HomeCardDialog kind="detail" title={selected.display_name||"未命名档案"} onClose={()=>{++editorGeneration.current;setShowDetail(false);setShowCreate(false);}}><section className={styles.stage}>
-        <div className={styles.profileHeading}><strong>{view==="voices"?"声音参考":"人物参考"}</strong><button type="button" aria-label="引用当前档案到对话" title="引用当前档案到对话" onClick={()=>referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:selected.id,version:selected.version,label:selected.display_name||"未命名档案"})}><MessageSquarePlus size={16}/></button></div><button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(selected);setShowCreate(true); }}>编辑参考</button><p>{usageLabel(selected.use_state)} · 参考已保存</p>
+        <div className={styles.profileHeading}><strong>{view==="voices"?"声音参考":"人物参考"}</strong><button type="button" aria-label="引用当前档案到对话" title="引用当前档案到对话" onClick={()=>referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:selected.id,version:selected.version,label:selected.display_name||"未命名档案"},true)}><MessageSquarePlus size={16}/></button></div><button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(selected);setShowCreate(true); }}>编辑参考</button><p>{usageLabel(selected.use_state)} · 参考已保存</p>
         <label>固定版本<AppSelect aria-label="档案版本" value={selected.version} onValueChange={newValue => { ++editorGeneration.current;const version=newValue; void run(async () => { const object=view==="voices" ? await getVoiceProfile(selected.id,version) : await getPersonProfile(selected.id,version);if(view==="voices")setVoice(object as VoiceProfile);else setPerson(object as PersonProfile);referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:object.id,version:object.version,label:object.display_name||"未命名档案"}); }); }}>{versions.map((item,index) => <AppSelectOption key={item.version} value={item.version}>第{versions.length-index}版</AppSelectOption>)}</AppSelect></label>
         <ReferencePlayback object={selected} voice={view === "voices"}/><details><summary>档案标识</summary><p>{selected.id} · {selected.version}</p></details>{!selected.runnable ? <p>当前参考不能用于生成。编辑参考可重新选择来源或检查使用限制。</p> : null}{selected.runnable_reason ? <details><summary>参考诊断</summary><p>{selected.runnable_reason}</p></details> : null}
         {view === "voices" && selectedVoice ? <><p>{selectedVoice.reference_text || "参考文字未填写；生成前需填写实际对应文字。"}</p><label>短试听文字<textarea aria-label="短试听文字" value={previewText} onChange={event => setPreviewText(event.target.value)} disabled={busy}/></label><button type="button" disabled={busy || !selectedVoice.runnable} onClick={() => void run(async () => { setDefault(await setDefaultVoice(selectedVoice.id,selectedVoice.version)); setNotice("已保存默认声音的固定版本。"); })}>{defaultVoice?.id===selectedVoice.id && defaultVoice.version===selectedVoice.version ? "当前默认版本" : "设为默认声音"}</button></> : <label>本次预览声音<AppSelect aria-label="人物预览声音" value={selectedVoice?.id ?? ""} onValueChange={newValue => setVoice(voices.find(v => v.id===newValue) ?? null)}><AppSelectOption value="">选择独立声音</AppSelectOption>{voices.map(v => <AppSelectOption key={v.id} value={v.id}>{v.display_name}</AppSelectOption>)}</AppSelect></label>}

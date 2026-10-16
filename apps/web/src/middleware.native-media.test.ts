@@ -63,6 +63,7 @@ describe("native local media identity forwarding", () => {
       "/api/creation-tasks/task-1/audio/artifacts/audio-1",
       "/api/creation-tasks/task-1/narration/segments/segment-1/audio",
       "/api/production/materials/asset-1/media",
+      "/api/production/materials/discovery/session-1/candidates/candidate-1/preview",
       "/api/production/montage-plans/plan-1/output",
     ];
     for (const route of routes) {
@@ -71,6 +72,7 @@ describe("native local media identity forwarding", () => {
       expect(isLocalNativeMediaRequest("POST", route), route).toBe(false);
     }
     expect(isLocalNativeMediaRequest("GET", "/api/production/materials")).toBe(false);
+    expect(isLocalNativeMediaRequest("POST", "/api/production/materials/discovery/session-1/receive")).toBe(false);
     expect(isLocalNativeMediaRequest("GET", "/api/creation-tasks/task-1/assistant/script-draft")).toBe(false);
   });
 

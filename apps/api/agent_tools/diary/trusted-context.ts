@@ -5,6 +5,7 @@ export function readAgentContext(environment: Record<string, string | undefined>
   const taskId = environment.AI_VIDEO_DIARY_AGENT_TASK_ID;
   const stage = environment.AI_VIDEO_DIARY_AGENT_STAGE;
   const selectedRefs = JSON.parse(environment.AI_VIDEO_DIARY_AGENT_SELECTED_REFS || "[]");
+  const selectedReferences = JSON.parse(environment.AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES || "[]");
   const playheadMs = environment.AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS
     ? Number(environment.AI_VIDEO_DIARY_AGENT_PLAYHEAD_MS)
     : null;
@@ -13,7 +14,7 @@ export function readAgentContext(environment: Record<string, string | undefined>
   const selectedTaskVersion = environment.AI_VIDEO_DIARY_AGENT_TASK_VERSION ? JSON.parse(environment.AI_VIDEO_DIARY_AGENT_TASK_VERSION) : null;
 
   return {
-    apiBase, taskId, stage, selectedRefs, playheadMs, selectedProfile, selectedKnowledge, selectedTaskVersion,
+    apiBase, taskId, stage, selectedRefs, selectedReferences, playheadMs, selectedProfile, selectedKnowledge, selectedTaskVersion,
     initialTaskRead: environment.AI_VIDEO_DIARY_AGENT_TASK_READ_READY === '1',
     initialScriptDraftUpdatedAt: environment.AI_VIDEO_DIARY_AGENT_SCRIPT_DRAFT_UPDATED_AT || null,
     initialEditCapabilities: environment.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES ? JSON.parse(environment.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES) : null,

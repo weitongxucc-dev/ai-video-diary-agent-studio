@@ -21,7 +21,10 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     from app.creation.contracts import JobRun, TaskEvent, TimelineVersion
     from app.production import CreationPlan, CreationTask, ProductionRepository
 
-    assert "app.main" not in sys.modules
+    import subprocess
+    cold=subprocess.run([sys.executable,"-B","-c",
+        "import sys; import app.assistant_goal_continuation; assert 'app.main' not in sys.modules"],capture_output=True,text=True)
+    assert cold.returncode == 0,cold.stderr
     library = tmp_path / "library"
     library.mkdir()
     production = ProductionRepository(tmp_path / "goal.sqlite3", library)
@@ -77,7 +80,6 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     assert continuation.reconcile() == 0
     with production._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM job_runs").fetchone()[0] == 1
-    assert "app.main" not in sys.modules
 
 
 def original(repo, *, message="生成一张标题图片，放进当前镜头，采用后生成成片", register=True):

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import shutil
+import os
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from app.assistant_pi import pi_runtime_checks
@@ -9,6 +12,47 @@ from app.config import Settings
 from app.local_runtime_status import whisper_file_present
 from app.models import utc_now
 from app.production import directory_accepts_writes
+
+
+def workspace_preflight(settings: Settings) -> dict:
+    """Check only the configured persistent store; identity is the caller's gate.
+
+    Never provision a directory or select a replacement disk here. Optional
+    capabilities have their own preflight at the action that needs them.
+    """
+    path = Path(settings.database_path).expanduser()
+    problem = ""
+    try:
+        if not path.is_absolute():
+            problem = "工作区数据位置无效，请修复原存储设置。"
+        else:
+            for candidate in (path, path.resolve()):
+                if candidate.parts[:2] == ("/", "Volumes") and len(candidate.parts) > 2:
+                    if not os.path.ismount(Path(*candidate.parts[:3])):
+                        problem = "工作区所在外接盘未挂载，请重新连接原磁盘。"
+                if os.name == "nt" and not os.path.ismount(candidate.anchor):
+                    problem = "工作区所在磁盘未挂载，请重新连接原磁盘。"
+            if not problem and not path.parent.is_dir():
+                problem = "工作区原数据目录不存在，请连接原磁盘或修复存储位置。"
+            if not problem and not directory_accepts_writes(path.parent):
+                problem = "工作区数据目录不可写，请检查磁盘和目录权限。"
+            if not problem and path.exists():
+                # Read/write mode must never create a fresh database after a
+                # configured disk disappears, nor mutate application rows.
+                with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=1)) as conn:
+                    conn.execute("PRAGMA schema_version").fetchone()
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.rollback()
+    except (OSError, sqlite3.Error):
+        problem = "工作区数据暂不可读写，请检查原磁盘、权限或数据库占用后重试。"
+    item = _preflight_item(
+        item_id="workspace_storage", label="工作区存储", status="invalid" if problem else "ready",
+        summary=problem or "既定工作区存储可读写",
+        impact="用于保存当前工作区的数据；不会自动切换到其他磁盘。",
+        repair_action="连接原磁盘并恢复存储权限后重新检查。" if problem else "无需处理。",
+    )
+    item["required"] = True
+    return {"overall": "blocked" if problem else "ready", "checks": [item], "generated_at": utc_now().isoformat()}
 
 
 def setup_preflight(settings: Settings) -> dict:
@@ -20,6 +64,7 @@ def setup_preflight(settings: Settings) -> dict:
     """
     generated_at = utc_now()
     checks: list[dict] = [
+        *workspace_preflight(settings)["checks"],
         _deepseek_check(settings),
         *(_preflight_item(
             item_id=c["id"], label=c["label"], status=c["status"],
@@ -35,10 +80,7 @@ def setup_preflight(settings: Settings) -> dict:
         _asr_check(settings),
     ]
 
-    # Text input keeps the workbench usable without ASR, while Obsidian,
-    # Jianying and remote model services are optional integrations. Only the
-    # local video pipeline prerequisites block first-run completion.
-    required = {"video_inbox", "video_output", "ffmpeg"}
+    required = {"workspace_storage"}
     for check in checks:
         check["required"] = check["id"] in required
 

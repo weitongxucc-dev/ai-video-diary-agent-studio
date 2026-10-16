@@ -44,7 +44,7 @@ def test_preflight_endpoint_returns_stable_structure(tmp_path, monkeypatch):
     data = response.json()
     assert data["overall"] in ("ready", "blocked")
     assert isinstance(data["checks"], list)
-    assert len(data["checks"]) == 11
+    assert len(data["checks"]) == 12
     assert "generated_at" in data
 
     # Every check has the required fields
@@ -65,7 +65,7 @@ def test_preflight_endpoint_returns_stable_structure(tmp_path, monkeypatch):
     ids = {c["id"] for c in data["checks"]}
     assert ids == {
         "deepseek", "obsidian", "video_inbox", "video_output",
-        "jianying", "ffmpeg", "python", "asr", "pi", "pi_node", "pi_tools",
+        "jianying", "ffmpeg", "python", "asr", "pi", "pi_node", "pi_tools", "workspace_storage",
     }
 
 
@@ -124,7 +124,7 @@ def test_preflight_missing_deepseek_key_uses_local_degraded_mode(tmp_path):
     output = tmp_path / "output"
     inbox.mkdir()
     output.mkdir()
-    settings = Settings(
+    settings = Settings(database_path=str(tmp_path / "db.sqlite"),
         deepseek_api_key=None,
         video_inbox_path=str(inbox),
         video_output_path=str(output),
@@ -165,8 +165,8 @@ def test_preflight_deepseek_ready_is_honest_about_local_only(tmp_path):
 # ── Directory not available ─────────────────────────────────────────────
 
 
-def test_preflight_directory_invalid_blocks(tmp_path):
-    """Any configured-but-missing directory → invalid → overall blocked."""
+def test_preflight_optional_directories_do_not_block(tmp_path):
+    """Optional media directories report invalid without blocking entry."""
     fake = str(tmp_path / "nonexistent_dir")
 
     settings = Settings(
@@ -184,8 +184,8 @@ def test_preflight_directory_invalid_blocks(tmp_path):
     assert by_id["video_inbox"]["status"] == "invalid"
     assert by_id["video_output"]["status"] == "invalid"
     assert by_id["jianying"]["status"] == "invalid"
-    # invalid (even non-critical) directories must block overall
-    assert result["overall"] == "blocked"
+    # Only configured workspace storage is required for entry.
+    assert result["overall"] == "ready"
 
 
 def _settings_for_dirs(tmp_path, inbox, output):
@@ -203,7 +203,7 @@ def _check(result, item_id):
     return next(c for c in result["checks"] if c["id"] == item_id)
 
 
-def test_preflight_read_only_required_directory_blocks_and_recovers(tmp_path):
+def test_preflight_read_only_media_directories_are_visible_and_recover(tmp_path):
     """A chmod-500 directory still lists as a directory, so only a real write proves it."""
     inbox = tmp_path / "inbox"
     output = tmp_path / "output"
@@ -230,7 +230,7 @@ def test_preflight_read_only_required_directory_blocks_and_recovers(tmp_path):
             # The repair has to name the cause and a way out, not just "fix it".
             assert "只读" in check["repair_action"], item_id
             assert "设置" in check["repair_action"], item_id
-        assert blocked["overall"] == "blocked"
+        assert blocked["overall"] == "ready"
     finally:
         inbox.chmod(0o755)
         output.chmod(0o755)
@@ -242,7 +242,7 @@ def test_preflight_read_only_required_directory_blocks_and_recovers(tmp_path):
     assert recovered["overall"] == "ready"
 
 
-def test_preflight_read_only_output_directory_blocks_on_its_own(tmp_path):
+def test_preflight_read_only_output_does_not_block_workbench(tmp_path):
     """Output is written to by the render pipeline, so it is gated independently of the inbox."""
     inbox = tmp_path / "inbox"
     output = tmp_path / "output"
@@ -259,7 +259,7 @@ def test_preflight_read_only_output_directory_blocks_on_its_own(tmp_path):
 
     assert _check(result, "video_inbox")["status"] == "ready"
     assert _check(result, "video_output")["status"] == "invalid"
-    assert result["overall"] == "blocked"
+    assert result["overall"] == "ready"
 
 
 def test_preflight_write_probe_leaves_nothing_behind(tmp_path):
@@ -304,7 +304,7 @@ def test_preflight_invalid_obsidian_directory_is_optional(tmp_path):
 
 
 def test_preflight_ffmpeg_missing(tmp_path):
-    """ffmpeg not found → missing status, overall blocked."""
+    """ffmpeg remains an honest capability check, not a workbench gate."""
     settings = Settings(
         deepseek_api_key="sk-test",
         database_path=str(tmp_path / "db.sqlite"),
@@ -313,7 +313,7 @@ def test_preflight_ffmpeg_missing(tmp_path):
     with mock.patch("app.preflight.shutil.which", return_value=None):
         result = setup_preflight(settings)
 
-    assert result["overall"] == "blocked"
+    assert result["overall"] == "ready"
     ffmpeg = next(c for c in result["checks"] if c["id"] == "ffmpeg")
     assert ffmpeg["status"] == "missing"
 
@@ -657,7 +657,7 @@ def test_missing_conversation_dependencies_never_block_core_onboarding(tmp_path,
     output = tmp_path / "output"
     inbox.mkdir()
     output.mkdir()
-    result = setup_preflight(Settings(video_inbox_path=str(inbox), video_output_path=str(output),
+    result = setup_preflight(Settings(database_path=str(tmp_path / "db.sqlite"), video_inbox_path=str(inbox), video_output_path=str(output),
                                       model_root_path=str(tmp_path / "models")))
     checks = {x["id"]: x for x in result["checks"]}
     assert result["overall"] == "ready"
@@ -665,30 +665,48 @@ def test_missing_conversation_dependencies_never_block_core_onboarding(tmp_path,
         assert checks[item]["status"] == "missing"
         assert not checks[item]["required"]
         assert "不阻断首启" in checks[item]["impact"]
-    assert {x["id"] for x in result["checks"] if x["required"]} == {"video_inbox", "video_output", "ffmpeg"}
+    assert {x["id"] for x in result["checks"] if x["required"]} == {"workspace_storage"}
 
 
 
-def test_pi_probe_temp_failure_stays_optional_for_core_onboarding(tmp_path, monkeypatch):
-    pi = tmp_path / "pi"
-    pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    pi.chmod(0o700)
-    monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(pi))
-    def deny_probe_directory(**kwargs):
-        raise PermissionError("synthetic isolated probe directory denied")
-    monkeypatch.setattr("app.assistant_pi.TemporaryDirectory", deny_probe_directory)
-    monkeypatch.setattr("app.preflight.shutil.which", lambda name, **kwargs:
-                        "/synthetic/ffmpeg" if name == "ffmpeg" else "/synthetic/node")
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", lambda cmd, **kwargs:
-                        __import__("subprocess").CompletedProcess(cmd, 0, stdout="v24.16.0", stderr=""))
-    inbox = tmp_path / "inbox"
-    output = tmp_path / "output"
-    inbox.mkdir()
-    output.mkdir()
-    result = setup_preflight(Settings(video_inbox_path=str(inbox), video_output_path=str(output)))
+def test_workspace_preflight_does_not_probe_optional_capabilities(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "pi_runtime_checks", lambda: pytest.fail("optional runtime must not gate entry"))
+    assert preflight.workspace_preflight(Settings(database_path=str(tmp_path / "db.sqlite")))["overall"] == "ready"
+
+
+def test_workspace_preflight_all_optional_capabilities_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr(preflight.shutil, "which", lambda *args, **kwargs: None)
+    result = setup_preflight(Settings(database_path=str(tmp_path / "data.sqlite"),
+        video_inbox_path=str(tmp_path / "missing-input"), video_output_path=str(tmp_path / "missing-output"),
+        obsidian_vault_path="", llm_api_key=None, deepseek_api_key=None))
     assert result["overall"] == "ready"
-    item = next(x for x in result["checks"] if x["id"] == "pi")
-    assert item["status"] == "missing" and not item["required"]
-    assert "临时目录" in item["summary"]
-    assert "临时目录可写" in item["repair_action"]
-    assert "npm install" not in item["repair_action"]
+    assert {c["id"] for c in result["checks"] if c["required"]} == {"workspace_storage"}
+    assert not (tmp_path / "missing-input").exists()
+
+
+def test_workspace_preflight_never_creates_replacement_directory(tmp_path):
+    missing = tmp_path / "disconnected-disk"
+    result = preflight.workspace_preflight(Settings(database_path=str(missing / "db.sqlite")))
+    assert result["overall"] == "blocked" and not missing.exists()
+
+
+def test_workspace_preflight_mount_placeholder_is_not_a_connected_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight.os.path, "ismount", lambda p: False)
+    monkeypatch.setattr(preflight, "directory_accepts_writes", lambda p: pytest.fail("unmounted volume must not be probed"))
+    result = preflight.workspace_preflight(Settings(database_path="/Volumes/Disconnected/studio.sqlite"))
+    assert result["overall"] == "blocked"
+    assert "未挂载" in result["checks"][0]["summary"]
+
+
+def test_workspace_preflight_reads_existing_database_without_mutation(tmp_path):
+    import sqlite3
+    path = tmp_path / "db.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE kept (value TEXT)")
+        conn.execute("INSERT INTO kept VALUES ('preserve')")
+    before = path.read_bytes()
+    assert preflight.workspace_preflight(Settings(database_path=str(path)))["overall"] == "ready"
+    assert path.read_bytes() == before
+    path.write_bytes(b"invalid database")
+    assert preflight.workspace_preflight(Settings(database_path=str(path)))["overall"] == "blocked"

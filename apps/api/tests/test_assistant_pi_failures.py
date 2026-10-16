@@ -4,6 +4,7 @@
 拿不到原因时如实说拿不到；提示里不许出现密钥。
 """
 from __future__ import annotations
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed, install_sdk_fixture
 
 import json
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from app import config as config_module
+from app.assistant.result_projection import read_sdk_result
 from app.assistant_pi import (
     FAILURE_ADDRESS_UNREACHABLE,
     FAILURE_KEY_REJECTED,
@@ -22,7 +24,6 @@ from app.assistant_pi import (
     AssistantUnavailable,
     _classify_output,
     _fail,
-    _last_answer_and_preview,
     run_task_turn,
 )
 from app.config import LLM_SERVICE_AVAILABLE, LLM_SERVICE_FAILED, LLM_SERVICE_UNVERIFIED, Settings
@@ -55,9 +56,7 @@ def _settings(tmp_path, key: str = KEY) -> Settings:
 
 
 def _install_fake_pi(monkeypatch, tmp_path):
-    fake_pi = tmp_path / "pi"
-    fake_pi.write_text("#!/bin/sh\necho 1.0.4\n")
-    fake_pi.chmod(0o700)
+    fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     return fake_pi
 
@@ -68,8 +67,8 @@ def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY)
 
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
-        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
+            return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        return sdk_completed(cmd, returncode, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
     return run_task_turn(settings, workspace_id="w", task_id="t", message="你好",
@@ -126,7 +125,7 @@ def test_unreachable_address_is_not_blamed_on_the_key(monkeypatch, tmp_path):
 def test_timeout_offers_retry_then_address_check(monkeypatch, tmp_path):
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
-            return subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+            return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
         raise subprocess.TimeoutExpired(cmd, 180)
 
     _install_fake_pi(monkeypatch, tmp_path)
@@ -188,7 +187,7 @@ def test_unknown_failure_admits_it_cannot_tell():
 
 def test_incomplete_reply_without_a_reason_still_honours_the_old_wording():
     with pytest.raises(AssistantUnavailable) as caught:
-        _last_answer_and_preview('{"type":"agent_settled"}')
+        project_event_fixture('{"type":"agent_settled"}')
     text = str(caught.value)
     assert "完整回复" in text
     assert "拿不到更具体的原因" in text
@@ -201,14 +200,14 @@ def test_incomplete_reply_with_a_reason_uses_that_reason():
          "stopReason": "error", "content": []}},
     ])
     with pytest.raises(AssistantUnavailable) as caught:
-        _last_answer_and_preview(log)
+        project_event_fixture(log)
     assert caught.value.cause == FAILURE_KEY_REJECTED
     assert "密钥" in str(caught.value)
 
 
 def test_unreadable_event_says_so_instead_of_a_fake_reason():
     with pytest.raises(AssistantUnavailable) as caught:
-        _last_answer_and_preview("这不是 JSON")
+        read_sdk_result("这不是 JSON")
     assert caught.value.cause == FAILURE_UNKNOWN
     assert "无法读取" in str(caught.value)
 
@@ -284,11 +283,11 @@ def test_node_requirement_uses_the_same_path_as_the_launcher(monkeypatch, tmp_pa
         return str(tmp_path / "node")
     monkeypatch.setattr("app.assistant_pi.shutil.which", which)
     monkeypatch.setattr("app.assistant_pi.subprocess.run", lambda cmd, **kwargs:
-                        subprocess.CompletedProcess(cmd, 0, stdout=("1.0.4" if Path(cmd[0]).name == "pi" else version), stderr=""))
+                        sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else version), stderr=""))
     checks = {c["id"]: c for c in pi_runtime_checks()}
     assert seen["path"].split(__import__("os").pathsep)[0] == str(pi.parent)
     assert (checks["pi_node"]["status"] == "ready") == ready
-    assert checks["pi"]["version"] == ("1.0.4" if ready else None)
+    assert checks["pi"]["version"] == ("1.3.0" if ready else None)
 
 
 def test_node_missing_blocks_before_provider_and_does_not_change_saved_key(monkeypatch, tmp_path):
@@ -355,8 +354,8 @@ def test_pi_launch_check_failure_is_not_a_provider_key_rejection(monkeypatch, tm
     def failed_pi_version(cmd, **kwargs):
         assert cmd[-1] == "--version"  # No conversation request reached the provider.
         if Path(cmd[0]).name == "pi":
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="401 private-test-key")
-        return subprocess.CompletedProcess(cmd, 0, stdout="v24.16.0", stderr="")
+            return sdk_completed(cmd, 1, stdout="", stderr="401 private-test-key")
+        return sdk_completed(cmd, 0, stdout="v24.16.0", stderr="")
     monkeypatch.setattr("app.assistant_pi.subprocess.run", failed_pi_version)
     with pytest.raises(AssistantUnavailable) as caught:
         run_task_turn(settings, workspace_id="w", task_id="t", message="你好",

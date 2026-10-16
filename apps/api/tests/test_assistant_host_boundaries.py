@@ -1,5 +1,6 @@
 """Independent host boundaries: no app.main, database or model account required."""
 from __future__ import annotations
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 
 import ast
 import json
@@ -102,7 +103,7 @@ def test_streaming_projection_preserves_original_nested_receipt_and_final_answer
         message=lines, env={"PATH": os.environ["PATH"]}, cwd=tmp_path, timeout_seconds=3, on_event=projected.append)
     assert result.returncode == 0
     assert json.loads(result.stdout.splitlines()[0])["result"]["details"]["business_receipts"] == [receipt]
-    answer, preview = host._last_answer_and_preview(result.stdout)
+    answer, preview = project_event_fixture(result.stdout)
     assert "尚未应用" in answer and "PNG来源已生成" in answer
     assert preview["media_job"]["job_id"] == "source-job"
     assert any(event["type"] == "tool_end" for event in projected)
@@ -145,6 +146,7 @@ def loopback_tools(tmp_path):
     thread.start()
     tools = tmp_path / "Resources" / "agent-tools"
     shutil.copytree(Path(__file__).parents[1] / "agent_tools", tools, ignore=shutil.ignore_patterns("*.mjs"))
+    shutil.copytree(Path(__file__).parents[1] / "agent_runtime", tools.parent / "agent_runtime")
     assert tool_sources_readable(tools / "diary_tools.ts")
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "TMPDIR": str(tmp_path),
         "AI_VIDEO_DIARY_AGENT_API_BASE": f"http://127.0.0.1:{server.server_port}",
@@ -183,7 +185,7 @@ def test_runtime_configuration_keeps_session_scope_and_secret_outside_model_file
     runtime, env, tools, session = prepare_runtime(**arguments)
     assert env["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == "original instruction"
     assert env["AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN"] == "synthetic-member"
-    assert tools == "read_current_task" and env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] == ""
+    assert tools == "read_current_task,codemode" and env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] == ""
     model_file = runtime / "models.json"
     assert model_file.stat().st_mode & 0o777 == 0o600
     assert "synthetic-private-key" not in model_file.read_text()
@@ -194,6 +196,7 @@ def test_runtime_configuration_keeps_session_scope_and_secret_outside_model_file
 
 def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_session(tmp_path, monkeypatch, loopback_tools):
     extension, env, calls = loopback_tools
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(extension))
     monkeypatch.setenv("API_PORT", env["AI_VIDEO_DIARY_AGENT_API_BASE"].rsplit(":", 1)[1])
     monkeypatch.setattr(host, "pi_runtime_checks", lambda: [])
@@ -212,12 +215,12 @@ def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == "original instruction"
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TASK_READ_READY"] == "1"
         assert json.loads(kwargs["env"]["AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES"])["schema"] == {"type": "object", "properties": {}}
-        assert str(extension) == command[command.index("--extension") + 1]
+        assert str(extension) == json.loads(kwargs["message"])["extensionPath"]
         assert "synthetic-private-key" not in " ".join(command)
         assert "synthetic-profile" not in kwargs["message"]
         assert "creator_preferences" in kwargs["message"] and "plain" in kwargs["message"]
         launches.append(command)
-        return subprocess.CompletedProcess(command, 0, json.dumps({"type": "message_end", "message": {
+        return sdk_completed(command, 0, json.dumps({"type": "message_end", "message": {
             "role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "synthetic answer"}]}})
             + "\n" + json.dumps({"type": "agent_settled"}), "")
 

@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 """Trusted instruction binding and actual shipped-Node preflight; never call a model."""
 import json
 import os
@@ -159,6 +160,7 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXTENSION", str(extension))
     monkeypatch.setenv("AI_VIDEO_DIARY_AGENT_TASK_READ_READY", "1")
     monkeypatch.setattr(pi, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     monkeypatch.setattr(pi, "_pi_executable", lambda: "/usr/bin/pi")
     monkeypatch.setattr(pi, "_configured_model", lambda _: ("https://controlled.invalid", "fixture", "unused"))
     monkeypatch.setattr(pi, "_agent_root", lambda *_: tmp_path)
@@ -176,17 +178,17 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TASK_READ_READY"] == "1"
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         assert json.loads(kwargs["env"]["AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES"])["schema"] == CreationTaskExactEditRequest.model_json_schema()
-        assert "preview_typed_edit" in cmd[cmd.index("--tools") + 1].split(",")
-        assert "preview_edit" not in cmd[cmd.index("--tools") + 1].split(",")
-        model_input = json.loads(kwargs["message"].split("本轮输入（JSON）：\n", 1)[1])
+        assert "preview_typed_edit" in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
+        assert "preview_edit" not in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
+        model_input = json.loads(json.loads(kwargs["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
         assert model_input["original_user_instruction"] == ORIGINAL
         assert model_input["current_task_facts"]["task_id"] == "task-real"
         assert model_input["current_task_facts"]["selected_refs"] == []
         assert model_input["current_task_facts"]["timeline_sequence"] == 0
-        prompt = cmd[cmd.index("--system-prompt")+1]
+        prompt = json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
         assert '"knowledge_reference_count": 1' in prompt and '"source_reference_count": 1' in prompt
         assert "large-body" not in prompt and "secret-token" not in prompt and "/private/" not in prompt
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已核对当前任务。"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
+        return sdk_completed(cmd, 0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已核对当前任务。"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)
     values = dict(workspace_id="qa", task_id="task-real", message=ORIGINAL, stage="montage", selected_refs=[], playhead_ms=None,
                   authorization=None,cookie=None,local_member_token="trusted-member",caller_user_id="owner",prompt="受控专项",
@@ -211,6 +213,7 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
 def test_task_switch_updates_current_model_input_without_rewriting_bound_instruction_or_session(tmp_path, monkeypatch, bound_turn, streaming):
     _req, _task, payload, _, conversations = bound_turn
     monkeypatch.setattr(pi, "pi_runtime_checks", lambda: [])
+    monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))
     monkeypatch.setattr(pi, "_pi_executable", lambda: "/usr/bin/pi")
     monkeypatch.setattr(pi, "_configured_model", lambda _: ("https://controlled.invalid", "fixture", "unused"))
     monkeypatch.setattr(pi, "_agent_root", lambda *_: tmp_path)
@@ -225,7 +228,7 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
     launches = []
     def launch(cmd, **kwargs):
         launches.append((cmd, kwargs))
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"受控回复"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
+        return sdk_completed(cmd, 0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"受控回复"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)
     monkeypatch.setattr(pi.subprocess, "run", launch)
     for task_id, facts in facts_by_task.items():
@@ -235,25 +238,25 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
                      tool_names="read_current_task,preview_typed_edit", preview_kind="edit_preview", session_key="conversation:shared",
                      turn_id=str(payload.assistant_turn_id) if streaming else None, on_event=(lambda _: None) if streaming else None)
         cmd, kwargs = launches[-1]
-        model_input = kwargs["message"] if streaming else kwargs["input"]
+        model_input = json.loads(kwargs["message"] if streaming else kwargs["input"])["message"]
         current = json.loads(model_input.split("本轮输入（JSON）：\n", 1)[1])
         assert current == {"current_task_facts":facts, "original_user_instruction":ORIGINAL}
         assert "历史工具结果及失败只属于其当时的任务和版本" in model_input
-        assert json.dumps(facts, ensure_ascii=False) in cmd[cmd.index("--system-prompt") + 1]
+        assert json.dumps(facts, ensure_ascii=False) in json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TURN_ID"] == (str(payload.assistant_turn_id) if streaming else "")
-        assert "preview_typed_edit" in cmd[cmd.index("--tools") + 1].split(",")
-        assert "preview_edit" not in cmd[cmd.index("--tools") + 1].split(",")
+        assert "preview_typed_edit" in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
+        assert "preview_edit" not in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
         assert conversations.get_turn(str(payload.assistant_turn_id))["user_message"] == ORIGINAL
     assert len(launches) == 2
-    assert launches[0][0][launches[0][0].index("--session-id") + 1] == launches[1][0][launches[1][0].index("--session-id") + 1]
+    assert json.loads(launches[0][1].get("message",launches[0][1].get("input")))["sessionId"] == json.loads(launches[1][1].get("message",launches[1][1].get("input")))["sessionId"]
 
 
 def test_render_configuration_failure_after_read_does_not_claim_unreadable_task():
     output = json.dumps({"type":"tool_execution_end", "toolName":"start_creation_execution", "isError":True,
                          "result":{"content":[{"type":"text","text":"未标定 DEVICE_CPU_RENDER_BYTES_PER_PIXEL"}]}})
     with pytest.raises(pi.AssistantUnavailable) as caught:
-        pi._last_answer_and_preview(output)
+        project_event_fixture(output)
     text = str(caught.value)
     assert "渲染尚未完成配置" in text and "当前修改已保留" in text
     assert "拿不到任务数据" not in text and "DEVICE_CPU" not in text and "设置页" not in text

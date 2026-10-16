@@ -3,8 +3,8 @@ import {modelParameters, isHostEditField} from './schemas.ts';
 import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 
-export function registerMediaScriptTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, readMediaScriptCapabilities, getMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview}: {
-  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; readMediaScriptCapabilities: () => any; getMediaScriptCapabilities: () => any; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markPreview: () => void;
+export function registerMediaScriptTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, readMediaScriptCapabilities, getMediaScriptCapabilities, getDeclaredCapabilities = getMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview}: {
+  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; readMediaScriptCapabilities: () => any; getMediaScriptCapabilities: () => any; getDeclaredCapabilities?: () => any; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markPreview: () => void;
 }) {
     pi.registerTool({
       name: "read_media_script_capabilities", label: "读取图片程序能力",
@@ -43,8 +43,8 @@ export function registerMediaScriptTools(pi: ToolRegistrar, {request, taskId, se
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });
-    if (getMediaScriptCapabilities()) {
-      const parameters = modelParameters(getMediaScriptCapabilities().schema);
+    if (getDeclaredCapabilities()) {
+      const parameters = modelParameters(getDeclaredCapabilities().schema);
       let submitted = false;
       pi.registerTool({
         name: "preview_media_script", label: "创建可编辑图片来源",
@@ -52,7 +52,7 @@ export function registerMediaScriptTools(pi: ToolRegistrar, {request, taskId, se
         parameters,
         execute: async (_id: string, params: Record<string, unknown>) => {
           if (!isTaskRead() || !selectedTaskVersion) throw new Error("请先读取可信任务与版本");
-          if (!getMediaScriptCapabilities().available) throw new Error(getMediaScriptCapabilities().reason || "程序工具链或专用预算不可用");
+          if (!getMediaScriptCapabilities()?.available) throw new Error(getMediaScriptCapabilities()?.reason || "程序工具链或专用预算不可用");
           if (Object.keys(params).some(key => isHostEditField(key) || !Object.hasOwn(parameters.properties, key)))
             throw new Error("程序参数包含未知或可信宿主字段，未提交");
           if (submitted || hasCreationAction() || hasEditControlWrite()) throw new Error("本轮程序请求已提交或已有其他执行动作，不重复执行");

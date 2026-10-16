@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import subprocess
@@ -8,6 +9,27 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from app.assistant.tool_sources import tool_sources_readable
 from app.assistant.failures import _FAILURES, FAILURE_RUNTIME_MISSING
+
+PI_SDK_VERSION = "1.3.0"
+
+
+def sdk_module(pi_executable: str) -> Path | None:
+    for parent in Path(pi_executable).resolve().parents:
+        if parent.name == "pi-coding-agent" and parent.parent.name == "@earendil-works":
+            module = parent / "dist" / "index.js"
+            return module if module.is_file() else None
+    return None
+
+
+def runtime_bundle(extension: Path) -> Path:
+    return extension.parent.parent / "agent_runtime"
+
+
+def runtime_bundle_readable(extension: Path) -> bool:
+    root = runtime_bundle(extension)
+    names = ["host.mjs", "session.mjs", "result.mjs", "input-delivery.mjs", "prompts/review-result.md",
+             *(f"skills/{name}/SKILL.md" for name in ("source-speech", "narration-materials", "local-edit"))]
+    return all((root / name).is_file() and os.access(root / name, os.R_OK) for name in names)
 
 def _pi_executable() -> str | None:
     configured = os.getenv("AI_VIDEO_DIARY_PI_EXECUTABLE")
@@ -53,7 +75,7 @@ def runtime_checks(extension: Path, find_pi) -> list[dict]:
     pi_reason = "未找到可执行 Pi；这不是密钥保存或鉴权失败。"
     pi_version: str | None = None
     pi_repair_action = str(_FAILURES[FAILURE_RUNTIME_MISSING]["next_step"])
-    pi_fix_command = "npm install -g @earendil-works/pi-coding-agent"
+    pi_fix_command = f"npm install -g @earendil-works/pi-coding-agent@{PI_SDK_VERSION}"
     if pi_ready and node_ready:
         # --version exits before Pi loads settings/auth or starts a model session.
         try:
@@ -78,6 +100,23 @@ def runtime_checks(extension: Path, find_pi) -> list[dict]:
                          else "Pi 未返回有效版本；对话尚未开始，不能据此判定密钥失败。")
     elif pi_ready:
         pi_reason = "已找到 Pi；需先修复 Node.js 才能验证启动。"
+        pi_ready = False
+    if pi_ready:
+        module = sdk_module(pi)
+        try:
+            package_version = json.loads((module.parent.parent / "package.json").read_text())["version"] if module else None
+        except (OSError, ValueError, KeyError):
+            package_version = None
+        pi_ready = pi_version == package_version == PI_SDK_VERSION
+        if not pi_ready:
+            pi_reason = f"创作会话需要已验证的 Pi SDK {PI_SDK_VERSION}；当前安装版本或 SDK 模块不匹配。"
+        elif not tools_ready or not runtime_bundle_readable(extension):
+            pi_ready = False
+            pi_reason = "创作运行桥、业务工具或随包创作技能缺失，尚不能启动对话。"
+            pi_repair_action = "恢复完整 agent_runtime 与业务工具目录，或重新安装桌面包。"
+            pi_fix_command = None
+        else:
+            pi_reason = f"Pi SDK {PI_SDK_VERSION} 与随包创作资源可用；真实模型和业务工具调用仍由功能入口验证。"
     return [
         {"id": "pi", "label": "对话程序 Pi", "status": "ready" if pi_ready else "missing",
          "version": pi_version,

@@ -56,6 +56,10 @@ from app.materials.source_files import MaterialSourceFileAccess
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 from app.profiles.reference_access import ProfileReferenceAccess, _profile_wav_duration
 from app.profiles.registration import ProfileRegistrationUseCase
+from app.profiles.voice_sampling import VoiceSamplingUseCase
+from app.materials.discovery import MaterialDiscoveryService
+from app.materials.discovery_store import DiscoveryStore
+from app.materials.discovery_intake import DiscoveryIntake
 from app.source_policy import content_owner
 from app.materials.contracts import MediaAuthorityError
 from app.creation.contracts import CreationPlanVoiceReference, CreationPlanPersonReference
@@ -714,6 +718,7 @@ class ProductionRepository:
         visual_provider: VisualSemanticProvider | None = None,
         speech_analyzer: LocalMaterialSpeechAnalyzer | None = None,
         visual_understanding: LocalVisualUnderstanding | None = None,
+        discovery_excluded_roots: tuple[Path, ...] = (),
     ) -> None:
         self.database_path = Path(database_path).expanduser()
         self._material_source_files = MaterialSourceFileAccess(self._connect, Path(video_library_path).expanduser())
@@ -743,10 +748,24 @@ class ProductionRepository:
             self._connect, self._profile_records, self._workspace_media_references)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
+        self.material_discovery = MaterialDiscoveryService(
+            DiscoveryStore(self._connect),
+            excluded_roots=lambda: [self.video_library_path, self.database_path, *discovery_excluded_roots],
+            target_for=self.material_link_target,
+            accept_copy=DiscoveryIntake(self._connect, self._material_assets,
+                target_for=self.material_link_target, confirm_copy=self.confirm_material_copy_complete),
+        )
 
     @property
     def video_library_path(self) -> Path:
         return self._material_source_files.video_library_path
+
+    @property
+    def voice_sampling(self) -> VoiceSamplingUseCase:
+        return VoiceSamplingUseCase(
+            self._connect, library_path=self.video_library_path,
+            registration=self._profile_registration,
+        )
 
     @video_library_path.setter
     def video_library_path(self, value: Path) -> None:

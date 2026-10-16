@@ -1,3 +1,4 @@
+from assistant_sdk_fixtures import project_event_fixture
 """Shipped tools and installed QuickJS, with HTTP doubles and no model/media calls."""
 import json
 import os
@@ -21,6 +22,7 @@ globalThis.fetch=async(url,init)=>{
  if(input.delay_ms){await new Promise(resolve=>setTimeout(resolve,input.delay_ms));if(init?.signal?.aborted)throw new Error('fixture call cancelled');}
  let value=input.workspace;
  if(path.endsWith('/assistant/edit-capabilities'))value=input.capabilities;
+ if(path.startsWith('/api/assistant/profile-references/'))value=input.reference_data[path];
  if(path.includes('/candidates'))value=[];
  if(path.endsWith('/execution'))value=new URL(url).searchParams.has('job_id')?input.execution:(input.execution_before||{task_id:'task-current',job:null});
  if(path.endsWith('/execution/preview'))value={script_id:'confirmed-script',input_digest:'a'.repeat(64),requirements:{can_continue:true}};
@@ -36,11 +38,12 @@ globalThis.fetch=async(url,init)=>{
  return {ok:!failed,status:failed?(input.failure_status||422):200,json:async()=>failed?{detail:'字段或版本拒绝'}:value};
 };
 process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES=JSON.stringify(input.capabilities);
-const {default:register,typedRequestId}=await import(process.argv[2]);
+const {createDiaryExtension,typedRequestId}=await import(process.argv[2]);
 const api={registerTool:tool=>tools.set(tool.name,tool), getAllTools:()=>[...tools.values()],
  getSettings:()=>({}),appendEntry:()=>{}};
-await register(api);
+const binding=createDiaryExtension(process.env);await binding.extension(api);
 for (const step of input.steps||[]) {
+ if(step.rebind){await binding.rebind({...process.env,AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES:JSON.stringify(step.rebind)});continue;}
  try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push({ok:true,result:await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)});}
  catch(error){results.push({ok:false,error:error.message});}
 }
@@ -72,7 +75,7 @@ def preview():
         "invalidated_refs": ["render:old"], "external_effects": []}}
 
 
-def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, execution=None, execution_before=None):
+def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, execution=None, execution_before=None, references=(), reference_data=None):
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="task-current",
                AI_VIDEO_DIARY_AGENT_STAGE=stage, AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
@@ -80,6 +83,7 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
                AI_VIDEO_DIARY_AGENT_TURN_ID="trusted-turn",
                AI_VIDEO_DIARY_AGENT_TASK_VERSION=json.dumps({"timeline_version_id": "version-current", "timeline_sequence": 4}),
                AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS="read_current_task,read_task_object,preview_typed_edit")
+    env["AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES"]=json.dumps(references)
     if pi_module:
         env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(pi_module)
     workspace = workspace or {"task": {"id": "task-current", "current_timeline_version_id": "version-current", "timeline_sequence": 4}}
@@ -88,7 +92,7 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
     completed = subprocess.run([os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types",
                                 str(runner), MODULE.as_uri()],
                                input=json.dumps({"steps": steps, "workspace": workspace, "capabilities": caps(),
-                                                 "preview": result or preview(), "job": job, "failure": failure, "code": code, "lost_receipt": lost_receipt, "delay_ms": delay_ms,
+                                                 "references":references,"reference_data":reference_data,"preview": result or preview(), "job": job, "failure": failure, "code": code, "lost_receipt": lost_receipt, "delay_ms": delay_ms,
                                                  "knowledge": knowledge, "script_context": script_context,
                                                  "failure_once": failure_once, "failure_status": failure_status,
                                                  "observations": observations, "observation_job": observation_job,
@@ -184,7 +188,7 @@ def test_common_typed_schema_passes_only_explicit_audio_or_visual_patch(tmp_path
         "result": seen["results"][0]["result"]},
         {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "尚未应用"}]}},
         {"type": "agent_settled"}]
-    reply, returned = host._last_answer_and_preview("\n".join(json.dumps(event) for event in events), "edit_preview")
+    reply, returned = project_event_fixture("\n".join(json.dumps(event) for event in events), "edit_preview")
     assert returned["proposal"]["operation"]["operation_type"] == action["operation_type"]
     assert "尚未应用修改" in reply
 
@@ -457,7 +461,7 @@ def test_nested_preview_survives_later_script_failure_in_host_and_projector(tmp_
     projected = host._PiStreamProjector().project(lines[0])
     assert projected["type"] == "tool_end" and projected["ok"]
     final = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "脚本后续失败"}]}}
-    answer, receipt = host._last_answer_and_preview(json.dumps(parent) + "\n" + json.dumps(final) + '\n{"type":"agent_settled"}', "edit_preview")
+    answer, receipt = project_event_fixture(json.dumps(parent) + "\n" + json.dumps(final) + '\n{"type":"agent_settled"}', "edit_preview")
     assert {key: receipt[key] for key in preview()} == preview() and "尚未应用" in answer
     assert "后续工具编排未完成" in answer
 
@@ -514,3 +518,25 @@ def test_candidates_read_real_clip_without_faking_editor_selection(tmp_path):
     observed = invoke(tmp_path, workspace=workspace, steps=[{"tool": "read_clip_candidates", "args": {"clip_id": "second"}}])
     assert observed["results"][0]["ok"]
     assert any('/montage/clips/second/candidates' in call["path"] for call in observed["calls"])
+
+
+def test_multiple_frozen_profiles_are_read_by_index_without_rebinding_ids(tmp_path):
+    references=[{"kind":"voice","profile_id":"voice-one","version":"v1","label":"声音甲"},
+                {"kind":"person","profile_id":"person-two","version":"v7","label":"人物乙"}]
+    data={"/api/assistant/profile-references/voice/voice-one":{"display_name":"声音甲","version":"v1"},
+          "/api/assistant/profile-references/person/person-two":{"display_name":"人物乙","version":"v7"},
+          "/api/assistant/profile-references/voice/voice-new":{"display_name":"声音丙","version":"v9"}}
+    actual=invoke(tmp_path,references=references,reference_data=data,steps=[
+        {"tool":"read_selected_reference","args":{"reference_index":2}},
+        {"tool":"read_selected_reference","args":{"reference_index":1}},
+        {"tool":"read_selected_reference","args":{"reference_index":3}},
+        {"rebind":[{"kind":"voice","profile_id":"voice-new","version":"v9","label":"声音丙"}]},
+        {"tool":"read_selected_reference","args":{"reference_index":1}}])
+    assert [item["result"]["details"]["display_name"] for item in actual["results"][:2]] == ["人物乙","声音甲"]
+    calls=[item for item in actual["calls"] if "/profile-references/" in item["path"]]
+    assert [(item["path"],item["query"]) for item in calls] == [
+        ("/api/assistant/profile-references/person/person-two","?version=v7"),
+        ("/api/assistant/profile-references/voice/voice-one","?version=v1"),
+        ("/api/assistant/profile-references/voice/voice-new","?version=v9")]
+    assert actual["results"][2]["ok"] is False and len(calls) == 3
+    assert actual["results"][3]["result"]["details"]["display_name"] == "声音丙"

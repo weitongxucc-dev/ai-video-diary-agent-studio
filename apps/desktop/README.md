@@ -2,11 +2,11 @@
 
 Electron 负责启动本地 Next.js 和 FastAPI API，并管理窗口、端口、日志和子进程生命周期。
 
-0.11 的对话助手调用本机已安装的 Pi（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具随桌面包提供，Pi 和 Node.js 尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
+0.11 的对话助手通过本机 Pi 1.3.0 的 coding-agent SDK 运行（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具、`agent_runtime` 会话桥、创作 Skills 和提示词模板随桌面包提供并进入构建标识，Pi 和 Node.js 尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
 
 业务工具入口为`apps/api/agent_tools/diary_tools.ts`，其`diary/`与`materials/`子目录须保持原结构一同打包；工具体检沿实际相对导入链核验文件。Python宿主入口为`apps/api/app/assistant_pi.py`，具体进程、停止、上下文及回执投影由`app/assistant/`拥有，HTTP工具仍消费原业务API。
 
-安装 Node.js 22.19 或更高版本后，按当前候选的已验版本安装 `@earendil-works/pi-coding-agent`，不要无版本安装或把本机最新版本当作兼容性证明。用 `node --version` 和 `pi --version` 核对实际程序，再重新打开应用。运行时升级和复用原则见[架构第3.15节](../../docs/system-architecture.md#315-pi-复用与视频创作-agent)；体检分别显示 Pi、Node 和业务工具文件状态，仅阻断所依赖能力。文件就绪和 Key 已保存都不等于模型请求或业务工具成功，仍需实际验证。
+安装 Node.js 22.19 或更高版本后，按运行桥要求安装 `@earendil-works/pi-coding-agent@1.3.0`，不要无版本安装或把本机最新版本当作兼容性证明。用 `node --version` 和 `pi --version` 核对实际程序，再重新打开应用。运行时升级和复用原则见[架构第3.15节](../../docs/system-architecture.md#315-pi-复用与视频创作-agent)；体检分别显示 Pi、Node 和业务工具文件状态，仅阻断所依赖能力。文件就绪和 Key 已保存都不等于模型请求或业务工具成功，仍需实际验证。
 
 ## 开发环境
 

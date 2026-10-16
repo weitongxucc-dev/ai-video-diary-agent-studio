@@ -16,14 +16,16 @@ import {registerObservationTools} from './observation-tools.ts';
 import {registerPreviewJobReader} from './preview-job-reader.ts';
 import {registerMediaScriptTools} from './media-script-tools.ts';
 import {createTypedEditTools} from './typed-edit-tools.ts';
+import {registerDirectEdit} from './direct-edit-tools.ts';
+import {registerReferenceRead} from './reference-reads.ts';
 import {registerTopicTools} from './topic-tools.ts';
 import {registerScriptTools} from './script-tools.ts';
 import {registerExecutionTools} from './execution-tools.ts';
 import {registerControlledCodemode} from '../controlled_codemode.ts';
 import type {ToolRegistrar} from './contracts.ts';
 
-export function createDiaryTools(environment: Record<string, string | undefined>) {
-  const {apiBase, taskId, stage, selectedRefs, playheadMs, selectedProfile, selectedKnowledge,
+export function createDiaryTools(environment: Record<string, string | undefined>, declarations = readAgentContext(environment)) {
+  const {apiBase, taskId, stage, selectedRefs, selectedReferences, playheadMs, selectedProfile, selectedKnowledge,
     selectedTaskVersion, readCredentials, readActionSource, readMaterialSelection,
     initialTaskRead, initialScriptDraftUpdatedAt,
     initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities} = readAgentContext(environment);
@@ -43,9 +45,10 @@ export function createDiaryTools(environment: Record<string, string | undefined>
 
   function register(agent: ToolRegistrar) {
     const pi = callScope.bind(agent);
+    registerReferenceRead(pi,request,selectedReferences);
     const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite} = createExecutionGuards();
     registerRecipeTools(pi, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource,
-      typedRequestId, getScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview});
+      typedRequestId, getScriptToolCapabilities, getDeclaredCapabilities: () => declarations.initialScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview});
     registerEditControls(pi, {request, taskId, selectedTaskVersion, isTaskRead, verifyTaskVersion, readActionSource,
       hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite});
     registerWorkspaceTools(pi, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge,
@@ -55,13 +58,16 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     registerCreationPlans(pi, {request, readActionSource, hasPreview, markPreview});
     registerTaskReads(pi, {request, taskId, readCurrentTaskFacts, readTaskEditCapabilities, markTaskRead, verifyTaskVersion});
     if (taskId) {
+      registerDirectEdit(pi,{request,taskId,selectedTaskVersion,isTaskRead,readActionSource,typedRequestId,
+        getEditCapabilities,getDeclaredCapabilities:()=>declarations.initialEditCapabilities,
+        hasCreationAction,hasEditControlWrite,markEditControlWrite});
       const typedEdits = createTypedEditTools({request, taskId, selectedTaskVersion, isTaskRead, readActionSource,
-        typedRequestId, getEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview});
+        typedRequestId, getEditCapabilities, getDeclaredCapabilities: () => declarations.initialEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview});
       registerObservationTools(pi, {request, taskId, verifyTaskVersion, readActionSource, typedRequestId});
       registerPreviewJobReader(pi, {request, taskId, getSignal, onPreviewJobObserved: typedEdits.onPreviewJobObserved});
       typedEdits.registerRequestReader(pi);
       registerMediaScriptTools(pi, {request, taskId, selectedTaskVersion, readMediaScriptCapabilities,
-        getMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview});
+        getMediaScriptCapabilities, getDeclaredCapabilities: () => declarations.initialMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview});
       typedEdits.registerPreview(pi);
     }
     registerTopicTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview});

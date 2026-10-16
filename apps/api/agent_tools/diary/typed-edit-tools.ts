@@ -3,8 +3,8 @@ import {typedEditSchema, isHostEditField} from './schemas.ts';
 import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 
-export function createTypedEditTools({request, taskId, selectedTaskVersion, isTaskRead, readActionSource, typedRequestId, getEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview}: {
-  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; getEditCapabilities: () => any; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markPreview: () => void;
+export function createTypedEditTools({request, taskId, selectedTaskVersion, isTaskRead, readActionSource, typedRequestId, getEditCapabilities, getDeclaredCapabilities = getEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview}: {
+  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; getEditCapabilities: () => any; getDeclaredCapabilities?: () => any; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markPreview: () => void;
 }) {
   let typedAttempts = 0;
   let typedPreviewBlocked = false;
@@ -13,14 +13,17 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
     pi.registerTool({
       name: "read_typed_edit_request", label: "回读已提交编辑请求",
       description: "用原请求身份查询真实结果；只读，不重POST，不换绑当前版本或从对话推测成功。",
-      parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}}, required: ["request_id"], additionalProperties: false},
-      execute: async (_id: string, params: {request_id: string}) => {
-        const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=preview`;
+      parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}, phase:{type:"string",enum:["preview","apply"]}}, required: ["request_id"], additionalProperties: false},
+      execute: async (_id: string, params: {request_id: string; phase?:"preview"|"apply"}) => {
+        const phase=params.phase ?? "preview";
+        const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=${phase}`;
         const receipt = await request(query);
-        if (receipt.request_id !== params.request_id || receipt.phase !== "preview") throw new Error("编辑请求回执身份不一致");
-        let details: any = {kind: "edit_request_status", request_id: params.request_id, query_url: query,
+        if (receipt.request_id !== params.request_id || receipt.phase !== phase) throw new Error("编辑请求回执身份不一致");
+        let details: any = {kind: "edit_request_status", phase, task_id:taskId, request_id: params.request_id, query_url: query,
           status: receipt.status, result: receipt.result};
-        if (receipt.status === "recorded" && receipt.result?.proposal?.id) {
+        if (phase === "apply" && receipt.status === "recorded" && receipt.result_status_code < 400) {
+          details={...details,kind:"edit_applied"};
+        } else if (phase === "preview" && receipt.status === "recorded" && receipt.result?.proposal?.id) {
           typedPreviewBlocked = false;
           details = {kind: "edit_preview", preview: {...receipt.result, request_id: params.request_id, request_query_url: query}};
         } else if (receipt.status === "recorded" && receipt.result?.job_id) {
@@ -31,8 +34,8 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
     });
   }
   function registerPreview(pi: ToolRegistrar) {
-    if (getEditCapabilities()) {
-      const parameters = typedEditSchema(getEditCapabilities());
+    if (getDeclaredCapabilities()) {
+      const parameters = typedEditSchema(getDeclaredCapabilities());
       pi.registerTool({
         name: "preview_typed_edit", label: "预览类型化修改",
         description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id、update片段或track音轨、非空values patch；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；本轮不开放音量关键点写入、solo持久化或独立音频变速。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。最多3个不同候选，同输入、未知结果或授权/版本拒绝不重放。",
@@ -43,7 +46,7 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
           if (typedPreviewBlocked || typedAttempts >= 3) throw new Error("本轮预览尚待核验结果或达到3次上限；不重复未知操作");
           if (Object.keys(params).some(key => isHostEditField(key) || !Object.hasOwn(parameters.properties, key)))
             throw new Error("模型参数包含未知字段或可信宿主字段，未提交预览");
-          const capability = getEditCapabilities().operations.find((item: any) => item.operation_type === params.operation_type);
+          const capability = getEditCapabilities()?.operations.find((item: any) => item.operation_type === params.operation_type);
           if (!capability || !capability.available) throw new Error(capability?.reason || "当前 API 未声明该类型化预览可执行");
           const instruction = readActionSource().userInstruction;
           const turn = readActionSource().turnId;

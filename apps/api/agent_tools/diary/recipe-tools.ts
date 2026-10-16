@@ -3,8 +3,8 @@ import {modelParameters, isHostEditField} from './schemas.ts';
 import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 
-export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource, typedRequestId, getScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview}: {
-  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; getScriptToolCapabilities: () => any; readMediaScriptToolCapabilities: () => any; markPreview: () => void;
+export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource, typedRequestId, getScriptToolCapabilities, getDeclaredCapabilities = getScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview}: {
+  request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; getScriptToolCapabilities: () => any; getDeclaredCapabilities?: () => any; readMediaScriptToolCapabilities: () => any; markPreview: () => void;
 }) {
   const knownTools = new Map<string, any>();
   const describeTool = async (toolId: string, version?: number) => {
@@ -51,7 +51,7 @@ export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selecte
       return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
-  if (getScriptToolCapabilities()) {
+  if (getDeclaredCapabilities()) {
     const writes = new Set<string>();
     const sourceTurn = () => {
       const turn = readActionSource().turnId;
@@ -63,7 +63,7 @@ export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selecte
         throw new Error("工具参数包含未知/宿主字段，未提交");
     };
     for (const action of ["update", "revoke"] as const) {
-      const parameters = modelParameters(getScriptToolCapabilities().schemas[action]);
+      const parameters = modelParameters(getDeclaredCapabilities().schemas[action]);
       parameters.properties.tool_id = {type: "string"}; parameters.required.push("tool_id");
       pi.registerTool({name: `${action}_media_script_tool`, label: action === "update" ? "更新可复用工具" : "停用可复用工具",
         description: "仅按用户明确更新/停用要求提交真实CAS；先读取实际工具版本，不因程序成功自动修改。丢回应只读取原工具，不自动重复写。停用不删除既有图片/视频。",
@@ -92,7 +92,7 @@ export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selecte
       });
     }
     if (taskId) {
-      const parameters = modelParameters(getScriptToolCapabilities().schemas.save);
+      const parameters = modelParameters(getDeclaredCapabilities().schemas.save);
       let saveAttempted = false;
       pi.registerTool({name: "save_media_script_tool", label: "保存可复用图片工具",
         description: "只有用户明确要求保存时，将本任务真实成功producer Job保存成可复用工具。程序成功不自动保存；代码/定义/输出槽由API回读，不接受模型代码。创建UUID由宿主绑定，unknown仅查询原UUID。",
@@ -121,7 +121,7 @@ export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selecte
           }
         },
       });
-      const invokeParameters = modelParameters(getScriptToolCapabilities().schemas.invoke);
+      const invokeParameters = modelParameters(getDeclaredCapabilities().schemas.invoke);
       invokeParameters.properties.tool_id = {type: "string"}; invokeParameters.required.push("tool_id");
       let invoked = false;
       pi.registerTool({name: "preview_media_script_tool", label: "用已有工具准备图片来源",
