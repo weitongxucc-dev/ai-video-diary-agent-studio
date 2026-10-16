@@ -167,7 +167,8 @@ def test_history_identity_and_result_are_host_bound_actual_receipts(tmp_path, co
     assert out["steps"][1]["ok"]
     assert posts(out)[0]["body"] == {"assistant_turn_id": "trusted-turn", "expected_timeline_version_id": "version-current", "expected_timeline_sequence": 4}
     details = out["steps"][1]["result"]["details"]
-    assert details == {"kind": "edit_control", "action": action, "task_id": "task-current",
+    assert details == {"invocation_input_id": "trusted-turn", "input_id": None, "input_turn_id": None,
+                       "kind": "edit_control", "action": action, "task_id": "task-current",
                        "result": {"task_id": "task-current", "timeline_version_id": "version-after", "status": "applied", "sentinel": "actual-http-receipt"}}
     model_text = out["steps"][1]["result"]["content"][0]["text"]
     assert "receipt_returned" in model_text

@@ -7662,6 +7662,23 @@ def _creation_task_assistant_turn(
     return _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, trusted_stage)
 
 
+def _assistant_applied_edit_receipt(task_id, request, turn_id, details):
+    workspace_id = current_workspace_id(request)
+    edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, details)
+    if edit_request.phase != "apply" or edit_request.status != "recorded" or edit_request.result_status_code != 200:
+        raise HTTPException(status_code=502, detail="直接编辑尚无可核验的完成回执")
+    confirmed = CreationTaskEditConfirmResponse.model_validate(edit_request.result)
+    actual = production_repo.get_edit_operation(workspace_id, confirmed.operation.id)
+    source_input = edit_request.submitted_input or {}
+    if (actual.task_id != task_id or actual.status != "applied" or not actual.result_version_id
+            or source_input.get("assistant_turn_id") != turn_id
+            or source_input.get("operation_type") != actual.operation_type
+            or source_input.get("expected_timeline_version_id") != actual.base_version_id
+            or confirmed.operation.result_version_id != actual.result_version_id):
+        raise HTTPException(status_code=502, detail="直接编辑回执与当前输入及实际操作不一致")
+    return edit_request
+
+
 def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, trusted_stage):
     workspace_id = current_workspace_id(request)
     reply = _assistant_text_without_credentials(reply, workspace_id)
@@ -7671,24 +7688,16 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     topic_candidates = None
     timeline_action = None
     media_job, edit_request, script_tool = None, None, None
+    if isinstance(preview, dict) and preview.get("kind") in {"execution_action", "execution_result"} and preview.get("applied_edit") is not None:
+        edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview["applied_edit"])
+        timeline_action = "apply"
     if isinstance(preview, dict) and preview.get("kind") in {"media_script_tool_result", "media_script_tool_status"}:
         script_tool, reply = _resolve_assistant_script_tool(task_id, request, turn_id, preview)
         if preview.get("related_media_job") is not None:
             media_job = _assistant_related_media_job(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
         edit_preview = None
     elif isinstance(preview, dict) and preview.get("kind") == "edit_applied":
-        edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
-        if edit_request.phase != "apply" or edit_request.status != "recorded" or edit_request.result_status_code != 200:
-            raise HTTPException(status_code=502, detail="直接编辑尚无可核验的完成回执")
-        confirmed = CreationTaskEditConfirmResponse.model_validate(edit_request.result)
-        actual = production_repo.get_edit_operation(workspace_id, confirmed.operation.id)
-        source_input = edit_request.submitted_input or {}
-        if (actual.task_id != task_id or actual.status != "applied" or not actual.result_version_id
-                or source_input.get("assistant_turn_id") != turn_id
-                or source_input.get("operation_type") != actual.operation_type
-                or source_input.get("expected_timeline_version_id") != actual.base_version_id
-                or confirmed.operation.result_version_id != actual.result_version_id):
-            raise HTTPException(status_code=502, detail="直接编辑回执与当前输入及实际操作不一致")
+        edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview)
         timeline_action = "apply"
         edit_preview = None
         reply = "修改已保存，可撤销；重新生成后可播放更新的成片。"
@@ -7738,9 +7747,15 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         status = preview.get("status")
         if not isinstance(status, dict) or status.get("task_id") != task_id or not isinstance(status.get("job"), dict):
             raise HTTPException(status_code=502, detail="没有返回可核验的原制作作业")
-        execution_status = _read_bound_execution_result(task_id, request, status["job"]["id"])
-        if preview.get("input_id") and execution_status["job"]["status"] in {"queued", "running"}:
-            execution_status = _bind_assistant_execution_observation(task_id, request, turn_id, preview, execution_status)
+        try:
+            execution_status = _read_bound_execution_result(task_id, request, status["job"]["id"])
+            if preview.get("input_id") and execution_status["job"]["status"] in {"queued", "running"}:
+                execution_status = _bind_assistant_execution_observation(task_id, request, turn_id, preview, execution_status)
+        except HTTPException as exc:
+            if edit_request is None:
+                raise
+            execution_status = None
+            reply = "修改已保存，可撤销；原制作作业回读未通过核验。" + _assistant_stream_safe_text(str(exc.detail), workspace_id)
         edit_preview = None
     elif isinstance(preview, dict) and preview.get("kind") == "execution_action":
         action = preview.get("action")
@@ -7751,8 +7766,14 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
                 or status.get("task_id") != task_id):
             raise HTTPException(status_code=502, detail="对话没有返回可核实的制作作业状态。")
         execution_action = action
-        execution_status = (_read_bound_execution_result(task_id, request, status["job"]["id"])
-                            if action == "cancel" else _bind_assistant_execution_result(task_id, request, turn_id, status))
+        try:
+            execution_status = (_read_bound_execution_result(task_id, request, status["job"]["id"])
+                                if action == "cancel" else _bind_assistant_execution_result(task_id, request, turn_id, status))
+        except HTTPException as exc:
+            if edit_request is None:
+                raise
+            execution_action, execution_status = None, None
+            reply = "修改已保存，可撤销；后续制作回执未通过核验。" + _assistant_stream_safe_text(str(exc.detail), workspace_id)
         edit_preview = None
     elif isinstance(preview, dict) and preview.get("kind") == "edit_control":
         action = preview.get("action")
@@ -14059,6 +14080,42 @@ def _bind_assistant_execution_observation(task_id, request, turn_id, details, re
     return _bind_assistant_execution_result(task_id, request, turn_id, result, source=source)
 
 
+def _assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request):
+    """Derive one authorized successor from this input's committed edit journal."""
+    if (version is None or version.parent_version_id != snapshot.get("timeline_version_id")
+            or version.sequence != snapshot.get("timeline_sequence", 0) + 1):
+        return None
+    operations = [item for item in production_repo.list_edit_operations(task.workspace_id, task.id)
+                  if item.status == "applied" and item.result_version_id == version.id
+                  and item.base_version_id == snapshot["timeline_version_id"]]
+    if len(operations) != 1:
+        return None
+    operation = operations[0]
+    proposal = production_repo.get_edit_proposal(task.workspace_id, operation.proposal_id)
+    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source") or {}
+    if any(source.get(key) != value for key, value in {
+            "workspace_id": task.workspace_id, "task_id": task.id, "member_id": member_id,
+            "conversation_id": origin["conversation_id"], "assistant_turn_id": str(turn_id),
+            "input_id": origin.get("input_id"), "input_turn_id": origin.get("input_turn_id"),
+            "expected_timeline_version_id": snapshot["timeline_version_id"],
+            "expected_timeline_sequence": snapshot["timeline_sequence"]}.items()):
+        return None
+    request_id = source.get("request_id")
+    if not request_id:
+        return None
+    receipt = get_exact_edit_request_result(task.id, UUID(request_id), request, "apply")
+    submitted, result = receipt["submitted_input"], receipt["result"]
+    if (receipt["status"] != "recorded" or receipt["result_status_code"] != 200 or not result
+            or submitted.get("assistant_turn_id") != str(turn_id)
+            or submitted.get("expected_timeline_version_id") != operation.base_version_id
+            or submitted.get("expected_timeline_sequence") != snapshot["timeline_sequence"]
+            or result.get("operation", {}).get("id") != operation.id
+            or result["operation"].get("result_version_id") != version.id):
+        return None
+    _require_assistant_input_origin(request, source)
+    return {**snapshot, "timeline_version_id": version.id, "timeline_sequence": version.sequence}
+
+
 def _assistant_execution_source(task_id, request, turn_id, action, input_digest=None):
     if turn_id is None:
         return None, None  # Existing explicit GUI/CLI starts keep their protocol.
@@ -14075,11 +14132,15 @@ def _assistant_execution_source(task_id, request, turn_id, action, input_digest=
         raise HTTPException(status_code=409, detail="原助手制作要求已被新的真人要求替代")
     snapshot = origin["context"].get("target_snapshot", {})
     version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if (origin["context"].get("stage") in {"topic", "script"}
-            or not origin["raw_command"].strip()
-            or (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
-                task.current_timeline_version_id, version.sequence if version else 0)):
+    if origin["context"].get("stage") in {"topic", "script"} or not origin["raw_command"].strip():
         raise HTTPException(status_code=409, detail="原助手制作要求的阶段或目标版本已失效")
+    if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
+            task.current_timeline_version_id, version.sequence if version else 0):
+        successor = (_assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
+                     if action in {"start", "resume"} else None)
+        if successor is None:
+            raise HTTPException(status_code=409, detail="原助手制作要求的目标版本已失效，且没有同一输入的已提交编辑回执")
+        snapshot = successor
     goal = conversation_repo.get_task_goal(str(turn_id))
     if goal is not None and goal.get("source_input_id") == origin.get("input_id") and (goal["status"] in {"invalidated", "no_progress", "limit_reached"}
             or _goal_pending_preview(goal, task.current_timeline_version_id) is not None):

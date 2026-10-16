@@ -46,7 +46,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
   function register(agent: ToolRegistrar) {
     const pi = callScope.bind(agent);
     registerReferenceRead(pi,request,selectedReferences);
-    const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite} = createExecutionGuards();
+    const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite, hasHistoryControlWrite, markDirectEditAttempt, verifyDirectEdit, directEditUnverified} = createExecutionGuards();
     registerRecipeTools(pi, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource,
       typedRequestId, getScriptToolCapabilities, getDeclaredCapabilities: () => declarations.initialScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview});
     registerEditControls(pi, {request, taskId, selectedTaskVersion, isTaskRead, verifyTaskVersion, readActionSource,
@@ -60,7 +60,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     if (taskId) {
       registerDirectEdit(pi,{request,taskId,selectedTaskVersion,isTaskRead,readActionSource,typedRequestId,
         getEditCapabilities,getDeclaredCapabilities:()=>declarations.initialEditCapabilities,
-        hasCreationAction,hasEditControlWrite,markEditControlWrite});
+        hasCreationAction,hasEditControlWrite,markDirectEditAttempt,verifyDirectEdit});
       const typedEdits = createTypedEditTools({request, taskId, selectedTaskVersion, isTaskRead, readActionSource,
         typedRequestId, getEditCapabilities, getDeclaredCapabilities: () => declarations.initialEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview});
       registerObservationTools(pi, {request, taskId, verifyTaskVersion, readActionSource, typedRequestId});
@@ -73,7 +73,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     registerTopicTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview});
     registerScriptTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt});
     registerExecutionTools(pi, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction,
-      hasEditControlWrite, hasPreview, readActionSource, getSignal});
+      hasEditControlWrite: hasHistoryControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal});
     return registerControlledCodemode(pi);
   }
   return {register, typedRequestId, readTaskEditCapabilities, readMediaScriptCapabilities, readMediaScriptToolCapabilities,

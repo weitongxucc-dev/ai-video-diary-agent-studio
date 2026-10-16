@@ -7,6 +7,13 @@ export function createPreviewBudget() {
 export function createExecutionGuards() {
   let creationActionApplied = false;
   let editControlWriteAttempted = false;
+  let directEditAttempted = false;
+  let directEditVerified = false;
   return {hasCreationAction: () => creationActionApplied, markCreationAction: () => {creationActionApplied = true;},
-    hasEditControlWrite: () => editControlWriteAttempted, markEditControlWrite: () => {editControlWriteAttempted = true;}};
+    hasEditControlWrite: () => editControlWriteAttempted || directEditAttempted,
+    hasHistoryControlWrite: () => editControlWriteAttempted,
+    markEditControlWrite: () => {editControlWriteAttempted = true;},
+    markDirectEditAttempt: () => {directEditAttempted = true;},
+    verifyDirectEdit: () => {directEditVerified = true;},
+    directEditUnverified: () => directEditAttempted && !directEditVerified};
 }

@@ -651,7 +651,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCue(cueId: string) {
-    publishSelection("subtitle",cueId,`字幕 ${(activeSubtitleTrack?.cues.findIndex(item=>item.id===cueId) ?? 0)+1}`);
+    const cue = activeSubtitleTrack?.cues.find(item => item.id === cueId);
+    publishSelection("subtitle",cueId,`字幕 ${(activeSubtitleTrack?.cues.findIndex(item=>item.id===cueId) ?? 0)+1}`,
+      cue ? {start_ms:Math.round(cue.start_seconds*1000),end_ms:Math.round(cue.end_seconds*1000)} : undefined);
     activateTaskSelection();
     setSelectedAudioId(null);
     if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId || selectedAudioId) invalidateEditPreview();

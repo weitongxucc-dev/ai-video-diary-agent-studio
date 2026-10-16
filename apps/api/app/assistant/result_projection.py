@@ -163,6 +163,16 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                     preview = details.get("preview")
                     if kind == "topic_generation":
                         preview = {"kind": "topic_generation", "topics": details.get("topics")}
+    if edit_applied is not None:
+        # A later provider/tool failure cannot erase a committed edit. A real
+        # render receipt takes precedence when the same input did both actions.
+        if action_result is not None:
+            action = action_result.get("action")
+            return ("修改已保存，后续制作已有实际回执；完成状态以当前作业为准。" if action else
+                    "修改已保存；已读取原制作作业，本轮未新增制作请求。"), {
+                **action_result, "kind": "execution_action" if action else "execution_result", "applied_edit": edit_applied}
+        return ("修改已保存，可撤销；后续制作没有取得成功提交回执。" if action_failed else
+                "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。"), edit_applied
     if (action_failed and action_result is None) or topic_failed:
         if render_configuration_failed:
             raise _fail(FAILURE_TOOL_FAILED, explanation="本机渲染尚未完成配置，本轮未生成新成片；当前修改已保留。",
@@ -176,8 +186,6 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
             )
         raise _fail(cause)
-    if edit_applied is not None:
-        return "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。", edit_applied
     if script_tool_status is not None and preview is None:
         if media_job is not None:
             script_tool_status = {**script_tool_status, "related_media_job": media_job}

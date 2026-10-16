@@ -5,11 +5,11 @@ import {boundedText} from '../task_facts.ts';
 
 export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead,
   readActionSource, typedRequestId, getEditCapabilities, getDeclaredCapabilities, hasCreationAction,
-  hasEditControlWrite, markEditControlWrite}: {
+  hasEditControlWrite, markDirectEditAttempt, verifyDirectEdit}: {
   request:BusinessRequest; taskId:string|undefined; selectedTaskVersion:TaskVersion|null;
   isTaskRead:()=>boolean; readActionSource:()=>ActionSource; typedRequestId:(turn:string,call:string)=>string;
   getEditCapabilities:()=>any; getDeclaredCapabilities:()=>any;
-  hasCreationAction:()=>boolean; hasEditControlWrite:()=>boolean; markEditControlWrite:()=>void;
+  hasCreationAction:()=>boolean; hasEditControlWrite:()=>boolean; markDirectEditAttempt:()=>void; verifyDirectEdit:()=>void;
 }) {
   const declaration=getDeclaredCapabilities();
   if (!declaration?.direct_apply?.operations?.length) return;
@@ -37,7 +37,7 @@ export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selected
       if (!source.turnId || !source.userInstruction || !callId) throw new Error("本次输入的明确要求或调用身份缺失，未提交");
       const requestId=typedRequestId(source.turnId,callId);
       const query=`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${requestId}?phase=apply`;
-      markEditControlWrite();
+      markDirectEditAttempt();
       let result:any;
       try {
         result=await request(endpoint,{method:"POST",body:JSON.stringify({...params,
@@ -52,9 +52,35 @@ export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selected
           failure_reason:boundedText(error instanceof Error ? error.message : String(error),500)};
         return {isError:true,content:[{type:"text",text:JSON.stringify(details)}],details};
       }
+      let continuationBlocker:string|undefined;
+      try {
+        // Only the acknowledged original journal may advance this invocation's
+        // CAS fence. A lost/rejected reply keeps the direct attempt locked.
+        const receipt=await request(query);
+        const operation=result.operation;
+        if (receipt.status!=="recorded" || receipt.result_status_code!==200
+            || receipt.request_id!==requestId || receipt.phase!=="apply"
+            || receipt.submitted_input?.assistant_turn_id!==source.turnId
+            || receipt.submitted_input?.expected_timeline_version_id!==selectedTaskVersion.timeline_version_id
+            || receipt.submitted_input?.expected_timeline_sequence!==selectedTaskVersion.timeline_sequence
+            || operation?.task_id!==taskId || operation.status!=="applied"
+            || operation.base_version_id!==selectedTaskVersion.timeline_version_id || !operation.result_version_id
+            || receipt.result?.operation?.id!==operation.id
+            || receipt.result.operation.result_version_id!==operation.result_version_id)
+          throw new Error("原编辑回执无法证明新版本，未继续制作；请查询原请求");
+        const current=await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
+        if (current.task?.id!==taskId || current.task.current_timeline_version_id!==operation.result_version_id
+            || current.task.timeline_sequence!==selectedTaskVersion.timeline_sequence+1)
+          throw new Error("当前版本不是本次已提交编辑的直接结果，未继续制作");
+        selectedTaskVersion.timeline_version_id=operation.result_version_id;
+        selectedTaskVersion.timeline_sequence=current.task.timeline_sequence;
+        verifyDirectEdit();
+      } catch (error) {
+        continuationBlocker=boundedText(error instanceof Error ? error.message : String(error),500).text;
+      }
       // The host re-reads the original journal and validates operation/target/version.
       const details={kind:"edit_applied",phase:"apply",task_id:taskId,request_id:requestId,query_url:query,
-        assistant_turn_id:source.turnId,tool_call_id:callId,result};
+        assistant_turn_id:source.turnId,tool_call_id:callId,result, ...(continuationBlocker ? {continuation_blocker:continuationBlocker} : {})};
       return {content:[{type:"text",text:JSON.stringify(details)}],details};
     },
   });

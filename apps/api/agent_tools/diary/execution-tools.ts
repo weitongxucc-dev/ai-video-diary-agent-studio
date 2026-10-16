@@ -3,8 +3,8 @@ import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 
-export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, hasPreview, readActionSource, getSignal}: {
-  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
+export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal}: {
+  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
 }) {
   if (taskId && stage !== "topic" && stage !== "script") {
     pi.registerTool({
@@ -39,6 +39,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, stag
     const perform = async (action: "start" | "resume" | "cancel") => {
       if (!isTaskRead()) throw new Error("请先读取当前创作任务");
       if (hasCreationAction()) throw new Error("本轮制作动作已经提交，不重复执行");
+      if (directEditUnverified?.()) throw new Error("本次直接编辑结果未核实，不能继续制作；请先查询原请求");
       if (hasEditControlWrite()) throw new Error("本轮已提交历史控制动作，不能同时开始、继续或取消制作");
       if (hasPreview()) throw new Error("本轮已请求修改预览，不能同时开始、继续或取消制作");
       markCreationAction();

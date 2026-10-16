@@ -8,9 +8,10 @@ FAILURE_ADDRESS_UNREACHABLE = "address_unreachable"  # 服务地址不通
 FAILURE_TIMEOUT = "timeout"                        # 超时
 FAILURE_RUNTIME_MISSING = "runtime_missing"        # 运行环境缺失
 FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
+FAILURE_OVERLOADED = "overloaded"
 FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
 
-# service_contacted=True 的只有三种：它们都真的向模型服务发过请求，结论可以写进
+# service_contacted=True 的分类有实际模型服务访问证据，结论可以写进
 # 服务状态。业务工具失败和「拿不到原因」不写——本地工具坏掉或日志缺失都不能
 # 拿来证明密钥是好的或坏的。
 _FAILURES: dict[str, dict[str, object]] = {
@@ -38,6 +39,11 @@ _FAILURES: dict[str, dict[str, object]] = {
         "service_contacted": False,
         "explanation": "本轮业务操作未完成，当前任务修改保留。",
         "next_step": "查看本轮工具记录中的具体阻断，再处理后重试。",
+    },
+    FAILURE_OVERLOADED: {
+        "service_contacted": True,
+        "explanation": "模型服务当前过载（529），本轮未取得完整回复；请以已返回的业务回执判断已完成的修改。",
+        "next_step": "稍后重试；若已有编辑或制作回执，先查询其结果，不要重复提交。",
     },
     FAILURE_UNKNOWN: {
         "service_contacted": False,
@@ -108,9 +114,31 @@ def _tool_error_seen(output: str) -> bool:
     return False
 
 
+def _provider_overloaded(output: str) -> bool:
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        failure = None
+        if (event.get("type") == "creation_session_result" and event.get("owner") == "pi-coding-agent-sdk"
+                and event.get("protocol") == 1):
+            failure = event.get("failure")
+        elif event.get("type") == "message_end":
+            message = event.get("message") or {}
+            if message.get("role") == "assistant" and message.get("stopReason") == "error":
+                failure = message.get("errorMessage")
+        if isinstance(failure, str) and (re.match(r"^(?:HTTP\s+)?529\b", failure)
+                                           or '"type":"overloaded_error"' in failure.replace(" ", "")):
+            return True
+    return False
+
+
 def _classify_output(stdout: str, stderr: str = "") -> str:
     """Read one Pi run's logs and name the failure class, or admit we can't."""
     text = f"{stdout}\n{stderr}".lower()
+    if _provider_overloaded(stdout):
+        return FAILURE_OVERLOADED
     if _tool_error_seen(stdout):
         return FAILURE_TOOL_FAILED
     if any(pattern in text for pattern in _KEY_REJECTED_PATTERNS) or re.search(r"\b401\b", text):

@@ -15,7 +15,7 @@ export function ReferenceChips({ items, onRemove }: { items: SelectedAssistantRe
   return <div className="assistant-reference-chips" aria-label="本轮选中引用">
     {visible.map(item => {
       const Icon = icons[item.kind];
-      const range = "start_ms" in item && item.start_ms !== undefined && item.end_ms !== undefined ? ` · ${time(item.start_ms)}–${time(item.end_ms)}` : "";
+      const range = "start_ms" in item && item.start_ms != null && item.end_ms != null ? ` · ${time(item.start_ms)}–${time(item.end_ms)}` : "";
       const name = `${labels[item.kind]} · ${item.label}${range}`;
       return <span className="assistant-reference-chip" key={assistantReferenceKey(item)}>
         <button type="button" title={name} aria-label={`定位${name}`} onClick={()=>locateAssistantReference(item)}><Icon size={12} aria-hidden/><span>{item.label}{range}</span></button>
