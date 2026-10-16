@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R2-METADATA-CONFIRM-OWNER-20261016独占main.py仅五类元数据确认分支、creation/editing/metadata_use_case.py及test_metadata_edit_use_case.py；复用原计算/事务，最小新metadata自测，其他源/旧接受冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R9-MEDIA-CONFIRM-REMAINDER-20261016仅只读剩余已知确认body及直接owner，证据fresh-api-media-confirm-remainder/**，零产品/执行权。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-NECESSITY-20261016只读判断已知goal freshness/结果投影残留是否确需源码归属收口，仅fresh-runtime-goal-projection-readonly/**一份短结论；零产品/运行权，原资源实验冻结不再重试。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-OWNER-20261016独占main.py指定goal五入口及必要直接helper/组装、assistant_goal_continuation.py、production.py仅对应公开只读查询、test_assistant_goal_continuation.py仅一个新node；原资源实验冻结不重试。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -27,13 +27,25 @@
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
+### 剩余goal业务归属收口（当前施工）
+
+metadata confirm三源已64025090f368cee07ea584055fbb603e9424870b精确集成，root核23artifact/8actual来源前后、完整diff和只读静态等价prefix；一个新node两次（首败仅新fixture字段，修正后PASS2.523s），无旧矩阵/普通QA/native。receipt fresh-root-review/metadata-confirm-owner-integrated.json SHAab29828202c27d1ebfce0148d61b7e6576e15a7ac58acc85ffa55c9d1b8ff8f5，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时送API，旧包冻结。
+
+REF-R9-GOAL-PROJECTION-OWNER-20261016依据只读结论aee72fc3e878483a56053119f24ce0dab76494e34735ac3b8c7a85bf6cac054b，唯一工具线程实施四源（完整初hash见fresh-root-review/goal-projection-owner-binding.json）：main.py仅_verify_current_goal、_project_assistant_execution_results、_project_assistant_business_candidate、_project_assistant_request_candidate、_project_assistant_script_tool_candidate及报告所列直接goal helper、_assistant_script_tool_candidates/必要goal service组装；assistant_goal_continuation.py集中原goal专属版本/来源/结果状态与投影决策；production.py仅本包原私有SQL的具名公开只读查询；test_assistant_goal_continuation.py仅一个新focused node。ConversationRepository和canonical execution/media/output/tool readers只读复用，现reconcile/claim/settle/指令封存与幂等事务不改。不得把active_creation_request_ids的waiting/blocked/granted谓词代替原granted/yield_requested，render来源仍核owner和done，不改schema/权限/成功政策。
+
+main留下可信Request/actor适配、原canonical用例调用与DTO/HTTP映射；业务owner无Request/路由重入/HTTP响应推断/反射或globals-deps袋，不将全部main回调搬为依赖袋。明确有限事实或真正边界port，goal规则唯一归属，底层授权与输出freshness不复制。保持原异常类/顺序、原422且无Job/intent才无副作用、停止/过期优先级、同任务版本/子render归属、终态且granted/yield_requested不存在才投影、原ConversationRepository投影幂等和公开写入次序。其他媒体confirm与旧接受不动，若确需额外源/语义变化报唯一root再绑定。
+
+一个新无main import的owner最小node：真实隔离公开repo与原goal构造，原execution成功且render子版本属于Vbase而当前切无关Vother，投影stale不可actionable、不可claim新模型回合，重复event由原仓储幂等，0新Job/model/native。用必要source/script预封及实际origin前后最小证据，不复制全源码/AST/旧证据；不跑旧R8/接续/质量/作者normal矩阵。涉及关键版本/结果/释放规则，稳定SOURCE_RELEASE后root再选一个必要独立反例，不新增复杂矩阵。只写fresh-runtime-goal-projection-owner/**，首败保留仅失败节点修正；零资源采样/真实native/模型/GUI/服务/network/用户DB私env/Git。短语义REBASE_ACK后直接实施无需第二START。原资源首次swap拒绝冻结不因本包重试。
+
+REF-R9-MEDIA-CONFIRM-REMAINDER-20261016同时只给API一份短只读结论及fresh-api-media-confirm-remainder/**，产品/运行权0。限当前_confirm_creation_task_edit内GenerateCoverFromFrame、ConfigureSubtitleTrack翻译、AlignSubtitleTiming、UpdateSubtitleCue、RemoveSilence五已知body与实际早期owner选择/直接公开caller，必要cover_generation/现subtitle/audio owner。只核真正可达且仍缺业务/执行/写入归属的差额，已被早期owner接管或合理薄委托则关闭，不按行数搬文件。goal区由工具线程独占，禁止API读其WIP整main/全AST；读取指定confirm定义且元数据已集成。复用source-closeout具名证据，不重清点全仓、import/测试/native/host/模型/GUI/数据库或Git。确有必要只给一个最小现owner包/精确源与退役目标/最小自测；保留封面真实执行未受资源协调的已知差额，不以普通搬body伪称资源或整体接受。短ACK后直接只读，稳定结论即冻结归还，无重复START。
+
 ### 既有goal结果投影残留的并行必要性判断
 
 REF-R9-GOAL-PROJECTION-NECESSITY-20261016只给当前工具线程新fresh-runtime-goal-projection-readonly/**，产品全只读且零import/test/DB/native/host/模型/服务/GUI/Git。沿已释放source-closeout报告（ea9d879c…）named_main_spans，限_verify_current_goal、_project_assistant_execution_results、_project_assistant_business_candidate、_project_assistant_request_candidate、_project_assistant_script_tool_candidate及对应GoalContinuationService/ConversationRepository公开边界、必要直接helper。判断它们是否仍在入口维护业务freshness/成功/版本来源规则，还是只抽可信transport与调用既有唯一owner的合理facade；已有所属则明确关闭，不为搬文件新增包装。确有归属缺口才交一个最小高内聚源码包/精确依赖与一个最小验证建议，不实现、不构造通用投影框架/deps袋/第二事实源、不复制权限/版本/成功规则，已过R8/接续/编辑/恢复门不跑。
 
 当前API同时仅写main五类metadata confirm，goal目标body不得改；main全hash变化预期，不冻结WIP整main，不读取整main/全AST，只核指定定义body与读期目标语义不变。报告已有named spans作目标引用，不复制原body或旧证据。优先现模块和显式有限repo/identity/task/result输入，真实Request构造/HTTP错误映射/lifecycle留边界；若需要组装变更如实列，不展开新安全重载工程。只需一份短结论+确切源hash/目标，证据够决策即停止，短ACK后直接只读，无第二START。资源swap拒绝与实验全部证据冻结，不因本条恢复测量。
 
-### 必要元数据确认归属收敛（当前施工）
+### 必要元数据确认归属收敛（已集成冻结）
 
 SOURCE_CLOSEOUT_RELEASE ea9d879c2eb5a969d789b07a068a131e80e5092e4ca81b834696f0f0fddcfa03已root核18当前源/3旧引用与直接公开caller。最后四组、旧两media入口/所属store/import目标有限关闭；但公开canvas/reorder提案仍从两种confirm入口进入main具体业务，不能将其当死代码或全部源码关闭。root source-closeout-metadata-reviewed.json记录，报告和旧门冻结。封面/翻译/RemoveSilence及goal freshness/projection其余既有body仍是已列观察缺口，后续只处理必要源码差额，不据本包关闭整体R9，不扩大性能/GUI/模型矩阵。
 
