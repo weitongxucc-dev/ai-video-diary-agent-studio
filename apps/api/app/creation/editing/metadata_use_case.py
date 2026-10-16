@@ -33,10 +33,11 @@ from app.creation.transactions import (clone_subtitle_track, clone_cover_asset,
     prepare_change_set, commit_direct_change, commit_change_set)
 from app.creation.editing.metadata import (check_command, prepare_subtitle_display_command,
     prepare_clip_command, prepare_picture_command, prepare_audio_command,
-    make_metadata_proposal, metadata_request_identity, PICTURE_METADATA_OPERATIONS)
+    make_metadata_proposal, metadata_request_identity, PICTURE_METADATA_OPERATIONS, apply_clip_proposal, apply_picture_metadata)
 from app.creation.editing.clips import CLIP_METADATA_OPERATIONS
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
+from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import apply_subtitle_cue
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.audio_timeline import narration_audio_timeline
@@ -175,6 +176,119 @@ class MetadataEditUseCase:
         self.audio_service = audio_service
         self.picture_renderer = None
         self.preview_settings = None
+
+    def confirm(self, task, proposal, *, identity, reader_identity, source):
+        workspace_id, task_id = task.workspace_id, task.id
+        operation_type = proposal.operation.get('operation_type')
+        operation_payload = proposal.operation.get('payload')
+        if operation_type == 'ReorderTimelineItems' and isinstance(operation_payload, dict):
+            if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+                raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新预览镜头排序。')
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            old_order = [clip.id for clip in plan.clips]
+            if old_order != operation_payload.get('current_order'):
+                raise EditPreviewRejected(status_code=409, detail='镜头顺序已变化，请重新预览。')
+            new_order = operation_payload['new_order']
+            target_ids = operation_payload['target_clip_ids']
+            if not target_ids or not set(target_ids) <= set(old_order):
+                raise EditPreviewRejected(status_code=409, detail='镜头排序目标已变化，请重新预览。')
+            for index, clip_id in enumerate(new_order):
+                if index >= len(old_order) or old_order[index] != clip_id:
+                    plan, _tracks, _linkage = self.apply_clip_update(workspace_id, task_id, plan, clip_id, CreationTaskMontageClipUpdateRequest(), reader_identity=reader_identity)
+            link_narration = self.reorder_narration_scope(plan, new_order, target_ids)
+            if link_narration != operation_payload['link_narration']:
+                raise EditPreviewRejected(status_code=409, detail='人物镜头关联已变化，请重新预览。')
+            tracks, linkage = self.reorder_montage_plan(workspace_id, task, plan, new_order, link_narration=link_narration)
+            bound = self.repository.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+            if bound is None:
+                raise EditPreviewRejected(status_code=409, detail='原排序提案未封存来源范围，请为当前版本重新预览')
+            source_command = metadata_edit_command(task, identity, operation_type, operation_payload, source=source)
+            source_command = EditSourceVerifier.restore_scope(source_command, bound)
+            verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
+            prepare_changed_montage(plan, message='整组镜头排序已保存；一次撤销可恢复，重新生成后播放新成片。')
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id), updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
+        if operation_type == 'ChangePresenterShare' and isinstance(operation_payload, dict):
+            if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+                raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新预览露脸比例')
+            plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            target = operation_payload['target']
+            plan.presenter_share_target = target
+            prepare_changed_montage(plan, message=f'露脸目标 {target}% 已保存到草稿；实际镜头保持不变，请明确生成后再核对实际占比。')
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=base, updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload)
+        if operation_type in CLIP_METADATA_OPERATIONS and isinstance(operation_payload, dict):
+            command = metadata_edit_command(task, identity, operation_type, operation_payload, source=source)
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            try:
+                changed, edited_tracks, _linkage = apply_clip_proposal(task, montage, command, resolve_source=lambda clip, values: self.resolve_edit_clip_source(task, reader_identity, clip, values), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
+            except PermissionError as exc:
+                raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+            except (ValueError, KeyError) as exc:
+                raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+            bound = self.repository.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+            if bound is not None:
+                command = EditSourceVerifier.restore_scope(command, bound)
+                verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+            else:
+                selected = set(command.values.get('clip_ids') or ([command.values['clip_id']] if command.values.get('clip_id') else []))
+                if not set(affected_source_clip_ids(montage, changed)) <= selected:
+                    raise EditPreviewRejected(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
+                verifier = EditSourceVerifier(self.repository, identity=command.actor_identity) if command.source is not None else None
+            prepare_changed_montage(changed, message='镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。')
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.get_timeline_version(workspace_id, command.base_version_id), updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
+        if operation_type in PICTURE_METADATA_OPERATIONS and isinstance(operation_payload, dict):
+            command = metadata_edit_command(task, identity, operation_type, operation_payload, source=source)
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            try:
+                changed = apply_picture_metadata(task, montage, command, validate_graphic_sources=lambda overlays: self.validate_graphic_sources(workspace_id, task_id, overlays))
+            except (EditConflict, ValueError, OSError) as exc:
+                raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+            bound = self.repository.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+            if bound is not None:
+                command = EditSourceVerifier.restore_scope(command, bound)
+                verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+            else:
+                selected = set(command.values.get('clip_ids') or ([command.values['clip_id']] if command.values.get('clip_id') else []))
+                if not set(affected_source_clip_ids(montage, changed)) <= selected:
+                    raise EditPreviewRejected(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
+                verifier = EditSourceVerifier(self.repository, identity=command.actor_identity) if command.source is not None else None
+            messages = {'EditGraphicOverlay': '图文已更新，可以重新渲染。', 'SetClipTransition': '转场已更新，配音与字幕时轴不变。', 'AdjustVisualEffects': '画面效果已更新，可以重新渲染。'}
+            prepare_changed_montage(changed, message=messages[operation_type])
+            base = self.repository.get_timeline_version(workspace_id, command.base_version_id)
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=base, updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
+        if operation_type == 'ChangeCanvas' and isinstance(operation_payload, dict):
+            if task.current_timeline_version_id != operation_payload.get('base_version_id'):
+                raise EditPreviewRejected(status_code=409, detail='版本已变化，请重新预览画幅')
+            base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+            montage.aspect_ratio = operation_payload['aspect_ratio']
+            if operation_payload.get('fit_mode'):
+                for clip in montage.clips:
+                    clip.fit_mode = operation_payload['fit_mode']
+            version_id = f'timeline_{uuid4().hex}'
+            tracks = [clone_subtitle_track(track, timeline_version_id=version_id) for track in self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)]
+            prepare_changed_montage(montage, message='画幅已修改，请重新渲染；封面需从新成片重新生成。')
+            try:
+                return self.persist_subtitle_edit(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base, result_version_id=version_id, operation_type=operation_type, operation_payload=operation_payload, subtitle_tracks=tracks, cover_asset=None, updated_plan=montage)
+            except ValueError as exc:
+                raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
+        raise EditPreviewRejected(status_code=409, detail='unsupported metadata confirmation operation')
+
+    def _persist_confirmed_montage(self, *, task, proposal, base_version, updated_plan,
+            operation_type, operation_payload, edited_subtitle_tracks=None,
+            proposal_source_command=None, proposal_source_verifier=None):
+        # Preserve the former HTTP facade's finite error boundary around this save.
+        try:
+            return self.persist_montage_edit(workspace_id=task.workspace_id, task=task, proposal=proposal,
+                base_version=base_version, updated_plan=updated_plan, operation_type=operation_type,
+                operation_payload=operation_payload, edited_subtitle_tracks=edited_subtitle_tracks,
+                proposal_source_command=proposal_source_command, proposal_source_verifier=proposal_source_verifier)
+        except (LegacyMontageReference, InvalidMontage):
+            raise
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
     def current_narration_snapshot(self, workspace_id: str, task: CreationTask) -> dict[str, object]:
         if not task.confirmed_script_id:

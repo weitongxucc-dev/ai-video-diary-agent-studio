@@ -200,3 +200,51 @@ def test_metadata_late_write_failure_rolls_back_change_but_keeps_prior_claim(sta
     assert editorial_rows(state.repo) == before
     assert state.repo.get_task_event('ws', event_id).event_type == 'edit_request_claimed'
     assert state.repo.read_edit_request_result(state.task, event_id) is None
+
+
+def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
+    from app.creation_execution import CreationExecutionActor
+    from app.schemas import CreationTaskEditPreviewRequest
+
+    state = metadata_state(tmp_path)
+    first = replace(state.plan.clips[0], source_end_seconds=2, timeline_end_seconds=2)
+    second = replace(state.plan.clips[0], id='clip-second', source_start_seconds=2,
+        timeline_start_seconds=2)
+    state.plan.clips = [first, second]
+    payload = creation_task_montage_plan_to_payload(state.plan)
+    state.repo.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    base = TimelineVersion('two-clips-base', 'ws', state.task.id, state.base.id, 2,
+        {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['two-clips-zh']}, None)
+    state.repo.create_timeline_version(base)
+    state.repo.create_subtitle_track(replace(state.track, id='two-clips-zh', timeline_version_id=base.id))
+    task = state.repo.get_creation_task('ws', state.task.id)
+    preview = CreationTaskEditPreviewRequest(raw_command='交换第1和第2个镜头', context_stage='montage',
+        selected_object_refs=['clip:clip', 'clip:clip-second'])
+    _, proposal = state.case.preview_reorder(task, preview, ('swap', 0, 1), identity=state.identity,
+        request_source=None, draft_only=True, execution=None,
+        actor=CreationExecutionActor('ws', state.member.member_id))
+    assert proposal.operation['operation_type'] == 'ReorderTimelineItems'
+    before = len(state.repo.list_timeline_versions('ws', task.id))
+    result = state.case.confirm(task, proposal, identity=state.identity, reader_identity=state.identity, source=None)
+    reopened = ProductionRepository(state.repo.database_path, tmp_path / 'library')
+    versions = reopened.list_timeline_versions('ws', task.id)
+    operations = reopened.list_edit_operations('ws', task.id)
+    current = reopened.get_creation_task('ws', task.id)
+    assert len(versions) == before + 1 and len(operations) == 1
+    assert operations[0].proposal_id == proposal.id and operations[0].result_version_id == current.current_timeline_version_id
+    assert reopened.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert [clip.id for clip in result.montage.clips] == ['clip-second', 'clip']
+    assert result.montage.duration_seconds == 4
+    assert result.montage.narration_audio_path == state.plan.narration_audio_path
+    version = reopened.get_timeline_version('ws', current.current_timeline_version_id)
+    assert version.parent_version_id == base.id and version.sequence == 3
+    assert [clip['id'] for clip in version.snapshot['montage']['clips']] == ['clip-second', 'clip']
+    assert reopened.get_timeline_version('ws', base.id).snapshot == base.snapshot
+    assert reopened.get_creation_task_montage_plan('ws', task.id)['clips'][0]['id'] == 'clip-second'
+    assert len(reopened.list_edit_operations('ws', task.id)) == 1
+    evidence = os.environ.get('METADATA_CONFIRM_EVIDENCE_DIR')
+    if evidence:
+        Path(evidence, 'NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,
+            'operation_type': proposal.operation['operation_type'], 'operation': operations[0].id,
+            'base_version': base.id, 'result_version': current.current_timeline_version_id,
+            'versions_added': 1, 'operations': 1, 'fresh_readback': True, 'native_calls': 0}, indent=2))
