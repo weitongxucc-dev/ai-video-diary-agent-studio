@@ -8,7 +8,7 @@
 - 整体产品真实验收：`DEFERRED / NOT ACCEPTED`，不能写成整体 R0–R9 已通过。
 - 本轮五个实施线程均已结束当前任务，产品、执行和新证据写权全部归还；旧绑定不可恢复。
 - 本轮定时监督 `automation` 已删除；无自动采样、重试、验收或续工。剩余项待后续明确安排后再按当时真实候选绑定。
-- 当前唯一主控为本聊天 `01a1429d-9efe-7491-bcb6-d85f090c1138`（用户于2026-10-16指定），负责共享文档、后续派工、审核与集成；原主控 `01a1376c-acbf-7f50-90a6-31328276a581` 已完成本轮收口。本次主控归属切换不产生新的产品写入租约。
+- 当前唯一主控为本聊天 `01a1429d-9efe-7491-bcb6-d85f090c1138`（用户于2026-10-16指定），负责共享文档、后续派工、审核与集成；原主控 `01a1376c-acbf-7f50-90a6-31328276a581` 已完成本轮收口。本次主控归属切换本身不恢复旧租约；下方新开发波次按用户最新授权单独绑定。
 
 ## 已集成的代码基线
 
@@ -42,9 +42,9 @@
 - 本次不重新采样、不盲重试、不移动上限、不猜生产预算，不更改用户环境以求通过。环境条件和候选确有改变且重新安排验收后，再仅检查受影响节点。
 - 完整性能标定、暂不用模型、手机与平台扩展验收继续后置，不作为本轮代码收口的新增工作。
 
-## 下一轮开发安排（2026-10-16，规划完成、尚未启动）
+## 当前开发波次（2026-10-16，用户已批准执行）
 
-用户本次要求梳理开发安排。下文是执行建议与验收顺序，不是已派工或产品写入租约；本次只更新计划，不新建实施线程、不运行媒体实验。当前 `main` HEAD 为 `98efaaac695e3a15f25b1f64a7b1733734cae122`，上一轮已批准的文档调整仍在工作区、尚未提交；实施前固定这些文档的独立基线，保护原有未跟踪资料。
+用户已明确批准：先提交文档基线，再新建A、B、C三条可见开发线程，主控审核、集成并持续推进完整目标。文档基线为 `0f683b8f`；产品起点仍为上方已集成基线。三线共用当前 `main`，按下方独占文件工作，不恢复旧五条线程或旧lease。主控统一提交；实施线程不得自行stage、commit、reset、checkout、rebase或push，不触碰原有未跟踪资料。普通模块完成不是再次请求用户批准的节点。
 
 ### 首个交付目标
 
@@ -78,13 +78,36 @@
 
 Pi候选验证只做一个真实编辑纵向切片，比较会话、插话、工具结果与恢复是否满足需求；通过后固定依赖和接入方式，不长期开发两套生产运行时。提示词、原子工具与Skills从A1开始随真实任务迭代：首批覆盖原声口播、旁白配素材和局部改片，按失败归因调整对应层，不以增加提示长度代替工具修复。上游能力边界以[架构§3.15](../docs/system-architecture.md#315-pi-复用与视频创作-agent)为准。
 
-### 建议分工与并行边界
+### 已批准分工与并行边界
 
-首批建议三条可见实施线：A负责会话/改片及其公共UI底座，B负责首次使用/素材发现入库，C负责人物/声音设置。A1之后沿同一负责人推进A2；手机在两端协议稳定后独立安排，不预先创建空任务。这里是角色建议，未指定实际线程、未恢复旧五条线程或旧lease。
+首批三条可见实施线：A负责会话/改片及其公共UI底座，B负责首次使用/素材发现入库，C负责人物/声音设置。A1之后沿同一负责人推进A2；手机在两端协议稳定后独立安排，不预先创建空任务。实际线程与文件绑定见下表；不继承任何旧lease。
 
 主控持有共享文档、schema/迁移与组装入口的分配和集成权；`main.py`、`schemas.py`、会话引用类型及公共组件等共享文件派工时各指定一个实际写入者，不能由三条线同时修改。欢迎页由B拥有，C通过声音组件/协议接入；公共对话和浮层底座由A拥有，其他线消费，不各造一套。每包按用户结果负责到页面、领域写入和真实结果，不能只报前端或API完成。
 
 并行限于独立开发与轻量验证。真实媒体和模型实验按设备许可串行排程，主控集中安排同候选验收，不让各线程争抢M2/16GB主机或重复全量检查。
+
+### 本波次独占写入与接口约定
+
+绑定生效点：本合同写入后，主控以创建线程的初始任务消息授予对应A/B/C角色写权；线程ID由主控收到创建结果后补录，不影响同角色独占边界。每线先核对Git差额和直接权威，只操作自己的文件，跨界需求回报主控后继续独立工作。新增文件限下列命名空间，不设任意“相关文件”授权。
+
+| 角色 / 线程 | 独占产品路径（含该命名空间新增文件） | 验收及禁止边界 |
+| --- | --- | --- |
+| A：Agent会话与改片 / 待登记 | `apps/api/app/assistant/`、`assistant_pi.py`、`assistant_goal_continuation.py`、`conversation_repository.py`、`task_observation.py`；`apps/api/agent_tools/`；Web的`AssistantConversationPanel.tsx`、`AssistantConversationProvider.tsx`、`AssistantConversationContext.ts`、`useAssistantConversation.ts`、`AssistantConversation.css`、`CreationTaskWorkspace.tsx`及其module.css、`components/creation-task/`、`HomeCardDialog.tsx`、`SideCards.module.css`、`components/ui/`、`lib/assistant-reference.ts`、`lib/api/assistant.ts`、`lib/types/assistant.ts`；Agent运行桥新增文件只在`apps/api/agent_runtime/`；相关assistant/conversation及CreationTaskWorkspace/SideCards/Assistant开头测试 | A1后沿同线推进A2；单一Pi生产Owner、胶囊、直接改片、撤销、steering/follow-up、观察真实性；公共浮层底座由A维护，B/C消费。依赖清单/锁文件、全局CSS及共享入口只提变更给主控。 |
+| B：首启与素材 / 待登记 | `apps/web/src/app/welcome/`、`app/onboarding/`、`components/OnboardingChecklist.tsx`、`components/MaterialLibraryWorkspace.tsx`、`components/MaterialLibraryControls.module.css`、`components/material-library/`、`lib/onboarding.ts`、`lib/api/materials.ts`、`lib/types/materials.ts`；`apps/api/app/preflight.py`、`app/materials/`；新增首启组件只在`components/onboarding/`；相关onboarding/preflight/material及MaterialLibrary开头测试 | 最小首启、候选发现/排除/暂停/取消/恢复、勾选接收和去重；不改变可信身份/workspace归属。欢迎页唯一Owner，声音模块通过C的组件契约接入。 |
+| C：人物与声音 / 待登记 | `apps/web/src/components/PeopleAndVoiceWorkspace.tsx`及module.css、`DesktopVoiceRecorder.tsx`及module.css、新增`components/voice-sampling/`、`lib/api/profiles.ts`、`lib/types/profiles.ts`、`lib/profile-api.ts`、`lib/media-profiles-api.ts`；`apps/api/app/profiles/`、`voice.py`、`voice_clone.py`、`profile_preview_execution.py`、`profile_reference_media.py`；相关profile/voice和PeopleAndVoice/DesktopVoiceRecorder测试 | 采样任务用途/同文版本、录制试听重录/提交、档案可用性真实回执；可跳过返回，不把本地录音等同克隆成功；本波次暂不写手机。 |
+| 主控：本聊天 | 全部共享文档；`apps/api/app/main.py`、`schemas.py`、`database_migrations.py`、`production.py`、`auth.py`及共享组装入口；Web的`lib/api.ts`、`lib/types.ts`、`AppShell.tsx`、`AppShellCompact.module.css`、全局CSS；package清单/锁文件；其余活动浮层消费者和共享集成测试 | 共享接口接入、必要数据结构、授权与版本核验、diff审核及统一提交；产品改动前指出具体独占路径；不并行修改A/B/C文件。 |
+
+表中后端裸文件名均相对`apps/api/app/`，Web裸组件名相对`apps/web/src/components/`；Web的`lib/`相对`apps/web/src/`。测试仅同职责文件；含多个领域的共享测试由主控协调分配，未命中明确范围先提出所需路径。文件写权发生改变时由主控原位调整并通知受影响线程。
+
+共同接口规则：
+
+1. 最小初始化只确认可信身份、所属工作区和既定存储可用性；外部模型、FFmpeg、人物/声音/素材配置不作为进入工作台的统一门。B给出预检结果与接口差额，主控调整完成接口；各能力沿原业务入口检查实际前提。
+2. A维护统一选中引用：kind、稳定对象ID、所属task/asset等父对象、版本和可选时间范围；发送时冻结并由业务层校验，不直接信任客户端路径。已有引用类型按当前消费者扩展，避免再造并列事实源。
+3. 扫描候选由B持有，发现仅本地元数据；用户选定后复制完成才进入既有接收/分析。候选和已登记Asset身份分开，授权范围/排除项随任务保存；不自动扩大当前素材目录权限。
+4. C持有声音采样任务：用途、文本及版本、所属workspace/用户、录音接收状态；同一协议可供电脑和后续手机。B只消费C导出的可跳过采样组件；调用props和服务方法由C先提交给主控/B确认。现有有效声音档案仍是事实源。
+5. A/B/C先提供共享schema、路由和组装需求的最小精确差额；主控实现共享入口，不由线程创建一份替代HTTP服务或重复数据库。队列只承载正常agent输入，业务幂等、版本和权限不交给Pi替代。
+
+轻量、隔离单元/契约验证可独立运行；真实用户素材扫描、外部模型/克隆调用、真实媒体/GUI服务由主控串行绑定具体候选和输入后排程。可用临时合成文件验证文件系统、复制、队列与版本边界，但报告必须标明证据等级。禁止同时全量构建/打包、盲重试旧媒体实验或改资源阈值求通过。
 
 ### 旧验收缺口如何进入新安排
 
