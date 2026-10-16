@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-SUBTITLE-OWNER-20261016阶段A仅独占subtitle_use_case.py和test_subtitle_change_use_cases.py，main只读；阶段B必须等root明确归还main后才准接四body与一个最小node。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段A1字幕两源冻结，A2仅独占linked_timeline_use_case.py和test_linked_edit_use_cases.py新增silence采用；main只读，待root明确归还后同包五源接线/两个新最小node。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-OWNER-20261016独占main.py指定goal五入口及必要直接helper/组装、assistant_goal_continuation.py、production.py仅对应公开只读查询、test_assistant_goal_continuation.py仅一个新node；原资源实验冻结不重试。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -26,6 +26,12 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 旧确认同包收尾增量（当前A2；A1冻结复用）
+
+REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016是同API普通迁交包的最小接续。字幕阶段A两源READY_FOR_MAIN_LEASE已冻结，root已审新owner/test diff，四body有限等价且原selector/旧方法未改；该包尚未运行。其等主入口期间，API只增加两源独占apps/api/app/creation/editing/linked_timeline_use_case.py及apps/api/tests/test_linked_edit_use_cases.py（初hash见fresh-root-review/legacy-confirm-closeout-binding.json），在现LinkedTimelineEditUseCase内新增具体confirm_remove_silence、仅一个新metadata node。只迁main既有RemoveSilence十三行采用body：原版本检查/remove_time_ranges/effective_audio/owned montage_edits.audio_service.validate(draft_only=True，保留原无actor调用)/prepare_changed_montage/原persist与错误映射；LINKED_EDIT_OPERATIONS/早期confirm/preview_remove_silence与原有方法不改，不重新检测静音或生成预览，无新算法/许可/来源政策。main只读、仍属工具goal，字幕两源和旧证据冻结；阶段A2也不import/app/test/DB/native/host/模型/GUI/Git。只本批证据fresh-api-legacy-confirm-closeout/**，复用现字幕READY不复制，够给两源diff/等价与初末hash即停等main。
+
+root明确完成goal集成归还main后，阶段B允许API同一main同时替换既有四字幕body与RemoveSilence，全部留在原公共source-facts检查之后；只有有限owner调用/异常/结果映射，public claim/replay/wake及已过metadata/goal区不改。最终精确五源一个SOURCE_RELEASE/一次集成，最小新display与silence adopted-result两个node各首次执行，非此前已过normal；silence只公开repo合法固定已分析ranges采用→fresh单version/画声字幕同缩/旧版本不变，无ASR/媒体检测或native。普通等价迁交不另加独立QA；若真改关键规则准确报告。首败只失败node修正，已过display不重跑。字幕A1源保持冻结，如真实新node失败需最小fixture修正留首败，不顺手重写旧方法。只在真实main交接时开始阶段B，不能自取；此增量短ACK直接A2，不重做报告/全仓/AST/旧证据。
 
 ### 旧字幕确认的有限并行收口（当前阶段A）
 
