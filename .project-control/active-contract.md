@@ -12,9 +12,9 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段A1字幕两源冻结，A2仅独占linked_timeline_use_case.py和test_linked_edit_use_cases.py新增silence采用；main只读，待root明确归还后同包五源接线/两个新最小node。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-GOAL-PROJECTION-INDEPENDENT-20261016仅fresh-qa-goal-projection/**一个metadata释放顺序反例，产品全只读；旧quality C3及其他门冻结不重跑。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | goal四源含C1已释放冻结并root源审；当前REF-R3-COVER-BOUNDARY-PREPARATION-20261016仅fresh-runtime-cover-boundary-preparation/**最小只读方案，零产品/运行权，资源旧拒绝冻结。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段B独占main仅四字幕+silence确认body/有限接线及原准备四源，按原source guard顺序完成五源、两个新最小node后快速release。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | goal单个释放顺序门已root核/66227f9c精确集成并即时归还；当前零产品/执行权，全部旧证据冻结，待真正下一关键差额。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R3-COVER-OWNER-20261016阶段A仅独占NEW creation/cover_use_case.py，静态实现有限封面owner；所有现有源/main及执行只读，阶段B另等API集成后root真实交接。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -27,7 +27,21 @@
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
-### goal关键独立差额与封面只读接续（当前）
+### goal集成后的真实主入口交接（当前API阶段B）
+
+goal四源含C1已66227f9c9ae5f9a05db48df0898b85a52e9c9d7b精确集成，committed/live一致；receipt fresh-root-review/goal-projection-integrated.json SHA0abdf6ccf915f4873ec912ff52483ed89632370327fe67f68f067ae4fb91b8a4，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时送作者/QA。独立门b50a41f84ef1f921ba8037d826e3a52f41e9b4440d00810e34ccee3b6f0d3ef0已核17artifact、69/50实际编译字节和当前源/前后origin；真实owner/scheduler grant与yield_requested期间不投影不落marker/不新轮且八表快照不变；公开defer(input_stale)+assert_released后request blocked/input_stale、permit free，没假done。首败QA datetime未编码在写前失败，同DB原身份继续失败步后一次投影/marker，重扫无变化，旧normal0。仅metadata ports/明确NONMEDIA，不是native/profile/完整R9接受。
+
+现明确将main从已集成goal包交给唯一API，REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段B五源当前hash见fresh-root-review/legacy-confirm-main-handover.json。A1/A2四源原冻结准备直接复用，只在新增node真正失败时最小fixture修正留首败；main仅原source guard之后四字幕与RemoveSilence body替换既有owner调用，原公共confirm claim/replay/null/source/wake及goal/metadata区不改。两个新增node首次运行分别display和固定ranges采用，已过一个则不重跑；不跑旧normal/作者矩阵/普通QA，依原37隔离factory如必要，0native/ASR/翻译/模型/host/GUI。源与脚本/实际origins有限预封，main只定向等价/非目标字节核，不全AST或旧证明扩展。源码等价+两最小node通过即stable五源release、root即时审核集成归还，无重复START/ACK。
+
+### 选帧封面剩余执行归属（当前仅新owner阶段A）
+
+准备697cc678e3f6ef927ad1bb290335516be189fd2c78a44587feb7e64eb329324b已root核14绑定源及已知同步confirm/native/登记采用差额，准备证据冻结归还。根本差额是完整FFmpeg/Pillow/hash/发布仍在HTTP链中无grant，以及成功Job与采用间中断后旧Job不能再claim；完整性能标定仍后置，不是仅搬body即可关闭。
+
+REF-R3-COVER-OWNER-20261016主控决定：保留原同步成功DTO，只有已采用版本才成功，不静默改202；cover:{proposal.id}/原operation digest/同Job/固定输出ref与请求claim/replay、源/版本/身份维持，成功或未知原Job不重claim/重生成。用现唯一scheduler/runtime/creation注册的有限cover委派和同PGID私有Python worker覆盖完整生成，原选帧/中文标题/版式/图片/前后源核验算法不改；无新coordinator/HTTP业务重入/通用分发。独立CoverBudget及运行门无默认数、无借用render/quality配置；缺配置在新Job/native之前明确不可执行，不做新采样/填生产预算。同步等待仅观察本请求，由同一显式cover wall/deadline上限从提交时有界计算，不新猜等待常量；等待/超时/取消仍按原公共许可取消/恢复路径，未释放或副作用未知保持原unknown回执/禁止终态与重复执行，不能假失败/假释放；实际必须改公开入口的差额逐项如实记录。父owner复核child回执/文件、当前源/身份/版本和许可后，用现scheduler complete回调传递同conn的原repo/事务入口组织artifact/transform/edge/Job与version/operation采用，晚失败保留staged回执与固定文件供原request恢复，不声称FS+DB原子性。需要新增实际源/API必须先报root精确symbol，不猜现有接口。
+
+为避免与API本批main/factory依赖冲突，阶段A现在**只准NEW apps/api/app/creation/cover_use_case.py**静态实现具体command/result、源/身份/版本/原结果读取与恢复/采用组织，现有所有源和测试只读；可据实际直接owner API读取，不提前改main、profiles/registration/worker/shared imports，不假造现接口。只写fresh-runtime-cover-owner/**有限本包记录，0import/test/DB/native/host/模型/GUI/Git，不复制完整旧证据/全AST。NEW文件当前不存在，绑定见fresh-root-review/cover-owner-implementation-binding.json；代码不注册或被当前应用导入。短ACK直接阶段A，无第二START；阶段B必须等root精确集成API五源再正式交出现有源独占清单，届时才原注册/profile/granted child/server/cover_generation与必要主入口接线，作者一个metadata声明worker最小node+真正关键晚采用SQL/回执续交独立差额，未标定实际native/物理接受仍明确待验。不因本包重跑已过quality/goal/旧cover矩阵；不承诺真实资源通过。若现公开事务入口不足，报确切缺口，不能越权私有SQL或加通用callback袋。
+
+### goal关键独立差额与封面只读接续（已集成/准备冻结）
 
 C1 release52e6609d68b089cd5fc6bb92e6996aad0de3105725ce58f4b28123f410a4d918/TAB f6d0889cedfe9833c3066ed2d4c4d5f13292f351c1bfd96fff39172732c60a2b已root goal-projection-c1-reviewed.json SHAaf8a953f1158661cab9b57201af286d4867d03892bc481b15533b4fd401f2e7f核精确四源；逆C1差额可还原原a266精确main，两个GET只return，签名/decorators/共享helper不变；production除八个只读method字节全同。原一个新stale node第三次PASS复用，不重跑；普通C1零新执行，其他goal/source事实见原已审release。
 
