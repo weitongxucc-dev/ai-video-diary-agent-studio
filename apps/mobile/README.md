@@ -2,11 +2,11 @@
 
 Android 与 iOS 共用 `lib/` 中的 Dart 界面、连接及状态逻辑。平台目录只放系统配置；Flutter Web 是本地渲染和交互检查入口，不是原生手机验收。
 
-产品范围见[产品需求 §1.1](../../docs/product-requirements.md#11-版本交付边界)，权限见[认证边界](../../docs/auth-workspace-boundary.md)。本应用不另行定义 0.12 版本承诺。桌面 [DESIGN.md](../../DESIGN.md) 的三栏和控件尺寸不直接套到手机。
+产品范围见[产品需求 §1.1](../../docs/product-requirements.md#11-版本交付边界)，权限见[认证边界](../../docs/auth-workspace-boundary.md)。本应用不另行定义 0.12 版本承诺。声音采样的电脑/手机同文、跳过及主机接收语义见[首次使用](../../docs/product-requirements.md#41-首次使用与按需设置)；这是目标行为，下面的代码入口和实际运行才证明接通情况。桌面 [DESIGN.md](../../DESIGN.md) 的三栏和控件尺寸不直接套到手机。
 
 ## 开发
 
-当前开发使用 Flutter 3.41.6 / Dart 3.11.4；依赖精确解在 `pubspec.lock`。Android 最低 API 24，iOS 最低 15.0。
+SDK约束以 `pubspec.yaml` 为准，依赖精确解见 `pubspec.lock`；用 `flutter --version` 核对本机实际环境，不沿用旧工作树的工具链快照。Android和iOS目标要求分别以原生项目配置为准。
 
 ```sh
 cd apps/mobile
@@ -15,12 +15,9 @@ flutter run -d <Android设备ID>
 flutter run -d <iOS设备ID>
 ```
 
-本机新增 Android 工具链位置是 `/Volumes/Dujiangyan-VM/dujiangyan-dev-runtime/yaohe-android-sdk`；编译前须确认该 SDK 的平台和构建工具已经安装，不能把目录存在当作安装完成。本任务的 `build` 目录链接到外接盘生成物目录，打包临时目录也放在同一运行环境下。新的 checkout 可以选择自己的生成物位置。SDK 下载源为 [Android 官方开发工具](https://developer.android.com/studio)。
+按本机配置设置 Android SDK、JDK、生成物及临时目录，编译前确认所需平台和构建工具已安装；不把历史机器路径或目录存在当作就绪证明。使用外接存储的环境先核实当前目录配置。SDK 下载源为 [Android 官方开发工具](https://developer.android.com/studio)。
 
 ```sh
-TMPDIR=/Volumes/Dujiangyan-VM/dujiangyan-dev-runtime/yaohe-mobile-tmp-20261010 \
-ANDROID_HOME=/Volumes/Dujiangyan-VM/dujiangyan-dev-runtime/yaohe-android-sdk \
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
 flutter build apk --debug
 ```
 
@@ -55,7 +52,7 @@ python3 -m http.server 4341 --bind 127.0.0.1 --directory build/web
 
 连接需要真实可达且证书可信的 HTTPS 主机地址。仅在 debug 模式允许 localhost/127.0.0.1 的 HTTP 调试，不允许对 LAN HTTP 发送邀请或成员凭证。主机现有 loopback 服务不会因为本应用创建而自动开放到局域网，手机也不会绕过证书或账号权限。现有成员 API 是本地模式的接入代码；Supabase 账号登录、设备邀请和空间选择还需与当前主机契约对齐。
 
-主机现在的素材导入入口读取本机目录，不接收手机文件。手机没有发明上传 URL，也没有收到确认、制作完成或上传动画。本轮清单只表示手机本地输入；真正发送、按成员/空间接收、断点续传、处理结果、失败重试、声音样本登记、设备发现/扫码和系统通知仍是后续实施与验收项。
+素材发送沿 `host_api.dart` 与主机实际接收接口核查；本地路径导入不能当作手机文件上传。当前本地草稿只表示手机已保存，未接入接收时不显示发送成功。正式登录/配对、文件发送与主机按空间接收、断点重传、声音登记及系统通知分别验收，不能由发现设备或扫码成功推定整条连接链完成。
 
 电脑版接入要求保存在 [desktop-integration-request.md](desktop-integration-request.md)。扫码与发现已进入 App 的连接界面；正式二维码、认证和发现协议对齐之前，不把识码或发现服务当作绑定成功。用户真实素材和录音保留；包名及持久化键保持一致，Android 更新使用覆盖安装，不能卸载或清除数据冒充升级。
 

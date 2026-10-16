@@ -6,7 +6,7 @@ Electron 负责启动本地 Next.js 和 FastAPI API，并管理窗口、端口�
 
 业务工具入口为`apps/api/agent_tools/diary_tools.ts`，其`diary/`与`materials/`子目录须保持原结构一同打包；工具体检沿实际相对导入链核验文件。Python宿主入口为`apps/api/app/assistant_pi.py`，具体进程、停止、上下文及回执投影由`app/assistant/`拥有，HTTP工具仍消费原业务API。
 
-安装 Node.js 22.19 或更高版本后执行 `npm install -g @earendil-works/pi-coding-agent`，用 `node --version` 和 `pi --version` 核对可执行程序，再重新打开应用。当前本机协议验证使用 Pi 1.0.4 / Node 24；体检分别显示 Pi、Node 和业务工具文件状态，仅阻断对话助手。文件就绪和 Key 已保存都不等于模型请求或业务 HTTP 工具成功，仍需在对应功能入口验证。
+安装 Node.js 22.19 或更高版本后，按当前候选的已验版本安装 `@earendil-works/pi-coding-agent`，不要无版本安装或把本机最新版本当作兼容性证明。用 `node --version` 和 `pi --version` 核对实际程序，再重新打开应用。运行时升级和复用原则见[架构第3.15节](../../docs/system-architecture.md#315-pi-复用与视频创作-agent)；体检分别显示 Pi、Node 和业务工具文件状态，仅阻断所依赖能力。文件就绪和 Key 已保存都不等于模型请求或业务工具成功，仍需实际验证。
 
 ## 开发环境
 

@@ -24,7 +24,7 @@
 - 拆分必须同时收敛职责、依赖、写入权和旧消费者；仅搬文件、增加通用分发层或隐藏全局状态不算完成。已有职责混杂按批准的重构计划逐批退役，普通单点任务不因此获得全仓重构授权。
 - 验收同时检查模块边界和真实行为：独立测试可运行、公共调用契约清楚、事务与恢复不被拆坏、旧路径完成退役。文件行数用于发现热点，不设机械拆文件指标，不以文件变小代替可维护性和用户结果。
 
-额度中断或更换执行工具时，从[接手入口](.project-control/takeover/README.md)开始；它是有时间性的交接快照，不替代当前权威和Git事实。
+额度中断或更换执行工具时，从[接手入口](.project-control/takeover/README.md)开始；它只路由到当前合同和Git事实，不继承旧线程授权或旧交接快照。
 
 ## 2. 渐进式文档路由
 
@@ -35,6 +35,7 @@
 | 产品定位、对象或能力边界 | [`docs/product-requirements.md`](docs/product-requirements.md) |
 | 领域名词、对象关系或任务状态 | [`docs/domain-model.md`](docs/domain-model.md) |
 | UI、页面结构、视觉 CSS、组件、功能命名或截图 | [`DESIGN.md`](DESIGN.md)；涉及对象状态时再读 `domain-model.md` 的目标章节 |
+| Agent 运行、提示词、原子工具、Skill 或 Pi 升级 | [`docs/system-architecture.md`](docs/system-architecture.md) §3.15；行为按产品 §4.2，不复制通用 Agent 基础设施 |
 | 跨 Web、API、Worker、桌面壳或外部服务 | [`docs/system-architecture.md`](docs/system-architecture.md) |
 | 产品验收或端到端完成判断 | [`docs/product-requirements.md`](docs/product-requirements.md) 的相关章节 |
 | 认证、首启或 workspace 隔离 | [`docs/auth-workspace-boundary.md`](docs/auth-workspace-boundary.md) |
@@ -48,7 +49,7 @@
 
 ## 3. 任务难度与并行
 
-本项目主控负责共享文档、派工、审核和集成。实现使用用户已授权的可见 Codex 线程及 cmux 中的 Pi/Claude Code，不派内部子智能体；当批所有权见活动合同。用户于2026-10-14明确允许本轮重构新建合适的可见线程或由主控直接执行；主控编写产品代码时也必须先绑定独占文件，不与实施线程同时写入同一文件。
+本项目主控负责共享文档、派工、审核和集成。实现使用用户已授权的可见 Codex 线程及 cmux 中的 Pi/Claude Code，不派内部子智能体；当批所有权见活动合同。是否创建新线程以当前用户授权和活动合同为准，不从已结束重构批次继承。主控编写产品代码时也必须先绑定独占文件，不与实施线程同时写入同一文件。
 
 - **简单任务**：单点查询、文案、小修复或单文件改动。单线程直接完成，不创建代理和长计划。
 - **常规任务**：一个模块内的功能或修复。由被指派的实施线程完成并做最小相关验证。
