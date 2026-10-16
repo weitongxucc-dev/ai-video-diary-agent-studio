@@ -12,6 +12,74 @@ def repo(tmp_path):
     return ConversationRepository(tmp_path / "continuation.sqlite3")
 
 
+def test_goal_projection_keeps_successful_execution_stale_after_unrelated_version(tmp_path):
+    """Real metadata owners; no main, model, render or permission replacement."""
+    from dataclasses import asdict
+    import sys
+    from fastapi.encoders import jsonable_encoder
+    from app.assistant_goal_continuation import GoalResultProjection
+    from app.creation.contracts import JobRun, TaskEvent, TimelineVersion
+    from app.production import CreationPlan, CreationTask, ProductionRepository
+
+    assert "app.main" not in sys.modules
+    library = tmp_path / "library"
+    library.mkdir()
+    production = ProductionRepository(tmp_path / "goal.sqlite3", library)
+    conversations = ConversationRepository(production.database_path)
+    plan = CreationPlan("plan", "workspace", "制作并检查输出", "goal", 1, "zh-CN", "9:16", 15,
+        [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
+    task = CreationTask("task", "workspace", plan.id, plan.name, "declared-goal-fixture")
+    production.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    base = production.create_timeline_version(TimelineVersion(
+        "version:one", "workspace", task.id, None, 1, {}, None))
+    job = production.create_job_run(JobRun("execution:one", "workspace", task.id,
+        "creation_task_execution", "execution:one", "declared-input"))
+    production.claim_job_run("workspace", job.id)
+    production.finish_job_run("workspace", job.id, status="succeeded")
+    rendered = production.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
+        base.id, 2, {"render_input_timeline_version_id": base.id, "creation_render_request_id": "render:one"}, None))
+    production.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
+    assert rendered.parent_version_id == base.id and rendered.snapshot["render_input_timeline_version_id"] == base.id
+
+    chat = conversations.create("workspace", "member", "task", task.id)
+    chat = conversations.save_draft(chat["id"], "workspace", "member", "制作并检查输出", chat["draft_version"])
+    turn, inserted = conversations.create_turn_idempotent(chat["id"], "workspace", "member", chat["draft_text"],
+        str(uuid4()), chat["draft_version"], request_context={"kind": "task", "task_id": task.id, "stage": "review",
+            "target_snapshot": {"timeline_version_id": base.id, "timeline_sequence": 1}})
+    assert inserted
+    assert conversations.task_turn_source(turn["id"], "workspace", "member", task.id)["raw_command"] == "制作并检查输出"
+    assert conversations.record_task_execution(turn["id"], "workspace", "member", task.id,
+        {"task_id": task.id, "job": {"id": job.id, "status": "queued"}})
+    conversations.finish_turn(turn["id"], "completed", "制作已提交。", result={"kind": "task_turn", "response": {
+        "execution_status": {"task_id": task.id, "job": {"id": job.id, "status": "queued"}}}})
+    assert conversations.register_task_goal(turn["id"])
+    source = {"workspace_id": "workspace", "task_id": task.id, "member_id": "member",
+        "conversation_id": chat["id"], "assistant_turn_id": turn["id"],
+        "expected_timeline_version_id": base.id, "expected_timeline_sequence": 1}
+    production.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
+        "assistant_execution_located", {"source": source, "job_id": job.id, "input_digest": job.input_digest}))
+    owner = GoalResultProjection(production, conversations)
+    rows = production.assistant_execution_projection_rows()
+    assert len(rows) == 1
+    context = owner.execution_candidate(rows[0])
+    actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.get_job_run("workspace", job.id)),
+              "video_ready": production.get_creation_task("workspace", task.id).output_ready})
+    event = owner.project_execution(context, actual)
+    assert event["status"] == "stale" and event["actionable"] is False and event["result_version_id"] is None
+    assert not production.assistant_execution_projection_rows()
+    assert conversations.project_business_result(turn["id"], "workspace", "member", event,
+        response_patch={"execution_status": actual}, message="duplicate is ignored")
+    stored = conversations.get_turn(turn["id"])
+    assert len([item for item in stored["events"] if item.get("event_id") == event["event_id"]]) == 1
+    continuation, model_calls = service(conversations, response={})
+    assert continuation.reconcile() == 0 and model_calls == []
+    assert conversations.get_task_goal(turn["id"])["status"] == "invalidated"
+    assert continuation.reconcile() == 0
+    with production._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM job_runs").fetchone()[0] == 1
+    assert "app.main" not in sys.modules
+
+
 def original(repo, *, message="生成一张标题图片，放进当前镜头，采用后生成成片", register=True):
     chat = repo.create("workspace", "member", "task", "task")
     chat = repo.save_draft(chat["id"], "workspace", "member", message, chat["draft_version"])

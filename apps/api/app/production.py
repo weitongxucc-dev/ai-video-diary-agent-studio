@@ -5713,6 +5713,95 @@ class ProductionRepository:
             raise KeyError(intent_id)
         return self._edit_intent_from_row(row)
 
+    def goal_completed_source_rows(self, workspace_id, task_id, conversation_id, member_id):
+        with self._connect() as conn:
+            return conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
+                "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
+                "AND j.status='succeeded' AND e.event_type='task_media_submitted' "
+                "AND json_extract(e.payload_json,'$.result_kind')='graphic_source' "
+                "AND json_extract(e.payload_json,'$.operation') IN ('media_script_preview','media_script_tool_preview') "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at,j.id",
+                (workspace_id, task_id, conversation_id, member_id)).fetchall()
+
+    def goal_pending_preview_rows(self, workspace_id, task_id, timeline_version_id, conversation_id, member_id):
+        with self._connect() as conn:
+            proposals = conn.execute("SELECT p.id,i.constraints_json FROM edit_proposals p JOIN edit_intents i "
+                "ON i.workspace_id=p.workspace_id AND i.id=p.intent_id WHERE p.workspace_id=? AND p.task_id=? "
+                "AND p.status='proposed' AND json_extract(p.operation_json,'$.payload.base_version_id') IS ? "
+                "AND json_extract(i.constraints_json,'$.request_source.conversation_id')=? "
+                "AND json_extract(i.constraints_json,'$.request_source.member_id')=? ORDER BY p.created_at",
+                (workspace_id, task_id, timeline_version_id, conversation_id, member_id)).fetchall()
+            jobs = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
+                "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
+                "AND e.event_type='task_media_submitted' AND j.status IN ('queued','running','interrupted') "
+                "AND json_extract(e.payload_json,'$.result_kind')='edit_preview' "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.expected_timeline_version_id') IS ? "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at",
+                (workspace_id, task_id, timeline_version_id, conversation_id, member_id)).fetchall()
+        return proposals, jobs
+
+    def goal_request_effect_rows(self, workspace_id, task_id, request_id):
+        with self._connect() as conn:
+            jobs = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? "
+                "AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments._typed_source.request_id')=? LIMIT 1",
+                (workspace_id, task_id, request_id)).fetchone()
+            proposals = conn.execute("SELECT 1 FROM edit_intents WHERE workspace_id=? AND task_id=? "
+                "AND json_extract(constraints_json,'$.request_source.request_id')=? LIMIT 1",
+                (workspace_id, task_id, request_id)).fetchone()
+        return jobs, proposals
+
+    def assistant_execution_projection_rows(self):
+        with self._connect() as conn:
+            return conn.execute("""SELECT e.*,j.status FROM task_events e JOIN job_runs j
+                ON j.workspace_id=e.workspace_id AND j.id=e.job_id
+                WHERE e.event_type='assistant_execution_located' AND j.kind='creation_task_execution'
+                AND j.status IN ('succeeded','failed','cancelled')
+                AND NOT EXISTS(SELECT 1 FROM task_events done WHERE done.id='event_assistant_execution_'||e.id||'_'||j.status)
+                ORDER BY e.created_at LIMIT 16""").fetchall()
+
+    def goal_unreleased_job_request(self, workspace_id, job_id):
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_id=? "
+                "AND state IN ('granted','yield_requested')", (workspace_id, job_id)).fetchone()
+
+    def goal_render_request_row(self, workspace_id, request_id):
+        with self._connect() as conn:
+            return conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
+                (workspace_id, request_id)).fetchone() if request_id else None
+
+    def goal_output_provenance_rows(self, workspace_id, task_id, request_id, conversation_id, member_id, media_kind):
+        with self._connect() as conn:
+            rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
+                (workspace_id, request_id)).fetchone()
+            located = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+                "AND event_type='assistant_execution_located' AND job_id=? "
+                "AND json_extract(payload_json,'$.source.conversation_id')=? AND json_extract(payload_json,'$.source.member_id')=?",
+                (workspace_id, task_id, rendered["owner_id"] if rendered else None, conversation_id, member_id)).fetchone()
+            pending = conn.execute("SELECT e.payload_json FROM job_runs j JOIN task_events e "
+                "ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start' "
+                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.status IN ('queued','running','interrupted') "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=?",
+                (workspace_id, task_id, media_kind, conversation_id, member_id)).fetchall()
+            unknown = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+                "AND event_type='assistant_edit_request_located' AND json_extract(payload_json,'$.source.conversation_id')=? "
+                "AND json_extract(payload_json,'$.source.member_id')=? "
+                "AND json_extract(payload_json,'$.locator.status') IN ('unknown','result_unknown')",
+                (workspace_id, task_id, conversation_id, member_id)).fetchall()
+        return rendered, located, pending, unknown
+
+    def assistant_script_tool_projection_rows(self):
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT e.* FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id "
+                "AND j.id=json_extract(e.payload_json,'$.registration_id') "
+                "WHERE e.event_type='assistant_script_tool_located' AND j.kind='media_script_tool_registration' "
+                "AND j.status='succeeded' AND NOT EXISTS (SELECT 1 FROM task_events done "
+                "WHERE done.id='event_assistant_script_tool_'||e.id) ORDER BY e.created_at LIMIT 32",
+            ).fetchall()
+
     def assistant_business_candidates(self, *, limit: int = 32) -> list[dict]:
         """Pending projections of existing jobs/proposals, never another queue."""
         with self._connect() as conn:

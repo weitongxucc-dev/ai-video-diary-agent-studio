@@ -46,7 +46,7 @@ from app.assistant_pi import (
     request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
-from app.assistant_goal_continuation import GoalContinuationService
+from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 from app.conversation_repository import (
     ConversationDraftVersionConflict,
     ConversationReferenceVersionConflict,
@@ -3302,33 +3302,7 @@ def _read_edit_request_result(task, event_id):
 
 @app.get("/api/creation-tasks/{task_id}/assistant/edit-requests/{request_id}")
 def get_exact_edit_request_result(task_id: str, request_id: UUID, request: Request, phase: Literal["preview", "apply", "script", "observation"] = "preview"):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    event_id = "event_edit_request_" + media_digest([task.workspace_id, member_id, str(request_id), phase])
-    try:
-        event = production_repo.get_task_event(task.workspace_id, event_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="编辑请求不存在") from exc
-    if event.task_id != task_id:
-        raise HTTPException(status_code=404, detail="编辑请求不存在")
-    inputs = event.payload["inputs"]
-    if phase in {"preview", "script", "observation"}:
-        fields = (CreationTaskExactEditRequest.model_fields if phase == "preview" else
-                  CreationTaskObservationRequest.model_fields if phase == "observation" else
-                  MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
-        submitted_input = {key: value for key, value in inputs.items() if key in fields}
-        if phase == "script" and "tool_id" in inputs:
-            submitted_input["tool_id"] = inputs["tool_id"]
-    else:
-        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
-        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
-    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
-        raise HTTPException(status_code=409, detail="原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
-    result = _read_edit_request_result(task, event_id)
-    return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
-            "task_id": task_id, "status": "recorded" if result else "unknown",
-            "submitted_input": submitted_input,
-            "result_status_code": result.status_code if result else None,
-            "result": json.loads(result.body) if result else None}
+    return _goal_request_result(task_id, request_id, request, phase)
 
 
 
@@ -3877,16 +3851,7 @@ def list_task_media_jobs(task_id: str, request: Request, cursor: str | None = No
 
 @app.get("/api/creation-tasks/{task_id}/media-jobs/{job_id}")
 def get_task_media_job(task_id: str, job_id: str, request: Request):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    runtime = _creation_runtime()
-    media = runtime.registrations["creation_job"].owner.task_media
-    try:
-        job, event = media.read(actor.workspace_id, job_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="任务媒体作业不存在") from exc
-    if job.task_id != task_id:
-        raise HTTPException(status_code=404, detail="任务媒体作业不存在")
-    return _task_media_job_response(media, job, actor, runtime)
+    return _goal_media_result(task_id, job_id, request)
 
 
 @app.post("/api/creation-tasks/{task_id}/media-jobs/{job_id}/cancel")
@@ -13406,162 +13371,74 @@ def _goal_request(goal):
 
 
 def _goal_script_source_slot(goal, job_id, actor):
-    job = production_repo.get_job_run(goal["workspace_id"], job_id)
-    start = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
-    source = start["arguments"]["_typed_source"]
-    producer_goal = conversation_repo.get_task_goal(source["assistant_turn_id"])
-    if (job.task_id != goal["task_id"] or job.kind != TASK_MEDIA_KIND or job.status != "succeeded"
-            or start["result_kind"] != "graphic_source" or CreationExecutionActor.from_event(job.workspace_id, start) != actor
-            or (source["workspace_id"], source["task_id"], source["member_id"], source["conversation_id"]) != (
-                goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
-            or producer_goal is None or producer_goal["original_turn_id"] != goal["original_turn_id"]
-            or media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest):
-        raise ValueError("已完成程序来源不属于原目标的实际成功作业")
-    payload = start["arguments"]["payload"]
-    result = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
-    facts = graphic_source_facts(production_repo, artifact_store, job.workspace_id, job.task_id, result["source_ref"], actor=actor)
-    publication = artifact_store.describe(result["source_ref"])
-    if (facts["producer_job_id"] != job.id or not _task_media_outputs_current(job)
-            or (publication.sha256, publication.size_bytes) != (result["sha256"], result["size_bytes"])
-            or any(facts[key] != result[key] for key in ("artifact_id", "sha256", "size_bytes", "width", "height"))):
-        raise ValueError("已完成PNG来源与当前真实登记文件不一致")
-    if start["operation"] == "media_script_preview":
-        outputs = payload["requested_outputs"]
-    elif start["operation"] == "media_script_tool_preview":
-        definition = next(item for item in production_repo.list_artifact_records(job.workspace_id, job.task_id)
-            if item.producer_job_id == job.id and item.kind == "media_script_definition")
-        published = artifact_store.describe(definition.logical_ref)
-        if (published.sha256, published.size_bytes) != (definition.sha256, definition.size_bytes) or definition.size_bytes > 256 * 1024:
-            raise ValueError("原成功配方定义不可核验")
-        outputs = json.loads(artifact_store.resolve_file(definition.logical_ref).read_text())["requested_outputs"]
-    else:
-        raise ValueError("已完成图片不是本目标的程序来源")
-    output, = outputs
-    if output["name"] != result["name"]:
-        raise ValueError("原成功图片与命名输出槽不一致")
-    return {"job_id": job.id, **{key: result[key] for key in ("source_ref", "artifact_id", "sha256", "size_bytes", "name", "width", "height")},
-        "requested_output": output, "input_refs": payload.get("input_refs", []), "base_version_id": start["input_facts"]["base_version_id"]}
+    return _goal_projection().script_source_slot(goal, job_id, actor, artifact_store, _output_observation_use_case())
 
 
 def _goal_completed_sources(goal, actor):
-    with production_repo._connect() as conn:
-        rows = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
-            "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
-            "AND j.status='succeeded' AND e.event_type='task_media_submitted' "
-            "AND json_extract(e.payload_json,'$.result_kind')='graphic_source' "
-            "AND json_extract(e.payload_json,'$.operation') IN ('media_script_preview','media_script_tool_preview') "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at,j.id",
-            (goal["workspace_id"], goal["task_id"], goal["conversation_id"], goal["member_id"])).fetchall()
-    slots = []
-    for row in rows:
-        source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
-        bound = conversation_repo.get_task_goal(source["assistant_turn_id"])
-        if bound and bound["original_turn_id"] == goal["original_turn_id"]:
-            slots.append(_goal_script_source_slot(goal, row["id"], actor))
-    return slots
+    return _goal_projection().completed_sources(goal, actor, artifact_store, _output_observation_use_case())
 
 
 def _goal_pending_preview(goal, timeline_version_id):
-    """A sibling observation result cannot bypass this goal's actual adoption wait."""
-    with production_repo._connect() as conn:
-        proposals = conn.execute("SELECT p.id,i.constraints_json FROM edit_proposals p JOIN edit_intents i "
-            "ON i.workspace_id=p.workspace_id AND i.id=p.intent_id WHERE p.workspace_id=? AND p.task_id=? "
-            "AND p.status='proposed' AND json_extract(p.operation_json,'$.payload.base_version_id') IS ? "
-            "AND json_extract(i.constraints_json,'$.request_source.conversation_id')=? "
-            "AND json_extract(i.constraints_json,'$.request_source.member_id')=? ORDER BY p.created_at",
-            (goal["workspace_id"], goal["task_id"], timeline_version_id, goal["conversation_id"], goal["member_id"])).fetchall()
-        jobs = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
-            "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
-            "AND e.event_type='task_media_submitted' AND j.status IN ('queued','running','interrupted') "
-            "AND json_extract(e.payload_json,'$.result_kind')='edit_preview' "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.expected_timeline_version_id') IS ? "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at",
-            (goal["workspace_id"], goal["task_id"], timeline_version_id, goal["conversation_id"], goal["member_id"])).fetchall()
-    for rows, status in ((proposals, "waiting_adoption"), (jobs, "waiting_result")):
-        for row in rows:
-            source = (json.loads(row["constraints_json"])["request_source"] if status == "waiting_adoption"
-                else json.loads(row["payload_json"])["arguments"]["_typed_source"])
-            bound = conversation_repo.get_task_goal(source["assistant_turn_id"])
-            if bound and bound["original_turn_id"] == goal["original_turn_id"]:
-                return {"status": status, "reason": "await_real_adoption" if status == "waiting_adoption"
-                    else "await_actual_preview_result", "pending_id": row["id"]}
-    return None
+    return _goal_projection().pending_preview(goal, timeline_version_id)
 
 
 def _verify_current_goal(goal, event):
+    owner = _goal_projection()
     request = _goal_request(goal)
     if request is None:
-        return {"status": "waiting_identity", "reason": "interactive_identity_not_available"}
+        return owner.unavailable_fact("identity")
     workspace_id, task_id = goal["workspace_id"], goal["task_id"]
     try:
         task, member_id = _exact_edit_access(task_id, request, write=True)
         actor = _require_permit_actor(request, workspace_id)
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     except (KeyError, HTTPException, PermissionError):
-        return {"status": "invalidated", "reason": "current_task_or_member_not_authorized"}
-    expected = goal["target_snapshot"].get("timeline_version_id")
-    event_version = event.get("result_version_id") or event.get("base_version_id")
-    if event.get("base_version_id") != expected or task.current_timeline_version_id != event_version:
-        return {"status": "invalidated", "reason": "unrelated_timeline_change"}
+        return owner.unavailable_fact("access")
+    decision = owner.verify_version(goal, event, task)
+    if decision is not None:
+        return decision
     try:
         completed_sources = _goal_completed_sources(goal, actor)
     except (KeyError, ValueError, PermissionError, OSError):
-        return {"status": "invalidated", "reason": "completed_source_no_longer_authorized_or_current"}
+        return owner.unavailable_fact("completed_sources")
     pending = _goal_pending_preview(goal, task.current_timeline_version_id)
     if pending is not None:
         return {**pending, "completed_source_slots": completed_sources}
     facts = {"business_event": event, "task": {"id": task.id, "stage": task.stage, "output_ready": task.output_ready},
         "completed_source_slots": completed_sources}
     no_side_effect = False
-    # Only the verified goal-version chain carries previously applied deletions;
-    # later render/observation events do not repeat the adoption operation.
-    removed_refs = list(goal["target_snapshot"].get("removed_selected_refs", []))
+    removed_refs = owner.removed_references(goal)
     if event.get("phase") == "request":
-        located = event.get("edit_request")
-        if not isinstance(located, dict):
-            return {"status": "waiting_unknown", "reason": "original_request_receipt_missing"}
-        actual = get_exact_edit_request_result(task_id, UUID(located["request_id"]), request, located["phase"])
+        decision, located = owner.request_locator(event)
+        if decision is not None:
+            return decision
+        actual = _goal_request_result(task_id, UUID(located["request_id"]), request, located["phase"])
         facts["original_request"] = actual
-        if event["status"] in {"rejected", "not_submitted"}:
-            code = actual.get("result_status_code")
-            if code in {401, 403, 409}:
-                return {"status": "invalidated", "reason": "original_request_authority_or_version_rejected"}
-            with production_repo._connect() as conn:
-                jobs = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? "
-                    "AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments._typed_source.request_id')=? LIMIT 1",
-                    (workspace_id, task_id, located["request_id"])).fetchone()
-                proposals = conn.execute("SELECT 1 FROM edit_intents WHERE workspace_id=? AND task_id=? "
-                    "AND json_extract(constraints_json,'$.request_source.request_id')=? LIMIT 1",
-                    (workspace_id, task_id, located["request_id"])).fetchone()
-            no_side_effect = code == 422 and jobs is None and proposals is None
+        decision, no_side_effect = owner.request_verification(goal, event, actual)
+        if decision is not None:
+            return decision
     if event.get("phase") == "execution":
         try:
             facts["execution_status"] = _read_bound_execution_result(task_id, request, event["job_id"])
         except (KeyError, ValueError, HTTPException):
-            return {"status": "invalidated", "reason": "original_execution_no_longer_current"}
-        if facts["execution_status"]["job"]["status"] not in {"succeeded", "failed", "cancelled"}:
-            return {"status": "waiting_result", "reason": "original_execution_not_settled"}
-    elif event.get("job_id") and event.get("status") != "confirmed":
+            return owner.unavailable_fact("execution")
+        decision = owner.execution_verification(facts["execution_status"])
+        if decision is not None:
+            return decision
+    elif owner.needs_media_receipt(event):
         try:
-            actual_job = get_task_media_job(task_id, event["job_id"], request)
+            actual_job = _goal_media_result(task_id, event["job_id"], request)
         except HTTPException:
-            return {"status": "invalidated", "reason": "original_media_job_no_longer_authorized"}
-        if actual_job["status"] not in {"succeeded", "failed"}:
-            return {"status": "waiting_result", "reason": "original_media_job_not_settled"}
+            return owner.unavailable_fact("media")
+        decision = owner.media_verification(actual_job)
+        if decision is not None:
+            return decision
         facts["media_job"] = actual_job
-    if event.get("proposal_id") and event.get("status") == "confirmed":
-        proposal = production_repo.get_edit_proposal(workspace_id, event["proposal_id"])
-        operation = next((item for item in production_repo.list_edit_operations(workspace_id, task_id)
-            if item.proposal_id == proposal.id and item.id == event.get("operation_id") and item.status == "applied"), None)
-        if proposal.status != "confirmed" or operation is None or operation.result_version_id != task.current_timeline_version_id:
-            return {"status": "invalidated", "reason": "adoption_result_not_current"}
-        facts["adopted_operation"] = {"operation_id": operation.id, "result_version_id": operation.result_version_id}
-        if operation.operation_type == "DeleteClip":
-            removed = f"clip:{operation.payload['clip_id']}"
-            if removed not in removed_refs:
-                removed_refs.append(removed)
+    decision, adopted, removed_refs = owner.adopted_operation(goal, event, task, removed_refs)
+    if decision is not None:
+        return decision
+    if adopted is not None:
+        facts["adopted_operation"] = adopted
     facts["observations"] = _task_observation_facts(task_id, request)
     context = goal["request_context"]
     for key in ("profile_reference", "knowledge_reference"):
@@ -13572,83 +13449,39 @@ def _verify_current_goal(goal, event):
                     if key == "profile_reference" else _assistant_knowledge_snapshot(request, reference["knowledge_item_id"],
                         reference["version"], reference.get("locator")))
             except HTTPException:
-                return {"status": "invalidated", "reason": "original_reference_authorization_changed"}
+                return owner.unavailable_fact("reference")
     checkpoint = _goal_output_checkpoint(goal, event, facts, task, version, actor, request)
-    return {"status": "ready", "task_version": {"timeline_version_id": task.current_timeline_version_id,
-        "timeline_sequence": version.sequence if version else 0, **({"removed_selected_refs": removed_refs} if removed_refs else {})}, "facts": facts, "request": request,
-        "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources,
-        **({"completed_output_checkpoint": checkpoint} if checkpoint else {})}
+    return {**owner.ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint), "request": request}
 
 
 def _goal_output_checkpoint(goal, event, facts, task, version, actor, request):
-    if event.get("phase") != "observation" or event.get("status") != "succeeded" or version is None:
-        return None
-    receipt = facts.get("media_job", {})
-    result = receipt.get("result") or {}
-    if (receipt.get("status") != "succeeded" or result.get("target", {}).get("kind") != "final"
-            or result.get("output_role") != "composed_output"
-            or result.get("timeline_version_id") != version.id or result.get("timeline_sequence") != version.sequence
-            or result.get("measurement_scope") != "actual_output_bounded_frames"):
-        return None
-    observed_start = production_repo.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
-    producer = observed_start["arguments"].get("_typed_source", {}).get("assistant_turn_id")
-    observed_goal = conversation_repo.get_task_goal(producer) if producer else None
-    if observed_goal is None or observed_goal["original_turn_id"] != goal["original_turn_id"]:
+    owner = _goal_projection()
+    observation = owner.output_observation(goal, event, facts, task, version)
+    if observation is None:
         return None
     try:
         _path, output, _binding = _registered_observation_output(task.workspace_id, task.id,
             CreationTaskObservationTarget(kind="final"), actor)
     except (KeyError, OSError, ValueError, PermissionError, HTTPException):
         return None
-    if (result.get("output") != {key: value for key, value in output.items() if key not in {"logical_ref", "mtime_ns", "ctime_ns"}}
-            or observed_start["input_facts"]["output"] != output):
+    sources = owner.output_sources(goal, task, version, observation, output)
+    if sources is None:
         return None
-    with production_repo._connect() as conn:
-        rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
-            (task.workspace_id, version.snapshot.get("creation_render_request_id"))).fetchone()
-        located = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
-            "AND event_type='assistant_execution_located' AND job_id=? "
-            "AND json_extract(payload_json,'$.source.conversation_id')=? AND json_extract(payload_json,'$.source.member_id')=?",
-            (task.workspace_id, task.id, rendered["owner_id"] if rendered else None, goal["conversation_id"], goal["member_id"])).fetchone()
-        pending_jobs = conn.execute("SELECT e.payload_json FROM job_runs j JOIN task_events e "
-            "ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start' "
-            "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.status IN ('queued','running','interrupted') "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
-            "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=?",
-            (task.workspace_id, task.id, TASK_MEDIA_KIND, goal["conversation_id"], goal["member_id"])).fetchall()
-        unknown_requests = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
-            "AND event_type='assistant_edit_request_located' AND json_extract(payload_json,'$.source.conversation_id')=? "
-            "AND json_extract(payload_json,'$.source.member_id')=? "
-            "AND json_extract(payload_json,'$.locator.status') IN ('unknown','result_unknown')",
-            (task.workspace_id, task.id, goal["conversation_id"], goal["member_id"])).fetchall()
-    for row in pending_jobs:
-        source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
-        pending_goal = conversation_repo.get_task_goal(source["assistant_turn_id"])
-        if pending_goal and pending_goal["original_turn_id"] == goal["original_turn_id"]:
-            return None
-    for row in unknown_requests:
-        data = json.loads(row["payload_json"])
-        unknown_goal = conversation_repo.get_task_goal(data["source"]["assistant_turn_id"])
-        if unknown_goal and unknown_goal["original_turn_id"] == goal["original_turn_id"]:
-            original = get_exact_edit_request_result(task.id, UUID(data["locator"]["request_id"]), request, data["locator"]["phase"])
-            if original["status"] in {"unknown", "result_unknown"}:
+    for row in sources["unknown_requests"]:
+        located = owner.unknown_request_for_goal(goal, row)
+        if located is not None:
+            original = _goal_request_result(task.id, UUID(located["request_id"]), request, located["phase"])
+            if owner.request_still_unknown(original):
                 return None
-    if rendered is None or rendered["state"] != "done" or located is None:
+    source = owner.output_execution_source(goal, version, sources)
+    if source is None:
         return None
-    source = json.loads(located["payload_json"])
-    execution_goal = conversation_repo.get_task_goal(source["source"]["assistant_turn_id"])
-    base = source["source"]["expected_timeline_version_id"]
-    if (execution_goal is None or execution_goal["original_turn_id"] != goal["original_turn_id"]
-            or version.parent_version_id != base or version.snapshot.get("render_input_timeline_version_id") != base):
-        return None
-    actual = _read_bound_execution_result(task.id, request, rendered["owner_id"])
-    if (actual["job"]["status"] != "succeeded" or not actual["video_ready"]
-            or source.get("input_digest") != actual["job"]["input_digest"]):
-        return None
-    return {"status": "completed", "scope": "production_and_output_observation", "job_id": actual["job"]["id"],
-        "observation_job_id": receipt["job_id"], "timeline_version_id": version.id, "sha256": output["sha256"],
-        "measurement_scope": result["measurement_scope"], "unavailable": [{"scope": item["scope"],
-            "reason": _assistant_stream_safe_text(item["reason"][:500], task.workspace_id)} for item in result.get("unavailable", [])]}
+    actual = _read_bound_execution_result(task.id, request, source["job_id"])
+    checkpoint = owner.completed_output(observation, output, version, source, actual)
+    if checkpoint is not None:
+        checkpoint["unavailable"] = [{"scope": item["scope"], "reason": _assistant_stream_safe_text(item["reason"], task.workspace_id)}
+            for item in checkpoint["unavailable"]]
+    return checkpoint
 
 
 def _run_goal_turn(claim, fresh):
@@ -13709,6 +13542,51 @@ def _run_goal_turn(claim, fresh):
             conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "task_turn", "response": {"turn_status": "stopped"}})
     finally:
         forget_turn_control(turn_id)
+
+
+def _goal_projection():
+    return GoalResultProjection(production_repo, conversation_repo)
+
+
+def _goal_request_result(task_id, request_id, request, phase):
+    # Transport projection of the original journal, using the same canonical reader.
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    try:
+        event_id, event = _goal_projection().request_claim(task, member_id, str(request_id), phase)
+    except GoalProjectionRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc.__cause__
+    inputs = event.payload["inputs"]
+    if phase in {"preview", "script", "observation"}:
+        fields = (CreationTaskExactEditRequest.model_fields if phase == "preview" else
+                  CreationTaskObservationRequest.model_fields if phase == "observation" else
+                  MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
+        submitted_input = {key: value for key, value in inputs.items() if key in fields}
+        if phase == "script" and "tool_id" in inputs:
+            submitted_input["tool_id"] = inputs["tool_id"]
+    else:
+        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
+        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
+    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise HTTPException(status_code=409, detail="原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
+    result = _read_edit_request_result(task, event_id)
+    return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
+            "task_id": task_id, "status": "recorded" if result else "unknown", "submitted_input": submitted_input,
+            "result_status_code": result.status_code if result else None, "result": json.loads(result.body) if result else None}
+
+
+def _goal_media_result(task_id, job_id, request):
+    actor = _require_permit_actor(request, current_workspace_id(request))
+    runtime = _creation_runtime()
+    media = runtime.registrations["creation_job"].owner.task_media
+    try:
+        job, event = media.read(actor.workspace_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务媒体作业不存在") from exc
+    try:
+        _goal_projection().require_media_task(task_id, job)
+    except GoalProjectionRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return _task_media_job_response(media, job, actor, runtime)
 
 
 def _goal_service():
@@ -13829,73 +13707,28 @@ def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, so
 
 
 def _execution_source_version_current(task, source, job_id, status):
-    """The original version, or the actual render child produced by this execution."""
-    base = source["expected_timeline_version_id"]
-    result_version = task.current_timeline_version_id
-    if result_version == base:
-        if result_version is None:
-            return source["expected_timeline_sequence"] == 0
-        version = production_repo.get_timeline_version(task.workspace_id, result_version)
-        return version.sequence == source["expected_timeline_sequence"]
-    if status != "succeeded" or result_version is None:
-        return False
-    version = production_repo.get_timeline_version(task.workspace_id, result_version)
-    render_request_id = version.snapshot.get("creation_render_request_id")
-    with production_repo._connect() as conn:
-        rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
-            (task.workspace_id, render_request_id)).fetchone() if render_request_id else None
-    return (version.parent_version_id == base and version.snapshot.get("render_input_timeline_version_id") == base
-        and rendered is not None and rendered["owner_id"] == job_id and rendered["state"] == "done")
+    return _goal_projection().execution_source_current(task, source, job_id, status)
 
 
 def _project_assistant_execution_results():
-    with production_repo._connect() as conn:
-        rows = conn.execute("""SELECT e.*,j.status FROM task_events e JOIN job_runs j
-            ON j.workspace_id=e.workspace_id AND j.id=e.job_id
-            WHERE e.event_type='assistant_execution_located' AND j.kind='creation_task_execution'
-            AND j.status IN ('succeeded','failed','cancelled')
-            AND NOT EXISTS(SELECT 1 FROM task_events done WHERE done.id='event_assistant_execution_'||e.id||'_'||j.status)
-            ORDER BY e.created_at LIMIT 16""").fetchall()
+    owner = _goal_projection()
     projected = 0
-    for row in rows:
-        located = json.loads(row["payload_json"])
-        source, job_id = located["source"], located["job_id"]
-        workspace_id, task_id, turn_id = row["workspace_id"], row["task_id"], source["assistant_turn_id"]
-        goal = conversation_repo.get_task_goal(turn_id)
-        binding = conversation_repo.business_turn_context(turn_id, workspace_id, source["member_id"], task_id)
-        if goal is None or binding is None or binding["status"] == "running":
-            continue  # Never infer a goal from legacy execution history.
-        request = _goal_request(goal)
+    for row in production_repo.assistant_execution_projection_rows():
+        context = owner.execution_candidate(row)
+        if context is None:
+            continue
+        request = _goal_request(context.goal)
         if request is None:
             continue
         try:
-            actual = _read_bound_execution_result(task_id, request, job_id)
+            actual = _read_bound_execution_result(row["task_id"], request, context.job_id)
         except (KeyError, ValueError, HTTPException):
-            _goal_service().invalidate(turn_id, "original_execution_authorization_changed")
+            owner.invalidate_execution(context)
             continue
-        with production_repo._connect() as conn:
-            active = conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_id=? "
-                "AND state IN ('granted','yield_requested')", (workspace_id, job_id)).fetchone()
-        if active is not None:
-            continue  # A terminal outer row is not proof of child-group release.
-        task = production_repo.get_creation_task(workspace_id, task_id)
-        base = source["expected_timeline_version_id"]
-        result_version = task.current_timeline_version_id
-        current = _execution_source_version_current(task, source, job_id, row["status"])
-        event_id = f"event_assistant_execution_{row['id']}_{row['status']}"
-        status = "stopped" if binding["status"] == "stopped" else row["status"] if current else "stale"
-        event = {"type": "business_result", "event_id": event_id, "task_id": task_id, "phase": "execution",
-            "job_id": job_id, "base_version_id": base, "result_version_id": result_version if current else None,
-            "status": status, "actionable": False, "video_ready": actual["video_ready"],
-            "waiting_reason": "原制作作业已实际结束，按原目标回读已登记输出。"}
-        if not conversation_repo.project_business_result(turn_id, workspace_id, source["member_id"], event,
-                response_patch={"execution_status": actual}, message="原制作作业的实际终态已回读，未重复启动制作。"):
-            continue
-        production_repo.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
-            job_id=job_id, event_type="assistant_business_projected", payload={"turn_id": turn_id,
-                "source_kind": "execution", "source_id": row["id"]}))
-        _goal_service().observe_business_result(turn_id, event)
-        projected += 1
+        event = owner.project_execution(context, actual)
+        if event is not None:
+            _goal_service().observe_business_result(context.source["assistant_turn_id"], event)
+            projected += 1
     return projected
 
 
@@ -13905,274 +13738,93 @@ def _wake_assistant_continuations():
 
 
 def _mark_assistant_projection(candidate):
-    production_repo.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
-        task_id=candidate["task_id"], job_id=candidate["id"] if candidate["kind"] == "job" else None,
-        event_type="assistant_business_projected", payload={"turn_id": candidate["source"]["assistant_turn_id"],
-            "source_kind": candidate["kind"], "source_id": candidate["id"]},
-        created_at=datetime.fromisoformat(candidate["created_at"])))
+    _goal_projection().mark(candidate)
 
 
 def _assistant_business_turn_can_continue(binding, turn_id):
-    if binding["status"] == "completed":
-        return True
-    if binding["status"] != "failed":
-        return False
-    turn = conversation_repo.get_turn(turn_id)
-    goal = conversation_repo.get_task_goal(turn_id)
-    return bool(turn and conversation_repo.recoverable_business_failure(turn.get("result") or {})
-                and goal and goal["current_turn_id"] == turn_id
-                and goal["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"})
+    return _goal_projection().can_continue(binding, turn_id)
 
 
 def _project_assistant_business_candidate(candidate):
     if candidate["kind"] == "request":
         return _project_assistant_request_candidate(candidate)
-    source = candidate["source"]
-    workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
-    member_id, turn_id = source["member_id"], source["assistant_turn_id"]
-    binding = conversation_repo.business_turn_context(turn_id, workspace_id, member_id, task_id)
-    if binding is None or binding["conversation_id"] != source["conversation_id"]:
-        _mark_assistant_projection(candidate)
-        return True  # Foreign turns are never mutated or exposed.
-    if binding["status"] == "running":
-        return False  # The finite model reply still owns its terminal write.
-    snapshot = binding["context"].get("target_snapshot", {})
-    if (source["workspace_id"], source["task_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
-            workspace_id, task_id, snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")):
-        _mark_assistant_projection(candidate)
+    owner = _goal_projection()
+    context = owner.business_candidate(candidate,
+        media_available=device_runtime is not None and "creation_job" in device_runtime.registrations)
+    if isinstance(context, bool):
+        return context
+    if not owner.authorized(context, _verify_creation_identity(context.actor)):
         return True
-    proposal, job, media_result = None, None, None
-    if candidate["kind"] == "job":
-        if device_runtime is None or "creation_job" not in device_runtime.registrations:
-            return False
-        job = production_repo.get_job_run(workspace_id, candidate["id"])
-        start = production_repo.get_task_event(workspace_id, f"event_{job.id}_start").payload
-        if media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest:
-            _mark_assistant_projection(candidate)
-            return True
-        actor = CreationExecutionActor.from_event(workspace_id, start)
-        with production_repo._connect() as conn:
-            active = conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND state IN ('granted','yield_requested')",
-                                  (workspace_id, job.id)).fetchone()
-        if active is not None:
-            return False  # Cancellation receipts do not prove group release.
-        if job.status == "succeeded":
-            media_result = production_repo.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
-            if media_result.get("proposal"):
-                proposal = production_repo.get_edit_proposal(workspace_id, media_result["proposal"]["id"])
-    else:
-        proposal = production_repo.get_edit_proposal(workspace_id, candidate["id"])
-        if proposal.status != candidate["status"]:
-            _mark_assistant_projection(candidate)
-            return True
-        if "actor_identity" not in source:
-            _mark_assistant_projection(candidate)
-            return True
-        actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if ((actor.user_id or actor.member_id) != member_id or _verify_creation_identity(actor) != "ready"
-            or not content_readable(user_id=member_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id)
-            or (task.owner_user_id is not None and task.owner_user_id != member_id)):
-        _mark_assistant_projection(candidate)
-        return True
-    current_version = task.current_timeline_version_id
-    base_version = source["expected_timeline_version_id"]
-    result_version, operation = None, None
-    if proposal is not None:
-        if proposal.task_id != task_id or proposal.workspace_id != workspace_id:
-            _mark_assistant_projection(candidate)
-            return True
-        if proposal.status == "confirmed":
-            operation = next((item for item in production_repo.list_edit_operations(workspace_id, task_id)
-                              if item.proposal_id == proposal.id and item.status == "applied"), None)
-            if operation is not None:
-                result_version = operation.result_version_id
-    current = current_version == (result_version or base_version)
-    inputs_current = True
-    if job is not None and current_version == base_version:
-        media = device_runtime.registrations["creation_job"].owner.task_media
-        inputs_current = media.check(job, start, actor) == "ready"
-    status = proposal.status if proposal is not None else job.status
-    if job is not None and (job.status != "succeeded" or not _task_media_outputs_current(job)):
-        status = job.status if job.status != "succeeded" else "failed"
-    if not current or not inputs_current:
-        status = "stale"
-    if binding["status"] == "stopped":
-        status = "stopped"
-    event = {"type": "business_result", "event_id": candidate["event_id"], "task_id": task_id,
-             "phase": "observation" if job is not None and start["result_kind"] == "observation" else "preview" if candidate["kind"] == "job" or candidate["status"] == "proposed" else "apply" if candidate["status"] == "confirmed" else "decision",
-             "job_id": job.id if job else source.get("media_job_id"), "proposal_id": proposal.id if proposal else None,
-             "base_version_id": base_version, "result_version_id": result_version,
-             "status": status, "actionable": status == "proposed" and _assistant_business_turn_can_continue(binding, turn_id)}
-    response_patch = {"edit_preview": None} if proposal is not None and status != "proposed" else {}
-    if event["actionable"]:
-        intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
-        preview = _edit_preview_response(intent, proposal).model_dump(mode="json")
-        response_patch["edit_preview"] = preview
-        event["waiting_reason"] = "请查看实际修改预览，再采用或拒绝。"
-        message = "修改预览已完成，可以查看并决定是否采用；当前草稿尚未改变。"
-    elif status == "confirmed" and operation is not None:
-        event["operation_id"] = operation.id
-        event["waiting_reason"] = "当前草稿已保存；这次修改尚未反映到成片。"
-        message = "修改已应用并保存到草稿，可撤销；成片尚未重新生成。"
-    elif status == "rejected":
-        event["waiting_reason"] = "修改方案已放弃；等待新的明确要求。"
-        message = "修改方案已放弃，当前草稿保持不变。"
-    elif status == "succeeded" and job is not None and start["result_kind"] == "graphic_source":
-        event["result_kind"] = "graphic_source"
-        event["source_ref"] = media_result["source_ref"]
-        event["waiting_reason"] = "图片来源已生成；等待图层修改提案与采用，当前版本和成片保持不变。"
-        message = "图片来源已生成，可用于图层修改；尚未应用到当前草稿或生成成片。"
-    elif status == "succeeded" and job is not None and start["result_kind"] == "observation":
-        event["result_kind"] = "observation"
-        event["waiting_reason"] = "真实登记输出的本机观察已完成；按原目标回读事实后继续。"
-        message = "输出观察已完成，已保存实际画面取样和技术事实；尚未检查的范围会明确标明。"
-    elif status in {"stale", "stopped"}:
-        event["waiting_reason"] = "仅保留原目标的历史结果，不沿旧选择继续。"
-        message = "原修改结果已保留为历史；当前目标或对话已变化，没有继续应用。"
-    else:
-        event["waiting_reason"] = "媒体处理未完成；查看作业原因后再决定下一步。"
-        message = "媒体处理未完成，当前草稿保持不变；请查看作业原因。"
-    if job is not None:
+    media = device_runtime.registrations["creation_job"].owner.task_media if context.job is not None else None
+    projection = owner.business_projection(context, media=media, outputs=_output_observation_use_case())
+    if isinstance(projection, bool):
+        return projection
+    if projection.preview is not None:
+        projection.response_patch["edit_preview"] = _edit_preview_response(*projection.preview).model_dump(mode="json")
+    if projection.media is not None:
         from app.schemas import TaskMediaJobResponse
-        media = device_runtime.registrations["creation_job"].owner.task_media
+        data = projection.media
+        job, start, actor = data["job"], data["start"], data["actor"]
         device_request, _view = _task_media_device_request(job, actor, device_runtime)
-        response_patch["media_job"] = TaskMediaJobResponse(job_id=job.id,
-            status=status if status in {"failed", "cancelled", "stale"} else job.status,
-            operation=start["operation"], input_digest=job.input_digest, created_at=job.created_at,
-            result_kind=start["result_kind"], base_version_id=base_version,
-            failure_reason=job.failure_reason, result=media_result if event["actionable"] or status == "succeeded" else None,
-            resource_wait=media.resource_admission_receipt(job, start, actor, device_request, status),
-            result_url=f"/api/creation-tasks/{task_id}/media-jobs/{job.id}").model_dump(mode="json")
-    if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
-            response_patch=response_patch, message=message):
-        _mark_assistant_projection(candidate)
-        if _goal_service().observe_business_result(turn_id, event):
+        projection.response_patch["media_job"] = TaskMediaJobResponse(job_id=job.id,
+            status=data["response_status"], operation=start["operation"], input_digest=job.input_digest, created_at=job.created_at,
+            result_kind=start["result_kind"], base_version_id=projection.event["base_version_id"],
+            failure_reason=job.failure_reason, result=data["result"],
+            resource_wait=media.resource_admission_receipt(job, start, actor, device_request, data["status"]),
+            result_url=f"/api/creation-tasks/{candidate['task_id']}/media-jobs/{job.id}").model_dump(mode="json")
+    if owner.commit(context, projection):
+        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
             _wake_assistant_continuations()
         return True
     return False
 
 
 def _project_assistant_request_candidate(candidate):
-    source, located = candidate["source"], candidate["request"]
-    workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
-    member_id, turn_id = source["member_id"], source["assistant_turn_id"]
-    binding = conversation_repo.business_turn_context(turn_id, workspace_id, member_id, task_id)
-    if binding is None or source.get("actor_identity") is None:
-        _mark_assistant_projection(candidate)
+    owner = _goal_projection()
+    context = owner.request_candidate(candidate)
+    if isinstance(context, bool):
+        return context
+    if not owner.authorized(context, _verify_creation_identity(context.actor)):
         return True
-    if binding["status"] == "running":
-        return False
-    actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if ((actor.user_id or actor.member_id) != member_id or _verify_creation_identity(actor) != "ready"
-            or not content_readable(user_id=member_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id)):
-        _mark_assistant_projection(candidate)
-        return True
-    locator = dict(located["locator"])
-    event_id = "event_edit_request_" + media_digest([workspace_id, member_id, locator["request_id"], locator["phase"]])
-    result = _read_edit_request_result(task, event_id)
-    if result is not None:
-        claim = production_repo.get_task_event(workspace_id, event_id)
-        if claim.task_id != task_id or claim.payload["member_id"] != member_id:
-            _mark_assistant_projection(candidate)
-            return True
-        locator.update(status="rejected" if result.status_code >= 400 else "recorded",
-            result_status_code=result.status_code, result=json.loads(result.body), input_digest=claim.payload["input_digest"])
-    elif locator["status"] not in {"not_submitted", "rejected"}:
-        return False
-    patch = {"edit_request": locator}
-    current = task.current_timeline_version_id == source["expected_timeline_version_id"]
-    if result is not None and result.status_code < 400:
-        actual = json.loads(result.body)
-        if actual.get("proposal"):
-            proposal = production_repo.get_edit_proposal(workspace_id, actual["proposal"]["id"])
-            if proposal.task_id != task_id:
-                _mark_assistant_projection(candidate)
-                return True
-            if current and proposal.status == "proposed" and proposal.operation["payload"].get("base_version_id") == task.current_timeline_version_id:
-                patch["edit_preview"] = _edit_preview_response(
-                    production_repo.get_edit_intent(workspace_id, proposal.intent_id), proposal).model_dump(mode="json")
-        elif actual.get("job_id"):
-            if device_runtime is None:
-                return False
-            job = production_repo.get_job_run(workspace_id, actual["job_id"])
-            if job.task_id != task_id:
-                _mark_assistant_projection(candidate)
-                return True
-            media = device_runtime.registrations["creation_job"].owner.task_media
-            patch["media_job"] = _task_media_job_response(media, job, actor, device_runtime)
-    status = locator["status"] if current else "stale"
-    event = {"type": "business_result", "event_id": candidate["event_id"], "phase": "request",
-        "task_id": task_id, "request_id": locator["request_id"], "base_version_id": source["expected_timeline_version_id"],
-        "status": "stopped" if binding["status"] == "stopped" else status, "edit_request": locator,
-        "actionable": bool(patch.get("edit_preview")) and _assistant_business_turn_can_continue(binding, turn_id),
-        "waiting_reason": "只回读原请求；排队不是完成，尚未确认的修改不会自动应用。"}
-    if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
-            response_patch=patch, message="原编辑请求的实际结果已回读，没有重复提交或改绑版本。"):
-        _mark_assistant_projection(candidate)
-        if _goal_service().observe_business_result(turn_id, event):
+    recorded = _read_edit_request_result(context.task, owner.request_event_id(context))
+    receipt = {"status_code": recorded.status_code, "response": json.loads(recorded.body)} if recorded is not None else None
+    result = owner.request_result(context, receipt, runtime_available=device_runtime is not None)
+    if isinstance(result, bool):
+        return result
+    patch = {"edit_request": result.locator}
+    if result.preview is not None:
+        patch["edit_preview"] = _edit_preview_response(*result.preview).model_dump(mode="json")
+    elif result.job is not None:
+        media = device_runtime.registrations["creation_job"].owner.task_media
+        patch["media_job"] = _task_media_job_response(media, result.job, context.actor, device_runtime)
+    projection = owner.request_projection(context, result, patch)
+    if owner.commit(context, projection):
+        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
             _wake_assistant_continuations()
         return True
     return False
 
 
 def _assistant_script_tool_candidates():
-    # Select only actual completed registrations. Missing/unknown creates stay
-    # in their original locator event; this neither POSTs nor schedules a job.
-    with production_repo._connect() as conn:
-        rows = conn.execute(
-            "SELECT e.* FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id "
-            "AND j.id=json_extract(e.payload_json,'$.registration_id') "
-            "WHERE e.event_type='assistant_script_tool_located' AND j.kind='media_script_tool_registration' "
-            "AND j.status='succeeded' AND NOT EXISTS (SELECT 1 FROM task_events done "
-            "WHERE done.id='event_assistant_script_tool_'||e.id) ORDER BY e.created_at LIMIT 32",
-        ).fetchall()
-    return [{"kind": "script_tool", "id": row["id"], "workspace_id": row["workspace_id"],
-        "task_id": row["task_id"], "created_at": row["created_at"],
-        "source": json.loads(row["payload_json"])["source"], "located": json.loads(row["payload_json"]),
-        "event_id": f"event_assistant_script_tool_{row['id']}"} for row in rows]
+    return _goal_projection().script_tool_candidates()
 
 
 def _project_assistant_script_tool_candidate(candidate):
-    source, located = candidate["source"], candidate["located"]
-    workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
-    member_id, turn_id = source["member_id"], source["assistant_turn_id"]
-    binding = conversation_repo.business_turn_context(turn_id, workspace_id, member_id, task_id)
-    if binding is None or binding["conversation_id"] != source["conversation_id"]:
-        _mark_assistant_projection(candidate)
+    owner = _goal_projection()
+    context = owner.script_tool_candidate(candidate)
+    if isinstance(context, bool):
+        return context
+    if not owner.authorized(context, _verify_creation_identity(context.actor)):
         return True
-    if binding["status"] == "running":
-        return False
-    snapshot = binding["context"].get("target_snapshot", {})
-    actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    if ((source["workspace_id"], source["task_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
-            workspace_id, task_id, snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence"))
-            or (actor.user_id or actor.member_id) != member_id or _verify_creation_identity(actor) != "ready"
-            or not content_readable(user_id=member_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id)
-            or (task.owner_user_id is not None and task.owner_user_id != member_id)):
-        _mark_assistant_projection(candidate)
-        return True
-    tool = _media_script_tools().get_created_for_request(actor, UUID(located["request_id"]))
-    _check_script_tool_save_result(workspace_id, task_id, tool, located["submitted_input"])
+    located = candidate["located"]
+    tool = _media_script_tools().get_created_for_request(context.actor, UUID(located["request_id"]))
+    _check_script_tool_save_result(candidate["workspace_id"], candidate["task_id"], tool, located["submitted_input"])
     receipt = AssistantScriptToolReceipt(action="save", status="recorded", request_id=located["request_id"],
         tool_id=tool["tool_id"], tool_version=tool["version"], query_url=located["query_url"],
         submitted_input=located["submitted_input"], tool=_script_tool_metadata(tool)).model_dump(mode="json")
-    version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    current = (task.current_timeline_version_id, version.sequence if version else 0) == (
-        source["expected_timeline_version_id"], source["expected_timeline_sequence"])
-    status = "stopped" if binding["status"] == "stopped" else "recorded" if current else "stale"
-    event = {"type": "business_result", "event_id": candidate["event_id"], "phase": "script_tool",
-        "task_id": task_id, "request_id": located["request_id"], "status": status, "actionable": False,
-        "base_version_id": source["expected_timeline_version_id"], "script_tool": receipt,
-        "waiting_reason": "只回读原工具登记；没有重复保存、生成图片或修改当前版本。"}
-    message = ("原工具登记已回读为历史结果，原目标或对话已变化，没有继续执行。" if status in {"stale", "stopped"}
-        else "原工具元数据登记已回读为实际v1；没有重复保存、生成图片或修改当前草稿、成片。")
-    if conversation_repo.project_business_result(turn_id, workspace_id, member_id, event,
-            response_patch={"script_tool": receipt}, message=message):
-        _mark_assistant_projection(candidate)
-        if _goal_service().observe_business_result(turn_id, event):
+    projection = owner.script_tool_projection(context, receipt)
+    if owner.commit(context, projection):
+        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
             _wake_assistant_continuations()
         return True
     return False
