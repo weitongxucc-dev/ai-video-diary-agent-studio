@@ -13,8 +13,8 @@
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段A1字幕两源冻结，A2仅独占linked_timeline_use_case.py和test_linked_edit_use_cases.py新增silence采用；main只读，待root明确归还后同包五源接线/两个新最小node。 |
-| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-C1-20261016仅独占main.py两个公共GET reader body薄委托原新共享reader；其余goal三源/已过normal冻结复用，完成后关键QA再精确集成。 |
+| 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | 当前REF-R9-GOAL-PROJECTION-INDEPENDENT-20261016仅fresh-qa-goal-projection/**一个metadata释放顺序反例，产品全只读；旧quality C3及其他门冻结不重跑。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | goal四源含C1已释放冻结并root源审；当前REF-R3-COVER-BOUNDARY-PREPARATION-20261016仅fresh-runtime-cover-boundary-preparation/**最小只读方案，零产品/运行权，资源旧拒绝冻结。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -27,7 +27,15 @@
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
 
-### goal候选源审唯一差额C1（当前施工）
+### goal关键独立差额与封面只读接续（当前）
+
+C1 release52e6609d68b089cd5fc6bb92e6996aad0de3105725ce58f4b28123f410a4d918/TAB f6d0889cedfe9833c3066ed2d4c4d5f13292f351c1bfd96fff39172732c60a2b已root goal-projection-c1-reviewed.json SHAaf8a953f1158661cab9b57201af286d4867d03892bc481b15533b4fd401f2e7f核精确四源；逆C1差额可还原原a266精确main，两个GET只return，签名/decorators/共享helper不变；production除八个只读method字节全同。原一个新stale node第三次PASS复用，不重跑；普通C1零新执行，其他goal/source事实见原已审release。
+
+REF-R9-GOAL-PROJECTION-INDEPENDENT-20261016仅QA新fresh-qa-goal-projection/**，产品全只读，候选四源与root审结见fresh-root-review/goal-projection-independent-binding.json。一个关键metadata代表：经真实公开Production/Conversation/DeviceScheduler等既有owner构造合法隔离目标、原execution locator及已终态Job；原实际已grant或yield_requested仍在时，新GoalResultProjection不可投影/标记或触发新轮次；经原公开安全释放路径（本fixture无真实native）确认释放后，同请求才一次投影/marker，重扫不重复，原Job/指令/目标版本/请求身份保持。优先同一节点真实grant→yield_requested→release三个时点，若原公共owner在更早合法门拒绝如实报实际阶段，不写表强free/done，不mock新owner/仓储/释放predicate、不把outer Job成功当release。使用原已接受的声明metadata resource/process端口可，但真实SQLite/公开转换与版本/会话/请求校验不替身；明确不是host/fullPGID/native或生产身份实测。只必要的新单case，不跑作者stale normal/R8/quality/旧矩阵，不再展开stopped/权限/输出等矩阵。冷import owner且禁旧conftest/main factory/driver，预封四源/脚本/新fixture及必要实际origins，必要源在compile前核hash与前后origins一致，无全overlay/AST/源码证据复制。0native/host/model/GUI/server/network/私env用户DB/Git。首败保留仅失败case必要修正；稳定SOURCE_GATE冻结，root精确四源集成/即时归还main后API直接阶段B。一短语义REBASE_ACK后直接单门，无第二START。
+
+REF-R3-COVER-BOUNDARY-PREPARATION-20261016同时仅工具线程新fresh-runtime-cover-boundary-preparation/**一份短只读包。只沿已知GenerateCoverFromFrame确认body、cover_generation.py裸subprocess与必要直接TaskMedia/execution/resource-profile入口/现封面测试，核最小高内聚owner/执行/仓储归属接续，消除原HTTP同步链裸native且不另建协调器。只列精确必要源、原公开confirm/请求幂等/Job→文件→artifact/transform/edge→version采用/恢复错误次序如何保持，以及一个normal/真正关键差额建议；若需改公共异步行为或新增实际生产预算，明确交root决策，不自改语义或猜数，不以搬body关闭资源缺口。允许缺未标定profile保持明确不可执行，不能借整片预算/假profile/放宽门。main/production四源为QA冻结只读，API四源也冻结；零产品/import/test/DB/native/host采样/模型/GUI/server/network/私env用户数据/Git，不重清点全仓/main/AST/旧证据。一个短ACK直接只读，报告够单次决定即释放，不先施工或启动测量。
+
+### goal候选源审唯一差额C1（已释放冻结）
 
 原四源release a266c53940b112b81ac32f779d8231708dcb590167d7717d8dce9696499bce90已root核19artifact/四源，完整owner/SQL/定向main适配及源规则已审。一个新owner node三次，前二仅新fixture proof/advanced期望错误，第三PASS0.865s；无main import/旧门/native，原证据冻结复用。root goal-projection-source-reviewed-c1.json记录：新_goal_request_result/_goal_media_result虽去路由重入，却完整复制现公共GET reader，64KiB及任务绑定有两个维护点；本C1仅收敛该新重复，不扩大业务或验证矩阵。
 
