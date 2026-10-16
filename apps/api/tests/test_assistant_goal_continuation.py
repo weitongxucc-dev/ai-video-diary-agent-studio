@@ -377,7 +377,7 @@ def test_interrupted_claim_is_not_replayed_but_new_actual_result_can_continue(re
     _, turn, _, _ = original(repo)
     emit(repo, turn)
     candidate = repo.goal_event_candidates()[0]
-    claimed = repo.claim_goal_event(candidate, {}, max_rounds=6)
+    claimed = repo.claim_goal_event(candidate, {"timeline_version_id": "version:one", "timeline_sequence": 1}, max_rounds=6)
     assert repo.fail_interrupted_turns() == 1
     svc, calls = service(ConversationRepository(repo.database_path))
     assert svc.reconcile() == 0 and calls == []
@@ -394,7 +394,7 @@ def test_cannot_claim_an_event_from_another_goal(repo):
     candidate["source_turn_id"] = other["id"]
     candidate["event"] = event
     with pytest.raises(ValueError, match="持久化的业务事件"):
-        repo.claim_goal_event(candidate, {}, max_rounds=6)
+        repo.claim_goal_event(candidate, {"timeline_version_id": "version:one", "timeline_sequence": 1}, max_rounds=6)
     assert len(repo.list_turns(chat["id"])) == len(repo.list_turns(other_chat["id"])) == 1
 
 
@@ -442,7 +442,7 @@ def test_pending_work_must_belong_to_the_original_goal_or_a_new_child_action(rep
 def shutdown_child(repo, *, status="failed", reason="api_shutdown"):
     chat, turn, request_id, context = original(repo)
     emit(repo, turn, job_id="png:one")
-    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {"timeline_version_id": "version:one", "timeline_sequence": 1}, max_rounds=6)
     repo.finish_turn(claim["turn_id"], status, "接续中断。", result={"reason": reason})
     repo.settle_goal_round(claim)
     return chat, turn, request_id, context, claim
@@ -497,7 +497,7 @@ def test_shutdown_patch_does_not_reopen_user_stop_other_failure_or_an_inactive_g
 def test_late_shutdown_proposal_does_not_patch_an_old_source_after_goal_moved_to_another_child(repo):
     _, turn, _, _, old = shutdown_child(repo)
     emit(repo, {"id": old["turn_id"]}, job_id="observation:old", result_kind="observation")
-    current = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    current = repo.claim_goal_event(repo.goal_event_candidates()[0], {"timeline_version_id": "version:one", "timeline_sequence": 1}, max_rounds=6)
     repo.finish_turn(current["turn_id"], "completed", "新检查已排队。", result={"response": {
         "media_job": {"job_id": "observation:new", "status": "queued"}},
         "goal_business_actions": [{"kind": "media_job", "id": "observation:new"}]})
@@ -522,7 +522,7 @@ def test_completed_source_slot_is_durable_and_scoped_to_the_active_automatic_chi
     slot = completed_source()
     duplicate = completed_source(job_id="png:duplicate", sha256="b" * 64)
     assert repo.record_goal_completed_sources(turn["id"], [slot, duplicate])
-    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {}, max_rounds=6)
+    claim = repo.claim_goal_event(repo.goal_event_candidates()[0], {"timeline_version_id": "version:one", "timeline_sequence": 1}, max_rounds=6)
     matched = repo.completed_goal_source(claim["turn_id"], requested_outputs=[slot["requested_output"]], input_refs=[])
     assert matched["job_id"] == "png:one" and matched["sha256"] == "a" * 64
     assert len(repo.get_task_goal(turn["id"])["completed_source_slots"]) == 1
@@ -541,7 +541,7 @@ def test_real_source_facts_and_event_checkpoint_are_given_to_the_new_turn(repo):
     _, turn, _, _ = original(repo)
     emit(repo, turn, job_id="png:one")
     slot = completed_source()
-    svc, calls = service(repo, readiness={"status": "ready", "task_version": {}, "facts": {},
+    svc, calls = service(repo, readiness={"status": "ready", "task_version": {"timeline_version_id": "version:one", "timeline_sequence": 1}, "facts": {},
                                         "completed_source_slots": [slot]})
     assert svc.reconcile() == 1
     assert calls[0][0]["goal"]["completed_source_slots"][0]["artifact_id"] == slot["artifact_id"]

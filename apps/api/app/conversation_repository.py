@@ -803,6 +803,9 @@ class ConversationRepository:
                                      "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                                      "WHERE t.conversation_id=? AND t.sequence>=? ORDER BY t.sequence",
                                      (root["conversation_id"], root["sequence"])).fetchall()
+                handled = {self._business_effect_key(event) for turn in turns for event in json.loads(turn["events_json"])
+                           if event.get("event_id") in root["goal"]["handled_event_ids"]}
+                handled.discard(None)
                 for turn in turns:
                     context = json.loads(turn["request_context_json"])
                     if turn["id"] != root["id"] and context.get("original_turn_id") != root["id"]:
@@ -810,7 +813,10 @@ class ConversationRepository:
                     if turn["status"] == "running":
                         continue
                     for event in json.loads(turn["events_json"]):
-                        if event.get("type") == "business_result" and event.get("event_id") and event["event_id"] not in root["goal"]["handled_event_ids"] and event.get("input_id") == root["goal"].get("source_input_id"):
+                        if (event.get("type") == "business_result" and event.get("event_id")
+                                and event["event_id"] not in root["goal"]["handled_event_ids"]
+                                and self._business_effect_key(event) not in handled
+                                and event.get("input_id") == root["goal"].get("source_input_id")):
                             candidates.append({"root": root, "source_turn_id": turn["id"], "event": event})
                             break
                     if candidates and candidates[-1]["root"]["id"] == root["id"]:
@@ -819,13 +825,15 @@ class ConversationRepository:
 
     def update_goal_checkpoint(self, root_id: str, *, status: str, waiting_reason: str,
                                event_id: str | None = None, next_checkpoint: str | None = None,
-                               expected_goal: dict | None = None) -> bool:
+                               expected_goal: dict | None = None, task_version: dict | None = None) -> bool:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             root = self._goal_root(conn, root_id)
             if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
                 return False
             goal = {**root["goal"], "status": status, "waiting_reason": waiting_reason}
+            if task_version is not None:
+                goal["target_snapshot"] = {**goal["target_snapshot"], **task_version}
             if event_id and event_id not in goal["handled_event_ids"]:
                 goal["handled_event_ids"] = [*goal["handled_event_ids"], event_id]
             if status == "waiting_adoption":
@@ -847,7 +855,7 @@ class ConversationRepository:
                                         "unfinished_steps": []})
         return True
 
-    def claim_goal_event(self, candidate: dict, task_version: dict, *, max_rounds: int) -> dict | None:
+    def claim_goal_event(self, candidate: dict, task_version: dict, *, max_rounds: int, selection_context: dict | None = None) -> dict | None:
         """Consume a business event and establish one empty-human-message turn.
 
         The event is consumed before any model/HTTP side effect. An interrupted
@@ -884,7 +892,10 @@ class ConversationRepository:
                     or event not in json.loads(event_source["events_json"])):
                 raise ValueError("接续只能消费已经核实并持久化的业务事件")
             turn_id = str(uuid5(NAMESPACE_URL, f"yaohe-goal:{root_id}:{goal['revision']}:{event['event_id']}" if goal.get("source_input_id") else f"yaohe-goal:{root_id}:{event['event_id']}"))
-            context = {**root["context"], "source_kind": "business_event", "original_turn_id": root_id,
+            context = {**root["context"], **(selection_context or {}),
+                       "expected_timeline_version_id": task_version["timeline_version_id"],
+                       "expected_timeline_sequence": task_version["timeline_sequence"],
+                       "source_kind": "business_event", "original_turn_id": root_id,
                        "source_turn_id": candidate["source_turn_id"], "business_event_id": event["event_id"],
                        "goal_revision":goal.get("revision",0), "goal_instruction":goal["original_instruction"],
                        **({"source_input_id":goal["source_input_id"],"source_input_turn_id":goal["source_input_turn_id"]} if goal.get("source_input_id") else {}),
@@ -1051,6 +1062,17 @@ class ConversationRepository:
                 (json.dumps(events, ensure_ascii=False), assistant_text, _now(), turn_id),
             )
 
+    @staticmethod
+    def _business_effect_key(event: dict):
+        if event.get("type") != "business_result":
+            return None
+        identity = event.get("operation_id") if event.get("phase") == "apply" else event.get("request_id") if event.get("phase") == "request" else None
+        if not identity:
+            return None
+        status = "applied" if event["phase"] == "apply" and event.get("status") in {"confirmed", "stale"} else event.get("status")
+        return (event.get("task_id"), event.get("input_id"), event["phase"], identity,
+                status, event.get("base_version_id"), event.get("result_version_id"))
+
     def project_business_result(self, turn_id: str, workspace_id: str, member_id: str,
                                 event: dict, *, response_patch: dict, message: str) -> bool:
         """Project one real business receipt into its existing settled turn.
@@ -1071,12 +1093,15 @@ class ConversationRepository:
             events = json.loads(row["events_json"])
             if any(item.get("event_id") == event["event_id"] for item in events):
                 return True
-            events.append(event)
+            effect = self._business_effect_key(event)
+            duplicate = effect is not None and any(self._business_effect_key(item) == effect for item in events)
+            if not duplicate:
+                events.append(event)
             result = json.loads(row["result_json"]) if row["result_json"] else {}
             active = latest_consumed_input(events)
             current_input_id = active["input_id"] if active else json.loads(row["request_context_json"]).get("source_input_id")
             current_input = event.get("input_id") == current_input_id
-            if current_input:
+            if current_input and not duplicate:
                 result["continuation"] = event
             text = row["assistant_text"]
             shutdown_goal = self._goal_root(conn, turn_id) if row["status"] == "failed" and self.recoverable_business_failure(result) else None
@@ -1087,7 +1112,10 @@ class ConversationRepository:
                     workspace_id, member_id, event.get("task_id")))
             if current_input and (row["status"] == "completed" or shutdown_result):
                 response = {**result.get("response", {}), **response_patch}
-                text = text + ("\n\n" if text else "") + message
+                if event.get("phase") == "execution" and event.get("status") == "succeeded" and event.get("video_ready"):
+                    text = "成片已生成，可以查看或保存。"
+                elif not duplicate:
+                    text = text + ("\n\n" if text else "") + message
                 response["reply"] = text
                 result.update(kind="task_turn", response=response,
                               edit_preview=bool(response.get("edit_preview")))

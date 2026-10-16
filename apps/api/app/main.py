@@ -13801,6 +13801,36 @@ def _goal_pending_preview(goal, timeline_version_id):
     return _goal_projection().pending_preview(goal, timeline_version_id)
 
 
+def _goal_selection_context(goal, task, version, request, removed_refs):
+    """Rebuild only derived continuation references over this goal's proved chain."""
+    original = goal["request_context"]["target_snapshot"].get("selected_references", [])
+    timeline_kinds = {"shot", "narration", "audio", "subtitle", "effect"}
+    if not any(item["kind"] in timeline_kinds for item in original):
+        return {}, None
+    chain = _goal_projection().selection_version_chain(goal, version)
+    if chain is None:
+        raise AssistantReferenceConflict("接续引用没有同一输入的已核验版本链")
+    prefixes = {"shot": "clip", "narration": "narration", "audio": "audio", "subtitle": "cue", "effect": "overlay"}
+    items = []
+    for item in original:
+        if item["kind"] in timeline_kinds:
+            if f"{prefixes[item['kind']]}:{item['object_id']}" in removed_refs:
+                continue
+            if item["task_id"] != task.id or item["version"] not in chain:
+                raise AssistantReferenceConflict("接续引用不属于原目标的版本链")
+            item = {**item, "version": version.id}
+        items.append(item)
+    # Materialize current subtitle identities through their existing owner;
+    # derive track refs from the same selected cue, never a name/language guess.
+    tracks = _current_subtitle_tracks(task.workspace_id, task, current_version=version) if any(item["kind"] == "subtitle" for item in items) else []
+    items = [validate_timeline_reference(item, task=task, timeline=version, subtitle_tracks=tracks)
+             if item["kind"] in timeline_kinds else _validate_saved_assistant_reference(request, item) for item in items]
+    reference = normalize_selection({"kind": "selection", "items": items}) if items else None
+    items = reference["items"] if reference else []
+    refs = timeline_object_refs(items, task.id, subtitle_tracks=tracks)
+    return {"selected_references": items}, {"selected_reference": reference, "selected_object_refs": refs}
+
+
 def _verify_current_goal(goal, event):
     owner = _goal_projection()
     request = _goal_request(goal)
@@ -13858,6 +13888,9 @@ def _verify_current_goal(goal, event):
         return decision
     if adopted is not None:
         facts["adopted_operation"] = adopted
+    deferred = owner.deferred_edit_execution(goal, event)
+    if deferred is not None:
+        return deferred
     facts["observations"] = _task_observation_facts(task_id, request)
     context = goal["request_context"]
     for key in ("profile_reference", "knowledge_reference"):
@@ -13870,7 +13903,13 @@ def _verify_current_goal(goal, event):
             except HTTPException:
                 return owner.unavailable_fact("reference")
     checkpoint = _goal_output_checkpoint(goal, event, facts, task, version, actor, request)
-    return {**owner.ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint), "request": request}
+    try:
+        reference_snapshot, selection_context = _goal_selection_context(goal, task, version, request, removed_refs)
+    except (AssistantReferenceConflict, HTTPException):
+        return owner.unavailable_fact("reference")
+    fresh = owner.ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint)
+    fresh["task_version"].update(reference_snapshot)
+    return {**fresh, "selection_context": selection_context, "request": request}
 
 
 def _goal_output_checkpoint(goal, event, facts, task, version, actor, request):

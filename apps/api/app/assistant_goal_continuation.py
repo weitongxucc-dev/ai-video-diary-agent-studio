@@ -91,7 +91,8 @@ class GoalContinuationService:
                 self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"), expected_goal=goal)
             if readiness in {"waiting_identity", "waiting_result", "waiting_unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status=readiness,
-                    waiting_reason=fresh.get("reason", readiness), expected_goal=goal)
+                    waiting_reason=fresh.get("reason", readiness), event_id=event["event_id"] if fresh.get("consume_event") else None, expected_goal=goal,
+                    task_version=fresh.get("task_version"))
                 continue
             if readiness != "ready" or not isinstance(fresh.get("task_version"), dict):
                 raise ValueError("接续必须使用当前已核验身份、目标和版本，不能默认授权")
@@ -104,7 +105,8 @@ class GoalContinuationService:
                 "read_actual_output_and_continue" if event.get("phase") == "execution" else "evaluate_actual_result")
             self.repo.update_goal_checkpoint(root["id"], status="waiting_result", waiting_reason=checkpoint,
                 next_checkpoint=checkpoint, expected_goal=goal)
-            claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds)
+            claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds,
+                selection_context=fresh.get("selection_context"))
             if claim is None:
                 continue
             try:
@@ -190,13 +192,84 @@ class GoalResultProjection:
         }[kind]
         return {"status": status, "reason": reason}
 
-    @staticmethod
-    def verify_version(goal, event, task):
+    def bound_execution(self, goal, base_version):
+        matches = []
+        for event in self.production.list_task_events(goal["workspace_id"], goal["task_id"]):
+            if event.event_type != "assistant_execution_located":
+                continue
+            source = event.payload["source"]
+            if ((source.get("workspace_id"), source.get("task_id"), source.get("member_id"), source.get("conversation_id"))
+                    != (goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
+                    or source.get("expected_timeline_version_id") != base_version or not self.source_belongs_to_goal(goal, source)):
+                continue
+            job = self.production.get_job_run(goal["workspace_id"], event.payload["job_id"])
+            if job.task_id == goal["task_id"] and job.kind == "creation_task_execution":
+                matches.append((source, job))
+        return matches[0] if len(matches) == 1 else None
+
+    def owned_render_version(self, goal, version):
+        bound = self.bound_execution(goal, version.parent_version_id)
+        if bound is None or version.snapshot.get("render_input_timeline_version_id") != version.parent_version_id:
+            return False
+        rendered = self.production.goal_render_request_row(goal["workspace_id"], version.snapshot.get("creation_render_request_id"))
+        return bool(rendered and rendered["owner_id"] == bound[1].id and rendered["state"] == "done")
+
+    def owned_edit_version(self, goal, version):
+        for operation in self.production.list_edit_operations(goal["workspace_id"], goal["task_id"]):
+            if operation.status != "applied" or operation.result_version_id != version.id or operation.base_version_id != version.parent_version_id:
+                continue
+            proposal = self.production.get_edit_proposal(goal["workspace_id"], operation.proposal_id)
+            source = self.production.get_edit_intent(goal["workspace_id"], proposal.intent_id).constraints.get("request_source") or {}
+            if ((source.get("workspace_id"), source.get("task_id"), source.get("member_id"), source.get("conversation_id"))
+                    == (goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
+                    and source.get("expected_timeline_version_id") == version.parent_version_id
+                    and source.get("expected_timeline_sequence") == version.sequence - 1
+                    and self.source_belongs_to_goal(goal, source)):
+                return True
+        return False
+
+    def edit_result_current(self, source, task, result_version):
+        if task.current_timeline_version_id == result_version:
+            return True
+        goal = self.conversations.get_task_goal(source["assistant_turn_id"])
+        if goal is None or not self.source_belongs_to_goal(goal, source):
+            return False
+        version = self.production.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        return version.parent_version_id == result_version and self.owned_render_version(goal, version)
+
+    def selection_version_chain(self, goal, version):
+        original = goal["request_context"]["target_snapshot"].get("timeline_version_id")
+        chain = {version.id} if version else {None}
+        while version is not None and version.id != original:
+            if not (self.owned_edit_version(goal, version) or self.owned_render_version(goal, version)):
+                return None
+            if version.parent_version_id in chain:
+                return None
+            version = self.production.get_timeline_version(goal["workspace_id"], version.parent_version_id)
+            chain.add(version.id)
+        return chain if original in chain else None
+
+    def verify_version(self, goal, event, task):
         expected = goal["target_snapshot"].get("timeline_version_id")
         event_version = event.get("result_version_id") or event.get("base_version_id")
-        if event.get("base_version_id") != expected or task.current_timeline_version_id != event_version:
+        if event.get("base_version_id") != expected:
             return {"status": "invalidated", "reason": "unrelated_timeline_change"}
+        if task.current_timeline_version_id != event_version:
+            version = self.production.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
+            if (event.get("phase") != "apply" or version.parent_version_id != event_version
+                    or not self.owned_render_version(goal, version)):
+                return {"status": "invalidated", "reason": "unrelated_timeline_change"}
         return None
+
+    def deferred_edit_execution(self, goal, event):
+        if event.get("phase") != "apply" or event.get("status") != "confirmed":
+            return None
+        result = event.get("result_version_id")
+        if not self.bound_execution(goal, result):
+            return None
+        version = self.production.get_timeline_version(goal["workspace_id"], result)
+        return {"status": "waiting_result", "reason": "read_original_request_result", "consume_event": True,
+                "task_version": {"timeline_version_id": result, "timeline_sequence": version.sequence}}
 
     def request_verification(self, goal, event, actual):
         if event["status"] not in {"rejected", "not_submitted"}:
@@ -258,7 +331,11 @@ class GoalResultProjection:
         proposal = self.production.get_edit_proposal(goal["workspace_id"], event["proposal_id"])
         operation = next((item for item in self.production.list_edit_operations(goal["workspace_id"], goal["task_id"])
             if item.proposal_id == proposal.id and item.id == event.get("operation_id") and item.status == "applied"), None)
-        if proposal.status != "confirmed" or operation is None or operation.result_version_id != task.current_timeline_version_id:
+        current = task.current_timeline_version_id == (operation.result_version_id if operation else None)
+        if not current and operation is not None:
+            version = self.production.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
+            current = version.parent_version_id == operation.result_version_id and self.owned_render_version(goal, version)
+        if proposal.status != "confirmed" or operation is None or not current:
             return {"status": "invalidated", "reason": "adoption_result_not_current"}, None, removed
         if operation.operation_type == "DeleteClip":
             ref = f"clip:{operation.payload['clip_id']}"
@@ -567,7 +644,8 @@ class GoalResultProjection:
                                   if item.proposal_id == proposal.id and item.status == "applied"), None)
                 if operation is not None:
                     result_version = operation.result_version_id
-        current = current_version == (result_version or base_version)
+        current = (self.edit_result_current(source, task, result_version) if result_version is not None
+                   else current_version == base_version)
         inputs_current = True
         if job is not None and current_version == base_version:
             inputs_current = media.check(job, start, context.actor) == "ready"
@@ -592,8 +670,10 @@ class GoalResultProjection:
             message = "修改预览已完成，可以查看并决定是否采用；当前草稿尚未改变。"
         elif status == "confirmed" and operation is not None:
             event["operation_id"] = operation.id
-            event["waiting_reason"] = "当前草稿已保存；这次修改尚未反映到成片。"
-            message = "修改已应用并保存到草稿，可撤销；成片尚未重新生成。"
+            event["waiting_reason"] = ("当前草稿已保存；这次修改尚未反映到成片。" if current_version == result_version
+                                       else "修改已保存，后续制作沿同一输入的回执核验。")
+            message = ("修改已应用并保存到草稿，可撤销；成片尚未重新生成。" if current_version == result_version
+                       else "修改已保存，可撤销；后续制作已有独立回执。")
         elif status == "rejected":
             event["waiting_reason"] = "修改方案已放弃；等待新的明确要求。"
             message = "修改方案已放弃，当前草稿保持不变。"
@@ -698,7 +778,8 @@ class GoalResultProjection:
         source, binding = context.source, context.binding
         if result.applied is not None:
             operation=result.applied
-            current=context.task.current_timeline_version_id == operation.result_version_id
+            direct_current=context.task.current_timeline_version_id == operation.result_version_id
+            current=self.edit_result_current(source, context.task, operation.result_version_id)
             status="stopped" if binding["status"] == "stopped" else "confirmed" if current else "stale"
             if current:
                 patch={**patch,"timeline_action":"apply","edit_preview":None}
@@ -708,7 +789,8 @@ class GoalResultProjection:
                 "proposal_id":operation.proposal_id,"operation_id":operation.id,
                 "status":status,"edit_request":result.locator,"actionable":False,
                 "waiting_reason":"原直接编辑回执已核验；后续版本变化不改绑原请求。"}
-            return GoalProjection(event,patch,"原直接编辑已保存并回读，可整项撤销；尚未重新生成视频。" if current
+            return GoalProjection(event,patch,("原直接编辑已保存并回读，可整项撤销；尚未重新生成视频。" if direct_current
+                else "原编辑已保存，可撤销；对应成片制作结果请查看当前回执。") if current
                 else "原直接编辑的保存结果已回读；当前已有后续版本，保留为历史回执。")
         status = result.locator["status"] if context.task.current_timeline_version_id == source["expected_timeline_version_id"] else "stale"
         event = {"type": "business_result", "event_id": context.candidate["event_id"], "phase": "request",
