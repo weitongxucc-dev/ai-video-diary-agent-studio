@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R9-SOURCE-CLOSEOUT-20261016只读核已知旧入口和最后四组迁移差额，仅fresh-api-source-closeout/**一份紧凑报告；零产品写权/import/test/native/全仓扫描。已过批次冻结复用。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | 当前REF-R2-METADATA-CONFIRM-OWNER-20261016独占main.py仅五类元数据确认分支、creation/editing/metadata_use_case.py及test_metadata_edit_use_case.py；复用原计算/事务，最小新metadata自测，其他源/旧接受冻结。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 首轮实验因固定swap启动上限拒绝，零factory/DB/native，driver组已退出；证据冻结并归还，当前无新增执行权，不重复采样/重试或加cap。完整标定后置，最小实机闭环仍环境阻断。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -26,6 +26,14 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 必要元数据确认归属收敛（当前施工）
+
+SOURCE_CLOSEOUT_RELEASE ea9d879c2eb5a969d789b07a068a131e80e5092e4ca81b834696f0f0fddcfa03已root核18当前源/3旧引用与直接公开caller。最后四组、旧两media入口/所属store/import目标有限关闭；但公开canvas/reorder提案仍从两种confirm入口进入main具体业务，不能将其当死代码或全部源码关闭。root source-closeout-metadata-reviewed.json记录，报告和旧门冻结。封面/翻译/RemoveSilence及goal freshness/projection其余既有body仍是已列观察缺口，后续只处理必要源码差额，不据本包关闭整体R9，不扩大性能/GUI/模型矩阵。
+
+REF-R2-METADATA-CONFIRM-OWNER-20261016唯一API精确三源：apps/api/app/main.py（初04454726…）仅_confirm_creation_task_edit的ReorderTimelineItems/ChangePresenterShare/CLIP_METADATA_OPERATIONS/PICTURE_METADATA_OPERATIONS/ChangeCanvas五族及必要有限import/调用；apps/api/app/creation/editing/metadata_use_case.py（初d4b85d3c…）现owner新增具体confirm能力/实际所需有限helper；apps/api/tests/test_metadata_edit_use_case.py（初40f14394…）仅一个新focused node。完整hash以本source-closeout release checked_source_hashes为准，tracked clean/HEAD aac3db5a，root仅合同提交不改产品。全部其余文件/旧证据只读。显式传task/proposal/trusted identity/source，不引main/Request/HTTP反射/依赖袋/新dispatcher/仓储或规则重复；复用现owner已具备的计算、source verifier/affected scope、同conn persist_montage_edit/persist_subtitle_edit。原no-request与request claim/replay/input-null/固定result/错误类及文本时点/authorization/wake保持，reorder旁白字幕关联、canvas/cover状态/单版本undo与source/CAS次序不改变。只迁五body，不把其余媒体确认、原shared claim/journal或新资源政策混进来；必要额外依赖先报确切symbol/files。main只保留有限选择、身份提取、HTTP/result映射与现公共协议。
+
+最小验证一个新增metadata node：复用现公开合法fixture/既有helper，原owner公开reorder提案→新confirm→fresh回读原版本/单次应用事实；无native或模型，不跑旧作者normal/全部metadata/编辑/质检/三尺寸矩阵。普通原body迁交且guard/事务未变不另设QA；若实际修改关键身份/来源/版本/事务/unknown规则，准确报差额由root保留一个真正必要独立反例，不能为了省QA放宽规则。只新fresh-api-metadata-confirm-owner/**，执行前封三源和脚本/owned env路径，原最小conftest组装如必要保持原37隔离值；使用current checkout必要实际origins，无全源码/AST/overlay/202map重建。稳定SOURCE_RELEASE准确3hash/diff与target body等价证明后冻结，root快速源审、必要门和精确集成/即时归还；短语义ACK后直接施工，无第二START。
 
 ### 当前加速收口决定（2026-10-16用户最新指令优先）
 
