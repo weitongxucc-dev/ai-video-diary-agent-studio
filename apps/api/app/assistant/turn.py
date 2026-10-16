@@ -66,6 +66,8 @@ def run_turn(
         knowledge_reference=knowledge_reference, task_version=task_version, turn_id=turn_id, creation_request=creation_request,
         message=message, tool_names=tool_names)
     env["AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES"] = json.dumps(selected_references or [],ensure_ascii=False)
+    env["AI_VIDEO_DIARY_AGENT_INPUT_ID"] = str((continuation_context or {}).get("source_input_id") or "")
+    env["AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID"] = str((continuation_context or {}).get("source_input_turn_id") or "")
     envelope = capability_envelope(tool_names=tool_names, task_id=task_id, stage=stage,
         selected_refs=selected_refs, material_selection=material_selection, task_version=task_version)
     prompt = enrich_prompt(prompt, envelope, continuation_context=continuation_context, task_id=task_id,

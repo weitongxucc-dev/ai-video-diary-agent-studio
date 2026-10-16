@@ -819,10 +819,12 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     receipt. Only media measurement/rendering is a seam here. Real decoding,
     silence/size/duration checks remain in the separate real-media regressions.
     """
-    from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor, CpuRenderLimits
     from app.device_runtime import OwnerRegistration, build_device_runtime
     from app.member_permits import MemberDeviceAccess
     from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT
+    from app.media.clip_preview import ClipPreviewExecutor
+    from app.media.picture_preview import PicturePreviewRenderer
     from app.host_resource_probes import HostProcessProbe
     from _media_preview_test_fixtures import ControlledResources
     actor = CreationExecutionActor(state.workspace_id,state.member.member_id)
@@ -830,6 +832,7 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     def live_identity(candidate):
         return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
     access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
+    monkeypatch.setattr(main_module.settings, 'native_ocr_worker_path', None, raising=False)
     clip_profile = synthetic_clip_preview_budget()
     monkeypatch.setattr(main_module, 'clip_preview_budget_from_env', lambda:clip_profile)
     def facts(workspace,task_id,operation,arguments,original):
@@ -843,19 +846,17 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         stable={key:value for key,value in payload.items() if key not in {'status','message','updated_at','output_path','subtitle_path'}}
         return {'base_version_id':current.current_timeline_version_id,'montage':stable}, {
             'kind':'creation_render','execution_mode':'cpu_ffmpeg','threads':1,'timeout_seconds':10,'max_output_bytes':1024**2}
+    original_picture_render = PicturePreviewRenderer.render_picture_input
     def render(workspace,task_id,inputs,path,context):
-        if 'clip' in inputs:
-            assert TASK_MEDIA_CONTEXT.get() is None
-        else:
-            assert TASK_MEDIA_CONTEXT.get()[0].grant == context.grant
-            assert TASK_MEDIA_CONTEXT.get()[0].scheduler is context.scheduler
+        assert TASK_MEDIA_CONTEXT.get() is None
         assert context.grant.workspace_id==state.workspace_id and context.grant.owner_type=='creation_job'
         context.check()
         state.preview_inputs.append(inputs)
         if capture is not None:
             capture(inputs)
         if facts_override is not None:
-            main_module._render_task_picture_input(workspace, task_id, inputs, path, context)
+            renderer = main_module._picture_preview_components(state.production)[2]
+            original_picture_render(renderer, workspace, task_id, inputs, path, context)
         else:
             path.write_bytes(b'domain-render-receipt')
     def clip_input(inputs, path, context):
@@ -864,6 +865,13 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         return service.picture_renderer(state.workspace_id, state.task.id, inputs, path, context)
     if facts_override is None:
         monkeypatch.setattr('app.media.clip_preview.render_clip_input', clip_input)
+        monkeypatch.setattr(PicturePreviewRenderer, 'render_picture_input',
+            lambda self,workspace,task_id,inputs,path,context:render(workspace,task_id,inputs,path,context))
+        def measured_video(path, context, *, expected_size, expected_duration_seconds, silent=False):
+            context.check()
+            assert path.read_bytes() == b'domain-render-receipt'
+            return {'duration_seconds':expected_duration_seconds,'sample_rate':None,'channels':None}
+        monkeypatch.setattr('app.montage.probe_preview_video', measured_video)
     original_measure = TaskAudio._measure_publication
     def measure(self,path,operation,inputs,context):
         if facts_override is not None or operation not in {"clip_preview", "picture_preview"}:
@@ -872,18 +880,21 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         duration=(min(5,inputs['clip']['timeline_end_seconds']-inputs['clip']['timeline_start_seconds'])
                   if 'clip' in inputs else inputs['plan']['duration_seconds'])
         return {'duration_seconds':duration,'sample_rate':None,'channels':None}
-    def validate(job,event,result,context):
-        context.check()
-        assert state.production.get_job_run(job.workspace_id,job.id).status=='running'
     state.preview_inputs=[]
-    def execute(job,event,original):
-        try:
-            return main_module._execute_task_media_operation(job,event,original)
-        except Exception as exc:
-            state.preview_error=repr(exc)+' CAUSE='+repr(exc.__cause__)
-            raise
-    media=TaskMediaJobs(state.production,facts=facts_override or facts,execute_operation=execute,
-        validate_result=validate_override or validate,verify_identity=access.verify_identity)
+    if validate_override is not None:
+        monkeypatch.setattr(TaskAudio,'validate_publications',
+            lambda self,job,event,result,context:validate_override(job,event,result,context))
+    media=TaskMediaJobs(state.production,facts=facts_override or facts,verify_identity=access.verify_identity,
+        audio_ingress=main_module._audio_ingress_use_case(state.production),
+        audio_edit=main_module._audio_edit_use_case(state.production),
+        output_observation=main_module._output_observation_use_case(state.production),
+        media_script=main_module._media_script_use_case(state.production),
+        visual_preview=main_module._visual_preview_use_case(state.production),
+        compound_selection=main_module._compound_edit_use_case(state.production),
+        exact_preview=main_module._exact_preview_use_case(state.production),
+        command_preview=main_module._command_preview_use_case(state.production),
+        clip_preview=ClipPreviewExecutor(main_module._clip_preview_use_case(state.production),
+            TaskAudio(state.production,main_module.artifact_store,main_module.settings.effective_temporary_root_path)))
     resources = ControlledResources()
     if facts_override is not None:
         from app.host_resource_probes import HostBudget, HostResourceProbe
@@ -895,7 +906,8 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     runtime=build_device_runtime(database_path=state.production.database_path,
         device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
         registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
-            verify_identity=access.verify_identity,task_media=media),CreationJobUnitExecutor(state.production,
+            verify_identity=access.verify_identity,task_media=media,
+            cpu_render_limits=CpuRenderLimits(32*1024**2,1,30)),CreationJobUnitExecutor(state.production,
             render_action=None,render_is_valid=None,task_media=media))},resources=resources,
         processes=HostProcessProbe())
     state.preview_runtime=runtime

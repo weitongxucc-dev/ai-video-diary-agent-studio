@@ -30,13 +30,25 @@ let raw='';for await(const part of process.stdin)raw+=part;
 const input=JSON.parse(raw);
 const {openCreationSession}=await import(pathToFileURL(input.sessionModule));
 const {createSessionResult}=await import(pathToFileURL(input.resultModule));
+const {creationInputExtension}=await import(pathToFileURL(input.inputModule));
 const {AssistantMessageEventStream}=await import(pathToFileURL(join(dirname(dirname(input.modulePath)),
   'node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js')));
 await writeFile(join(input.cwd,'models.json'),JSON.stringify({providers:{'ai-video-diary':{
   baseUrl:'http://127.0.0.1:9',api:'openai-completions',apiKey:'unused',
   models:[{id:'synthetic-edit',contextWindow:32768,maxTokens:1024}],
 }}}));
-const current=await openCreationSession({...input,modelId:'synthetic-edit',systemPrompt:'按工具真实回执回答。'});
+let current;
+const inputExtension=creationInputExtension({getSession:()=>current.session,
+  rebind:environment=>current.rebindTools({...process.env,...environment}),
+  ask:async(phase,id,mode)=>{
+    if(!input.inputBridge)return null;
+    const response=await fetch(input.inputBridge,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phase,input_id:id,mode})});
+    if(!response.ok)throw new Error(await response.text());
+    return response.json();
+  }});
+current=await openCreationSession({...input,modelId:'synthetic-edit',systemPrompt:'按工具真实回执回答。',
+  extensionFactories:input.inputBridge?[inputExtension]:[]});
 const result=createSessionResult(input.sessionId);const events=[];
 current.session.subscribe(event=>{result.observe(event);events.push(event);});
 let index=0;
@@ -52,7 +64,9 @@ current.session.agent.streamFunction=()=>{
   });return stream;
 };
 try{await current.session.prompt(input.message,{source:'rpc'});
-  process.stdout.write(JSON.stringify({...result.value(),history_count:current.session.messages.length})+'\n');
+  if(inputExtension.getFailure())throw inputExtension.getFailure();
+  process.stdout.write(JSON.stringify({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? null,
+    history_count:current.session.messages.length})+'\n');
 }finally{current.session.dispose();}
 """
 
@@ -88,14 +102,34 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         effective_llm_provider="synthetic", effective_llm_model="synthetic-edit", effective_llm_api_key=None))
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
     requests = []
+    input_headers = []
+    delivery = {}
 
     class Bridge(BaseHTTPRequestHandler):
         def exchange(self):
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(length) if length else None
+            if self.path == "/fixture/input-checkpoint":
+                value=json.loads(body)
+                if value["phase"] == "next" and not delivery.get("input_id") and any(
+                        item[1].endswith("/edits/exact") for item in requests[delivery["request_offset"]:]):
+                    current=conversations.get(chat["id"],"ws",state.member.member_id)
+                    message=delivery["message"]
+                    saved=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,current["draft_version"])
+                    input_id=str(uuid4())
+                    accepted=state.client.post(f"/api/assistant/conversations/{chat['id']}/inputs",json={
+                        "target_turn_id":delivery["turn_id"],"client_request_id":input_id,"message":message,"mode":"steer",
+                        "expected_draft_version":saved["draft_version"],"expected_reference_version":saved["reference_version"]})
+                    assert accepted.status_code == 200,accepted.text
+                    delivery["input_id"]=input_id
+                result=delivery["handler"](value["phase"],value.get("input_id"),value.get("mode"))
+                self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
+                self.wfile.write(json.dumps(result).encode());return
             response = state.client.request(self.command, self.path, content=body,
-                headers={"Content-Type": "application/json", "X-Local-Member-Token": state.token})
+                headers={"Content-Type": "application/json", "X-Local-Member-Token": state.token,
+                    **({"X-Assistant-Input-ID":self.headers["X-Assistant-Input-ID"]} if self.headers.get("X-Assistant-Input-ID") else {})})
             requests.append((self.command, self.path, json.loads(body) if body else None, response.status_code))
+            input_headers.append(self.headers.get("X-Assistant-Input-ID"))
             self.send_response(response.status_code)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -132,7 +166,18 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
             AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES=json.dumps(capabilities),
             AI_VIDEO_DIARY_AGENT_PI_MODULE=str(module), AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS=",".join(controls))
         steps = [{"name": "read_current_task", "args": {}}]
-        if kwargs["message"] == "撤销上一步修改":
+        bridge=None
+        if kwargs["message"] in {"先改成旧输入文字，然后继续生成视频","先修改，追加输入只作澄清"}:
+            clarification=kwargs["message"] == "先修改，追加输入只作澄清"
+            delivery.clear()
+            delivery.update(handler=kwargs["input_handler"],turn_id=kwargs["turn_id"],request_offset=len(requests),
+                message="只澄清当前保存结果，不再修改或生成" if clarification else "把字幕改成追加输入文字，然后继续生成视频")
+            bridge=f"http://127.0.0.1:{server.server_port}/fixture/input-checkpoint"
+            steps += [{"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"澄清前的修改" if clarification else "旧输入文字"}}]
+            if not clarification:steps += [{"name":"read_current_task","args":{}},
+                {"name":"read_task_edit_capabilities","args":{}},
+                {"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"追加输入文字"}}]
+        elif kwargs["message"] == "撤销上一步修改":
             steps += [{"name": "read_edit_control_context", "args": {}}, {"name": "undo_last_edit", "args": {}}]
         elif kwargs["message"] == "画布改成横屏16:9":
             steps += [{"name":"apply_typed_edit","args":{"operation_type":"ChangeCanvas","aspect_ratio":"16:9","fit_mode":"fit"}}]
@@ -143,6 +188,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
             timeout=30, input=json.dumps({"modulePath": str(module), "cwd": str(cwd),
                 "sessionModule": str(api_root / "agent_runtime/session.mjs"),
                 "resultModule": str(api_root / "agent_runtime/result.mjs"),
+                "inputModule": str(api_root / "agent_runtime/input-delivery.mjs"), "inputBridge":bridge,
                 "extensionPath": str(api_root / "agent_tools/diary_tools.ts"),
                 "sessionDir": str(cwd / "sessions"), "sessionId": session_id,
                 "tools": controls, "message": kwargs["message"], "steps": steps}))
@@ -208,6 +254,63 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert [turn["status"] for turn in reopened.list_turns(chat["id"])] == ["completed"] * 5
         assert state.repo.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
         assert state.repo.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
+        current=state.repo.get_creation_task("ws",state.task.id)
+        version=state.repo.get_timeline_version("ws",current.current_timeline_version_id)
+        saved=conversations.get(chat["id"],"ws",state.member.member_id)
+        message="先改成旧输入文字，然后继续生成视频"
+        draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
+        response=state.client.post(state.url+"/assistant/turn",json={"conversation_id":chat["id"],
+            "client_request_id":str(uuid4()),"message":message,"expected_draft_version":draft["draft_version"],
+            "expected_reference_version":draft["reference_version"],"expected_timeline_version_id":version.id,
+            "expected_timeline_sequence":version.sequence,"context_stage":"montage","selected_object_refs":[]})
+        assert response.status_code == 200,response.text
+        root_id=response.json()["turn_id"]
+        receipt=conversations.list_inputs(chat["id"],"ws",state.member.member_id)[0]
+        assert receipt["input_id"] == delivery["input_id"] and receipt["status"] == "completed"
+        goal=conversations.get_task_goal(root_id)
+        assert goal["source_input_id"] == receipt["input_id"]
+        edits=[item["result"]["details"] for item in outputs[-1]["tool_results"] if item["toolName"] == "apply_typed_edit"]
+        assert [item["input_id"] for item in edits] == [None,receipt["input_id"]]
+        assert edits[-1]["input_turn_id"] == root_id
+        assert input_headers[-1] == receipt["input_id"]
+        assert state.repo.get_creation_task_montage_plan("ws",state.task.id)["cues"][0]["text"] == "追加输入文字"
+        locator=response.json()["edit_request"]
+        source=state.repo.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
+        assert source["input_id"] == receipt["input_id"] and source["expected_timeline_version_id"] == receipt["request_context"]["target_snapshot"]["timeline_version_id"]
+        monkeypatch.setattr(main,"LEGACY_WORKSPACE_ID","ws")
+        assert main._reconcile_assistant_business_results() > 0
+        continuations=[]
+        def read_after_apply(_settings,**kwargs):
+            continuations.append(kwargs)
+            assert kwargs["continuation_context"]["source_input_id"] == receipt["input_id"]
+            assert kwargs["continuation_context"]["business_event"]["phase"] == "apply"
+            assert kwargs["task_version"]["timeline_version_id"] == locator["result"]["operation"]["result_version_id"]
+            assert "然后继续生成视频" in kwargs["message"]
+            assert kwargs["caller_user_id"] == state.member.member_id
+            return "已读取真实保存结果，本测试不启动媒体。",None
+        monkeypatch.setattr(main,"run_task_turn",read_after_apply)
+        assert main._goal_service().reconcile() == 1 and len(continuations) == 1
+        assert main._goal_service().reconcile() == 0
+        assert conversations.list_turns(chat["id"])[-1]["user_message"] == ""
+        assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 5
+        monkeypatch.setattr(main,"run_task_turn",run_sdk)
+        version=state.repo.get_timeline_version("ws",state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id)
+        saved=conversations.get(chat["id"],"ws",state.member.member_id)
+        message="先修改，追加输入只作澄清"
+        draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
+        clarified=state.client.post(state.url+"/assistant/turn",json={"conversation_id":chat["id"],"client_request_id":str(uuid4()),
+            "message":message,"expected_draft_version":draft["draft_version"],"expected_reference_version":draft["reference_version"],
+            "context_stage":"montage","selected_object_refs":[],"expected_timeline_version_id":version.id,"expected_timeline_sequence":version.sequence})
+        assert clarified.status_code == 200,clarified.text
+        assert clarified.json()["timeline_action"] is None and clarified.json()["edit_request"] is None
+        assert outputs[-1]["input_id"] == delivery["input_id"]
+        old_receipts=[item["result"]["details"] for item in outputs[-1]["tool_results"] if item["toolName"] == "apply_typed_edit"]
+        assert len(old_receipts) == 1 and old_receipts[0]["input_id"] is None
+        assert conversations.get_task_goal(clarified.json()["turn_id"]) is None
+        assert conversations.list_inputs(chat["id"],"ws",state.member.member_id)[-1]["status"] == "completed"
+        original_receipt=state.client.get(old_receipts[0]["query_url"])
+        assert original_receipt.status_code == 200 and original_receipt.json()["result_status_code"] == 200
+        assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 6
     finally:
         server.shutdown()
         server.server_close()

@@ -81,7 +81,7 @@ def test_lifecycle_driver_completes_preview_and_projects_user_decision_once(stat
         assert result.status_code == 200, result.text
         outcome = await_projection(state, lambda item: item["result"].get("continuation", {}).get("status") == "confirmed")
         assert outcome["result"]["continuation"]["result_version_id"] == result.json()["operation"]["result_version_id"]
-        assert "等待明确生成决定" in outcome["result"]["continuation"]["waiting_reason"]
+        assert outcome["result"]["continuation"]["waiting_reason"] == "当前草稿已保存；这次修改尚未反映到成片。"
     else:
         # A genuine new user decision goes through the existing trusted
         # control-turn contract; the driver never invents this instruction.
@@ -151,7 +151,7 @@ def test_failure_is_projected_without_retry_or_fabricated_proposal(state, monkey
     queued = state.submit()
     assert queued.status_code == 202
     media = state.runtime.registrations["creation_job"].owner.task_media
-    monkeypatch.setattr(media, "execute_operation", lambda *_: (_ for _ in ()).throw(ValueError("fixture failure")))
+    monkeypatch.setattr(media.clip_preview, "execute", lambda *_: (_ for _ in ()).throw(ValueError("fixture failure")))
     state.finish()
     assert state.runtime.run_once()
     main.start_assistant_continuation_driver()
@@ -207,6 +207,7 @@ def test_assistant_dispatch_persists_unknown_request_location_without_502(state,
     monkeypatch.setattr(main, "run_task_turn", trusted_tool_receipt)
     response = state.raw_post(state.base_url + "/assistant/turn", json={
         "conversation_id": chat["id"], "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"],
+        "expected_reference_version":chat["reference_version"],
         "message": raw, "context_stage": "montage", "selected_object_refs": [f"clip:{state.clip.id}"],
         "expected_timeline_version_id": state.version.id, "expected_timeline_sequence": state.version.sequence})
     assert response.status_code == 200, response.text

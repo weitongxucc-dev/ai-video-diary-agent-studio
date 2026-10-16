@@ -5821,14 +5821,17 @@ class ProductionRepository:
             return conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
                 (workspace_id, request_id)).fetchone() if request_id else None
 
-    def goal_output_provenance_rows(self, workspace_id, task_id, request_id, conversation_id, member_id, media_kind):
+    def goal_output_provenance_rows(self, workspace_id, task_id, request_id, conversation_id, member_id, media_kind,
+                                    *, input_id=None, input_turn_id=None):
         with self._connect() as conn:
             rendered = conn.execute("SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?",
                 (workspace_id, request_id)).fetchone()
             located = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
                 "AND event_type='assistant_execution_located' AND job_id=? "
-                "AND json_extract(payload_json,'$.source.conversation_id')=? AND json_extract(payload_json,'$.source.member_id')=?",
-                (workspace_id, task_id, rendered["owner_id"] if rendered else None, conversation_id, member_id)).fetchone()
+                "AND json_extract(payload_json,'$.source.conversation_id')=? AND json_extract(payload_json,'$.source.member_id')=? "
+                "AND json_extract(payload_json,'$.source.input_id') IS ? AND json_extract(payload_json,'$.source.input_turn_id') IS ?",
+                (workspace_id, task_id, rendered["owner_id"] if rendered else None, conversation_id, member_id,
+                 input_id, input_turn_id)).fetchone()
             pending = conn.execute("SELECT e.payload_json FROM job_runs j JOIN task_events e "
                 "ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start' "
                 "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.status IN ('queued','running','interrupted') "

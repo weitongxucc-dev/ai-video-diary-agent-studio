@@ -35,8 +35,8 @@ class GoalContinuationService:
         return bool(goal and event.get("type") == "business_result" and event.get("event_id")
                     and event.get("task_id") == goal["task_id"])
 
-    def invalidate(self, turn_id: str, reason: str) -> bool:
-        return self.repo.invalidate_task_goal(turn_id, reason)
+    def invalidate(self, turn_id: str, reason: str, *, expected_goal: dict | None = None) -> bool:
+        return self.repo.invalidate_task_goal(turn_id, reason, expected_goal=expected_goal)
 
     def reconcile(self, *, limit: int = 8) -> int:
         advanced = 0
@@ -44,7 +44,7 @@ class GoalContinuationService:
             root, event = candidate["root"], candidate["event"]
             goal, status = root["goal"], event.get("status")
             if event.get("task_id") != goal["task_id"]:
-                self.invalidate(root["id"], "business_event_target_changed")
+                self.invalidate(root["id"], "business_event_target_changed", expected_goal=goal)
                 continue
             # A rejected user decision is final. A rejected/not-submitted
             # *request* is different: the host may prove no effect and permit
@@ -53,7 +53,7 @@ class GoalContinuationService:
                                                     and goal["status"] == "waiting_adoption")
             if (status in {"stale", "cancelled", "stopped"} and not stale_observation_awaiting_adoption
                     or status == "rejected" and event.get("phase") != "request"):
-                self.invalidate(root["id"], f"business_result_{status}")
+                self.invalidate(root["id"], f"business_result_{status}", expected_goal=goal)
                 continue
             if goal["status"] == "waiting_adoption" and status != "confirmed":
                 # Observation/program results can arrive out of order, even
@@ -61,49 +61,49 @@ class GoalContinuationService:
                 # old result without treating it as adoption or making the
                 # pending confirmed event stale before it can be verified.
                 if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
-                        waiting_reason="await_real_adoption", event_id=event["event_id"]):
+                        waiting_reason="await_real_adoption", event_id=event["event_id"], expected_goal=goal):
                     advanced += 1
                 continue
             if status == "proposed" or (event.get("phase") == "request" and event.get("actionable")):
                 if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
-                        waiting_reason="await_real_adoption", event_id=event["event_id"]):
+                        waiting_reason="await_real_adoption", event_id=event["event_id"], expected_goal=goal):
                     advanced += 1
                 continue
             if status in {"queued", "running", "pending", "result_unknown", "unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status="waiting_unknown" if status in {"result_unknown", "unknown"} else "waiting_result",
-                    waiting_reason="read_original_request_result", event_id=event["event_id"])
+                    waiting_reason="read_original_request_result", event_id=event["event_id"], expected_goal=goal)
                 continue
             fresh = self.verify_current_goal(goal, event)
             readiness = fresh["status"]
             if readiness == "invalidated":
-                self.invalidate(root["id"], fresh.get("reason", "current_goal_invalidated"))
+                self.invalidate(root["id"], fresh.get("reason", "current_goal_invalidated"), expected_goal=goal)
                 continue
             if readiness in {"ready", "waiting_adoption"} and "completed_source_slots" in fresh:
-                self.repo.record_goal_completed_sources(root["id"], fresh["completed_source_slots"])
+                self.repo.record_goal_completed_sources(root["id"], fresh["completed_source_slots"], expected_goal=goal)
             if readiness == "waiting_adoption":
                 # A completed observation must never authorize execution while
                 # another actual proposal is awaiting the real user's adoption.
                 if self.repo.update_goal_checkpoint(root["id"], status="waiting_adoption",
-                        waiting_reason=fresh.get("reason", "await_real_adoption"), event_id=event["event_id"]):
+                        waiting_reason=fresh.get("reason", "await_real_adoption"), event_id=event["event_id"], expected_goal=goal):
                     advanced += 1
                 continue
             if readiness == "ready":
-                self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"))
+                self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"), expected_goal=goal)
             if readiness in {"waiting_identity", "waiting_result", "waiting_unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status=readiness,
-                    waiting_reason=fresh.get("reason", readiness))
+                    waiting_reason=fresh.get("reason", readiness), expected_goal=goal)
                 continue
             if readiness != "ready" or not isinstance(fresh.get("task_version"), dict):
                 raise ValueError("接续必须使用当前已核验身份、目标和版本，不能默认授权")
             if event.get("phase") == "request" and status in {"rejected", "not_submitted"} and fresh.get("no_side_effect") is not True:
-                self.repo.update_goal_checkpoint(root["id"], status="waiting_unknown", waiting_reason="request_effect_not_verified")
+                self.repo.update_goal_checkpoint(root["id"], status="waiting_unknown", waiting_reason="request_effect_not_verified", expected_goal=goal)
                 continue
             checkpoint = ("continue_after_real_adoption" if status == "confirmed" else
                 "read_completed_source_and_continue" if event.get("result_kind") == "graphic_source" else
                 "read_observed_result_and_continue" if event.get("result_kind") == "observation" else
                 "read_actual_output_and_continue" if event.get("phase") == "execution" else "evaluate_actual_result")
             self.repo.update_goal_checkpoint(root["id"], status="waiting_result", waiting_reason=checkpoint,
-                next_checkpoint=checkpoint)
+                next_checkpoint=checkpoint, expected_goal=goal)
             claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds)
             if claim is None:
                 continue
@@ -274,6 +274,12 @@ class GoalResultProjection:
             "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources,
             **({"completed_output_checkpoint": checkpoint} if checkpoint else {})}
 
+    def source_belongs_to_goal(self, goal, source):
+        bound = self.conversations.get_task_goal(source["assistant_turn_id"])
+        return bool(bound and bound["original_turn_id"] == goal["original_turn_id"]
+            and source.get("input_id") == goal.get("source_input_id")
+            and source.get("input_turn_id") == goal.get("source_input_turn_id"))
+
     def script_source_slot(self, goal, job_id, actor, artifact_store, outputs):
         from app.creation_execution import CreationExecutionActor
         from app.graphic_sources import graphic_source_facts
@@ -282,12 +288,11 @@ class GoalResultProjection:
         job = self.production.get_job_run(goal["workspace_id"], job_id)
         start = self.production.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
         source = start["arguments"]["_typed_source"]
-        producer_goal = self.conversations.get_task_goal(source["assistant_turn_id"])
         if (job.task_id != goal["task_id"] or job.kind != TASK_MEDIA_KIND or job.status != "succeeded"
                 or start["result_kind"] != "graphic_source" or CreationExecutionActor.from_event(job.workspace_id, start) != actor
                 or (source["workspace_id"], source["task_id"], source["member_id"], source["conversation_id"]) != (
                     goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
-                or producer_goal is None or producer_goal["original_turn_id"] != goal["original_turn_id"]
+                or not self.source_belongs_to_goal(goal, source)
                 or media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest):
             raise ValueError("已完成程序来源不属于原目标的实际成功作业")
         payload = start["arguments"]["payload"]
@@ -320,8 +325,7 @@ class GoalResultProjection:
         slots = []
         for row in rows:
             source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
-            bound = self.conversations.get_task_goal(source["assistant_turn_id"])
-            if bound and bound["original_turn_id"] == goal["original_turn_id"]:
+            if self.source_belongs_to_goal(goal, source):
                 slots.append(self.script_source_slot(goal, row["id"], actor, artifact_store, outputs))
         return slots
 
@@ -332,8 +336,7 @@ class GoalResultProjection:
             for row in rows:
                 source = (json.loads(row["constraints_json"])["request_source"] if status == "waiting_adoption"
                     else json.loads(row["payload_json"])["arguments"]["_typed_source"])
-                bound = self.conversations.get_task_goal(source["assistant_turn_id"])
-                if bound and bound["original_turn_id"] == goal["original_turn_id"]:
+                if self.source_belongs_to_goal(goal, source):
                     return {"status": status, "reason": "await_real_adoption" if status == "waiting_adoption"
                         else "await_actual_preview_result", "pending_id": row["id"]}
         return None
@@ -349,9 +352,8 @@ class GoalResultProjection:
                 or result.get("measurement_scope") != "actual_output_bounded_frames"):
             return None
         observed = self.production.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
-        producer = observed["arguments"].get("_typed_source", {}).get("assistant_turn_id")
-        original = self.conversations.get_task_goal(producer) if producer else None
-        if original is None or original["original_turn_id"] != goal["original_turn_id"]:
+        source = observed["arguments"].get("_typed_source", {})
+        if not source.get("assistant_turn_id") or not self.source_belongs_to_goal(goal, source):
             return None
         return {"receipt": receipt, "result": result, "observed_start": observed}
 
@@ -364,18 +366,17 @@ class GoalResultProjection:
             return None
         rendered, located, pending, unknown = self.production.goal_output_provenance_rows(
             task.workspace_id, task.id, version.snapshot.get("creation_render_request_id"),
-            goal["conversation_id"], goal["member_id"], TASK_MEDIA_KIND)
+            goal["conversation_id"], goal["member_id"], TASK_MEDIA_KIND,
+            input_id=goal.get("source_input_id"),input_turn_id=goal.get("source_input_turn_id"))
         for row in pending:
             source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
-            pending_goal = self.conversations.get_task_goal(source["assistant_turn_id"])
-            if pending_goal and pending_goal["original_turn_id"] == goal["original_turn_id"]:
+            if self.source_belongs_to_goal(goal, source):
                 return None
         return {"rendered": rendered, "located": located, "unknown_requests": unknown}
 
     def unknown_request_for_goal(self, goal, row):
         data = json.loads(row["payload_json"])
-        unknown_goal = self.conversations.get_task_goal(data["source"]["assistant_turn_id"])
-        if unknown_goal and unknown_goal["original_turn_id"] == goal["original_turn_id"]:
+        if self.source_belongs_to_goal(goal, data["source"]):
             return data["locator"]
         return None
 
@@ -388,9 +389,8 @@ class GoalResultProjection:
         if rendered is None or rendered["state"] != "done" or located is None:
             return None
         source = json.loads(located["payload_json"])
-        execution_goal = self.conversations.get_task_goal(source["source"]["assistant_turn_id"])
         base = source["source"]["expected_timeline_version_id"]
-        if (execution_goal is None or execution_goal["original_turn_id"] != goal["original_turn_id"]
+        if (not self.source_belongs_to_goal(goal, source["source"])
                 or version.parent_version_id != base or version.snapshot.get("render_input_timeline_version_id") != base):
             return None
         return {"job_id": rendered["owner_id"], "input_digest": source.get("input_digest")}
@@ -425,13 +425,15 @@ class GoalResultProjection:
         source, job_id = located["source"], located["job_id"]
         turn_id = source["assistant_turn_id"]
         goal = self.conversations.get_task_goal(turn_id)
-        binding = self.conversations.business_turn_context(turn_id, row["workspace_id"], source["member_id"], row["task_id"])
+        binding = self.conversations.business_turn_context(turn_id, row["workspace_id"], source["member_id"], row["task_id"], source=source)
         if goal is None or binding is None or binding["status"] == "running":
             return None
         return GoalExecutionCandidate(row, source, job_id, goal, binding)
 
     def invalidate_execution(self, context):
-        return self.conversations.invalidate_task_goal(context.source["assistant_turn_id"], "original_execution_authorization_changed")
+        if not self.source_belongs_to_goal(context.goal, context.source):
+            return False
+        return self.conversations.invalidate_task_goal(context.source["assistant_turn_id"], "original_execution_authorization_changed", expected_goal=context.goal)
 
     def project_execution(self, context, actual):
         from app.creation.contracts import TaskEvent
@@ -450,6 +452,8 @@ class GoalResultProjection:
             "result_version_id": task.current_timeline_version_id if current else None,
             "status": status, "actionable": False, "video_ready": actual["video_ready"],
             "waiting_reason": "原制作作业已实际结束，按原目标回读已登记输出。"}
+        if source.get("input_id"):
+            event["input_id"]=source["input_id"]
         if not self.conversations.project_business_result(turn_id, workspace_id, source["member_id"], event,
                 response_patch={"execution_status": actual}, message="原制作作业的实际终态已回读，未重复启动制作。"):
             return None
@@ -491,6 +495,8 @@ class GoalResultProjection:
 
     def commit(self, context, projection):
         source = context.source
+        if source.get("input_id"):
+            projection.event["input_id"]=source["input_id"]
         if self.conversations.project_business_result(source["assistant_turn_id"], context.candidate["workspace_id"],
                 source["member_id"], projection.event, response_patch=projection.response_patch, message=projection.message):
             self.mark(context.candidate)
@@ -504,7 +510,7 @@ class GoalResultProjection:
         source = candidate["source"]
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id, turn_id = source["member_id"], source["assistant_turn_id"]
-        binding = self.conversations.business_turn_context(turn_id, workspace_id, member_id, task_id)
+        binding = self.conversations.business_turn_context(turn_id, workspace_id, member_id, task_id, source=source)
         if binding is None or binding["conversation_id"] != source["conversation_id"]:
             self.mark(candidate)
             return True
@@ -619,7 +625,7 @@ class GoalResultProjection:
         source, _located = candidate["source"], candidate["request"]
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
-        binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id)
+        binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)
         if binding is None or source.get("actor_identity") is None:
             self.mark(candidate)
             return True
@@ -719,7 +725,7 @@ class GoalResultProjection:
         source, _located = candidate["source"], candidate["located"]
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
-        binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id)
+        binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)
         if binding is None or binding["conversation_id"] != source["conversation_id"]:
             self.mark(candidate)
             return True

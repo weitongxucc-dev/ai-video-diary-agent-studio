@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -10,8 +11,8 @@ import { creationInputExtension } from "../agent_runtime/input-delivery.mjs";
 
 // Actual installed SDK, synthetic model responses and editing tool. No provider,
 // HTTP service, user media, production DB or device scheduler is used here.
-const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-const modulePath = join(globalRoot, "@earendil-works/pi-coding-agent/dist/index.js");
+const piExecutable=execFileSync("which",["pi"],{encoding:"utf8"}).trim();
+const modulePath=join(dirname(dirname(realpathSync(piExecutable))),"index.js");
 const aiRoot = join(dirname(dirname(modulePath)), "node_modules/@earendil-works/pi-ai/dist");
 const { AssistantMessageEventStream } = await import(pathToFileURL(join(aiRoot, "utils/event-stream.js")));
 
@@ -83,6 +84,7 @@ test("SDK owns two editing rounds, safe steering/follow-up, persisted history an
     assert.deepEqual(consumed,["steer-1","later-1"]);
     assert.deepEqual(completed,["steer-1","later-1"]);
     assert.deepEqual(rebound,["steer-1","later-1"]);
+    assert.equal(inputExtension.getLastConsumedInputId(),"later-1","completion must retain final input provenance");
     assert.equal(receipts.length,2,"queue delivery must not replay earlier edits");
     pending.push({input_id:"revoked",message:"不应执行的要求",mode:"steer"});
     await current.session.prompt("保持原目标",{source:"rpc"});

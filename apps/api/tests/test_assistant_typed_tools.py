@@ -142,7 +142,8 @@ def test_api_schema_declares_model_fields_and_host_binds_http(tmp_path):
     assert post["body"]["expected_timeline_sequence"] == 4
     assert "raw_command" not in post["body"]
     result = observed["results"][0]["result"]
-    assert result["structuredContent"] == result["details"] == json.loads(result["content"][0]["text"])
+    assert result["structuredContent"] == result["details"]
+    assert {key:result["details"][key] for key in json.loads(result["content"][0]["text"])} == json.loads(result["content"][0]["text"])
     actual_preview = result["details"]["preview"]
     assert {key: actual_preview[key] for key in preview()} == preview()
     assert actual_preview["request_id"] == observed["requestIdentity"] == post["body"]["request_id"]
@@ -405,7 +406,7 @@ def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp
     seen = invoke(tmp_path, observations=observations, observation_job=job, steps=[
         {"tool": "read_task_observations"},
         {"tool": "observe_task_output", "args": {"target": {"kind": "final"}, "sample_times_seconds": [1, 2]}}])
-    assert seen["results"][0]["result"]["details"] == observations
+    assert seen["results"][0]["result"]["details"] == {**observations,"invocation_input_id":None}
     result = seen["results"][1]["result"]["details"]
     assert result["media_job"]["status"] == "queued" and result["media_job"]["result_kind"] == "observation"
     post = next(call for call in seen["calls"] if call["method"] == "POST")

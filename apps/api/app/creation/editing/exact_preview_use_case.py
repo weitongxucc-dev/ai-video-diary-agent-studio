@@ -59,7 +59,8 @@ class ExactPreviewUseCase:
             snapshot = origin['context'].get('target_snapshot', {})
             if (snapshot.get('timeline_version_id'), snapshot.get('timeline_sequence')) != (task.current_timeline_version_id, version.sequence if version else 0):
                 raise EditPreviewRejected(status_code=409, detail='助手轮次的目标版本已失效')
-            source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin['conversation_id'], raw_command=origin['raw_command'])
+            source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin['conversation_id'], raw_command=origin['raw_command'],
+                          **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
         clean = CreationTaskExactEditRequest.model_validate(payload.model_dump(mode='json', exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS))
         source['action'] = clean.model_dump(mode='json', exclude_unset=True)
         return (clean, source)
@@ -167,7 +168,8 @@ class ExactPreviewUseCase:
             source = {'workspace_id': workspace_id, 'task_id': task_id, 'member_id': actor.user_id or actor.member_id, 'actor_identity': actor.identity_payload(), 'request_id': None, 'raw_command': original_command.raw_command, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence, 'action': action.model_dump(mode='json', exclude_unset=True), 'source_facts': self.source_facts(task, action, {'member_id': actor.user_id or actor.member_id, 'local_diagnostic': False}, actor)}
             if original_command.assistant_turn_id is not None:
                 origin = self.conversations.task_turn_source(str(original_command.assistant_turn_id), workspace_id, actor.user_id or actor.member_id, task_id)
-                source.update(assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'])
+                source.update(assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'],
+                              **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
             command = replace(command, source=source)
         self.clip_preview.prepare(actor, command)
         self.clip_preview.seal(actor, command)

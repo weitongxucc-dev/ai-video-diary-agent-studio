@@ -46,7 +46,7 @@ session.subscribe(event => { result.observe(event); emit(event); });
 try {
   await session.prompt(input.message, { source: "rpc" });
   if (inputExtension.getFailure()) throw inputExtension.getFailure();
-  emit(result.value());
+  emit({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? (process.env.AI_VIDEO_DIARY_AGENT_INPUT_ID || null)});
 } finally {
   session.dispose();
   lines.close();

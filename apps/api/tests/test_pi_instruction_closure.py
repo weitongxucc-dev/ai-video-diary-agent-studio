@@ -97,7 +97,7 @@ def test_server_rechecks_running_owner_and_timeline(bound_turn, monkeypatch):
     with pytest.raises(HTTPException, match="版本已变化"):
         main._bind_assistant_edit_instruction(req, task, payload)
     conversations.finish_turn(str(payload.assistant_turn_id), status="failed", result={"reason":"controlled"})
-    with pytest.raises(HTTPException, match="原始要求不一致"):
+    with pytest.raises(HTTPException, match="当前有效助手轮次"):
         main._bind_assistant_edit_instruction(req, task, payload)
 
 

@@ -26,6 +26,8 @@ def isolated_local_workspace(state, monkeypatch):
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     from test_montage_pipeline import synthetic_clip_preview_budget
     monkeypatch.setattr(main, 'clip_preview_budget_from_env', synthetic_clip_preview_budget)
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets
+    configure_synthetic_media_budgets(monkeypatch,main)
 
 
 
@@ -37,6 +39,31 @@ def wait_until(predicate):
             return value
         time.sleep(.02)
     pytest.fail("normal lifecycle driver did not advance the actual result")
+
+
+def select_clip(state, chat):
+    return state.conversations.save_reference(chat["id"],state.workspace_id,state.member.member_id,
+        {"kind":"selection","items":[{"kind":"shot","task_id":state.task.id,"object_id":state.clip.id,
+            "version":state.version.id,"label":"当前镜头"}]},chat["reference_version"])
+
+
+def material_execution_input(state):
+    """A confirmed material-only fixture; no presenter or media execution claim."""
+    from dataclasses import asdict
+    from app.montage import creation_task_montage_plan_to_payload
+    plan=state.production.get_creation_plan(state.workspace_id,state.task.plan_id)
+    plan.presenter_share_target=0
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?",(json.dumps(asdict(plan),default=str),plan.id))
+    reference=state.production.workspace_media_reference_for_asset(state.workspace_id,state.asset.id)
+    montage=replace(state.montage,presenter_share_target=0,clips=[replace(clip,person_render_id=None,
+        asset_id=state.asset.id,segment_id=state.asset.segments[0].id,source_path=reference) if clip.person_render_id else clip
+        for clip in state.montage.clips])
+    payload=creation_task_montage_plan_to_payload(montage)
+    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,montage.id,payload)
+    state.version=replace(state.version,id="material-execution-input",parent_version_id=state.version.id,
+        sequence=state.version.sequence+1,snapshot={**state.version.snapshot,"montage":payload})
+    state.production.create_timeline_version(state.version)
 
 
 def test_assistant_scope_reads_registered_image_overlay_from_persisted_montage(state):
@@ -79,13 +106,17 @@ def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_ad
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
     media = state.runtime.registrations["creation_job"].owner.task_media
-    execute = media.execute_operation
-    def bounded_media_seam(job, event, actor):
-        if event["operation"] == "output_observation":
-            # The media observer is a seam; real device/JobRun/event/HTTP ownership is exercised.
-            return {"observation_id": job.id, "task_id": job.task_id, "fixture": "bounded_reader_result"}
-        return execute(job, event, actor)
-    monkeypatch.setattr(media, "execute_operation", bounded_media_seam)
+    def bounded_media_seam(job, event, actor, context):
+        # The media observer is a seam; real device/JobRun/event/HTTP ownership is exercised.
+        context.check()
+        assert event["operation"] == "output_observation" and actor.member_id == state.member.member_id
+        return {"observation_id": job.id, "task_id": job.task_id, "fixture": "bounded_reader_result"}
+    def validate_observation(job, event, result, context):
+        context.check()
+        assert result == {"observation_id": job.id, "task_id": job.task_id, "fixture": "bounded_reader_result"}
+        return []
+    monkeypatch.setattr(media.output_observation, "execute", bounded_media_seam)
+    monkeypatch.setattr(media.output_observation, "validate_result", validate_observation)
     calls = []
     def model(_settings, **kwargs):
         calls.append(kwargs)
@@ -112,10 +143,14 @@ def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_ad
         return "已安排观察与待采用预览。", {"kind": "media_job", "media_job": preview.json()}
     monkeypatch.setattr(main, "run_task_turn", model)
     chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
+    chat = state.conversations.save_reference(chat["id"], state.workspace_id, state.member.member_id,
+        {"kind":"selection","items":[{"kind":"shot","task_id":state.task.id,"object_id":state.clip.id,
+            "version":state.version.id,"label":"当前镜头"}]},chat["reference_version"])
     raw = "检查实际结果并准备修改；等我实际采用，再继续生成"
     chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
     result = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": raw,
-        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "review",
+        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"],
+        "expected_reference_version":chat["reference_version"], "context_stage": "review",
         "selected_object_refs": [f"clip:{state.clip.id}"], "expected_timeline_version_id": state.version.id,
         "expected_timeline_sequence": state.version.sequence})
     assert result.status_code == 200, result.text
@@ -198,9 +233,11 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
     monkeypatch.setattr(main, "run_task_turn", model)
     chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
     raw = "生成命名图片一次；实际采用修改后继续使用这份已完成来源"
+    chat = select_clip(state,chat)
     chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
     response = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": raw,
-        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "review",
+        "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"],
+        "expected_reference_version":chat["reference_version"], "context_stage": "review",
         "selected_object_refs": [f"clip:{state.clip.id}"], "expected_timeline_version_id": state.version.id,
         "expected_timeline_sequence": state.version.sequence})
     assert response.status_code == 200, response.text
@@ -268,9 +305,13 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
                     script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
                     plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
                     actor = main._require_permit_actor(state.request, state.workspace_id)
+                    source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
+                    assert prior is None
                     jobs.append(execution.start(state.workspace_id, current.id, script.id, revision_digest(script, plan), actor=actor))
+                    status=main._bind_assistant_execution_result(current.id,state.request,kwargs["turn_id"],
+                        main._creation_execution_status(state.workspace_id,current.id),source=source)
                     return "已按删除后的当前版本登记制作。", {"kind": "execution_action", "action": "start",
-                        "status": main._creation_execution_status(state.workspace_id, current.id)}
+                        "status": status}
                 assert event["phase"] == "execution"
             if not shutdown or len(calls) == 3:
                 return "实际采用结果已读取，原要求完成。", None
@@ -293,10 +334,11 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
     monkeypatch.setattr(main, "run_task_turn", model)
     chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
     raw = "将当前镜头裁剪向左；采用后继续读取实际结果"
+    chat = select_clip(state,chat)
     chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
     response = state.raw_post(state.base_url + "/assistant/turn", json={
         "conversation_id": chat["id"], "message": raw, "client_request_id": str(uuid4()),
-        "expected_draft_version": chat["draft_version"], "context_stage": "review",
+        "expected_draft_version": chat["draft_version"], "expected_reference_version":chat["reference_version"], "context_stage": "review",
         "selected_object_refs": [f"clip:{state.clip.id}"],
         "expected_timeline_version_id": state.version.id, "expected_timeline_sequence": state.version.sequence})
     assert response.status_code == 200, response.text
@@ -387,9 +429,13 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
         script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
         actor = main._require_permit_actor(state.request, state.workspace_id)
+        source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
+        assert prior is None
         jobs.append(execution.start(state.workspace_id, current.id, script.id, revision_digest(script, plan), actor=actor))
+        status=main._bind_assistant_execution_result(current.id,state.request,kwargs["turn_id"],
+            main._creation_execution_status(state.workspace_id,current.id),source=source)
         return "已登记原制作作业。", {"kind": "execution_action", "action": "start",
-                                    "status": main._creation_execution_status(state.workspace_id, current.id)}
+                                    "status":status}
     monkeypatch.setattr(main, "run_task_turn", model)
     chat = state.conversations.get(state.conversation["id"], state.workspace_id, state.member.member_id)
     raw = "生成后查看实际成片"
@@ -421,6 +467,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
 @pytest.mark.parametrize("streaming", [False, True])
 def test_actual_start_is_persisted_before_model_failure_then_original_job_continues(state, monkeypatch, streaming):
     state.finish()
+    material_execution_input(state)
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
@@ -487,6 +534,7 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
 @pytest.mark.parametrize("submitted", [False, True])
 def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, monkeypatch, submitted):
     state.finish()
+    material_execution_input(state)
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _:SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
@@ -554,7 +602,74 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
         if job.kind=="creation_task_execution"]) == 1
 
 
-@pytest.mark.parametrize("mutation", ["none", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
+def test_consumed_input_observes_existing_job_then_resumes_without_starting_again(state,monkeypatch):
+    state.finish()
+    material_execution_input(state)
+    monkeypatch.setattr(main,"quality_check_repo",QualityCheckRepository(state.production.database_path))
+    monkeypatch.setattr(main,"_workspace_settings_for",lambda _:SimpleNamespace(
+        effective_llm_provider="fixture",effective_llm_model="fixture",effective_llm_api_key=""))
+    execution=CreationExecution(state.production,run_narration=lambda *_:None,run_montage_plan=lambda *_:None,
+        run_render=lambda *_:None,render_is_valid=lambda *_:True)
+    monkeypatch.setattr(main,"creation_execution",execution)
+    monkeypatch.setattr(main,"submit_creation_stage",lambda *_:"receipt test; no media")
+    calls,job_ids,input_ids=[],[],[]
+    def model(_settings,**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("continuation_context"):
+            assert kwargs["continuation_context"]["source_input_id"] == input_ids[0]
+            assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["id"] == job_ids[0]
+            assert kwargs["message"] == "等当前作业结束后检查结果，不要重新制作"
+            return "已回读当前原作业的实际终态。",None
+        turn_id=kwargs["turn_id"]
+        preview=state.client.get(state.base_url+"/execution/preview").json()
+        started=state.raw_post(state.base_url+"/execution/start?assistant_turn_id="+turn_id,json={
+            "script_id":preview["script_id"],"input_digest":preview["input_digest"],"requirements_confirmed":True})
+        assert started.status_code == 202,started.text
+        job_ids.append(started.json()["job"]["id"])
+        message="等当前作业结束后检查结果，不要重新制作"
+        chat=state.conversations.get(state.conversation["id"],state.workspace_id,state.member.member_id)
+        draft=state.conversations.save_draft(chat["id"],state.workspace_id,state.member.member_id,message,chat["draft_version"])
+        input_id=str(uuid4());input_ids.append(input_id)
+        accepted=state.raw_post(f"/api/assistant/conversations/{chat['id']}/inputs",json={"target_turn_id":turn_id,
+            "client_request_id":input_id,"message":message,"mode":"follow_up","expected_draft_version":draft["draft_version"],
+            "expected_reference_version":draft["reference_version"]})
+        assert accepted.status_code == 200,accepted.text
+        handler=kwargs["input_handler"]
+        assert handler("next",mode="any")["input_id"] == input_id
+        assert handler("consume",input_id)["environment"]["AI_VIDEO_DIARY_AGENT_INPUT_ID"] == input_id
+        read=state.client.get(state.base_url+"/execution",params={"job_id":job_ids[0]})
+        assert read.status_code == 200,read.text
+        handler("complete",input_id)
+        details={"kind":"execution_result","status":read.json(),"input_id":input_id,
+            "input_turn_id":turn_id,"invocation_input_id":input_id}
+        return project_event_fixture("\n".join(json.dumps(item) for item in [
+            {"type":"tool_execution_end","toolName":"start_creation_execution","isError":False,
+                "result":{"details":{"kind":"execution_action","action":"start","status":started.json(),"invocation_input_id":None}}},
+            {"type":"tool_execution_end","toolName":"read_creation_execution","isError":False,"result":{"details":details}},
+            {"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已查询原作业"}]}},
+            {"type":"agent_settled"}]))
+    monkeypatch.setattr(main,"run_task_turn",model)
+    chat=state.conversations.get(state.conversation["id"],state.workspace_id,state.member.member_id)
+    chat=state.conversations.save_draft(chat["id"],state.workspace_id,state.member.member_id,"开始制作后检查结果",chat["draft_version"])
+    response=state.raw_post(state.base_url+"/assistant/turn",json={"conversation_id":chat["id"],"message":chat["draft_text"],
+        "client_request_id":str(uuid4()),"expected_draft_version":chat["draft_version"],"expected_reference_version":0,
+        "context_stage":"review","selected_object_refs":[],"expected_timeline_version_id":state.version.id,"expected_timeline_sequence":state.version.sequence})
+    assert response.status_code == 200,response.text
+    root_id=response.json()["turn_id"]
+    assert response.json()["execution_action"] is None
+    goal=state.conversations.get_task_goal(root_id)
+    assert goal["source_input_id"] == input_ids[0] and goal["revision"] == 1
+    located=state.production.get_task_event(state.workspace_id,main._assistant_execution_locator_id(root_id,input_ids[0]))
+    assert located.payload["source"]["action"] == "observe" and located.job_id == job_ids[0]
+    state.production.claim_job_run(state.workspace_id,job_ids[0])
+    state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
+    assert main._project_assistant_execution_results() == 2
+    assert main._goal_service().reconcile() == 1 and len(calls) == 2
+    assert main._goal_service().reconcile() == 0
+    assert len([job for job in state.production.list_job_runs(state.workspace_id,state.task.id) if job.kind == "creation_task_execution"]) == 1
+
+
+@pytest.mark.parametrize("mutation", ["none", "watched_input", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
 def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation):
     # Real SQL selection with host/media-reader seams; this is not media acceptance.
     import sqlite3
@@ -574,6 +689,12 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
     connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('locator','workspace','task','execution',
         'assistant_execution_located',json.dumps(source)))
     start = {'arguments':{'_typed_source':{'assistant_turn_id':'observer'}},'input_facts':{'output':dict(output)}}
+    if mutation == 'watched_input':
+        goal.update(source_input_id='watched-input',source_input_turn_id='root')
+        watched={**source,'source':{**source['source'],'input_id':'watched-input','input_turn_id':'root','action':'observe'}}
+        connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('watch-locator','workspace','task','execution',
+            'assistant_execution_located',json.dumps(watched)))
+        start['arguments']['_typed_source'].update(input_id='watched-input',input_turn_id='root')
     result = {'target':{'kind':'final'},'output_role':'composed_output','timeline_version_id':'final',
         'timeline_sequence':2,'measurement_scope':'actual_output_bounded_frames',
         'output':{key:value for key,value in output.items() if key not in {'logical_ref','mtime_ns','ctime_ns'}},
@@ -593,18 +714,22 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
         else:
             payload = {'source':source,'locator':{'status':'unknown','request_id':str(uuid4()),'phase':'preview'}}
             connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('unknown','workspace','task',None,'assistant_edit_request_located',json.dumps(payload)))
-    monkeypatch.setattr(main,'production_repo',SimpleNamespace(_connect=lambda:connection,get_task_event=lambda *_:SimpleNamespace(payload=start)))
+    repository=SimpleNamespace(_connect=lambda:connection,get_task_event=lambda *_:SimpleNamespace(payload=start))
+    from types import MethodType
+    from app.production import ProductionRepository
+    repository.goal_output_provenance_rows=MethodType(ProductionRepository.goal_output_provenance_rows,repository)
+    monkeypatch.setattr(main,'production_repo',repository)
     monkeypatch.setattr(main,'conversation_repo',SimpleNamespace(get_task_goal=lambda identifier:
         {'original_turn_id':'foreign' if mutation=='foreign_goal' and identifier=='producer' else 'root'}))
     monkeypatch.setattr(main,'_registered_observation_output',lambda *_:(None,output,{'kind':'composed_output'}))
     monkeypatch.setattr(main,'_read_bound_execution_result',lambda *_:{'job':{'id':'execution','status':'succeeded','input_digest':'b'*64},'video_ready':mutation!='no_video'})
-    monkeypatch.setattr(main,'get_exact_edit_request_result',lambda *_:{'status':'unknown'})
+    monkeypatch.setattr(main,'_goal_request_result',lambda *_:{'status':'unknown'})
     task=SimpleNamespace(workspace_id='workspace',id='task')
     version=SimpleNamespace(id='final',sequence=2,parent_version_id='base',snapshot={
         'creation_render_request_id':'render-request','render_input_timeline_version_id':'base'})
     checkpoint=main._goal_output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
         {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,None)
-    if mutation=='none':
+    if mutation in {'none','watched_input'}:
         assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']=='a'*64
         assert checkpoint['unavailable']==result['unavailable']
     else:

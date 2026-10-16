@@ -31,10 +31,10 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities} = readAgentContext(environment);
   const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion);
   const typedRequestId = (turn: string, call: string) => requestIdentity(taskId, turn, call);
-  const callScope = createToolCallScope();
+  const callScope = createToolCallScope(readActionSource);
   const {getSignal} = callScope;
   const request = createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion,
-    readCredentials, getSignal, fetchRequest: (input, init) => fetch(input, init)});
+    readCredentials, readActionSource, getSignal, fetchRequest: (input, init) => fetch(input, init)});
   const {readTaskEditCapabilities, readMediaScriptCapabilities, readMediaScriptToolCapabilities,
     getEditCapabilities, getMediaScriptCapabilities, getScriptToolCapabilities} = createCapabilities({
       request, taskId, verifyTaskVersion, initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities});
@@ -74,7 +74,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     registerScriptTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt});
     registerExecutionTools(pi, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction,
       hasEditControlWrite, hasPreview, readActionSource, getSignal});
-    return registerControlledCodemode(agent);
+    return registerControlledCodemode(pi);
   }
   return {register, typedRequestId, readTaskEditCapabilities, readMediaScriptCapabilities, readMediaScriptToolCapabilities,
     readCurrentTaskFacts, readCreatorMemoryFacts: preferences.readCreatorMemoryFacts};

@@ -17,7 +17,8 @@ from app.graphic_sources import import_graphic_source, resolve_graphic_source
 from app.host_resource_probes import HostProcessProbe, MediaScriptBudget
 from app.member_permits import MemberDeviceAccess
 from app.media_script import MeasuredScriptOutput
-from app.task_audio import TaskMediaJobs
+from app.task_audio import TaskMediaJobs, TaskAudio
+from app.media.clip_preview import ClipPreviewExecutor
 from app.production import ArtifactRecord, JobRun, TransformRun
 from app.models import utc_now
 from app.conversation_repository import ConversationRepository
@@ -51,9 +52,18 @@ def state(material_edit_state, tmp_path, monkeypatch):
     def identity(candidate):
         return "ready" if candidate == actor and main.find_member(state.members, actor.member_id) else "unauthorized"
     access = MemberDeviceAccess(state.members, identity_verifier=identity)
-    media = TaskMediaJobs(state.production, facts=main._task_media_facts,
-        execute_operation=main._execute_task_media_operation, validate_result=main._validate_task_media_result,
-        verify_identity=identity)
+    monkeypatch.setattr(main.settings, "native_ocr_worker_path", None, raising=False)
+    media = TaskMediaJobs(state.production, facts=main._task_media_facts, verify_identity=identity,
+        audio_ingress=main._audio_ingress_use_case(state.production),
+        audio_edit=main._audio_edit_use_case(state.production),
+        output_observation=main._output_observation_use_case(state.production),
+        media_script=main._media_script_use_case(state.production),
+        visual_preview=main._visual_preview_use_case(state.production),
+        compound_selection=main._compound_edit_use_case(state.production),
+        exact_preview=main._exact_preview_use_case(state.production),
+        command_preview=main._command_preview_use_case(state.production),
+        clip_preview=ClipPreviewExecutor(main._clip_preview_use_case(state.production),
+            TaskAudio(state.production, main.artifact_store, main.settings.effective_temporary_root_path)))
     owner = CreationJobOwnerVerifier(state.production, task_media=media, verify_identity=identity)
     executor = CreationJobUnitExecutor(state.production, render_action=None, render_is_valid=None, task_media=media)
     runtime = build_device_runtime(database_path=state.production.database_path,
@@ -66,14 +76,15 @@ def state(material_edit_state, tmp_path, monkeypatch):
     monkeypatch.setattr(main, "device_runtime", runtime)
     state.calls = []
     def prepare(*, sealed, input_paths, job_directory, limits):
-        assert main.TASK_MEDIA_CONTEXT.get() is not None
         job_directory.mkdir()
         (job_directory / "out").mkdir()
         return SimpleNamespace(sealed=sealed, directory=job_directory, limits=limits)
     def run(*, prepared, scheduler, grant, cancel_event):
         scheduler.assert_grant(grant)
-        context, job, event, current_actor = main.TASK_MEDIA_CONTEXT.get()
-        assert current_actor == actor and context.grant == grant
+        job = state.production.get_job_run(grant.workspace_id, grant.owner_id)
+        event = state.production.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
+        assert job.status == "running" and job.task_id == state.task.id
+        assert CreationExecutionActor.from_event(job.workspace_id, event) == actor
         assert event["resources"]["kind"] == "media_script"
         assert event["resources"]["script_digest"] == prepared.sealed.digest
         assert grant.input_digest != prepared.sealed.digest
@@ -261,10 +272,16 @@ def test_shared_artifact_transform_connection_is_one_rollback_transaction(state)
 
 def test_crash_after_graphic_record_recovers_definition_without_rerunning_python(state, monkeypatch):
     original_definition = scripts.script_definition
-    monkeypatch.setattr(scripts, "script_definition", lambda *_: (_ for _ in ()).throw(RuntimeError("crash after PNG record")))
     queued = submit(state)
-    assert queued.status_code == 202 and state.runtime.run_once()
+    assert queued.status_code == 202, queued.text
     job_id = queued.json()["job_id"]
+    def fail_after_graphic_record(*args):
+        if any(item.producer_job_id == job_id and item.kind == "graphic_source"
+               for item in state.production.list_artifact_records(state.workspace_id, state.task.id)):
+            raise RuntimeError("crash after PNG record")
+        return original_definition(*args)
+    monkeypatch.setattr(scripts, "script_definition", fail_after_graphic_record)
+    assert state.runtime.run_once()
     assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
     assert any(item.producer_job_id == job_id and item.kind == "graphic_source"
                for item in state.production.list_artifact_records(state.workspace_id, state.task.id))

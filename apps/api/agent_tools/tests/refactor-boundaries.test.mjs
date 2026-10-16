@@ -12,7 +12,7 @@ import {createMaterialSelection} from '../materials/selection.ts';
 
 test('public exports and session registration do not initialize business services', async () => {
   assert.deepEqual(Object.keys(publicTools).sort(), [
-    'default', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
+    'default', 'createDiaryExtension', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
     'readMediaScriptToolCapabilities', 'readCreatorMemoryFacts', 'readCurrentTaskFacts',
   ].sort());
   const originalFetch = globalThis.fetch;
@@ -51,7 +51,7 @@ test('version rejection stays before POST and uses the trusted identity headers'
 });
 
 test('transport reports API rejection and registration keeps cancellation scopes separate', async () => {
-  const scope = createToolCallScope(), tools = new Map(), signals = new Map();
+  const scope = createToolCallScope(() => ({})), tools = new Map(), signals = new Map();
   const request = createBusinessRequest({
     apiBase: 'http://fixture.invalid', selectedTaskVersion: null,
     verifyTaskVersion: () => {}, readCredentials: () => ({}), getSignal: scope.getSignal,
@@ -75,7 +75,25 @@ test('transport reports API rejection and registration keeps cancellation scopes
   a.abort();
   assert.equal(signals.get('/a').aborted, true);
   assert.equal(signals.get('/b').aborted, false);
-  assert.deepEqual(results.map(result => result.structuredContent), [{path: '/a'}, {path: '/b'}]);
+  assert.deepEqual(results.map(result => result.structuredContent), [
+    {path: '/a',invocation_input_id:null}, {path: '/b',invocation_input_id:null}]);
+});
+
+test('late action results retain their invoking input and readers do not acquire new provenance', async () => {
+  let current={inputId:'old-input',inputTurnId:'original-turn'};
+  const tools=new Map(), scope=createToolCallScope(()=>current);
+  const pi=scope.bind({registerTool:tool=>tools.set(tool.name,tool)});
+  let finish;
+  const pending=new Promise(resolve=>{finish=resolve;});
+  pi.registerTool({name:'apply_typed_edit',execute:async()=>{await pending;return {details:{kind:'edit_request_status'}};}});
+  pi.registerTool({name:'read_typed_edit_request',execute:async()=>({details:{kind:'edit_request_status'}})});
+  const submitted=tools.get('apply_typed_edit').execute('call',{});
+  current={inputId:'new-input',inputTurnId:'original-turn'};
+  finish();
+  const actual=await submitted;
+  assert.equal(actual.details.input_id,'old-input');
+  assert.equal(actual.structuredContent.input_turn_id,'original-turn');
+  assert.equal((await tools.get('read_typed_edit_request').execute('read',{})).details.input_id,undefined);
 });
 
 test('model schemas are cloned from the shared API declaration', () => {

@@ -35,14 +35,18 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     edit_applied = None
     script_tool_result = None
     script_tool_status = None
-    for line in _business_event_lines("\n".join(json.dumps(event) for event in result["tool_results"])):
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise _fail(
-                FAILURE_UNKNOWN,
-                explanation="对话助手返回了无法读取的事件，这一轮对话没完成。",
-            ) from exc
+    try:
+        events = [json.loads(line) for line in _business_event_lines("\n".join(json.dumps(event) for event in result["tool_results"]))]
+    except json.JSONDecodeError as exc:
+        raise _fail(FAILURE_UNKNOWN, explanation="对话助手返回了无法读取的事件，这一轮对话没完成。") from exc
+    latest_input = ({"invocation_input_id":result["input_id"]} if "input_id" in result else
+        next((event["result"]["details"] for event in reversed(events)
+            if "invocation_input_id" in ((event.get("result") or {}).get("details") or {})),None))
+    for event in events:
+        details = (event.get("result") or {}).get("details") or {}
+        if (latest_input is not None and event.get("type") == "tool_execution_end"
+                and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
+            continue  # History remains in the SDK log; only this input owns the reply.
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {"apply_typed_edit", "preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
             status_details = (event.get("result") or {}).get("details") or {}
             if status_details.get("kind") == "edit_request_status":
@@ -242,7 +246,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
             answer = "任务记录显示制作已完成，当前成片产物可用。"
         else:
             answer = f"制作动作已返回；当前作业状态：{job_status or '未知'}。请以任务页回读为准。"
-        return answer, {"kind": "execution_result" if action is None else "execution_action", "action": action, "status": status}
+        return answer, {"kind": "execution_result" if action is None else "execution_action", "action": action, "status": status,
+            **{key:action_result[key] for key in ("input_id","input_turn_id") if key in action_result}}
     if topic_result is not None:
         topics = topic_result.get("candidates") or []
         count = len(topics)

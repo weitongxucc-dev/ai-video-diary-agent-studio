@@ -59,12 +59,17 @@ def enqueue_input(conn, *, conversation_id, workspace_id, member_id, target_turn
     return item, True
 
 
+def latest_consumed_input(events: list[dict]) -> dict | None:
+    """Result provenance follows consumption order, including interrupted input."""
+    return next((item for item in reversed(events) if item.get("type") == "assistant_input"
+        and item["status"] in {"consumed", "completed", "interrupted"}),None)
+
+
 def active_input(events: list[dict]) -> dict | None:
-    """Only a consumed receipt can replace a turn's immutable initial binding."""
-    for status in ("consumed", "completed"):
-        for item in reversed(events):
-            if item.get("type") == "assistant_input" and item["status"] == status:
-                return item
+    """Interrupted input cannot restore a preceding input's write permission."""
+    latest = latest_consumed_input(events)
+    if latest and latest["status"] != "interrupted":
+        return latest
     return None
 
 

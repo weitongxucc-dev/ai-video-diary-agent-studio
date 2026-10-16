@@ -24,6 +24,7 @@ export function readAgentContext(environment: Record<string, string | undefined>
     readCredentials: () => ({authorization: environment.AI_VIDEO_DIARY_AGENT_AUTHORIZATION,
       cookie: environment.AI_VIDEO_DIARY_AGENT_COOKIE, localMemberToken: environment.AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN}),
     readActionSource: (): ActionSource => ({turnId: environment.AI_VIDEO_DIARY_AGENT_TURN_ID,
+      inputId: environment.AI_VIDEO_DIARY_AGENT_INPUT_ID, inputTurnId: environment.AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID,
       userInstruction: environment.AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION, creationRequestId: environment.AI_VIDEO_DIARY_AGENT_CREATION_REQUEST_ID}),
   };
 }

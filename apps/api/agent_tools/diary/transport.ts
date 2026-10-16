@@ -1,4 +1,4 @@
-import type {TaskVersion} from './contracts.ts';
+import type {TaskVersion,ActionSource} from './contracts.ts';
 
 export class BusinessRequestError extends Error {
   httpStatus: number;
@@ -8,10 +8,11 @@ export class BusinessRequestError extends Error {
 
 export class RequestNotSubmitted extends Error {}
 
-export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, getSignal, fetchRequest}: {
+export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, fetchRequest}: {
   apiBase?: string; taskId?: string; selectedTaskVersion: TaskVersion | null;
   verifyTaskVersion: (workspace: any) => void;
   readCredentials: () => {authorization?: string; cookie?: string; localMemberToken?: string};
+  readActionSource?:()=>ActionSource;
   getSignal: () => AbortSignal | undefined; fetchRequest: typeof fetch;
 }) {
   async function request(path: string, init?: RequestInit) {
@@ -22,6 +23,8 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     if (authorization) headers.set("Authorization", authorization);
     if (cookie) headers.set("Cookie", cookie);
     if (localMemberToken) headers.set("X-Local-Member-Token", localMemberToken);
+    const inputId=readActionSource?.().inputId;
+    if(inputId)headers.set("X-Assistant-Input-ID",inputId);
     if (taskId && selectedTaskVersion && init?.method && init.method !== "GET" && path.startsWith(`/api/creation-tasks/${encodeURIComponent(taskId)}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`);

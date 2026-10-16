@@ -155,6 +155,8 @@ def test_running_input_http_replays_original_receipt_and_consumes_at_sdk_boundar
         offered = delivery("next", mode="steer")
         assert offered["input_id"] == payload["client_request_id"]
         verified = delivery("consume", offered["input_id"])
+        assert verified["environment"]["AI_VIDEO_DIARY_AGENT_INPUT_ID"] == offered["input_id"]
+        assert verified["environment"]["AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID"] == arguments["turn_id"]
         assert verified["environment"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == "先改成十秒"
         assert verified["environment"]["AI_VIDEO_DIARY_AGENT_SELECTED_REFS"] == "[]"
         assert verified["environment"]["AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES"] == ""
@@ -193,3 +195,49 @@ def test_first_turn_rejects_stale_reference_version_without_consuming_draft(tmp_
     current = conversations.get(chat["id"], "local", owner.member_id)
     assert current["draft_text"] == "修改这一段" and current["draft_version"] == 1
     assert conversations.list_turns(chat["id"]) == []
+
+
+def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.creation.contracts import TaskEvent
+
+    _, repository, owner, _, _ = _sampling_context(tmp_path, monkeypatch)
+    # Isolated ledger seam: the host read has already verified the real job.
+    source = {"assistant_turn_id": "turn", "input_id": "input-old"}
+    event = TaskEvent(id=main._assistant_execution_locator_id("turn", "input-old"),
+        workspace_id="local", task_id="task", job_id="job", event_type="assistant_execution_located",
+        payload={"source": source, "job_id": "job", "input_digest": "digest"})
+    monkeypatch.setattr(repository, "list_task_events", lambda *_: [event])
+    monkeypatch.setattr(repository, "get_task_event", lambda *_: event)
+    receipt = {"job": {"id": "job", "input_digest": "digest", "status": "succeeded"}}
+    records = []
+    monkeypatch.setattr(main, "_read_bound_execution_result", lambda *_: receipt)
+    monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
+    monkeypatch.setattr(main, "_assistant_member_id", lambda *_: owner.member_id)
+    monkeypatch.setattr(repository, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
+    monkeypatch.setattr(main, "_execution_source_version_current", lambda *_: True)
+    monkeypatch.setattr(main, "conversation_repo", SimpleNamespace(
+        record_task_execution=lambda *args, **kwargs: records.append(kwargs)))
+    monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
+    assert main._bind_assistant_execution_result("task", object(), "turn", receipt) == receipt
+    assert records == [{"current_source": True, "input_id": "input-old"}]
+    assert main._assistant_execution_locator_id("turn", "input-new") != event.id
+    assert main._assistant_execution_locator_id("turn") == "event_assistant_execution_locator_turn"
+    proofs = main._assistant_goal_action_proofs("local", "task", "turn",
+        media_job=None, edit_preview=None, edit_request=None, execution_status=receipt)
+    assert proofs == [{"kind": "execution_status", "id": "job", "input_id": "input-old"}]
+
+
+def test_late_input_request_is_rejected_but_matching_host_input_is_accepted():
+    import pytest
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    source = {"assistant_turn_id": "turn", "input_id": "new-input"}
+    for header in (None, "old-input"):
+        request = Request({"type": "http", "headers": [(b"x-assistant-input-id", header.encode())] if header else []})
+        with pytest.raises(HTTPException) as error:
+            main._require_assistant_input_origin(request, source)
+        assert error.value.status_code == 409
+    request = Request({"type": "http", "headers": [(b"x-assistant-input-id", b"new-input")]})
+    main._require_assistant_input_origin(request, source)
