@@ -12,7 +12,7 @@
 
 | 角色 | 当前线程 ID（local，同 main） | 本批目标与独占范围 |
 | --- | --- | --- |
-| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R9-MEDIA-CONFIRM-REMAINDER-20261016仅只读剩余已知确认body及直接owner，证据fresh-api-media-confirm-remainder/**，零产品/执行权。 |
+| API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-SUBTITLE-OWNER-20261016阶段A仅独占subtitle_use_case.py和test_subtitle_change_use_cases.py，main只读；阶段B必须等root明确归还main后才准接四body与一个最小node。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
 | 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-OWNER-20261016独占main.py指定goal五入口及必要直接helper/组装、assistant_goal_continuation.py、production.py仅对应公开只读查询、test_assistant_goal_continuation.py仅一个新node；原资源实验冻结不重试。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
@@ -26,6 +26,14 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### 旧字幕确认的有限并行收口（当前阶段A）
+
+REF-R2-LEGACY-SUBTITLE-OWNER-20261016依据只读报告fresh-api-media-confirm-remainder/READONLY_REMAINDER_RELEASE.json SHA8555f096f30097d8755a026d75daae5c6d87a6844e797ea5b250126fbe120787，root核六必要owner hashes及确认body/早期selector；旧track-bound字幕已归属，四具体旧body仍需现SubtitleEditUseCase归属。唯一API阶段A只写apps/api/app/creation/editing/subtitle_use_case.py、apps/api/tests/test_subtitle_change_use_cases.py；初hash及目标见fresh-root-review/legacy-subtitle-owner-binding.json。只实现具体confirm_legacy和一个新最小node，原owner已有methods/早期is_subtitle_edit不改变，零应用import/test/factory/native/model/host/GUI/network/DB/Git；本阶段main完全只读，仅已知confirm定义供原body等价迁交。main仍属工具goal线程。API完成两源后短报READY_FOR_MAIN_LEASE，冻结两源等待真实归还；不自行进入阶段B、不为等待扩证据。
+
+阶段B只在root精确集成goal四源并明确交出main后，API再独占main仅AlignSubtitleTiming、ConfigureSubtitleTrack显示与翻译、无track_id的UpdateSubtitleCue四body及必要有限import/调用。公共source guard之前的早期选择完全保留，四body仍位于原公共source-facts检查之后；main只可信身份/输入与原HTTP/结果映射。既有montage_edits/current-tracks/publication/clone/persist和原translator factory/算法复用，不加新store/dispatcher/依赖袋/HTTP重入。版本/CAS/错误时点及文本、双语时间/样式/失效、cover carry、同事务单version/undo与原请求claim/replay/wake保持，校准预览503保持，不启动ASR/翻译模型。封面资源与RemoveSilence另列，当前不碰。
+
+main交接并完成三源后才跑一个新display提案→owner confirm→fresh单版本/启用轨/封面延续回读node，必要fixture原隔离值复用；不跑旧门/作者normal/普通额外QA。初编与来源/脚本前后仅本3源+必要直接边界，不全源AST/overlay/旧证据复制；首败保留只失败node必要修正。只新fresh-api-legacy-subtitle-owner/**；稳定release冻结，root按源等价和最小node快速精确集成归还。若实际触及关键规则而不等价先报差额，不能借普通拆分省掉必要QA。短语义ACK后阶段A直接施工，无第二START；阶段B的main真实交接是唯一必要依赖门。
 
 ### 剩余goal业务归属收口（当前施工）
 
