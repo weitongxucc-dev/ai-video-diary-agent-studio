@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | API 编辑执行 | `01a13772-0d4c-7d92-af3a-57312845da4c` | metadata confirm三源已64025090精确集成/即时归还；当前REF-R2-LEGACY-CONFIRM-CLOSEOUT-20261016阶段A1字幕两源冻结，A2仅独占linked_timeline_use_case.py和test_linked_edit_use_cases.py新增silence采用；main只读，待root明确归还后同包五源接线/两个新最小node。 |
 | 独立 QA | `01a13772-12d8-77d0-8487-42b1895027ba` | quality C3独立单节点PASS已root核并b04c5f86集成/即时归还；所有证据冻结，零新增产品/执行权，待真正剩余关键差额。 |
-| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-OWNER-20261016独占main.py指定goal五入口及必要直接helper/组装、assistant_goal_continuation.py、production.py仅对应公开只读查询、test_assistant_goal_continuation.py仅一个新node；原资源实验冻结不重试。 |
+| 工具/安装/资源 | `01a13772-1968-74b0-8598-acb87024a819` | 当前REF-R9-GOAL-PROJECTION-C1-20261016仅独占main.py两个公共GET reader body薄委托原新共享reader；其余goal三源/已过normal冻结复用，完成后关键QA再精确集成。 |
 | Web 消费者 | `01a13772-20d8-77a3-8c68-d372b38a7d3b` | 八源死kind/五client退役已d6cb8af准确集成/WRITE_LEASE_RETURN；产品只读待后续稳定接口差额，不复测/重做剩余大清点或恢复旧租约。合成GUI与生产/整体接受分列。 |
 | 资料/档案 | `01a13772-28ed-70c1-90fb-507e59a2fd3a` | 发音词典三源已11c59ebe准确集成/WRITE_LEASE_RETURN；原实现归现ProfileRecordStore，一个最小自测首次通过，无额外QA。本证据冻结，当前无新产品/证据写权，待实际独立剩余差额。 |
 | 主控本批产品接线 | `01a1376c-acbf-7f50-90a6-31328276a581` | EOF及两个旧fixture断言C1已分别c760b8ec/c124a144提交并归还；当前无产品写权，只审核/协调/集成，保护并行改动。 |
@@ -26,6 +26,12 @@
 共享文档、派工和 Git 集成唯一本聊天负责。QA 与 Runtime 的新证据子目录互斥；其他原证据不覆盖。冻结、反例、事务/身份/版本/许可边界与同候选退役验收均沿后文，不因换线程或局部通过降低。
 
 复合四源已 `9b64d8a6d2e8e4781531382795c2284c099c8f69` 精确集成，SOURCE_INTEGRATED/WRITE_LEASE_RETURN已即时发给API和QA。独立门 `fresh-qa/compound-application-independent/SOURCE_GATE.json` SHAd916355f59ad7399d833eb7af127d4e225f4f9e76ca625da50171d8c768bc3b3：首次3PASS4.30s/3实际代表，无探针或产品失败，作者3和旧矩阵0新执行；主控核37artifact/18复用/21合成输入、469冻结源同作者、179实际imports前后、2child/5fixture prepost与8真实组装。真实TaskAudio预检后外部ACL提交由最终caller verify_change拒绝且外部变化保留；第二字幕INSERT晚失败在op/version/首轨SQL之后联合editorial回滚，后续task/proposal/montage/audio/cover UPDATE尚未到达不能称其已写后回滚；style-only本代表新SRT发布0，原claim/fixture媒体事实单列。后来HEAD/仅丢原result projection恢复原op/result_version、confirm1→1，原wake首次2/恢复1，journal显式null输入拒绝；fresh与immutable snapshot的montage.updated_at原时间差如实保留，其余字段/shape保持，不声称完整HTTP字节同一。四cached/committed blob准确；全R2/R3/R9与所有组同候选真实接受仍未完成。
+
+### goal候选源审唯一差额C1（当前施工）
+
+原四源release a266c53940b112b81ac32f779d8231708dcb590167d7717d8dce9696499bce90已root核19artifact/四源，完整owner/SQL/定向main适配及源规则已审。一个新owner node三次，前二仅新fixture proof/advanced期望错误，第三PASS0.865s；无main import/旧门/native，原证据冻结复用。root goal-projection-source-reviewed-c1.json记录：新_goal_request_result/_goal_media_result虽去路由重入，却完整复制现公共GET reader，64KiB及任务绑定有两个维护点；本C1仅收敛该新重复，不扩大业务或验证矩阵。
+
+REF-R9-GOAL-PROJECTION-C1-20261016只给同工具线程main.py两个既有公开定义get_exact_edit_request_result、get_task_media_job的body薄委托对应_goal_request_result/_goal_media_result，所有签名/decorator/HTTP原顺序与共享helper原body不改；其余main目标和goal/production/test三源冻结。若有名称调整只允许上述有限实际caller，不新包装、dispatcher、规则、callback或日志。API四源继续冻结等main，禁止并写。只新fresh-runtime-goal-projection-owner/c1/**一份短差额release，引用原a266/已过attempt03，精确更新main hash/其余三源固定hash与diff；静态核两个route thin delegate及helper不变即可，不import/app/test/旧normal/DB/native/host/GUI/模型/用户数据或Git。短ACK后直接C1无第二START；完成即冻结归还，root再交一个关键释放独立反例，不重复作者normal。
 
 ### 旧确认同包收尾增量（当前A2；A1冻结复用）
 
