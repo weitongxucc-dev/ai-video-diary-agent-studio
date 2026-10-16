@@ -7,6 +7,7 @@ ASSISTANT_BUSINESS_TOOLS = {
     "home": (
         "read_workspace_context", "read_video_templates", "find_knowledge", "find_materials",
         "preview_creation_plan", "prepare_creation_window",
+        "read_material_library_status", "search_material_library",
     ),
     "profile_reference": ("read_selected_profile",),
     "knowledge_reference": ("read_selected_knowledge",),
@@ -112,7 +113,8 @@ PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当�
 需要事实时调用 find_knowledge；查询可用镜头时调用 find_materials；了解已有任务时调用 read_workspace_context。
 用户要求沿用我的模板时，先调用 read_video_templates 查明真实 ID 和版本。
 用户指定露脸比例时，将其归到 0%、20%、40%、60%、80%、100% 中最近的一档并说明；未指定时用默认 20%。露脸只用于需要出镜的段落，其余画面共用配音。
-用户提出制作目标后，调用 preview_creation_plan 保存完整数量、时长、素材范围及关系；100或10000不是1，不把数量写死。多条关系未明确时不要猜测，工具保存等待条件后问少量具体问题。条件已明确时调用 prepare_creation_window，只为当前至多8条给出具体目标；不能一次输出全部目标，也不能重复同一目标凑数。每条都继承共同要求，并说明本组方案待确认，其余尚未规划。
+用户提出制作目标后，调用 preview_creation_plan 保存完整数量、时长、素材范围及关系；100或10000不是1，不把数量写死。素材默认使用workspace_library；仅用户明确限制为今日接收才选today_received，不能从刚导入、稍后导入或今天制作推定日期限制。多条关系未明确时不要猜测，工具保存等待条件后问少量具体问题。条件已明确时调用 prepare_creation_window，只为当前至多8条给出具体目标；不能一次输出全部目标，也不能重复同一目标凑数。每条都继承共同要求，并说明本组方案待确认，其余尚未规划。
+素材引用是创作上下文，不关闭工作区创作能力。只有用户明确要求修改标签并确定添加、移除或替换及文字时，先read_selected_material，再update_selected_material_tags一次；不改系统标签或从标签推定用途。需要引用内容先read_selected_reference；有绑定素材时可读取或按明确要求修改用户标签。review_status=approved表示已确认，usage_role=b_roll就是界面‘用作配图’，与用户标签分别保存；不能因没有‘配图’标签或视觉模型blocked否认已保存的人工审核、用途和片段description。
 不要把旧任务、旧文案或旧成片说成新结果。预检不是任务创建，确认按钮由用户操作。
 不要请求或上传原始媒体文件；只用已提供的业务工具。
 人物口型默认选 high 高精度；只有用户明确要求速度优先或低精度时才选 fast。不要在高精度不可用时自行改为 fast。

@@ -9,6 +9,8 @@ from app.materials.discovery import MaterialDiscoveryService
 from app.materials.discovery_store import DISCOVERY_SCHEMA, DiscoveryStore
 from app.materials.discovery_intake import DiscoveryIntake
 from app.materials.assets import MaterialAssetStore
+from app.materials.source_files import MaterialSourceFileAccess
+from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 
 
 @pytest.fixture
@@ -26,6 +28,8 @@ def environment(tmp_path):
           CREATE TABLE material_assets (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
             file_path TEXT NOT NULL, payload TEXT NOT NULL, visibility TEXT NOT NULL,
             updated_at TEXT NOT NULL, UNIQUE(workspace_id,file_path));
+          CREATE TABLE workspace_media_references (reference TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL, updated_at TEXT NOT NULL);
         """)
     assets = MaterialAssetStore(connect)
     confirmations = []
@@ -35,6 +39,7 @@ def environment(tmp_path):
             raise ValueError("原接收盘不可用或工作区不匹配")
         return target
     intake = DiscoveryIntake(connect, assets, target_for=target_for,
+        workspace_references=WorkspaceMediaReferenceAccess(connect, MaterialSourceFileAccess(connect, target), assets),
         confirm_copy=lambda *args, **kwargs: confirmations.append((args, kwargs)))
     store = DiscoveryStore(connect)
     def make_service():
@@ -72,6 +77,8 @@ def test_candidates_never_register_or_analyze_before_selection(environment):
     received = next(c for c in result["candidates"] if c["id"] == chosen["id"])
     existing = environment[4].get_asset("ws", received["asset_id"])
     assert existing.file_name == "b.jpg"
+    with environment[2]() as conn:
+        assert conn.execute("SELECT workspace_id FROM workspace_media_references").fetchone()[0] == "ws"
     copied = Path(existing.path)
     replay = environment[4].save_discovered_asset(existing, "ws", copied, copied.stat(), media_type=None,
         source_url="", owner_user_id="alice", copy_uploader_user_id="alice")

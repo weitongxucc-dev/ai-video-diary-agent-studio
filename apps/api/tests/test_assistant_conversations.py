@@ -173,7 +173,7 @@ def test_material_library_turn_without_selection_is_read_only_and_replayed_once(
     monkeypatch.setattr(main_module, "get_production_material", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(AssertionError("No material may be guessed without selection")))
     calls = []
-    monkeypatch.setattr(main_module, "run_material_turn", lambda _settings, **kwargs:
+    monkeypatch.setattr(main_module, "run_plan_turn", lambda _settings, **kwargs:
                         (calls.append(kwargs) or ("素材库可查询 3 项。", None)))
     headers = {"X-Local-Member-Token": token}
     client = TestClient(main_module.app)
@@ -192,7 +192,7 @@ def test_material_library_turn_without_selection_is_read_only_and_replayed_once(
     response = client.post("/api/assistant/material/turn", headers=headers, json=request)
     assert response.status_code == 200, response.text
     assert response.json()["draft_version"] == saved.json()["draft_version"] + 1
-    assert calls[0]["selection"] is None
+    assert calls[0]["material_selection"] is None
     replay = client.post("/api/assistant/material/turn", headers=headers, json=request)
     assert replay.status_code == 200 and replay.json() == response.json()
     assert len(calls) == 1

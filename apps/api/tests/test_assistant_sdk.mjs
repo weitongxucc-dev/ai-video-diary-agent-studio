@@ -142,3 +142,41 @@ test("product extension loads with SDK and rebinds its tool closures", async () 
     if (previousTools===undefined) delete process.env.AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS; else process.env.AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS=previousTools;
   }
 });
+
+
+test("SDK keeps original creation receipt input binding in completion", async () => {
+  const {createToolCallScope}=await import("../agent_tools/diary/registration.ts");
+  const {createSessionResult}=await import("../agent_runtime/result.mjs");
+  const cwd=await mkdtemp(join(tmpdir(),"diary-sdk-creation-"));
+  let current;
+  try {
+    await writeFile(join(cwd,"models.json"),JSON.stringify({providers:{"ai-video-diary":{
+      baseUrl:"http://127.0.0.1:9",api:"openai-completions",apiKey:"unused",
+      models:[{id:"creation-test",contextWindow:16384,maxTokens:1024}],
+    }}}));
+    const tools=[];
+    const scope=createToolCallScope(()=>({turnId:"original-turn"}));
+    scope.bind({registerTool:tool=>tools.push(tool)}).registerTool({
+      name:"preview_creation_plan",label:"保存目标",description:"SDK receipt regression",
+      parameters:{type:"object",properties:{}},
+      execute:async()=>({content:[{type:"text",text:"saved"}],details:{kind:"plan_preview",preview:{kind:"creation_request",request:{id:"request-a"}}}}),
+    });
+    current=await openCreationSession({modulePath,cwd,sessionDir:join(cwd,"sessions"),
+      sessionId:"33333333-3333-4333-8333-333333333333",modelId:"creation-test",systemPrompt:"test",
+      tools:["preview_creation_plan"],customTools:tools});
+    const result=createSessionResult("creation");current.session.subscribe(event=>result.observe(event));
+    let calls=0;
+    current.session.agent.streamFunction=()=>{
+      const stream=new AssistantMessageEventStream();
+      const content=calls++===0?[{type:"toolCall",id:"plan-call",name:"preview_creation_plan",arguments:{}}]:[{type:"text",text:"saved"}];
+      const message={role:"assistant",content,api:"openai-completions",provider:"ai-video-diary",model:"creation-test",
+        stopReason:content[0].type==="toolCall"?"toolUse":"stop",timestamp:Date.now(),
+        usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
+      queueMicrotask(()=>{stream.push({type:"done",reason:message.stopReason,message});stream.end(message);});return stream;
+    };
+    await current.session.prompt("保存目标",{source:"rpc"});
+    assert.equal(result.value().tool_results.length,1);
+    assert.equal(result.value().tool_results[0].result.details.kind,"plan_preview");
+    assert.equal(result.value().tool_results[0].result.details.invocation_input_id,"original-turn");
+  } finally {current?.session.dispose();await rm(cwd,{recursive:true,force:true});}
+});

@@ -214,7 +214,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (material_failed or material_result_invalid or material_write_result is None
                 or "action" not in material_write_result or "changed" not in material_write_result):
             raise _fail(FAILURE_TOOL_FAILED)
-    if kind == "material_result":
+    if kind == "material_result" or (kind == "plan_preview" and material_write_result is not None and preview is None):
         if material_failed or material_result_invalid:
             raise _fail(FAILURE_TOOL_FAILED)
         if material_result is None:

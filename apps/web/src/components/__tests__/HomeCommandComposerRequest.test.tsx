@@ -11,14 +11,14 @@ vi.mock("@/components/useAssistantConversation", () => ({ useAssistantConversati
   bindTurnEvents: () => vi.fn(), isCurrentConversation: (id: string) => mocks.conversation?.id === id,
   refresh: mocks.refresh, failUnpersistedTurn: vi.fn(),
 }) }));
-vi.mock("@/components/AssistantConversationProvider", () => ({ useAssistantMaterialReference: () => null, useAssistantKnowledgeReference: () => null, useAssistantProfileReference: () => null }));
+vi.mock("@/components/AssistantConversationProvider", () => ({ useAssistantSelection: () => null, useAssistantMaterialReference: () => null, useAssistantKnowledgeReference: () => null, useAssistantProfileReference: () => null }));
 vi.mock("@/components/HomeCardDialog", () => ({ HomeCardDialog: ({ children, title, onClose }: { children: ReactNode; title: string; onClose: () => void }) => <div role="dialog" aria-label={title}><button onClick={onClose}>关闭目标</button>{children}</div> }));
 vi.mock("@/components/AssistantConversationPanel", () => ({
   AssistantConversationPanel: ({ onSend, state, onOpenCreationRequest }: { onSend: (message: string) => void; state: { conversation: AssistantConversation | null }; onOpenCreationRequest: (turn: AssistantConversationTurn) => void }) => <><button onClick={() => onSend("制作一万条视频")}>发送</button>{state.conversation?.turns.filter(turn => turn.result?.kind === "creation_request").map(turn => <button key={turn.id} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button>)}</>,
   AssistantFailureMessage: ({ message }: { message: string }) => <>{message}</>,
 }));
 vi.mock("@/lib/api", () => ({ apiUrl: (url: string) => url, getRuntimeSettings: async () => ({ status: { llm: { configured: true } } }), sendWorkspaceAssistantPlanTurn: mocks.send,
-  confirmCreationPlan: vi.fn(), confirmCreationTaskEdit: vi.fn(), previewCreationPlan: vi.fn(), sendCreationTaskAssistantTurn: vi.fn(), sendMaterialAssistantTurn: vi.fn(), undoCreationTaskTimeline: vi.fn(), updateAssistantPlanPreview: vi.fn(),
+  confirmCreationPlan: vi.fn(), confirmCreationTaskEdit: vi.fn(), previewCreationPlan: vi.fn(), sendCreationTaskAssistantTurn: vi.fn(), sendMaterialAssistantTurn: mocks.send, undoCreationTaskTimeline: vi.fn(), updateAssistantPlanPreview: vi.fn(),
 }));
 vi.mock("@/lib/creation-request-api", () => ({ getCreationRequest: mocks.get, getCreationRequestItems: mocks.items, updateCreationRequest: vi.fn(), prepareCreationRequestWindow: vi.fn(), confirmCreationRequestWindow: vi.fn() }));
 
@@ -75,4 +75,14 @@ it("does not open a late request response on a different page or conversation", 
   expect(screen.queryByRole("dialog", { name: "创作目标" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "查看这次创作目标" })).not.toBeInTheDocument();
   expect(mocks.get).not.toHaveBeenCalled();
+});
+
+
+it("keeps creation confirmation available with a material capsule", async () => {
+  mocks.conversation = { ...conversation(), turns: [] };
+  mocks.send.mockResolvedValue({ reply: "已保存", creation_request: request(0), plan_preview: null });
+  render(<HomeCommandComposer materialContext={{ selection: {scope: "asset", asset_id: "material-a"}, label: "当前素材", onResult: vi.fn() }} />);
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  expect(await screen.findByRole("dialog", { name: "创作目标" })).toBeInTheDocument();
+  expect(await screen.findByText("当前持久目标")).toBeInTheDocument();
 });

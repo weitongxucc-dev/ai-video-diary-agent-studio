@@ -10,16 +10,19 @@ import sqlite3
 from app.materials.assets import MaterialAssetStore
 from app.materials.contracts import MATERIAL_MEDIA_LABEL, MaterialAsset, material_media_type_for
 from app.materials.source_files import MaterialSourceFileAccess
+from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 from app.models import utc_now
 
 
 class DiscoveryIntake:
     def __init__(
         self, connection_factory: Callable[[], sqlite3.Connection], assets: MaterialAssetStore, *,
+        workspace_references: WorkspaceMediaReferenceAccess,
         target_for: Callable[[str], Path], confirm_copy: Callable[..., None],
     ):
         self._connect = connection_factory
         self._assets = assets
+        self._workspace_references = workspace_references
         self._target_for = target_for
         self._confirm_copy = confirm_copy
 
@@ -50,4 +53,5 @@ class DiscoveryIntake:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             saved = self._assets.save_received_asset(conn, asset, workspace_id=workspace_id, owner_user_id=owner_user_id)
+            self._workspace_references.claim_asset_reference(conn, workspace_id, saved.id)
         return saved.id

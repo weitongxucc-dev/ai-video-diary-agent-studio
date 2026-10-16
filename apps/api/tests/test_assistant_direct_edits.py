@@ -65,7 +65,7 @@ current.session.agent.streamFunction=()=>{
 };
 try{await current.session.prompt(input.message,{source:'rpc'});
   if(inputExtension.getFailure())throw inputExtension.getFailure();
-  process.stdout.write(JSON.stringify({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? null,
+  process.stdout.write(JSON.stringify({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? process.env.AI_VIDEO_DIARY_AGENT_TURN_ID ?? null,
     history_count:current.session.messages.length})+'\n');
 }finally{current.session.dispose();}
 """

@@ -8,6 +8,8 @@ const iterator = lines[Symbol.asyncIterator]();
 const initial = await iterator.next();
 if (initial.done) throw new Error("缺少宿主发送快照。");
 const input = JSON.parse(initial.value);
+const originalInputId = process.env.AI_VIDEO_DIARY_AGENT_TURN_ID || null;
+if (input.inputEnabled && !originalInputId) throw new Error("原始当前输入未绑定，未启动创作会话。");
 const emit = event => process.stdout.write(JSON.stringify(event) + "\n");
 const responses = new Map();
 let checkpoint = 0;
@@ -46,7 +48,7 @@ session.subscribe(event => { result.observe(event); emit(event); });
 try {
   await session.prompt(input.message, { source: "rpc" });
   if (inputExtension.getFailure()) throw inputExtension.getFailure();
-  emit({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? (process.env.AI_VIDEO_DIARY_AGENT_INPUT_ID || null)});
+  emit({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? originalInputId});
 } finally {
   session.dispose();
   lines.close();

@@ -406,7 +406,7 @@ def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp
     seen = invoke(tmp_path, observations=observations, observation_job=job, steps=[
         {"tool": "read_task_observations"},
         {"tool": "observe_task_output", "args": {"target": {"kind": "final"}, "sample_times_seconds": [1, 2]}}])
-    assert seen["results"][0]["result"]["details"] == {**observations,"invocation_input_id":None}
+    assert seen["results"][0]["result"]["details"] == {**observations,"invocation_input_id":"trusted-turn"}
     result = seen["results"][1]["result"]["details"]
     assert result["media_job"]["status"] == "queued" and result["media_job"]["result_kind"] == "observation"
     post = next(call for call in seen["calls"] if call["method"] == "POST")

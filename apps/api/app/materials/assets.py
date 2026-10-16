@@ -86,6 +86,7 @@ class MaterialAssetStore:
         self, existing: MaterialAsset | None, workspace_id: str, resolved: Path, stat: stat_result,
         *, media_type: MaterialMediaType | None, source_url: str,
         owner_user_id: str | None, copy_uploader_user_id: str | None,
+        connection: sqlite3.Connection | None = None,
     ) -> MaterialAsset:
         if existing is None:
             digest = hashlib.sha256(f"{workspace_id}\0{resolved}".encode("utf-8")).hexdigest()[:16]
@@ -115,7 +116,7 @@ class MaterialAssetStore:
                 existing.media_type = media_type
             if source_url and not existing.source_url:
                 existing.source_url = source_url
-        return self.save_asset(existing)
+        return self.save_asset(existing, connection=connection)
 
     def _asset_payload_row_by_id(
         self, conn: sqlite3.Connection, workspace_id: str, asset_id: str,
@@ -533,11 +534,15 @@ class MaterialAssetStore:
         assets = [self._asset_from_row(row) for row in rows]
         return assets, total
 
-    def save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
+    def save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False,
+                   connection: sqlite3.Connection | None = None) -> MaterialAsset:
+        if connection is not None and not connection.in_transaction:
+            raise ValueError("素材保存必须在调用方事务中执行")
         asset.updated_at = utc_now()
-        with self._connect() as conn:
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             if analysis_only:
-                conn.execute("BEGIN IMMEDIATE")
+                if connection is None:
+                    conn.execute("BEGIN IMMEDIATE")
                 # 连 visibility 一起读：分析写回时用库里那一列的当前值，
                 # 不拿分析结果里的旧值覆盖用户明确设过的共享或收回。
                 row = conn.execute(

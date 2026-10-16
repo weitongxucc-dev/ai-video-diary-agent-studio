@@ -27,6 +27,7 @@ export type MaterialAsset = {
   updated_at: string;
   id: string; user_tags: string[]; segments: Segment[]; file_name: string; media_type: string;
   duration_seconds: number | null; use_state: string; analysis_status: string; analysis_message: string;
+  review_status: Segment["review_status"]; usage_role: Segment["usage_role"];
   user_description: string; upload_context: string;
   speech_analysis: { status: string; message: string; observations: { start_ms: number; end_ms: number; text: string }[] } | null;
 };

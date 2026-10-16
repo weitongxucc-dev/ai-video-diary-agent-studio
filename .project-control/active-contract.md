@@ -1,5 +1,20 @@
 # 当前主控与执行边界
 
+## 当前真实闭环验收（2026-10-16，用户重新授权）
+
+用户最新要求：核实并解决现时环境阻断，跑通实际视频输出、连续修改与撤销、桌面真正退出重启恢复。此授权取代下方历史“暂缓／不重新采样”的执行限制，不改变资源准入、安全或验收标准。
+
+- 起始源码候选为 `c4be4f69`；修复后重新固定实际候选，同一任务贯通全部验收。旧截图、替身媒体和单测不作为本次真实输出证明。
+- 主控串行负责真实进程、模型、媒体、桌面和验收数据。使用外接盘独立验收目录与数据库；不更改原用户库、安装包或密钥，不关闭其他用户应用，不调整资源阈值求通过。
+- A/B/C 原实施写权保持冻结；可按主控消息进行定向只读调查，不运行媒体／模型或构建。主控独占当前活动合同和验收脚本；发现必须修复的产品文件时先在此绑定具体路径，再修改。
+- C 本轮仅新增写权：外接盘验收目录 `/Volumes/Dujiangyan-VM/AI视频日记/acceptance/real-loop-20261016/observe.py`，实现只读许可／进程组观测器；不写产品源码或数据库、不自行启动观测／重活。主控审核后启动。其他验收文件由主控拥有。
+- 主控本次源码独占：`apps/api/app/production.py`、`apps/api/app/materials/assets.py`、`apps/api/app/materials/workspace_references.py`、`apps/api/app/materials/discovery_intake.py`，以及 `apps/api/tests/test_material_discovery.py`、`apps/api/tests/test_material_asset_store.py`、`apps/api/tests/test_development_wave_api.py`。修复实际导入后缺少工作区媒体登记，要求素材与引用同事务保存、冲突整体回滚；不放宽根目录、成员或跨工作区边界。
+- A 本次限量修复写权：`apps/web/src/components/HomeCommandComposer.tsx` 及其直接测试；`apps/api/app/main.py`、`schemas.py`、`assistant_pi.py`、`assistant/catalogue.py`、`assistant/result_projection.py`、`assistant/projection.py`、`assistant/runtime_context.py`；`apps/api/agent_runtime/{session,host,result}.mjs`；`apps/api/agent_tools/{diary,materials}/` 中上述真实断点直接需要的工具、契约与注册文件；相应 `test_assistant*`、`test_creation_requests*` 以及工具测试。目标仅为素材胶囊不切断创作能力、真实审核用途投影、无依据日期限制修正、Pi持久方案回执恢复到可操作卡片。A不得触碰主控媒体登记文件、共享文档或验收库，不运行模型/媒体/构建；最小定向测试可运行。
+- 上述 A 修复已完成并冻结，文件写权归还主控；C 审核只读完成。主控正在串行重建并执行同一任务的真实闭环；不得将定向测试或尚未结束的本轮验收写成产品整体通过。
+- 本轮先核实实际配置、工具、内存／交换／磁盘和候选身份，再建立有输入边界、时间／资源上限及完整进程组观测的独立标定。已有配置须检查来源与完整性，缺项不填猜测值；实验测量与生产资源配置分开。
+- 通过条件：当前生产业务入口实际产出可播放视频；同任务两次修改有对应版本／产物，撤销恢复正确版本；保存文件可读；原生桌面 Quit 后所属 API/Web/媒体进程与端口释放；同候选、同数据目录重启后回读正确任务、版本与产物，无重复执行。
+
+
 ## 上一轮重构收口与主控归属
 
 用户已决定：收口已完成的代码重构，真实验收和环境阻断单独保留，先不反复重试，准备新功能开发。

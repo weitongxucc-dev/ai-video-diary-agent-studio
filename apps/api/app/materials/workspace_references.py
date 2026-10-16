@@ -88,6 +88,13 @@ class WorkspaceMediaReferenceAccess:
             ) from exc
         return f"workspace://{relative.as_posix()}"
 
+    def claim_asset_reference(self, conn: sqlite3.Connection, workspace_id: str, asset_id: str) -> None:
+        """Join a received asset's canonical reference to its original transaction."""
+        if not conn.in_transaction:
+            raise ValueError("素材引用登记必须与素材保存处于同一事务")
+        reference = self.workspace_media_reference_for_asset(workspace_id, asset_id, connection=conn)
+        self.claim_workspace_media_reference(conn, workspace_id=workspace_id, reference=reference)
+
     def claim_workspace_media_reference(
         self,
         conn: sqlite3.Connection,

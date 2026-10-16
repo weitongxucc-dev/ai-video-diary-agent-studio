@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
-import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection } from "@/lib/types";
+import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { CreationRequestPanel } from "@/components/CreationRequestPanel";
@@ -81,9 +81,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         : `segment:${materialContext.selection.asset_id}:${materialContext.selection.segment_id}`
       : "browse"
     : null;
-  const materialConversationScope = materialContext ? "library" : null;
-  const scopeKind = materialConversationScope !== null ? "material" as const : task ? "task" as const : "home" as const;
-  const scopeId = materialConversationScope ?? task?.id ?? "home";
+  const scopeKind = task ? "task" as const : "home" as const;
+  const scopeId = task?.id ?? "home";
   const assistant = useAssistantConversation({ scope_kind: "home", scope_id: "home" });
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -178,13 +177,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           "页面或会话已切换；本轮没有发送，原要求已保留为草稿。");
         return;
       }
-      if (materialContext) {
-        const selection = materialContext.selection;
-        const result = await sendMaterialAssistantTurn(command, turn.conversationId, selection,
-          turn.clientRequestId, expectedDraftVersion, onStreamEvent, selectionState?.version);
-        if (!assistant.isCurrentConversation(turn.conversationId)) return;
-        if (selection && result.material_result) materialContext.onResult(selection, result.material_result);
-      } else if (task) {
+      if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
           conversation_id: turn.conversationId,
           message: command, context_stage: task.stage,
@@ -202,10 +195,14 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         setTaskPreviewOpen(Boolean(result.edit_preview));
         if (result.execution_action || result.topic_candidates || result.timeline_action) onTaskUpdated?.();
       } else {
-        const result = await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
-          turn.clientRequestId, expectedDraftVersion, onStreamEvent, profileReference ? {kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version} : undefined, knowledgeReference ? {knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})} : undefined, selectionState?.version);
+        const result = (materialContext
+          ? await sendMaterialAssistantTurn(command, turn.conversationId, materialContext.selection,
+            turn.clientRequestId, expectedDraftVersion, onStreamEvent, selectionState?.version)
+          : await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
+          turn.clientRequestId, expectedDraftVersion, onStreamEvent, profileReference ? {kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version} : undefined, knowledgeReference ? {knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})} : undefined, selectionState?.version)) as WorkspaceAssistantPlanTurnResponse & { material_result?: MaterialAssistantResult };
         if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
+        if (materialContext?.selection && result.material_result) materialContext.onResult(materialContext.selection, result.material_result);
         setRequestBinding(result.creation_request ? { id: result.creation_request.id, conversationId: turn.conversationId, revision } : null);
         setRequestOpen(Boolean(result.creation_request));
         setPreview(result.creation_request ? null : result.plan_preview);
@@ -307,7 +304,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
   function startPlanFromReply(turn: AssistantConversationTurn) {
     const conversation = assistant.conversation;
-    if (scopeKind !== "home" || task || materialContext || !conversation
+    if (scopeKind !== "home" || task || !conversation
       || !assistant.isCurrentConversation(conversation.id) || turn.status !== "completed"
       || !turn.assistant_text.trim() || !conversation.turns.some(item => item.id === turn.id && item.status === "completed")) {
       setError("当前首页对话或完成回复已变化，没有带入其他内容。");
@@ -391,7 +388,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
         onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setRequestBinding(null); setRequestOpen(false); setPending(null); setShareUpdating(false); setError(null); }}
         onSend={sendToAssistant}
-        onCreatePlanFromReply={scopeKind === "home" && !task && !materialContext ? startPlanFromReply : undefined}
+        onCreatePlanFromReply={scopeKind === "home" && !task ? startPlanFromReply : undefined}
         onOpenCreationRequest={scopeKind === "home" ? turn => {
           const id = turn.result?.creation_request_id;
           const conversationId = assistant.conversation?.id;

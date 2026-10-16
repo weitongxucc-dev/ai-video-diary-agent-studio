@@ -341,3 +341,16 @@ def test_tag_suggestions_do_not_resurface_observations_shadowed_by_correction(tm
     result = call(tmp_path, asset, scope="segment", tool="suggest_selected_material_tags")
     assert result["result"]["details"]["suggestions"] == []
     assert result["asset"] == result["original"]
+
+
+def test_manual_review_and_role_survive_blocked_visual_observation(tmp_path, asset):
+    asset.update(review_status="approved", usage_role="b_roll", user_description="")
+    asset["segments"][0]["understanding"] = {"status": "blocked", "summary": "", "facts": [], "unknowns": [], "ocr_status": "blocked"}
+    out = call(tmp_path, asset, tool="read_selected_material")
+    facts = out["result"]["details"]
+    assert facts["review_status"] == "approved" and facts["usage_role"] == "b_roll"
+    assert facts["segments"][0]["description"] == "办公电脑"
+    assert facts["segments"][0]["review_status"] == "approved"
+    assert facts["segments"][0]["usage_role"] == "b_roll"
+    assert facts["segments"][0]["visual"]["status"] == "blocked"
+    assert "用作配图" in facts["instruction"]

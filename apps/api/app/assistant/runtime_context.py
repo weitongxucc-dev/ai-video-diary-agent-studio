@@ -51,6 +51,8 @@ def prepare_runtime(*, root: Path, pi_executable: str, base_url: str, model: str
         "AI_VIDEO_DIARY_AGENT_KNOWLEDGE_REFERENCE": json.dumps(knowledge_reference) if knowledge_reference else "",
         "AI_VIDEO_DIARY_AGENT_TASK_VERSION": json.dumps(task_version) if task_version else "",
         "AI_VIDEO_DIARY_AGENT_TURN_ID": turn_id or "",
+        "AI_VIDEO_DIARY_AGENT_INPUT_ID": "",
+        "AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID": "",
         "AI_VIDEO_DIARY_AGENT_CREATION_REQUEST_ID": str(creation_request["id"]) if creation_request else "",
         "AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION": message,
         "AI_VIDEO_DIARY_AGENT_TASK_READ_READY": "",

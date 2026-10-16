@@ -150,3 +150,75 @@ def test_ninth_window_item_and_duplicate_goal_are_rejected(client_state):
     for goals in [[{"goal": str(i)} for i in range(9)], [{"goal": "相同"}, {"goal": "相同"}]]:
         assert c.client.post(base, headers=c.alice, json={"expected_revision": saved["revision"], "goals": goals}).status_code == 422
     assert c.repository.list_creation_tasks("request-test") == []
+
+
+def test_original_turn_scope_and_exact_saved_request_recovery(client_state):
+    c = client_state
+    message = "使用刚导入的现有素材制作1条视频，不调用声音生成"
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "目标")
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message, str(uuid4()), 1)
+    saved = create(c, goal="模型误推今日", target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"], material_scope="today_received").json()
+    assert saved["material_scope"] == {"kind": "workspace_library"}
+    assert saved["clarification_questions"] == []
+    c.conversations.finish_turn(turn["id"], "completed", "已保存", {"kind": "conversation", "creation_request_id": None})
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["turns"][0]["result"]["creation_request_id"] == saved["id"]
+    assert restored.json()["turns"][0]["result"]["kind"] == "creation_request"
+    assert c.conversations.get_turn(turn["id"])["result"]["kind"] == "conversation", "read recovery must not rewrite old evidence"
+    assert c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.bob).status_code == 404
+
+
+def test_request_recovery_does_not_match_a_similar_goal(client_state):
+    c = client_state
+    message = "同名目标"
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", message)
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message, str(uuid4()), 1)
+    create(c, goal=message, target_count=1)
+    c.conversations.finish_turn(turn["id"], "completed", "已保存", {"kind": "conversation"})
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice).json()
+    assert restored["turns"][0]["result"] == {"kind": "conversation"}
+
+
+@pytest.mark.parametrize("result_asset,expected_status", [("asset-a", 200), ("other-asset", 502), ("malformed", 502)])
+def test_material_tag_receipt_still_requires_exact_bound_object(client_state, monkeypatch, result_asset, expected_status):
+    from datetime import datetime, timezone
+    c = client_state
+    monkeypatch.setattr(main, "get_production_material", lambda *_args, **_kwargs: SimpleNamespace(
+        id="asset-a", updated_at=datetime(2026, 10, 16, tzinfo=timezone.utc), segments=[]))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _workspace: SimpleNamespace(
+        effective_llm_provider="test", effective_llm_model="test", effective_llm_api_key=None))
+    raw = {"scope": "asset", "asset_ref": "asset:"+result_asset, "user_tags": ["配图"], "action": "add", "changed": True}
+    if result_asset == "malformed":
+        del raw["user_tags"]
+    monkeypatch.setattr(main, "run_plan_turn", lambda *_args, **_kwargs: ("已回读", {"kind": "material_result", "material_result": raw}))
+    c.client.app.add_api_route("/api/assistant/material/turn", main.material_assistant_turn, methods=["POST"])
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "素材")
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, "添加配图标签", 0)
+    payload = {"conversation_id": chat["id"], "message": "添加配图标签", "client_request_id": str(uuid4()),
+               "expected_draft_version": 1, "selection": {"scope": "asset", "asset_id": "asset-a"}}
+    response = c.client.post("/api/assistant/material/turn", headers=c.alice, json=payload)
+    assert response.status_code == expected_status, response.text
+    if expected_status == 200:
+        assert response.json()["material_result"]["asset_ref"] == "asset:asset-a"
+        assert c.client.post("/api/assistant/material/turn", headers=c.alice, json=payload).json() == response.json()
+    else:
+        assert c.conversations.list_turns(chat["id"])[0]["status"] == "failed"
+
+
+def test_interrupted_follow_up_does_not_restore_original_creation_request(client_state):
+    c = client_state
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "目标")
+    message = "建一条视频"
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message, str(uuid4()), 1)
+    create(c, goal=message, target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"])
+    c.conversations.append_event(turn["id"], {"type": "assistant_input", "input_id": str(uuid4()), "target_turn_id": turn["id"], "status": "interrupted"})
+    c.conversations.finish_turn(turn["id"], "completed", "后续澄清", {"kind": "conversation"})
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice).json()
+    assert restored["turns"][0]["result"]["kind"] == "conversation"

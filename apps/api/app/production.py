@@ -753,6 +753,7 @@ class ProductionRepository:
             excluded_roots=lambda: [self.video_library_path, self.database_path, *discovery_excluded_roots],
             target_for=self.material_link_target,
             accept_copy=DiscoveryIntake(self._connect, self._material_assets,
+                workspace_references=self._workspace_media_references,
                 target_for=self.material_link_target, confirm_copy=self.confirm_material_copy_complete),
         )
 
@@ -8661,10 +8662,15 @@ class ProductionRepository:
                     (workspace_id, str(resolved), json.dumps(self.material_copy_revision(stat), sort_keys=True)),
                 ).fetchone()
             copy_uploader_user_id = confirmation["copy_uploader_user_id"] if confirmation is not None else None
-        return self._material_assets.save_discovered_asset(
-            existing, workspace_id, resolved, stat, media_type=media_type, source_url=source_url,
-            owner_user_id=owner_user_id, copy_uploader_user_id=copy_uploader_user_id,
-        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            saved = self._material_assets.save_discovered_asset(
+                existing, workspace_id, resolved, stat, media_type=media_type, source_url=source_url,
+                owner_user_id=owner_user_id, copy_uploader_user_id=copy_uploader_user_id,
+                connection=conn,
+            )
+            self._workspace_media_references.claim_asset_reference(conn, workspace_id, saved.id)
+        return saved
 
     def material_link_target(self, workspace_id: str) -> Path:
         """Return the intake directory a direct link may write into, or refuse.

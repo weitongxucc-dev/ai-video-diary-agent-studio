@@ -2429,7 +2429,20 @@ class WorkspaceAssistantPlanTurnRequest(BaseModel):
     selected_knowledge_reference: AssistantKnowledgeReferenceRequest | None = None
 
 
+class MaterialAssistantResultResponse(BaseModel):
+    scope: Literal["asset", "segment"]
+    asset_ref: str
+    segment_ref: str | None = None
+    user_tags: list[str]
+    system_tags: list[str] | None = None
+    action: Literal["replace", "add", "remove"] | None = None
+    changed: bool | None = None
+    previous_user_tags: list[str] | None = None
+
+
+
 class WorkspaceAssistantPlanTurnResponse(BaseModel):
+    material_result: MaterialAssistantResultResponse | None = None
     reply: str
     provider: str
     model: str
@@ -2453,25 +2466,10 @@ class MaterialAssistantTurnRequest(BaseModel):
     selection: MaterialAssistantSelectionRequest | None = None
 
 
-class MaterialAssistantResultResponse(BaseModel):
-    scope: Literal["asset", "segment"]
-    asset_ref: str
-    segment_ref: str | None = None
-    user_tags: list[str]
-    system_tags: list[str] | None = None
-    action: Literal["replace", "add", "remove"] | None = None
-    changed: bool | None = None
-    previous_user_tags: list[str] | None = None
 
 
-class MaterialAssistantTurnResponse(BaseModel):
-    reply: str
-    provider: str
-    model: str
-    material_result: MaterialAssistantResultResponse | None = None
-    turn_id: UUID | None = None
+class MaterialAssistantTurnResponse(WorkspaceAssistantPlanTurnResponse):
     turn_status: Literal["running", "completed", "stopped", "failed"] = "completed"
-    draft_version: int | None = Field(default=None, ge=0)
 
 
 class AssistantStreamEvent(BaseModel):

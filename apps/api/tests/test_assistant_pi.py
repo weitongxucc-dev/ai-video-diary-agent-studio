@@ -338,7 +338,8 @@ def test_material_turn_uses_existing_pi_turn_with_selection_scoped_session(monke
     assert seen["material_selection"] == {
         "scope": "segment", "assetId": "asset-1", "segmentId": "segment-2",
     }
-    assert seen["stage"] == "material"
+    assert seen["stage"] == ""
+    assert {"preview_creation_plan", "prepare_creation_window"} <= set(seen["tool_names"].split(","))
     assert seen["session_key"] == "conversation:conversation-1"
 
 
@@ -957,3 +958,23 @@ def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
                       message="你好", authorization=None, cookie=None)
     assert sessions[0] == sessions[1]
     assert sessions[0] != sessions[2]
+
+
+def test_original_input_and_late_receipts_are_separate_creation_results():
+    from app.assistant.result_projection import project_business_result
+    request = {"id": "request-real", "target_count": 1, "clarification_questions": [], "current_window": {"entries": [1]}}
+    event = {"type": "tool_execution_end", "toolName": "prepare_creation_window", "isError": False,
+             "result": {"details": {"kind": "plan_preview", "invocation_input_id": "original-turn", "preview": {"kind": "creation_request", "request": request}}}}
+    completion = {"status": "settled", "answer": "已保存", "input_id": "original-turn", "tool_results": [event]}
+    assert project_business_result(completion, "plan_preview")[1]["request"]["id"] == "request-real"
+    completion["input_id"] = "follow-up"
+    assert project_business_result(completion, "plan_preview")[1] is None
+
+
+def test_material_reference_keeps_workspace_creation_and_exact_tag_target(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(pi_module, "_run_turn", lambda settings, **kwargs: (seen.update(kwargs) or "收到", None))
+    run_plan_turn(Settings(model_root_path=str(tmp_path)), workspace_id="w", conversation_id="c", message="用选中素材建视频",
+                  selected_references=[{"kind": "material", "selection": {"scope": "asset", "asset_id": "selected"}}])
+    assert seen["material_selection"] == {"scope": "asset", "assetId": "selected"}
+    assert {"prepare_creation_window", "preview_creation_plan", "update_selected_material_tags"} <= set(seen["tool_names"].split(","))

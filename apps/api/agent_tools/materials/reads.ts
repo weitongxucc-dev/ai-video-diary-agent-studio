@@ -106,6 +106,7 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
       const speech = asset.speech_analysis;
       return result({ ...projection(asset, target), file_name: fileName(asset), media_type: asset.media_type,
         duration_seconds: asset.duration_seconds, use_state: asset.use_state, analysis_status: asset.analysis_status,
+        review_status: asset.review_status, usage_role: asset.usage_role,
         analysis_message: materialText(asset.analysis_message ?? ""),
         user_description: materialText(asset.user_description ?? ""), upload_context: materialText(asset.upload_context ?? ""),
         evidence_source: "当前选中素材业务回读；时间均对应该原文件，用户说明不等于系统观察",
@@ -113,6 +114,7 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
           const visual = segment.understanding;
           return { segment_ref: `segment:${segment.id}`, start_seconds: segment.start_seconds, end_seconds: segment.end_seconds,
             description: materialText(segment.description), stored_transcript: materialText(segment.transcript),
+            review_status: segment.review_status, usage_role: segment.usage_role,
             user_tags: segment.user_tags, system_tags: segment.system_tags,
             visual: { status: visual?.status ?? segment.visual_status ?? "not_recorded",
               summary: visual?.status === "ready" ? materialText(visual.summary) : "",
@@ -127,7 +129,7 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
         speech: { status: speech?.status ?? "not_recorded", message: materialText(speech?.message ?? ""),
           observations: speech?.status === "ready" ? speech.observations.filter(item => ranges.some(([start, end]) => item.end_ms > start * 1000 && item.start_ms < end * 1000))
             .map(item => ({ start_ms: item.start_ms, end_ms: item.end_ms, text: materialText(item.text) })) : [] },
-        instruction: "画面观察、声音陈述、OCR文字、已存片段转录和用户补充分别表达；未记录、blocked、failed不表示已识别。OCR retrieval_eligible=false仅为低置信线索，不能当确定事实。不得把推断当作观察，也不能仅凭标签宣称用途。" });
+        instruction: "review_status是实际审核状态，approved表示已确认；usage_role是用途：b_roll就是界面‘用作配图’，a_roll为主画面，exclude为不使用，unassigned为未指定。用途与标签分开，不因没有‘配图’标签否认已确认用途。description为已存片段描述，user_description为空不代表片段描述或人工审核不存在。画面观察、声音陈述、OCR文字、已存片段转录和用户补充分别表达；blocked或failed只表示对应识别未完成，不否定人工记录。OCR retrieval_eligible=false仅为低置信线索。不得把推断当作观察，也不能仅凭标签宣称用途。" });
     },
   });
 }

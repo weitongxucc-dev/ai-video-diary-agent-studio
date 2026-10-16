@@ -96,6 +96,7 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
         DiscoveryStore(repository._connect), root_provider=lambda: [source],
         excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_link_target,
         accept_copy=DiscoveryIntake(repository._connect, repository._material_assets,
+            workspace_references=repository._workspace_media_references,
             target_for=repository.material_link_target, confirm_copy=repository.confirm_material_copy_complete),
     )
     monkeypatch.setattr(main, "material_ingestion", None)
@@ -241,3 +242,40 @@ def test_late_input_request_is_rejected_but_matching_host_input_is_accepted():
         assert error.value.status_code == 409
     request = Request({"type": "http", "headers": [(b"x-assistant-input-id", b"new-input")]})
     main._require_assistant_input_origin(request, source)
+
+
+def test_received_material_reference_is_atomic_and_restored_by_rescan(tmp_path, monkeypatch):
+    import pytest
+    from app.materials.contracts import MediaAuthorityError
+    client, repository, owner, headers, _ = _sampling_context(tmp_path, monkeypatch)
+    path = repository.video_library_path / 'owned.mp4'
+    path.write_bytes(b'synthetic metadata only')
+    asset = repository._upsert_discovered_asset('local', path, owner_user_id=owner.member_id)
+    asset.analysis_status = 'ready'
+    asset.review_status = 'approved'
+    asset.user_description = '已确认的人工说明'
+    repository._save_asset(asset)
+    reference = repository.workspace_media_reference_for_asset('local', asset.id)
+    assert repository.resolve_workspace_media_reference('local', reference, require_registered=True) == path
+    with repository._connect() as conn:
+        conn.execute('DELETE FROM workspace_media_references WHERE reference=?', (reference,))
+    repository.bind_material_ingestion('local', expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
+    repository.confirm_material_copy_complete('local', relative_path=path.name,
+        expected_revision=repository.material_copy_revision(path.stat()), confirmation_source='app_import',
+        verified_owner_user_id=owner.member_id)
+    response = client.post('/api/production/materials/scan', headers=headers)
+    assert response.status_code == 200
+    assert response.json()['assets'][0]['id'] == asset.id
+    restored = repository.get_asset('local', asset.id)
+    assert (restored.owner_user_id, restored.analysis_status, restored.review_status,
+            restored.user_description) == (owner.member_id, 'ready', 'approved', '已确认的人工说明')
+    assert repository.resolve_workspace_media_reference('local', reference, require_registered=True) == path
+    conflict = repository.video_library_path / 'conflict.mp4'
+    conflict.write_bytes(b'another synthetic metadata input')
+    with repository._connect() as conn:
+        repository._claim_workspace_media_reference(conn, workspace_id='other', reference='workspace://conflict.mp4')
+    with pytest.raises(MediaAuthorityError):
+        repository._upsert_discovered_asset('local', conflict, owner_user_id=owner.member_id)
+    with repository._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM material_assets WHERE file_path=?', (str(conflict),)).fetchone()[0] == 0
+        assert conn.execute("SELECT workspace_id FROM workspace_media_references WHERE reference='workspace://conflict.mp4'").fetchone()[0] == 'other'

@@ -15,7 +15,7 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
         goal: { type: "string", minLength: 1, maxLength: 2000 },
         target_count: { type: "integer", minimum: 1, maximum: 9007199254740991 },
         output_relation: { type: "string", enum: ["single", "different_topics", "variants", "series"] },
-        material_scope: { type: "string", enum: ["workspace_library", "today_received"] },
+        material_scope: { type: "string", enum: ["workspace_library", "today_received"], description: "默认workspace_library，使用现有可用素材。仅用户明确将素材范围限制为今日接收时才选today_received；今天制作、刚导入或稍后导入不构成该限制。" },
         name: { type: "string", minLength: 1, maxLength: 120 },
         language: { type: "string", enum: ["zh-CN", "en-US", "zh-CN/en-US"] },
         aspect_ratio: { type: "string", enum: ["9:16", "16:9", "1:1"] },

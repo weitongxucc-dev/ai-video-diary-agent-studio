@@ -5,7 +5,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
   request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any;
 }) {
   const materialSelection = readMaterialSelection();
-  if (stage === "material" || taskId || materialSelection) registerMaterialTools(pi, {
+  registerMaterialTools(pi, {
     selection: materialSelection,
     request: async (path, init) => {
       if (taskId && materialSelection) {

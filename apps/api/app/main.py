@@ -5087,8 +5087,34 @@ def assistant_knowledge_reference(knowledge_item_id: str, request: Request, vers
     return _assistant_knowledge_snapshot(request, knowledge_item_id, version, locator, include_content=True)
 
 
-def _assistant_conversation_response(row: dict) -> dict:
-    return {**row, "turns": conversation_repo.list_turns(row["id"])}
+def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict | None:
+    workspace_id, member_id, _row = _assistant_conversation_for_request(request, turn["conversation_id"])
+    # Only the exact original input may recover a missing SDK projection. An
+    # appended input invalidates that attribution even when the old write exists.
+    if any(item["target_turn_id"] == turn["id"] and item["status"] in {"consumed", "completed", "interrupted"}
+           for item in conversation_repo.list_inputs(turn["conversation_id"], workspace_id, member_id)):
+        return None
+    owner, diagnostic = _content_reader(request, workspace_id)
+    if not owner:
+        return None
+    with production_repo._connect() as conn:
+        saved = conn.execute("SELECT id FROM creation_requests WHERE workspace_id=? AND owner_user_id=? AND request_key=?",
+                             (workspace_id, owner, turn["id"])).fetchone()
+    if saved is None:
+        return None
+    return production_repo.get_creation_request(workspace_id, saved["id"],
+        viewer_user_id=owner, local_diagnostic=diagnostic)
+
+
+def _assistant_conversation_response(row: dict, request: Request) -> dict:
+    turns = conversation_repo.list_turns(row["id"])
+    for turn in turns:
+        if turn["status"] != "completed" or (turn.get("result") or {}).get("kind") != "conversation":
+            continue
+        saved = _assistant_creation_request_for_turn(request, turn)
+        if saved is not None:
+            turn["result"] = {**turn["result"], "kind": "creation_request", "creation_request_id": saved["id"]}
+    return {**row, "turns": turns}
 
 
 def _assistant_conversation_for_request(request: Request, conversation_id: str) -> tuple[str, str, dict]:
@@ -5106,7 +5132,7 @@ def current_assistant_conversation(request: Request, payload: AssistantConversat
     member_id = _assistant_member_id(request, workspace_id)
     _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
     row = conversation_repo.current_or_create(workspace_id, member_id, payload.scope_kind, payload.scope_id)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
 @app.post("/api/assistant/conversations", response_model=AssistantConversationResponse)
@@ -5117,7 +5143,7 @@ def create_assistant_conversation(request: Request, payload: AssistantConversati
         raise HTTPException(status_code=422, detail="会话名称不能包含密钥或口令。")
     _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
     row = conversation_repo.create(workspace_id, member_id, payload.scope_kind, payload.scope_id, payload.title)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
 @app.get("/api/assistant/conversations", response_model=AssistantConversationListResponse)
@@ -5138,14 +5164,14 @@ def list_assistant_conversations(request: Request, scope_kind: str, scope_id: st
             visible_rows.append(row)
         rows = visible_rows
     return AssistantConversationListResponse.model_validate({
-        "items": [_assistant_conversation_response(row) for row in rows],
+        "items": [_assistant_conversation_response(row, request) for row in rows],
     })
 
 
 @app.get("/api/assistant/conversations/{conversation_id}", response_model=AssistantConversationResponse)
 def get_assistant_conversation(conversation_id: str, request: Request):
     _workspace_id, _member_id, row = _assistant_conversation_for_request(request, conversation_id)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row))
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
 @app.post("/api/assistant/conversations/{conversation_id}/resume", response_model=AssistantConversationResponse)
@@ -5153,7 +5179,7 @@ def resume_assistant_conversation(conversation_id: str, request: Request):
     workspace_id, member_id, row = _assistant_conversation_for_request(request, conversation_id)
     selected = conversation_repo.select_current(conversation_id, workspace_id, member_id, workspace_session=True)
     assert selected is not None
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(selected))
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(selected, request))
 
 
 @app.post(
@@ -5263,7 +5289,7 @@ def update_assistant_conversation(
     if updated is not None and payload.title is not None:
         updated = conversation_repo.update_title(conversation_id, workspace_id, member_id, payload.title)
     assert updated is not None
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(updated))
+    return AssistantConversationResponse.model_validate(_assistant_conversation_response(updated, request))
 
 
 @app.post(
@@ -5293,7 +5319,7 @@ def restore_unpersisted_assistant_turn_draft(
         raise HTTPException(status_code=404, detail="对话不存在或当前成员无权访问。")
     return AssistantConversationDraftRestoreResponse.model_validate({
         "status": status,
-        "conversation": _assistant_conversation_response(conversation),
+        "conversation": _assistant_conversation_response(conversation, request),
     })
 
 
@@ -5579,6 +5605,7 @@ def _workspace_assistant_plan_turn(
     request: Request,
     payload: WorkspaceAssistantPlanTurnRequest,
     on_event,
+    *, material_selection: dict | None = None,
 ) -> WorkspaceAssistantPlanTurnResponse:
     workspace_id = current_workspace_id(request)
     workspace_settings_for_turn = _workspace_settings_for(workspace_id)
@@ -5591,7 +5618,7 @@ def _workspace_assistant_plan_turn(
                            if payload.selected_knowledge_reference is not None else None)
     turn_id, created, turn = _begin_assistant_turn(
         request, str(payload.conversation_id), "home", "home", payload.message.strip(),
-        payload.client_request_id, payload.expected_draft_version, {"kind": "home", "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, "target_snapshot": {"profile_reference": profile_reference, "knowledge_reference": knowledge_reference}}, on_event,
+        payload.client_request_id, payload.expected_draft_version, {"kind": "home", "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, "target_snapshot": {"profile_reference": profile_reference, "knowledge_reference": knowledge_reference, "material_selection": material_selection}}, on_event,
         expected_reference_version=payload.expected_reference_version,
     )
     if not created:
@@ -5619,7 +5646,7 @@ def _workspace_assistant_plan_turn(
             input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
             profile_reference=profile_reference,
             knowledge_reference=knowledge_reference,
-            keep_turn_control=True,
+            keep_turn_control=True, material_selection=material_selection,
         )
         if isinstance(preview, dict) and preview.get("kind") == "creation_request":
             saved_request = preview["request"]
@@ -5638,7 +5665,7 @@ def _workspace_assistant_plan_turn(
                         input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
                         knowledge_reference=knowledge_reference,
                         creation_request=_creation_request_response(latest).model_dump(mode="json"),
-                        keep_turn_control=True,
+                        keep_turn_control=True, material_selection=material_selection,
                     )
                     if isinstance(next_preview, dict) and next_preview.get("kind") == "creation_request":
                         reply, preview = next_reply, next_preview
@@ -5663,7 +5690,30 @@ def _workspace_assistant_plan_turn(
             "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
         })
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    material_result = None
+    if isinstance(preview, dict) and preview.get("kind") == "material_result":
+        try:
+            material_result = MaterialAssistantResultResponse.model_validate(preview.get("material_result"))
+        except ValidationError as exc:
+            forget_turn_control(turn_id)
+            conversation_repo.finish_turn(turn_id, "failed", result={"kind": "failure", "message": "素材结果格式不可核验，未宣称保存。"})
+            raise HTTPException(status_code=502, detail="素材结果格式不可核验，未宣称保存。") from exc
+    if material_result is not None:
+        materials = [item["selection"] for item in _frozen_assistant_references(request, str(payload.conversation_id), turn_id)
+                     if item["kind"] == "material"]
+        bound = materials[0] if len(materials) == 1 else material_selection if not materials else None
+        if (bound is None or material_result.scope != bound["scope"]
+                or material_result.asset_ref != f"asset:{bound['asset_id']}"
+                or material_result.segment_ref != (f"segment:{bound['segment_id']}" if bound["scope"] == "segment" else None)):
+            forget_turn_control(turn_id)
+            conversation_repo.finish_turn(turn_id, "failed", result={"kind": "failure", "message": "素材结果没有通过当前选择核对，未宣称保存。"})
+            raise HTTPException(status_code=502, detail="素材结果没有通过当前选择核对，未宣称保存。")
+        preview = None
     request_result = preview.get("request") if isinstance(preview, dict) and preview.get("kind") == "creation_request" else None
+    if request_result is None and material_result is None:
+        request_result = _assistant_creation_request_for_turn(request, conversation_repo.get_turn(turn_id))
+        if request_result is not None:
+            preview = None
     creation_request = CreationRequestResponse.model_validate(request_result) if request_result is not None else None
     plan_preview = CreationPlanPreviewResponse.model_validate(preview) if preview is not None and creation_request is None else None
     forget_turn_control(turn_id)
@@ -5673,12 +5723,12 @@ def _workspace_assistant_plan_turn(
         provider=workspace_settings_for_turn.effective_llm_provider,
         model=workspace_settings_for_turn.effective_llm_model,
         plan_preview=plan_preview,
-        creation_request=creation_request,
+        creation_request=creation_request, material_result=material_result,
         turn_id=turn_id,
         draft_version=payload.expected_draft_version + 1,
     )
     conversation_repo.finish_turn(turn_id, "completed", safe_reply, {
-        "kind": "creation_request" if creation_request else "plan_preview" if plan_preview else "conversation",
+        "kind": "creation_request" if creation_request else "plan_preview" if plan_preview else "material_result" if material_result else "conversation",
         "creation_request_id": creation_request.id if creation_request else None,
         "plan_preview": plan_preview.model_dump(mode="json") if plan_preview else None,
         "response": response.model_dump(mode="json"),
@@ -5752,120 +5802,18 @@ def _material_assistant_turn(
     payload: MaterialAssistantTurnRequest,
     on_event,
 ) -> MaterialAssistantTurnResponse:
+    selection = None
     workspace_id = current_workspace_id(request)
-    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    selection = payload.selection.model_dump(exclude_none=True) if payload.selection is not None else None
-    # Resolve the user-selected target through the existing visibility-checked API
-    # before adding its exact identity to this Pi turn's trusted extension context.
-    asset = None
     member_id = _assistant_member_id(request, workspace_id)
-    previous_context = conversation_repo.request_context(str(payload.client_request_id), str(payload.conversation_id), workspace_id, member_id)
-    if selection is not None:
-        selection, asset = _assistant_material_selection_snapshot(request, payload.selection.model_dump(mode="json",exclude_none=True), replay=previous_context is not None)
-    message = payload.message.strip()
-    if _assistant_text_without_credentials(message, workspace_id) != message:
-        raise HTTPException(status_code=422, detail="请勿在素材要求中粘贴密钥或口令。")
-    workspace_settings_for_turn = _workspace_settings_for(workspace_id)
-    turn_id, created, turn = _begin_assistant_turn(
-        request, str(payload.conversation_id), "material", None, message,
-        payload.client_request_id, payload.expected_draft_version,
-        {"kind": "material", "selection": payload.selection.model_dump(mode="json", exclude_none=True) if payload.selection else None,
-         "target_snapshot": selection}, on_event,
-        expected_reference_version=payload.expected_reference_version,
-    )
-    if not created:
-        if turn["status"] == "failed":
-            failure = turn.get("result") or {}
-            return MaterialAssistantTurnResponse(
-                reply=str(failure.get("message") or "上一轮未能完成，请检查后明确重试。"),
-                provider=workspace_settings_for_turn.effective_llm_provider,
-                model=workspace_settings_for_turn.effective_llm_model,
-                turn_id=turn_id,
-                turn_status="failed",
-                draft_version=payload.expected_draft_version + 1,
-            )
-        return _replay_assistant_turn(
-            turn_id, MaterialAssistantTurnResponse,
-            provider=workspace_settings_for_turn.effective_llm_provider,
-            model=workspace_settings_for_turn.effective_llm_model,
-            draft_version=payload.expected_draft_version + 1,
-        )
-    try:
-        reply, result = run_material_turn(
-            workspace_settings_for_turn,
-            workspace_id=workspace_id,
-            conversation_id=str(payload.conversation_id),
-            message=message,
-            selection={key: value for key, value in selection.items() if isinstance(value, str)} if selection else None,
-            local_member_token=_local_member_token(request) or None,
-            caller_user_id=caller_user_id if not local_diagnostic else None,
-            authorization=request.headers.get("authorization"),
-            cookie=request.headers.get("cookie"),
-            on_event=on_event,
-            turn_id=turn_id,
-            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
-            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
-        )
-    except AssistantStopped:
-        saved = conversation_repo.get_turn(turn_id)
-        response = MaterialAssistantTurnResponse(
-            reply=saved["assistant_text"] if saved else "", provider=workspace_settings_for_turn.effective_llm_provider,
-            model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
-            draft_version=payload.expected_draft_version + 1,
-        )
-        conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "conversation", "response": response.model_dump(mode="json")})
-        return response
-    except AssistantUnavailable as exc:
-        forget_turn_control(turn_id)
-        conversation_repo.finish_turn(turn_id, "failed", result={
-            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
-        })
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    try:
-        reply = _assistant_text_without_credentials(reply, workspace_id)
-        material_result = None
-        if isinstance(result, dict) and result.get("kind") == "material_result":
-            raw = result.get("material_result")
-            if isinstance(raw, dict):
-                if selection is None or asset is None:
-                    raise HTTPException(status_code=502, detail="未选择素材时不能修改素材标签。")
-                expected_asset_ref = f"asset:{asset.id}"
-                expected_segment_ref = f"segment:{selection['segment_id']}" if selection["scope"] == "segment" else None
-                if (raw.get("scope") != selection["scope"]
-                    or raw.get("asset_ref") != expected_asset_ref
-                    or raw.get("segment_ref") != expected_segment_ref):
-                    raise HTTPException(status_code=503, detail="所选素材回读与本轮选择不一致，未能确认结果")
-                material_result = MaterialAssistantResultResponse.model_validate(raw)
-        response = MaterialAssistantTurnResponse(
-            reply=reply,
-            provider=workspace_settings_for_turn.effective_llm_provider,
-            model=workspace_settings_for_turn.effective_llm_model,
-            material_result=material_result,
-            turn_id=turn_id,
-            draft_version=payload.expected_draft_version + 1,
-        )
-    except HTTPException as exc:
-        forget_turn_control(turn_id)
-        detail = exc.detail if isinstance(exc.detail, str) else "素材结果没有通过当前选择核对，未写入。"
-        conversation_repo.finish_turn(turn_id, "failed", result={
-            "kind": "failure", "message": _assistant_stream_safe_text(detail, workspace_id),
-        })
-        raise
-    except ValidationError as exc:
-        forget_turn_control(turn_id)
-        conversation_repo.finish_turn(turn_id, "failed", result={
-            "kind": "failure", "message": "素材结果未通过字段校验，未写入。",
-        })
-        raise HTTPException(status_code=400, detail="素材结果未通过字段校验，未写入。") from exc
-    forget_turn_control(turn_id)
-    conversation_repo.finish_turn(
-        turn_id, "completed", reply,
-        {"kind": "material_result" if material_result else "conversation",
-         "scope": material_result.scope if material_result else None,
-         "changed": material_result.changed if material_result else None,
-         "response": response.model_dump(mode="json")},
-    )
-    return response
+    previous = conversation_repo.request_context(str(payload.client_request_id), str(payload.conversation_id), workspace_id, member_id)
+    if payload.selection is not None:
+        selection, _asset = _assistant_material_selection_snapshot(
+            request, payload.selection.model_dump(mode="json", exclude_none=True), replay=previous is not None)
+        if previous is not None:
+            selection = previous["target_snapshot"].get("material_selection")
+    response = _workspace_assistant_plan_turn(request, WorkspaceAssistantPlanTurnRequest(
+        **payload.model_dump(exclude={"selection"})), on_event, material_selection=selection)
+    return MaterialAssistantTurnResponse.model_validate(response.model_dump())
 
 
 def _creation_request_response(data: dict) -> CreationRequestResponse:
@@ -5903,7 +5851,7 @@ def _creation_request_questions(target_count: int, relation: str | None, scope: 
     if target_count > 1 and relation not in {"different_topics", "variants", "series"}:
         questions.append("这些视频是不同主题、同一主题的不同版本，还是系列分集？")
     if scope == "today_received":
-        questions.append("当前素材尚无可核实的今日接收记录。请选择本次素材，或明确使用现有可用素材。")
+        questions.append("请明确本次要用的今日接收素材，或选择使用现有素材库。")
     return questions
 
 
@@ -5958,7 +5906,10 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
         raise HTTPException(status_code=409, detail="总数量与用户原句不一致，没有保存错误的制作目标。")
     if stated_duration is not None and stated_duration != payload.duration_target_seconds:
         raise HTTPException(status_code=409, detail="目标时长与用户原句不一致，没有保存错误的制作要求。")
-    scope = "today_received" if re.search(r"今天(?:我)?(?:发|传|给)|今天.{0,8}(?:视频|素材)", goal) else payload.material_scope
+    # A model enum cannot impose a date restriction absent from the user's goal.
+    scope = "today_received" if re.search(r"(?:今天|今日)(?:我)?(?:接收|收到|发给|传给|导入|上传|发来|传来)", goal) else ("workspace_library" if payload.assistant_turn_id else payload.material_scope)
+    if re.search(r"(?:不限制|不限|不按|无需).{0,4}(?:今天|今日)", goal):
+        scope = "workspace_library"
     relation = "single" if payload.target_count == 1 else payload.output_relation
     if payload.assistant_turn_id is not None and payload.target_count > 1:
         explicit_relation = ("series" if re.search(r"系列|分集", goal) else

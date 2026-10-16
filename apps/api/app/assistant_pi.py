@@ -136,8 +136,13 @@ def run_plan_turn(
     keep_turn_control: bool = False,
     selected_references: list[dict] | None = None,
     input_handler=None,
+    material_selection: dict | None = None,
 ) -> tuple[str, dict | None]:
+    materials = [item["selection"] for item in (selected_references or []) if item["kind"] == "material"]
+    selection = materials[0] if len(materials) == 1 else material_selection if not materials else None
     tools = ASSISTANT_BUSINESS_TOOLS["home"]
+    if selection is not None:
+        tools += ("read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags")
     if creation_request is not None:
         tools = tuple(name for name in tools if name != "preview_creation_plan")
     return _run_turn(
@@ -148,7 +153,7 @@ def run_plan_turn(
         on_event=on_event,
         prompt=PLAN_PROMPT, tool_names=",".join(tools) + (",read_selected_profile" if profile_reference else "") + (",read_selected_knowledge" if knowledge_reference else ""),
         preview_kind="plan_preview", session_key=f"conversation:{conversation_id}", turn_id=turn_id, profile_reference=profile_reference, knowledge_reference=knowledge_reference,
-        creation_request=creation_request,
+        creation_request=creation_request, material_selection=_material_tool_selection(selection),
         keep_turn_control=keep_turn_control, selected_references=selected_references, input_handler=input_handler,
     )
 
@@ -169,19 +174,11 @@ def run_material_turn(
     selected_references: list[dict] | None = None,
     input_handler=None,
 ) -> tuple[str, dict | None]:
-    tool_selection = _material_tool_selection(selection)
-    return _run_turn(
-        settings, workspace_id=workspace_id, task_id="", message=message,
-        stage="material", selected_refs=[], playhead_ms=None,
-        authorization=authorization, cookie=cookie,
-        local_member_token=local_member_token, caller_user_id=caller_user_id,
-        on_event=on_event, prompt=MATERIAL_PROMPT,
-        tool_names=",".join(ASSISTANT_BUSINESS_TOOLS["material"] if selection is not None
-                            else ("read_material_library_status", "search_material_library", "read_selected_reference") + MEMORY_TOOLS),
-        preview_kind="material_result",
-        session_key=f"conversation:{conversation_id}",
-        material_selection=tool_selection,
-        turn_id=turn_id, selected_references=selected_references, input_handler=input_handler,
+    return run_plan_turn(
+        settings, workspace_id=workspace_id, conversation_id=conversation_id, message=message,
+        authorization=authorization, cookie=cookie, local_member_token=local_member_token,
+        caller_user_id=caller_user_id, on_event=on_event, turn_id=turn_id,
+        selected_references=selected_references, input_handler=input_handler, material_selection=selection,
     )
 
 

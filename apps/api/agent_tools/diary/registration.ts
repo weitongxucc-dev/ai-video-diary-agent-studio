@@ -23,7 +23,7 @@ export function createToolCallScope(readActionSource: () => ActionSource) {
       execute: (...args: any[]) => signal.run(args[2], async () => {
         const source = readActionSource();
         const result = await tool.execute(...args);
-        const details = {...result.details, invocation_input_id: source.inputId ?? null,
+        const details = {...result.details, invocation_input_id: source.inputId || source.turnId || null,
           ...(inputBoundActions.has(tool.name)
             ? {input_id: source.inputId ?? null, input_turn_id: source.inputTurnId ?? null} : {})};
         return {...result, details, structuredContent: details};
