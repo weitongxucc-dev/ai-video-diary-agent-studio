@@ -6676,6 +6676,7 @@ def _topic_failure_response(
     candidate_field: str | None = None,
     candidate_fragment_index: int | None = None,
     candidate_field_digest: str | None = None,
+    review_issues: list[dict[str, object]] | None = None,
 ) -> HTTPException:
     return HTTPException(
         status_code=status_code,
@@ -6691,6 +6692,7 @@ def _topic_failure_response(
             **({"candidate_field": candidate_field} if candidate_field is not None else {}),
             **({"candidate_fragment_index": candidate_fragment_index} if candidate_fragment_index is not None else {}),
             **({"candidate_field_digest": candidate_field_digest} if candidate_field_digest is not None else {}),
+            **({"review_issues": review_issues} if review_issues is not None else {}),
         },
     )
 
@@ -7085,6 +7087,7 @@ def _assistant_script_inputs(workspace_id: str, task_id: str):
 def get_assistant_script_context(task_id: str, request: Request) -> dict[str, object]:
     workspace_id = current_workspace_id(request)
     task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
+    script_goal = _creation_task_script_goal(plan, task, _content_reader(request, workspace_id)[0])
     scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
     draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
     if task.can_revise_script and task.confirmed_script_id:
@@ -7106,7 +7109,10 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
         and isinstance(reply_event.payload.get("request_id"), str) else None)
     return {
         "task_id": task.id,
-        "goal": plan.goal,
+        "goal": script_goal,
+        **({"creative_proposal": plan.goal,
+            "creative_proposal_role": "可修订的Agent方案，不是用户已定稿正文；本条交付以language和duration_target_seconds等结构化要求为准。"}
+           if script_goal != plan.goal else {}),
         "creation_intent": plan.creation_intent,
         "language": plan.language,
         "duration_target_seconds": plan.duration_target_seconds,
@@ -7323,7 +7329,7 @@ def save_assistant_script_draft(
             retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index,
             candidate_section_index=exc.candidate_section_index, candidate_field=exc.candidate_field,
             candidate_fragment_index=exc.candidate_fragment_index,
-            candidate_field_digest=exc.candidate_field_digest) from exc
+            candidate_field_digest=exc.candidate_field_digest, review_issues=exc.review_issues) from exc
     record_llm_service_verification(_workspace_settings_for(workspace_id), ok=True, cause="verified", workspace_id=workspace_id)
     # The model call can outlive source permissions or the current plan/topic.
     # Re-read those bindings; the repository still owns the final draft CAS.
@@ -8458,6 +8464,7 @@ def generate_creation_task_script(
             candidate_field=exc.candidate_field,
             candidate_fragment_index=exc.candidate_fragment_index,
             candidate_field_digest=exc.candidate_field_digest,
+            review_issues=exc.review_issues,
         ) from exc
     record_llm_service_verification(
         _workspace_settings_for(workspace_id), ok=True, cause="verified",

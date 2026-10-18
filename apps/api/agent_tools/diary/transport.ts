@@ -7,11 +7,19 @@ export type ScriptCandidateLocation = {
   candidate_field_digest: string;
 };
 
+export type ScriptReviewIssue = ScriptCandidateLocation & {
+  error: "script_fact_unsupported" | "script_goal_conflict";
+  reason_code: "unsupported_fact" | "goal_conflict";
+  section_index: number;
+  review_explanation: string;
+};
+
 export type ScriptDraftFailure = Partial<ScriptCandidateLocation> & {
   error: "script_review_invalid" | "script_fact_unsupported" | "script_goal_conflict";
   reason_code: string;
   section_index: number | null;
   retryable: boolean;
+  review_issues?: ScriptReviewIssue[];
 };
 
 export function safeScriptCandidateLocation(value: any): ScriptCandidateLocation | undefined {
@@ -29,7 +37,7 @@ export function safeScriptCandidateLocation(value: any): ScriptCandidateLocation
     candidate_fragment_index: fragment, candidate_field_digest: digest};
 }
 
-export type BusinessFailure = Record<string, string | number | boolean | null> & {
+export type BusinessFailure = Record<string, string | number | boolean | null | ScriptReviewIssue[]> & {
   error: string; reason: string; repair_action: string;
   stage: string; submission_effect: "not_submitted" | "rejected" | "unknown";
 };
@@ -43,15 +51,37 @@ export function safeFailureText(value: unknown, secrets: string[] = []): string 
   if (typeof value !== "string") return undefined;
   let text = value;
   for (const secret of secrets.filter(Boolean)) text = text.replaceAll(secret, "[已隐藏]");
-  return text.replace(/\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi, "[已隐藏]")
+  text = text.replace(/\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi, "[已隐藏]")
     .replace(/\b(?:authorization|cookie|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "[已隐藏]")
     .replace(/https?:\/\/[^\s）)；;]+|(?:[A-Za-z]:\\|\/(?!api\/)[A-Za-z0-9_.~-]+\/)[^\s）)；;]+/g, "[已隐藏]")
-    .replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 500);
+    .replace(/[\u0000-\u001f\u007f]/g, " ");
+  return Array.from(text).slice(0, 500).join("");
+}
+
+export function safeScriptReviewIssues(value: any, secrets: string[] = []): ScriptReviewIssue[] | undefined {
+  const issues = value?.review_issues;
+  if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)
+      || !Array.isArray(issues) || issues.length < 1 || issues.length > 12) return undefined;
+  const safe: ScriptReviewIssue[] = [];
+  for (const issue of issues) {
+    const location = safeScriptCandidateLocation(issue);
+    if (!location || issue.reason_code !== (issue.error === "script_fact_unsupported" ? "unsupported_fact" : "goal_conflict")
+        || typeof issue.review_explanation !== "string" || !issue.review_explanation.trim()
+        || Array.from(issue.review_explanation).length > 300) continue;
+    const explanation = safeFailureText(issue.review_explanation, secrets)!;
+    safe.push({error: issue.error, reason_code: issue.reason_code, section_index: issue.section_index,
+      ...location, review_explanation: Array.from(explanation).slice(0, 300).join("")});
+  }
+  if (!safe.length) return undefined;
+  // Keep already-clean receipts stable through the existing runtime decorator.
+  if (safe.length === issues.length && safe.every((item, index) => Object.keys(item).length === Object.keys(issues[index]).length
+      && Object.entries(item).every(([key, value]) => issues[index][key] === value))) return issues;
+  return safe;
 }
 
 // Only business locators and finite diagnostics cross into model input/events.
 export function safeBusinessFailure(value: any, secrets: string[] = []): Partial<BusinessFailure> {
-  const safe: Record<string, string | number | boolean | null> = {};
+  const safe: Record<string, string | number | boolean | null | ScriptReviewIssue[]> = {};
   for (const key of ["reason", "repair_action"]) {
     const text = safeFailureText(value?.[key], secrets);
     if (text) safe[key] = text;
@@ -75,6 +105,8 @@ export function safeBusinessFailure(value: any, secrets: string[] = []): Partial
   if (value?.section_index === null || (Number.isInteger(value?.section_index) && value.section_index >= 1 && value.section_index <= 20))
     safe.section_index = value.section_index;
   Object.assign(safe, safeScriptCandidateLocation(value));
+  const issues = safeScriptReviewIssues(value, secrets);
+  if (issues) safe.review_issues = issues;
   for (const [key, text] of Object.entries(safe))
     if (typeof text === "string" && secrets.some(secret => secret && text.includes(secret))) delete safe[key];
   return safe;
@@ -84,16 +116,17 @@ const reviewReasons = new Set(["envelope", "length", "tool_finish", "tool_call_c
   "tool_arguments", "tool_arguments_shape", "section_count", "section_shape", "index", "bool", "support_shape",
   "support_quote", "source_quote", "support_reference", "issue_shape", "issue_quote", "issue_reference", "issue_flags", "issue_count"]);
 
-function scriptDraftFailure(detail: any): ScriptDraftFailure | undefined {
+function scriptDraftFailure(detail: any, secrets: string[]): ScriptDraftFailure | undefined {
   const error = detail?.error;
   if (!["script_review_invalid", "script_fact_unsupported", "script_goal_conflict"].includes(error)) return undefined;
   const reason = detail.reason_code;
   const validReason = error === "script_review_invalid" ? reviewReasons.has(reason)
     : reason === (error === "script_fact_unsupported" ? "unsupported_fact" : "goal_conflict");
+  const issues = safeScriptReviewIssues(detail, secrets);
   return {error, reason_code: validReason ? reason : "unavailable",
     section_index: Number.isInteger(detail.section_index) && detail.section_index >= 1 && detail.section_index <= 20
       ? detail.section_index : null,
-    retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail)};
+    retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail), ...(issues ? {review_issues: issues} : {})};
 }
 
 export class BusinessRequestError extends Error {
@@ -191,7 +224,7 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     catch { return unknown("business_response_unreadable", "response_decode"); }
     if (!response.ok) {
       const detail = typeof body?.detail === "string" ? {reason: body.detail} : body?.detail;
-      const scriptFailure = scriptDraftFailure(detail);
+      const scriptFailure = scriptDraftFailure(detail, secrets);
       const safe = safeBusinessFailure(detail, secrets);
       const effect = safe.submission_effect ?? (response.status < 500 || scriptFailure ? "rejected" : "unknown");
       const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${response.status}`,

@@ -327,9 +327,14 @@ def test_script_http_errors_preserve_safe_category_section_and_retryability(
         'candidate_fragment_index': 0, 'candidate_field_digest': 'a' * 64} if code == 'script_fact_unsupported'
         else {'candidate_section_index': section_index, 'candidate_field': 'visual_prompt',
             'candidate_fragment_index': 2, 'candidate_field_digest': 'b' * 64} if code == 'script_goal_conflict' else {})
+    review_issues = ([{'error': code, 'reason_code': reason_code, 'section_index': section_index,
+        **location, 'review_explanation': '已核查的有限说明。'},
+        {'error': 'script_goal_conflict', 'reason_code': 'goal_conflict', 'section_index': 2,
+            'candidate_section_index': 2, 'candidate_field': 'content', 'candidate_fragment_index': 0,
+            'candidate_field_digest': 'c' * 64, 'review_explanation': '另一字段存在要求冲突。'}] if location else None)
     failure = CreationTaskScriptGenerationError(code=code, reason='安全的分段失败说明。',
         impact='没有保存草稿。', repair_action='先核对指定段落及资料。', retryable=False,
-        reason_code=reason_code, section_index=section_index, **location)
+        reason_code=reason_code, section_index=section_index, review_issues=review_issues, **location)
     def reject(*args):
         raise failure
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings:
@@ -341,6 +346,7 @@ def test_script_http_errors_preserve_safe_category_section_and_retryability(
     assert {key: detail[key] for key in ('error', 'reason_code', 'section_index', 'retryable')} == {
         'error': code, 'reason_code': reason_code, 'section_index': section_index, 'retryable': False}
     assert {key: value for key, value in detail.items() if key.startswith('candidate_')} == location
+    assert detail.get('review_issues') == review_issues
     assert api_state.repository.list_creation_task_scripts('local', 'task') == []
 
 
@@ -648,6 +654,7 @@ def test_minimax_reasoning_only_length_response_is_rejected_without_retry():
     with pytest.raises(CreationTaskScriptGenerationError) as error:
         generator.generate(inputs())
     assert error.value.code == 'script_review_invalid' and not error.value.retryable
+    assert error.value.review_issues is None
     assert len(calls) == 2 and calls[1]['max_tokens'] == 8192
     assert all(body['reasoning_split'] is True for body in calls)
 
@@ -1242,6 +1249,55 @@ def test_content_rejection_locator_is_derived_from_the_verified_candidate_fragme
     assert len(calls) == 1
 
 
+def test_complete_review_returns_every_verified_finding_without_changing_first_item():
+    import hashlib
+
+    document = draft()
+    document['script']['sections'].append(copy.deepcopy(document['script']['sections'][0]))
+    review = reviewed(document)
+    review['sections'][0]['issues'] = [
+        {'kind': 'unsupported_fact', 'candidate_quote_id': '@script_title:0', 'reference_ids': ['evidence_1'],
+            'missing_or_conflicting': '总标题承诺没有资料依据。'},
+        {'kind': 'goal_conflict', 'candidate_quote_id': '@content:0', 'reference_ids': [],
+            'missing_or_conflicting': '旁白与本轮要求冲突。'},
+    ]
+    review['sections'][1]['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': '@visual_prompt:0',
+        'reference_ids': ['evidence_1'], 'missing_or_conflicting': '画面承诺没有资料依据。 isolated-key'}]
+    calls = []
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        provider(document, review, calls).generate(inputs())
+    error = failure.value
+    assert error.code == 'script_fact_unsupported' and error.section_index == 1
+    assert error.candidate_section_index == 0 and error.candidate_field == 'title'
+    assert len(error.review_issues) == 3 and len(calls) == 2
+    assert [(item['section_index'], item['candidate_section_index'], item['candidate_field'], item['error'])
+        for item in error.review_issues] == [(1, 0, 'title', 'script_fact_unsupported'),
+            (1, 1, 'content', 'script_goal_conflict'), (2, 2, 'visual_prompt', 'script_fact_unsupported')]
+    texts = [document['script']['title'], document['script']['sections'][0]['content'], document['script']['sections'][1]['visual_prompt']]
+    for item, text in zip(error.review_issues, texts):
+        assert item['candidate_field_digest'] == hashlib.sha256(text.encode('utf-8')).hexdigest()
+        assert item['candidate_fragment_index'] == 0 and len(item['review_explanation']) <= 300
+        assert set(item) == {'error', 'reason_code', 'section_index', 'candidate_section_index', 'candidate_field',
+            'candidate_fragment_index', 'candidate_field_digest', 'review_explanation'}
+    assert error.review_issues[1]['review_explanation'] == '旁白与本轮要求冲突。'
+    assert 'isolated-key' not in json.dumps(error.review_issues, ensure_ascii=False)
+
+
+def test_all_twelve_findings_are_returned_with_the_existing_report_limit():
+    document = draft()
+    document['script']['sections'] *= 4
+    review = reviewed(document)
+    for section in review['sections']:
+        section['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': '@' + field + ':0',
+            'reference_ids': ['evidence_1'], 'missing_or_conflicting': '该字段承诺缺少资料支持。'}
+            for field in ('title', 'content', 'visual_prompt')]
+    calls = []
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        provider(document, review, calls).generate(inputs())
+    assert failure.value.code == 'script_fact_unsupported' and len(failure.value.review_issues) == 12
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize('change,subtype,missing_keys,unknown_count', [
     ('not_object', 'not_object', [], None),
     ('missing', 'missing_keys', ['reference_ids'], 0),
@@ -1293,6 +1349,7 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
         generator.generate(inputs())
     assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == 'issue_shape'
     assert failure.value.candidate_field is None and failure.value.candidate_field_digest is None
+    assert failure.value.review_issues is None
     assert failure.value.retryable is False and len(calls) == 2
     records = [record for record in caplog.records if record.name == 'app.topics']
     assert len(records) == 1

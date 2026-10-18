@@ -71,9 +71,17 @@ output.local={result:await localTools.get('regenerate_storyboard').execute('loca
 const scriptTools=new Map(),script={title:'总标题😀',sections:[{title:'段落',content:'有据的说明。',visual_prompt:'展示画面',evidence_reference_ids:['source-a']}]};
 const scriptLocation={candidate_section_index:0,candidate_field:'title',candidate_fragment_index:0,
  candidate_field_digest:createHash('sha256').update(script.title,'utf8').digest('hex')};
+const scriptIssues=[{error:'script_goal_conflict',reason_code:'goal_conflict',section_index:1,...scriptLocation,
+ review_explanation:'总标题与原用户要求冲突。'},
+ {error:'script_fact_unsupported',reason_code:'unsupported_fact',section_index:1,candidate_section_index:1,
+  candidate_field:'content',candidate_fragment_index:0,candidate_field_digest:createHash('sha256').update(script.sections[0].content,'utf8').digest('hex'),
+  review_explanation:`正文承诺缺少资料支持。 ${credentials.authorization} ${credentials.cookie} ${credentials.localMemberToken} /Users/private/file`,raw_response:'private-nested-response'},
+ {error:'script_fact_unsupported',reason_code:'unsupported_fact',section_index:1,candidate_section_index:1,
+  candidate_field:'content',candidate_fragment_index:0,candidate_field_digest:createHash('sha256').update('old field','utf8').digest('hex'),
+  review_explanation:'private-stale-finding'}];
 globalThis.fetch=async(url)=>url.endsWith('/script-context')?Response.json({creation_intent:{kind:'discussion'}})
  :Response.json({detail:{error:'script_goal_conflict',reason_code:'goal_conflict',section_index:1,retryable:false,
-  ...scriptLocation,reason:'private-model-explanation',repair_action:'private-response-body'}},{status:422});
+  ...scriptLocation,review_issues:scriptIssues,reason:'private-model-explanation',repair_action:'private-response-body'}},{status:422});
 await createDiaryTools(environment).register({registerTool:tool=>scriptTools.set(tool.name,tool)});
 output.scriptRejection=await scriptTools.get('preview_script_draft').execute('script-call',script);
 // A failure before POST must not consume the one-write guard; an unknown POST must.
@@ -270,6 +278,9 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
         assert delivered["failure"]["candidate_field"] == "title"
         assert "总标题" in delivered["failure"]["reason"] and "本次未保存送审稿" in delivered["failure"]["reason"]
         assert "private-model-explanation" not in json.dumps(events) and "private-response-body" not in json.dumps(events)
+        assert len(delivered["failure"]["review_issues"]) == 2
+        assert [issue["candidate_field"] for issue in delivered["failure"]["review_issues"]] == ["title", "content"]
+        assert "private-stale-finding" not in json.dumps(events) and "private-nested-response" not in json.dumps(events)
 
 
 @pytest.mark.parametrize("details", [None, {}])
@@ -355,3 +366,30 @@ def test_verified_script_location_reaches_model_and_projection_without_free_revi
     assert result["structuredContent"]["failure"] == failure
     assert _project(result, "preview_script_draft")["failure"] == failure
     assert "private-model-explanation" not in json.dumps(result) and "private-response-body" not in json.dumps(result)
+    assert len(failure["review_issues"]) == 2
+    assert failure["review_issues"][0]["review_explanation"] == '总标题与原用户要求冲突。'
+    for secret in ('opaque-auth-value', 'opaque-cookie-value', 'opaque-member-value', '/Users/private', 'private-stale-finding', 'private-nested-response'):
+        assert secret not in json.dumps(result)
+
+
+def test_review_issue_projection_keeps_only_bounded_validated_data_and_redacts_known_secrets():
+    issue = {"error": "script_fact_unsupported", "reason_code": "unsupported_fact", "section_index": 1,
+        "candidate_section_index": 1, "candidate_field": "content", "candidate_fragment_index": 0,
+        "candidate_field_digest": "a" * 64,
+        "review_explanation": "这是待核对数据。opaque-local-secret /Users/private/file Bearer hidden-value",
+        "raw_response": "private-response-body"}
+    failure = {"error": "script_fact_unsupported", "review_issues": [issue,
+        {**issue, "candidate_field_digest": "invalid", "review_explanation": "private-invalid-location"},
+        {**issue, "reason_code": "unknown", "review_explanation": "private-invalid-category"},
+        {**issue, "review_explanation": "x" * 301}]}
+    safe = _safe_business_failure(failure, secrets=("opaque-local-secret",))
+    assert len(safe["review_issues"]) == 1
+    assert "这是待核对数据" in safe["review_issues"][0]["review_explanation"]
+    assert set(safe["review_issues"][0]) == set(issue) - {"raw_response"}
+    for secret in ('opaque-local-secret', '/Users/private', 'hidden-value', 'private-response-body', 'private-invalid-location', 'private-invalid-category'):
+        assert secret not in json.dumps(safe)
+    unicode_issue = {**issue, "review_explanation": '😀' * 300}
+    assert len(_safe_business_failure({"error": "script_fact_unsupported", "review_issues": [unicode_issue]})["review_issues"][0]["review_explanation"]) == 300
+    for invalid_list in ([], [issue] * 13):
+        assert "review_issues" not in _safe_business_failure({"error": "script_fact_unsupported", "review_issues": invalid_list})
+    assert "review_issues" not in _safe_business_failure({"error": "script_review_invalid", "review_issues": [issue]})

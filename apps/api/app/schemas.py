@@ -2659,7 +2659,7 @@ class AssistantStreamEvent(BaseModel):
     label: str | None = None
     ok: bool | None = None
     summary: str | None = None
-    failure: dict[str, str | int | bool | None] | None = None
+    failure: dict[str, str | int | bool | None | list[dict[str, str | int | bool | None]]] | None = None
     result: dict[str, object] | None = None
     message: str | None = None
     status: int | None = None

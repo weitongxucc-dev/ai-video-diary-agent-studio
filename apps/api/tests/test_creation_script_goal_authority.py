@@ -180,16 +180,19 @@ def consumer_state(api_state, monkeypatch):
     from app.conversation_repository import ConversationRepository
     from app.production import CreationTask
 
-    def create(*, failure=None):
+    def create(*, failure=None, kind="goal_delegation", adoption_kind="delegated_system"):
         state = api_state
         owner = state.owner.member_id if failure != "private_request" else "another-original-owner"
         if failure == "private_request":
             state.sources.set_knowledge_item_visibility("local", "fixture", "shared")
-        goal = "请自主制作30秒本机工作区介绍，中文旁白，不编造功能。"
+        fixed_body = "用户可以为素材设置用途。"
+        goal = ("请自主制作30秒本机工作区介绍，中文旁白，不编造功能。" if kind == "goal_delegation"
+                else "请按定稿制作30秒视频：" + fixed_body)
         source = {"kind": "conversation_input", "member_id": owner, "request_id": "http-human-input",
             "turn_id": "http-original-turn", "conversation_id": "http-original-chat",
             "message_digest": hashlib.sha256(goal.encode()).hexdigest() if failure != "source" else "wrong-body"}
-        intent = CreationIntentUseCase.receive_intent({"kind": "goal_delegation", "topic_title": "本机工作区导览"},
+        intent = CreationIntentUseCase.receive_intent({"kind": kind, "topic_title": "本机工作区导览",
+            **({"final_script": {"title": "确认稿", "text": fixed_body}} if kind == "final_script" else {})},
             source=source, target_count=1, original_message=goal)
         saved = state.repository.create_creation_request("local", request_key="http-human-input",
             input_fingerprint="http-input", goal=goal, target_count=1, output_relation="single",
@@ -203,7 +206,7 @@ def consumer_state(api_state, monkeypatch):
             verified_owner_user_id=owner)
         state.repository.confirm_creation_request_window("local", saved["id"], saved["current_window"]["id"],
             expected_revision=saved["revision"], input_fingerprint="http-window",
-            verified_owner_user_id=owner, adoption_kind="delegated_system")
+            verified_owner_user_id=owner, adoption_kind=adoption_kind)
         if failure == "private_request":
             state.repository.set_creation_task_visibility("local", task.id, "shared")
             state.repository.set_creation_plan_visibility("local", plan.id, "shared")
@@ -215,7 +218,8 @@ def consumer_state(api_state, monkeypatch):
         chat = conversations.save_draft(chat["id"], "local", state.owner.member_id, instruction, 0)
         turn, _ = conversations.create_turn_idempotent(chat["id"], "local", state.owner.member_id, instruction,
             str(uuid4()), chat["draft_version"], request_context={"kind": "task", "task_id": task.id})
-        return SimpleNamespace(**{**vars(state), "task": task}, goal=goal, instruction=instruction, turn_id=turn["id"])
+        return SimpleNamespace(**{**vars(state), "task": task}, goal=goal, instruction=instruction,
+            turn_id=turn["id"], fixed_body=fixed_body)
     return create
 
 
@@ -230,19 +234,29 @@ def test_real_main_script_consumers_send_original_user_goal_to_model(consumer_st
     else:
         set_api_provider(monkeypatch, document, reviewed(document), calls)
         payload = {}
+    context_response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
+    assert context_response.status_code == 200, context_response.text
+    context = context_response.json()
+    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    assert context["goal"] == state.goal
+    assert context["creative_proposal"] == plan.goal and context["creative_proposal"] != context["goal"]
+    assert "可修订" in context["creative_proposal_role"] and "不是用户已定稿正文" in context["creative_proposal_role"]
+    assert context["creation_intent"] == plan.creation_intent
+    assert (context["language"], context["duration_target_seconds"], context["presenter_share_target"]) == ("zh-CN", 30, 0)
+    assert calls == []
     response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
     assert response.status_code == 200, response.text
     bodies = calls if endpoint == "assistant/script-draft" else [body for _, body in calls]
     assert len(bodies) == (1 if endpoint == "assistant/script-draft" else 2)
     for body in bodies:
         model_input = json.loads(body["messages"][1]["content"])
-        assert model_input["goal"] == state.goal and "Agent自拟" not in model_input["goal"]
+        assert model_input["goal"] == context["goal"] == state.goal and "Agent自拟" not in model_input["goal"]
         assert model_input.get("duration_target_seconds", model_input.get("requirements", {}).get("duration_target_seconds")) == 30
     if endpoint == "assistant/script-draft":
         assert json.loads(bodies[0]["messages"][1]["content"])["current_instruction"] == state.instruction
 
 
-@pytest.mark.parametrize("endpoint", ["assistant/script-draft", "scripts/generate"])
+@pytest.mark.parametrize("endpoint", ["assistant/script-context", "assistant/script-draft", "scripts/generate"])
 @pytest.mark.parametrize("failure", ["private_request", "source"])
 def test_main_rejects_unreadable_or_mismatched_goal_before_model_and_script_run(consumer_state, monkeypatch, endpoint, failure):
     import app.main as main
@@ -250,9 +264,32 @@ def test_main_rejects_unreadable_or_mismatched_goal_before_model_and_script_run(
     monkeypatch.setattr(main, "_creation_task_script_generator_for",
         lambda *_: pytest.fail("来源拒绝必须发生在模型调用前"))
     payload = {**agent_payload(state), "assistant_turn_id": state.turn_id} if endpoint == "assistant/script-draft" else {}
-    response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
+    path = f"/api/creation-tasks/{state.task.id}/{endpoint}"
+    response = state.client.get(path) if endpoint == "assistant/script-context" else state.client.post(path, json=payload)
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["error"] == "script_goal_source_changed"
     assert state.repository.list_creation_task_scripts("local", state.task.id) == []
     with state.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs WHERE task_id=?", (state.task.id,)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("kind,adoption_kind", [("goal_delegation", "manual"), ("final_script", "delegated_system")])
+def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixed_copy(consumer_state, monkeypatch, kind, adoption_kind):
+    import app.main as main
+    state = consumer_state(kind=kind, adoption_kind=adoption_kind)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for",
+        lambda *_: pytest.fail("读取文案上下文不能调用模型"))
+    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
+    assert "creative_proposal" not in response.json() and "creative_proposal_role" not in response.json()
+    if kind == "goal_delegation":
+        assert response.status_code == 200, response.text
+        assert response.json()["goal"] == plan.goal
+        assert response.json()["creation_intent"] == plan.creation_intent
+        assert plan.adoption["kind"] == "manual"
+    else:
+        assert response.status_code == 409 and "锁定" in response.json()["detail"]
+        script = state.repository.get_creation_task_script("local", state.task.confirmed_script_id)
+        assert script.sections[0].content == state.fixed_body
+        assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
+    assert state.repository.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent

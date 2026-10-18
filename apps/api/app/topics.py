@@ -623,6 +623,7 @@ class CreationTaskScriptGenerationError(RuntimeError):
         candidate_field: Literal["title", "content", "visual_prompt"] | None = None,
         candidate_fragment_index: int | None = None,
         candidate_field_digest: str | None = None,
+        review_issues: list[dict[str, object]] | None = None,
     ) -> None:
         self.code = code
         self.reason = reason
@@ -635,6 +636,7 @@ class CreationTaskScriptGenerationError(RuntimeError):
         self.candidate_field = candidate_field
         self.candidate_fragment_index = candidate_fragment_index
         self.candidate_field_digest = candidate_field_digest
+        self.review_issues = review_issues
         super().__init__(f"{code}: {reason}")
 
 
@@ -1250,6 +1252,18 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         if len(all_issues) > 12:
             raise self._review_failure("issue_count", diagnostics)
         if all_issues:
+            review_issues = []
+            for review_index, review_issue in all_issues:
+                is_unsupported = review_issue["kind"] == "unsupported_fact"
+                explanation = review_issue["missing_or_conflicting"].strip()
+                if self._api_key:
+                    explanation = explanation.replace(self._api_key, "[已隐藏]")
+                review_issues.append({
+                    "error": "script_fact_unsupported" if is_unsupported else "script_goal_conflict",
+                    "reason_code": "unsupported_fact" if is_unsupported else "goal_conflict",
+                    "section_index": review_index, "candidate_section_index": review_issue["candidate_section_index"],
+                    "candidate_field": review_issue["field"], "candidate_fragment_index": review_issue["candidate_fragment_index"],
+                    "candidate_field_digest": review_issue["candidate_field_digest"], "review_explanation": explanation[:300]})
             index, issue = all_issues[0]
             unsupported = issue["kind"] == "unsupported_fact"
             detail = issue["missing_or_conflicting"].strip()
@@ -1269,7 +1283,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 reason=reason, impact="未保存这份新草稿，已有草稿保持原样。", repair_action=repair, retryable=False,
                 reason_code="unsupported_fact" if unsupported else "goal_conflict", section_index=index,
                 candidate_section_index=issue["candidate_section_index"], candidate_field=issue["field"],
-                candidate_fragment_index=issue["candidate_fragment_index"], candidate_field_digest=issue["candidate_field_digest"])
+                candidate_fragment_index=issue["candidate_fragment_index"], candidate_field_digest=issue["candidate_field_digest"],
+                review_issues=review_issues)
 
 
     def _review_failure(self, reason_code: str, diagnostics: dict) -> CreationTaskScriptGenerationError:
@@ -1362,6 +1377,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         candidate_field: Literal["title", "content", "visual_prompt"] | None = None,
         candidate_fragment_index: int | None = None,
         candidate_field_digest: str | None = None,
+        review_issues: list[dict[str, object]] | None = None,
     ) -> CreationTaskScriptGenerationError:
         return CreationTaskScriptGenerationError(
             code=code,
@@ -1375,6 +1391,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             candidate_field=candidate_field,
             candidate_fragment_index=candidate_fragment_index,
             candidate_field_digest=candidate_field_digest,
+            review_issues=review_issues,
         )
 
 
