@@ -16,7 +16,7 @@ from app.media.clip_preview import ClipPreviewExecutor
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.models import utc_now
 from app.production import TimelineVersionConflict
-from app.schemas import CreationTaskExactEditRequest, CreationTaskEditPreviewResponse, EXACT_EDIT_ENVELOPE_FIELDS
+from app.schemas import CreationTaskExactEditRequest, CreationTaskEditPreviewResponse
 from app.task_audio import media_digest
 from app.visual_effects import VisualEditRequest
 import subprocess
@@ -61,8 +61,8 @@ class ExactPreviewUseCase:
                 raise EditPreviewRejected(status_code=409, detail='助手轮次的目标版本已失效')
             source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin['conversation_id'], raw_command=origin['raw_command'],
                           **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
-        clean = CreationTaskExactEditRequest.model_validate(payload.model_dump(mode='json', exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS))
-        source['action'] = clean.model_dump(mode='json', exclude_unset=True)
+        clean = CreationTaskExactEditRequest.model_validate(payload.action_values())
+        source['action'] = clean.action_values()
         return (clean, source)
 
     def source_facts(self, task, payload, identity, actor):

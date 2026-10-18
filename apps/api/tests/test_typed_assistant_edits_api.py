@@ -77,6 +77,65 @@ def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http
     assert len(state.repo.list_edit_operations('ws', state.task.id)) == 1
 
 
+def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tmp_path, monkeypatch):
+    from test_timeline_restore_application import restore_http_state
+    state = restore_http_state(tmp_path, monkeypatch)
+    url = state.base_url
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: None)
+    cropped = state.client.post(url + '/edits/exact', json=bound(state,
+        operation_type='ChangeCrop', clip_id='clip', fit_mode='fit', crop_x=.3, crop_y=.7))
+    assert cropped.status_code == 200, cropped.text
+    before = state.repo.get_creation_task('ws', state.task.id)
+    base = state.repo.get_timeline_version('ws', before.current_timeline_version_id)
+    original = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    payload = {'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add',
+        'graphic_overlay': {'kind': 'text', 'text': '公开素材演示', 'start_seconds': 0, 'end_seconds': 3},
+        'request_id': str(uuid4()), 'expected_timeline_version_id': base.id,
+        'expected_timeline_sequence': base.sequence}
+    response = state.client.post(url + '/edits/exact', json=payload)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    task = state.repo.get_creation_task('ws', state.task.id)
+    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    montage = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    layer, = montage['graphic_overlays']
+    assert layer['id'].startswith('overlay_') and layer['text'] == '公开素材演示'
+    assert layer['x'] == .5 and layer['y'] == .15 and layer['font_size'] == 64
+    assert montage['clips'] == original['clips']
+    assert montage['cues'] == original['cues'] and montage['audio_timeline'] == original['audio_timeline']
+    assert montage['narration_audio_path'] == original['narration_audio_path']
+    assert task.narration_cache_key == before.narration_cache_key
+    versions = state.repo.list_timeline_versions('ws', state.task.id)
+    operations = state.repo.list_edit_operations('ws', state.task.id)
+    with monkeypatch.context() as replay:
+        replay.setattr(CreationTaskExactEditRequest, 'action_values',
+            lambda self: pytest.fail('recorded replay must not normalize or save another graphic'))
+        repeated = state.client.post(url + '/edits/exact', json=payload)
+    assert repeated.status_code == 200 and repeated.json() == saved
+    assert state.repo.list_timeline_versions('ws', state.task.id) == versions
+    assert state.repo.list_edit_operations('ws', state.task.id) == operations
+    assert state.repo.get_creation_task_montage_plan('ws', state.task.id)['graphic_overlays'] == [layer]
+    journal = state.client.get(url + f"/assistant/edit-requests/{payload['request_id']}?phase=apply")
+    assert journal.status_code == 200, journal.text
+    assert journal.json()['submitted_input'] == payload
+    assert journal.json()['result'] == saved
+    stale = state.client.post(url + '/timeline/undo', json={
+        'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence})
+    assert stale.status_code == 409
+    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == version.id
+    undone = state.client.post(url + '/timeline/undo', json={
+        'expected_timeline_version_id': version.id, 'expected_timeline_sequence': version.sequence})
+    assert undone.status_code == 200, undone.text
+    restored = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    assert restored['graphic_overlays'] == original['graphic_overlays'] == []
+    assert restored['clips'] == original['clips'] and restored['audio_timeline'] == original['audio_timeline']
+    after_undo = state.repo.list_timeline_versions('ws', state.task.id)
+    replayed = state.client.post(url + '/edits/exact', json=payload)
+    assert replayed.status_code == 200 and replayed.json() == saved
+    assert state.repo.list_timeline_versions('ws', state.task.id) == after_undo
+    assert state.repo.get_creation_task_montage_plan('ws', state.task.id)['graphic_overlays'] == []
+
+
 def test_metadata_patch_preserves_no_change_and_missing_target_responses(metadata_http_state):
     state = metadata_http_state
     unchanged = state.client.patch(state.url + '/montage/cues/cue', json={'text': '原字幕'})

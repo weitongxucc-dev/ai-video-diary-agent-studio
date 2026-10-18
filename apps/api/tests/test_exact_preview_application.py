@@ -16,8 +16,41 @@ from app.production import EXACT_EDIT_SOURCE
 from app.creation_execution import CreationExecutionActor
 from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
 from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.schemas import CreationTaskExactEditRequest
 from test_visual_preview_application import visual_application, _inspect
 from test_montage_pipeline import person_render_edit_state, permitted_media_state
+
+
+def test_typed_graphic_action_keeps_validated_id_and_defaults_out_of_request_digest():
+    payload = CreationTaskExactEditRequest.model_validate({
+        'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add',
+        'graphic_overlay': {'kind': 'text', 'text': '公开素材演示', 'start_seconds': 0, 'end_seconds': 3},
+        'request_id': str(uuid4()), 'expected_timeline_version_id': 'version', 'expected_timeline_sequence': 1,
+    })
+    original = payload.model_dump(mode='json', exclude_unset=True)
+    layer = payload.graphic_overlay.model_dump(mode='json')
+    assert 'id' not in original['graphic_overlay'] and 'x' not in original['graphic_overlay']
+    case = ExactPreviewUseCase(None, None, None, None, None, None, None, None, None)
+    clean, source = case.complete_typed(None, payload, 'member', None, {}, None)
+    assert clean.graphic_overlay.id == payload.graphic_overlay.id
+    assert source['action'] == clean.action_values() == {
+        'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add', 'graphic_overlay': layer,
+    }
+    assert payload.model_dump(mode='json', exclude_unset=True) == original
+
+
+@pytest.mark.parametrize('action', [
+    {'operation_type': 'AdjustVisualEffects', 'clip_ids': ['clip'], 'effects': {'contrast': 1.2, 'exposure': 0}},
+    {'operation_type': 'EditAudioTimeline', 'audio_edit': {'action': 'track', 'target_id': 'track',
+        'values': {'gain_db': -4.5, 'muted': False}}},
+])
+def test_typed_action_normalization_preserves_nested_patch_field_presence(action):
+    payload = CreationTaskExactEditRequest.model_validate({**action, 'request_id': str(uuid4()),
+        'expected_timeline_version_id': 'version', 'expected_timeline_sequence': 1})
+    case = ExactPreviewUseCase(None, None, None, None, None, None, None, None, None)
+    clean, source = case.complete_typed(None, payload, 'member', None, {}, None)
+    assert source['action'] == clean.action_values() == action
+    assert clean.model_dump(mode='json', exclude_unset=True) == action
 
 
 @pytest.mark.parametrize('failure,status,detail', [

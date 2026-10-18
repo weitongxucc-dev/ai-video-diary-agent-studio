@@ -8854,7 +8854,7 @@ def _save_direct_metadata_edit(task_id, request, payload):
                 _wake_assistant_continuations()
             return result
         clean, source = _prepare_exact_edit_request(task_id, request, payload)
-        values = clean.model_dump(mode='json', exclude_unset=True)
+        values = clean.action_values()
         values.pop('operation_type')
         if set(values) - EXACT_EDIT_FIELDS[clean.operation_type]:
             raise HTTPException(status_code=422, detail='精确编辑不能混入其他操作')

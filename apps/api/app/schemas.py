@@ -1702,6 +1702,13 @@ class CreationTaskExactEditRequest(BaseModel):
     position: int | None = Field(default=None, ge=0, le=99)
     locked: bool | None = None
 
+    def action_values(self) -> dict[str, object]:
+        """Validated execution values, separate from the explicit request digest."""
+        values = self.model_dump(mode="json", exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS)
+        if self.operation_type == "EditGraphicOverlay" and self.graphic_overlay is not None:
+            values["graphic_overlay"] = self.graphic_overlay.model_dump(mode="json")
+        return values
+
     @model_validator(mode="after")
     def exact_action_fields(self):
         allowed = EXACT_EDIT_FIELDS.get(self.operation_type)
