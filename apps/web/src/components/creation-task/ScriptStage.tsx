@@ -3,6 +3,7 @@ import { useWorkspaceViewState } from "../workbench/context";
 import { Tabs } from "@base-ui/react/tabs";
 import Link from "next/link";
 import { Check, LoaderCircle } from "lucide-react";
+import { Button } from "../ui/button";
 import { useEffect, useState } from "react";
 import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan } from "@/lib/api";
 import type { CreationTask, CreationTaskScript, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
@@ -140,19 +141,19 @@ export function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: {
     onConfirm: (script: CreationTaskScript) => void;
 }) {
     const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
-    const [sources, setSources] = useState<{
-        reference_id: string;
-        title: string;
-        text: string;
-    }[]>([]);
+    const [sourceRead, setSourceRead] = useState<
+        { status: "loading" } | { status: "failed"; message: string }
+        | { status: "ready"; sources: { reference_id: string; title: string; text: string }[] }
+    >({ status: "loading" });
     const [savingDraft, setSavingDraft] = useState(false);
     const [draftError, setDraftError] = useState<string | null>(null);
     useEffect(() => {
         let active = true;
+        setSourceRead({ status: "loading" });
         void getAssistantScriptContext(taskId).then((context) => { if (active)
-            setSources(context.sources); })
+            setSourceRead({ status: "ready", sources: context.sources }); })
             .catch((cause) => { if (active)
-            setDraftError(cause instanceof Error ? cause.message : "无法读取当前任务资料。"); });
+            setSourceRead({ status: "failed", message: cause instanceof Error ? cause.message : "无法读取当前任务资料。" }); });
         return () => { active = false; };
     }, [taskId]);
     async function saveDraft() {
@@ -181,9 +182,10 @@ export function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: {
       {script.reused_from_entry_id ? <p>从文案库复用的新稿，尚未确认；没有调用模型或复制旧成片。<Link href="/knowledge">查看文案来源</Link></p> : null}
       {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；来源和画面建议需要你逐段核对补充。</p> : null}
       <label className={styles.field}><span>标题</span><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })}/></label>
-      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sources.length ? sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；请先补充并确认有效来源。</p>}</fieldset></article>)}</div>
+      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sourceRead.status === "loading" ? <p role="status">正在读取当前任务资料…</p> : sourceRead.status === "failed" ? <p>资料尚未读回，请检查读取错误。</p> : sourceRead.sources.length ? sourceRead.sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；请先补充并确认有效来源。</p>}</fieldset></article>)}</div>
+      {sourceRead.status === "failed" ? <p role="alert">{sourceRead.message}</p> : null}
       {draftError ? <p role="alert">{draftError}</p> : null}
-      {script.selection_status === "draft" ? <button className={styles.secondaryButton} disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</button> : null}
-      <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim() || !section.evidence_reference_ids.length)} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</button></div>
+      {script.selection_status === "draft" ? <Button variant="outline" className={styles.secondaryButton} disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</Button> : null}
+      <div className={styles.primaryAction}><Button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim() || !section.evidence_reference_ids.length)} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</Button></div>
     </section>);
 }

@@ -8,6 +8,7 @@ import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, C
 import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
+import { ScriptEditor } from "../creation-task/ScriptStage";
 vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
   getCreationTaskNarrationVoiceSelection: (...args: unknown[]) => mocks.getVoiceSelection(...args),
@@ -1715,7 +1716,7 @@ describe("CreationTaskWorkspace", () => {
   });
 
   it.each(["recorded", "lost_response", "query_retry", "explicit_replay", "query_unavailable", "conflict"])("binds a later authorized voice through its original receipt: %s", async outcome => {
-    const initial = workspace(baseTask);
+    const initial = workspace({...baseTask, stage_status:"not_started", can_revise_script:true});
     initial.available_voices = [{
       profile_id: "voice-1", version: "v1", person_display_name: "主讲人",
       language: "zh", model_id: "qwen3-tts-12hz-0.6b-base-8bit",
@@ -1755,7 +1756,9 @@ describe("CreationTaskWorkspace", () => {
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await productionPanel();expect(await screen.findByRole("button", { name: "暂不能开始制作" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button",{name:"收起制作详情"}));
-    fireEvent.click(screen.getByRole("button", { name: "使用授权声音生成" }));
+    expect(screen.getByRole("button", {name:"修改文案"})).toBeEnabled();
+    expect(screen.getByRole("combobox", {name:"用于生成配音的声音"})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "采用此声音" }));
 
     await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", {
       voice_profile_id: "voice-1", voice_version: "v1", request_id:expect.stringMatching(/^[0-9a-f-]{36}$/),
@@ -1770,7 +1773,7 @@ describe("CreationTaskWorkspace", () => {
     }
     if (outcome === "query_retry" || outcome === "explicit_replay") {
       await screen.findByText("声音采用结果尚未查明，请查询原请求。");
-      expect(screen.getByRole("button", {name:"使用授权声音生成"})).toBeDisabled();
+      expect(screen.getByRole("button", {name:"采用此声音"})).toBeDisabled();
       fireEvent.click(screen.getByRole("button", {name:outcome === "query_retry" ? "查询声音采用结果" : "继续原声音采用请求"}));
     }
     if (outcome === "query_unavailable") {
@@ -1789,6 +1792,54 @@ describe("CreationTaskWorkspace", () => {
     if (outcome === "query_retry") expect(mocks.getVoiceSelection).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["voice_reference_unavailable", "声音参考暂不可用，请检查来源和使用范围。"],
+    ["voice_language_unavailable", "声音不支持当前方案语言。"],
+    ["unrecognized_private_code", "此声音暂不可用，服务未提供可显示的具体原因。"],
+  ])("retains an unavailable voice and its safe reason while script revision remains available: %s", async (reason, message) => {
+    const initial = workspace({...baseTask, stage_status:"not_started", can_revise_script:true});
+    initial.available_voices = [{profile_id:"voice-unavailable", version:"v1", person_display_name:"已登记声音", language:"en", model_id:"model", runnable:false, runnable_reason:reason}];
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    expect(screen.getByRole("button", {name:"修改文案"})).toBeEnabled();
+    expect(screen.getByRole("button", {name:"采用此声音"})).toBeDisabled();
+    expect(screen.getByRole("list", {name:"暂不可用的声音"})).toHaveTextContent(`已登记声音 · v1：${message}`);
+    expect(screen.queryByText("还没有可用于生成配音的授权声音")).not.toBeInTheDocument();
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", {name:"检查声音参考"})).toHaveAttribute("href", "/profiles?view=voices&task=task-1");
+    await chooseSelectValue(screen.getByRole("combobox", {name:"用于生成配音的声音"}), "voice-unavailable");
+    expect(mocks.selectVoice).not.toHaveBeenCalled();
+    expect(mocks.generateNarration).not.toHaveBeenCalled();
+  });
+
+  it.each(["populated", "empty", "failed"])("shows source loading before a real %s response without changing frozen references", async outcome => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (cause: Error) => void;
+    mocks.getAssistantScriptContext.mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
+    const script: WorkspaceState["scripts"][number] = {
+      id:"script-source-read", task_id:"task-1", run_id:"run", topic_id:"topic", title:"已有文案", language:"zh-CN",
+      selection_status:"confirmed", created_at:baseTask.created_at, updated_at:baseTask.updated_at, confirmed_at:baseTask.updated_at,
+      sections:[{id:"section-1", title:"正文", content:"原正文", visual_prompt:"原画面", evidence_reference_ids:["knowledge:fixed:v1"]}],
+    };
+    const confirm = vi.fn();
+    render(<ScriptEditor taskId="task-1" script={script} busy={false} repairing={false} onConfirm={confirm} />);
+    expect(screen.getByText("正在读取当前任务资料…")).toBeInTheDocument();
+    expect(screen.queryByText("当前任务没有可选资料；请先补充并确认有效来源。")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", {name:"第 1 段正文"}), {target:{value:"正在编辑的正文"}});
+    if (outcome === "failed") {
+      await act(async () => reject(new Error("当前资料读取暂不可用")));
+      expect(screen.getByRole("alert")).toHaveTextContent("当前资料读取暂不可用");
+      expect(screen.queryByText("当前任务没有可选资料；请先补充并确认有效来源。")).not.toBeInTheDocument();
+    } else {
+      await act(async () => resolve({sources:outcome === "populated" ? [{reference_id:"knowledge:fixed:v1", title:"已采用资料", text:"资料正文"}] : []}));
+      if (outcome === "populated") expect(screen.getByRole("checkbox", {name:"已采用资料"})).toBeChecked();
+      else expect(screen.getByText("当前任务没有可选资料；请先补充并确认有效来源。")).toBeInTheDocument();
+    }
+    expect(screen.queryByText("正在读取当前任务资料…")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", {name:"第 1 段正文"})).toHaveValue("正在编辑的正文");
+    expect(script.sections[0].evidence_reference_ids).toEqual(["knowledge:fixed:v1"]);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("does not apply a late original voice receipt to another task after switching", async () => {
     const initial = workspace(baseTask);
     initial.available_voices = [{profile_id:"voice-1", version:"v1", person_display_name:"声音", language:"zh", model_id:"model", runnable:true, runnable_reason:null}];
@@ -1796,7 +1847,7 @@ describe("CreationTaskWorkspace", () => {
     let resolveQuery!: (value: unknown) => void;
     mocks.getVoiceSelection.mockReturnValueOnce(new Promise(resolve => { resolveQuery = resolve; }));
     const view = renderTaskSubject(<CreationTaskWorkspace key="task-1" initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(screen.getByRole("button", {name:"使用授权声音生成"}));
+    fireEvent.click(screen.getByRole("button", {name:"采用此声音"}));
     await waitFor(() => expect(mocks.getVoiceSelection).toHaveBeenCalledOnce());
     const originalId = mocks.selectVoice.mock.calls[0][1].request_id;
     const next = workspace({...baseTask, id:"task-2", plan_id:"plan-2", name:"另一任务"});
