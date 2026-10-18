@@ -535,12 +535,15 @@ class ConversationRepository:
     def task_turn_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict:
         """Read the consumed, trusted task snapshot for an active tool call."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT t.user_message,t.status,t.events_json,r.request_context_json,t.conversation_id "
-                "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
-                "WHERE t.id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
-                (turn_id, workspace_id, member_id),
-            ).fetchone()
+            return self._task_turn_source(conn, turn_id, workspace_id, member_id, task_id)
+
+    def _task_turn_source(self, conn: sqlite3.Connection, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict:
+        row = conn.execute(
+            "SELECT t.user_message,t.status,t.events_json,r.request_context_json,t.conversation_id "
+            "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+            "WHERE t.id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+            (turn_id, workspace_id, member_id),
+        ).fetchone()
         context = json.loads(row["request_context_json"]) if row else {}
         if row is None or row["status"] != "running" or context.get("kind") != "task" or context.get("task_id") != task_id:
             raise ValueError("类型化编辑不属于当前有效助手轮次")
@@ -557,8 +560,7 @@ class ConversationRepository:
                     "conversation_id": row["conversation_id"], "input_id": active["input_id"], "input_turn_id":turn_id}
         original = row["user_message"]
         if context.get("source_kind") == "business_event":
-            with self._connect() as conn:
-                root = self._goal_root(conn, turn_id)
+            root = self._goal_root(conn, turn_id)
             if (root is None or root["goal"].get("current_turn_id") != turn_id or root["goal"].get("status") != "running"
                     or context.get("goal_revision",0) != root["goal"].get("revision",0)
                     or context.get("source_input_id") != root["goal"].get("source_input_id")):
@@ -567,6 +569,51 @@ class ConversationRepository:
         return {"context": context, "raw_command": original, "conversation_id": row["conversation_id"],
                 **({"input_id":context["source_input_id"],"input_turn_id":context["source_input_turn_id"]}
                    if context.get("source_input_id") else {})}
+
+    def task_execution_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str,
+                              *, input_id: str | None = None) -> dict:
+        """Verify an execution's current human origin in one read snapshot."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            origin = self._task_turn_source(conn, turn_id, workspace_id, member_id, task_id)
+            if origin.get("input_id") != input_id:
+                raise ValueError("制作提交不属于当前已消费输入，不能沿旧输入执行。")
+            context = json.loads(conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts "
+                "WHERE turn_id=? AND outcome='consumed'", (turn_id,)).fetchone()["request_context_json"])
+            if context.get("source_kind") == "business_event":
+                root = self._goal_root(conn, turn_id)
+                if (root is None or (root["workspace_id"], root["member_id"], root["goal"]["task_id"])
+                        != (workspace_id, member_id, task_id)):
+                    raise ValueError("制作提交不属于当前任务的原目标。")
+            else:
+                root = {"id": turn_id, "conversation_id": origin["conversation_id"], "goal": {}}
+            if not self._goal_origin_current(conn, root):
+                raise ValueError("原助手制作要求已被新的真人要求或追加输入替代。")
+            if input_id is not None:
+                row = conn.execute("SELECT t.events_json FROM assistant_conversation_turns t "
+                    "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                    "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                    (origin["input_turn_id"], origin["conversation_id"], workspace_id, member_id)).fetchone()
+                consumed = latest_consumed_input(json.loads(row["events_json"])) if row else None
+                if consumed is None or consumed["input_id"] != input_id or consumed["status"] == "interrupted":
+                    raise ValueError("制作提交的追加输入已变化或中断，没有沿旧要求执行。")
+            return origin
+
+    @staticmethod
+    def _goal_origin_current(conn: sqlite3.Connection, root: dict) -> bool:
+        latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+            "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (root["conversation_id"],)).fetchone()
+        adoption = root["goal"].get("creation_adoption")
+        origin_id = adoption["turn_id"] if adoption else root["id"]
+        if latest is None or latest["id"] != origin_id:
+            return False
+        if adoption:
+            origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
+                (origin_id,)).fetchone()
+            consumed = latest_consumed_input(json.loads(origin["events_json"]))
+            return (origin["status"] == "completed" and (consumed is None or consumed["status"] != "interrupted")
+                and (consumed["input_id"] if consumed else None) == adoption["source"].get("input_id"))
+        return True
 
     def task_result_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str, *,
                            input_id: str | None = None, input_turn_id: str | None = None) -> dict:
@@ -1014,18 +1061,7 @@ class ConversationRepository:
                 return None
             if event["event_id"] in goal["handled_event_ids"]:
                 return None
-            latest_user = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
-                                       "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (root["conversation_id"],)).fetchone()
-            adoption = goal.get("creation_adoption")
-            origin_id = adoption["turn_id"] if adoption else root_id
-            origin_current = latest_user is not None and latest_user["id"] == origin_id
-            if origin_current and adoption:
-                origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
-                    (origin_id,)).fetchone()
-                consumed = latest_consumed_input(json.loads(origin["events_json"]))
-                origin_current = (origin["status"] == "completed"
-                    and (consumed["input_id"] if consumed else None) == adoption["source"].get("input_id"))
-            if not origin_current:
+            if not self._goal_origin_current(conn, root):
                 self._write_goal(conn, root, {**goal, "status": "invalidated", "waiting_reason": "new_user_instruction"})
                 return None
             if conn.execute("SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running'",

@@ -430,6 +430,7 @@ def adopted_creation_goal(repo, *, revised):
             client_request_id=input_id, message=message, mode="steer", expected_draft_version=chat["draft_version"],
             expected_reference_version=0, request_context={"kind": "home"})
         repo.transition_input(chat["id"], "workspace", "member", input_id, "consumed")
+        repo.transition_input(chat["id"], "workspace", "member", input_id, "completed")
         source["input_id"] = input_id
     source["message_digest"] = hashlib.sha256(message.encode()).hexdigest()
     repo.finish_turn(turn["id"], "completed", "窗口已采用。")

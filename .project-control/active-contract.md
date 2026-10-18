@@ -57,6 +57,8 @@ B补绑`apps/api/agent_tools/diary/script-tools.ts`与`apps/api/agent_tools/test
 
 A补绑`apps/api/app/creation/intent_use_case.py`及新增`apps/api/tests/test_creation_script_goal_authority.py`：仅沿已采用请求的现有原目标/来源/任务绑定，为两条文案入口解析可信用户目标；目标委托不将Agent自拟文案当固定正文。复用公开仓储，源不匹配明确拒绝，不新增存储或放宽可见性。main调用由主控负责；topics仍B独占。
 
+A补绑`apps/api/app/conversation_repository.py`与新增`apps/api/tests/test_assistant_execution_input_source.py`：仅修复已采用目标的制作提交来源核验，沿已有creation_adoption回到真实首页输入，不能把内部任务目标根当真人输入。复用仓储公开入口，保留新真人输入、已消费追加输入、中断、身份、任务及目标修订的失效保护；两条派生任务不互相替代。主控负责main薄接线及已有路由测试；不新增状态表或并行授权规则。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。

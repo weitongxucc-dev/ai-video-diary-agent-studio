@@ -158,6 +158,68 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert '事实只能来自' in calls[0][1]['messages'][0]['content']
 
 
+@pytest.mark.parametrize('template_count', [None, 2])
+def test_two_section_review_schema_pins_actual_count_and_keeps_template_count_semantics(template_count):
+    document = draft()
+    document['script']['sections'].append(copy.deepcopy(document['script']['sections'][0]))
+    calls = []
+    result = provider(document, reviewed(document), calls).generate(replace(inputs(), script_section_count=template_count))
+    assert len(result.sections) == 2 and len(calls) == 2
+    payload = calls[1][1]
+    actual_input = json.loads(payload['messages'][1]['content'])
+    sections_schema = payload['tools'][0]['function']['parameters']['properties']['sections']
+    assert sections_schema['minItems'] == sections_schema['maxItems'] == 2
+    assert sections_schema['items']['properties']['index'] == {'type': 'integer', 'minimum': 1, 'maximum': 2}
+    assert actual_input['review_section_count'] == len(actual_input['script']['sections']) == 2
+    assert actual_input['requirements']['section_count'] == template_count
+    assert '必须恰好返回2项' in payload['messages'][0]['content']
+    assert payload['max_tokens'] == 8192
+
+
+@pytest.mark.parametrize('returned,type_name,actual_count,reason', [
+    ('less', 'array', 1, 'section_count'),
+    ('more', 'array', 3, 'section_count'),
+    ('duplicate', 'array', 2, 'index'),
+    ('missing', 'missing', None, 'section_count'),
+    (None, 'null', None, 'section_count'),
+    ('private-invalid-sections', 'string', None, 'section_count'),
+    ({'private-unknown-key': 'private-body'}, 'object', None, 'section_count'),
+    (True, 'boolean', None, 'section_count'),
+    (7, 'number', None, 'section_count'),
+])
+def test_review_still_rejects_incomplete_extra_or_duplicate_sections_with_safe_counts(caplog, returned, type_name, actual_count, reason):
+    import logging
+
+    document = draft()
+    document['script']['sections'].append(copy.deepcopy(document['script']['sections'][0]))
+    review = reviewed(document)
+    if returned == 'less':
+        review['sections'] = review['sections'][:1]
+    elif returned == 'more':
+        review['sections'].append({**copy.deepcopy(review['sections'][1]), 'index': 3})
+    elif returned == 'duplicate':
+        review['sections'][1]['index'] = 1
+    elif returned == 'missing':
+        del review['sections']
+    else:
+        review['sections'] = returned
+    calls = []
+    caplog.set_level(logging.WARNING, logger='app.topics')
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        provider(document, review, calls).generate(inputs())
+    assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == reason
+    assert failure.value.retryable is False and failure.value.review_issues is None
+    assert len(calls) == 2 and calls[1][1]['max_tokens'] == 8192
+    records = [record for record in caplog.records if record.name == 'app.topics']
+    assert len(records) == 1
+    text = records[0].getMessage()
+    diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))
+    assert diagnostic['section_count'] == 2
+    assert diagnostic['returned_sections_type'] == type_name
+    assert diagnostic['returned_section_count'] == actual_count
+    assert 'private-' not in text and FACT not in text and len(text) < 1200
+
+
 @pytest.mark.parametrize('claim', ['按天自动备份', '断电误删可回溯', '实时预览帧率不掉', '中文旁白已对准口型'])
 def test_same_valid_reference_does_not_support_unstated_promises(claim):
     document = draft(FACT + claim + '。')

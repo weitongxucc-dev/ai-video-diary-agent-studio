@@ -977,13 +977,14 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 return None
             return entry
 
+        review_section_count = len(sections)
         report_schema = {
             "type": "object", "additionalProperties": False, "required": ["sections"],
-            "properties": {"sections": {"type": "array", "minItems": 1, "maxItems": 20,
+            "properties": {"sections": {"type": "array", "minItems": review_section_count, "maxItems": review_section_count,
                 "items": {"type": "object", "additionalProperties": False,
                     "required": ["index", "supports", "issues"],
                     "properties": {
-                        "index": {"type": "integer", "minimum": 1, "maximum": 20},
+                        "index": {"type": "integer", "minimum": 1, "maximum": review_section_count},
                         "supports": {"type": "array", "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["candidate_quote_id", "source_quote_id"], "properties": {
@@ -1025,6 +1026,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "必须阅读全部片段来核全部事实，只选现有quote_id定位，不自行复述引句或构造新ID。"
                     "仅调用一次submit_script_review报告工具，在arguments中提交{sections:[{index,supports,issues}]}。"
                     "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
+                    f"本次送审稿有{review_section_count}段，报告sections必须恰好返回{review_section_count}项，index为1至{review_section_count}且唯一。"
                     "完整覆盖输入全部段落，index从1开始且唯一；每段严格只有index、supports、issues三个字段。"
                     "结论只由具体问题表达，不另返回grounded、constraints_met等重复判断。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
@@ -1048,6 +1050,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 )},
                 {"role": "user", "content": json.dumps({
                     "goal": input.goal, "current_instruction": input.current_instruction,
+                    "review_section_count": review_section_count,
                     "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
                         "angle": input.topic_angle, "audience": input.topic_audience,
                         "outline": list(input.topic_outline)},
@@ -1084,6 +1087,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "tool_call_count": None, "tool_arguments_length": None, "usage": {"prompt_tokens": None, "completion_tokens": None,
                 "total_tokens": None, "reasoning_tokens": None}, "section_index": None,
             "section_count": len(sections), "source_count": len(source_inputs),
+            "returned_sections_type": None, "returned_section_count": None,
             "support_reference_mismatch": None, "issue_reference_mismatch": None, "issue_shape_mismatch": None}
 
         def safe_count(value):
@@ -1139,6 +1143,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         if not isinstance(document, dict):
             raise self._review_failure("tool_arguments_shape", diagnostics)
         reviews = document.get("sections") if isinstance(document, dict) else None
+        diagnostics["returned_sections_type"] = ("missing" if "sections" not in document else {
+            type(None): "null", list: "array", dict: "object", str: "string",
+            bool: "boolean", int: "number", float: "number"}[type(reviews)])
+        diagnostics["returned_section_count"] = len(reviews) if isinstance(reviews, list) else None
         if not isinstance(reviews, list) or len(reviews) != len(sections):
             raise self._review_failure("section_count", diagnostics)
         sources_by_alias = {source["reference_id"]: source for source in sources}

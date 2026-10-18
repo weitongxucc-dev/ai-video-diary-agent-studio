@@ -14756,15 +14756,11 @@ def _assistant_execution_source(task_id, request, turn_id, action, input_digest=
         return None, None  # Existing explicit GUI/CLI starts keep their protocol.
     task, member_id = _exact_edit_access(task_id, request, write=True)
     try:
-        origin = conversation_repo.task_turn_source(str(turn_id), task.workspace_id, member_id, task_id)
+        origin = conversation_repo.task_execution_source(
+            str(turn_id), task.workspace_id, member_id, task_id,
+            input_id=request.headers.get("x-assistant-input-id") or None)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    with conversation_repo._connect() as conn:
-        latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
-            "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (origin["conversation_id"],)).fetchone()
-    original_turn_id = origin["context"].get("original_turn_id", str(turn_id))
-    if latest is None or latest["id"] != original_turn_id:
-        raise HTTPException(status_code=409, detail="原助手制作要求已被新的真人要求替代")
     snapshot = origin["context"].get("target_snapshot", {})
     version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     if not origin["raw_command"].strip():
