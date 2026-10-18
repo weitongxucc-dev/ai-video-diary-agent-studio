@@ -778,6 +778,18 @@ class TaskMediaJobs:
         if (request.input_digest != job.input_digest or request.unit_key != f"task_media:{job.input_digest}"
                 or request.resources != event["resources"] or job.status not in {"queued", "interrupted", "running"}):
             return "stale"
+        if media_digest({key: value for key, value in event.items() if key != "input_digest"}) != job.input_digest:
+            return "stale"
+        facts = event["input_facts"]
+        if event["operation"] == "audio_waveform" and isinstance(facts, dict):
+            version = facts.get("base_version_id")
+            if isinstance(version, str) and version.strip():
+                try:
+                    task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+                except KeyError:
+                    return self.check(job, event, actor)
+                if version != task.current_timeline_version_id:
+                    return "stale"
         return self.check(job, event, actor)
 
     def verify_retry(self, request, actor, reason, conn):

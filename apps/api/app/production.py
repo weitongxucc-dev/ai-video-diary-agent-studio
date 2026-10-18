@@ -4720,16 +4720,20 @@ class ProductionRepository:
         task_id: str,
         *,
         include_private: bool = True,
+        connection: sqlite3.Connection | None = None,
     ) -> CreationTask:
-        with self._connect() as conn:
-            visibility_clause = "" if include_private else " AND visibility = 'shared'"
-            row = conn.execute(
-                f"""
-                SELECT payload, visibility FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?{visibility_clause}
-                """,
-                (workspace_id, task_id),
-            ).fetchone()
+        if connection is None:
+            with self._connect() as conn:
+                return self.get_creation_task(workspace_id, task_id,
+                    include_private=include_private, connection=conn)
+        visibility_clause = "" if include_private else " AND visibility = 'shared'"
+        row = connection.execute(
+            f"""
+            SELECT payload, visibility FROM creation_tasks
+            WHERE workspace_id = ? AND id = ?{visibility_clause}
+            """,
+            (workspace_id, task_id),
+        ).fetchone()
         if row is None:
             raise KeyError(task_id)
         return self._task_from_row(row)
