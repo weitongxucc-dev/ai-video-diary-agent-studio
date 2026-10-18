@@ -79,7 +79,8 @@ class ExactPreviewUseCase:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
             status = 404 if isinstance(exc, KeyError) and exc.args[0] == '当前任务镜头不存在' else 409
-            raise EditPreviewRejected(status_code=status, detail='镜头来源或使用状态已失效') from exc
+            detail = '目标镜头不存在，请重新读取当前任务后选择实际镜头。' if status == 404 else '镜头来源或使用状态已失效'
+            raise EditPreviewRejected(status_code=status, detail=detail) from exc
     def audio_source_graph(self, task, payload):
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id, task.id))
         graph = effective_audio_timeline(montage)

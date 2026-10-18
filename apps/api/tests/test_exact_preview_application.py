@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 from uuid import uuid4
 
 from PIL import Image
@@ -13,8 +14,38 @@ import app.main as main
 from app.task_audio import TASK_MEDIA_CONTEXT, media_digest
 from app.production import EXACT_EDIT_SOURCE
 from app.creation_execution import CreationExecutionActor
+from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+from app.creation.editing.metadata_use_case import EditPreviewRejected
 from test_visual_preview_application import visual_application, _inspect
 from test_montage_pipeline import person_render_edit_state, permitted_media_state
+
+
+@pytest.mark.parametrize('failure,status,detail', [
+    (KeyError('当前任务镜头不存在'), 404, '目标镜头不存在，请重新读取当前任务后选择实际镜头。'),
+    (KeyError('private-source-key'), 409, '镜头来源或使用状态已失效'),
+    (ValueError('private-source-state'), 409, '镜头来源或使用状态已失效'),
+    (OSError('/private/source-path.mp4'), 409, '镜头来源或使用状态已失效'),
+    (PermissionError('当前成员不可使用镜头来源'), 403, '当前成员不可使用镜头来源'),
+])
+def test_source_facts_distinguishes_missing_target_from_source_failures(failure, status, detail):
+    calls = []
+    def read_source(workspace_id, task_id, **kwargs):
+        calls.append((workspace_id, task_id, kwargs))
+        raise failure
+    use_case = ExactPreviewUseCase(
+        repository=SimpleNamespace(clip_edit_source_facts=read_source), metadata=None,
+        subtitles=None, linked=None, audio_edit=None, visual=None, clip_preview=None,
+        conversations=None, settings=None,
+    )
+    payload = SimpleNamespace(operation_type='InsertClip', clip_id='missing-target',
+        asset_id='existing-asset', segment_id='existing-segment')
+    with pytest.raises(EditPreviewRejected) as rejected:
+        use_case.source_facts(SimpleNamespace(workspace_id='workspace', id='task'), payload,
+            {'member_id': 'member', 'local_diagnostic': False}, None)
+    assert rejected.value.status_code == status and rejected.value.detail == detail
+    assert calls == [('workspace', 'task', {'clip_ids': ['missing-target'],
+        'replacement': ('existing-asset', 'existing-segment'),
+        'user_id': 'member', 'local_diagnostic': False})]
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')
