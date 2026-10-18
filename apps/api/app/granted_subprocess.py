@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+import math
 import re
 import selectors
 import signal
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 _PERMISSION_SAMPLE_SECONDS = 1.0
 _QWEN_PHASE = re.compile(rb"QWEN_PHASE (?:worker_started|importing_runtime|loading_weights|weights_loaded|inference_started|inference_returned|audio_written)")
 _QWEN_MEMORY = re.compile(rb"QWEN_MEMORY phase=(?:cache_disabled|weights_loaded|inference_started|inference_returned|audio_written) active_bytes=[0-9]{1,20} cache_bytes=[0-9]{1,20} peak_bytes=[0-9]{1,20}")
+_CPU_POLICY = re.compile(rb"GRANT_CPU_POLICY mode=darwin_background state=(?:verified background=1 errno=0|failed errno=[0-9]{1,10})")
 
 
 def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
@@ -36,7 +38,8 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
     markers = {stream: [line.decode("ascii") for line in diagnostic[stream].splitlines()
         if _QWEN_PHASE.fullmatch(line) or _QWEN_MEMORY.fullmatch(line)]
         for stream in ("stdout", "stderr")}
-    if failure is None and diagnostic["returncode"] == 0 and not any(markers.values()):
+    cpu_policy = [line.decode("ascii") for line in diagnostic["stderr"].splitlines() if _CPU_POLICY.fullmatch(line)]
+    if failure is None and diagnostic["returncode"] == 0 and not any(markers.values()) and not cpu_policy:
         return
     payload = {"recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "request_id": grant.request_id, "workspace_id": grant.workspace_id,
@@ -45,6 +48,7 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
         "child": {"pid": child.pid, "start_token": child.start_token, "boot_id": child.boot_id} if child else None,
         "failure_type": type(failure).__name__ if failure is not None else None,
         "qwen_markers": markers,
+        "cpu_policy_markers": cpu_policy,
         **{key: diagnostic[key] for key in ("stdout_truncated", "stderr_truncated", "exec_ack",
             "group_released", "before_termination_returncode", "returncode")}}
     if isinstance(failure, HostResourceRefusal):
@@ -134,14 +138,20 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
         threads = 0
         cpu_started = time.monotonic() if limits.collect_cpu else None
         cpu_members = []
+        cpu_available = True
         for current in processes:
             try:
                 rss += current.memory_info().rss
                 threads += current.num_threads()
                 if limits.collect_cpu:
-                    times = current.cpu_times()
-                    cpu_members.append({"pid": current.pid, "start_token": f"{current.create_time():.6f}",
-                        "user": times.user, "system": times.system})
+                    try:
+                        times = current.cpu_times()
+                        if not all(math.isfinite(value) and value >= 0 for value in (times.user, times.system)):
+                            raise ValueError("Invalid process CPU counters")
+                        cpu_members.append({"pid": current.pid, "start_token": f"{current.create_time():.6f}",
+                            "user": times.user, "system": times.system})
+                    except (psutil.Error, OSError, ValueError):
+                        cpu_available = False  # Diagnostic failure does not negate verified OS scheduling.
             except psutil.NoSuchProcess as exc:
                 if current.pid == process.pid and process.poll() is None:
                     # macOS can remove the pid just before waitpid exposes its
@@ -159,8 +169,13 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
         if memory.verdict is not True:
             raise GrantedCommandMemoryPressure(memory)
         if limits.collect_cpu:
+            try:
+                cores = psutil.cpu_count(logical=True)
+            except (psutil.Error, OSError):
+                cores = None
             return {"read_started_monotonic": cpu_started, "observed_monotonic": time.monotonic(),
-                    "logical_cpu_count": psutil.cpu_count(logical=True), "members": cpu_members}
+                    "logical_cpu_count": cores, "members": cpu_members,
+                    "state": "ready" if cpu_available and cpu_members and type(cores) is int and cores > 0 else "unknown"}
     except psutil.NoSuchProcess as exc:
         if process.poll() is None:
             try:
@@ -267,9 +282,10 @@ def run_granted_command(
     entrypoint = [sys.executable]
     if not getattr(sys, "frozen", False):
         entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
+    child_entry = "--grant-exec-background" if scene_limits is not None and scene_limits.background_cpu else "--grant-exec"
     try:
         process = subprocess.Popen(
-            [*entrypoint, "--grant-exec", str(read_fd), *argv],
+            [*entrypoint, child_entry, str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
             env=env,
@@ -305,8 +321,10 @@ def run_granted_command(
             common = before.keys() & after.keys()
             deltas = [after[key][metric] - before[key][metric] for key in common for metric in ("user", "system")]
             process_cpu_observation = {"start": previous, "end": current,
+                "diagnostic_only": True,
                 "membership_changed": previous is None or before.keys() != after.keys(),
-                "same_identity_cpu_seconds_delta": sum(deltas) if previous and all(value >= 0 for value in deltas) else None,
+                "same_identity_cpu_seconds_delta": sum(deltas) if previous and common
+                    and previous["state"] == current["state"] == "ready" and all(value >= 0 for value in deltas) else None,
                 "interval_seconds": current["observed_monotonic"] - previous["observed_monotonic"] if previous else None}
             if previous is None or current["observed_monotonic"] - previous["observed_monotonic"] >= _PERMISSION_SAMPLE_SECONDS:
                 logger.warning("Granted process CPU observation: %s", json.dumps({

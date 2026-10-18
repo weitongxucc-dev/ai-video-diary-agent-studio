@@ -63,7 +63,7 @@ class ProfilePreviewOwner:
             facts = [asdict(source), asdict(voice), run.preview_input,
                      [entry.task_input() for entry in narration_inputs.pronunciation_entries]]
             resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
-                "text_chars": len(run.preview_input["preview_text"]), "section_count": 1,
+                "text_chars": len(run.preview_input["preview_text"]) + len(voice.reference_text), "section_count": 1,
                 "reference_bytes": source.size_bytes, "duration_seconds": budget.max_duration_seconds,
                 "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                 "timeout_seconds": budget.max_timeout_seconds}

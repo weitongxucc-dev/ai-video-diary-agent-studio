@@ -399,12 +399,6 @@ def build_host_probes(
     device_poll_interval_seconds: float | None = None,
 ) -> tuple[HostResourceProbe, HostProcessProbe]:
     """真实整机探针：资源采样 + POSIX 进程身份，不提供任何替代实现。"""
-    cpu_policy = budget.narration.running_cpu_policy if budget.narration else None
-    if cpu_policy is not None and (
-            type(device_poll_interval_seconds) not in {int, float} or not math.isfinite(device_poll_interval_seconds)
-            or device_poll_interval_seconds <= 0
-            or cpu_policy.max_sample_gap_seconds <= device_poll_interval_seconds + budget.sample_seconds):
-        raise HostBudgetUncalibrated("运行CPU最大观测间隙必须覆盖实际driver与probe节奏；实际超时仍拒绝")
     if budget.memory_policy is not None:
         try:
             validate_observation_cadence(budget.memory_policy,

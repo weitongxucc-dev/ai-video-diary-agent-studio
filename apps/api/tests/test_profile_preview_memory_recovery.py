@@ -30,6 +30,18 @@ def _pressure():
     return GrantedCommandMemoryPressure(MemoryDecision(False, "memory_pressure_critical", sample, 100, None, 0.))
 
 
+def test_voice_preview_text_budget_includes_fixed_reference_transcript(repo, tmp_path):
+    runtime, _, _, queued = setup_preview(repo, tmp_path)
+    owner = runtime.registrations["media_preview"].owner
+    _, _, resources = owner.facts(queued)
+    voice = repo.get_versioned_voice_profile("ws", queued.voice_profile_id, queued.voice_version)
+    assert resources["text_chars"] == len(queued.preview_input["preview_text"]) + len(voice.reference_text)
+    with repo._connect() as connection:
+        request = connection.execute("SELECT resources_json FROM device_work_requests WHERE id=?",
+            (queued.device_request_id,)).fetchone()
+    assert json.loads(request[0])["text_chars"] == resources["text_chars"]
+
+
 def test_pressure_keeps_original_attempt_waits_and_then_succeeds(repo, tmp_path, caplog):
     provider = PressureProvider(_pressure())
     runtime, resources, provider, queued = setup_preview(repo, tmp_path, provider=provider)

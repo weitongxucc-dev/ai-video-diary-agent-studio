@@ -5,8 +5,10 @@ import os
 import sqlite3
 import subprocess
 import sys
+import ctypes
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -95,3 +97,57 @@ def test_frozen_child_dispatch_precedes_all_api_imports(monkeypatch):
     monkeypatch.setattr(server, "_exec_granted_command", calls.append)
     server.main()
     assert calls == [["10", "target", "argument"]]
+
+
+@pytest.mark.parametrize("approval", [b"G", b"X"])
+@pytest.mark.parametrize("failure", [None, "set", "read", "not_background"])
+def test_background_entry_verifies_after_ack_and_never_execs_on_failure(monkeypatch, approval, failure, capsys):
+    server = load_server()
+    events = []
+    def setpriority(which, who, value):
+        assert (which, who, value) == (4, 0, 0x1000) and ctypes.get_errno() == 0
+        events.append("set")
+        if failure == "set":
+            ctypes.set_errno(1)
+            return -1
+        return 0
+    def getpriority(which, who):
+        assert (which, who) == (4, 0) and ctypes.get_errno() == 0
+        events.append("get")
+        if failure == "read":
+            ctypes.set_errno(22)
+        return 0 if failure == "not_background" else 1
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin", stderr=sys.stderr))
+    monkeypatch.setattr(ctypes, "CDLL", lambda _, use_errno: SimpleNamespace(
+        setpriority=Mock(side_effect=setpriority), getpriority=Mock(side_effect=getpriority)))
+    monkeypatch.setattr(server.os, "execvp", lambda *args: events.append("exec"))
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, approval)
+    finally:
+        os.close(write_fd)
+    ctypes.set_errno(99)
+    if approval != b"G" or failure:
+        with pytest.raises(SystemExit) as stopped:
+            server._exec_granted_command([str(read_fd), "target"], background_cpu=True)
+        assert stopped.value.code == (126 if approval != b"G" else 125)
+        assert "exec" not in events
+        if approval != b"G":
+            assert events == [] and "GRANT_CPU_POLICY" not in capsys.readouterr().err
+        else:
+            assert "state=failed" in capsys.readouterr().err
+    else:
+        server._exec_granted_command([str(read_fd), "target"], background_cpu=True)
+        assert events == ["set", "get", "exec"]
+        assert "state=verified background=1 errno=0" in capsys.readouterr().err
+
+
+def test_frozen_background_dispatch_uses_same_fixed_entry(monkeypatch):
+    server = load_server()
+    calls = []
+    monkeypatch.setattr(server, "sys", SimpleNamespace(
+        argv=["api-server", "--grant-exec-background", "10", "target"], frozen=True))
+    monkeypatch.setattr(server, "_configure_env", lambda: pytest.fail("API environment loaded"))
+    monkeypatch.setattr(server, "_exec_granted_command", lambda *args, **kwargs: calls.append((args, kwargs)))
+    server.main()
+    assert calls == [((["10", "target"],), {"background_cpu": True})]

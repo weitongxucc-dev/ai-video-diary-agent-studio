@@ -937,15 +937,16 @@ def test_runtime_declared_budget_missing_and_grant_fact_unreadable_are_explicit(
 
 @pytest.fixture
 def narration_cpu_boundary(monkeypatch):
-    # These older tests isolate IO/memory/input caps. Real CPU windows and
-    # admission identity have their own tests in test_running_cpu_policy.py.
+    # These tests isolate IO/memory/input caps; OS scheduling has its own tests.
     import app.host_resource_probes as probes
     monkeypatch.setattr(probes, "_cpu_counter", lambda: {
         "user": 1., "nice": 0., "system": 0., "idle": 7., "logical_cpu_count": 8,
         "observed_monotonic": 0., "read_started_monotonic": 0., "read_seconds": 0.})
-    monkeypatch.setattr(probes.HostResourceProbe, "_cpu_request_key", staticmethod(lambda request: ("isolated",)))
-    monkeypatch.setattr(probes.HostResourceProbe, "_runtime_cpu_check", lambda *args: (True, None, {"passed": True}))
-    return RuntimeCpuPolicy(1, 2, "synthetic-cpu-boundary")
+    monkeypatch.setattr(probes.HostResourceProbe, "_runtime_cpu_observation", lambda *args:
+        {"diagnostic_only": True, "state": "unknown", "actual": None})
+    monkeypatch.setattr(probes, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(probes.time, "sleep", lambda _: None)
+    return RuntimeCpuPolicy("darwin_background", "synthetic-cpu-boundary")
 
 
 def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, monkeypatch, narration_cpu_boundary):
