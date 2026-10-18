@@ -216,7 +216,7 @@ def test_discussion_cannot_be_adopted_or_start_a_task(client_state):
     assert c.client.get(base, headers=c.alice).json()["intent"]["kind"] == "discussion"
 
 
-def test_delegated_existing_topic_is_adopted_without_topic_generation(client_state):
+def test_delegated_existing_topic_is_adopted_without_topic_generation(client_state, monkeypatch):
     c = client_state
     _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "用户已有主题"})
     adopted = c.client.post(url, headers=c.alice, json=confirmation)
@@ -230,6 +230,17 @@ def test_delegated_existing_topic_is_adopted_without_topic_generation(client_sta
     assert len(topics) == 1 and topics[0].title == "用户已有主题"
     run = c.repository.latest_topic_generation_run("request-test", task.id)
     assert run.route_snapshot == {"operation": "provided_topic", "provider": "none"}
+    route = {"provider_kind": "openai_compatible", "execution_location": "cloud", "model_id": "test-model",
+        "endpoint_identity": "https://models.invalid", "connection_version": "test-connection",
+        "availability": "unconfigured", "checked_at": "2026-10-18T00:00:00Z"}
+    monkeypatch.setattr(main, "_topic_route_snapshot", lambda workspace: route)
+    c.client.app.add_api_route("/api/creation-tasks/{task_id}/topics", main.get_creation_task_topics, methods=["GET"])
+    response = c.client.get(f"/api/creation-tasks/{task.id}/topics", headers=c.alice)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["latest_run"]["route_snapshot"] == {"operation": "provided_topic", "provider": "none"}
+    assert data["route_preflight"] == route
+    assert data["candidates"][0]["selection_status"] == "confirmed"
 
 
 def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state):

@@ -1042,6 +1042,13 @@ class TopicRouteSnapshotResponse(BaseModel):
     checked_at: datetime
 
 
+class ProvidedTopicRouteSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["provided_topic"]
+    provider: Literal["none"]
+
+
 class TopicEgressPreflightResponse(BaseModel):
     cloud_egress: bool
     source_count: int = Field(ge=0)
@@ -1057,7 +1064,7 @@ class TopicGenerationRunResponse(BaseModel):
     task_id: str
     plan_id: str
     status: Literal["running", "succeeded", "failed"]
-    route_snapshot: TopicRouteSnapshotResponse
+    route_snapshot: TopicRouteSnapshotResponse | ProvidedTopicRouteSnapshotResponse
     prompt_schema_version: str
     input_references: list[dict[str, object]]
     reason: str | None
