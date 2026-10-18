@@ -41,6 +41,7 @@ import {
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
 import { useWorkspacePage } from "./workbench/context";
+import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
 import { HelpPanel } from "@/components/HelpPanel";
@@ -224,6 +225,8 @@ export function AppShellFrame({
   workspaceTabs,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
+  const workspaceBoot = useWorkspaceBoot();
+  const workspaceReady = !workspaceBoot.blocked;
   const [nativeMac, setNativeMac] = useState(false);
   useEffect(() => {
     // These two read-only fields are provided by the existing desktop preload;
@@ -284,6 +287,7 @@ export function AppShellFrame({
   }, []);
 
   const refreshRecentTasks = useCallback(async (background = false) => {
+    if (!workspaceReady) return;
     const request = ++taskReadSequence.current;
     const factsRevision = taskFactsRevision.current;
     if (!background) { setTaskReadState("loading"); setTaskReadError(null); }
@@ -298,7 +302,7 @@ export function AppShellFrame({
       setTaskReadError(cause instanceof Error ? cause.message : "任务列表读取失败");
       setTaskReadState("error");
     }
-  }, []);
+  }, [workspaceReady]);
 
   useEffect(() => {
     void refreshRecentTasks();
@@ -307,7 +311,7 @@ export function AppShellFrame({
 
   const hasRunningTask = recentTasks.some(task => task.status === "running" || task.stage_status === "running");
   useEffect(() => {
-    if (!hasRunningTask) return;
+    if (!workspaceReady || !hasRunningTask) return;
     let active = true;
     let reading = false;
     let timer: number | undefined;
@@ -411,13 +415,14 @@ export function AppShellFrame({
 
           <div className="desktop-nav-section desktop-nav-section--creation-tasks">
             <div className="desktop-nav-heading">创作任务</div>
-            {taskReadState === "loading" ? <p className="desktop-creation-tasks-empty" role="status">{recentTasks.length ? "正在更新创作任务…" : "正在读取创作任务…"}</p> : null}
-            {taskReadState === "error" ? <div className="desktop-creation-tasks-empty" role="alert">
+            {!workspaceReady ? <p className="desktop-creation-tasks-empty" role="status">登录并完成首次设置后读取创作任务。</p> : null}
+            {workspaceReady && taskReadState === "loading" ? <p className="desktop-creation-tasks-empty" role="status">{recentTasks.length ? "正在更新创作任务…" : "正在读取创作任务…"}</p> : null}
+            {workspaceReady && taskReadState === "error" ? <div className="desktop-creation-tasks-empty" role="alert">
               <p>暂时无法读取创作任务。{recentTasks.length ? "已有任务仍可打开。" : ""}</p>
               <Button variant="ghost" className="shell-icon-button" aria-label="重新读取创作任务" title="重新读取创作任务" onClick={() => void refreshRecentTasks()} type="button"><RefreshCw size={16}/></Button>
               <details><summary>失败详情</summary><p>{taskReadError}</p></details>
             </div> : null}
-            {recentTasks.length ? recentTasks.map((task) => {
+            {workspaceReady && recentTasks.length ? recentTasks.map((task) => {
               const statusLabel = creationTaskShortStatus(task.stage_status, task.stage);
               return (
                 <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
@@ -428,7 +433,7 @@ export function AppShellFrame({
                   </span>
                 </Link>
               );
-            }) : taskReadState === "ready" ? (
+            }) : workspaceReady && taskReadState === "ready" ? (
               <p className="desktop-creation-tasks-empty">还没有创作任务</p>
             ) : null}
           </div>
@@ -461,7 +466,7 @@ export function AppShellFrame({
             {toolbar ?? <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
               <ToolbarLocation pathname={pathname} />
             </Suspense>}
-            <Suspense fallback={null}><PreflightDraftReturn /></Suspense>
+            {workspaceReady ? <Suspense fallback={null}><PreflightDraftReturn /></Suspense> : null}
           </div>
           <div className="desktop-toolbar__actions">
             <Button variant="ghost" aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></Button>
@@ -484,7 +489,7 @@ export function AppShellFrame({
           <section aria-label="创作助手" className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}>
-              {conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
+              {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>

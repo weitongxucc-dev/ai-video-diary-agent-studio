@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabasePublicConfig } from "./config";
+import { readVerifiedWorkspaceSession } from "./workspace-session";
 
 export type SessionRefreshResult = {
   response: NextResponse;
@@ -43,29 +44,12 @@ export async function refreshSession(
   });
 
   try {
-    const { data, error } = await supabase.auth.getClaims();
-    if (error || !data?.claims?.sub) {
-      return {
-        response,
-        userId: null,
-        accessToken: null,
-        onboardingComplete: false,
-        configurationError: null,
-      };
-    }
-    const { data: sessionData } = await supabase.auth.getSession();
-    const { data: onboardingState, error: onboardingError } = await supabase
-      .from("onboarding_states")
-      .select("completed_at, workspaces!inner(owner_id)")
-      .eq("user_id", data.claims.sub)
-      .eq("workspaces.owner_id", data.claims.sub)
-      .maybeSingle();
+    const session = await readVerifiedWorkspaceSession(supabase);
     return {
       response,
-      userId: data.claims.sub,
-      accessToken: sessionData.session?.access_token ?? null,
-      onboardingComplete:
-        !onboardingError && Boolean(onboardingState?.completed_at),
+      userId: session.userId,
+      accessToken: session.accessToken,
+      onboardingComplete: session.onboardingComplete,
       configurationError: null,
     };
   } catch {

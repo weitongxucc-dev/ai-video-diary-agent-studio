@@ -38,6 +38,8 @@ vi.mock("@/hooks/useLocalMemberIdentity", () => ({
 }));
 
 
+import { WorkspaceBootContext } from "../WorkspaceBootContext";
+import { getCurrentAssistantConversation, listCreationTasks } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 
 function openPalette() {
@@ -53,6 +55,14 @@ describe("real avatar group and existing theme controls", () => {
     membersApi.mockReset();membersApi.mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]});
     vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "local");
     Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }) });
+  });
+  it("does not start conversation or task reads before the verified workspace is ready", async () => {
+    vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "supabase");
+    vi.mocked(getCurrentAssistantConversation).mockClear(); vi.mocked(listCreationTasks).mockClear();
+    render(<WorkspaceBootContext.Provider value={{blocked:true,message:"完成首次设置后即可使用创作助手。",href:"/onboarding"}}><AppShell creationTasks={[]}><p>首启设置</p></AppShell></WorkspaceBootContext.Provider>);
+    expect(await screen.findByText("完成首次设置后即可使用创作助手。")).toBeVisible();
+    expect(screen.getByRole("link",{name:"完成首次设置"})).toHaveAttribute("href","/onboarding");
+    expect(getCurrentAssistantConversation).not.toHaveBeenCalled(); expect(listCreationTasks).not.toHaveBeenCalled(); expect(membersApi).not.toHaveBeenCalled();
   });
   it("shows one actual member without adding empty slots, photographs or status dots", async () => {
     identity.role="owner";render(<AppShell creationTasks={[]}><p>页面内容</p></AppShell>);
