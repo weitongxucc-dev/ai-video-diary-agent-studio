@@ -209,7 +209,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
-        if (result.execution_action || result.topic_candidates || result.timeline_action) onTaskUpdated?.();
+        if (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft) onTaskUpdated?.();
       } else {
         const result = (materialContext
           ? await sendMaterialAssistantTurn(command, turn.conversationId, materialContext.selection,

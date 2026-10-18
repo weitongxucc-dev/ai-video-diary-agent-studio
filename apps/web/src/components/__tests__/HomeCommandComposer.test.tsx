@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { AssistantConversationContext } from "../AssistantConversationContext";
+import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { CreationTask } from "@/lib/types";
 
 const mocks = vi.hoisted(() => ({ selection: null as ReturnType<typeof import("../AssistantConversationProvider").useAssistantSelection>, saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
@@ -523,6 +525,62 @@ describe("HomeCommandComposer", () => {
       message: "就按已确认的文案开始做成片，请回报真实作业进度", context_stage: "montage",
     }), expect.any(Function));
     expect(onTaskUpdated).toHaveBeenCalledOnce();
+  });
+
+  it.each(["draft", "confirmed"])("refreshes the targeted task after a home conversation returns a %s script receipt", async selectionStatus => {
+    configuredModel();
+    const task = { id: "task-1", stage: "script", name: "产品介绍" } as CreationTask;
+    const onTaskUpdated = vi.fn();
+    mocks.editAsk.mockResolvedValueOnce({
+      reply: selectionStatus === "confirmed" ? "实际文案版本已采用，尚未生成成片。" : "文案草稿已保存，尚未采用。",
+      provider: "fixture", model: "fixture", edit_preview: null,
+      script_draft: { id: "script-1", task_id: task.id, selection_status: selectionStatus },
+      execution_action: null, topic_candidates: null, timeline_action: null,
+    });
+    render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "按现有资料整理这份文案" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    const payload = mocks.editAsk.mock.calls[0][1];
+    expect(mocks.saved.get(payload.conversation_id)).toMatchObject({ scope_kind: "home", scope_id: "home" });
+    expect(mocks.editAsk).toHaveBeenCalledWith(task.id, expect.objectContaining({ context_stage: "script" }), expect.any(Function));
+    expect(mocks.ask).not.toHaveBeenCalled();
+  });
+
+  it.each(["task", "conversation", "unmount"])("does not refresh from a late script receipt after changing %s", async change => {
+    configuredModel();
+    let finish!: (value: unknown) => void;
+    mocks.editAsk.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const task = { id: "task-1", stage: "script", name: "原任务" } as CreationTask;
+    const onTaskUpdated = vi.fn();
+    function SharedConversation({ selectedTask }: { selectedTask: CreationTask }) {
+      const assistant = useScopedAssistantConversation({ scope_kind: "home", scope_id: "home" });
+      return <AssistantConversationContext.Provider value={assistant}>
+        <button type="button" onClick={() => void assistant.createNew()}>切换共享会话</button>
+        <output aria-label="共享会话ID">{assistant.conversation?.id}</output>
+        <HomeCommandComposer task={selectedTask} onTaskUpdated={onTaskUpdated} />
+      </AssistantConversationContext.Provider>;
+    }
+    const view = render(<SharedConversation selectedTask={task} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "保存当前文案" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledOnce());
+    const originalConversationId = mocks.editAsk.mock.calls[0][1].conversation_id;
+    if (change === "task") view.rerender(<SharedConversation selectedTask={{ ...task, id: "task-2" }} />);
+    else if (change === "conversation") {
+      fireEvent.click(screen.getByRole("button", { name: "切换共享会话" }));
+      await waitFor(() => expect(screen.getByLabelText("共享会话ID").textContent).not.toBe(originalConversationId));
+    } else view.unmount();
+    await act(async () => finish({
+      reply: "原任务文案已采用。", provider: "fixture", model: "fixture", edit_preview: null,
+      script_draft: { id: "script-1", task_id: task.id, selection_status: "confirmed" },
+      execution_action: null, topic_candidates: null, timeline_action: null,
+    }));
+    expect(onTaskUpdated).not.toHaveBeenCalled();
+    expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject({ kind: "task_turn", script_draft: "saved" });
+    expect(mocks.editAsk).toHaveBeenCalledOnce();
   });
 
   it("keeps a queued person proposal pending without enabling an uncommitted undo", async () => {
