@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,7 @@ from app.device_scheduler import (
     VerifiedWork,
 )
 from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample
+from app.host_resource_probes import HostBudget, HostResourceProbe, NarrationBudget, RuntimeCpuPolicy
 
 
 class Owner:
@@ -108,7 +110,7 @@ def _intent(owner_id, owner_type="job_run"):
     return SubmissionIntent("private-a", owner_type, owner_id, "sha256:input", "narration", SchedulePolicy())
 
 
-def _runtime(tmp_path, *, database=None, executor=None, resources=None, registrations=None, memory_monitor=None):
+def _runtime(tmp_path, *, database=None, executor=None, resources=None, registrations=None, host_observer=None):
     database = database or _database(tmp_path)
     executor = executor or CompletingExecutor()
     registrations = registrations or {"job_run": OwnerRegistration(Owner(), executor)}
@@ -117,54 +119,73 @@ def _runtime(tmp_path, *, database=None, executor=None, resources=None, registra
         device_access=Access(), registrations=registrations,
         resources=resources or Resources(), processes=Processes(),
         poll_interval_seconds=0.01,
-        memory_monitor=memory_monitor,
-        memory_reserve_bytes=100 if memory_monitor is not None else None,
+        host_observer=host_observer,
     )
 
 
-class MemoryObservations:
+class BaseObservations:
     """Virtual one-second native observations; wall-clock waits stay small."""
-    def __init__(self):
+    def __init__(self, tmp_path, monkeypatch):
         self.now = 0.
         self.condition = threading.Condition()
         self.monitor = HostMemoryMonitor(MemoryPolicy("darwin", 10, 2, "synthetic-observer-cadence"),
             sampler=self.sample, clock=lambda: self.now)
+        import app.host_resource_probes as probes
+        monkeypatch.setattr(probes, "time", SimpleNamespace(monotonic=lambda: self.now, sleep=self.advance))
+        monkeypatch.setattr(probes, "sys", SimpleNamespace(platform="darwin"))
+        monkeypatch.setattr(probes.psutil, "cpu_percent", lambda interval: self.advance(interval) or 0)
+        monkeypatch.setattr(probes.psutil, "disk_io_counters", lambda **_: {
+            "disk0": SimpleNamespace(read_bytes=int(self.now * 10), write_bytes=0)})
+        monkeypatch.setattr(probes.psutil, "disk_partitions", lambda **_: [])
+        monkeypatch.setattr(probes.psutil, "disk_usage", lambda _: SimpleNamespace(free=10**9))
+        narration = NarrationBudget(80, 1, 1024, 15, 1024, 1, 120, 1000, 64, .1, 1000, 100,
+            RuntimeCpuPolicy("darwin_background", "synthetic-base-observation"))
+        self.probe = HostResourceProbe(tmp_path / "business.sqlite", disk_paths=(tmp_path,),
+            budget=HostBudget(91, 100, None, 100, 10**9, 10**9, narration=narration), memory_monitor=self.monitor)
+        self.resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
+            "text_chars": 17, "section_count": 1, "reference_bytes": 100, "duration_seconds": 15,
+            "max_output_bytes": 1024, "threads": 1, "timeout_seconds": 120}
+
+    def advance(self, seconds):
+        with self.condition:
+            self.now += seconds
+            self.condition.notify_all()
 
     def sample(self):
         with self.condition:
             self.now += 1
             self.condition.notify_all()
-            return MemorySample("darwin", self.now, "synthetic", "normal", 1000, None, {})
+            return MemorySample("darwin", self.now, "synthetic", "normal", 10000, None, {})
 
     def wait_past(self, observation):
         with self.condition:
             assert self.condition.wait_for(lambda: self.now > observation, timeout=1)
 
 
-def test_independent_memory_recovery_survives_slow_owner_checks_and_multiple_queued_units(tmp_path):
-    observations = MemoryObservations()
+@pytest.mark.parametrize("unit_count", [1, 2])
+def test_base_observation_completes_both_windows_despite_slow_owner_checks(tmp_path, monkeypatch, unit_count):
+    observations = BaseObservations(tmp_path, monkeypatch)
     checking, release_owner, finished = (threading.Event() for _ in range(3))
     class SlowOwner(Owner):
+        def verify_submission(self, intent, actor):
+            trusted = super().verify_submission(intent, actor)
+            from dataclasses import replace
+            return replace(trusted, resources=observations.resources)
         def check_current(self, request, conn):
-            assert observations.monitor.observing  # Observer starts before dispatch.
+            assert observations.probe.observing  # Observer starts before dispatch.
             if request.owner_id == "slow":
                 checking.set()
                 assert release_owner.wait(2)
             return "ready"
-    class LiveResources(Resources):
-        def admit(self, request):
-            from app.host_resource_probes import HostResourceDecision
-            decision = observations.monitor.check(system_reserve_bytes=100, additional_memory_bytes=200)
-            return HostResourceDecision(decision.verdict, {}, {}, decision.reason)
     class Executor(CompletingExecutor):
         def execute(self, grant, scheduler):
             super().execute(grant, scheduler)
-            if len(self.calls) == 2:
+            if len(self.calls) == unit_count:
                 finished.set()
     executor = Executor()
-    runtime = _runtime(tmp_path, resources=LiveResources(), memory_monitor=observations.monitor,
+    runtime = _runtime(tmp_path, resources=observations.probe, host_observer=observations.probe,
         registrations={"job_run": OwnerRegistration(SlowOwner(), executor)})
-    for name in ("slow", "second"):
+    for name in ("slow", "second")[:unit_count]:
         runtime.scheduler.submit(_intent(name), "member")
     try:
         runtime.start()
@@ -173,45 +194,49 @@ def test_independent_memory_recovery_survives_slow_owner_checks_and_multiple_que
         assert not executor.calls
         release_owner.set()
         assert finished.wait(2)
-        assert len(executor.calls) == 2 and runtime.last_error is None
+        assert len(executor.calls) == unit_count and runtime.last_error is None
+        check = observations.probe.admit(SimpleNamespace(id="read-probe", resources=observations.resources))
+        assert check.verdict is True and check.checks['memory_policy']['stable_elapsed_seconds'] >= 10
+        assert check.checks['disk_io_bytes_per_second']['window_complete']
+        assert check.checks['disk_io_bytes_per_second']['window_seconds'] >= 3
     finally:
         release_owner.set()
         assert runtime.stop(2)
-    assert not observations.monitor.observing
+    assert not observations.probe.observing
 
 
-def test_memory_observer_stays_on_during_pause_and_failed_stop_then_joins(tmp_path):
-    observations = MemoryObservations()
+def test_base_observer_stays_on_during_pause_and_failed_stop_then_joins(tmp_path, monkeypatch):
+    observations = BaseObservations(tmp_path, monkeypatch)
     entered, release = threading.Event(), threading.Event()
     class Executor(CompletingExecutor):
         def execute(self, grant, scheduler):
             entered.set()
             assert release.wait(2)
             super().execute(grant, scheduler)
-    runtime = _runtime(tmp_path, executor=Executor(), memory_monitor=observations.monitor)
+    runtime = _runtime(tmp_path, executor=Executor(), host_observer=observations.probe)
     try:
         runtime.start()
-        thread = observations.monitor._observer_thread
+        thread = observations.probe._observer_thread
         runtime.start()
-        assert observations.monitor._observer_thread is thread
+        assert observations.probe._observer_thread is thread
         assert runtime.pause(1)
         observations.wait_past(observations.now)
-        assert observations.monitor.observing
+        assert observations.probe.observing
         runtime.scheduler.submit(_intent("blocked-executor"), "member")
         runtime.resume()
         assert entered.wait(1)
         assert not runtime.stop(.01)
         observations.wait_past(observations.now)
-        assert observations.monitor.observing
+        assert observations.probe.observing
     finally:
         release.set()
         assert runtime.stop(2)
-    assert not observations.monitor.observing and not thread.is_alive()
+    assert not observations.probe.observing and not thread.is_alive()
 
 
-def test_dispatch_start_failure_stops_the_existing_memory_observer(tmp_path, monkeypatch):
-    observations = MemoryObservations()
-    runtime = _runtime(tmp_path, memory_monitor=observations.monitor)
+def test_dispatch_start_failure_stops_the_existing_base_observer(tmp_path, monkeypatch):
+    observations = BaseObservations(tmp_path, monkeypatch)
+    runtime = _runtime(tmp_path, host_observer=observations.probe)
     original = threading.Thread.start
     def fail_dispatch(thread):
         if thread.name == "device-dispatch":
@@ -220,7 +245,7 @@ def test_dispatch_start_failure_stops_the_existing_memory_observer(tmp_path, mon
     monkeypatch.setattr(threading.Thread, "start", fail_dispatch)
     with pytest.raises(RuntimeError, match="startup failure"):
         runtime.start()
-    assert not observations.monitor.observing and not runtime.running
+    assert not observations.probe.observing and not runtime.running
     assert runtime.stop(1)
 
 

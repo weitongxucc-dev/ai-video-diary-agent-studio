@@ -1243,6 +1243,122 @@ def test_narration_admission_requires_complete_window_without_blocking(tmp_path,
     assert intervals == [0.1] * 6  # A 30s backoff must require a new complete 3s observation.
 
 
+@pytest.mark.parametrize("failure", ["before_missing", "after_missing", "read_error", "devices", "regressed", "gap"])
+def test_base_io_failure_requires_new_real_endpoints(tmp_path, monkeypatch, failure):
+    import app.host_resource_probes as probes
+    clock = [0.]
+    monkeypatch.setattr(probes, "time", SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
+    def healthy(**_):
+        return {"disk0": SimpleNamespace(read_bytes=int(clock[0] * 10), write_bytes=0)}
+    monkeypatch.setattr(psutil, "disk_io_counters", healthy)
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **_: [])
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(75, 100, None, 100, 1000, 100))
+    for second in range(4):
+        clock[0] = float(second)
+        evidence, reason = probe._observe_base()
+    assert reason is None and evidence["window_complete"]
+    clock[0] = 10. if failure == "gap" else 4.
+    if failure == "read_error":
+        monkeypatch.setattr(psutil, "disk_io_counters", lambda **_: (_ for _ in ()).throw(OSError("synthetic")))
+    elif failure != "gap":
+        snapshots = iter({
+            "before_missing": [None],
+            "after_missing": [healthy(), None],
+            "devices": [healthy(), {"disk1": SimpleNamespace(read_bytes=40, write_bytes=0)}],
+            "regressed": [{"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)}] * 2,
+        }[failure])
+        monkeypatch.setattr(psutil, "disk_io_counters", lambda **_: next(snapshots))
+    evidence, reason = probe._observe_base()
+    if failure == "gap":
+        assert reason is None and not evidence["window_complete"]
+        assert evidence["window_started_monotonic"] == 10.
+    else:
+        assert evidence is None and reason is not None and not probe._admission_io
+    monkeypatch.setattr(psutil, "disk_io_counters", healthy)
+    restart = clock[0] + 1
+    clock[0] = restart
+    evidence, reason = probe._observe_base()
+    assert reason is None and not evidence["window_complete"]
+    for step in (1, 2, 3):
+        clock[0] = restart + step
+        evidence, reason = probe._observe_base()
+    assert reason is None and evidence["window_complete"]
+    assert evidence["window_started_monotonic"] >= restart
+
+
+def test_base_and_live_io_reads_share_ordered_lock(tmp_path, monkeypatch, narration_cpu_boundary):
+    from concurrent.futures import ThreadPoolExecutor
+    import app.host_resource_probes as probes
+    clock, calls = [0.], []
+    first_entered, release_first, next_entered = (threading.Event() for _ in range(3))
+    monkeypatch.setattr(probes, "time", SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
+    def disks(**_):
+        calls.append(threading.current_thread().name)
+        if len(calls) == 1:
+            first_entered.set()
+            assert release_first.wait(2)
+        else:
+            next_entered.set()
+        return {"disk0": SimpleNamespace(read_bytes=int(clock[0] * 10), write_bytes=0)}
+    monkeypatch.setattr(psutil, "disk_io_counters", disks)
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **_: [])
+    monkeypatch.setattr(psutil, "disk_usage", lambda _: SimpleNamespace(free=10**9))
+    monkeypatch.setattr(psutil, "cpu_percent", lambda interval: probes.time.sleep(interval) or 0)
+    budget = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, .1, 100, 100, narration_cpu_boundary)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(75, 100, None, 100, 1000, 100, narration=budget))
+    resources = dict(kind="creation_narration", execution_mode="isolated_qwen3_tts", text_chars=17,
+        section_count=1, reference_bytes=100, duration_seconds=15, max_output_bytes=100, threads=1, timeout_seconds=120)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        base = pool.submit(probe._observe_base)
+        assert first_entered.wait(1)
+        live = pool.submit(probe._sample, resources)
+        try:
+            assert not next_entered.wait(.05)
+        finally:
+            release_first.set()
+        base_evidence, _ = base.result(timeout=1)
+        current = live.result(timeout=1)
+    assert base_evidence["sample_finished_monotonic"] <= current.checks["disk_io_bytes_per_second"]["sample_started_monotonic"]
+    assert list(probe._admission_io) == sorted(probe._admission_io, key=lambda item: item[0])
+
+
+def test_base_observer_never_seeds_or_switches_running_io_history(tmp_path, monkeypatch, narration_cpu_boundary):
+    from dataclasses import replace
+    import app.host_resource_probes as probes
+    clock = [0.]
+    monkeypatch.setattr(probes, "time", SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
+    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_: {"disk0": SimpleNamespace(read_bytes=int(clock[0] * 10), write_bytes=0)})
+    monkeypatch.setattr(psutil, "disk_partitions", lambda **_: [])
+    monkeypatch.setattr(psutil, "disk_usage", lambda _: SimpleNamespace(free=10**9))
+    budget = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, .1, 100, 100, narration_cpu_boundary)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(75, 100, None, 100, 1000, 100, narration=budget))
+    resources = dict(kind="creation_narration", execution_mode="isolated_qwen3_tts", text_chars=17,
+        section_count=1, reference_bytes=100, duration_seconds=15, max_output_bytes=100, threads=1, timeout_seconds=120)
+    monkeypatch.setattr(probe, "_grant_resources", lambda _: resources)
+    grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
+        "a" * 64, 1, 1, "token", probe.database_path)
+    for second in range(4):
+        clock[0] = float(second)
+        probe._observe_base()
+    assert not probe._running_io and probe._running_io_key is None
+    assert probe.continue_unit(grant)
+    assert len(probe._running_io) == 2
+    previous = list(probe._running_io)
+    clock[0] += 1
+    probe._observe_base()
+    assert list(probe._running_io) == previous
+    clock[0] += 1
+    assert probe.continue_unit(replace(grant, generation=2))
+    assert len(probe._running_io) == 2 and probe._running_io[0][0] > previous[-1][0]
+    assert probe._running_io_key == (grant.request_id, 2)
+
+
 def test_presenter_probe_keeps_dedicated_caps_unknown_and_measured_floor(tmp_path, monkeypatch):
     import app.host_resource_probes as probes
     from app.host_resource_probes import PresenterBudget

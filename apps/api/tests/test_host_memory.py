@@ -168,7 +168,7 @@ def test_sampling_and_window_writes_are_serialized_across_background_and_live_ch
 
 
 @pytest.mark.parametrize("failure", ["critical", "unknown", "sampler_exception"])
-def test_background_failure_resets_healthy_window_and_keeps_observing(failure):
+def test_background_failure_resets_healthy_window_and_keeps_observing(failure, tmp_path, monkeypatch):
     world = World()
     assert world.stabilize().verdict is True
     sampled = threading.Event()
@@ -179,21 +179,25 @@ def test_background_failure_resets_healthy_window_and_keeps_observing(failure):
         world.pressure = failure
         return world.sample()
     world.monitor.sampler = failed_sample
-    world.monitor.start_observing(system_reserve_bytes=100, interval_seconds=.01)
+    probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(75, 100, None, 100, 100, 100), memory_monitor=world.monitor)
+    monkeypatch.setattr(memory.psutil, "disk_io_counters", lambda **_: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    monkeypatch.setattr(memory.psutil, "disk_partitions", lambda **_: [])
+    probe.start_observing(interval_seconds=.01)
     try:
-        assert sampled.wait(1) and world.monitor.observing
+        assert sampled.wait(1) and probe.observing
         stopped = world.check()
         assert stopped.reason == ("memory_pressure_critical" if failure == "critical" else "memory_measurement_unavailable")
         assert stopped.stable_elapsed_seconds == 0
         if failure == "sampler_exception":
             assert stopped.sample.available_bytes is None
     finally:
-        assert world.monitor.stop_observing(1)
+        assert probe.stop_observing(1)
     world.monitor.sampler = world.sample
     world.now += 1
     world.pressure = "normal"
     assert world.check().reason == "memory_recovery_stabilizing"
-    assert not world.monitor.observing
+    assert not probe.observing
 
 
 def test_windows_commit_is_distinct_from_available_physical_memory():

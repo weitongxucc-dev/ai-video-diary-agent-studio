@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass
@@ -869,11 +870,85 @@ class HostResourceProbe:
         self._running_io_key = None
         self._running_cpu_key = None
         self._running_cpu = None
+        self._io_lock = threading.RLock()
+        self._observer_lock = threading.Lock()
+        self._observer_stop = threading.Event()
+        self._observer_thread: threading.Thread | None = None
         self.io_paths = {name: Path(path).resolve() for name, path in (io_paths or {}).items()}
         self.io_paths.update({f"output_{i}": path for i, path in enumerate(self.disk_paths)})
 
+    @property
+    def observing(self) -> bool:
+        with self._observer_lock:
+            return self._observer_thread is not None and self._observer_thread.is_alive()
+
+    def start_observing(self, *, interval_seconds: float) -> None:
+        """One base observer for the existing memory policy and admission IO history."""
+        policy = self.memory_monitor.policy
+        if (type(interval_seconds) not in {int, float} or not math.isfinite(interval_seconds)
+                or interval_seconds <= 0 or interval_seconds + self.budget.sample_seconds >= self.io_window_seconds
+                or policy is not None and interval_seconds + self.budget.sample_seconds >= policy.max_sample_gap_seconds):
+            raise ValueError("Base observation cadence must fit the existing memory and IO gaps")
+        with self._observer_lock:
+            if self._observer_thread is not None and self._observer_thread.is_alive():
+                if self._observer_stop.is_set():
+                    raise RuntimeError("Base resource observation is still stopping")
+                return
+            self._observer_stop.clear()
+            self._observer_thread = threading.Thread(target=self._observe, args=(interval_seconds,),
+                name="device-resource-observation", daemon=True)
+            try:
+                self._observer_thread.start()
+            except (RuntimeError, OSError):
+                self._observer_thread = None
+                self._observer_stop.set()
+                raise
+
+    def _observe(self, interval_seconds: float) -> None:
+        while not self._observer_stop.is_set():
+            _, unavailable = self._observe_base()
+            if unavailable:
+                logger.warning("Host IO observation unavailable: %s", unavailable)
+            self._observer_stop.wait(interval_seconds)
+
+    def _observe_base(self):
+        self.memory_monitor.check(system_reserve_bytes=self.budget.min_available_memory_bytes,
+                                  additional_commit_bytes=0)
+        with self._io_lock:
+            try:
+                before = psutil.disk_io_counters(perdisk=True)
+                if not before:
+                    self._admission_io.clear()
+                    return None, "disk_io_before_unavailable"
+                start = time.monotonic()
+                time.sleep(self.budget.sample_seconds)
+                after = psutil.disk_io_counters(perdisk=True)
+                end = time.monotonic()
+                if not after:
+                    self._admission_io.clear()
+                    return None, "disk_io_after_unavailable"
+                if end <= start:
+                    self._admission_io.clear()
+                    return None, "sample_interval_nonpositive"
+                return self._io_evidence(before, after, start, end, self._admission_io)
+            except (OSError, psutil.Error, ValueError):
+                self._admission_io.clear()
+                return None, "disk_io_measurement_unavailable"
+
+    def stop_observing(self, timeout_seconds: float) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("Base observation stop timeout must be nonnegative")
+        with self._observer_lock:
+            self._observer_stop.set()
+            thread = self._observer_thread
+            if thread is not None:
+                thread.join(timeout_seconds)
+                return not thread.is_alive()
+            return True
+
     def _io_evidence(self, before, after, start, end, history):
         if set(before) != set(after):
+            history.clear()
             return None, "disk_devices_changed"
         if history and start - history[-1][0] > self.io_window_seconds:
             history.clear()  # Backoff is not a long averaging window or readiness cache.
@@ -901,8 +976,10 @@ class HostResourceProbe:
                 if left is None or right is None:
                     metrics[device][field] = "UNAVAILABLE"
                     if field in {"read_bytes", "write_bytes"}:
+                        history.clear()
                         return None, "disk_io_after_unavailable"
                 elif right < left:
+                    history.clear()
                     return None, "disk_io_counters_regressed"
                 else:
                     metrics[device][field] = {"before": left, "after": right, "delta": right - left}
@@ -1280,46 +1357,53 @@ class HostResourceProbe:
         duration = None
         try:
             sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check", "cover_generation", "material_visual_query"}
-            before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
-            if before is None or (sustained and not before):
-                return decision(None, "disk_io_before_unavailable")
-            start = time.monotonic()
-            if background_runtime:
-                time.sleep(self.budget.sample_seconds)  # Preserve the measured IO interval.
-                checks["cpu_observation"] = self._runtime_cpu_observation(cpu_grant)
-                cpu_passed = True  # The broker verifies OS background state before exec.
-            else:
-                sampling = "cpu_percent"
-                cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
-                cpu_passed = cpu <= self.budget.max_cpu_percent
-                checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
-                                         "passed": cpu_passed}
-            sampling = "disk_io_after"
-            after = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
-            end = time.monotonic()
-            duration = end - start
-            if after is None or (sustained and not after):
-                return decision(None, "disk_io_after_unavailable", duration)
-            if duration <= 0:
-                return decision(None, "sample_interval_nonpositive", duration)
-            if sustained:
-                evidence, unavailable = self._io_evidence(before, after, start, end,
-                    self._running_io if running_io else self._admission_io)
-                if unavailable:
-                    return decision(None, unavailable, duration)
-                checks["disk_io_bytes_per_second"] = evidence
-            else:
-                io_bytes = (after.read_bytes - before.read_bytes + after.write_bytes - before.write_bytes)
-                if io_bytes < 0:
-                    checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
-                        "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
-                        "after_write_bytes": after.write_bytes}
-                    return decision(None, "disk_io_counters_regressed", duration)
-                checks["disk_io_bytes_per_second"] = {
-                    "actual": io_bytes / duration, "maximum": self.budget.max_disk_io_bytes_per_second,
-                    "passed": io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
-                    "delta_bytes": io_bytes,
-                }
+            with self._io_lock:
+                history = self._running_io if running_io else self._admission_io
+                before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+                if before is None or (sustained and not before):
+                    if sustained:
+                        history.clear()
+                    return decision(None, "disk_io_before_unavailable")
+                start = time.monotonic()
+                if background_runtime:
+                    time.sleep(self.budget.sample_seconds)  # Preserve the measured IO interval.
+                    checks["cpu_observation"] = self._runtime_cpu_observation(cpu_grant)
+                    cpu_passed = True  # The broker verifies OS background state before exec.
+                else:
+                    sampling = "cpu_percent"
+                    cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
+                    cpu_passed = cpu <= self.budget.max_cpu_percent
+                    checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
+                                             "passed": cpu_passed}
+                sampling = "disk_io_after"
+                after = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+                end = time.monotonic()
+                duration = end - start
+                if after is None or (sustained and not after):
+                    if sustained:
+                        history.clear()
+                    return decision(None, "disk_io_after_unavailable", duration)
+                if duration <= 0:
+                    if sustained:
+                        history.clear()
+                    return decision(None, "sample_interval_nonpositive", duration)
+                if sustained:
+                    evidence, unavailable = self._io_evidence(before, after, start, end, history)
+                    if unavailable:
+                        return decision(None, unavailable, duration)
+                    checks["disk_io_bytes_per_second"] = evidence
+                else:
+                    io_bytes = (after.read_bytes - before.read_bytes + after.write_bytes - before.write_bytes)
+                    if io_bytes < 0:
+                        checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
+                            "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
+                            "after_write_bytes": after.write_bytes}
+                        return decision(None, "disk_io_counters_regressed", duration)
+                    checks["disk_io_bytes_per_second"] = {
+                        "actual": io_bytes / duration, "maximum": self.budget.max_disk_io_bytes_per_second,
+                        "passed": io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
+                        "delta_bytes": io_bytes,
+                    }
             sampling = "available_memory_bytes"
             memory_decision = self.memory_monitor.check(system_reserve_bytes=self.budget.min_available_memory_bytes,
                 additional_memory_bytes=0 if memory_running else additional_memory,
@@ -1403,11 +1487,12 @@ class HostResourceProbe:
                      self.budget.cover if resources["kind"] == "cover_generation" else
                      self.budget.quality if resources["kind"] == "quality_check" else
                      self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
-            key = (grant.request_id, grant.generation)
-            if key != self._running_io_key:
-                self._running_io.clear()
-                self._running_io_key = key
-            decision = self._sample(resources, running_io=True, cpu_grant=grant)
+            with self._io_lock:
+                key = (grant.request_id, grant.generation)
+                if key != self._running_io_key:
+                    self._running_io.clear()
+                    self._running_io_key = key
+                decision = self._sample(resources, running_io=True, cpu_grant=grant)
         elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             decision = self._sample(resources, running_render=True)
         else:

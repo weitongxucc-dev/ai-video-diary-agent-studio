@@ -185,7 +185,7 @@ def bind_device_runtime(
     from app.member_permits import MemberDeviceAccess
 
     material_service = None
-    # Reuse the existing 1s cadence for independent base-health observation;
+    # Reuse the existing 1s cadence for independent memory and admission IO observation;
     # dispatch can spend longer in owner/identity checks or a running unit.
     poll_interval_seconds = 1.0
     resources, processes = build_host_probes(
@@ -206,8 +206,7 @@ def bind_device_runtime(
         # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
         activity_source_reliable=True,
         poll_interval_seconds=poll_interval_seconds,
-        memory_monitor=resources.memory_monitor,
-        memory_reserve_bytes=budget.min_available_memory_bytes,
+        host_observer=resources,
     )
     if material_executor is not None:
         # 素材服务要拿到同一张队列，所以只能在运行时装好之后再绑。
