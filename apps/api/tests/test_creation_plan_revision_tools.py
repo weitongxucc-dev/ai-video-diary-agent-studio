@@ -198,3 +198,77 @@ console.log(JSON.stringify({scenario,tasks,windowCount,confirms}));
 @pytest.mark.parametrize("scenario", ["replace", "discussion", "rejected_create", "lost_create", "lost_create_null", "lost_plan", "lost_confirm", "old_input"])
 def test_creation_revision_and_original_request_reconciliation(scenario):
     assert run_tools(REVISION_RUNNER, scenario)["scenario"] == scenario
+
+
+FACTORY_RUNNER = r"""
+import assert from 'node:assert/strict';
+delete process.env.AI_VIDEO_DIARY_AGENT_PI_MODULE;
+const {createDiaryTools}=await import(process.argv[1]+'runtime.ts');
+const scenario=process.argv[2], calls=[];
+const environment={AI_VIDEO_DIARY_AGENT_API_BASE:'http://business.test',AI_VIDEO_DIARY_AGENT_STAGE:'home',
+  AI_VIDEO_DIARY_AGENT_TURN_ID:'trusted-turn',AI_VIDEO_DIARY_AGENT_INPUT_ID:'trusted-input',
+  AI_VIDEO_DIARY_AGENT_CREATION_REQUEST_ID:'',AI_VIDEO_DIARY_AGENT_AUTHORIZATION:'Bearer fixture-token'};
+let current=null,taskCount=0;
+globalThis.fetch=async(url,init)=>{
+  const path=new URL(url), method=init?.method||'GET', body=init?.body?JSON.parse(init.body):null;
+  assert.equal(init.headers.get('Authorization'),'Bearer fixture-token');
+  assert.equal(init.headers.get('X-Assistant-Input-ID'),'trusted-input');
+  calls.push({path:path.pathname,method,body});
+  if(path.pathname==='/api/creation-requests'&&method==='POST'){
+    current={id:'server-request',revision:1,goal:body.goal,target_count:2,confirmed_count:0,intent:body.intent,
+      requirements:{language:body.language,duration_target_seconds:body.duration_target_seconds,
+        aspect_ratio:body.aspect_ratio,presenter_share_target:0,lipsync_quality:'high',selected_voice:null,selected_person:null},
+      clarification_questions:[],current_window:null};
+  }else if(path.pathname==='/api/assistant/creation-request'){
+    assert.equal(path.searchParams.get('assistant_turn_id'),'trusted-turn');
+    if(scenario==='null')return new Response('null',{status:200});
+    if(scenario==='changed_input')environment.AI_VIDEO_DIARY_AGENT_INPUT_ID='new-input';
+  }else if(path.pathname==='/api/creation-requests/server-request'&&method==='GET'){
+  }else if(path.pathname.endsWith('/windows')){
+    assert.equal(body.expected_revision,current.revision);
+    current={...current,revision:2,current_window:{id:'real-window',status:'proposed',input_fingerprint:'a'.repeat(64),
+      entries:body.goals.map((g,i)=>({ordinal:i+1,task_id:'task-'+i,task:null,
+        plan:{...current.requirements,...g,...g.requirements,name:g.name||g.goal,blockers:[],confirmable:true}}))}};
+  }else if(path.pathname.endsWith('/confirm')){
+    assert.equal(body.expected_revision,2);
+    current={...current,revision:3,confirmed_count:2,current_window:{...current.current_window,status:'confirmed',
+      entries:current.current_window.entries.map(x=>({...x,task:{id:x.task_id}}))}};taskCount+=2;
+  }else throw new Error('unexpected request '+url);
+  return new Response(JSON.stringify(current),{status:200,headers:{'Content-Type':'application/json'}});
+};
+async function instance(){
+  const tools={};await createDiaryTools(environment).register({registerTool:t=>tools[t.name]=t});
+  for(const tool of Object.values(tools)){
+    const execute=tool.execute;
+    tool.execute=async(...args)=>{const result=await execute(...args);
+      if(result.isError)throw new Error(result.details.failure.reason);return result;};
+  }
+  return tools;
+}
+const first=await instance(), goals=[{goal:'中文',requirements:{language:'zh-CN'}},{goal:'English',requirements:{language:'en-US'}}];
+await first.preview_creation_plan.execute('create',{goal:'中英文各一条',target_count:2,duration_target_seconds:30,intent:{kind:'goal_delegation'}});
+if(scenario==='same_instance'){
+  await first.prepare_creation_window.execute('prepare',{goals});
+}else if(scenario==='read_then_same_instance'){
+  await first.read_creation_request.execute('read',{});await first.prepare_creation_window.execute('prepare',{goals});
+}else if(scenario==='separate_instances'){
+  await (await instance()).read_creation_request.execute('read',{});
+  const result=await (await instance()).prepare_creation_window.execute('prepare',{goals});
+  assert.equal(result.details.preview.request.current_window.id,'real-window');
+  const writes=calls.filter(x=>x.method==='POST').length;
+  await (await instance()).prepare_creation_window.execute('repeat',{goals});
+  assert.equal(calls.filter(x=>x.method==='POST').length,writes);
+}else if(scenario==='null'){
+  await assert.rejects((await instance()).prepare_creation_window.execute('prepare',{goals}),/不能证明请求未写入/);
+}else if(scenario==='changed_input'){
+  await assert.rejects((await instance()).prepare_creation_window.execute('prepare',{goals}),/输入已变化/);
+}
+assert.equal(calls.filter(x=>x.path==='/api/creation-requests'&&x.method==='POST').length,1);
+assert.equal(taskCount,['null','changed_input'].includes(scenario)?0:2);
+console.log(JSON.stringify({scenario,taskCount,calls}));
+"""
+
+
+@pytest.mark.parametrize("scenario", ["same_instance", "read_then_same_instance", "separate_instances", "null", "changed_input"])
+def test_actual_tool_factory_empty_binding_and_cross_instance_readback(scenario):
+    assert run_tools(FACTORY_RUNNER, scenario)["scenario"] == scenario

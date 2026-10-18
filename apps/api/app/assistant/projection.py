@@ -27,6 +27,8 @@ def _safe_business_failure(value: object, *, secrets=()) -> dict:
     for key in ("error", "code", "stage", "object_type", "query_tool", "reason_code"):
         if isinstance(value.get(key), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", value[key]):
             safe[key] = value[key]
+    if isinstance(value.get("tool_name"), str) and value["tool_name"] in _PI_TOOL_LABELS:
+        safe["tool_name"] = value["tool_name"]
     for key in ("request_id", "window_id", "current_window_id", "plan_id", "task_id", "object_id", "job_id"):
         if (isinstance(value.get(key), str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value[key])
                 and not any(secret and secret in value[key] for secret in secrets)):
@@ -52,6 +54,35 @@ def _safe_business_failure(value: object, *, secrets=()) -> dict:
         safe["section_index"] = value["section_index"]
     return {key: text for key, text in safe.items()
             if not isinstance(text, str) or not any(secret and secret in text for secret in secrets)}
+
+
+def _sdk_parameter_failure(tool_name: str, result: dict) -> dict | None:
+    prefix = f'Validation failed for tool "{tool_name}":\n'
+    for item in result.get("content", []):
+        raw = item.get("text") if item.get("type") == "text" else None
+        if not isinstance(raw, str) or not raw.startswith(prefix):
+            continue
+        validation, separator, _ = raw[len(prefix):].partition("\n\nReceived arguments:")
+        if not separator:
+            continue
+        errors = [match.groups() for line in validation.splitlines()
+            if (match := re.fullmatch(r"\s*-\s+([A-Za-z0-9_.\[\]-]{1,160}):\s*(.+)", line))]
+        if not errors:
+            continue
+        reasons = []
+        for field, problem in errors[:8]:
+            if problem == "must be number":
+                reasons.append(f"{field} 必须使用数字")
+            elif problem in {"must be string", "must be integer", "must be boolean", "must be object", "must be array"}:
+                reasons.append(f"{field}: {problem}")
+            elif re.fullmatch(r"must have required properties [A-Za-z_][A-Za-z0-9_]{0,63}(?:, [A-Za-z_][A-Za-z0-9_]{0,63}){0,7}", problem):
+                reasons.append(f"{field}: {problem}")
+        reason = "；".join(reasons)
+        return {"error": "tool_arguments_invalid", "tool_name": tool_name,
+            "reason": "参数校验未通过，工具未执行。" + (reason + "。" if reason else ""),
+            "repair_action": "按工具参数契约补齐或修正上述字段后再提交；本次工具未执行。",
+            "stage": "parameter_validation", "submission_effect": "not_submitted"}
+    return None
 
 
 def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> str:
@@ -211,30 +242,20 @@ class _PiStreamProjector:
                 tool_id, label = self._next_id, _PI_TOOL_LABELS[name]
             failed = bool(event.get("isError"))
             details = (event.get("result") or {}).get("details") or {}
+            summary_result = event.get("result")
             failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
             if failure is None and details.get("kind") == "edit_request_status":
                 reason = details.get("failure_reason")
                 if isinstance(reason, dict) and isinstance(reason.get("text"), str):
                     failure = {"reason": reason["text"]}
-            if failed and failure is None and (event.get("result") or {}).get("details") is None:
-                prefix = f'Validation failed for tool "{name}":\n'
-                for item in (event.get("result") or {}).get("content", []):
-                    raw = item.get("text") if item.get("type") == "text" else None
-                    if not isinstance(raw, str) or not raw.startswith(prefix):
-                        continue
-                    validation = raw[len(prefix):].split("\n\nReceived arguments:", 1)[0]
-                    errors = [match.groups() for line in validation.splitlines()
-                        if (match := re.fullmatch(r"\s*-\s+([A-Za-z0-9_.\[\]-]+):\s*(.+)", line))]
-                    concrete = [(field, reason) for field, reason in errors
-                        if reason not in {"must be null", "must match a schema in anyOf"}]
-                    reason = "；".join(f"{field} 必须使用数字" if problem == "must be number" else f"{field}: {problem}"
-                        for field, problem in concrete)
-                    failure = {"reason": "参数校验未通过，工具未执行。" + (reason + "。" if reason else "")}
-                    break
+            if failed and failure is None and (event.get("result") or {}).get("details") in (None, {}):
+                failure = _sdk_parameter_failure(name, event.get("result") or {})
+                if failure:
+                    summary_result = {"details": {"failure": failure}}
             return {
                 "type": "tool_end", "tool_id": tool_id, "label": label,
                 "ok": not failed,
-                "summary": _safe_tool_result_summary(name, event.get("result"), failed),
+                "summary": _safe_tool_result_summary(name, summary_result, failed),
                 **({"failure": _safe_business_failure(failure)} if failed and failure else {}),
             }
         return None

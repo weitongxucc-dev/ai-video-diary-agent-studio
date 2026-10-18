@@ -397,7 +397,9 @@ def test_sdk_parameter_validation_projects_concrete_reason_without_received_argu
     projected = _PiStreamProjector().project(json.dumps({"type":"tool_execution_end",
         "toolName":"preview_typed_edit", "isError":True,
         "result":{"details":None,"content":[{"type":"text","text":raw}]}}))
-    assert projected["failure"] == {"reason":"参数校验未通过，工具未执行。audio_edit.values.gain_db 必须使用数字。"}
+    assert projected["failure"] == {"reason":"参数校验未通过，工具未执行。audio_edit.values.gain_db 必须使用数字。",
+        "error": "tool_arguments_invalid", "tool_name": "preview_typed_edit", "stage": "parameter_validation",
+        "submission_effect": "not_submitted", "repair_action": "按工具参数契约补齐或修正上述字段后再提交；本次工具未执行。"}
     assert projected["ok"] is False
     assert not any(value in json.dumps(projected) for value in ("Received arguments", "must be null", "anyOf", "secret", "/Volumes"))
 

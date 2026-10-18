@@ -41,9 +41,9 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
   async function currentRequest(refresh = false) {
     const key = inputKey();
     if (parentCreationPromise) await parentCreationPromise;
-    const boundId = readActionSource().creationRequestId;
+    // Unset host environment fields are empty strings, not request identities.
+    const boundId = readActionSource().creationRequestId || undefined;
     const requestId = boundId ?? creationRequest?.id;
-    if (!requestId && !refresh) throw new Error("请先保存或读取本次可信制作目标");
     if (!refresh && (needsRead || boundId && creationRequest && boundId !== creationRequest.id))
       throw new Error("原请求结果或修订待核对，请先read_creation_request，不重复提交旧窗口");
     if (refresh || !creationRequest) {

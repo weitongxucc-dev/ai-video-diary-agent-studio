@@ -219,7 +219,8 @@ def test_nested_receipt_and_durable_roundtrip_keep_safe_typed_fields(tool_bounda
     assert type(stored["failure"]["current_revision"]) is int
 
 
-def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boundary, tmp_path, monkeypatch):
+@pytest.mark.parametrize("receipt_kind", ["business", "sdk_validation"])
+def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boundary, tmp_path, monkeypatch, receipt_kind):
     from types import SimpleNamespace
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -231,7 +232,11 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
     turn, _ = repo.create_turn_idempotent(conversation["id"], "workspace", "member", "制作视频", "request-one", draft["draft_version"])
     monkeypatch.setattr(main, "conversation_repo", repo)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _workspace: SimpleNamespace(effective_llm_api_key="synthetic-secret"))
-    event = _project(tool_boundary["caught"])
+    event = (_project(tool_boundary["caught"]) if receipt_kind == "business"
+        else _project({"isError": True, "details": {}, "content": [{"type": "text", "text":
+            'Validation failed for tool "preview_creation_plan":\n'
+            '  - selected_person.profile_id: must have required properties profile_id, version\n\nReceived arguments:\n'
+            '{"private":"/Users/private/reference.wav","token":"private-token"}'}]}, "preview_creation_plan"))
     app = FastAPI()
 
     @app.get("/stream")
@@ -244,8 +249,56 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
     response = TestClient(app).get("/stream")
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
     delivered = next(event for event in events if event["type"] == "tool_end")
-    assert delivered["failure"] == tool_boundary["caught"]["details"]["failure"]
+    assert delivered["failure"] == event["failure"]
     assert repo.get_turn(turn["id"])["events"][0]["failure"] == delivered["failure"]
+    if receipt_kind == "sdk_validation":
+        assert delivered["failure"]["submission_effect"] == "not_submitted"
+        assert delivered["failure"]["tool_name"] == "preview_creation_plan"
+        assert "private" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("details", [None, {}])
+def test_sdk_validation_before_execute_retains_only_safe_field_diagnostics(details):
+    raw = ('Validation failed for tool "preview_creation_plan":\n'
+        '  - selected_person.profile_id: must have required properties profile_id, version\n'
+        '  - duration_target_seconds: must be number\n'
+        '  - selected_person: must be null\n'
+        '  - selected_person: must match a schema in anyOf\n\nReceived arguments:\n'
+        '{"path":"/Users/private/reference.wav","token":"opaque-token","nested":"- stolen: must be number"}')
+    event = _project({"isError": True, "details": details, "content": [{"type": "text", "text": raw}]}, "preview_creation_plan")
+    assert event["ok"] is False
+    assert event["failure"] == {
+        "error": "tool_arguments_invalid", "tool_name": "preview_creation_plan", "stage": "parameter_validation",
+        "submission_effect": "not_submitted", "repair_action": "按工具参数契约补齐或修正上述字段后再提交；本次工具未执行。",
+        "reason": "参数校验未通过，工具未执行。selected_person.profile_id: must have required properties profile_id, version；duration_target_seconds 必须使用数字。"}
+    assert "selected_person.profile_id" in event["summary"]
+    assert "工具未执行" in event["summary"]
+    for raw_value in ("Received arguments", "opaque-token", "private", "stolen", "must be null", "anyOf"):
+        assert raw_value not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("raw,details", [
+    ('ordinary model failure: opaque-private-value', {}),
+    ('Validation failed for tool "other_tool":\n  - gain_db: must be number', {}),
+    ('Validation failed for tool "preview_creation_plan":\nopaque-private-value', {}),
+    ('Validation failed for tool "preview_creation_plan":\n  - gain_db: must be number', {}),
+    ('Validation failed for tool "preview_creation_plan":\n  - /Users/private/key: must be number', {}),
+    ('Validation failed for tool "preview_creation_plan":\n  - gain_db: must be number', {"kind": "business_result"}),
+])
+def test_sdk_validation_requires_matching_prefix_empty_details_and_field_lines(raw, details):
+    event = _project({"isError": True, "details": details, "content": [{"type": "text", "text": raw}]}, "preview_creation_plan")
+    assert "failure" not in event
+    assert "opaque-private-value" not in json.dumps(event) and "/Users/private" not in json.dumps(event)
+
+
+def test_sdk_validation_omits_unknown_validation_text():
+    raw = ('Validation failed for tool "preview_creation_plan":\n'
+        '  - selected_person.profile_id: opaque-private-value from an unknown validator\n\nReceived arguments:\n'
+        '{"token":"another-private-value"}')
+    event = _project({"isError": True, "details": {}, "content": [{"type": "text", "text": raw}]}, "preview_creation_plan")
+    assert event["failure"]["reason"] == "参数校验未通过，工具未执行。"
+    assert event["failure"]["submission_effect"] == "not_submitted"
+    assert "private-value" not in json.dumps(event)
 
 
 def test_projection_whitelist_does_not_accept_raw_or_wrongly_typed_fields():
@@ -256,3 +309,5 @@ def test_projection_whitelist_does_not_accept_raw_or_wrongly_typed_fields():
     assert safe["error"] == "auth_dependency_unavailable"
     assert "private" not in json.dumps(safe) and "opaque" not in json.dumps(safe)
     assert set(safe) == {"reason", "repair_action", "error", "stage", "submission_effect", "request_id"}
+    assert _safe_business_failure({"tool_name": ["preview_creation_plan"]}) == {}
+    assert _safe_business_failure({"tool_name": "unknown_tool"}) == {}
