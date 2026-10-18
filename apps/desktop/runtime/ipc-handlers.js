@@ -1,5 +1,19 @@
 // Public renderer channels remain stable; native modules own validation and I/O.
-function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, getVersion, quit, checkForUpdates }) {
+function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, getVersion, quit, checkForUpdates, companion, getWindow, webOrigin }) {
+  if (companion) {
+    for (const [channel, action] of Object.entries({
+      'companion-status': () => companion.status(),
+      'companion-configure': (input) => companion.configure(input),
+      'companion-disable': () => companion.disable(),
+      'companion-invitation': (input) => companion.invitation(input),
+    })) {
+      ipcMain.handle(channel, (event, input) => {
+        if (event.sender !== getWindow()?.webContents || event.senderFrame !== event.sender.mainFrame
+            || new URL(event.senderFrame.url).origin !== webOrigin) throw new Error('手机连接仅可从当前曜核工作台操作。');
+        return action(input);
+      });
+    }
+  }
   ipcMain.handle('get-api-port', () => services.getApiEndpoint().port);
   ipcMain.handle('open-directory', () => files.openDirectory());
   ipcMain.handle('open-file', () => files.openFile());

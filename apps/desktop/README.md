@@ -60,6 +60,8 @@ Web通过Electron utilityProcess运行，使用后台Helper身份和管道输出
 
 桌面主进程首次启动会在 userData 下生成并持久化设备身份 `device-identity.generated.json`（`device_id` 为随机 UUID、`proof` 为 64 位小写 hex），并在启动本地 API 子进程时以 `DEVICE_ID`/`DEVICE_PROOF` 环境变量注入（与 Supabase 凭据同源，渲染进程不可观测）。文件缺失视为首次启动而生成；文件存在但畸形则视为运维故障、拒绝启动（对应 API 侧 503 unavailable），不伪造、不降级、不静默重生成。
 
+手机连接由原生 `runtime/companion-gateway.js` 管理 HTTPS 监听与设备专属证书，核心 API/Web 仍绑定 loopback。证书和启用状态保存在 userData 的 `companion/`，正常退出等待正在进行的连接配置并关闭监听；重启沿用证书与端口，局域网地址变化则要求重新选择。正式身份、同账号配对和成员邀请按[架构§5.1.1](../../docs/system-architecture.md#511-手机联动的共同接收与回读)执行。`node scripts/companion-gateway-test.js` 检查真实 TLS、受限转发与监听生命周期，其模拟身份不代替实体手机验收。
+
 自动化启动链遵循[系统架构§3.12](../../docs/system-architecture.md#312-整机资源调度)：Electron随本地API启动与关闭到期扫描器，媒体执行接入该API已有设备协调者。
 
 macOS包内主程序、Helper可执行名及`CFBundleName`保持ASCII（`Yaohe Studio`），避免系统截断进程名时切断UTF-8字符；`CFBundleDisplayName`和安装包文件名保留中文。Helper寻址依赖同一内部名，不能仅改主程序或显示名。此构建字段不改变顶层包名`ai-video-diary-studio`；隔离验收继续显式指定`--user-data-dir`。

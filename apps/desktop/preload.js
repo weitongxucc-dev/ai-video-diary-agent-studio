@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getApiPort: () => ipcRenderer.invoke('get-api-port'),
   getServiceStatus: () => ipcRenderer.invoke('get-service-status'),
 
+  companionStatus: () => ipcRenderer.invoke('companion-status'),
+  configureCompanion: (input) => ipcRenderer.invoke('companion-configure', input),
+  disableCompanion: () => ipcRenderer.invoke('companion-disable'),
+  companionInvitation: (input) => ipcRenderer.invoke('companion-invitation', input),
+
   // File system
   openDirectory: () => ipcRenderer.invoke('open-directory'),
   openFile: () => ipcRenderer.invoke('open-file'),

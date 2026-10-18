@@ -91,7 +91,20 @@ const services = createServiceSupervisor({
   spawnApi: spawn, forkWeb: (...args) => utilityProcess.fork(...args),
   recordLifecycle, attachChildOutput, onFailure: reportServiceFailure,
 });
-const { stopAllServices } = services;
+const { createCompanionGateway } = require('./runtime/companion-gateway');
+const { loadOrCreateIdentity } = require('./device-identity');
+const companion = createCompanionGateway({
+  userDataPath: app.getPath('userData'), getApiEndpoint: services.getApiEndpoint,
+  getDeviceId: () => loadOrCreateIdentity(app.getPath('userData')).device_id,
+  getAuthConfig: () => {
+    const env = serviceConfiguration.apiEnvironment(0);
+    return { supabase_url: env.SUPABASE_URL, publishable_key: env.SUPABASE_PUBLISHABLE_KEY };
+  },
+});
+async function stopAllServices() {
+  await companion.stop();
+  await services.stopAllServices();
+}
 const getWindow = () => mainWindow;
 const files = createNativeFiles({ dialog, shell, getWindow });
 const { importMaterials } = createMaterialImporter({ recordLifecycle });
@@ -175,7 +188,7 @@ async function startReadyServices() {
   if (quitInProgress) return;
   buildMenu({ app, Menu, dialog, shell, getWindow, checkForUpdates, buildIdentity });
   registerDesktopIpc({ ipcMain, services, files, media, buildIdentity,
-    getVersion: () => app.getVersion(), quit: () => app.quit(), checkForUpdates,
+    getVersion: () => app.getVersion(), quit: () => app.quit(), checkForUpdates, companion, getWindow, webOrigin,
   });
   configureAutoUpdater();
 
@@ -194,6 +207,8 @@ async function startReadyServices() {
     await services.startApiServer();
     startupService = 'web';
     await services.startNextServer();
+    try { await companion.restore(); }
+    catch (error) { dialog.showErrorBox('手机连接未恢复', error.message); }
     createWindow();
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
