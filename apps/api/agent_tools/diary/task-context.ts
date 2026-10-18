@@ -73,6 +73,13 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
         }),
       } : null,
       execution: executionFacts(execution),
+      available_voices: (task.available_voices || []).slice(0, 24).map((voice: Record<string, unknown>) => ({
+        profile_id: metadata(voice.profile_id, 120), version: metadata(voice.version, 120),
+        display_name: metadata(voice.person_display_name, 160), language: voice.language,
+        runnable: voice.runnable, runnable_reason: voice.runnable_reason,
+      })),
+      available_voice_count: (task.available_voices || []).length,
+      available_voices_truncated: (task.available_voices || []).length > 24,
       plan: plan ? {
         creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
           topic_title: plan.creation_intent.topic_title,

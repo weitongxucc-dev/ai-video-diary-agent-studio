@@ -6562,6 +6562,8 @@ def _topic_failure_response(
     impact: str,
     repair_action: str,
     retryable: bool,
+    reason_code: str | None = None,
+    section_index: int | None = None,
 ) -> HTTPException:
     return HTTPException(
         status_code=status_code,
@@ -6571,6 +6573,8 @@ def _topic_failure_response(
             "impact": impact,
             "repair_action": repair_action,
             "retryable": retryable,
+            **({"reason_code": reason_code} if reason_code is not None else {}),
+            **({"section_index": section_index} if section_index is not None else {}),
         },
     )
 
@@ -7170,7 +7174,7 @@ def save_assistant_script_draft(
         raise _topic_failure_response(status_code=422 if content_failure or prevalidation else 502,
             error=exc.code, reason=exc.reason, impact="本轮修订未保存，原有草稿和任务保持原样。",
             repair_action=("请核对文案段落、资料引用和方案时长，修改后再提交。" if prevalidation else exc.repair_action),
-            retryable=exc.retryable) from exc
+            retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index) from exc
     record_llm_service_verification(_workspace_settings_for(workspace_id), ok=True, cause="verified", workspace_id=workspace_id)
     # The model call can outlive source permissions or the current plan/topic.
     # Re-read those bindings; the repository still owns the final draft CAS.
@@ -8208,6 +8212,8 @@ def generate_creation_task_script(
             impact=exc.impact,
             repair_action=exc.repair_action,
             retryable=exc.retryable,
+            reason_code=exc.reason_code,
+            section_index=exc.section_index,
         ) from exc
     record_llm_service_verification(
         _workspace_settings_for(workspace_id), ok=True, cause="verified",

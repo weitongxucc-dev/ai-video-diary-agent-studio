@@ -616,12 +616,16 @@ class CreationTaskScriptGenerationError(RuntimeError):
         impact: str,
         repair_action: str,
         retryable: bool,
+        reason_code: str | None = None,
+        section_index: int | None = None,
     ) -> None:
         self.code = code
         self.reason = reason
         self.impact = impact
         self.repair_action = repair_action
         self.retryable = retryable
+        self.reason_code = reason_code
+        self.section_index = section_index
         super().__init__(f"{code}: {reason}")
 
 
@@ -1187,7 +1191,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             repair = ((f"资料{titles}尚未支持这句说明。{detail} 请补充已核实的资料，或删去这句承诺后重新生成。")
                       if unsupported else f"{detail} 请核对制作方案，或修改冲突表述后重新生成。")
             raise self._failure(code="script_fact_unsupported" if unsupported else "script_goal_conflict",
-                reason=reason, impact="未保存这份新草稿，已有草稿保持原样。", repair_action=repair, retryable=False)
+                reason=reason, impact="未保存这份新草稿，已有草稿保持原样。", repair_action=repair, retryable=False,
+                reason_code="unsupported_fact" if unsupported else "goal_conflict", section_index=index)
 
 
     def _review_failure(self, reason_code: str, diagnostics: dict) -> CreationTaskScriptGenerationError:
@@ -1195,9 +1200,16 @@ class OpenAICompatibleCreationTaskScriptGenerator:
 
         logging.getLogger(__name__).warning("creation_script_review_invalid %s",
             json.dumps({"reason_code": reason_code, **diagnostics}, sort_keys=True, separators=(",", ":")))
-        return self._failure(code="script_review_invalid", reason="本次文案未完成完整、可回查的逐段核查。",
+        section_index = diagnostics.get("section_index")
+        section = f"第{section_index}段" if type(section_index) is int and 1 <= section_index <= 20 else ""
+        section_index = section_index if section else None
+        reason = (f"{section}核查报告的片段引用无效，尚不能判定文案是否通过。"
+            if reason_code in {"support_quote", "issue_quote", "source_quote", "support_reference", "issue_reference"}
+            else f"{section}核查报告不符合完整核查要求，尚不能判定文案是否通过。")
+        return self._failure(code="script_review_invalid", reason=reason,
             impact="未保存未经核查的新草稿，已有草稿保持原样。",
-            repair_action="请缩短文案或重新生成，并在确认前人工核对事实和制作要求。", retryable=False)
+            repair_action="本轮停止提交并保留原稿；先核对文字服务的核查报告格式与引用，不要据此改写正文或原样重试。",
+            retryable=False, reason_code=reason_code, section_index=section_index)
 
     def _validated_script(
         self, document: object, allowed_reference_aliases: dict[str, str], requested_language: str
@@ -1267,6 +1279,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         impact: str,
         repair_action: str,
         retryable: bool,
+        reason_code: str | None = None,
+        section_index: int | None = None,
     ) -> CreationTaskScriptGenerationError:
         return CreationTaskScriptGenerationError(
             code=code,
@@ -1274,6 +1288,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             impact=impact,
             repair_action=repair_action,
             retryable=retryable,
+            reason_code=reason_code,
+            section_index=section_index,
         )
 
 

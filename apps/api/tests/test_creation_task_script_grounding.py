@@ -159,6 +159,7 @@ def test_same_valid_reference_does_not_support_unstated_promises(claim):
         provider(document, review, calls).generate(inputs())
     error = failure.value
     assert error.code == 'script_fact_unsupported' and not error.retryable
+    assert error.reason_code == 'unsupported_fact' and error.section_index == 1
     assert claim in error.reason and '本机工作区导览资料' in error.repair_action
     assert 'evidence_1' not in error.repair_action and 'knowledge:fixture:v1' not in error.repair_action
     assert len(calls) == 2
@@ -175,6 +176,7 @@ def test_goal_conflicts_are_separate_from_valid_source_support(quote, field, det
     with pytest.raises(CreationTaskScriptGenerationError) as failure:
         provider(document, rejected(document, kind='goal_conflict', field=field, quote=quote, detail=detail), calls).generate(inputs())
     assert failure.value.code == 'script_goal_conflict' and not failure.value.retryable
+    assert failure.value.reason_code == 'goal_conflict' and failure.value.section_index == 1
     assert detail in failure.value.repair_action and len(calls) == 2
 
 
@@ -300,6 +302,32 @@ def test_api_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch)
     assert api_state.verifications[-1]['ok'] is True and len(calls) == 2
     assert llm_service_verification(api_state.settings, workspace_id='local')['ok'] is True
     assert json.loads(calls[1][1]['messages'][1]['content'])['requirements']['presenter_share_target'] == api_state.plan.presenter_share_target
+
+
+@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+@pytest.mark.parametrize('code,reason_code,section_index', [
+    ('script_review_invalid', 'issue_reference', 3),
+    ('script_review_invalid', 'support_quote', 5),
+    ('script_fact_unsupported', 'unsupported_fact', 3),
+    ('script_goal_conflict', 'goal_conflict', 2),
+])
+def test_script_http_errors_preserve_safe_category_section_and_retryability(
+    api_state, monkeypatch, endpoint, code, reason_code, section_index,
+):
+    failure = CreationTaskScriptGenerationError(code=code, reason='安全的分段失败说明。',
+        impact='没有保存草稿。', repair_action='先核对指定段落及资料。', retryable=False,
+        reason_code=reason_code, section_index=section_index)
+    def reject(*args):
+        raise failure
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings:
+        SimpleNamespace(generate=reject, check_draft=reject))
+    body = {} if endpoint == 'scripts/generate' else agent_payload(api_state)
+    response = api_state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
+    assert response.status_code == (502 if code == 'script_review_invalid' else 422), response.text
+    detail = response.json()['detail']
+    assert {key: detail[key] for key in ('error', 'reason_code', 'section_index', 'retryable')} == {
+        'error': code, 'reason_code': reason_code, 'section_index': section_index, 'retryable': False}
+    assert api_state.repository.list_creation_task_scripts('local', 'task') == []
 
 
 def test_provided_topic_without_generated_metadata_reaches_real_script_provider(api_state, monkeypatch):
@@ -672,6 +700,12 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
     assert text.startswith(prefix) and len(text) < 1200
     diagnostic = json.loads(text.removeprefix(prefix))
     assert diagnostic['reason_code'] == failure_kind
+    assert error.value.reason_code == failure_kind
+    expected_section = diagnostic['section_index']
+    if type(expected_section) is not int or not 1 <= expected_section <= 20:
+        expected_section = None
+    assert error.value.section_index == expected_section
+    assert '不要据此改写正文或原样重试' in error.value.repair_action
     assert diagnostic['requested_max_tokens'] == 8192
     assert diagnostic['usage'] == {'prompt_tokens': 123, 'completion_tokens': 456,
                                    'total_tokens': 579, 'reasoning_tokens': 300}

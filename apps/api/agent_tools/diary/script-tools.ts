@@ -1,9 +1,22 @@
 import type {BusinessRequest, ToolRegistrar, ActionSource} from './contracts.ts';
+import {BusinessRequestError} from './transport.ts';
+import type {ScriptDraftFailure} from './transport.ts';
 import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
 
 export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
   request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
 }) {
+  let blockedReview: {inputKey: string | undefined; failure: ScriptDraftFailure} | null = null;
+  function rejectedDraft(failure: ScriptDraftFailure) {
+    const section = failure.section_index === null ? "" : `第${failure.section_index}段`;
+    const reportInvalid = failure.error === "script_review_invalid";
+    const reason = reportInvalid ? `${section}核查报告无效，尚不能判定正文是否通过。`
+      : `${section}正文${failure.error === "script_fact_unsupported" ? "存在无资料支持的事实" : "与制作要求冲突"}。`;
+    const repair = reportInvalid ? "停止本轮提交并保留原稿；先核对核查服务的报告与引用，不要把此错误当正文已证伪，也不要改写正文后原样重试。"
+      : "重新读取当前任务的固定资料，只纠正指出段落的无据事实或要求冲突后提交修订；不要原样重试或编造新证据。";
+    const details = {kind: "script_draft_rejected", failure: {...failure, reason, repair_action: repair}};
+    return {isError: true, content: [{type: "text", text: JSON.stringify(details.failure)}], details};
+  }
   pi.registerTool({
     name: "find_knowledge",
     label: "检索已保存资料",
@@ -66,9 +79,12 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
           properties: {
             id: { type: "string", minLength: 1, maxLength: 120 },
             title: { type: "string", minLength: 1, maxLength: 160 },
-            content: { type: "string", minLength: 1, maxLength: 4000 },
-            visual_prompt: { type: "string", minLength: 1, maxLength: 1000 },
-            evidence_reference_ids: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" } },
+            content: { type: "string", minLength: 1, maxLength: 4000,
+              description: "仅实际朗读的旁白；不写静音、角标、署名、许可字幕或制作指令，不为画面文字单独增加旁白段。" },
+            visual_prompt: { type: "string", minLength: 1, maxLength: 1000,
+              description: "简短画面意图；画面文字需后续用实际编辑工具落片，写在此处不代表已经生成。" },
+            evidence_reference_ids: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" },
+              description: "逐字使用 read_current_task 的 script_context.sources[].reference_id 完整引用；知识条目裸ID、文件名及自己拼的引用都无效。" },
           },
           required: ["title", "content", "visual_prompt", "evidence_reference_ids"],
           additionalProperties: false,
@@ -78,15 +94,26 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     },
     execute: async (_id: string, params: { title: string; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
       if (!taskId) throw new Error("当前步骤不能保存文案草稿");
+      const source = readActionSource();
+      const inputKey = source.inputId ?? source.turnId;
+      if (blockedReview && blockedReview.inputKey === inputKey) return rejectedDraft(blockedReview.failure);
       if (!isTaskRead()) throw new Error("请先读取当前任务和允许使用的资料");
       if (hasPreview()) throw new Error("本轮已有尚未采用的方案，不能另写文案");
       const context = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
-      const draft = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, {
-        method: "POST",
-        body: JSON.stringify({ title: params.title, assistant_turn_id: readActionSource().turnId, sections: params.sections.map((section, index) => ({
-          ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
-        })), ...(getScriptDraftUpdatedAt() ? { expected_updated_at: getScriptDraftUpdatedAt() } : {}) }),
-      });
+      let draft;
+      try {
+        draft = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, {
+          method: "POST",
+          body: JSON.stringify({ title: params.title, assistant_turn_id: source.turnId, sections: params.sections.map((section, index) => ({
+            ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
+          })), ...(getScriptDraftUpdatedAt() ? { expected_updated_at: getScriptDraftUpdatedAt() } : {}) }),
+        });
+      } catch (error) {
+        if (!(error instanceof BusinessRequestError) || !error.scriptFailure) throw error;
+        if (error.scriptFailure.error === "script_review_invalid" && !error.scriptFailure.retryable)
+          blockedReview = {inputKey, failure: error.scriptFailure};
+        return rejectedDraft(error.scriptFailure);
+      }
       if (typeof draft.updated_at === "string") setScriptDraftUpdatedAt(draft.updated_at);
       const delegated = context.creation_intent?.kind === "goal_delegation";
       if (delegated) {
