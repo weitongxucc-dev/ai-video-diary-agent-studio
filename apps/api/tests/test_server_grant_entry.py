@@ -129,7 +129,7 @@ def test_background_entry_verifies_after_ack_and_never_execs_on_failure(monkeypa
     ctypes.set_errno(99)
     if approval != b"G" or failure:
         with pytest.raises(SystemExit) as stopped:
-            server._exec_granted_command([str(read_fd), "target"], background_cpu=True)
+            server._exec_granted_command([str(read_fd), "target"], cpu_mode="darwin_background")
         assert stopped.value.code == (126 if approval != b"G" else 125)
         assert "exec" not in events
         if approval != b"G":
@@ -137,7 +137,7 @@ def test_background_entry_verifies_after_ack_and_never_execs_on_failure(monkeypa
         else:
             assert "state=failed" in capsys.readouterr().err
     else:
-        server._exec_granted_command([str(read_fd), "target"], background_cpu=True)
+        server._exec_granted_command([str(read_fd), "target"], cpu_mode="darwin_background")
         assert events == ["set", "get", "exec"]
         assert "state=verified background=1 errno=0" in capsys.readouterr().err
 
@@ -150,4 +150,70 @@ def test_frozen_background_dispatch_uses_same_fixed_entry(monkeypatch):
     monkeypatch.setattr(server, "_configure_env", lambda: pytest.fail("API environment loaded"))
     monkeypatch.setattr(server, "_exec_granted_command", lambda *args, **kwargs: calls.append((args, kwargs)))
     server.main()
-    assert calls == [((["10", "target"],), {"background_cpu": True})]
+    assert calls == [((["10", "target"],), {"cpu_mode": "darwin_background"})]
+
+
+@pytest.mark.parametrize("approval", [b"G", b"X"])
+@pytest.mark.parametrize("failure", [None, "set", "nice_read", "nice_mismatch", "bg_read", "bg_on"])
+def test_nice_entry_requires_exact_nice_and_bg_zero_after_ack(monkeypatch, approval, failure, capsys):
+    server = load_server()
+    events = []
+    def setpriority(which, who, value):
+        assert (which, who, value) == (0, 0, 5) and ctypes.get_errno() == 0
+        events.append("set")
+        if failure == "set":
+            ctypes.set_errno(1)
+            return -1
+        return 0
+    def getpriority(which, who):
+        assert who == 0 and ctypes.get_errno() == 0
+        if which == 0:
+            events.append("nice")
+            if failure == "nice_read":
+                ctypes.set_errno(22)
+            return 4 if failure == "nice_mismatch" else 5
+        assert which == 4
+        events.append("bg")
+        if failure == "bg_read":
+            ctypes.set_errno(22)
+        return 1 if failure == "bg_on" else 0
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin", stderr=sys.stderr))
+    monkeypatch.setattr(ctypes, "CDLL", lambda _, use_errno: SimpleNamespace(
+        setpriority=Mock(side_effect=setpriority), getpriority=Mock(side_effect=getpriority)))
+    monkeypatch.setattr(server.os, "execvp", lambda *args: events.append("exec"))
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, approval)
+    os.close(write_fd)
+    ctypes.set_errno(99)
+    if approval != b"G" or failure:
+        with pytest.raises(SystemExit) as stopped:
+            server._exec_granted_command([str(read_fd), "target"], cpu_mode="darwin_nice", nice=5)
+        assert stopped.value.code == (126 if approval != b"G" else 125)
+        assert "exec" not in events
+        if approval != b"G":
+            assert events == [] and "GRANT_CPU_POLICY" not in capsys.readouterr().err
+        else:
+            assert "mode=darwin_nice state=failed" in capsys.readouterr().err
+    else:
+        server._exec_granted_command([str(read_fd), "target"], cpu_mode="darwin_nice", nice=5)
+        assert events == ["set", "nice", "bg", "exec"]
+        assert "mode=darwin_nice state=verified nice=5 background=0 errno=0" in capsys.readouterr().err
+
+
+def test_frozen_nice_dispatch_precedes_api_imports_and_preserves_value(monkeypatch):
+    server = load_server()
+    calls = []
+    monkeypatch.setattr(server, "sys", SimpleNamespace(
+        argv=["api-server", "--grant-exec-nice", "5", "10", "target"], frozen=True))
+    monkeypatch.setattr(server, "_configure_env", lambda: pytest.fail("API environment loaded"))
+    monkeypatch.setattr(server, "_exec_granted_command", lambda *args, **kwargs: calls.append((args, kwargs)))
+    server.main()
+    assert calls == [((["10", "target"],), {"cpu_mode": "darwin_nice", "nice": 5})]
+
+
+@pytest.mark.parametrize("nice", [None, 0, -1, 21, True, 5., "5"])
+def test_nice_invalid_value_never_reaches_native_setter(monkeypatch, nice):
+    server = load_server()
+    monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: pytest.fail("Invalid priority reached libc"))
+    with pytest.raises(OSError):
+        server._set_nice_cpu_policy(nice)

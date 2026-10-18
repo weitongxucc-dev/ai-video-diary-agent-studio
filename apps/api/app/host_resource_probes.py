@@ -107,6 +107,8 @@ class CpuRenderBudget:
             raise ValueError("Render process thread cap must cover the requested encoder threads")
         if self.running_cpu_policy is not None and not isinstance(self.running_cpu_policy, RuntimeCpuPolicy):
             raise ValueError("Render running CPU policy must be explicit")
+        if self.running_cpu_policy is not None and self.running_cpu_policy.mode != "darwin_nice":
+            raise ValueError("CPU成片必须使用显式darwin_nice策略")
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,7 @@ class SceneRuntimeLimits:
     sample_seconds: float
     memory_monitor: HostMemoryMonitor | None = None
     collect_cpu: bool = False
-    background_cpu: bool = False
+    cpu_policy: RuntimeCpuPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -167,11 +169,16 @@ class RuntimeCpuPolicy:
     """Explicit OS scheduling mechanism and its device evidence; no CPU veto window."""
     mode: str
     evidence_reference: str
+    nice: int | None = None
 
     def __post_init__(self):
-        if (self.mode != "darwin_background"
-                or not isinstance(self.evidence_reference, str) or not self.evidence_reference.strip()):
-            raise ValueError("运行CPU策略必须明确指定darwin_background及本机实验证据")
+        if not isinstance(self.evidence_reference, str) or not self.evidence_reference.strip():
+            raise ValueError("运行CPU策略必须绑定本机实验证据")
+        if self.mode == "darwin_background" and self.nice is None:
+            return
+        if self.mode == "darwin_nice" and type(self.nice) is int and 1 <= self.nice <= 20:
+            return
+        raise ValueError("运行CPU策略必须明确指定darwin_background或darwin_nice及正nice值")
 
 
 def _cpu_counter():
@@ -210,6 +217,8 @@ class NarrationBudget:
             if name == "running_cpu_policy":
                 if value is not None and not isinstance(value, RuntimeCpuPolicy):
                     raise ValueError("配音运行CPU策略必须为显式RuntimeCpuPolicy")
+                if value is not None and value.mode != "darwin_background":
+                    raise ValueError("配音必须保留darwin_background策略")
                 continue
             if name in {"max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"}:
                 if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
@@ -729,8 +738,8 @@ class HostResourceRefusal(RecoveryBlocked):
             "input_bytes": ("素材输入大小", "字节"),
         }
         reasons = {
-            "cpu_policy_unavailable": "后台CPU调度策略尚未准备",
-            "cpu_policy_platform_unsupported": "当前平台尚无已核验的后台CPU调度适配",
+            "cpu_policy_unavailable": "CPU调度策略尚未准备",
+            "cpu_policy_platform_unsupported": "当前平台尚无已核验的CPU调度适配",
             "io_window_incomplete": "磁盘持续观察窗口尚未完成",
             "io_observation_gap": "运行中磁盘持续观察间隔超出窗口",
             "disk_devices_changed": "磁盘采样设备集合变化",
@@ -1345,7 +1354,7 @@ class HostResourceProbe:
         else:
             return decision(None, "unsupported_resource_kind")
         memory_running = running or running_io or running_render
-        background_runtime = memory_running and cpu_policy is not None
+        scheduled_runtime = memory_running and cpu_policy is not None
         additional_memory = max(0, required_memory - self.budget.min_available_memory_bytes)
         if memory_running:
             required_memory = self.budget.min_available_memory_bytes
@@ -1356,7 +1365,7 @@ class HostResourceProbe:
             "disk_io_bytes_per_second": {"maximum": self.budget.max_disk_io_bytes_per_second},
             **{f"disk_free_bytes:{path}": {"minimum": required_disk} for path in self.disk_paths},
         })
-        if background_runtime:
+        if scheduled_runtime:
             del checks["cpu_percent"]
         sampling = "disk_io_before"
         duration = None
@@ -1370,10 +1379,10 @@ class HostResourceProbe:
                         history.clear()
                     return decision(None, "disk_io_before_unavailable")
                 start = time.monotonic()
-                if background_runtime:
+                if scheduled_runtime:
                     time.sleep(self.budget.sample_seconds)  # Preserve the measured IO interval.
                     checks["cpu_observation"] = self._runtime_cpu_observation(cpu_grant)
-                    cpu_passed = True  # The broker verifies OS background state before exec.
+                    cpu_passed = True  # The broker verifies the OS scheduling policy before exec.
                 else:
                     sampling = "cpu_percent"
                     cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
@@ -1437,7 +1446,7 @@ class HostResourceProbe:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
         if memory_decision.verdict is not True:
             return decision(memory_decision.verdict, memory_decision.reason, duration)
-        # Runtime background scheduling is verified in the grant exec broker.
+        # Runtime scheduling is verified in the grant exec broker.
         passed = (cpu_passed
                         and all(disk.free >= required_disk for disk in disks)
                         and checks["disk_io_bytes_per_second"]["passed"])
@@ -1511,9 +1520,10 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
-        background_cpu = resources.get("kind") == "creation_render"
-        if background_cpu and (self.budget.cpu_render is None or self.budget.cpu_render.running_cpu_policy is None):
-            raise RecoveryBlocked("CPU 成片后台CPU调度策略尚未准备")
+        cpu_policy = (self.budget.cpu_render.running_cpu_policy
+            if resources.get("kind") == "creation_render" and self.budget.cpu_render is not None else None)
+        if resources.get("kind") == "creation_render" and cpu_policy is None:
+            raise RecoveryBlocked("成片CPU调度策略尚未准备")
         if resources.get("kind") == "material_visual_query" or purpose == "material_visual_query":
             query = self.budget.material_visual_query
             if (grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:")
@@ -1551,7 +1561,7 @@ class HostResourceProbe:
                 raise RecoveryBlocked("CPU 成片进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds, self.memory_monitor,
-                collect_cpu=background_cpu, background_cpu=background_cpu)
+                collect_cpu=cpu_policy is not None, cpu_policy=cpu_policy)
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
@@ -1570,7 +1580,7 @@ class HostResourceProbe:
                 raise RecoveryBlocked("CPU 音频进程预算尚未标定")
             return SceneRuntimeLimits(audio.max_process_rss_bytes, audio.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds, self.memory_monitor,
-                collect_cpu=background_cpu, background_cpu=background_cpu)
+                collect_cpu=cpu_policy is not None, cpu_policy=cpu_policy)
         if resources.get("kind") in {"creation_narration", "creation_person_render"}:
             narration = (self.budget.presenter if resources["kind"] == "creation_person_render"
                          else self.budget.narration)
@@ -1581,7 +1591,7 @@ class HostResourceProbe:
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
                 narration.runtime_sample_seconds, self.memory_monitor,
                 collect_cpu=resources["kind"] == "creation_narration" and narration.running_cpu_policy is not None,
-                background_cpu=resources["kind"] == "creation_narration" and narration.running_cpu_policy is not None,
+                cpu_policy=narration.running_cpu_policy if resources["kind"] == "creation_narration" else None,
             )
         if resources.get("kind") != "material_scene_window":
             return None

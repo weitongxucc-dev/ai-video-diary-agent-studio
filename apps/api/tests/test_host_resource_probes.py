@@ -205,7 +205,7 @@ def _render_budget():
         max_output_bytes=1_000_000, max_threads=1, max_timeout_seconds=5,
         additional_memory_bytes=128*1024**2, additional_disk_bytes=64*1024**2,
         max_process_threads=16,  # Finite synthetic process/disk profile, not a machine default.
-        running_cpu_policy=RuntimeCpuPolicy("darwin_background", "synthetic-render-test-evidence"),
+        running_cpu_policy=RuntimeCpuPolicy("darwin_nice", "synthetic-render-test-evidence", nice=5),
     )
 
 
@@ -243,7 +243,7 @@ def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits
     assert limits.max_process_rss_bytes == render.additional_memory_bytes
     assert limits.max_process_threads == 16 and limits.min_host_available_memory_bytes == 1024**3
     assert limits.sample_seconds == .01
-    assert limits.collect_cpu and limits.background_cpu
+    assert limits.collect_cpu and limits.cpu_policy == render.running_cpu_policy
     grant = Grant("request", "workspace", "creation_job", "job", "render:digest", "a"*64, 1, 1, "token", probe.database_path)
     assert probe.continue_unit(grant) is True
 

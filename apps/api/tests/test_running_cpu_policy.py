@@ -22,6 +22,7 @@ from app.member_permits import (
 
 
 POLICY = RuntimeCpuPolicy("darwin_background", "synthetic-test-evidence")
+RENDER_POLICY = RuntimeCpuPolicy("darwin_nice", "synthetic-render-test-evidence", nice=5)
 
 
 def endpoint(now, busy=0, idle=0, **changes):
@@ -34,8 +35,23 @@ def narration(policy=POLICY):
     return NarrationBudget(80, 1, 1024, 15, 1024, 2, 120, 1024, 64, .1, 1024, 1024, policy)
 
 
-def render(policy=POLICY):
+def render(policy=RENDER_POLICY):
     return CpuRenderBudget(30, 30*320*240, 320, 240, 1024, 6, 2, 1024, 2, 90, 1024, 1024, 64, policy)
+
+
+@pytest.mark.parametrize("nice", [None, 0, -1, 21, True, 5., "5"])
+def test_nice_policy_rejects_missing_or_invalid_native_priority(nice):
+    with pytest.raises(ValueError, match="正nice值"):
+        RuntimeCpuPolicy("darwin_nice", "synthetic-test-evidence", nice=nice)
+
+
+def test_policy_modes_cannot_be_borrowed_between_narration_and_active_render():
+    with pytest.raises(ValueError, match="成片"):
+        render(POLICY)
+    with pytest.raises(ValueError, match="配音"):
+        narration(RENDER_POLICY)
+    with pytest.raises(ValueError):
+        RuntimeCpuPolicy("darwin_background", "synthetic-test-evidence", nice=5)
 
 
 @pytest.fixture(params=["narration", "cpu_render"])
@@ -152,7 +168,7 @@ def test_absent_policy_or_unsupported_platform_is_explicit(probe, monkeypatch):
         probe.value.continue_unit(probe.grant)
     assert stopped.value.decision.reason == "cpu_policy_unavailable"
     if budget_name == "cpu_render":
-        with pytest.raises(RecoveryBlocked, match="后台CPU调度策略尚未准备"):
+        with pytest.raises(RecoveryBlocked, match="CPU调度策略尚未准备"):
             probe.value.scene_runtime_limits(probe.grant)
 
 
@@ -171,7 +187,7 @@ def test_other_render_kinds_do_not_inherit_the_background_policy(probe, kind, bu
         probe.value.continue_unit(probe.grant)
     assert stopped.value.decision.checks["cpu_percent"]["passed"] is False
     limits = probe.value.scene_runtime_limits(probe.grant)
-    assert not limits.background_cpu and not limits.collect_cpu
+    assert limits.cpu_policy is None and not limits.collect_cpu
 
 
 @pytest.mark.parametrize("kind", ["narration", "cpu_render"])
@@ -187,15 +203,17 @@ def test_policy_parser_requires_os_mechanism_and_rejects_old_window_schema(tmp_p
         return creation_stage_budgets_from_env(environment)[0] if kind == "narration" else cpu_render_budget_from_env(environment)
     result = parse()
     assert result.running_cpu_policy is None
-    environment[prefix + "RUNNING_CPU_POLICY_JSON"] = json.dumps(asdict(POLICY))
+    policy = POLICY if kind == "narration" else RENDER_POLICY
+    environment[prefix + "RUNNING_CPU_POLICY_JSON"] = json.dumps(asdict(policy))
     result = parse()
-    assert result.running_cpu_policy == POLICY
+    assert result.running_cpu_policy == policy
     resources, _ = build_host_probes(database_path=tmp_path / "db", disk_paths=(tmp_path,),
         budget=HostBudget(91, 100, None, 100, 10**9, 10**9, **{kind: result}), device_poll_interval_seconds=2)
-    assert getattr(resources.budget, kind).running_cpu_policy == POLICY
+    assert getattr(resources.budget, kind).running_cpu_policy == policy
     for invalid in ({"window_seconds": 1, "max_sample_gap_seconds": 2, "evidence_reference": "old"},
                     {"mode": "darwin_background", "evidence_reference": ""},
-                    {"mode": "unverified", "evidence_reference": "other"}, []):
+                    {"mode": "unverified", "evidence_reference": "other"}, [],
+                    asdict(RENDER_POLICY if kind == "narration" else POLICY)):
         environment[prefix + "RUNNING_CPU_POLICY_JSON"] = json.dumps(invalid)
         with pytest.raises(HostBudgetUncalibrated):
             parse()
@@ -207,7 +225,7 @@ def test_policy_parser_requires_os_mechanism_and_rejects_old_window_schema(tmp_p
     ("render", "descendant"), ("audio_mix", "descendant"),
     ("render", "cancel"), ("render", "timeout"),
 ])
-def test_real_broker_sets_background_for_registered_commands_and_descendants(tmp_path, monkeypatch, caplog, kind, command):
+def test_real_broker_verifies_policy_for_registered_commands_and_descendants(tmp_path, monkeypatch, caplog, kind, command):
     from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout, run_granted_command
     from app.host_resource_probes import HostProcessProbe
     from tests.host_memory_boundary import IsolatedMemoryMonitor
@@ -262,7 +280,7 @@ def test_real_broker_sets_background_for_registered_commands_and_descendants(tmp
                 worker.join(timeout=1)
         return
     if command == "descendant":
-        readback = "import ctypes,json,os; c=ctypes.CDLL(None,use_errno=True); ctypes.set_errno(0); b=c.getpriority(4,0); print(json.dumps({'background':b,'errno':ctypes.get_errno(),'pid':os.getpid(),'pgid':os.getpgrp()}))"
+        readback = "import ctypes,json,os; c=ctypes.CDLL(None,use_errno=True); ctypes.set_errno(0); b=c.getpriority(4,0); e=ctypes.get_errno(); ctypes.set_errno(0); n=c.getpriority(0,0); print(json.dumps({'background':b,'errno':e,'nice':n,'nice_errno':ctypes.get_errno(),'pid':os.getpid(),'pgid':os.getpgrp()}))"
         code = "import subprocess,sys,time; " + readback + "; subprocess.run([sys.executable,'-c'," + repr(readback) + "],check=True); time.sleep(1.1)"
         argv = [sys.executable, "-c", code]
     else:
@@ -274,12 +292,17 @@ def test_real_broker_sets_background_for_registered_commands_and_descendants(tmp
         max_stdout_bytes=8192, max_stderr_bytes=1024,
         resource_purpose="audio_mix" if kind == "audio_mix" else None)
     assert result.returncode == 0
-    assert b"GRANT_CPU_POLICY mode=darwin_background state=verified background=1 errno=0" in result.stderr
+    marker = (b"GRANT_CPU_POLICY mode=darwin_background state=verified background=1 errno=0" if kind == "narration" else
+        b"GRANT_CPU_POLICY mode=darwin_nice state=verified nice=5 background=0 errno=0")
+    assert marker in result.stderr
     assert scheduler.processes.children_released((scheduler.child,)) is True
     if command == "descendant":
         observations = [json.loads(line) for line in result.stdout.splitlines()]
         assert len(observations) == 2
-        assert all(row["background"] == 1 and row["errno"] == 0 and row["pgid"] == scheduler.child.pid for row in observations)
+        assert all(row["background"] == (1 if kind == "narration" else 0) and row["errno"] == 0
+            and row["pgid"] == scheduler.child.pid for row in observations)
+        if kind != "narration":
+            assert all(row["nice"] == 5 and row["nice_errno"] == 0 for row in observations)
         assert scheduler.child.pid in {row["pid"] for row in observations}
         samples = [json.loads(r.args[0]) for r in caplog.records if r.msg == "Granted process CPU observation: %s"]
         assert samples[-1]["process_cpu"]["interval_seconds"] >= 1

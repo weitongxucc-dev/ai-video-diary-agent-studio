@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _PERMISSION_SAMPLE_SECONDS = 1.0
 _QWEN_PHASE = re.compile(rb"QWEN_PHASE (?:worker_started|importing_runtime|loading_weights|weights_loaded|inference_started|inference_returned|audio_written)")
 _QWEN_MEMORY = re.compile(rb"QWEN_MEMORY phase=(?:cache_disabled|weights_loaded|inference_started|inference_returned|audio_written) active_bytes=[0-9]{1,20} cache_bytes=[0-9]{1,20} peak_bytes=[0-9]{1,20}")
-_CPU_POLICY = re.compile(rb"GRANT_CPU_POLICY mode=darwin_background state=(?:verified background=1 errno=0|failed errno=[0-9]{1,10})")
+_CPU_POLICY = re.compile(rb"GRANT_CPU_POLICY mode=(?:darwin_background state=(?:verified background=1 errno=0|failed errno=[0-9]{1,10})|darwin_nice state=(?:verified nice=(?:[1-9]|1[0-9]|20) background=0 errno=0|failed errno=[0-9]{1,10}))")
 
 
 def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
@@ -275,6 +275,15 @@ def run_granted_command(
                     resources.scene_runtime_limits(grant)) if isinstance(resources, HostResourceProbe) else None
     if (scene_unit or model_unit or quality_unit or cover_unit) and scene_limits is None:
         raise RecoveryBlocked("场景子进程缺少运行中资源预算")
+    cpu_policy = scene_limits.cpu_policy if scene_limits is not None else None
+    if cpu_policy is None:
+        child_entry = ["--grant-exec"]
+    elif cpu_policy.mode == "darwin_background":
+        child_entry = ["--grant-exec-background"]
+    elif cpu_policy.mode == "darwin_nice":
+        child_entry = ["--grant-exec-nice", str(cpu_policy.nice)]
+    else:
+        raise RecoveryBlocked("受许可子进程CPU调度策略不可识别")
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     child: ProcessIdentity | None = None
@@ -286,10 +295,9 @@ def run_granted_command(
     entrypoint = [sys.executable]
     if not getattr(sys, "frozen", False):
         entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
-    child_entry = "--grant-exec-background" if scene_limits is not None and scene_limits.background_cpu else "--grant-exec"
     try:
         process = subprocess.Popen(
-            [*entrypoint, child_entry, str(read_fd), *argv],
+            [*entrypoint, *child_entry, str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
             env=env,
