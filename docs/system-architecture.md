@@ -408,6 +408,10 @@ Flutter负责设备发现/扫码、用户操作、手机私有草稿、传输和
 
 进度和结果沿现有CreationTask、作业、事件和授权媒体读取投影；离线缓存显示更新时间和离线状态，不能覆盖新事实。重连后先核验成员/设备/工作区再刷新任务；结果随当前版本回读，未知发送状态先查询原接收请求，不盲目新建任务。
 
+手机连接载荷使用显式`yaohe-companion`类型与`version: 1`，必须带`purpose`（`pair`或`invite`）：`endpoint`（HTTPS根地址）、`device_id`、`token`、`expires_at`、`workspace_id`、`tls_ca_pem`与`auth`（`supabase_url`、`publishable_key`）。`purpose=pair`用于同一已授权账号连接自己的手机，由`POST /api/companion/pairings`生成仅绑定当前成员/工作区/设备的短期一次配对凭证，`POST /api/companion/pairings/accept`在独立JWT身份核验后接受；不新增成员、不占第二个名额。`purpose=invite`继续使用既有正式成员邀请，在接受后建立新成员与空间。主机在相应凭证创建后由原生端组装二维码；不得包含设备proof、CA私钥、账号密码或长期成员token。扫码是用户从自己的可信桌面取得该设备专属CA的动作，手机客户端仅在该主机连接上下文信任它并保留常规证书有效期/主机名校验；不安装全系统根证书，不使用放行所有证书的回调。云登录使用系统信任HTTPS，不接受主机CA覆盖云端信任。主机地址变化需重新取得经核验的定位/证书，不能自动将凭证发往发现的另一主机。
+
+桌面保留核心API/Web的loopback服务，原生端仅在正式身份可用且用户启用手机连接后开放受限HTTPS网关；网关限制接口、HTTP方法和转发头，拒绝local成员凭证，真实JWT、设备及工作区授权仍由主机业务逐次核验。网关随桌面Quit关闭；不把未经验证的任意代理或系统文件入口暴露到LAN。手机带`Authorization: Bearer ...`与`X-Workspace-Id`查询`GET /api/companion/session`，返回经核验的`device_id/workspace_id/member_id/name/role`（`role`来自设备成员关系，不由工作区角色推断）；工作区选择不由客户端自报即生效。原邀请接受入口仍可在未选空间时核验身份；后续请求显式选择其返回的空间。
+
 ### 5.2 新任务
 
 首页/对话/CLI/MCP/已授权消息目标或模板

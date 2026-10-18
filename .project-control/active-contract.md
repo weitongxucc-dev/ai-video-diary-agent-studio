@@ -91,7 +91,14 @@ B当前纵向负责人为P0资源策略必修，兼顾已有查询预算消费�
 
 B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增定向测试`tests/test_profile_preview_memory_recovery.py`：独立声音预览的压力中断必须在通用RecoveryBlocked/失败分支前按同一政策处理，保留原请求并经已有调度器释放、等待和续作；子进程回收未知仍保留保护，不能伪装可恢复。仅修该真实消费者，不扩大至档案或配音业务重构；`narration.py`如有必要差额先交精确证据，由主控另行划转。
 
-手机M1当前绑定：A核查现有正式邀请、身份/空间、实际文件接收与任务/媒体回读入口；C核查`apps/mobile/`当前主线客户端与原生配置，两线先只读交具体协议和差额，主控审定后续绑独占实现文件。C现有Web UI diff保留冻结，不与手机工作混写；A资料追加API候选保留待主控审核；B资源策略工作不受本次版本范围更新影响，继续原写权。主控独占跨端协议及安全权威、桌面LAN暴露与信任方案审核、共享依赖及最终实机排程；未经精确绑定不得自行开放监听或写共享入口。旧手机线程/worktree不继承当前写权。
+手机联合实施绑定（用户已于2026-10-18再次明确要求补齐并持续联调）：
+
+- A独占主机正式连接用例：`app/auth.py`、`device_accounts.py`、新`companion/identity.py`、`companion/routes.py`及`companion/pairing.py`及对应定向测试，以及单一`device_member_context`只读RPC的新迁移源码（主控审核后才应用测试库）；继续独占`main.py`/`schemas.py`薄接线；`apps/api/server.py`修正默认loopback并定向验证，避免缺env时匿名服务全网监听。先保持资料追加候选稳定供主控集成，再实现明确工作区选择的服务端成员/设备权限核验、正式邀请管理入口、`GET /api/companion/session`真实绑定回读和手机采样source接线。同账号手机配对的短期票据与接受归A的新pairing用例；原成员邀请仍只由DeviceAccountService/RPC负责；不得用开发成员替代正式身份、自动登记/认领云端设备或擅自应用云端迁移。进度和媒体读取复用所属权限入口，发现同空间私人任务裸读必须修直接消费者。A同时负责B内存policy/query预算的必要薄组装，具体差额先与主控确认，不能猜标定值；续拥`app/bootstrap.py::bind_device_runtime`实际poll参数薄接线。
+- B已交资源12文件暂冻结供主控审核；续拥新`app/mobile_transfers.py`、`app/mobile_transfer_routes.py`、`tests/test_mobile_transfers.py`及`materials/assets.py`的必要接收事务入口。声音压力defer后再写owner的原子性审查差额续归B：仅`device_scheduler.py::defer_unit`可选同事务owner回调、现有直接消费者和故障注入测试。补稳定request_id的完整字节接收、长度/摘要验证、取消/重发/回执对账与原子入库；仅在已有素材所属公开入口内接入，不另建素材事实库。HTTP router用显式身份/仓储依赖，main挂载交A；不写auth/main/production/手机客户端、不运行重模型。先反馈精确wire DTO供主控冻结，接收状态可用有限SQLite记录，不把半文件登记为素材。声音继续复用既有采样事务，不另建声音上传事实源。
+- C解除手机只读限制，独占`apps/mobile/lib/`及相关`test/`、Android/iOS原生连接所必需配置；已有Web差额继续冻结待审核。实现正式登录/刷新、二维码可信连接、device/member/workspace持久绑定、手机读取同一采样任务/文本版本与稳定请求、素材完整传输及原请求对账、授权任务/结果回看。先按主控冻结协议接通客户端，不猜字段，不关闭TLS校验；如需依赖提交具体清单，主控管理pubspec/lock。不把Flutter Web当原生通过，不自行启动模拟器/模型/打包。
+- 主控独占`apps/desktop/`的可信LAN网关/二维码连接配置、`scripts/`、共享依赖与权威；保持核心API/Web的loopback绑定，只在明确启用、正式身份可用时开放受限HTTPS网关。主控审核全部差额、选择固定候选并串行真实媒体/Android安装、局域网/重启验收。Android是用户指定首验平台，iOS仍独立待验。
+
+共享协议先固定在架构§5.1.1，具体HTTP DTO由A/B交付后由主控审核同步给C；实现单文件单写。前序候选先集成，后序不叠写待审差额；无需用户逐步确认。旧手机worktree不继承写权。
 
 ## 6. 收口门
 
