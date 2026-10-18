@@ -59,6 +59,10 @@ A补绑`apps/api/app/creation/intent_use_case.py`及新增`apps/api/tests/test_c
 
 A补绑`apps/api/app/conversation_repository.py`与新增`apps/api/tests/test_assistant_execution_input_source.py`：仅修复已采用目标的制作提交来源核验，沿已有creation_adoption回到真实首页输入，不能把内部任务目标根当真人输入。复用仓储公开入口，保留新真人输入、已消费追加输入、中断、身份、任务及目标修订的失效保护；两条派生任务不互相替代。主控负责main薄接线及已有路由测试；不新增状态表或并行授权规则。
 
+上述A来源绑定扩至同一缺陷的后续消费：派生child实际消费追加输入后，沿既有`_register_task_goal`和输入回执登记新目标修订并继续接收业务结果；保留原采用来源，不让未消费/撤回/中断输入、无实际业务效果的文本或兄弟任务继承授权。验证写在该新增来源测试中，不新增目标存储。
+
+C接回`apps/api/app/assistant/turn.py`、`apps/api/agent_tools/diary/transport.ts`（B已结束前批），补绑`apps/api/app/assistant/process_runner.py`、`apps/api/agent_runtime/host.mjs`，仅按架构§3.14的实际模型/请求阶段计时及SDK取消接线；不调大180/120/20秒既定限制，不新增重试或任务调度，不改B当前topics/script工具。直接验证独占新增`apps/api/tests/test_assistant_phase_deadlines.py`及`apps/api/agent_runtime/tests/phase-deadlines.test.mjs`，可运行原直接回归但不改其他测试。main由主控补已知接续异常的安全落库，并独占`apps/api/tests/test_assistant_goal_api.py`对应回归；未知异常保留通用兜底。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。
