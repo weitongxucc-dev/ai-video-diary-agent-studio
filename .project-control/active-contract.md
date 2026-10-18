@@ -120,6 +120,8 @@ C资源等待文案续绑：独占`lib/api/task-media.ts`及已有`task-media-ap
 
 B旧编码重复CPU门续绑：独占`host_resource_probes.py::admit_resource`及`test_host_resource_probes.py`、`test_render_admission.py`相关直接用例；核清仅有当前已受设备许可的两个编码消费者后，退役一分钟load average>=cores的第二次否决。保留声明字段/类型/上界、实际线程ceiling、历史load诊断值及HostResourceProbe当前CPU/内存/IO保护；不加新兼容分支、调阈值、改名或扩大调度范围。非许可CreationTask不得因此获准；主控用同任务有效配音恢复实际编码。
 
+B编码文件超限诊断续绑：独占`granted_subprocess.py`、`test_host_resource_probes.py`直接用例。文件大小超限决定当刻捕获actual_bytes、maximum_bytes、output_count（成功stat且计入求和的文件数），附于既有异常与同request/attempt/generation诊断，终止前固定，不事后重采样；stdout/stderr超限无该文件计量，不暴露路径/命令或另建日志平台。主控保持所有当前预算/CRF，单次取得该证据后再标定，不先抬临时/成片上限；不改montage算法。
+
 配音实测诊断续绑：B在既有`profile_preview_execution.py`、`granted_subprocess.py`及直接测试保留同一request/attempt的运行拒绝决定和有界模型阶段/内存诊断，复用现有日志归属；不能只剩通用`resource_pressure`而丢失判定依据。不记录参考文字、凭据或完整请求，不扩大输出预算或新建监控事实库。原始决定缺失的历史实验保持未知，修复后由主控再安排单次受控验证。
 
 真实文案失败续绑：A独占`topics.py`、`agent_tools/diary/transport.ts`、`script-tools.ts`及直接测试，将逐段核查的固定错误类别、段号及可重试性经现有业务错误回执提供给Agent，区分核查报告契约无效与文案事实无依据；不透传模型原始输出、来源全文或凭据，不放宽事实门、不增加盲重试或超时。文案工具明确`content`仅含实际朗读正文，画面署名与许可说明不得混入旁白。给定主题的公开响应允许真实的无模型快照，不能伪造模型配置来满足DTO。
