@@ -38,6 +38,36 @@ export type AssistantScriptToolReceipt = {
     submitted_input?: Record<string, unknown> | null;
     tool?: Record<string, unknown> | null;
 };
+export type AssistantStoryboardRegeneration = {
+    kind: "storyboard_regeneration_receipt";
+    action: "submit" | "query";
+    receipt: {
+        request_id: string;
+        task_id: string;
+        job_id: string;
+        status: "queued" | "running" | "interrupted" | "succeeded" | "failed" | "cancelled";
+        stage: "montage_plan";
+        script_id: string;
+        narration_cache_key: string;
+        base_timeline_version_id: string;
+        base_timeline_sequence: number;
+        result: {
+            request_id: string;
+            montage_plan_id: string;
+            timeline_version_id: string;
+            timeline_sequence: number;
+            operation_id: string;
+        } | null;
+        failure_reason: string | null;
+        result_url: string;
+    };
+} | {
+    kind: "storyboard_regeneration_unknown" | "storyboard_regeneration_rejected";
+    action: "submit";
+    request_id: string;
+    query_url: string;
+    failure: AssistantToolFailure & {repair_action: string};
+};
 export type CreationTaskAssistantTurnResponse = {
     reply: string;
     provider: string;
@@ -46,6 +76,7 @@ export type CreationTaskAssistantTurnResponse = {
     media_job?: TaskMediaJob | null;
     edit_request?: AssistantEditRequest | null;
     script_tool?: AssistantScriptToolReceipt | null;
+    storyboard_regeneration?: AssistantStoryboardRegeneration | null;
     script_draft: CreationTaskScript | null;
     execution_action: "start" | "resume" | "cancel" | null;
     execution_status: CreationExecutionStatus | null;

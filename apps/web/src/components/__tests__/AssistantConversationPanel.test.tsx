@@ -5,6 +5,7 @@ import { referenceAssistantKnowledge, referenceAssistantMaterial, referenceAssis
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantStreamEvent, ResourceAdmissionReceipt } from "@/lib/types";
+import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 
 const api = vi.hoisted(() => ({
   enqueueAssistantInput: vi.fn(),
@@ -330,6 +331,84 @@ const resourceReceipt: ResourceAdmissionReceipt = {
     {metric: "available_memory_bytes", unit: "bytes", actual: 1073741824, minimum: 3221225472, maximum: null, passed: false}],
   summary: "首次检查时设备资源余量不足，本请求仍在等待。", repair_action: "请等待资源恢复后查询原请求。",
 };
+
+describe("persisted storyboard regeneration receipts", () => {
+  function storyboard(status: Extract<AssistantStoryboardRegeneration, {kind: "storyboard_regeneration_receipt"}>["receipt"]["status"],
+    action: "submit" | "query" = "submit"): AssistantStoryboardRegeneration {
+    return {kind: "storyboard_regeneration_receipt", action,
+      receipt: {request_id: "storyboard-original", task_id: "task-one", job_id: "job-storyboard", status,
+        stage: "montage_plan", script_id: "script-original", narration_cache_key: "narration-original",
+        base_timeline_version_id: "version-original", base_timeline_sequence: 1,
+        result: status === "succeeded" ? {request_id: "storyboard-original", montage_plan_id: "montage-saved",
+          timeline_version_id: "version-saved", timeline_sequence: 2, operation_id: "operation-saved"} : null,
+        failure_reason: status === "failed" ? "来源已变化，原故事板保留。" : null,
+        result_url: "/api/creation-tasks/task-one/montage/plan/requests/storyboard-original"}};
+  }
+  function withStoryboard(outcome: AssistantStoryboardRegeneration) {
+    const saved = projectedTaskConversation("queued");
+    saved.turns[0].assistant_text = "";
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = null;
+    response.storyboard_regeneration = outcome;
+    return saved;
+  }
+
+  it.each([
+    ["queued", "故事板重算已排队；尚未保存新故事板版本。"],
+    ["running", "正在重算故事板；尚未保存新故事板版本。"],
+    ["interrupted", "故事板重算已中断；尚未核实新故事板版本是否保存。"],
+    ["succeeded", "新故事板版本已保存，可撤销；成片尚未重新生成。"],
+    ["failed", "故事板重算失败；原稿保留。"],
+    ["cancelled", "故事板重算已取消；未保存新故事板版本。"],
+  ] as const)("shows the persisted %s storyboard result without claiming a video", (status, label) => {
+    const saved = withStoryboard(storyboard(status));
+    const original = structuredClone(saved);
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getByText(label)).toBeVisible();
+    expect(details).not.toHaveTextContent(/预览已安排|成片已生成|视频已完成|已提交开始制作/);
+    if (status === "failed") expect(within(details).getByText("来源已变化，原故事板保留。")).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
+    expect(saved).toEqual(original);
+  });
+
+  it.each(["unknown", "rejected"] as const)("keeps the original %s request without declaring success or retrying", kind => {
+    const outcome: AssistantStoryboardRegeneration = {
+      kind: kind === "unknown" ? "storyboard_regeneration_unknown" : "storyboard_regeneration_rejected",
+      action: "submit", request_id: "storyboard-original",
+      query_url: "/api/creation-tasks/task-one/montage/plan/requests/storyboard-original",
+      failure: {reason: "原请求响应未能核验。", repair_action: "请查询原请求，不重复提交。"},
+    };
+    const saved = withStoryboard(outcome);
+    const original = structuredClone(saved);
+    const onSend = vi.fn();
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={onSend} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(within(details).getByText(kind === "unknown"
+      ? "故事板重算结果尚未核实；原请求定位已保留，请查询原请求，不重复提交。"
+      : "故事板重算请求已被拒绝；未取得新故事板版本。")).toBeVisible();
+    expect(within(details).getByText("原请求响应未能核验。")).toBeVisible();
+    expect(within(details).getByText("请查询原请求，不重复提交。")).toBeVisible();
+    expect(details).not.toHaveTextContent(/新故事板版本已保存|成片已生成/);
+    if (kind === "unknown") expect(details).not.toHaveTextContent(/重算失败|请求已被拒绝/);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(saved).toEqual(original);
+  });
+
+  it.each(["queued", "succeeded"] as const)("identifies a historical query with a %s receipt as the original request", status => {
+    const saved = withStoryboard(storyboard(status, "query"));
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    const details = screen.getByText("本轮结果").closest("details")!;
+    expect(within(details).getByText(status === "queued"
+      ? "原故事板重算请求：故事板重算已排队；尚未保存新故事板版本。"
+      : "原请求记录：故事板版本已保存；不代表当前版本或成片已更新。")).toBeVisible();
+    expect(details).not.toHaveTextContent("新故事板版本已保存");
+  });
+});
 
 describe("persisted business result cards", () => {
   it("shows the first same-request refusal beside the current wait and preserves the next draft", () => {

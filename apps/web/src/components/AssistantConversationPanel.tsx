@@ -15,6 +15,7 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
+import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
 
@@ -296,6 +297,24 @@ function canOpenTurnProposal(turn: AssistantConversationTurn) {
   return result.edit_preview === true && (!result.response?.edit_preview || result.response.edit_preview.proposal.status === "proposed");
 }
 
+function storyboardRegenerationSummary(outcome: AssistantStoryboardRegeneration | null | undefined) {
+  if (!outcome) return null;
+  if (outcome.kind !== "storyboard_regeneration_receipt") return outcome.kind === "storyboard_regeneration_unknown"
+    ? "故事板重算结果尚未核实；原请求定位已保留，请查询原请求，不重复提交。"
+    : "故事板重算请求已被拒绝；未取得新故事板版本。";
+  if (outcome.receipt.status === "succeeded") return outcome.action === "query"
+    ? "原请求记录：故事板版本已保存；不代表当前版本或成片已更新。"
+    : "新故事板版本已保存，可撤销；成片尚未重新生成。";
+  const statusLabels = {
+    queued: "故事板重算已排队；尚未保存新故事板版本。",
+    running: "正在重算故事板；尚未保存新故事板版本。",
+    interrupted: "故事板重算已中断；尚未核实新故事板版本是否保存。",
+    failed: "故事板重算失败；原稿保留。",
+    cancelled: "故事板重算已取消；未保存新故事板版本。",
+  };
+  return `${outcome.action === "query" ? "原故事板重算请求：" : ""}${statusLabels[outcome.receipt.status]}`;
+}
+
 function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefined) {
   if (!receipt) return null;
   const action = {save: "保存", query: "查询", update: "更新", revoke: "停用"}[receipt.action];
@@ -338,6 +357,10 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
   const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
+  const storyboard = taskResult?.response?.storyboard_regeneration;
+  const storyboardSummary = storyboardRegenerationSummary(storyboard);
+  const storyboardFailure = storyboard?.kind === "storyboard_regeneration_receipt"
+    ? storyboard.receipt.failure_reason : storyboard?.failure.reason;
   const outcomeStatus = continuation?.status ?? job?.status;
   const mediaJobLabel = job && (job.status === "queued" || job.status === "cancelled")
     ? taskMediaJobLabel(job) : null;
@@ -367,7 +390,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
   };
-  const resultSummary = businessSummary ?? toolSummary ?? (result?.kind === "plan_preview"
+  const resultSummary = businessSummary ?? storyboardSummary ?? toolSummary ?? (result?.kind === "plan_preview"
     ? (result.plan_preview as Record<string, unknown> | undefined)?.confirmable === true
       ? "方案已检查，可查看页面中的方案卡后决定是否创建。"
       : "方案检查已返回阻断项；请按页面中的真实原因处理。"
@@ -391,6 +414,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
+      {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
+      {storyboardFailure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:storyboard:diagnostic`} message={storyboardFailure}/></div> : null}
+      {storyboard && storyboard.kind !== "storyboard_regeneration_receipt" && storyboard.failure.repair_action ? <p>{storyboard.failure.repair_action}</p> : null}
       {unknownRequest && graphicSourceReady ? <p>{graphicSourceSummary}</p> : null}
       {mediaJobLabel ? <p>{mediaJobLabel}</p> : continuation?.waiting_reason || job?.waiting_reason
         ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}

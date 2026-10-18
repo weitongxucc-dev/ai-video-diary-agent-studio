@@ -4,6 +4,16 @@ import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { AssistantConversationContext } from "../AssistantConversationContext";
 import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { CreationTask } from "@/lib/types";
+import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+
+const queuedStoryboard: AssistantStoryboardRegeneration = {
+  kind: "storyboard_regeneration_receipt", action: "submit",
+  receipt: {request_id: "request-original", task_id: "task-1", job_id: "job-storyboard", status: "queued",
+    stage: "montage_plan", script_id: "script-1", narration_cache_key: "narration-original",
+    base_timeline_version_id: "version-original", base_timeline_sequence: 1,
+    result: null, failure_reason: null,
+    result_url: "/api/creation-tasks/task-1/montage/plan/requests/request-original"},
+};
 
 const mocks = vi.hoisted(() => ({ selection: null as ReturnType<typeof import("../AssistantConversationProvider").useAssistantSelection>, saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
 vi.mock("@/components/AssistantConversationProvider", async importOriginal => ({
@@ -51,10 +61,10 @@ vi.mock("@/lib/api", () => {
     const materialResult = result.material_result as { scope: string; changed: boolean } | null | undefined;
     const projected = result.plan_preview ? { kind: "plan_preview", plan_preview: result.plan_preview }
       : materialResult ? { kind: "material_result", scope: materialResult.scope, changed: materialResult.changed }
-        : result.execution_action || result.script_draft || result.topic_candidates
+        : result.execution_action || result.script_draft || result.topic_candidates || result.storyboard_regeneration
           ? { kind: "task_turn", execution_action: result.execution_action, execution_status: result.execution_status,
               script_draft: result.script_draft ? "saved" : null, topic_candidates: Boolean(result.topic_candidates),
-              edit_preview: Boolean(result.edit_preview) }
+              edit_preview: Boolean(result.edit_preview), ...(result.storyboard_regeneration ? {response: result} : {}) }
           : result.edit_preview ? { kind: "task_turn", edit_preview: true }
             : { kind: "conversation" };
     const turn = { id: turnId, sequence: mocks.sequence, user_message: userMessage, assistant_text: assistantText,
@@ -548,7 +558,30 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask).not.toHaveBeenCalled();
   });
 
-  it.each(["task", "conversation", "unmount"])("does not refresh from a late script receipt after changing %s", async change => {
+  it.each(["submit", "query", "unknown", "rejected"] as const)("refreshes the targeted task for a storyboard %s result", async mode => {
+    configuredModel();
+    const onTaskUpdated = vi.fn();
+    const storyboard: AssistantStoryboardRegeneration = mode === "unknown" || mode === "rejected"
+      ? {kind: mode === "unknown" ? "storyboard_regeneration_unknown" : "storyboard_regeneration_rejected",
+        action: "submit", request_id: "request-original", query_url: queuedStoryboard.receipt.result_url,
+        failure: {reason: "原请求结果需核对。", repair_action: "查询原请求，不重复提交。"}}
+      : {...queuedStoryboard, action: mode};
+    mocks.editAsk.mockResolvedValueOnce({reply: "故事板原请求状态已登记。", provider: "fixture", model: "fixture",
+      edit_preview: null, script_draft: null, execution_action: null, topic_candidates: null, timeline_action: null,
+      storyboard_regeneration: storyboard});
+    render(<HomeCommandComposer task={{id: "task-1", stage: "montage", name: "当前任务"} as CreationTask} onTaskUpdated={onTaskUpdated}/>);
+    fireEvent.change(await readyInput("任务对话要求"), {target: {value: "重新生成故事板"}});
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "发送"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    const originalConversationId = mocks.editAsk.mock.calls[0][1].conversation_id;
+    expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject({kind: "task_turn",
+      response: {storyboard_regeneration: storyboard}});
+    expect(mocks.editAsk).toHaveBeenCalledOnce();
+  });
+
+  it.each(["task", "conversation", "unmount"].flatMap(change => ["script", "storyboard"].map(kind => [change, kind])))
+  ("does not refresh after changing %s with a late %s receipt", async (change, kind) => {
     configuredModel();
     let finish!: (value: unknown) => void;
     mocks.editAsk.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
@@ -574,12 +607,15 @@ describe("HomeCommandComposer", () => {
       await waitFor(() => expect(screen.getByLabelText("共享会话ID").textContent).not.toBe(originalConversationId));
     } else view.unmount();
     await act(async () => finish({
-      reply: "原任务文案已采用。", provider: "fixture", model: "fixture", edit_preview: null,
-      script_draft: { id: "script-1", task_id: task.id, selection_status: "confirmed" },
+      reply: "原请求已回读。", provider: "fixture", model: "fixture", edit_preview: null,
+      script_draft: kind === "script" ? { id: "script-1", task_id: task.id, selection_status: "confirmed" } : null,
+      storyboard_regeneration: kind === "storyboard" ? queuedStoryboard : null,
       execution_action: null, topic_candidates: null, timeline_action: null,
     }));
     expect(onTaskUpdated).not.toHaveBeenCalled();
-    expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject({ kind: "task_turn", script_draft: "saved" });
+    expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject(kind === "script"
+      ? { kind: "task_turn", script_draft: "saved" }
+      : { kind: "task_turn", response: {storyboard_regeneration: queuedStoryboard} });
     expect(mocks.editAsk).toHaveBeenCalledOnce();
   });
 
