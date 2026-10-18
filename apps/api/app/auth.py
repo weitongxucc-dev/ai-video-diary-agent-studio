@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 import httpx
 import jwt
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _BEARER_PREFIX = "Bearer "
 _ASYMMETRIC_JWT_ALGORITHMS = ["ES256", "RS256"]
+WORKSPACE_SELECTION_HEADER = "X-Workspace-Id"
 
 
 class UnauthorizedError(Exception):
@@ -51,6 +53,14 @@ class AuthPrincipal:
     workspace_id: str | None
     authenticated: bool = True
     access_token: str | None = field(default=None, repr=False, compare=False)
+    # Display only. User-editable metadata is never an authorization claim.
+    name: str | None = None
+
+
+def account_display_name(payload: dict[str, Any]) -> str | None:
+    metadata = payload.get("user_metadata")
+    name = metadata.get("account") if isinstance(metadata, dict) else None
+    return name if isinstance(name, str) and name.strip() else None
 
 
 def extract_bearer_token(request: Request) -> str | None:
@@ -117,7 +127,9 @@ class SupabaseAuthContext:
             "Authorization": f"Bearer {access_token}",
         }
 
-    def resolve_workspace_id(self, user_id: str, access_token: str) -> str | None:
+    def resolve_workspace_id(
+        self, user_id: str, access_token: str, *, selected_workspace_id: str | None = None,
+    ) -> str | None:
         """Resolve the user's authorized workspace membership server-side.
 
         Uses the caller's verified token and the public key, so Supabase RLS
@@ -132,6 +144,12 @@ class SupabaseAuthContext:
             "select": "workspace_id,role",
             "order": "created_at.asc",
         }
+        if selected_workspace_id is not None:
+            try:
+                selected_workspace_id = str(UUID(selected_workspace_id))
+            except ValueError as exc:
+                raise ForbiddenError("invalid selected workspace") from exc
+            params["workspace_id"] = f"eq.{selected_workspace_id}"
         try:
             response = httpx.get(url, headers=headers, params=params, timeout=10.0)
         except httpx.HTTPError as exc:
@@ -149,6 +167,10 @@ class SupabaseAuthContext:
             rows = []
         if not isinstance(rows, list) or not rows:
             return None
+        if selected_workspace_id is not None:
+            return selected_workspace_id if any(
+                isinstance(row, dict) and row.get("workspace_id") == selected_workspace_id for row in rows
+            ) else None
         owner = next(
             (
                 row
@@ -267,7 +289,9 @@ class SupabaseAuthContext:
         user_id = str(payload.get("sub") or "")
         if not user_id:
             raise UnauthorizedError("token missing subject claim")
-        workspace_id = self.resolve_workspace_id(user_id, token)
+        selected = request.headers.get(WORKSPACE_SELECTION_HEADER)
+        workspace_id = (self.resolve_workspace_id(user_id, token, selected_workspace_id=selected)
+            if selected is not None else self.resolve_workspace_id(user_id, token))
         if workspace_id is None:
             raise ForbiddenError("no authorized workspace membership")
         return AuthPrincipal(
@@ -275,6 +299,7 @@ class SupabaseAuthContext:
             workspace_id=workspace_id,
             authenticated=True,
             access_token=token,
+            name=account_display_name(payload),
         )
 
     def authenticate_identity(self, request: Request) -> AuthPrincipal:
@@ -282,7 +307,7 @@ class SupabaseAuthContext:
 
         Verifies the bearer JWT and derives ``user_id`` from the verified
         ``sub`` claim, but leaves ``workspace_id`` unset. This is the identity
-        entry for the narrow device-invite acceptance endpoint: a first-time
+        entry for the narrow invite/pairing acceptance endpoints: a first-time
         invitee has no workspace membership yet, so membership-based
         ``authenticate()`` would reject them with 403 before they can reach
         the invite RPC. All product-data paths must keep using
@@ -304,4 +329,5 @@ class SupabaseAuthContext:
             workspace_id=None,
             authenticated=True,
             access_token=token,
+            name=account_display_name(payload),
         )

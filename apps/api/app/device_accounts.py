@@ -55,6 +55,14 @@ class InviteAcceptance:
     already_accepted: bool
 
 
+@dataclass(frozen=True)
+class DeviceMemberContext:
+    device_id: str
+    workspace_id: str
+    member_id: str
+    role: str
+
+
 class DeviceAccountService:
     """Call restricted Supabase RPCs with a verified user's bearer token."""
 
@@ -64,6 +72,24 @@ class DeviceAccountService:
         self._base_url = settings.supabase_url.rstrip("/")
         self._publishable_key = settings.supabase_publishable_key
         self._device = trusted_device
+
+    @property
+    def device_id(self) -> str:
+        return self._device.device_id
+
+    def require_workspace_access(self, principal: AuthPrincipal) -> DeviceMemberContext:
+        """Recheck the actual account/device/workspace tuple, without a local fallback."""
+        if not principal.authenticated or not principal.access_token or not principal.workspace_id:
+            raise DeviceAccountError("forbidden", "verified account and workspace are required")
+        result = self._call(principal, "device_member_context", {"target_workspace_id": principal.workspace_id})
+        if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
+            raise DeviceAccountError("unavailable", "invalid device membership response")
+        row = result[0]
+        if (row.get("device_id"), row.get("workspace_id"), row.get("member_id")) != (
+            self.device_id, principal.workspace_id, principal.user_id,
+        ) or row.get("role") not in {"owner", "member"}:
+            raise DeviceAccountError("unavailable", "device membership response does not match the original binding")
+        return DeviceMemberContext(row["device_id"], row["workspace_id"], row["member_id"], row["role"])
 
     def creation_permit(self, device_id: str, user_id: str, workspace_id: str) -> str:
         """Read only the original tuple's permission; no user session is retained."""

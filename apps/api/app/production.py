@@ -2239,6 +2239,7 @@ class ProductionRepository:
         self, workspace_id: str, *, relative_path: str,
         expected_revision: dict[str, str], confirmation_source: Literal["manual", "app_import"],
         verified_owner_user_id: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         """Persist a copy declaration for this bound file revision, not media validity."""
         import time
@@ -2251,8 +2252,11 @@ class ProductionRepository:
             raise ValueError("不能确认符号链接素材")
         if confirmation_source not in {"manual", "app_import"}:
             raise ValueError("复制完成确认来源无效")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
+            elif not conn.in_transaction:
+                raise ValueError("接收确认必须加入调用方已开始的事务")
             binding = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1").fetchone()
             if (binding is None or (binding["workspace_id"], binding["library_path"])
                     != (workspace_id, str(self.video_library_path.resolve()))):

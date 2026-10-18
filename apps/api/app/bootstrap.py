@@ -185,11 +185,15 @@ def bind_device_runtime(
     from app.member_permits import MemberDeviceAccess
 
     material_service = None
+    # Use the existing driver's 1s cadence for both admission validation and
+    # execution; the memory recovery policy must cover this real observation gap.
+    poll_interval_seconds = 1.0
     resources, processes = build_host_probes(
         database_path=repository.database_path,
         disk_paths=(Path(repository.database_path).expanduser().resolve().parent,
                     Path(settings.video_output_path).expanduser()),
         budget=budget,
+        device_poll_interval_seconds=poll_interval_seconds,
     )
     runtime = build_device_runtime(
         database_path=repository.database_path,
@@ -201,6 +205,7 @@ def bind_device_runtime(
         admission_recorder=record_admission,
         # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
         activity_source_reliable=True,
+        poll_interval_seconds=poll_interval_seconds,
     )
     if material_executor is not None:
         # 素材服务要拿到同一张队列，所以只能在运行时装好之后再绑。

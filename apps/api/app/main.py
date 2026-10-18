@@ -77,6 +77,10 @@ from app.auth import (
     UnauthorizedError,
 )
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
+from app.auth import WORKSPACE_SELECTION_HEADER
+from app.companion.identity import CompanionIdentity, require_account_principal, require_companion_identity
+from app.companion.routes import build_companion_router, companion_http_error
+from app.companion.pairing import CompanionPairingService
 from app.artifact_store import ArtifactStore
 from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies, bind_device_runtime
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
@@ -669,15 +673,18 @@ PUBLIC_AUTH_PATHS: set[str] = {
     "/api/content-templates",
 }
 
-# The single identity-only entry: a first-time invitee accepts a device invite
+# Identity-only entries: a first-time invitee accepts a device invite
 # before holding any workspace membership. This exact path (POST only) is
 # authenticated by identity without workspace resolution (see the middleware).
 DEVICE_INVITE_ACCEPT_PATH = "/api/device-invites/accept"
+PAIRING_ACCEPT_PATH = "/api/companion/pairings/accept"
 
 # Authenticated users who have not completed onboarding may only use these
 # repair endpoints.  The same trusted Python boundary enforces this rule for
 # direct localhost requests, not just Next.js-proxied browser traffic.
 ONBOARDING_REPAIR_PATHS: set[str] = {
+    # Binding facts only; accepting an invite has not initialized the workspace.
+    "/api/companion/session",
     "/api/onboarding/complete",
     "/api/settings/runtime",
     "/api/models",
@@ -773,7 +780,7 @@ async def auth_boundary_middleware(request: Request, call_next):
     queries stay inside the caller's partition.
     """
     path = request.url.path
-    is_device_accept = request.method == "POST" and path == DEVICE_INVITE_ACCEPT_PATH
+    is_device_accept = request.method == "POST" and path in {DEVICE_INVITE_ACCEPT_PATH, PAIRING_ACCEPT_PATH}
     if (
         path in PUBLIC_AUTH_PATHS
         or request.method == "OPTIONS"
@@ -789,6 +796,10 @@ async def auth_boundary_middleware(request: Request, call_next):
             return await call_next(request)
         request.state.principal = auth_context.authenticate(request)
         principal = request.state.principal
+        if WORKSPACE_SELECTION_HEADER in request.headers:
+            request.state.companion_identity = require_companion_identity(
+                request, DeviceAccountService(settings, trusted_device_credential()),
+            )
         if (
             not is_onboarding_repair_path(path)
             and not auth_context.is_onboarding_complete(
@@ -808,6 +819,9 @@ async def auth_boundary_middleware(request: Request, call_next):
             status_code=403,
             content={"error": "forbidden", "detail": str(exc)},
         )
+    except DeviceAccountError as exc:
+        return JSONResponse(status_code=DEVICE_ACCOUNT_ERROR_STATUS[exc.kind],
+            content={"error": exc.kind, "detail": str(exc)})
     workspace_id = request.state.principal.workspace_id or LEGACY_WORKSPACE_ID
     token = set_workspace_context(workspace_id)
     try:
@@ -842,6 +856,20 @@ def trusted_device_credential() -> DeviceCredential:
         return DeviceCredential(device_id, proof)
     except ValueError as exc:
         raise DeviceAccountError("unavailable", "trusted device credential is malformed") from exc
+
+
+def companion_identity_for(request: Request) -> CompanionIdentity:
+    """Public identity dependency for companion upload, session and media adapters."""
+    try:
+        require_account_principal(request)
+        if not auth_context.enabled:
+            raise UnauthorizedError("formal account authentication is not configured")
+        cached = getattr(request.state, "companion_identity", None)
+        if isinstance(cached, CompanionIdentity):
+            return cached
+        return require_companion_identity(request, DeviceAccountService(settings, trusted_device_credential()))
+    except (DeviceAccountError, UnauthorizedError) as exc:
+        raise companion_http_error(exc) from exc
 
 
 class DeviceInviteAcceptRequest(BaseModel):
@@ -1105,6 +1133,11 @@ def _content_visible(
 # 只能落到保留的 local 工作区，全部成员共享同一空间，跨空间授权本就不成立。
 def _prepare_runtime_routes(database: DatabaseOwners, auth: SupabaseAuthContext):
     router = APIRouter()
+    router.include_router(build_companion_router(
+        accounts_for=lambda: DeviceAccountService(settings, trusted_device_credential()),
+        identity_for=companion_identity_for,
+        pairings=CompanionPairingService(database.production.database_path),
+    ))
     router.include_router(knowledge_grant_router(
         database.sources, workspace_for=current_workspace_id, content_reader=_content_reader,
         target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth.enabled),
@@ -2102,9 +2135,11 @@ async def receive_voice_sampling_sample(
     task_id: str, request: Request,
     request_id: UUID = Form(...), text_version: str = Form(...),
     purpose: Literal["voice_profile"] = Form(...),
-    source_device: Literal["desktop", "import"] = Form(...),
+    source_device: Literal["desktop", "import", "mobile"] = Form(...),
     audio: UploadFile = File(...),
 ):
+    if source_device == "mobile":
+        companion_identity_for(request)
     workspace_id, owner = _member_owned_content_scope(request)
     try:
         # Resolve ownership before reading an uploaded sample into memory.
@@ -6472,6 +6507,14 @@ def _creation_task_or_404(workspace_id: str, task_id: str) -> CreationTask:
         raise HTTPException(status_code=404, detail="creation task not found") from exc
 
 
+def _readable_creation_task(request: Request, task_id: str) -> CreationTask:
+    workspace_id = current_workspace_id(request)
+    task = _creation_task_or_404(workspace_id, task_id)
+    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        raise HTTPException(status_code=404, detail="creation task not found")
+    return task
+
+
 def _creation_plan_for_task_or_404(
     workspace_id: str,
     task: CreationTask,
@@ -6804,7 +6847,7 @@ def get_creation_task_workspace(
     workspace_id = current_workspace_id(request)
     return _creation_task_workspace_response(
         workspace_id,
-        _creation_task_or_404(workspace_id, task_id),
+        _readable_creation_task(request, task_id),
     )
 
 
@@ -7995,7 +8038,7 @@ def get_creation_task_scripts(
     workspace_id = current_workspace_id(request)
     return _creation_task_scripts_response(
         workspace_id,
-        _creation_task_or_404(workspace_id, task_id),
+        _readable_creation_task(request, task_id),
     )
 
 
@@ -8318,7 +8361,7 @@ def _generate_creation_task_narration_for_workspace(workspace_id: str,task_id: s
 @app.get("/api/creation-tasks/{task_id}/narration/audio")
 def get_creation_task_narration_audio(task_id: str, request: Request) -> FileResponse:
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
+    task = _readable_creation_task(request, task_id)
     artifact = (
         production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
         if task.narration_cache_key
@@ -8343,7 +8386,7 @@ def get_creation_task_narration_segment_audio(
     task_id: str, segment_id: str, request: Request
 ) -> FileResponse:
     workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
+    _readable_creation_task(request, task_id)
     try:
         segment = production_repo.get_narration_segment(
             workspace_id, task_id, segment_id
@@ -8453,6 +8496,7 @@ def get_creation_task_person_render_media(
     task_id: str, render_id: str, request: Request
 ) -> FileResponse:
     workspace_id = current_workspace_id(request)
+    _readable_creation_task(request, task_id)
     try:
         render = production_repo.get_person_render(workspace_id, task_id, render_id)
     except KeyError as exc:
@@ -10174,6 +10218,7 @@ def check_creation_task_quality(task_id: str, request: Request,
 
 @app.get("/api/creation-tasks/{task_id}/output")
 def get_creation_task_output(task_id: str, request: Request) -> FileResponse:
+    _readable_creation_task(request, task_id)
     path = _creation_task_output_path(
         current_workspace_id(request), task_id, subtitle=False
     )
@@ -10182,6 +10227,7 @@ def get_creation_task_output(task_id: str, request: Request) -> FileResponse:
 
 @app.get("/api/creation-tasks/{task_id}/output/subtitles")
 def get_creation_task_subtitles(task_id: str, request: Request) -> FileResponse:
+    _readable_creation_task(request, task_id)
     path = _creation_task_output_path(
         current_workspace_id(request), task_id, subtitle=True
     )
@@ -10441,7 +10487,7 @@ def get_creation_task_selected_subtitles(
     en_track_id: str | None = None,
 ) -> Response:
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
+    task = _readable_creation_task(request, task_id)
     if not task.current_timeline_version_id or task.current_timeline_version_id != expected_version_id:
         raise HTTPException(status_code=409, detail="当前字幕版本已变化，请重新选择后保存。")
     required = {"zh": ("zh-CN",), "en": ("en-US",), "zh-en": ("zh-CN", "en-US")}[mode]
@@ -10480,7 +10526,7 @@ def get_creation_task_cover_image(
     task_id: str, cover_id: str, request: Request
 ) -> FileResponse:
     workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
+    _readable_creation_task(request, task_id)
     try:
         cover = production_repo.get_cover_asset(workspace_id, task_id, cover_id)
     except KeyError as exc:
@@ -13449,6 +13495,7 @@ def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, obj
 
 @app.get("/api/creation-tasks/{task_id}/execution/preview")
 def preview_creation_execution(task_id: str, request: Request) -> dict[str, object]:
+    _readable_creation_task(request, task_id)
     try:
         return _creation_execution_control().preview(current_workspace_id(request), task_id)
     except ExecutionControlRejected as exc:
@@ -13457,6 +13504,7 @@ def preview_creation_execution(task_id: str, request: Request) -> dict[str, obje
 
 @app.get("/api/creation-tasks/{task_id}/execution")
 def get_creation_execution(task_id: str, request: Request, job_id: str | None = None) -> dict[str, object]:
+    _readable_creation_task(request, task_id)
     if job_id is not None:
         try:
             return _read_bound_execution_result(task_id, request, job_id)
@@ -13478,6 +13526,7 @@ def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResp
     作业，页面关闭不改变它们。等待与处理估时分开，没有可信样本就是未知。
     """
     workspace_id = current_workspace_id(request)
+    _readable_creation_task(request, task_id)
     try:
         runs = production_repo.list_job_runs(workspace_id, task_id)
     except KeyError as exc:
@@ -13686,10 +13735,12 @@ def _build_device_components(*, repository: ProductionRepository):
     from app.material_ingestion import (
         MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
     )
+    from app.member_permits import memory_policy_from_env, material_visual_query_budget_from_env
 
     cpu_render_budget = (cpu_render_budget_from_env() if any(
         value.strip() for name, value in os.environ.items() if name.startswith("DEVICE_CPU_RENDER_")) else None)
-    budget = host_budget_from_env(cpu_render=cpu_render_budget)
+    budget = host_budget_from_env(cpu_render=cpu_render_budget,
+        memory_policy=memory_policy_from_env(), material_visual_query=material_visual_query_budget_from_env())
     narration_budget, montage_budget = creation_stage_budgets_from_env()
     presenter_budget, presenter_cpu_render_budget = presenter_budgets_from_env()
     budget = replace(budget, narration=narration_budget, montage=montage_budget,
