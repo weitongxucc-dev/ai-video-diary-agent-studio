@@ -63,7 +63,7 @@
     "beforePack": "./scripts/generate-build-identity.js",
     "extraResources": [
       { "from": "dist/api-server", "to": "api-server" },
-      { "from": "dist/programmatic", "to": "programmatic", "filter": ["**/*.mjs"] },
+      { "from": "dist/programmatic", "to": "programmatic", "filter": ["**/*.mjs", "**/*.txt"] },
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },
       { "from": "../api/agent_tools", "to": "agent-tools", "filter": ["**/*.ts"] },
       { "from": "../api/agent_runtime", "to": "agent_runtime", "filter": ["**/*.mjs", "**/*.md"] },
