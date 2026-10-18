@@ -8304,6 +8304,11 @@ class ProductionRepository:
                 raise ValueError("确认文案必须提供当前 updated_at")
             if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
                 raise ValueError("文案草稿修订已变化，请重新读取后再确认")
+            if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
+                    (workspace_id, task_id)).fetchone():
+                raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再确认修订文案。")
+            if task.narration_cache_key or task.montage_plan_id or task.current_timeline_version_id or task.output_ready:
+                raise ValueError("此任务已有配音或剪辑结果，不能通过此入口改写文案。")
             if not self._script_knowledge_inputs_current(conn, task, script.id):
                 raise ValueError("任务已追加资料，不能采用旧资料生成的草稿；请基于当前资料另存新稿。")
             from app.creation.intent_use_case import CreationIntentUseCase
@@ -8421,23 +8426,60 @@ class ProductionRepository:
         self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
         return inputs
 
+    @staticmethod
+    def _narration_voice_selection_owner(task: CreationTask, member_id: str) -> None:
+        if not member_id or not content_readable(user_id=member_id, local_diagnostic=False,
+                visibility=task.visibility, owner_user_id=task.owner_user_id):
+            raise KeyError(task.id)
+        if task.owner_user_id and task.owner_user_id != member_id:
+            raise PermissionError("当前成员不能更改此任务的配音声音。")
+
+    def get_creation_task_narration_voice_selection(
+        self, workspace_id: str, task_id: str, request_id: str, *, member_id: str,
+    ) -> dict[str, object]:
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            self._narration_voice_selection_owner(task, member_id)
+            event_id = _assistant_reply_request_event_id("task_narration_voice_selected", workspace_id, request_id)
+            row = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_narration_voice_selected'",
+                (workspace_id, event_id)).fetchone()
+            if row is None or row["task_id"] != task_id:
+                raise KeyError(request_id)
+            payload = json.loads(row["payload_json"])
+            if payload["member_id"] != member_id:
+                raise KeyError(request_id)
+            return payload["receipt"]
+
     def select_creation_task_narration_voice(
         self,
         *,
         workspace_id: str,
         task_id: str,
-        selected_voice: CreationPlanVoiceReference,
-        pronunciation_references: list[CreationPlanPronunciationReference],
-    ) -> tuple[CreationPlan, CreationTask]:
-        """Bind an explicitly confirmed voice to a blocked narration stage."""
+        member_id: str,
+        request_id: str,
+        voice_profile_id: str,
+        voice_version: str,
+        expected_plan_updated_at: datetime | str,
+        expected_task_updated_at: datetime | str,
+    ) -> dict[str, object]:
+        """Select one fixed voice and record its original request in the same transaction."""
+        if not request_id.strip():
+            raise ValueError("选择配音声音需要稳定请求身份。")
+        inputs = {"task_id": task_id, "member_id": member_id, "voice_profile_id": voice_profile_id,
+            "voice_version": voice_version, "expected_plan_updated_at": _revision_value(expected_plan_updated_at),
+            "expected_task_updated_at": _revision_value(expected_task_updated_at)}
+        fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        event_id = _assistant_reply_request_event_id("task_narration_voice_selected", workspace_id, request_id)
         with self._connect() as conn:
-            task_row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            self._narration_voice_selection_owner(task, member_id)
+            previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
+            if previous is not None:
+                saved = json.loads(previous["payload_json"])
+                if previous["task_id"] != task_id or saved["fingerprint"] != fingerprint:
+                    raise ValueError("此声音采用请求已用于不同输入，请查询原请求。")
+                return saved["receipt"]
             plan_row = conn.execute(
                 "SELECT payload FROM creation_plans WHERE workspace_id = ? AND id = ?",
                 (workspace_id, task.plan_id),
@@ -8447,13 +8489,37 @@ class ProductionRepository:
             plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
             if plan.creation_task_id != task.id:
                 raise ValueError("创作方案与任务不一致")
+            if (not content_readable(user_id=member_id, local_diagnostic=False,
+                    visibility=plan.visibility, owner_user_id=plan.owner_user_id)
+                    or plan.owner_user_id and plan.owner_user_id != member_id):
+                raise PermissionError("当前成员不能更改此创作方案的配音声音。")
+            if (_revision_value(plan.updated_at) != inputs["expected_plan_updated_at"]
+                    or _revision_value(task.updated_at) != inputs["expected_task_updated_at"]):
+                raise ValueError("方案或任务版本已变化，请读取当前版本后重新选择声音。")
             if task.stage != "narration" or task.stage_status not in {
                 "not_started",
                 "failed",
             }:
                 raise ValueError("当前任务不能选择配音声音")
+            if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
+                    (workspace_id, task_id)).fetchone():
+                raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再选择配音声音。")
+            try:
+                selected_voice = self.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
+                    viewer_user_id=member_id)
+                entries = self.list_applicable_pronunciation_entries(workspace_id=workspace_id,
+                    person_profile_id=selected_voice.person_profile_id, episode_id=task.id)
+            except (KeyError, ValueError, PermissionError, OSError) as exc:
+                raise MediaAuthorityError(reason="voice_reference_unavailable", impact="声音引用未更新，未调用模型。",
+                    repair_action=str(exc)) from exc
+            if selected_voice.language not in {{"zh-CN":"zh", "en-US":"en", "zh-CN/en-US":"zh-en"}[plan.language], "zh-en"}:
+                raise MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。",
+                    repair_action="选择匹配方案语言的声音。")
+            pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
+                scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language) for entry in entries]
 
             now = utc_now()
+            previous_voice = asdict(plan.selected_voice) if plan.selected_voice else None
             plan.selected_voice = selected_voice
             plan.pronunciation_references = pronunciation_references
             plan.blockers = [
@@ -8488,10 +8554,17 @@ class ProductionRepository:
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
                 (_json_payload(task), now.isoformat(), workspace_id, task.id),
             )
-        return (
-            self.get_creation_plan(workspace_id, task.plan_id),
-            self.get_creation_task(workspace_id, task.id),
-        )
+            receipt = {"request_id": request_id, "workspace_id": workspace_id, "member_id": member_id,
+                "task_id": task.id, "plan_id": plan.id, "status": "selected", "recorded_at": now.isoformat(),
+                "expected_plan_updated_at": inputs["expected_plan_updated_at"],
+                "expected_task_updated_at": inputs["expected_task_updated_at"],
+                "plan_updated_at": now.isoformat(), "task_updated_at": now.isoformat(),
+                "previous_voice": previous_voice, "selected_voice": asdict(selected_voice),
+                "pronunciation_references": [asdict(item) for item in pronunciation_references],
+                "confirmed_script_id": task.confirmed_script_id}
+            self.append_task_event(TaskEvent(event_id, workspace_id, task_id, None, "task_narration_voice_selected",
+                {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
+            return receipt
 
     def complete_creation_task_narration(
         self,

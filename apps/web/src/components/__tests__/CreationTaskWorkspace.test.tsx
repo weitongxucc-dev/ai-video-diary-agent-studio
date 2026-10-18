@@ -8,6 +8,10 @@ import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, C
 import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
+vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
+  getCreationTaskNarrationVoiceSelection: (...args: unknown[]) => mocks.getVoiceSelection(...args),
+}));
 
 const mocks = vi.hoisted(() => {
   class MockCreationPlanApiError extends Error {
@@ -74,6 +78,7 @@ const mocks = vi.hoisted(() => {
     askAssistant: vi.fn(),
     renderMontage: vi.fn(),
     selectVoice: vi.fn(),
+    getVoiceSelection: vi.fn(),
     undoTimeline: vi.fn(),
     redoTimeline: vi.fn(),
     saveRecording: vi.fn(),
@@ -462,6 +467,7 @@ function workspace(task: CreationTask, montage: WorkspaceState["montage"] = null
   return {
     task,
     plan: {
+      updated_at:task.updated_at,
       goal: task.scenario,
       name: task.name,
       target_count: 1,
@@ -1708,7 +1714,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.generateNarration).not.toHaveBeenCalled();
   });
 
-  it("explicitly binds a later authorized voice before enabling generation", async () => {
+  it.each(["recorded", "lost_response", "query_retry", "explicit_replay", "query_unavailable", "conflict"])("binds a later authorized voice through its original receipt: %s", async outcome => {
     const initial = workspace(baseTask);
     initial.available_voices = [{
       profile_id: "voice-1", version: "v1", person_display_name: "主讲人",
@@ -1723,7 +1729,15 @@ describe("CreationTaskWorkspace", () => {
       model_id: "qwen3-tts-12hz-0.6b-base-8bit",
     };
     selected.available_voices = initial.available_voices;
-    mocks.selectVoice.mockResolvedValue(selected);
+    const receipt = {request_id:"voice-request", task_id:"task-1", plan_id:"plan-1", status:"selected", selected_voice:selected.plan.selected_voice};
+    mocks.selectVoice.mockResolvedValue(receipt);
+    mocks.getVoiceSelection.mockResolvedValue(receipt);
+    if (outcome !== "recorded") mocks.selectVoice.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(0, null, "响应连接中断"));
+    if (outcome === "query_retry" || outcome === "explicit_replay") mocks.getVoiceSelection.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(404, null, "尚未找到原请求"));
+    if (outcome === "query_unavailable") mocks.getVoiceSelection.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(503, null, "查询暂不可用"));
+    if (outcome === "conflict") {
+      mocks.selectVoice.mockReset().mockRejectedValueOnce(new mocks.MockCreationPlanApiError(409, null, "声音采用的方案版本已过期"));
+    }
     mocks.getWorkspace.mockResolvedValueOnce(initial).mockResolvedValue(selected);
     const preview = {
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
@@ -1743,8 +1757,56 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:"收起制作详情"}));
     fireEvent.click(screen.getByRole("button", { name: "使用授权声音生成" }));
 
-    await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", { voice_profile_id: "voice-1", voice_version: "v1" }));
+    await waitFor(() => expect(mocks.selectVoice).toHaveBeenCalledWith("task-1", {
+      voice_profile_id: "voice-1", voice_version: "v1", request_id:expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expected_plan_updated_at:initial.plan.updated_at, expected_task_updated_at:initial.task.updated_at,
+    }));
+    const originalId = mocks.selectVoice.mock.calls[0][1].request_id;
+    if (outcome === "conflict") {
+      await screen.findByText("声音采用的方案版本已过期");
+      expect(mocks.getVoiceSelection).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", {name:"查询声音采用结果"})).not.toBeInTheDocument();
+      return;
+    }
+    if (outcome === "query_retry" || outcome === "explicit_replay") {
+      await screen.findByText("声音采用结果尚未查明，请查询原请求。");
+      expect(screen.getByRole("button", {name:"使用授权声音生成"})).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", {name:outcome === "query_retry" ? "查询声音采用结果" : "继续原声音采用请求"}));
+    }
+    if (outcome === "query_unavailable") {
+      await screen.findByText("声音采用结果尚未查明，请查询原请求。");
+      expect(screen.queryByRole("button", {name:"继续原声音采用请求"})).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", {name:"查询声音采用结果"}));
+    }
+    await screen.findByText("声音采用请求已查明，请确认文案和要求后开始连续制作。");
     expect(await productionAction("确认以上文案和要求，开始制作")).toBeEnabled();
+    if (outcome === "explicit_replay") {
+      expect(mocks.selectVoice).toHaveBeenCalledTimes(2);
+      expect(mocks.selectVoice.mock.calls[1]).toEqual(mocks.selectVoice.mock.calls[0]);
+    } else expect(mocks.selectVoice).toHaveBeenCalledOnce();
+    if (outcome === "recorded") expect(mocks.getVoiceSelection).not.toHaveBeenCalled();
+    else expect(mocks.getVoiceSelection).toHaveBeenCalledWith("task-1", originalId);
+    if (outcome === "query_retry") expect(mocks.getVoiceSelection).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply a late original voice receipt to another task after switching", async () => {
+    const initial = workspace(baseTask);
+    initial.available_voices = [{profile_id:"voice-1", version:"v1", person_display_name:"声音", language:"zh", model_id:"model", runnable:true, runnable_reason:null}];
+    mocks.selectVoice.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(0, null, "响应中断"));
+    let resolveQuery!: (value: unknown) => void;
+    mocks.getVoiceSelection.mockReturnValueOnce(new Promise(resolve => { resolveQuery = resolve; }));
+    const view = renderTaskSubject(<CreationTaskWorkspace key="task-1" initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", {name:"使用授权声音生成"}));
+    await waitFor(() => expect(mocks.getVoiceSelection).toHaveBeenCalledOnce());
+    const originalId = mocks.selectVoice.mock.calls[0][1].request_id;
+    const next = workspace({...baseTask, id:"task-2", plan_id:"plan-2", name:"另一任务"});
+    view.rerender(<CreationTaskWorkspace key="task-2" initialTasks={[]} initialTopics={null} initialWorkspace={next} />);
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenLastCalledWith("task-2"));
+    const reads = mocks.getWorkspace.mock.calls.length;
+    await act(async () => resolveQuery({request_id:originalId, task_id:"task-1", status:"selected"}));
+    expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+    expect(screen.queryByText("声音采用请求已查明，请确认文案和要求后开始连续制作。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name:"查询声音采用结果"})).not.toBeInTheDocument();
   });
 
   it("sends only the task id to the native save boundary", async () => {

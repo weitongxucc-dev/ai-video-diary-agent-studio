@@ -74,6 +74,7 @@ export type CreationPlanBlocker = {
     blocks_confirmation: boolean;
 };
 export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
+    updated_at?: string | null;
     template_settings?: VideoTemplateSettings;
     name: string;
     knowledge_references: CreationPlanKnowledgeReference[];

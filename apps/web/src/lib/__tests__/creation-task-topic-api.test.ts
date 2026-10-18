@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getCreationTaskNarrationVoiceSelection } from "../api/creation-tasks";
 import {
   confirmCreationTaskTopic,
   CreationPlanApiError,
@@ -88,6 +89,9 @@ describe("creation-task topic API", () => {
     vi.stubGlobal("fetch", fetch);
 
     await selectCreationTaskNarrationVoice("task-1", {
+      request_id: "00000000-0000-4000-8000-000000000001",
+      expected_plan_updated_at: "2026-10-18T00:00:00Z",
+      expected_task_updated_at: "2026-10-18T00:00:01Z",
       voice_profile_id: "voice-1",
       voice_version: "v2",
     });
@@ -96,9 +100,19 @@ describe("creation-task topic API", () => {
       "/api/creation-tasks/task-1/narration/voice",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ voice_profile_id: "voice-1", voice_version: "v2" }),
+        body: JSON.stringify({ request_id: "00000000-0000-4000-8000-000000000001", expected_plan_updated_at: "2026-10-18T00:00:00Z", expected_task_updated_at: "2026-10-18T00:00:01Z", voice_profile_id: "voice-1", voice_version: "v2" }),
       }),
     );
     expect(fetch.mock.calls[0]?.[1]?.body).not.toContain("/Users/");
+  });
+
+  it("queries the original voice selection receipt without posting again", async () => {
+    const receipt = {request_id:"original-request", task_id:"task/1", selected_voice:{profile_id:"voice-1", version:"v2"}};
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(receipt), {status:200}));
+    vi.stubGlobal("fetch", fetch);
+    await expect(getCreationTaskNarrationVoiceSelection("task/1", "original-request")).resolves.toEqual(receipt);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith("/api/creation-tasks/task%2F1/narration/voice/requests/original-request", expect.objectContaining({cache:"no-store"}));
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
   });
 });

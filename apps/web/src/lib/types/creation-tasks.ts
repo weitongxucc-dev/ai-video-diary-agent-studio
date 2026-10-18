@@ -1,6 +1,6 @@
 import type { ContentVisibility } from './common';
 import type { NarrationCue } from './production';
-import type { CreationPlanPreview } from './creation-plans';
+import type { CreationPlanPreview, CreationPlanVoiceReference, CreationPlanPronunciationReference } from './creation-plans';
 import type { GraphicOverlay, CreationTaskMontageClip, AudioTimeline } from './timeline';
 export type CreationTask = {
     id: string;
@@ -140,6 +140,30 @@ export type CreationTaskScriptsResponse = {
         finished_at: string | null;
     } | null;
     route_preflight: CreationTaskTopicRoutePreflight;
+};
+export type CreationTaskNarrationVoiceSelectionRequest = {
+    request_id: string;
+    voice_profile_id: string;
+    voice_version: string;
+    expected_plan_updated_at: string;
+    expected_task_updated_at: string;
+};
+export type CreationTaskNarrationVoiceSelectionResponse = {
+    request_id: string;
+    workspace_id: string;
+    member_id: string;
+    task_id: string;
+    plan_id: string;
+    status: "selected";
+    recorded_at: string;
+    expected_plan_updated_at: string;
+    expected_task_updated_at: string;
+    plan_updated_at: string;
+    task_updated_at: string;
+    previous_voice: CreationPlanVoiceReference | null;
+    selected_voice: CreationPlanVoiceReference;
+    pronunciation_references: CreationPlanPronunciationReference[];
+    confirmed_script_id: string | null;
 };
 export type CreationTaskNarrationSegment = {
     id: string;

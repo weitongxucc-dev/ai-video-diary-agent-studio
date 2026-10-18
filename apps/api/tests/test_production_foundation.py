@@ -3228,20 +3228,28 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         ),
     )
 
-    response = TestClient(main_module.app, headers=plan_owner[1]).post(
+    client = TestClient(main_module.app, headers=plan_owner[1])
+    command = {"voice_profile_id": voice.id, "voice_version": voice.version,
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "expected_plan_updated_at": plan.updated_at.isoformat(), "expected_task_updated_at": task.updated_at.isoformat()}
+    response = client.post(
         f"/api/creation-tasks/{task.id}/narration/voice",
-        json={"voice_profile_id": voice.id, "voice_version": voice.version},
+        json=command,
     )
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["plan"]["selected_voice"]["profile_id"] == voice.id
-    assert body["task"]["stage"] == "narration"
-    assert body["task"]["stage_status"] == "not_started"
-    assert body["task"]["confirmed_script_id"] == "script-confirmed"
-    assert body["task"]["stage_reason"] is None
+    assert client.get(f"/api/creation-tasks/{task.id}/narration/voice/requests/{command['request_id']}").json() == body
+    assert client.post(f"/api/creation-tasks/{task.id}/narration/voice", json=command).json() == body
+    assert client.post(f"/api/creation-tasks/{task.id}/narration/voice",
+        json={"voice_profile_id": voice.id, "voice_version": voice.version}).status_code == 422
+    assert body["selected_voice"]["profile_id"] == voice.id
+    assert body["status"] == "selected" and body["confirmed_script_id"] == "script-confirmed"
+    current_task = production.get_creation_task(workspace_id, task.id)
+    assert current_task.stage == "narration" and current_task.stage_status == "not_started"
+    assert current_task.stage_reason is None
     assert not any(
-        blocker["stage"] == "narration" for blocker in body["plan"]["blockers"]
+        blocker.stage == "narration" for blocker in production.get_creation_plan(workspace_id, plan.id).blockers
     )
     reloaded = ProductionRepository(
         database_path=production.database_path,

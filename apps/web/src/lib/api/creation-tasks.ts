@@ -1,4 +1,5 @@
 import type { TaskMediaJob } from '../types/task-edits';
+import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
 import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
@@ -109,11 +110,11 @@ export function saveAssistantScriptDraft(taskId: string, input: {
 }): Promise<CreationTaskScript> {
     return creationPlanRequest<CreationTaskScript>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, { method: "POST", body: JSON.stringify(input) });
 }
-export function selectCreationTaskNarrationVoice(taskId: string, input: {
-    voice_profile_id: string;
-    voice_version: string;
-}): Promise<CreationTaskWorkspace> {
-    return creationPlanRequest<CreationTaskWorkspace>(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`, { method: "POST", body: JSON.stringify(input) });
+export function selectCreationTaskNarrationVoice(taskId: string, input: CreationTaskNarrationVoiceSelectionRequest): Promise<CreationTaskNarrationVoiceSelectionResponse> {
+    return creationPlanRequest<CreationTaskNarrationVoiceSelectionResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getCreationTaskNarrationVoiceSelection(taskId: string, requestId: string): Promise<CreationTaskNarrationVoiceSelectionResponse> {
+    return creationPlanRequest<CreationTaskNarrationVoiceSelectionResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice/requests/${encodeURIComponent(requestId)}`);
 }
 export function generateCreationTaskPersonRender(taskId: string, input: {
     narration_segment_id: string;

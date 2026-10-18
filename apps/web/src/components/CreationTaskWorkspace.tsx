@@ -10,7 +10,9 @@ import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
-import type { TaskMediaJob, TaskMediaResultMap } from "@/lib/types";
+import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
+import { getCreationTaskNarrationVoiceSelection } from "@/lib/api/creation-tasks";
+import { CreationPlanApiError } from "@/lib/api";
 import { Tabs, TabsContent } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { TaskViewNavigation } from "./creation-task/TaskViewNavigation";
@@ -132,6 +134,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? initialWorkspace.available_voices.find((voice) => voice.runnable)?.profile_id
       ?? null,
   );
+  const [pendingVoiceSelection, setPendingVoiceSelection] = useWorkspaceViewState<CreationTaskNarrationVoiceSelectionRequest | null>(`task:${workspace.task.id}.voiceSelectionRequest`, null);
+  const [voiceSelectionNotFound, setVoiceSelectionNotFound] = useState<string | null>(null);
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
   const [inserting, setInserting] = useState(false);
@@ -553,6 +557,52 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("execution");
     await executionController.changeExecution(operation);
     if (currentTaskId.current === task.id) setBusy(null);
+  }
+
+  async function useNarrationVoice(mode: "select" | "query" | "replay" = "select") {
+    if (busy !== null) return;
+    const voice = runnableVoices.find(item => item.profile_id === selectedVoiceId);
+    if (mode === "select" && (!voice || pendingVoiceSelection)) return;
+    if (mode === "select" && !workspace.plan.updated_at) {
+      setError({message:"方案修订尚未读回，请重新打开当前任务后选择声音。", impact:"没有提交声音采用。", repairAction:null, code:null});
+      return;
+    }
+    const input = mode !== "select" ? pendingVoiceSelection : {
+      request_id: crypto.randomUUID(), voice_profile_id: voice!.profile_id, voice_version: voice!.version,
+      expected_plan_updated_at: workspace.plan.updated_at!, expected_task_updated_at: task.updated_at,
+    };
+    if (!input) return;
+    if (mode === "replay" && voiceSelectionNotFound !== input.request_id) return;
+    const targetId = task.id;
+    const current = () => currentTaskId.current === targetId;
+    setPendingVoiceSelection(input); setVoiceSelectionNotFound(null); setBusy("voice-select"); setError(null); setNotice(null);
+    let querying = mode === "query";
+    let selectionRecorded = false;
+    try {
+      if (mode === "query") await getCreationTaskNarrationVoiceSelection(targetId, input.request_id);
+      else {
+        try { await selectCreationTaskNarrationVoice(targetId, input); }
+        catch (cause) {
+          if (cause instanceof CreationPlanApiError && cause.status > 0 && cause.status < 500) {
+            if (current()) setPendingVoiceSelection(null);
+            throw cause;
+          }
+          querying = true;
+          await getCreationTaskNarrationVoiceSelection(targetId, input.request_id);
+        }
+      }
+      if (!current()) return;
+      selectionRecorded = true;
+      setPendingVoiceSelection(null);
+      await refresh(true, next => current() && next.task.id === targetId);
+      if (current()) setNotice("声音采用请求已查明，请确认文案和要求后开始连续制作。");
+    } catch (cause) {
+      if (!current()) return;
+      if (querying && cause instanceof CreationPlanApiError && cause.status === 404) setVoiceSelectionNotFound(input.request_id);
+      setError(selectionRecorded ? {message:"声音采用已记录，任务状态尚未回读，请重新打开当前任务。", impact:"没有重复采用声音。",
+        repairAction:errorDetails(cause).message, code:null} : querying ? {message:"声音采用结果尚未查明，请查询原请求。", impact:"没有重发声音采用请求。",
+        repairAction:errorDetails(cause).message, code:null} : errorDetails(cause));
+    } finally { if (current()) setBusy(null); }
   }
 
   async function saveOutput(operation: () => Promise<SaveFeedback>) {
@@ -1351,10 +1401,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}
 
+        {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void useNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void useNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
-          <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={latestScript?.sections.length ?? 0} hasSelectedVoice={Boolean(workspace.plan.selected_voice)} voices={runnableVoices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy}
+          <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={latestScript?.sections.length ?? 0} hasSelectedVoice={Boolean(workspace.plan.selected_voice)} voices={runnableVoices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy ?? (pendingVoiceSelection ? "voice-select" : null)}
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
-            onUseVoice={() => { const voice = runnableVoices.find(item => item.profile_id === selectedVoiceId); if (voice) void run("voice-select", () => selectCreationTaskNarrationVoice(task.id, { voice_profile_id: voice.profile_id, voice_version: voice.version }), "声音已绑定，请确认文案和要求后开始连续制作。"); }} />
+            onUseVoice={() => void useNarrationVoice()} />
         ) : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} personRenders={workspace.person_renders} hasPerson={Boolean(workspace.plan.selected_person)} taskId={task.id} /> : null}
 

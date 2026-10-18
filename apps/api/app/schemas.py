@@ -1275,8 +1275,30 @@ class CreationTaskNarrationResponse(BaseModel):
 class CreationTaskNarrationVoiceSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    request_id: UUID
+    expected_plan_updated_at: datetime
+    expected_task_updated_at: datetime
     voice_profile_id: str = Field(min_length=1, max_length=120)
     voice_version: str = Field(min_length=1, max_length=120)
+    assistant_turn_id: UUID | None = None
+
+
+class CreationTaskNarrationVoiceSelectionResponse(BaseModel):
+    request_id: UUID
+    workspace_id: str
+    member_id: str
+    task_id: str
+    plan_id: str
+    status: Literal["selected"]
+    recorded_at: datetime
+    expected_plan_updated_at: datetime
+    expected_task_updated_at: datetime
+    plan_updated_at: datetime
+    task_updated_at: datetime
+    previous_voice: CreationPlanVoiceReferenceResponse | None
+    selected_voice: CreationPlanVoiceReferenceResponse
+    pronunciation_references: list[CreationPlanPronunciationReferenceResponse]
+    confirmed_script_id: str | None
 
 
 class CreationTaskRecordingAdoptRequest(BaseModel):
