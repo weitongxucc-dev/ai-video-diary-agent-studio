@@ -977,16 +977,21 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "supports": {"type": "array", "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["candidate_quote_id", "source_quote_id"], "properties": {
-                                "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128},
-                                "source_quote_id": {"type": "string", "minLength": 1, "maxLength": 128}}}},
+                                "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                                    "enum": list(candidate_pieces)},
+                                "source_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                                    "enum": list(source_pieces)}}}},
                         "issues": {"type": "array", "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"],
                             "properties": {
                                 "kind": {"type": "string", "enum": ["unsupported_fact", "goal_conflict"]},
-                                "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128},
-                                "reference_ids": {"type": "array", "maxItems": 12,
-                                    "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+                                "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                                    "enum": list(candidate_pieces)},
+                                "reference_ids": {"type": "array", "maxItems": 12, "uniqueItems": True,
+                                    "description": "仅从当前段evidence_reference_ids原样选择资料别名，不重复；unsupported_fact必须非空，goal_conflict可为空。不得填片段ID、资料原ID或标题。",
+                                    "items": {"type": "string", "minLength": 1, "maxLength": 128,
+                                        "enum": list(aliases)}},
                                 "missing_or_conflicting": {"type": "string", "minLength": 1, "maxLength": 300}}}},
                     }}}},
         }
@@ -1024,6 +1029,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "issues总计至多12项，每项为"
                     "{kind,candidate_quote_id,reference_ids,missing_or_conflicting}。kind仅unsupported_fact或goal_conflict；"
                     "candidate_quote_id须为当前段或总标题的现有片段；unsupported_fact列该段资料编号，goal_conflict可列空数组。"
+                    "reference_ids只能从当前段evidence_reference_ids原样选择evidence_N资料别名，不得重复；"
+                    "unsupported_fact至少列1个，不能用空数组表示没有支持；不得填quote_id、资料原ID或来源标题。"
                     "不返回field、quote、source_quote或全文，程序会从片段ID还原准确原文。"
                     "missing_or_conflicting用80字以内的普通短说明指出哪份资料缺少什么或哪条要求冲突，不写原ID、证据编号或协议术语。"
                     "要求冲突必须报告goal_conflict；issues为空表示核查全部事实与要求后没有发现问题。"
@@ -1067,7 +1074,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "tool_call_count": None, "tool_arguments_length": None, "usage": {"prompt_tokens": None, "completion_tokens": None,
                 "total_tokens": None, "reasoning_tokens": None}, "section_index": None,
             "section_count": len(sections), "source_count": len(source_inputs),
-            "support_reference_mismatch": None}
+            "support_reference_mismatch": None, "issue_reference_mismatch": None}
 
         def safe_count(value):
             return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
@@ -1155,7 +1162,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "allowed_source_ordinals": [source_ordinals[reference] for reference in section["evidence_reference_ids"]]}
                     raise self._review_failure("support_reference", diagnostics)
             kinds = set()
-            for issue in issues:
+            for issue_index, issue in enumerate(issues, start=1):
                 if not isinstance(issue, dict) or set(issue) != {"kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"}:
                     raise self._review_failure("issue_shape", diagnostics)
                 fragment = candidate_quote(issue["candidate_quote_id"], index)
@@ -1166,9 +1173,47 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 if (not isinstance(kind, str) or kind not in {"unsupported_fact", "goal_conflict"}
                         or not isinstance(detail, str) or not detail.strip() or len(detail) > 300):
                     raise self._review_failure("issue_shape", diagnostics)
-                if (not isinstance(refs, list) or len(refs) > 12
-                        or any(not isinstance(ref, str) or ref not in section["evidence_reference_ids"] for ref in refs)
-                        or len(set(refs)) != len(refs) or (kind == "unsupported_fact" and not refs)):
+                reference_error = None
+                if not isinstance(refs, list):
+                    reference_error = "not_array"
+                elif len(refs) > 12:
+                    reference_error = "too_many"
+                elif any(not isinstance(ref, str) for ref in refs):
+                    reference_error = "non_string"
+                elif any(ref not in source_ordinals for ref in refs):
+                    reference_error = "unknown_alias"
+                elif any(ref not in section["evidence_reference_ids"] for ref in refs):
+                    reference_error = "not_in_section"
+                elif len(set(refs)) != len(refs):
+                    reference_error = "duplicate"
+                elif kind == "unsupported_fact" and not refs:
+                    reference_error = "empty_unsupported"
+                if reference_error:
+                    sampled_refs = refs[:12] if isinstance(refs, list) else []
+                    forms = dict.fromkeys(("alias", "source_quote_id", "candidate_quote_id",
+                        "original_reference_id", "other", "non_string"), 0)
+                    for ref in sampled_refs:
+                        if not isinstance(ref, str):
+                            form = "non_string"
+                        elif ref in source_ordinals:
+                            form = "alias"
+                        elif ref in source_pieces:
+                            form = "source_quote_id"
+                        elif ref in candidate_pieces:
+                            form = "candidate_quote_id"
+                        elif ref in aliases.values():
+                            form = "original_reference_id"
+                        else:
+                            form = "other"
+                        forms[form] += 1
+                    diagnostics["issue_reference_mismatch"] = {
+                        "issue_index": issue_index, "kind": kind, "subtype": reference_error,
+                        "candidate_field": fragment["field"], "candidate_section_index": fragment["index"],
+                        "reference_count": len(refs) if isinstance(refs, list) else None,
+                        "allowed_source_ordinals": [source_ordinals[ref] for ref in section["evidence_reference_ids"]],
+                        "returned_source_ordinals": [source_ordinals[ref] for ref in sampled_refs
+                            if isinstance(ref, str) and ref in source_ordinals],
+                        "sampled_reference_forms": forms}
                     raise self._review_failure("issue_reference", diagnostics)
                 kinds.add(kind)
                 all_issues.append((index, {**issue, "field": fragment["field"], "quote": fragment["text"]}))

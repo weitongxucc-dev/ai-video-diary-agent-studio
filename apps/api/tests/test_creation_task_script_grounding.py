@@ -141,8 +141,18 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert set(properties) == {'index', 'supports', 'issues'}
     assert schema['properties']['sections']['items']['required'] == ['index', 'supports', 'issues']
     assert set(properties['supports']['items']['properties']) == {'candidate_quote_id', 'source_quote_id'}
-    assert 'enum' not in properties['supports']['items']['properties']['candidate_quote_id']
-    assert 'enum' not in properties['supports']['items']['properties']['source_quote_id']
+    candidate_ids = [piece['quote_id'] for piece in second['script']['title']]
+    candidate_ids += [piece['quote_id'] for section in second['script']['sections']
+        for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+    source_ids = [piece['quote_id'] for source in second['sources'] for piece in source['text']]
+    assert properties['supports']['items']['properties']['candidate_quote_id']['enum'] == candidate_ids
+    assert properties['supports']['items']['properties']['source_quote_id']['enum'] == source_ids
+    issue_properties = properties['issues']['items']['properties']
+    assert issue_properties['candidate_quote_id']['enum'] == candidate_ids
+    assert issue_properties['reference_ids']['items']['enum'] == ['evidence_1']
+    assert issue_properties['reference_ids']['uniqueItems'] is True
+    assert 'unsupported_fact必须非空，goal_conflict可为空' in issue_properties['reference_ids']['description']
+    assert not any(keyword in json.dumps(schema) for keyword in ('"oneOf"', '"anyOf"', '"if"', '"then"', '"$ref"'))
     assert 'response_format' not in calls[0][1] and calls[0][1]['tool_choice'] == 'required'
     assert calls[0][1]['tools'][0]['function']['name'] == 'submit_script_draft'
     assert '事实只能来自' in calls[0][1]['messages'][0]['content']
@@ -1090,3 +1100,95 @@ def test_fifth_section_wrong_source_still_rejects_and_reports_only_bounded_ordin
     for secret in (private_text, 'private-source-id-sentinel', 'private-source-title-sentinel', FACT, 'isolated-key'):
         assert secret not in caplog.text
     assert len(records[0].getMessage()) < 1200 and len(calls) == 2
+
+
+@pytest.mark.parametrize('refs,subtype,returned_ordinals,form_counts', [
+    (None, 'not_array', [], {}),
+    ({'private-unknown-reference': 'private-value'}, 'not_array', [], {}),
+    (['evidence_1'] * 13, 'too_many', [1] * 12, {'alias': 12}),
+    ([1, {'private-key': 'private-value'}], 'non_string', [], {'non_string': 2}),
+    (['private-unknown-reference'], 'unknown_alias', [], {'other': 1}),
+    (['evidence_2'], 'not_in_section', [2], {'alias': 1}),
+    (['evidence_1', 'evidence_1'], 'duplicate', [1, 1], {'alias': 2}),
+    ([], 'empty_unsupported', [], {}),
+    (['@source_quote'], 'unknown_alias', [], {'source_quote_id': 1}),
+    (['@candidate_quote'], 'unknown_alias', [], {'candidate_quote_id': 1}),
+    (['private-original-source-id'], 'unknown_alias', [], {'original_reference_id': 1}),
+])
+def test_issue_reference_rejection_reports_safe_subtype_without_fixing_model_reference(
+    caplog, refs, subtype, returned_ordinals, form_counts,
+):
+    import logging
+
+    source = replace(inputs(), sources=(
+        CreationTaskTopicSource(reference_id='private-original-source-id', kind='knowledge',
+            title='private-source-title', text=SOURCE + 'private-source-body'),
+        CreationTaskTopicSource(reference_id='private-second-source-id', kind='knowledge',
+            title='private-second-title', text='另一份资料。private-second-body'),
+    ))
+    document = draft()
+    calls = []
+    forbidden_ids = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        data = json.loads(body['messages'][1]['content'])
+        schema = body['tools'][0]['function']['parameters']
+        reference_schema = schema['properties']['sections']['items']['properties']['issues']['items']['properties']['reference_ids']
+        assert reference_schema['items']['enum'] == ['evidence_1', 'evidence_2']
+        assert reference_schema['uniqueItems'] is True
+        assert data['script']['sections'][0]['evidence_reference_ids'] == ['evidence_1']
+        review = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
+            detail='private-issue-detail'), data)
+        source_quote_id = data['sources'][0]['text'][0]['quote_id']
+        candidate_quote_id = data['script']['sections'][0]['content'][0]['quote_id']
+        forbidden_ids.extend((source_quote_id, candidate_quote_id))
+        assigned = copy.deepcopy(refs)
+        if assigned == ['@source_quote']:
+            assigned = [source_quote_id]
+        elif assigned == ['@candidate_quote']:
+            assigned = [candidate_quote_id]
+        review['sections'][0]['issues'][0]['reference_ids'] = assigned
+        return _review_tool_response(review)
+
+    caplog.set_level(logging.WARNING, logger='app.topics')
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        api_key='private-credential', transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(source)
+    assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == 'issue_reference'
+    assert failure.value.retryable is False and len(calls) == 2
+    records = [record for record in caplog.records if record.name == 'app.topics']
+    assert len(records) == 1
+    text = records[0].getMessage()
+    diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))
+    assert diagnostic['reason_code'] == 'issue_reference' and diagnostic['section_index'] == 1
+    mismatch = diagnostic['issue_reference_mismatch']
+    assert mismatch['subtype'] == subtype and mismatch['issue_index'] == 1
+    assert mismatch['kind'] == 'unsupported_fact' and mismatch['candidate_field'] == 'content'
+    assert mismatch['candidate_section_index'] == 1
+    assert mismatch['reference_count'] == (len(refs) if isinstance(refs, list) else None)
+    assert mismatch['allowed_source_ordinals'] == [1]
+    assert mismatch['returned_source_ordinals'] == returned_ordinals
+    assert {kind: count for kind, count in mismatch['sampled_reference_forms'].items() if count} == form_counts
+    assert len(text) < 1200
+    for secret in (*forbidden_ids, 'evidence_1', 'evidence_2', 'private-', SOURCE, FACT, 'https://models.invalid', 'Authorization'):
+        assert secret not in text
+
+
+@pytest.mark.parametrize('kind,refs,expected_code', [
+    ('unsupported_fact', ['evidence_1'], 'script_fact_unsupported'),
+    ('goal_conflict', [], 'script_goal_conflict'),
+])
+def test_valid_issue_references_still_reject_unfounded_content_or_goal_conflict(kind, refs, expected_code):
+    document = draft()
+    review = rejected(document, kind=kind, field='content', quote=FACT, detail='资料或本次要求不支持该表述。')
+    review['sections'][0]['issues'][0]['reference_ids'] = refs
+    calls = []
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        provider(document, review, calls).generate(inputs())
+    assert failure.value.code == expected_code and failure.value.retryable is False
+    assert len(calls) == 2
