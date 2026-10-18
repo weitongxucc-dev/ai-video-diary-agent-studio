@@ -51,7 +51,7 @@
 
 另绑A：`apps/api/app/assistant_goal_continuation.py`及其直接测试`apps/api/tests/test_assistant_goal_continuation.py`，仅新建目标的真实输出时长验收与可执行未完成事实投影；复用已有目标接续和InsertClip等编辑原子能力，不能手工补尾、伪改元数据、将旧方案时长强加给后续剪短编辑。main薄接线仍主控负责。若直接测试入口名称不同，先回报精确路径，不扩写其他文件。
 
-C补绑`apps/api/tests/test_device_runtime.py`，仅将既有Owner测试夹具同步当前本地复核协议，保留原行为断言。
+C补绑`apps/api/tests/test_device_runtime.py`，仅将既有Owner测试夹具同步当前本地复核协议，并将虚拟时钟改为随实际观察tick而非每次内存读取推进，保留原行为断言与生产资源门槛。
 
 ## 5. 共同接入约定与接受点
 
