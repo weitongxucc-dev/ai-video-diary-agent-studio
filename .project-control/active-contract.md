@@ -79,6 +79,8 @@ A续绑同一纵向消费者：`apps/api/agent_tools/diary/creation-plans.ts`、
 
 A同时拥有`app/assistant/projection.py`的文案采用状态投影及对应测试；旧固定“尚待人工确认”提示必须读取实际采用回执，不能反向创造业务事实。
 
+真实任务补充资料的直接断点续归A：在现有`creation/`新增具体资料采用用例，`main.py`/`schemas.py`薄入口、`production.py`的Plan引用与Task事件同事务、对应定向测试。请求携带固定资料id/version、预期Plan/Task版本和稳定request_id；复用公开资料权限读取，追加采用后旧稿/生成记录/产物保持历史原貌，新一轮写稿显式消费新引用。已有制作/已采用文案的下游影响必须明确，不能悄悄替换资料、覆盖旧稿或重建任务；缺失/撤权/冲突拒绝，重放回查同一采用回执。不新建通用指令平台。当前稳定批先交主控集成，再推进此直接消费者。
+
 B续段负责P2素材语义检索的真实业务链，新增独占`app/materials/retrieval.py`及定向测试、`app/materials/assets.py`、`analysis.py`、`contracts.py`、`app/visual_semantics.py`的既有向量读取/查询与受许可执行适配。复用现有ChineseCLIP、素材特征及设备许可，模型调用不得绕过调度或在HTTP搜索同步偷偷加载；索引按素材内容和模型版本失效，当前权限/审核/排除先于召回，弱候选明确标识。`production.py`搜索薄接线与应用组装暂由主控协调，不与A同写；B先交明确调用契约，再绑定直接消费者。禁止启动重模型、下载新模型或改资源门限。同时在既有知识解析拥有范围内修复混合PDF静默丢失扫描页的实际问题，未接通OCR时显式报告缺页，不能宣称整份解析成功。
 
 ## 6. 收口门
