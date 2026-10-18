@@ -7861,7 +7861,8 @@ def _creation_task_assistant_turn(
                     "timeline_sequence": current_version.sequence if current_version is not None else 0}
     if previous_context is None and payload.expected_timeline_sequence is not None and (payload.expected_timeline_sequence != task_version["timeline_sequence"]
             or payload.expected_timeline_version_id != task.current_timeline_version_id):
-        raise HTTPException(status_code=409, detail="当前任务版本已变化，请重新查看选中对象后发送。")
+        raise HTTPException(status_code=409, detail={"error": "creation_task_timeline_version_conflict",
+            "message": "当前任务版本已变化，请重新查看选中对象后发送。"})
     trusted_stage, trusted_refs = _assistant_turn_scope(workspace_id, task, payload)
     material_selection = (previous_context.get("target_snapshot", {}).get("material_selection")
                           if previous_context is not None else _assistant_task_clip_material_selection(request, task, trusted_refs))

@@ -67,6 +67,29 @@ def send(state, message="只重新生成故事板，保留配音，不生成视�
     return state.client.post(state.base_url + "/assistant/turn", json=payload), payload
 
 
+@pytest.mark.parametrize("stale_field", ["id", "sequence"])
+def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat, monkeypatch, stale_field):
+    state = chat
+    current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
+    message = "保留这条尚未发送的修改要求"
+    draft = state.conversations.save_draft(current["id"], "ws", state.member.member_id, message, current["draft_version"])
+    version = state.repo.get_timeline_version("ws", state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id)
+    monkeypatch.setattr(main, "run_task_turn", lambda *_a, **_k: pytest.fail("stale task must not invoke the assistant"))
+    payload = {"conversation_id": current["id"], "message": message, "context_stage": "montage",
+        "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],
+        "expected_timeline_version_id": "old-timeline" if stale_field == "id" else version.id,
+        "expected_timeline_sequence": version.sequence - 1 if stale_field == "sequence" else version.sequence}
+    response = state.client.post(state.base_url + "/assistant/turn", json=payload)
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"error": "creation_task_timeline_version_conflict",
+        "message": "当前任务版本已变化，请重新查看选中对象后发送。"}}
+    assert state.conversations.request_context(payload["client_request_id"], current["id"], "ws", state.member.member_id) is None
+    after = state.conversations.get(current["id"], "ws", state.member.member_id)
+    assert (after["draft_text"], after["draft_version"]) == (message, draft["draft_version"])
+    with state.conversations._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM assistant_conversation_turns WHERE conversation_id=?", (current["id"],)).fetchone()[0] == 0
+
+
 def request_id(task_id, turn_id):
     return str(uuid5(NAMESPACE_URL, json.dumps([task_id, turn_id, "storyboard-call"],
         ensure_ascii=False, separators=(",", ":"))))
