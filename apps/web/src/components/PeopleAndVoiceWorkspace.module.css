@@ -128,7 +128,7 @@
 .originalPreview small { color: var(--text-3); font-size: 12px; }
 
 .workspaceTabs { display:flex; gap:8px; flex-wrap:wrap; }
-.workspaceTabs button, .sectionHeader button, .stage button { padding:7px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
+.workspaceTabs button, .sectionHeader button, .stage button:not([data-slot="button"]) { padding:7px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
 .workspaceTabs button[aria-pressed="true"] { background:var(--surface-2); }
 .objectRail > button { display:grid; gap:4px; padding:10px; border:0; border-bottom:1px solid var(--border-1); background:transparent; color:var(--text-1); text-align:left; cursor:pointer; }
 .objectRail > button[aria-pressed="true"] { background:var(--surface-1); }
@@ -136,6 +136,7 @@
 .stage video, .stage img { display:block; max-width:100%; max-height:300px; }
 .stage audio { max-width:100%; }
 .stage label { display:grid; gap:5px; margin:10px 0; }
+.previewLanguage { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; }
 .stage [data-app-select-trigger] { min-width:0; max-width:100%; color:var(--text-1); background:var(--surface-1); }
 .editorForm > p { grid-column:1/-1; }
 
@@ -195,6 +196,6 @@
 .objectRail > button { height:56px; }
 .objectInfo strong { line-height:18px; }
 .objectInfo small { line-height:16px; }
-.workspaceTabs button, .sectionHeader button, .stage button, .importActions button, .intakeRepair button { min-height:32px; padding:0 10px; font-size:13px; }
+.workspaceTabs button, .sectionHeader button, .stage button:not([data-slot="button"]), .importActions button, .intakeRepair button { min-height:32px; padding:0 10px; font-size:13px; }
 .profileHeading button { padding:0; }
 .page svg, .stage svg, .importActions svg { stroke-width:1.7; }

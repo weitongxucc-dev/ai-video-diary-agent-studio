@@ -47,6 +47,13 @@ describe("media profiles API client", () => {
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "测试", retry: true });
   });
 
+  it.each(["zh", "en"] as const)("sends the concrete audition language %s", async language => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "preview-2", language }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await createVoicePreview({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "A short audition.", language, retry: false });
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({ voice_profile_id: "voice-1", voice_version: "v1", preview_text: "A short audition.", language, retry: false });
+  });
+
   it("sends the AvatarLipSyncPreviewRequest body exactly", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "preview-3" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

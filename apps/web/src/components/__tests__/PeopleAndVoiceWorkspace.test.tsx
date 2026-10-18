@@ -69,10 +69,10 @@ describe("independent profile consumers",()=>{
   api.setDefaultVoice.mockResolvedValue({...voice,version:"v0"});render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");await inspectSelectOptions(screen.getByLabelText("档案版本"),()=>screen.findByRole("option",{name:"第1版"}));await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");await waitFor(()=>expect(api.getVoiceProfile).toHaveBeenCalledWith("voice","v0"));fireEvent.click(await screen.findByRole("button",{name:"设为默认声音"}));await waitFor(()=>expect(api.setDefaultVoice).toHaveBeenCalledWith("voice","v0"));expect(screen.getByLabelText("原始声音参考")).toHaveAttribute("src","/reference/voice");
  });
  it("queued is not a generated audio and can be explicitly cancelled",async()=>{
-  const run={id:"r",identity:"i",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",status:"queued",output_url:null};api.listMediaPreviews.mockResolvedValue({items:[run]});render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");await screen.findByText("等待设备许可");expect(screen.getByRole("button",{name:"生成短试听"})).toBeDisabled();expect(document.querySelectorAll('audio[src]')).toHaveLength(1);fireEvent.click(screen.getByRole("button",{name:"取消预览"}));await waitFor(()=>expect(api.cancelPreview).toHaveBeenCalledWith(run));
+  const run={id:"r",identity:"i",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",language:"zh",status:"queued",output_url:null};api.listMediaPreviews.mockResolvedValue({items:[run]});render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");await screen.findByText("等待设备许可");expect(screen.getByRole("button",{name:"生成短试听"})).toBeDisabled();expect(document.querySelectorAll('audio[src]')).toHaveLength(1);fireEvent.click(screen.getByRole("button",{name:"取消预览"}));await waitFor(()=>expect(api.cancelPreview).toHaveBeenCalledWith(run));
  });
- it("person preview selects an independent voice version and uses only its succeeded run",async()=>{
-  const run={id:"r",identity:"i",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",status:"succeeded"};api.listMediaPreviews.mockResolvedValue({items:[run]});api.getMediaCapability.mockResolvedValue({available:true,model_id:"avatar-model"});render(<PeopleAndVoiceWorkspace/>);await openProfile("人物");fireEvent.click(screen.getByRole("button",{name:"制作人物短预览"}));await waitFor(()=>expect(api.createAvatarLipsyncPreview).toHaveBeenCalledWith(expect.objectContaining({person_profile_id:"person",person_version:"p1",voice_profile_id:"voice",voice_version:"v1",voice_preview_identity:"i",authorization_id:null,authorization_version:null,model_id:"avatar-model"})));
+ it.each(["zh", "en"])("person preview selects an independent voice version and uses its succeeded %s run",async language=>{
+  api.listVoiceProfiles.mockResolvedValue({items:[{...voice,language:"zh-en"}]});const run={id:"r",identity:"i",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",language,status:"succeeded"};api.listMediaPreviews.mockResolvedValue({items:[run]});api.getMediaCapability.mockResolvedValue({available:true,model_id:"avatar-model"});render(<PeopleAndVoiceWorkspace/>);await openProfile("人物");fireEvent.click(screen.getByRole("button",{name:"制作人物短预览"}));await waitFor(()=>expect(api.createAvatarLipsyncPreview).toHaveBeenCalledWith(expect.objectContaining({person_profile_id:"person",person_version:"p1",voice_profile_id:"voice",voice_version:"v1",voice_preview_identity:"i",authorization_id:null,authorization_version:null,model_id:"avatar-model"})));
  });
  it("save failure keeps the selected source and original draft",async()=>{
   api.savePersonProfile.mockRejectedValue(new Error("synthetic save failed"));render(<PeopleAndVoiceWorkspace/>);await openProfile("人物");fireEvent.click(screen.getByRole("button",{name:"新增人物"}));fireEvent.change(screen.getByLabelText("名称"),{target:{value:"保留输入"}});await inspectSelectOptions(screen.getByLabelText("参考素材"),()=>screen.findByRole("option",{name:"合成照片.png"}));await chooseSelectValue(screen.getByLabelText("参考素材"), "visual");fireEvent.submit(screen.getByLabelText("名称").closest("form")!);await screen.findByText("synthetic save failed");expect(screen.getByLabelText("名称")).toHaveValue("保留输入");expect(screen.getByLabelText("参考素材")).toHaveAttribute("data-selected-value", "visual");
@@ -112,7 +112,82 @@ describe("independent profile consumers",()=>{
  });
 
  it("shows the persisted audition text separately from newly edited input and keeps its output identity",async()=>{
-  api.listMediaPreviews.mockResolvedValue({items:[{id:"r",identity:"old-audition",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",status:"succeeded",preview_text:"真实生成的旧句子",output_url:"/generated/old.wav"}]});render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");await screen.findByText("这次结果的试听文字：真实生成的旧句子");fireEvent.change(screen.getByLabelText("短试听文字"),{target:{value:"这句还没有生成"}});expect(screen.getByText(/当前输入与这条结果不同/)).toBeInTheDocument();expect(document.querySelector('audio[src="/generated/old.wav"]')).toBeInTheDocument();expect(api.createVoicePreview).not.toHaveBeenCalled();
+  api.listMediaPreviews.mockResolvedValue({items:[{id:"r",identity:"old-audition",preview_type:"voice",voice_profile_id:"voice",voice_version:"v1",language:"zh",status:"succeeded",preview_text:"真实生成的旧句子",output_url:"/generated/old.wav"}]});render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");await screen.findByText("这次结果的试听文字：真实生成的旧句子");fireEvent.change(screen.getByLabelText("短试听文字"),{target:{value:"这句还没有生成"}});expect(screen.getByText(/当前输入与这条结果不同/)).toBeInTheDocument();expect(document.querySelector('audio[src="/generated/old.wav"]')).toBeInTheDocument();expect(api.createVoicePreview).not.toHaveBeenCalled();
+ });
+
+ it.each([["zh", "中文"], ["en", "English"]] as const)("uses a monolingual voice's own language %s automatically", async (language, label) => {
+  const monolingual = {...voice, language};
+  api.listVoiceProfiles.mockResolvedValue({items:[monolingual]});
+  api.getVoiceProfile.mockResolvedValue(monolingual);
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);
+  await openProfile("独立声音");
+  expect(screen.getByText(`试听语言：${label}`)).toBeInTheDocument();
+  expect(screen.queryByRole("group", {name:"试听语言"})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"生成短试听"}));
+  await waitFor(() => expect(api.createVoicePreview).toHaveBeenCalledWith(expect.objectContaining({language})));
+ });
+
+ it("keeps bilingual audition receipts and players separate when switching languages", async () => {
+  const bilingual = {...voice, language:"zh-en"};
+  api.listVoiceProfiles.mockResolvedValue({items:[bilingual]});
+  api.getVoiceProfile.mockResolvedValue(bilingual);
+  const receipt = {preview_type:"voice", voice_profile_id:"voice", voice_version:"v1", status:"succeeded", preview_text:voice.reference_text};
+  api.listMediaPreviews.mockResolvedValue({items:[
+   {...receipt, id:"en", identity:"english-audition", language:"en", output_url:"/generated/en.wav"},
+   {...receipt, id:"zh", identity:"chinese-audition", language:"zh", output_url:"/generated/zh.wav"},
+  ]});
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);
+  await openProfile("独立声音");
+  expect(screen.getByRole("button", {name:"中文", pressed:true})).toBeInTheDocument();
+  const chinesePlayer = document.querySelector('audio[src="/generated/zh.wav"]');
+  expect(chinesePlayer).toBeInTheDocument();
+  expect(document.querySelector('audio[src="/generated/en.wav"]')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"English"}));
+  expect(screen.getByRole("button", {name:"English", pressed:true})).toBeInTheDocument();
+  expect(screen.getByText("这次结果的试听语言：English")).toBeInTheDocument();
+  expect(chinesePlayer).not.toBeInTheDocument();
+  expect(document.querySelector('audio[src="/generated/en.wav"]')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"中文"}));
+  expect(document.querySelector('audio[src="/generated/zh.wav"]')).not.toBe(chinesePlayer);
+  expect(api.createVoicePreview).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name:"生成短试听"}));
+  await waitFor(() => expect(api.createVoicePreview).toHaveBeenLastCalledWith(expect.objectContaining({language:"zh", retry:false})));
+ });
+
+ it("does not reuse the other language's failed receipt when requesting a new audition", async () => {
+  const bilingual = {...voice, language:"zh-en"};
+  api.listVoiceProfiles.mockResolvedValue({items:[bilingual]});
+  api.getVoiceProfile.mockResolvedValue(bilingual);
+  api.listMediaPreviews.mockResolvedValue({items:[{id:"zh", identity:"failed-zh", preview_type:"voice", voice_profile_id:"voice", voice_version:"v1", language:"zh", status:"failed", preview_text:voice.reference_text, reason:"中文生成失败"}]});
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);
+  await openProfile("独立声音");
+  expect(screen.getByText("中文生成失败")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"English"}));
+  expect(screen.queryByLabelText("生成预览状态")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("短试听文字"), {target:{value:"A short English audition."}});
+  fireEvent.click(screen.getByRole("button", {name:"生成短试听"}));
+  await waitFor(() => expect(api.createVoicePreview).toHaveBeenCalledWith({voice_profile_id:"voice", voice_version:"v1", preview_text:"A short English audition.", language:"en", retry:false}));
+  await waitFor(() => expect(screen.getByRole("button", {name:"生成短试听"})).toBeEnabled());
+  expect(screen.queryByLabelText("生成预览状态")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"English", pressed:true})).toBeInTheDocument();
+ });
+
+ it("explains the existing generation lock without showing another language's queued receipt", async () => {
+  const bilingual = {...voice, language:"zh-en"};
+  api.listVoiceProfiles.mockResolvedValue({items:[bilingual]});
+  api.getVoiceProfile.mockResolvedValue(bilingual);
+  const queued = {id:"zh", identity:"queued-zh", preview_type:"voice", voice_profile_id:"voice", voice_version:"v1", language:"zh", status:"queued", preview_text:voice.reference_text};
+  api.listMediaPreviews.mockResolvedValue({items:[queued]});
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);
+  await openProfile("独立声音");
+  fireEvent.click(screen.getByRole("button", {name:"English"}));
+  expect(screen.queryByLabelText("生成预览状态")).not.toBeInTheDocument();
+  expect(screen.getByText("该声音还有另一种语言的试听等待或生成。可切换语言查看或取消。")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:"生成短试听"})).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", {name:"中文"}));
+  fireEvent.click(screen.getByRole("button", {name:"取消预览"}));
+  await waitFor(() => expect(api.cancelPreview).toHaveBeenCalledWith(queued));
+  expect(api.createVoicePreview).not.toHaveBeenCalled();
  });
 
 });

@@ -137,7 +137,7 @@ export const listVoiceProfileVersions = (id: string) => request<{ items: VoicePr
 export const getDefaultVoice = () => request<VoiceProfile | null>("/api/media/default-voice");
 export const setDefaultVoice = (profile_id: string, version: string) => request<VoiceProfile>("/api/media/default-voice", { method: "PUT", body: JSON.stringify({ profile_id, version }) });
 export const cancelPreview = (preview: MediaPreview) => request<MediaPreview>(`/api/media/previews/${preview.preview_type}/${encodeURIComponent(preview.identity)}/cancel`, { method: "POST" });
-export const createVoicePreview = (input: { voice_profile_id: string; voice_version: string; preview_text: string; retry: boolean }) => request<MediaPreview>("/api/media/previews/voice", { method: "POST", body: JSON.stringify(input) });
+export const createVoicePreview = (input: { voice_profile_id: string; voice_version: string; preview_text: string; language?: "zh" | "en"; retry: boolean }) => request<MediaPreview>("/api/media/previews/voice", { method: "POST", body: JSON.stringify(input) });
 export const createAvatarLipsyncPreview = (input: {
   person_profile_id: string; person_version: string; voice_profile_id: string; voice_version: string;
   voice_preview_identity: string; motion: string; expression: string;

@@ -9,6 +9,7 @@ import { getMaterialIntakeStatus, bindMaterialIntake } from "@/lib/api";
 import type { MaterialIntakeStatus } from "@/lib/types";
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { AppShell } from "@/components/AppShell";
+import { Button } from "@/components/ui/button";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { VoiceSamplingSetup } from "@/components/voice-sampling";
 import {
@@ -42,6 +43,7 @@ const usageLabel = (value?: string) => value ? useLabels[value] ?? "历史使用
 type View = "people" | "voices" | "dictionary" | "authorizations";
 const id = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const viewLabel: Record<View, string> = { people: "人物形象", voices: "声音", dictionary: "朗读替换", authorizations: "授权记录" };
+const previewLanguageLabels = { zh: "中文", en: "English" };
 
 export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = false, returnTaskId }: { initialView?: View; embedded?: boolean; returnTaskId?: string }) {
   const locateQuery = useSearchParams().get("locate_ref");
@@ -68,6 +70,7 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState("");
+  const [bilingualPreviewLanguage, setBilingualPreviewLanguage] = useState<"zh" | "en">("zh");
   useEffect(() => { setPreviewText(selectedVoice?.reference_text ?? ""); }, [selectedVoice?.id, selectedVoice?.version, selectedVoice?.reference_text]);
   const [notice, setNotice] = useState<string | null>(null);
   const editorGeneration = useRef(0);
@@ -124,10 +127,13 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   const generationCapability = view === "voices" ? capabilities.voice : capabilities.person;
   const selected = view === "voices" ? selectedVoice : selectedPerson;
   const voiceModelMismatch = view === "voices" && generationCapability?.available && generationCapability.model_id && selectedVoice?.model_id !== generationCapability.model_id;
-  const voicePreviews = previews.filter(run => run.preview_type === "voice" && run.voice_profile_id === selectedVoice?.id && run.voice_version === selectedVoice?.version);
-  const selectedVoicePreview=voicePreviews.find(run=>run.status==="succeeded");
+  const previewLanguage = selectedVoice?.language === "zh-en" ? bilingualPreviewLanguage : selectedVoice?.language;
+  const profileVoicePreviews = previews.filter(run => run.preview_type === "voice" && run.voice_profile_id === selectedVoice?.id && run.voice_version === selectedVoice?.version);
+  const voicePreviews = profileVoicePreviews.filter(run => run.language === previewLanguage);
+  const selectedVoicePreview=profileVoicePreviews.find(run=>run.status==="succeeded");
   const activePreview = view === "voices" ? voicePreviews.find(run=>run.preview_text===previewText.trim()) ?? voicePreviews[0] : previews.find(run=>run.preview_type === "avatar_lipsync" && run.person_profile_id === selectedPerson?.id && run.person_version === selectedPerson?.version && run.voice_profile_id===selectedVoice?.id && run.voice_version===selectedVoice?.version);
-  const voicePreviewBusy=voicePreviews.some(run=>run.status==="queued"||run.status==="running");
+  const pendingVoicePreview=profileVoicePreviews.find(run=>run.status==="queued"||run.status==="running");
+  const voicePreviewBusy=Boolean(pendingVoicePreview);
   const selectedId = selected?.id;
   const selectedVersion = selected?.version;
   useEffect(() => {
@@ -149,7 +155,7 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   async function preview() {
     await run(async () => {
       if (view === "voices" && selectedVoice) {
-        await createVoicePreview({ voice_profile_id: selectedVoice.id, voice_version: selectedVoice.version, preview_text: previewText, retry: Boolean(activePreview && !["queued", "running", "succeeded"].includes(activePreview.status)) });
+        await createVoicePreview({ voice_profile_id: selectedVoice.id, voice_version: selectedVoice.version, preview_text: previewText, language: previewLanguage, retry: Boolean(activePreview && !["queued", "running", "succeeded"].includes(activePreview.status)) });
       } else if (selectedPerson && selectedVoice) {
         const upstream = selectedVoicePreview;
         if (!upstream) throw new Error("先完成当前声音版本的独立试听，再制作人物短预览。");
@@ -188,12 +194,13 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
         <div className={styles.profileHeading}><strong>{view==="voices"?"声音参考":"人物参考"}</strong><button type="button" aria-label="引用当前档案到对话" title="引用当前档案到对话" onClick={()=>referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:selected.id,version:selected.version,label:selected.display_name||"未命名档案"},true)}><MessageSquarePlus size={16}/></button></div><button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(selected);setShowCreate(true); }}>编辑参考</button><p>{usageLabel(selected.use_state)} · 参考已保存</p>
         <label>固定版本<AppSelect aria-label="档案版本" value={selected.version} onValueChange={newValue => { ++editorGeneration.current;const version=newValue; void run(async () => { const object=view==="voices" ? await getVoiceProfile(selected.id,version) : await getPersonProfile(selected.id,version);if(view==="voices")setVoice(object as VoiceProfile);else setPerson(object as PersonProfile);referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:object.id,version:object.version,label:object.display_name||"未命名档案"}); }); }}>{versions.map((item,index) => <AppSelectOption key={item.version} value={item.version}>第{versions.length-index}版</AppSelectOption>)}</AppSelect></label>
         <ReferencePlayback object={selected} voice={view === "voices"}/><details><summary>档案标识</summary><p>{selected.id} · {selected.version}</p></details>{!selected.runnable ? <p>当前参考不能用于生成。编辑参考可重新选择来源或检查使用限制。</p> : null}{selected.runnable_reason ? <details><summary>参考诊断</summary><p>{selected.runnable_reason}</p></details> : null}
-        {view === "voices" && selectedVoice ? <><p>{selectedVoice.reference_text || "参考文字未填写；生成前需填写实际对应文字。"}</p><label>短试听文字<textarea aria-label="短试听文字" value={previewText} onChange={event => setPreviewText(event.target.value)} disabled={busy}/></label><button type="button" disabled={busy || !selectedVoice.runnable} onClick={() => void run(async () => { setDefault(await setDefaultVoice(selectedVoice.id,selectedVoice.version)); setNotice("已保存默认声音的固定版本。"); })}>{defaultVoice?.id===selectedVoice.id && defaultVoice.version===selectedVoice.version ? "当前默认版本" : "设为默认声音"}</button></> : <label>本次预览声音<AppSelect aria-label="人物预览声音" value={selectedVoice?.id ?? ""} onValueChange={newValue => setVoice(voices.find(v => v.id===newValue) ?? null)}><AppSelectOption value="">选择独立声音</AppSelectOption>{voices.map(v => <AppSelectOption key={v.id} value={v.id}>{v.display_name}</AppSelectOption>)}</AppSelect></label>}
+        {view === "voices" && selectedVoice ? <><p>{selectedVoice.reference_text || "参考文字未填写；生成前需填写实际对应文字。"}</p>{selectedVoice.language === "zh-en" ? <div role="group" aria-label="试听语言" className={styles.previewLanguage}><span>试听语言</span>{(["zh", "en"] as const).map(language => <Button key={language} type="button" variant={previewLanguage === language ? "secondary" : "outline"} aria-pressed={previewLanguage === language} disabled={busy} onClick={() => setBilingualPreviewLanguage(language)}>{previewLanguageLabels[language]}</Button>)}</div> : <p>试听语言：{previewLanguageLabels[selectedVoice.language]}</p>}<label>短试听文字<textarea aria-label="短试听文字" value={previewText} onChange={event => setPreviewText(event.target.value)} disabled={busy}/></label><button type="button" disabled={busy || !selectedVoice.runnable} onClick={() => void run(async () => { setDefault(await setDefaultVoice(selectedVoice.id,selectedVoice.version)); setNotice("已保存默认声音的固定版本。"); })}>{defaultVoice?.id===selectedVoice.id && defaultVoice.version===selectedVoice.version ? "当前默认版本" : "设为默认声音"}</button></> : <label>本次预览声音<AppSelect aria-label="人物预览声音" value={selectedVoice?.id ?? ""} onValueChange={newValue => setVoice(voices.find(v => v.id===newValue) ?? null)}><AppSelectOption value="">选择独立声音</AppSelectOption>{voices.map(v => <AppSelectOption key={v.id} value={v.id}>{v.display_name}</AppSelectOption>)}</AppSelect></label>}
         {view!=="voices" ? selectedVoicePreview ? <p>口型将使用该声音版本最近成功的试听：{selectedVoicePreview.preview_text || "历史记录未保存文字，音频身份仍为已记录的同一声音版本。"}</p> : <p>先为选中的声音生成短试听，再回来制作人物口型。 <button type="button" onClick={()=>{setView("voices");setShowDetail(Boolean(selectedVoice));}}>打开声音试听</button></p> : null}
         {generationCapability && !generationCapability.available ? <section role="status"><p>参考已保存，暂不可生成。请准备本地{view === "voices" ? "声音" : "人物口型"}模型后重试。 <Link href="/health">查看运行条件</Link></p><details><summary>模型准备详情</summary><p>{generationCapability.message}</p><p>{generationCapability.repair_action}</p></details></section> : null}
         {voiceModelMismatch ? <p>该声音版本尚未选择当前模型，请编辑参考，选择已配置模型并保存新版本。</p> : null}
+        {view === "voices" && pendingVoicePreview && pendingVoicePreview.language !== previewLanguage ? <p role="status">该声音还有另一种语言的试听等待或生成。可切换语言查看或取消。</p> : null}
         <button type="button" disabled={busy || voicePreviewBusy || Boolean(voiceModelMismatch) || !selected.runnable || generationCapability?.available === false || (view === "voices" ? !selectedVoice?.reference_text.trim() || !previewText.trim() : !selectedVoice || !selectedVoicePreview) || activePreview?.status==="queued" || activePreview?.status==="running"} onClick={() => void preview()}>{view==="voices" ? "生成短试听" : "制作人物短预览"}</button>
-        {activePreview ? <section aria-label="生成预览状态"><strong>{view==="voices"?"生成试听结果":"生成口型结果"}</strong>{view==="voices" ? <><p>这次结果的试听文字：{activePreview.preview_text || "历史记录未保存试听文字"}</p>{activePreview.preview_text!==previewText.trim() ? <p>当前输入与这条结果不同，修改文字后需要生成新的试听。</p> : null}</> : null}<p>{({queued:"等待设备许可",running:"正在生成",succeeded:"已生成",cancelled:"已取消",failed:"失败",blocked:"阻断",unavailable:"能力不可用"})[activePreview.status]}</p><p>{activePreview.impact} {activePreview.repair_action}</p>{activePreview.reason ? <details><summary>预览诊断</summary><p>{activePreview.reason}</p></details> : null}{activePreview.status==="succeeded" && activePreview.output_url ? view==="voices" ? <audio controls src={activePreview.output_url}/> : <video controls src={activePreview.output_url}/> : null}{["queued","running"].includes(activePreview.status) ? <button type="button" onClick={() => void run(async () => { await cancelPreview(activePreview); await refresh(); })}>取消预览</button> : null}</section> : null}
+        {activePreview ? <section key={activePreview.identity} aria-label="生成预览状态"><strong>{view==="voices"?"生成试听结果":"生成口型结果"}</strong>{view==="voices" ? <><p>这次结果的试听语言：{previewLanguage && previewLanguageLabels[previewLanguage]}</p><p>这次结果的试听文字：{activePreview.preview_text || "历史记录未保存试听文字"}</p>{activePreview.preview_text!==previewText.trim() ? <p>当前输入与这条结果不同，修改文字后需要生成新的试听。</p> : null}</> : null}<p>{({queued:"等待设备许可",running:"正在生成",succeeded:"已生成",cancelled:"已取消",failed:"失败",blocked:"阻断",unavailable:"能力不可用"})[activePreview.status]}</p><p>{activePreview.impact} {activePreview.repair_action}</p>{activePreview.reason ? <details><summary>预览诊断</summary><p>{activePreview.reason}</p></details> : null}{activePreview.status==="succeeded" && activePreview.output_url ? view==="voices" ? <audio controls src={activePreview.output_url}/> : <video controls src={activePreview.output_url}/> : null}{["queued","running"].includes(activePreview.status) ? <button type="button" onClick={() => void run(async () => { await cancelPreview(activePreview); await refresh(); })}>取消预览</button> : null}</section> : null}
       </section>{editorCard}</HomeCardDialog> : editorCard}
 
     </>}

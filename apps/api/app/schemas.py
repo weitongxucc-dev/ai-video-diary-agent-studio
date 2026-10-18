@@ -3430,6 +3430,7 @@ class VoicePreviewRequest(BaseModel):
     voice_profile_id: str = Field(min_length=1, max_length=120)
     voice_version: str = Field(min_length=1, max_length=120)
     preview_text: str = Field(min_length=1, max_length=4000)
+    language: Literal["zh", "en"] | None = None
     retry: bool = False
 
 
