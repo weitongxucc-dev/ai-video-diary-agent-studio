@@ -344,7 +344,7 @@ describe("persisted business result cards", () => {
     const receipt = within(details).getByText("首次资源检查 · 未通过").closest("details")!;
     expect(details).toHaveAttribute("open");
     expect(receipt).toHaveAttribute("open");
-    expect(within(details).getByText("等待处理：本机资源余量不足，正在等待满足制作条件。")).toBeVisible();
+    expect(within(details).getByText("等待处理：本机资源检查尚未通过，正在等待满足制作条件。")).toBeVisible();
     expect(within(receipt).getByText(resourceReceipt.summary)).toBeVisible();
     expect(within(receipt).getByText("CPU 使用率：实测 95.6%；不高于 91%；检查未通过。")).toBeVisible();
     expect(within(receipt).getByText("可用内存：实测 1,073,741,824 字节；至少 3,221,225,472 字节；检查未通过。")).toBeVisible();
@@ -449,12 +449,12 @@ describe("persisted business result cards", () => {
     response.media_job = {...response.media_job as Record<string, unknown>, waiting_reason: "resource_busy", resource_wait};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    expect(screen.getByText("等待处理：本机资源余量不足，正在等待满足制作条件。")).toBeVisible();
+    expect(screen.getByText("等待处理：本机资源检查尚未通过，正在等待满足制作条件。")).toBeVisible();
     expect(screen.queryByText(/首次资源检查|历史资源检查|CPU|字节|首次检查时间/)).not.toBeInTheDocument();
   });
 
   it.each([
-    ["resource_busy", "本机资源余量不足，正在等待满足制作条件。"],
+    ["resource_busy", "本机资源检查尚未通过，正在等待满足制作条件。"],
     ["resource_unknown", "暂不能确认设备资源是否足够。"],
   ])("shows the actual %s wait in the default-open result without inventing resource measurements", (reason, label) => {
     const saved = projectedTaskConversation("queued");

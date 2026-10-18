@@ -138,7 +138,7 @@ it("does not return recovery results after an API member-boundary rejection", as
 it("uses ordinary device waiting text and preserves the original diagnostic reason", () => {
   const pressure = { ...queued, waiting_reason: "resource_pressure" };
   expect(taskMediaJobLabel(pressure)).toBe("等待处理：本机资源暂时不足，等待恢复。");
-  expect(taskMediaJobLabel({ ...queued, waiting_reason: "resource_busy" })).toContain("本机资源余量不足");
+  expect(taskMediaJobLabel({ ...queued, waiting_reason: "resource_busy" })).toBe("等待处理：本机资源检查尚未通过，正在等待满足制作条件。");
   const unknown = { ...queued, waiting_reason: "new_internal_wait_code" };
   expect(taskMediaJobLabel(unknown)).toBe("已安排，等待设备空闲");
   expect(pressure.waiting_reason).toBe("resource_pressure");

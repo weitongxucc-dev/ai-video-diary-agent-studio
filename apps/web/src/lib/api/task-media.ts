@@ -99,7 +99,7 @@ export function taskMediaJobLabel(job: TaskMediaJob): string {
             activity_unknown: "暂不能确认设备是否空闲。",
             device_active: "设备有人正在播放、录音或编辑。",
             resource_unknown: "暂不能确认设备资源是否足够。",
-            resource_busy: "本机资源余量不足，正在等待满足制作条件。",
+            resource_busy: "本机资源检查尚未通过，正在等待满足制作条件。",
             resource_pressure: "本机资源暂时不足，等待恢复。",
             retry_not_before: "等待下次可重试时间。",
             recovered: "设备恢复后等待重新核验。",
