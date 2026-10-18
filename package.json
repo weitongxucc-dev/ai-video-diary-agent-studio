@@ -13,5 +13,9 @@
     "test:api": "cd apps/api && uv run pytest",
     "test:web": "corepack pnpm --dir apps/web test",
     "test": "pnpm run test:web-contract && pnpm run test:design-system && pnpm run test:web"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "3.25.76"
   }
 }

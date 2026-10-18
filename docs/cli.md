@@ -14,7 +14,26 @@
 
 当前CLI已有能力/素材/任务读取、编辑预览应用、图片程序、制作作业、历史控制及自然语言会话入口。自然语言意图的实际制作能力由API决定，入口接通不表示自主制作/逐条语言已通过。待补齐：完整定稿采用和逐条语言配置、安装包中的可发现入口、所有写入的独立持久回执及受权产物取得。尤其现有制作开始/恢复与撤销/重做的未知结果限制仍按下文执行；不能因新要求而盲重发。
 
-MCP服务端、飞书和钉钉适配需各自实现与实测，当前CLI代码不证明它们已经存在；Pi可调用外部MCP不等于曜核已能被MCP调用。新协议复用服务端能力schema与同一业务用例，客户端不复制参数规则、任务库或调度。协议完成后再追加精确命令/配置示例，并用真实客户端和同一作品验收。
+MCP源码入口已提供下述stdio能力，复用CLI传输和业务命令；它不代表完整制作、安装交付或外部软件整条链路已验收。飞书和钉钉适配仍需各自实现与真实租户验证，不能从MCP接通外推。
+
+## MCP本地连接
+
+安装仓库依赖后，使用Node.js22以上启动`scripts/yaohe-mcp.mjs --config 私有配置路径`。SDK固定为`@modelcontextprotocol/sdk@1.32.1`，按[官方stdio方式](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/docs/server.md#stdio)协商；不会开放新的HTTP端口。客户端配置示例中的路径需替换为实际绝对路径：
+
+```json
+{
+  "mcpServers": {
+    "yaohe": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/repository/scripts/yaohe-mcp.mjs", "--config", "/private/path/config.json"]
+    }
+  }
+}
+```
+
+工具包括`capabilities`、`task_inspect`、`material_search/inspect`、`execution_status/preview`、`job_inspect`、`conversation_create/inspect/draft/turn/request`、`edit_preview/apply/request`。参数schema由`tools/list`返回，动作细节仍从服务端能力目录取得。`yaohe://tasks/{taskId}`资源读取同一受权作品，不授予额外访问权。每次调用重新读取私有身份配置，由业务API验证权限；工具不接受凭据、工作区身份、任意URL或本地路径。
+
+会话发送须先保存草稿，再提交相同正文、草稿和引用版本；原请求回执支持断线回查。精确编辑先预检，再按真实提案应用；明确用户指令可连续完成两步，不强制再问一次。未知结果只查原身份，不换ID重试。MCP连接断开不取消制作；当前未暴露制作开始/恢复、撤销/重做的直接MCP工具，待这些写入具备独立回执后接入。调用会话可能等待模型响应，不把协议请求完成等同制作完成。
 
 ## 私有配置
 

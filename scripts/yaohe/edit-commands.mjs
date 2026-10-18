@@ -7,6 +7,21 @@ import {open} from 'node:fs/promises';
 import {boundedJson} from './files.mjs';
 
 export async function editCommand(api,args) {
+  return editRequest(api,args,async()=>{
+  let action, file;
+    if (!args.flags.file) throw new CliError('预览需要 --file');
+    try {
+      file = await open(args.flags.file,constants.O_RDONLY | constants.O_NONBLOCK);
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > 65536) throw new CliError('编辑文件须是有界普通文件');
+      action = await boundedJson(file);
+    } catch { throw new CliError('编辑文件须是有界完整 JSON'); }
+    finally { await file?.close(); }
+  return action;
+  });
+}
+
+export async function editRequest(api,args,readAction) {
   const {positional:p,flags:f} = args;
   const [group,command,task,object] = p;
   const check = (length,allowed) => checkArguments(p,f,length,allowed);
@@ -17,16 +32,7 @@ export async function editCommand(api,args) {
     if (previous?.status === 'unknown') return knownReceipt(previous,locator);
     if (previous && previous.status !== 'recorded') throw new CliError('请求回执无法核验',4,{request_locator:locator});
     if (command === 'preview') {
-      if (!f.file) throw new CliError('预览需要 --file');
-      let action, file;
-      try {
-        file = await open(f.file,constants.O_RDONLY | constants.O_NONBLOCK);
-        const stat = await file.stat();
-        if (!stat.isFile() || stat.size > 65536) throw new CliError('编辑文件须是有界普通文件');
-        action = await boundedJson(file);
-      }
-      catch { throw new CliError('编辑文件须是有界完整 JSON'); }
-      finally { await file?.close(); }
+      const action = await readAction();
       if (!action || Array.isArray(action) || typeof action !== 'object' || typeof action.operation_type !== 'string'
           || ['assistant_turn_id','request_id','workspace_id','member_id','task_id'].some(k => k in action)) throw new CliError('编辑文件须仅包含实际动作与期望版本，不包含身份');
       let body;

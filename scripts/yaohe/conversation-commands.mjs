@@ -32,12 +32,18 @@ function turnOutcome(status) {
   return {code:4,state:'unknown'};
 }
 
-export async function conversationCommand(api, {positional:p,flags:f}) {
+export async function conversationCommand(api, args) {
+  const needsBody = ['create','draft','turn'].includes(args.positional[1]);
+  return conversationRequest(api,args,needsBody ? await payloadFile(args.flags.file) : undefined);
+}
+
+// CLI files and MCP structured arguments share the same identity/version rules.
+export async function conversationRequest(api, {positional:p,flags:f}, input) {
   const [,command,conversation,request] = p;
   const check = (length, fields) => checkArguments(p,f,length,fields);
   if (command === 'create') {
     check(2,['file']);
-    const body = await payloadFile(f.file);
+    const body = input;
     only(body,['scope_kind','scope_id','title']);
     // Creation is explicit. A lost response is unknown, never an automatic retry.
     return {data:await api('/api/assistant/conversations',{method:'POST',body})};
@@ -53,7 +59,7 @@ export async function conversationCommand(api, {positional:p,flags:f}) {
   }
   if (command === 'draft') {
     check(3,['file']);
-    const body = await payloadFile(f.file);
+    const body = input;
     only(body,['draft_text','expected_draft_version']);
     if (typeof body.draft_text !== 'string' || !Number.isSafeInteger(body.expected_draft_version) || body.expected_draft_version < 0) {
       throw new CliError('草稿需要draft_text和明确的非负expected_draft_version');
@@ -63,7 +69,7 @@ export async function conversationCommand(api, {positional:p,flags:f}) {
   if (command === 'turn') {
     check(3,['file','request-id','task','timeout-seconds']);
     const requestId = uuid(f['request-id']);
-    const body = await payloadFile(f.file);
+    const body = input;
     only(body,['message','expected_draft_version','expected_reference_version',
       ...(f.task ? ['context_stage','expected_timeline_version_id','expected_timeline_sequence','selected_object_refs','playhead_ms'] : [])]);
     if (typeof body.message !== 'string' || !Number.isSafeInteger(body.expected_draft_version) || body.expected_draft_version < 0
