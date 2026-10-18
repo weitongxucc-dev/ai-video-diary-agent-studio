@@ -130,7 +130,7 @@ A新增实际文案约束与接续绑定：在既有`topics.py`、`main.py`、`a
 
 C配音准备页与资料加载续绑：在现有`CreationTaskWorkspace.tsx`、`creation-task/NarrationPreparation.tsx`、现有`ScriptEditor`定义所在文件及直接测试，移除can_revise_script对声音控件的互斥隐藏，保留修改文案与采用声音并列；传递完整声音候选并展示真实不可用原因，不把过滤后的空数组称为无档案。只采用声音的按钮明确命名，不能假称已生成；触及按钮复用现有shadcn Button/AppSelect，保持设计token和左栏不变。资料请求未完成时展示读取中，不能提前声称当前无资料；复用现有加载状态，不加缓存/轮询/错误兜底框架。主控负责原生页面复验，C不运行模型或打包。
 
-C镜头待确认误报续绑：独占`creation-task/CreationExecutionPanel.tsx`及直接测试，仅在真实失败/中断/取消失败状态展示失败原因；排队中的waiting_for_user复用现有等待说明，不能按旧任务阶段报“配音没有完成”。紧凑与详情消费者一致，不新增轮询或缓存。声音选择本回合已有execution_action结束刷新，未证实的新刷新缺口不修改。
+C镜头待确认误报续绑：独占`creation-task/CreationExecutionPanel.tsx`及直接测试，仅在真实失败/中断/取消失败状态展示失败原因；排队中的waiting_for_user复用现有等待说明，不能按旧任务阶段报“配音没有完成”。紧凑与详情消费者一致；同一文件补queued/waiting_for_user镜头全部确认后的原onResume入口，以真实preview.requirements.can_continue约束，不将普通排队变成可重启、不取消重建作业。尚有待审核镜头时仅指向审核且不误允。不得新增轮询或缓存。声音选择本回合已有execution_action结束刷新，未证实的新刷新缺口不修改。
 
 C新增独占绑定`apps/web/src/components/HomeCommandComposer.tsx`及`__tests__/HomeCommandComposer.test.tsx`：真实首页会话携带任务目标保存并采用文案后，复用既有`onTaskUpdated`刷新当前任务；将真实`script_draft`回执纳入刷新条件，保留会话/目标切换的晚回包保护。不新增缓存、事件总线或轮询层，不变更左侧名称与分区。
 
