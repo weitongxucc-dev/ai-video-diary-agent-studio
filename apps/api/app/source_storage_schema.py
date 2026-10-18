@@ -72,6 +72,7 @@ SOURCE_TABLES_DDL = """
                     body TEXT,
                     file_reference TEXT,
                     source_item_id TEXT,
+                    original_source_item_id TEXT,
                     sections TEXT NOT NULL DEFAULT '[]',
                     parameters TEXT NOT NULL DEFAULT '[]',
                     fetched_at TEXT,
@@ -101,6 +102,21 @@ SOURCE_TABLES_DDL = """
                 CREATE INDEX IF NOT EXISTS idx_source_runs_workspace
                     ON source_runs(workspace_id, connector_id, finished_at DESC);
                 """
+
+
+KNOWLEDGE_ORIGINAL_FILES_DDL = """
+CREATE TABLE IF NOT EXISTS knowledge_original_files (
+    source_item_id TEXT PRIMARY KEY REFERENCES source_items(id),
+    workspace_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK(size_bytes > 0 AND size_bytes <= 30000000),
+    received_at TEXT NOT NULL,
+    UNIQUE(workspace_id, owner_user_id, content_hash)
+);
+"""
 
 
 KNOWLEDGE_GRANTS_DDL = """

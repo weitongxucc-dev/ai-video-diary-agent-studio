@@ -80,6 +80,23 @@ class KnowledgeItemVersion:
     # 这一版内容实际从哪个网址抓来、什么时候抓的。网页快照回查当时内容靠它。
     fetched_at: datetime | None = None
     source_url: str | None = None
+    # Actual byte-upload receipt; independent of the immutable parsing source.
+    original_source_item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeOriginalFile:
+    knowledge_item_id: str
+    version: str
+    source_item_id: str
+    workspace_id: str
+    owner_user_id: str
+    filename: str
+    content_type: str
+    content_hash: str
+    size_bytes: int
+    original_source_item_id: str
+    content: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)

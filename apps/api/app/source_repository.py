@@ -14,6 +14,7 @@ from app.source_types import (
     ContentUsePurpose,
     KnowledgeItem,
     KnowledgeItemVersion,
+    KnowledgeOriginalFile,
     KnowledgeGrant,
     SourceConnector,
     SourceItem,
@@ -25,8 +26,9 @@ from app.database_migrations import (
     ensure_content_visibility_columns,
 )
 from app.knowledge_files import KnowledgeParameter, KnowledgeSection, parse_knowledge_file
+from app.knowledge_file_store import KnowledgeFileStore, KnowledgeOriginalUnavailable
 from app.source_policy import content_allows_use
-from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL, SOURCE_TABLES_DDL
+from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL, KNOWLEDGE_ORIGINAL_FILES_DDL, SOURCE_TABLES_DDL
 
 
 class KnowledgeVersionConflict(ValueError):
@@ -42,10 +44,11 @@ class SourceRepository:
     knowledge grant; original ownership is never rewritten.
     """
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path, *, file_store: KnowledgeFileStore | None = None) -> None:
         self._database_path = Path(database_path).expanduser()
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
+        self._original_files = file_store if file_store is not None else KnowledgeFileStore(self._database_path.parent)
 
     def upsert_connector(self, connector: SourceConnector) -> SourceConnector:
         self._require_workspace(connector.workspace_id)
@@ -126,6 +129,50 @@ class SourceRepository:
         with self._connect() as conn:
             self._save_source_items(conn, workspace_id, items)
         return [self.get_source_item(workspace_id, item.id) for item in items]
+
+    def save_source_file(
+        self, workspace_id: str, item: SourceItem, data: bytes, *,
+        verified_owner_user_id: str | None,
+    ) -> SourceItem:
+        """Publish complete bytes before atomically exposing source and receipt.
+
+        Duplicate uploads return the original source without changing names or
+        use restrictions. Published files survive a rolled-back DB transaction;
+        retry verifies/reuses those exact bytes rather than overwriting them.
+        """
+        self._require_workspace(workspace_id)
+        owner = str(verified_owner_user_id or "").strip()
+        if not owner:
+            raise ValueError("保存资料原件需要已验证的上传者")
+        self._validate_source_item(workspace_id, item)
+        filename = item.file_reference or ""
+        if item.source_label != "file_import" or not item.content_hash:
+            raise ValueError("只有实际上传并完成解析的文件才能登记原件")
+        if not filename or Path(filename).name != filename or any(char in filename for char in ("\\", "\r", "\n", "\x00")):
+            raise ValueError("资料原件文件名无效，请使用不含目录的文件名")
+        # The file owner validates actual bytes before either a duplicate reply
+        # or a new source/receipt can commit. Never accept a digest alone.
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT source_item_id FROM knowledge_original_files WHERE workspace_id=? AND owner_user_id=? AND content_hash=?",
+                (workspace_id, owner, item.content_hash),
+            ).fetchone()
+            if existing is not None:
+                self._original_files.put(workspace_id, owner, data, item.content_hash)
+                source = conn.execute("SELECT * FROM source_items WHERE workspace_id=? AND id=?", (workspace_id, existing["source_item_id"])).fetchone()
+                if source is None or source["content_hash"] != item.content_hash:
+                    raise ValueError("原件接收回执与资料来源不一致，未改写原记录")
+                return self._source_item_from_row(source)
+            if conn.execute("SELECT 1 FROM source_items WHERE id=?", (item.id,)).fetchone():
+                raise ValueError("资料来源ID已存在，原件必须使用本次实际上传的新来源")
+            self._original_files.put(workspace_id, owner, data, item.content_hash)
+            self._save_source_items(conn, workspace_id, [item])
+            conn.execute(
+                "INSERT INTO knowledge_original_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (item.id, workspace_id, owner, item.content_hash, filename, item.content_type, len(data), _utc_now().isoformat()),
+            )
+        return self.get_source_item(workspace_id, item.id)
 
     def get_source_item(self, workspace_id: str, item_id: str) -> SourceItem:
         self._require_workspace(workspace_id)
@@ -295,6 +342,10 @@ class SourceRepository:
     def _insert_knowledge_item(
         self, conn: sqlite3.Connection, item: KnowledgeItem
     ) -> None:
+        if item.source_item_id:
+            original = conn.execute("SELECT workspace_id, owner_user_id FROM knowledge_original_files WHERE source_item_id=?", (item.source_item_id,)).fetchone()
+            if original is not None and (original["workspace_id"], original["owner_user_id"]) != (item.workspace_id, item.owner_user_id):
+                raise PermissionError("原件归属与新资料的工作区或上传者不匹配")
         existing = conn.execute(
             "SELECT workspace_id FROM knowledge_items WHERE id = ?", (item.id,)
         ).fetchone()
@@ -361,6 +412,9 @@ class SourceRepository:
             if source_row is None:
                 raise KeyError(source_item_id)
             source = self._source_item_from_row(source_row)
+            original = conn.execute("SELECT owner_user_id FROM knowledge_original_files WHERE source_item_id=? AND workspace_id=?", (source.id, workspace_id)).fetchone()
+            if original is not None and original["owner_user_id"] != owner:
+                raise PermissionError("只有本次文件上传者可以将其保存到自己的知识库")
             if source.content_hash is None:
                 # 手动来源重试只返回本成员首次保存的对象，不改用户限制。
                 existing = conn.execute(
@@ -391,6 +445,16 @@ class SourceRepository:
                 item_id = self._save_parsed_source_to_knowledge(
                     conn, workspace_id, source, ownership=ownership, authorization=authorization,
                     verified_owner_user_id=owner,
+                )
+            if original is not None:
+                # A real re-upload can supply missing original evidence for an
+                # existing exact version. Never infer bytes from the old name,
+                # mutate its parsing source, or create a duplicate version.
+                conn.execute(
+                    "UPDATE knowledge_item_versions SET original_source_item_id=? "
+                    "WHERE workspace_id=? AND knowledge_item_id=? AND original_source_item_id IS NULL "
+                    "AND source_item_id IN (SELECT id FROM source_items WHERE workspace_id=? AND content_hash=? AND source_label='file_import')",
+                    (source.id, workspace_id, item_id, workspace_id, source.content_hash),
                 )
             saved = conn.execute(
                 "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
@@ -660,6 +724,7 @@ class SourceRepository:
                 saved_at=_parse_datetime(row["saved_at"]),
                 fetched_at=_parse_datetime(row["fetched_at"]) if row["fetched_at"] else None,
                 source_url=row["source_url"],
+                original_source_item_id=row["original_source_item_id"],
             )
             for row in rows
         ]
@@ -682,13 +747,25 @@ class SourceRepository:
         fetched_at: datetime | None = None,
         source_url: str | None = None,
     ) -> None:
+        original = conn.execute(
+            "SELECT source_item_id FROM knowledge_original_files WHERE workspace_id=? AND source_item_id=?",
+            (workspace_id, source_item_id),
+        ).fetchone()
+        original_source_id = original["source_item_id"] if original else None
+        if original_source_id is None:
+            inherited = conn.execute(
+                "SELECT original_source_item_id FROM knowledge_item_versions WHERE workspace_id=? AND knowledge_item_id=? "
+                "AND source_item_id=? AND original_source_item_id IS NOT NULL ORDER BY CAST(version AS INTEGER) DESC LIMIT 1",
+                (workspace_id, knowledge_item_id, source_item_id),
+            ).fetchone()
+            original_source_id = inherited["original_source_item_id"] if inherited else None
         conn.execute(
             """
             INSERT INTO knowledge_item_versions (
                 knowledge_item_id, workspace_id, version, content_hash, title,
                 body, file_reference, source_item_id, sections, parameters, saved_at,
-                fetched_at, source_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fetched_at, source_url, original_source_item_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 knowledge_item_id,
@@ -704,6 +781,7 @@ class SourceRepository:
                 saved_at.isoformat(),
                 fetched_at.isoformat() if fetched_at else None,
                 source_url,
+                original_source_id,
             ),
         )
 
@@ -954,6 +1032,57 @@ class SourceRepository:
             parameters=snapshot.parameters, fetched_at=snapshot.fetched_at,
             source_url=snapshot.source_url,
         )
+
+    def read_knowledge_original(
+        self, workspace_id: str, item_id: str, version: str, *,
+        user_id: str | None, local_diagnostic: bool = False,
+    ) -> KnowledgeOriginalFile:
+        """Resolve exact-version original bytes after checking today's grant.
+
+        One read snapshot covers current visibility/grant, fixed version and
+        original receipt. A filename or a current-head file is never a fallback.
+        """
+        self._require_workspace(workspace_id)
+        if user_id is None and not local_diagnostic:
+            raise ValueError("读取资料原件必须带已验证身份")
+        if not version.strip():
+            raise ValueError("必须指定资料原件的固定版本")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            access = "workspace_id=:workspace_id AND use_state!='excluded'" if local_diagnostic else self._knowledge_access_clause()
+            item = conn.execute(
+                f"SELECT * FROM knowledge_items WHERE id=:item_id AND {access}",
+                {"workspace_id": workspace_id, "item_id": item_id, "user_id": user_id,
+                 "private": CONTENT_VISIBILITY_DEFAULT, "shared": CONTENT_VISIBILITY_LEGACY},
+            ).fetchone()
+            if item is None:
+                raise KeyError(item_id)
+            fixed = conn.execute(
+                "SELECT source_item_id, original_source_item_id FROM knowledge_item_versions WHERE workspace_id=? AND knowledge_item_id=? AND version=?",
+                (item["workspace_id"], item_id, version),
+            ).fetchone()
+            if fixed is None:
+                if item["version"] != version:
+                    raise KeyError((item_id, version))
+                source_id = item["source_item_id"]
+                original_source_id = source_id
+            else:
+                source_id = fixed["source_item_id"]
+                original_source_id = fixed["original_source_item_id"]
+            original = conn.execute(
+                "SELECT o.* FROM knowledge_original_files o JOIN source_items s ON s.id=o.source_item_id "
+                "JOIN source_items parsed ON parsed.id=? AND parsed.workspace_id=o.workspace_id AND parsed.content_hash=o.content_hash "
+                "WHERE o.workspace_id=? AND o.source_item_id=? AND s.workspace_id=o.workspace_id AND s.content_hash=o.content_hash",
+                (source_id, item["workspace_id"], original_source_id),
+            ).fetchone()
+            if original is None:
+                raise KnowledgeOriginalUnavailable("此版本未保存上传原件；历史文件名和解析正文不能恢复原件，请重新上传实际文件")
+            content = self._original_files.read(original["workspace_id"], original["owner_user_id"], original["content_hash"], original["size_bytes"])
+            return KnowledgeOriginalFile(knowledge_item_id=item_id, version=version,
+                source_item_id=source_id, original_source_item_id=original["source_item_id"], workspace_id=original["workspace_id"],
+                owner_user_id=original["owner_user_id"], filename=original["filename"],
+                content_type=original["content_type"], content_hash=original["content_hash"],
+                size_bytes=original["size_bytes"], content=content)
 
     @staticmethod
     def _grant_from_row(row: sqlite3.Row) -> KnowledgeGrant:
@@ -1249,13 +1378,14 @@ class SourceRepository:
                 row[1]
                 for row in conn.execute("PRAGMA table_info(knowledge_item_versions)")
             }
-            for column in ("fetched_at", "source_url"):
+            for column in ("fetched_at", "source_url", "original_source_item_id"):
                 if column not in version_columns:
                     conn.execute(
                         f"ALTER TABLE knowledge_item_versions ADD COLUMN {column} TEXT"
                     )
 
             conn.executescript(KNOWLEDGE_GRANTS_DDL)
+            conn.executescript(KNOWLEDGE_ORIGINAL_FILES_DDL)
 
     def _insert_run(self, conn: sqlite3.Connection, run: SourceRunEvidence) -> None:
         conn.execute(
@@ -1283,6 +1413,11 @@ class SourceRepository:
     ) -> None:
         for item in items:
             self._validate_source_item(workspace_id, item)
+            bound_file = conn.execute("SELECT 1 FROM knowledge_original_files WHERE source_item_id=?", (item.id,)).fetchone()
+            if bound_file is not None:
+                current = conn.execute("SELECT * FROM source_items WHERE id=?", (item.id,)).fetchone()
+                if current is None or self._source_item_from_row(current) != item:
+                    raise ValueError("已保存原件的资料来源不可覆盖，请为实际新上传创建新来源")
             existing_item = conn.execute(
                 "SELECT workspace_id FROM source_items WHERE id = ?", (item.id,)
             ).fetchone()
