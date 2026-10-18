@@ -34,28 +34,64 @@ class TopicGenerationResponseError(RuntimeError):
     pass
 
 
-def _generation_report_document(response: httpx.Response, expected_tool: str) -> dict:
+def _generation_report_document(
+    response: httpx.Response, expected_tool: str, *, requested_max_tokens: int,
+) -> dict:
     """Read one inert candidate report. No tool execution, text fallback or loop."""
+    # Only fixed enums and counts may enter rejection logs, never provider text.
+    diagnostics = {"requested_max_tokens": requested_max_tokens, "finish_reason": None,
+        "message_lengths": {"content": None, "reasoning_content": None, "refusal": None},
+        "tool_call_count": None, "tool_name_matches": None, "tool_arguments_length": None,
+        "usage": {"prompt_tokens": None, "completion_tokens": None,
+            "total_tokens": None, "reasoning_tokens": None}}
+
+    def safe_count(value):
+        return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+
     def invalid(reason):
         import logging
         kind = "topics" if expected_tool == "submit_topic_candidates" else "script"
-        logging.getLogger(__name__).warning("creation_generation_report_invalid kind=%s reason=%s", kind, reason)
+        logging.getLogger(__name__).warning("creation_generation_report_invalid %s", json.dumps(
+            {"kind": kind, "reason_code": reason, **diagnostics}, sort_keys=True, separators=(",", ":")))
         raise ValueError(reason)
 
     try:
         envelope = response.json()
     except ValueError:
         invalid("envelope")
+    usage = envelope.get("usage") if isinstance(envelope, dict) else None
+    if isinstance(usage, dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            diagnostics["usage"][key] = safe_count(usage.get(key))
+        details = usage.get("completion_tokens_details")
+        if isinstance(details, dict):
+            diagnostics["usage"]["reasoning_tokens"] = safe_count(details.get("reasoning_tokens"))
     choices = envelope.get("choices") if isinstance(envelope, dict) else None
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
         invalid("envelope")
     choice = choices[0]
-    if choice.get("finish_reason") == "length":
-        invalid("length")
-    if choice.get("finish_reason") != "tool_calls":
-        invalid("tool_finish")
+    finish = choice.get("finish_reason")
+    diagnostics["finish_reason"] = (finish if isinstance(finish, str) and finish in {
+        "stop", "length", "tool_calls", "function_call", "content_filter"} else None if finish is None else "other")
     message = choice.get("message")
     calls = message.get("tool_calls") if isinstance(message, dict) else None
+    if isinstance(message, dict):
+        for key in diagnostics["message_lengths"]:
+            value = message.get(key)
+            diagnostics["message_lengths"][key] = len(value) if isinstance(value, str) else None
+    if isinstance(calls, list):
+        diagnostics["tool_call_count"] = len(calls)
+        if len(calls) == 1:
+            call = calls[0]
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict):
+                diagnostics["tool_name_matches"] = function.get("name") == expected_tool
+                arguments = function.get("arguments")
+                diagnostics["tool_arguments_length"] = len(arguments) if isinstance(arguments, str) else None
+    if finish == "length":
+        invalid("length")
+    if finish != "tool_calls":
+        invalid("tool_finish")
     if not isinstance(calls, list) or len(calls) != 1:
         invalid("tool_call_count")
     call = calls[0]
@@ -262,7 +298,8 @@ class OpenAICompatibleCreationTaskTopicGenerator:
                 retryable=response.status_code >= 500,
             )
         try:
-            document = _generation_report_document(response, "submit_topic_candidates")
+            document = _generation_report_document(response, "submit_topic_candidates",
+                requested_max_tokens=payload["max_tokens"])
         except ValueError as exc:
             raise self._failure(code="content_json_invalid" if str(exc) == "tool_arguments" else "response_envelope_invalid",
                 reason="文字服务未完整返回本次选题候选。", impact="未保存新的选题候选。",
@@ -822,7 +859,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 retryable=response.status_code >= 500,
             )
         try:
-            document = _generation_report_document(response, "submit_script_draft")
+            document = _generation_report_document(response, "submit_script_draft",
+                requested_max_tokens=payload["max_tokens"])
         except ValueError:
             raise self._failure(code="response_envelope_invalid", reason="文字服务未完整返回本次文案候选。",
                 impact="未保存新文案。", repair_action="检查当前文字服务的候选返回格式后重新发起；原有草稿保持原样。",

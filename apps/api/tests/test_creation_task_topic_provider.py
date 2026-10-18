@@ -405,11 +405,12 @@ def test_script_honors_requested_language_and_rejects_wrong_response(language):
 
 
 @pytest.mark.parametrize("kind", ["topics", "script"])
-@pytest.mark.parametrize("invalid", ["missing", "multiple", "wrong-name", "bad-json", "non-object", "length", "content-only", "fenced"])
+@pytest.mark.parametrize("invalid", ["missing", "multiple", "wrong-type", "wrong-name", "bad-json", "non-object", "length", "content-only", "finish-with-tool", "fenced"])
 def test_creation_task_generation_accepts_only_one_complete_inert_report(kind, invalid, caplog):
     import logging
 
     seen = []
+    replies = []
     secret = "private-generation-report-sentinel"
     document = {"topics": [_topic()]} if kind == "topics" else _script_document(evidence_ids=["evidence_1"])
     def handler(request):
@@ -421,12 +422,18 @@ def test_creation_task_generation_accepts_only_one_complete_inert_report(kind, i
         envelope = _response(document).json()
         choice, message = envelope["choices"][0], envelope["choices"][0]["message"]
         message["content"] = json.dumps(document)  # Never used to rescue the invalid report call.
+        message["reasoning_content"] = secret + "-reasoning"
+        message["refusal"] = secret + "-refusal"
+        envelope["usage"] = {"prompt_tokens": 123, "completion_tokens": 456, "total_tokens": 579,
+            "completion_tokens_details": {"reasoning_tokens": 300}, secret: secret}
         tool = message["tool_calls"][0]
         tool["id"] = secret
         if invalid == "missing":
             message.pop("tool_calls")
         elif invalid == "multiple":
             message["tool_calls"].append(dict(tool))
+        elif invalid == "wrong-type":
+            tool["type"] = secret
         elif invalid == "wrong-name":
             tool["function"]["name"] = secret
         elif invalid == "bad-json":
@@ -438,19 +445,87 @@ def test_creation_task_generation_accepts_only_one_complete_inert_report(kind, i
         elif invalid == "content-only":
             choice["finish_reason"] = "stop"
             message.pop("tool_calls")
+        elif invalid == "finish-with-tool":
+            choice["finish_reason"] = "stop"
         else:
             tool["function"]["arguments"] = "```json\n" + tool["function"]["arguments"] + "\n```"
+        replies.append(envelope)
         return httpx.Response(200, json=envelope)
     caplog.set_level(logging.WARNING, logger="app.topics")
     constructor = OpenAICompatibleCreationTaskTopicGenerator if kind == "topics" else OpenAICompatibleCreationTaskScriptGenerator
     expected_error = CreationTaskTopicGenerationError if kind == "topics" else CreationTaskScriptGenerationError
     generator = constructor("https://models.invalid/v1", "MiniMax-M3", api_key=secret, transport=httpx.MockTransport(handler))
-    with pytest.raises(expected_error):
+    with pytest.raises(expected_error) as error:
         generator.generate(_input() if kind == "topics" else _script_input())
+    assert error.value.code == ("content_json_invalid" if kind == "topics" and invalid in {"bad-json", "fenced"}
+        else "response_envelope_invalid")
+    assert error.value.retryable
     assert len(seen) == 1  # No tool executor/results, retry or script review for invalid generation.
     assert seen[0]["max_tokens"] == (3200 if kind == "topics" else 8192)
     assert seen[0]["reasoning_split"] is True
     assert secret not in caplog.text
+    records = [record for record in caplog.records if record.name == "app.topics"]
+    assert len(records) == 1
+    text = records[0].getMessage()
+    prefix = "creation_generation_report_invalid "
+    assert text.startswith(prefix) and len(text) < 1200
+    diagnostic = json.loads(text.removeprefix(prefix))
+    assert diagnostic["kind"] == kind
+    assert diagnostic["reason_code"] == {
+        "missing": "tool_call_count", "multiple": "tool_call_count", "wrong-type": "tool_type",
+        "wrong-name": "tool_name", "bad-json": "tool_arguments", "non-object": "tool_arguments_shape",
+        "length": "length", "content-only": "tool_finish", "finish-with-tool": "tool_finish",
+        "fenced": "tool_arguments"}[invalid]
+    assert diagnostic["requested_max_tokens"] == seen[0]["max_tokens"]
+    assert diagnostic["finish_reason"] == replies[0]["choices"][0]["finish_reason"]
+    assert diagnostic["usage"] == {"prompt_tokens": 123, "completion_tokens": 456,
+        "total_tokens": 579, "reasoning_tokens": 300}
+    message = replies[0]["choices"][0]["message"]
+    assert diagnostic["message_lengths"] == {key: len(message[key]) for key in
+        ("content", "reasoning_content", "refusal")}
+    calls = message.get("tool_calls")
+    assert diagnostic["tool_call_count"] == (len(calls) if calls is not None else None)
+    assert diagnostic["tool_name_matches"] == (invalid != "wrong-name" if calls is not None and len(calls) == 1 else None)
+    assert diagnostic["tool_arguments_length"] == (len(calls[0]["function"]["arguments"])
+        if calls is not None and len(calls) == 1 else None)
+    title = document["topics"][0]["title"] if kind == "topics" else document["script"]["title"]
+    assert title not in caplog.text
+
+
+@pytest.mark.parametrize("kind", ["topics", "script"])
+@pytest.mark.parametrize("finish", [None, "private-provider-metadata", ["private-provider-metadata"],
+    {"private-provider-metadata": "private-provider-metadata"}])
+def test_candidate_diagnostic_sanitizes_arbitrary_finish_and_usage(kind, finish, caplog):
+    import logging
+
+    secret = "private-provider-metadata"
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"choices": [{"finish_reason": finish, "message": {
+            "content": secret, "reasoning_content": secret, "refusal": secret,
+            "tool_calls": [{"id": secret, "type": "function", "function": {
+                "name": secret, "arguments": secret}}], secret: secret}}], "usage": {
+                "prompt_tokens": secret, "completion_tokens": True, "total_tokens": 2**64,
+                "completion_tokens_details": {"reasoning_tokens": -1}}, secret: secret})
+    caplog.set_level(logging.WARNING, logger="app.topics")
+    constructor = OpenAICompatibleCreationTaskTopicGenerator if kind == "topics" else OpenAICompatibleCreationTaskScriptGenerator
+    expected_error = CreationTaskTopicGenerationError if kind == "topics" else CreationTaskScriptGenerationError
+    generator = constructor("https://models.invalid/v1", "MiniMax-M3", api_key=secret,
+        transport=httpx.MockTransport(handler))
+    with pytest.raises(expected_error) as error:
+        generator.generate(_input() if kind == "topics" else _script_input())
+    assert error.value.code == "response_envelope_invalid" and len(seen) == 1
+    records = [record for record in caplog.records if record.name == "app.topics"]
+    assert len(records) == 1
+    text = records[0].getMessage()
+    diagnostic = json.loads(text.removeprefix("creation_generation_report_invalid "))
+    assert diagnostic["reason_code"] == "tool_finish"
+    assert diagnostic["finish_reason"] == (None if finish is None else "other")
+    assert diagnostic["tool_call_count"] == 1 and diagnostic["tool_name_matches"] is False
+    assert diagnostic["tool_arguments_length"] == len(secret)
+    assert all(value is None for value in diagnostic["usage"].values())
+    assert secret not in caplog.text and len(text) < 1200
 
 
 def test_topic_candidate_report_schema_preserves_all_existing_constraints():
