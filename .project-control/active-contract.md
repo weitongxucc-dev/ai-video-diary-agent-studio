@@ -40,7 +40,7 @@
 
 | 负责人 | 独占生产文件与直接验证 |
 | --- | --- |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | `apps/api/agent_tools/diary/creation-plans.ts`、`workspace-tools.ts`、`recipe-tools.ts`；`apps/api/app/assistant/catalogue.py`、`apps/api/app/main.py`（仅creation-requests读取/修订/窗口路由）、`apps/api/app/creation/plan_preflight_use_case.py`；`apps/api/tests/test_creation_request_api.py`、`test_creation_plan_preflight_use_case.py`、`test_assistant_edit_capabilities.py`及新增`test_creation_plan_revision_tools.py`。复用既有请求仓储，补方案读取、应用新要求/重规划/采用及声音发现，保证参数不被静默忽略。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | `apps/api/agent_tools/diary/creation-plans.ts`、`workspace-tools.ts`、`recipe-tools.ts`；`apps/api/app/assistant/catalogue.py`、`apps/api/app/main.py`（仅creation-requests读取/修订/窗口路由）、`apps/api/app/creation/plan_preflight_use_case.py`、`apps/api/app/schemas.py`（仅`CreationRequestWindowReplanRequest`可选1–8项goals）；`apps/api/tests/test_creation_request_api.py`、`test_creation_plan_preflight_use_case.py`、`test_assistant_edit_capabilities.py`及新增`test_creation_plan_revision_tools.py`。复用既有请求仓储，补方案读取、应用新要求/重规划/采用及声音发现，保证参数不被静默忽略。 |
 | B `01a14301-7591-74f1-b240-d3643b78ecfe` | `apps/api/agent_tools/diary/transport.ts`、`runtime.ts`；`apps/api/app/assistant/projection.py`、`turn.py`；`apps/api/tests/test_assistant_pi_failures.py`及新增`test_assistant_business_failure_receipts.py`。补安全结构化错误、持久回执、提交效果与超时归因；不改A工具或main路由，所需业务错误由A按共同约定返回。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | `apps/api/app/device_scheduler.py`、`apps/api/app/creation_execution.py`（仅Owner核验相关）、`apps/api/tests/test_device_scheduler.py`、`test_creation_execution.py`。先审查各Owner与事务调用，再移出外部核验/采样；需要其他Owner文件时先向主控给出精确路径和必要性，获划转后实施。 |
 | 主控 | 权威/合同/计划、审核和集成；`apps/desktop/`、`scripts/`及本机验收目录。其他生产文件需先显式绑定；不与A写main或与B写runtime，不同时编辑各线程测试。 |
