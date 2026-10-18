@@ -2,7 +2,7 @@
 
 Android 与 iOS 共用 `lib/` 中的 Dart 界面、连接及状态逻辑。平台目录只放系统配置；Flutter Web 是本地渲染和交互检查入口，不是原生手机验收。
 
-产品范围见[产品需求 §1.1](../../docs/product-requirements.md#11-版本交付边界)，权限见[认证边界](../../docs/auth-workspace-boundary.md)。本应用不另行定义 0.12 版本承诺。声音采样的电脑/手机同文、跳过及主机接收语义见[首次使用](../../docs/product-requirements.md#41-首次使用与按需设置)；这是目标行为，下面的代码入口和实际运行才证明接通情况。桌面 [DESIGN.md](../../DESIGN.md) 的三栏和控件尺寸不直接套到手机。
+产品范围见[产品需求 §1.1](../../docs/product-requirements.md#11-版本交付边界)，权限见[认证边界](../../docs/auth-workspace-boundary.md)。0.11/0.12联动已并入本轮[联合交付清单](../../.project-control/0.11-development-plan.md#114-p7桌面与手机联动的联合交付)，本应用不另行定义版本承诺，也不以本地功能存在代替跨端验收。声音采样的电脑/手机同文、跳过及主机接收语义见[首次使用](../../docs/product-requirements.md#41-首次使用与按需设置)；这是目标行为，下面的代码入口和实际运行才证明接通情况。桌面 [DESIGN.md](../../DESIGN.md) 的三栏和控件尺寸不直接套到手机。
 
 ## 开发
 
