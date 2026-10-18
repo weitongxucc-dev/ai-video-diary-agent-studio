@@ -36,6 +36,7 @@ def main() -> None:
     _log_mlx_memory(mx, "cache_disabled")
     from mlx_audio.audio_io import write as audio_write
     from mlx_audio.tts.utils import load_model
+    from qwen3_text_embedding import Qwen3TextEmbedding
 
     model_path = Path(request["model_path"]).expanduser().resolve()
     reference_path = Path(request["reference_audio_path"]).expanduser().resolve()
@@ -46,12 +47,21 @@ def main() -> None:
         raise FileNotFoundError("reference WAV does not exist")
 
     print("QWEN_PHASE loading_weights", file=sys.stderr, flush=True)
-    model = load_model(str(model_path))
-    print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
-    _log_mlx_memory(mx, "weights_loaded")
-    print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
-    _log_mlx_memory(mx, "inference_started")
-    results = _generate_with_pronunciation(model, request, reference_path)
+    model = load_model(str(model_path), lazy=True)
+    weight = model.talker.model.text_embedding.weight
+    if weight.dtype != mx.bfloat16:
+        raise ValueError("Qwen text embedding must retain BF16 weights")
+    with Qwen3TextEmbedding(
+        model_path / "model.safetensors", expected_shape=weight.shape
+    ) as text_embedding:
+        model.talker.model.text_embedding = text_embedding
+        del weight
+        mx.eval(model.parameters())
+        print("QWEN_PHASE weights_loaded", file=sys.stderr, flush=True)
+        _log_mlx_memory(mx, "weights_loaded")
+        print("QWEN_PHASE inference_started", file=sys.stderr, flush=True)
+        _log_mlx_memory(mx, "inference_started")
+        results = _generate_with_pronunciation(model, request, reference_path)
     if not results:
         raise RuntimeError("model generated no audio")
     print("QWEN_PHASE inference_returned", file=sys.stderr, flush=True)

@@ -85,7 +85,8 @@ def test_worker_rejects_malformed_pronunciation_entry():
         worker._validate_request(payload)
 
 
-def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_memory(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("weight_dtype", ["bf16", "fp16"])
+def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_memory(tmp_path, monkeypatch, capsys, weight_dtype):
     import json
     import sys
     from types import ModuleType, SimpleNamespace
@@ -101,6 +102,11 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     mx.get_active_memory=lambda:64
     mx.get_cache_memory=lambda:cache["bytes"]
     mx.get_peak_memory=lambda:256
+    mx.bfloat16="bf16"
+    def evaluate(parameters):
+        assert parameters==["remaining weights"]
+        events.append("eval_remaining")
+    mx.eval=evaluate
     mlx=ModuleType("mlx")
     mlx.__path__=[]
     mlx.core=mx
@@ -115,22 +121,40 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     audio.write=write_audio
     utils=ModuleType("mlx_audio.tts.utils")
     class Model:
+        def __init__(self):
+            self.talker=SimpleNamespace(model=SimpleNamespace(text_embedding=SimpleNamespace(
+                weight=SimpleNamespace(dtype=weight_dtype,shape=(4,8)))))
+        def parameters(self):
+            assert isinstance(self.talker.model.text_embedding, TextEmbedding)
+            return ["remaining weights"]
         def generate(self, **kwargs):
             assert cache["bytes"]==0
             assert kwargs["text"]=="Read this." and kwargs["ref_text"]=="Reference."
             events.append("generate")
             return [SimpleNamespace(audio=[0]*48,sample_rate=24)]
-    def load_model(path):
+    def load_model(path, *, lazy):
         assert cache["bytes"]==0 and path==str(tmp_path/"model")
+        assert lazy is True
         events.append("load_model")
         return Model()
     utils.load_model=load_model
+    embedding=ModuleType("qwen3_text_embedding")
+    class TextEmbedding:
+        def __init__(self, path, *, expected_shape):
+            assert path==tmp_path/"model"/"model.safetensors" and expected_shape==(4,8)
+            events.append("open_embedding")
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            events.append("close_embedding")
+    embedding.Qwen3TextEmbedding=TextEmbedding
     package=ModuleType("mlx_audio")
     package.__path__=[]
     tts=ModuleType("mlx_audio.tts")
     tts.__path__=[]
     for name,module in {"numpy":numpy,"mlx":mlx,"mlx.core":mx,"mlx_audio":package,
-                        "mlx_audio.audio_io":audio,"mlx_audio.tts":tts,"mlx_audio.tts.utils":utils}.items():
+                        "mlx_audio.audio_io":audio,"mlx_audio.tts":tts,"mlx_audio.tts.utils":utils,
+                        "qwen3_text_embedding":embedding}.items():
         monkeypatch.setitem(sys.modules,name,module)
     (tmp_path/"model").mkdir()
     (tmp_path/"ref.wav").write_bytes(b"reference fixture")
@@ -140,8 +164,15 @@ def test_worker_disables_free_cache_before_weight_load_and_inference_and_logs_me
     input_path.write_text(json.dumps(payload))
     response_path=tmp_path/"response.json"
     monkeypatch.setattr(sys,"argv",["worker","--request",str(input_path),"--response",str(response_path)])
+    if weight_dtype != mx.bfloat16:
+        with pytest.raises(ValueError, match="retain BF16"):
+            worker.main()
+        assert events==["disable_cache","load_model"]
+        assert not response_path.exists() and not (tmp_path/"audio.wav").exists()
+        return
     worker.main()
-    assert events==["disable_cache","load_model","generate","write_audio"]
+    assert events==["disable_cache","load_model","open_embedding","eval_remaining",
+                    "generate","close_embedding","write_audio"]
     assert json.loads(response_path.read_text())["duration_seconds"]==2.0
     assert (tmp_path/"audio.wav").read_bytes()==b"worker contract fixture"
     log=capsys.readouterr().err
