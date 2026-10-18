@@ -24,6 +24,7 @@ from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneR
 
 
 logger = logging.getLogger(__name__)
+_PERMISSION_SAMPLE_SECONDS = 1.0
 _QWEN_PHASE = re.compile(rb"QWEN_PHASE (?:worker_started|importing_runtime|loading_weights|weights_loaded|inference_started|inference_returned|audio_written)")
 _QWEN_MEMORY = re.compile(rb"QWEN_MEMORY phase=(?:cache_disabled|weights_loaded|inference_started|inference_returned|audio_written) active_bytes=[0-9]{1,20} cache_bytes=[0-9]{1,20} peak_bytes=[0-9]{1,20}")
 
@@ -50,6 +51,8 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
         payload["decision"] = failure.decision.diagnostic_payload()
     if isinstance(failure, GrantedCommandResourceLimit):
         payload["process_resource_sample"] = failure.resource_sample
+    if diagnostic.get("process_cpu_observation") is not None:
+        payload["process_cpu_observation"] = diagnostic["process_cpu_observation"]
     # These bounded execution receipts must reach the existing API stderr log,
     # including successful worker runs when application INFO logging is disabled.
     logger.warning("Granted command diagnostic: %s", json.dumps(payload, ensure_ascii=False))
@@ -113,7 +116,7 @@ class GrantedCommandMemoryPressure(GrantedCommandResourceUnavailable, HostResour
 
 
 def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentity,
-                         limits: SceneRuntimeLimits) -> None:
+                         limits: SceneRuntimeLimits) -> dict | None:
     try:
         if process.poll() is None and f"{psutil.Process(process.pid).create_time():.6f}" != child.start_token:
             raise GrantedCommandResourceUnavailable("Child identity changed during sampling")
@@ -129,10 +132,16 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                 continue
         rss = 0
         threads = 0
+        cpu_started = time.monotonic() if limits.collect_cpu else None
+        cpu_members = []
         for current in processes:
             try:
                 rss += current.memory_info().rss
                 threads += current.num_threads()
+                if limits.collect_cpu:
+                    times = current.cpu_times()
+                    cpu_members.append({"pid": current.pid, "start_token": f"{current.create_time():.6f}",
+                        "user": times.user, "system": times.system})
             except psutil.NoSuchProcess as exc:
                 if current.pid == process.pid and process.poll() is None:
                     # macOS can remove the pid just before waitpid exposes its
@@ -149,6 +158,9 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                                               additional_commit_bytes=0)
         if memory.verdict is not True:
             raise GrantedCommandMemoryPressure(memory)
+        if limits.collect_cpu:
+            return {"read_started_monotonic": cpu_started, "observed_monotonic": time.monotonic(),
+                    "logical_cpu_count": psutil.cpu_count(logical=True), "members": cpu_members}
     except psutil.NoSuchProcess as exc:
         if process.poll() is None:
             try:
@@ -250,6 +262,8 @@ def run_granted_command(
     outputs = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
     exec_ack = False
+    process_cpu_observation = None
+    last_cpu_record = None
     entrypoint = [sys.executable]
     if not getattr(sys, "frozen", False):
         entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
@@ -280,11 +294,32 @@ def run_granted_command(
         next_scene_sample = time.monotonic()
         next_permission_sample = time.monotonic()
 
+        def sample_scene_runtime():
+            nonlocal process_cpu_observation, last_cpu_record
+            current = _check_scene_runtime(process, child, scene_limits)
+            if current is None:
+                return
+            previous = last_cpu_record
+            before = {(item["pid"], item["start_token"]): item for item in previous["members"]} if previous else {}
+            after = {(item["pid"], item["start_token"]): item for item in current["members"]}
+            common = before.keys() & after.keys()
+            deltas = [after[key][metric] - before[key][metric] for key in common for metric in ("user", "system")]
+            process_cpu_observation = {"start": previous, "end": current,
+                "membership_changed": previous is None or before.keys() != after.keys(),
+                "same_identity_cpu_seconds_delta": sum(deltas) if previous and all(value >= 0 for value in deltas) else None,
+                "interval_seconds": current["observed_monotonic"] - previous["observed_monotonic"] if previous else None}
+            if previous is None or current["observed_monotonic"] - previous["observed_monotonic"] >= _PERMISSION_SAMPLE_SECONDS:
+                logger.warning("Granted process CPU observation: %s", json.dumps({
+                    "request_id": grant.request_id, "attempt_number": grant.attempt_number,
+                    "permit_generation": grant.generation, "process_cpu": process_cpu_observation,
+                }, ensure_ascii=False))
+                last_cpu_record = current
+
         def check_running_unit():
             nonlocal next_permission_sample
             if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit or quality_unit) and time.monotonic() >= next_permission_sample:
                 scheduler.assert_grant(grant)
-                next_permission_sample = time.monotonic() + 1.0
+                next_permission_sample = time.monotonic() + _PERMISSION_SAMPLE_SECONDS
             if max_output_file_bytes is not None:
                 output_size = 0
                 for target in output_paths:
@@ -304,7 +339,7 @@ def run_granted_command(
                 if cancel_event is not None and cancel_event.is_set():
                     raise GrantedCommandCancelled("Command cancelled")
                 if scene_limits is not None and time.monotonic() >= next_scene_sample:
-                    _check_scene_runtime(process, child, scene_limits)
+                    sample_scene_runtime()
                     next_scene_sample = time.monotonic() + scene_limits.sample_seconds
                 if time.monotonic() >= deadline:
                     raise GrantedCommandTimeout("Command exceeded its unit deadline")
@@ -322,7 +357,7 @@ def run_granted_command(
             if cancel_event is not None and cancel_event.is_set():
                 raise GrantedCommandCancelled("Command cancelled")
             if scene_limits is not None and time.monotonic() >= next_scene_sample:
-                _check_scene_runtime(process, child, scene_limits)
+                sample_scene_runtime()
                 next_scene_sample = time.monotonic() + scene_limits.sample_seconds
             if process.poll() is not None:
                 break
@@ -343,6 +378,7 @@ def run_granted_command(
             "stdout_truncated": False, "stderr_truncated": False,
             "exec_ack": exec_ack, "group_released": True,
             "before_termination_returncode": process.returncode, "returncode": process.returncode,
+            "process_cpu_observation": process_cpu_observation,
         })
         return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
     except BaseException as exc:
@@ -374,6 +410,7 @@ def run_granted_command(
                 "exec_ack": exec_ack, "group_released": group_released,
                 "before_termination_returncode": before_termination_returncode,
                 "returncode": process.returncode if process is not None else None,
+                "process_cpu_observation": process_cpu_observation,
             }
             _record_command_diagnostics(grant, child, exc.command_diagnostics, failure=exc)
         raise

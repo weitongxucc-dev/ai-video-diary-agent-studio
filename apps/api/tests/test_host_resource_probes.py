@@ -24,6 +24,7 @@ def isolated_native_pressure_boundary(monkeypatch):
     monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 from app.host_resource_probes import MediaScriptBudget
+from app.host_resource_probes import RuntimeCpuPolicy
 from app.device_scheduler import RecoveryBlocked
 
 from app.granted_subprocess import (
@@ -934,10 +935,23 @@ def test_runtime_declared_budget_missing_and_grant_fact_unreadable_are_explicit(
     assert unreadable.value.decision.reason == "granted_resources_unreadable"
 
 
-def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, monkeypatch):
+@pytest.fixture
+def narration_cpu_boundary(monkeypatch):
+    # These older tests isolate IO/memory/input caps. Real CPU windows and
+    # admission identity have their own tests in test_running_cpu_policy.py.
+    import app.host_resource_probes as probes
+    monkeypatch.setattr(probes, "_cpu_counter", lambda: {
+        "user": 1., "nice": 0., "system": 0., "idle": 7., "logical_cpu_count": 8,
+        "observed_monotonic": 0., "read_started_monotonic": 0., "read_seconds": 0.})
+    monkeypatch.setattr(probes.HostResourceProbe, "_cpu_request_key", staticmethod(lambda request: ("isolated",)))
+    monkeypatch.setattr(probes.HostResourceProbe, "_runtime_cpu_check", lambda *args: (True, None, {"passed": True}))
+    return RuntimeCpuPolicy(1, 2, "synthetic-cpu-boundary")
+
+
+def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, monkeypatch, narration_cpu_boundary):
     import app.host_resource_probes as probes
     narration = NarrationBudget(80, 1, 1048576, 15, 2097152, 1, 120,
-                                2147483648, 128, 0.1, 2147483648, 8388608)
+                                2147483648, 128, 0.1, 2147483648, 8388608, narration_cpu_boundary)
     minimum_memory = 1610612736 + narration.additional_memory_bytes
     minimum_disk = 1073741824 + narration.additional_disk_bytes + narration.max_output_bytes
     reads = []
@@ -953,7 +967,7 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                  "text_chars": 80, "section_count": 1, "reference_bytes": 1048576,
                  "duration_seconds": 15, "max_output_bytes": 2097152, "threads": 1, "timeout_seconds": 120}
-    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources)).verdict is True
+    assert probe.admit(SimpleNamespace(id="fixture-request", resources=resources, last_grant_generation=None)).verdict is True
     assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "text_chars": 81})).verdict is False
     assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "reference_bytes": 1048577})).verdict is False
     assert probe.admit(SimpleNamespace(id="fixture-request", resources={**resources, "execution_mode": "in_process"})).verdict is None
@@ -969,14 +983,14 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     ("creation_person_render", 29 * 1024**3 // 10, False),
 ])
 def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
-    tmp_path, monkeypatch, kind, available, runtime_verdict,
+    tmp_path, monkeypatch, kind, available, runtime_verdict, narration_cpu_boundary,
 ):
     from itertools import count
     import app.host_resource_probes as probes
     from app.host_resource_probes import PresenterBudget
     gib = 1024**3
     narration = NarrationBudget(128, 1, 8 * 1024**2, 20, 4 * 1024**2, 1, 90,
-                                3 * gib // 2, 16, .1, 2 * gib, 32 * 1024**2)
+                                3 * gib // 2, 16, .1, 2 * gib, 32 * 1024**2, narration_cpu_boundary)
     presenter = PresenterBudget(1, 8 * 1024**2, 20, 4 * 1024**2, 1, 90,
                                 3 * gib // 2, 16, .1, 2 * gib, 32 * 1024**2)
     budget = HostBudget(91, gib, 16 * gib, gib, 10**9, 128 * 1024**2,
@@ -1134,10 +1148,10 @@ def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_field
 
 
 @pytest.mark.parametrize("scenario", ["short_peak", "sustained", "unknown", "counter_regressed", "observation_gap"])
-def test_narration_io_uses_real_endpoint_window_and_finite_burst(tmp_path, monkeypatch, scenario):
+def test_narration_io_uses_real_endpoint_window_and_finite_burst(tmp_path, monkeypatch, scenario, narration_cpu_boundary):
     import app.host_resource_probes as probes
     narration = NarrationBudget(80, 1, 1048576, 15, 2097152, 1, 120,
-                                100, 128, 0.1, 100, 1)
+                                100, 128, 0.1, 100, 1, narration_cpu_boundary)
     budget = HostBudget(75, 100, 50, 200, 100, 2097152, narration=narration)
     probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,), budget=budget)
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
@@ -1163,21 +1177,21 @@ def test_narration_io_uses_real_endpoint_window_and_finite_burst(tmp_path, monke
     monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=0))
     monkeypatch.setattr(psutil, "disk_usage", lambda path: SimpleNamespace(free=10**9))
     monkeypatch.setattr(psutil, "disk_partitions", lambda **kw: [])
-    first = probe._sample(resources, running_io=True)
+    first = probe._sample(resources, running_io=True, cpu_grant="isolated")
     if scenario == "unknown":
         assert first.verdict is None and first.reason == "disk_io_before_unavailable"
         assert not HostResourceRefusal(first).recoverable_pressure
         return
     assert first.verdict is True  # Known measured bytes below the finite 300B burst budget.
-    second = probe._sample(resources, running_io=True)
+    second = probe._sample(resources, running_io=True, cpu_grant="isolated")
     if scenario == "observation_gap":
         assert second.verdict is None and second.reason == "io_observation_gap"
         return
     if scenario == "counter_regressed":
         assert second.verdict is None and second.reason == "disk_io_counters_regressed"
         return
-    third = probe._sample(resources, running_io=True)
-    final = probe._sample(resources, running_io=True)
+    third = probe._sample(resources, running_io=True, cpu_grant="isolated")
+    final = probe._sample(resources, running_io=True, cpu_grant="isolated")
     io = final.checks["disk_io_bytes_per_second"]
     assert io["window_complete"] and io["window_seconds"] >= 3
     assert io["delta_bytes"] == (0 if scenario == "short_peak" else 420)
@@ -1191,13 +1205,13 @@ def test_narration_io_uses_real_endpoint_window_and_finite_burst(tmp_path, monke
     else:
         assert final.verdict is False and HostResourceRefusal(final).recoverable_pressure
         assert io["actual"] > 100 and io["maximum"] == 100
-    next_window = probe._sample(resources, running_io=True)
+    next_window = probe._sample(resources, running_io=True, cpu_grant="isolated")
     assert next_window.checks["disk_io_bytes_per_second"]["window_complete"]
 
 
-def test_narration_admission_requires_complete_window_without_blocking(tmp_path, monkeypatch):
+def test_narration_admission_requires_complete_window_without_blocking(tmp_path, monkeypatch, narration_cpu_boundary):
     import app.host_resource_probes as probes
-    narration = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, 0.1, 100, 1)
+    narration = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, 0.1, 100, 1, narration_cpu_boundary)
     probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
         budget=HostBudget(75, 0, 50, 0, 100, 100, narration=narration))
     resources = dict(kind="creation_narration", execution_mode="isolated_qwen3_tts", text_chars=1,

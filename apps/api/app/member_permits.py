@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import json
+import math
 from dataclasses import fields
 from pathlib import Path
 from typing import Callable, Mapping
@@ -48,6 +49,7 @@ from app.host_resource_probes import (
     HostProcessProbe,
     HostResourceProbe,
     NarrationBudget,
+    RuntimeCpuPolicy,
     MontageBudget,
     PresenterBudget,
 )
@@ -181,11 +183,13 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
     environment = os.environ if env is None else env
     budgets = []
     for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
-        if not any(environment.get(prefix + item.name.upper(), "").strip() for item in fields(budget_type)):
+        numeric_fields = [item for item in fields(budget_type) if item.name != "running_cpu_policy"]
+        cpu_policy = environment.get("DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON", "").strip() if budget_type is NarrationBudget else ""
+        if not cpu_policy and not any(environment.get(prefix + item.name.upper(), "").strip() for item in numeric_fields):
             budgets.append(None)
             continue
         values = {}
-        for item in fields(budget_type):
+        for item in numeric_fields:
             name = prefix + item.name.upper()
             raw = environment.get(name)
             if not raw:
@@ -196,8 +200,10 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
             except ValueError:
                 raise HostBudgetUncalibrated(f"阶段标定值无效：{name}") from None
         try:
+            if cpu_policy:
+                values["running_cpu_policy"] = RuntimeCpuPolicy(**json.loads(cpu_policy))
             budgets.append(budget_type(**values))
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise HostBudgetUncalibrated(str(exc)) from None
     return tuple(budgets)
 
@@ -393,6 +399,12 @@ def build_host_probes(
     device_poll_interval_seconds: float | None = None,
 ) -> tuple[HostResourceProbe, HostProcessProbe]:
     """真实整机探针：资源采样 + POSIX 进程身份，不提供任何替代实现。"""
+    cpu_policy = budget.narration.running_cpu_policy if budget.narration else None
+    if cpu_policy is not None and (
+            type(device_poll_interval_seconds) not in {int, float} or not math.isfinite(device_poll_interval_seconds)
+            or device_poll_interval_seconds <= 0
+            or cpu_policy.max_sample_gap_seconds <= device_poll_interval_seconds + budget.sample_seconds):
+        raise HostBudgetUncalibrated("运行CPU最大观测间隙必须覆盖实际driver与probe节奏；实际超时仍拒绝")
     if budget.memory_policy is not None:
         try:
             validate_observation_cadence(budget.memory_policy,

@@ -18,6 +18,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import quote
@@ -153,6 +154,96 @@ class SceneRuntimeLimits:
     max_host_swap_used_bytes: int | None  # Legacy diagnostic only; never a live gate.
     sample_seconds: float
     memory_monitor: HostMemoryMonitor | None = None
+    collect_cpu: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimeCpuPolicy:
+    """Explicit narration experiment; no inferred window or production default."""
+    window_seconds: float
+    max_sample_gap_seconds: float
+    evidence_reference: str
+
+    def __post_init__(self):
+        if (any(type(value) not in {int, float} or not math.isfinite(value) or value <= 0
+                for value in (self.window_seconds, self.max_sample_gap_seconds))
+                or not isinstance(self.evidence_reference, str) or not self.evidence_reference.strip()):
+            raise ValueError("运行CPU窗口、观测间隙与实验证据必须明确提供")
+
+
+def _cpu_counter():
+    """Darwin cumulative CPU counters, with the actual read interval."""
+    started = time.monotonic()
+    counters = psutil.cpu_times()._asdict()
+    cores = psutil.cpu_count(logical=True)
+    finished = time.monotonic()
+    if (set(counters) != {"user", "nice", "system", "idle"}
+            or type(cores) is not int or cores <= 0 or finished < started
+            or any(type(value) not in {int, float} or not math.isfinite(value) or value < 0
+                   for value in counters.values())):
+        raise ValueError("Darwin累计CPU计数不可核验")
+    return {**counters, "logical_cpu_count": cores, "observed_monotonic": finished,
+            "read_started_monotonic": started, "read_seconds": finished - started}
+
+
+class _RunningCpuWindow:
+    """Derived observations for one grant; a failed window cannot re-arm itself."""
+    def __init__(self, policy, seed):
+        self.policy = policy
+        self.samples = deque([seed])
+        self.last_observed = seed
+        self.valid_until = seed["observed_monotonic"] + policy.window_seconds + policy.max_sample_gap_seconds
+        self.failure = None
+
+    def observe(self, sample, maximum):
+        policy = self.policy
+        previous = self.last_observed
+        now = sample["observed_monotonic"]
+        gap = now - previous["observed_monotonic"]
+        check = {"maximum": maximum, "actual": None, "passed": None,
+            "state": "unknown", "required_window_seconds": policy.window_seconds,
+            "max_sample_gap_seconds": policy.max_sample_gap_seconds,
+            "sample_gap_seconds": gap, "valid_until_monotonic": self.valid_until,
+            "previous_endpoint": previous, "window_started_endpoint": self.samples[0],
+            "window_finished_endpoint": sample}
+        if self.failure is None:
+            if sample["logical_cpu_count"] != previous["logical_cpu_count"]:
+                self.failure = "cpu_identity_changed"
+            elif gap < 0 or any(sample[key] < previous[key] for key in ("user", "nice", "system", "idle")):
+                self.failure = "cpu_counters_regressed"
+            elif gap > policy.max_sample_gap_seconds or sample["read_seconds"] > policy.max_sample_gap_seconds:
+                self.failure = "cpu_observation_gap"
+            elif now > self.valid_until:
+                self.failure = "cpu_observation_expired"
+        if self.failure:
+            return None, self.failure, check
+        self.last_observed = sample
+        advanced = any(sample[key] != previous[key] for key in ("user", "nice", "system", "idle"))
+        if advanced:
+            self.samples.append(sample)
+            while len(self.samples) > 2 and self.samples[1]["observed_monotonic"] <= now - policy.window_seconds:
+                self.samples.popleft()
+        initial = self.samples[0]
+        elapsed = now - initial["observed_monotonic"]
+        check.update(window_seconds=elapsed, window_started_endpoint=initial)
+        deltas = {key: sample[key] - initial[key] for key in ("user", "nice", "system", "idle")}
+        total = sum(deltas.values())
+        busy = total - deltas["idle"]
+        check.update(total_cpu_seconds_delta=total, busy_cpu_seconds_delta=busy)
+        if not advanced or elapsed < policy.window_seconds or total <= 0:
+            if now >= self.valid_until:
+                self.failure = "cpu_counters_not_advancing"
+                return None, self.failure, check
+            check.update(state="collecting", passed=True)
+            return True, None, check  # Only the original finite permission; never renew on zero counters.
+        actual = 100 * busy / total
+        self.valid_until = now + policy.max_sample_gap_seconds
+        passed = actual <= maximum
+        check.update(actual=actual, passed=passed, state="ready" if passed else "refused",
+                     valid_until_monotonic=self.valid_until, window_complete=True)
+        if not passed:
+            self.failure = "cpu_sustained_overload"
+        return passed, None if passed else self.failure, check
 
 
 @dataclass(frozen=True)
@@ -169,9 +260,14 @@ class NarrationBudget:
     runtime_sample_seconds: float
     additional_memory_bytes: int
     additional_disk_bytes: int
+    running_cpu_policy: RuntimeCpuPolicy | None = None
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
+            if name == "running_cpu_policy":
+                if value is not None and not isinstance(value, RuntimeCpuPolicy):
+                    raise ValueError("配音运行CPU策略必须为显式RuntimeCpuPolicy")
+                continue
             if name in {"max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"}:
                 if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
                     raise ValueError("Narration timing limits must be explicit positive values")
@@ -619,6 +715,7 @@ class HostResourceDecision:
             "window_finished_monotonic", "finite_byte_budget", "verdict", "required_available_bytes",
             "required_commit_headroom_bytes", "stable_elapsed_seconds", "recovery_required_seconds",
             "max_sample_gap_seconds", "system_reserve_bytes", "additional_memory_bytes",
+            "sample_gap_seconds", "valid_until_monotonic", "total_cpu_seconds_delta", "busy_cpu_seconds_delta",
         }
         def numbers(value):
             return {key: item for key, item in value.items() if key in numeric_fields
@@ -631,6 +728,15 @@ class HostResourceDecision:
                               "disk_io_bytes_per_second", "disk_free_bytes", "memory_policy", "memory_pressure"}:
                 continue
             item = numbers(check)
+            if metric == "cpu_percent":
+                if check.get("state") in {"collecting", "ready", "refused", "unknown"}:
+                    item["state"] = check["state"]
+                for endpoint in ("previous_endpoint", "window_started_endpoint", "window_finished_endpoint"):
+                    if endpoint in check:
+                        item[endpoint] = {key: value for key, value in check[endpoint].items()
+                            if key in {"user", "nice", "system", "idle", "logical_cpu_count",
+                                "observed_monotonic", "read_started_monotonic", "read_seconds"}
+                            and type(value) in {int, float} and math.isfinite(value)}
             if metric == "memory_policy":
                 sample = check.get("sample", {})
                 item["sample"] = {key: sample[key] for key in (
@@ -683,6 +789,14 @@ class HostResourceRefusal(RecoveryBlocked):
             "input_bytes": ("素材输入大小", "字节"),
         }
         reasons = {
+            "cpu_policy_unavailable": "配音持续CPU策略尚未准备",
+            "cpu_admission_missing": "当前许可没有匹配的有效CPU准入端点",
+            "cpu_identity_changed": "CPU观测身份或设备核心数变化",
+            "cpu_counters_regressed": "累计CPU计数回退",
+            "cpu_observation_gap": "CPU实际观测间隙超出实验上界",
+            "cpu_observation_expired": "CPU观测或有限初始许可已过期",
+            "cpu_counters_not_advancing": "CPU计数在有限许可内未形成有效区间",
+            "cpu_sustained_overload": "完整运行窗口的CPU占用超出原阈值",
             "io_window_incomplete": "磁盘持续观察窗口尚未完成",
             "io_observation_gap": "运行中磁盘持续观察间隔超出窗口",
             "disk_devices_changed": "磁盘采样设备集合变化",
@@ -747,7 +861,7 @@ class HostResourceRefusal(RecoveryBlocked):
                 details.append(f"{labels[decision.reason.split(':', 1)[1]][0]}声明无效")
             else:
                 details.append(reasons[decision.reason])
-        elif decision.reason in reasons and decision.reason.startswith("memory_"):
+        elif decision.reason in reasons and decision.reason.startswith(("memory_", "cpu_")):
             details.append(reasons[decision.reason])
         super().__init__("运行中资源未知或不足，须在安全边界让出：" + "；".join(details)
                          + "。请检查本机资源与该阶段预算后再试，当前任务保持。")
@@ -756,12 +870,14 @@ class HostResourceRefusal(RecoveryBlocked):
     def recoverable_pressure(self) -> bool:
         if self.decision.verdict is None and self.decision.reason in {
             "memory_measurement_unavailable", "memory_observation_stale", "memory_observation_gap", "memory_commit_measurement_unavailable",
+            "cpu_observation_gap", "cpu_observation_expired", "cpu_counters_not_advancing",
         }:
             return True
         if self.decision.verdict is not False or self.decision.reason not in {
             None, "memory_pressure_critical", "memory_headroom_insufficient",
             "memory_commit_headroom_insufficient", "memory_recovery_stabilizing",
             "memory_task_budget_insufficient", "memory_task_commit_budget_insufficient",
+            "cpu_sustained_overload",
         }:
             return False
         failed = [name for name, check in self.decision.checks.items() if check.get("passed") is False]
@@ -823,6 +939,9 @@ class HostResourceProbe:
         self._admission_io = deque()
         self._running_io = deque()
         self._running_io_key = None
+        self._cpu_admissions = {}
+        self._running_cpu_key = None
+        self._running_cpu = None
         self.io_paths = {name: Path(path).resolve() for name, path in (io_paths or {}).items()}
         self.io_paths.update({f"output_{i}": path for i, path in enumerate(self.disk_paths)})
 
@@ -896,8 +1015,34 @@ class HostResourceProbe:
                 "busy_percent": "UNAVAILABLE: request times are not utilization",
                 "process_io": "UNAVAILABLE: host counters cannot attribute a process"}, None
 
+    @staticmethod
+    def _cpu_request_key(request):
+        return (request.id if hasattr(request, "id") else request.request_id, request.workspace_id,
+            request.owner_type, request.owner_id, request.unit_key, request.input_digest, request.attempt_number)
+
+    def _runtime_cpu_check(self, grant, sample, policy):
+        key = (*self._cpu_request_key(grant), grant.generation)
+        if key != self._running_cpu_key:
+            seed = self._cpu_admissions.pop(self._cpu_request_key(grant), None)
+            if seed is None or (seed[1] is not None and grant.generation <= seed[1]):
+                return None, "cpu_admission_missing", {"passed": None, "state": "unknown"}
+            self._running_cpu_key = key
+            self._running_cpu = _RunningCpuWindow(policy, seed[0])
+        if self._running_cpu.policy != policy:
+            self._running_cpu.failure = "cpu_identity_changed"
+        if time.monotonic() - sample["observed_monotonic"] > policy.max_sample_gap_seconds:
+            self._running_cpu.failure = "cpu_observation_expired"
+        result = self._running_cpu.observe(sample, self.budget.max_cpu_percent)
+        logger.warning("Runtime CPU observation: %s", json.dumps({
+            "request_id": grant.request_id, "workspace_id": grant.workspace_id,
+            "owner_id": grant.owner_id, "attempt_number": grant.attempt_number,
+            "permit_generation": grant.generation, "observed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "reason": result[1], "cpu": result[2],
+        }, ensure_ascii=False))
+        return result
+
     def _sample(self, resources: dict[str, object], *, running_io: bool = False, running_render: bool = False,
-                running: bool = False) -> HostResourceDecision:
+                running: bool = False, cpu_grant: Grant | None = None) -> HostResourceDecision:
         checks: dict[str, dict[str, object]] = {}
 
         def decision(verdict: bool | None, reason: str | None = None,
@@ -905,6 +1050,9 @@ class HostResourceProbe:
             return HostResourceDecision(verdict, dict(resources), checks, reason, interval)
 
         kind, size = resources.get("kind"), resources.get("size_bytes")
+        cpu_policy = self.budget.narration.running_cpu_policy if kind == "creation_narration" and self.budget.narration else None
+        if kind == "creation_narration" and self.budget.narration is not None and cpu_policy is None:
+            return decision(None, "cpu_policy_unavailable")
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
@@ -1191,6 +1339,7 @@ class HostResourceProbe:
             cpu = psutil.cpu_percent(interval=self.budget.sample_seconds)
             checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
                                      "passed": cpu <= self.budget.max_cpu_percent}
+            cpu_endpoint = _cpu_counter() if cpu_policy else None
             sampling = "disk_io_after"
             after = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             end = time.monotonic()
@@ -1245,8 +1394,20 @@ class HostResourceProbe:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
         if memory_decision.verdict is not True:
             return decision(memory_decision.verdict, memory_decision.reason, duration)
+        if cpu_policy:
+            if memory_running:
+                if cpu_grant is None:
+                    return decision(None, "cpu_admission_missing", duration)
+                cpu_passed, cpu_reason, cpu_evidence = self._runtime_cpu_check(cpu_grant, cpu_endpoint, cpu_policy)
+                checks["cpu_percent"] = cpu_evidence
+                if cpu_passed is not True:
+                    return decision(cpu_passed, cpu_reason, duration)
+            else:
+                checks["cpu_percent"]["window_finished_endpoint"] = cpu_endpoint
+        else:
+            cpu_passed = cpu <= self.budget.max_cpu_percent
         # CPU, IO and disk gates remain unchanged. Swap totals are diagnostic only.
-        passed = (cpu <= self.budget.max_cpu_percent
+        passed = ((cpu_passed if memory_running and cpu_policy else cpu <= self.budget.max_cpu_percent)
                         and all(disk.free >= required_disk for disk in disks)
                         and checks["disk_io_bytes_per_second"]["passed"])
         if sustained and passed and not running_io and not evidence["window_complete"]:
@@ -1255,6 +1416,17 @@ class HostResourceProbe:
 
     def admit(self, request: WorkRequest) -> HostResourceDecision:
         decision = self._sample(request.resources)
+        if request.resources.get("kind") == "creation_narration" and self.budget.narration is not None:
+            policy = self.budget.narration.running_cpu_policy
+            if policy is not None:
+                endpoint = decision.checks.get("cpu_percent", {}).get("window_finished_endpoint")
+                if endpoint is not None:
+                    self._cpu_admissions = {key: value for key, value in self._cpu_admissions.items()
+                        if endpoint["observed_monotonic"] - value[0]["observed_monotonic"] <= policy.max_sample_gap_seconds}
+                key = self._cpu_request_key(request)
+                self._cpu_admissions.pop(key, None)
+                if decision.verdict is True:
+                    self._cpu_admissions[key] = (endpoint, request.last_grant_generation)
         if decision.verdict is not True:
             logger.warning("Device resource admission: %s", json.dumps({
                 "request_id": request.id,
@@ -1304,7 +1476,7 @@ class HostResourceProbe:
             if key != self._running_io_key:
                 self._running_io.clear()
                 self._running_io_key = key
-            decision = self._sample(resources, running_io=True)
+            decision = self._sample(resources, running_io=True, cpu_grant=grant)
         elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             decision = self._sample(resources, running_render=True)
         else:
@@ -1382,6 +1554,7 @@ class HostResourceProbe:
                 narration.max_process_rss_bytes, narration.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
                 narration.runtime_sample_seconds, self.memory_monitor,
+                collect_cpu=resources["kind"] == "creation_narration" and narration.running_cpu_policy is not None,
             )
         if resources.get("kind") != "material_scene_window":
             return None
