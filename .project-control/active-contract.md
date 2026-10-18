@@ -112,6 +112,8 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 桌面真实创作续绑：A在既有首页目标接收、任务回合及`assistant_goal_continuation.py`直接消费者中补自主委托采用任务后的可信接续；讨论模式不自动制作，复用当前会话/任务授权与幂等，不新建调度器。A同时拥有`schemas.py::VoicePreviewRequest`目标语言薄接线及直接测试，复用声音预览用例已有的显式语言参数；双语声音能力声明不能直接充当一次合成的目标语言。C独占`PeopleAndVoiceWorkspace`、`lib/media-profiles-api.ts`及对应类型/测试的试听语言选择与回读消费者，不复用另一语言的试听回执。主控仍独占受控模型实测、候选打包和真实闭环；实验配置不自动成为生产资源档。
 
+B新增运行CPU修复绑定：独占`host_resource_probes.py`、`member_permits.py`、`granted_subprocess.py`及直接测试，按架构§3.12新增准入/运行分责实现有界累计CPU窗口，首批限定`creation_narration`的显式实验档，不改原91%准入/运行阈值。复用当前请求/attempt/许可代与既有执行诊断，成功准入计数作为起点，有限初始许可不能反复刷新；计数不推进须积累并在期限内形成有效窗口，回退/过期/缺失为unknown保护。原生critical、RSS/线程、IO/磁盘、取消和timeout独立即时生效。实验候选窗口1秒来自`short-cpu-times.jsonl`对比，不是生产校准；最大采样间隙由同一检查调用实际时序及明确安全上界核对，必须记录实际跨度。其他未接入场景保留待迁移清单，不能称所有CPU策略已完成。主控独占模型实测和实验配置，B不运行模型/打包。
+
 配音实测诊断续绑：B在既有`profile_preview_execution.py`、`granted_subprocess.py`及直接测试保留同一request/attempt的运行拒绝决定和有界模型阶段/内存诊断，复用现有日志归属；不能只剩通用`resource_pressure`而丢失判定依据。不记录参考文字、凭据或完整请求，不扩大输出预算或新建监控事实库。原始决定缺失的历史实验保持未知，修复后由主控再安排单次受控验证。
 
 真实文案失败续绑：A独占`topics.py`、`agent_tools/diary/transport.ts`、`script-tools.ts`及直接测试，将逐段核查的固定错误类别、段号及可重试性经现有业务错误回执提供给Agent，区分核查报告契约无效与文案事实无依据；不透传模型原始输出、来源全文或凭据，不放宽事实门、不增加盲重试或超时。文案工具明确`content`仅含实际朗读正文，画面署名与许可说明不得混入旁白。给定主题的公开响应允许真实的无模型快照，不能伪造模型配置来满足DTO。
