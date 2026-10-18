@@ -69,6 +69,8 @@ A接回`apps/api/tests/test_assistant_pi_failures.py`、`test_assistant_pi.py`�
 
 ## 5. 共同接入约定与接受点
 
+当前实测补绑：主控独占`production.py`既有`search_material_segments`候选证据/确认状态输出和`apps/api/tests/test_material_search_permissions_http.py`，补齐既有字段，不改检索器或成员过滤。A沿已绑定`creation-plans.ts`、`workspace-tools.ts`、`catalogue.py`及`creation-intake.test.mjs`修正“本轮尚未提交”只读空结果与“已提交结果未知”的区分，以及最近任务摘要的截断元数据和证据查找指引；不增加全库上下文，不以标签代替画面事实。其他绑定冻结。
+
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。
 
 A接受：已有proposed窗口传新goals会保存实际新版，不自动确认旧窗口；读/修订/重规划/采用可由Agent完成，原委托下无人工中间门；讨论不创建任务、相同采用不重复、旧修订被拒绝、所选资源变化/撤权拒绝，无关资源不随意使采用失效。只对证实的依赖过宽做最小修改，不能移除执行前核验。六次409的精确历史原因仍未知，新试验必须保留首个实际拒绝。

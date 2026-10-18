@@ -67,6 +67,19 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
     second_ids = {row["asset_ref"].removeprefix("asset:") for row in second_all.json()}
     assert first_ids == {shared.id, first_private.id}
     assert second_ids == {shared.id, second_private.id}
+    text_matches = [row for row in first_all.json() if row["match_tier"] == "text"]
+    assert len(text_matches) == 2
+    assert all("permissionneedle" in row["evidence_excerpt"] and row["needs_confirmation"] is False
+               for row in text_matches)
+
+    weak = client.get("/api/production/materials/search",
+        params={"q": "unmatched", "usage_role": "b_roll"}, headers=first_headers)
+    assert weak.status_code == 200
+    assert {row["asset_ref"] for row in weak.json()} == {row["asset_ref"] for row in first_all.json()}
+    assert all(row["match_tier"] == "structural" and row["needs_confirmation"] is True for row in weak.json())
+    matched_refs = {row["segment_ref"] for row in text_matches}
+    assert all("permissionneedle" in row["evidence_excerpt"] for row in weak.json()
+               if row["segment_ref"] in matched_refs)
 
     # The second member's private asset is newest and matches equally. A limit
     # applied before permission filtering would hide the first member's result.

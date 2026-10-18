@@ -3709,6 +3709,8 @@ class ProductionRepository:
                             f"{_material_timecode(segment.end_seconds)}"
                         ),
                         tags=segment_tags,
+                        evidence_excerpt=_material_searchable_corpus(segment, asset)[:900],
+                        needs_confirmation=tier in {"partial", "structural", "semantic"},
                     )
                 )
         matches.sort(key=lambda item: (-item.score, item.asset_ref, item.segment_ref))
