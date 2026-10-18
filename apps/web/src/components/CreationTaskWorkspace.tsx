@@ -559,7 +559,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (currentTaskId.current === task.id) setBusy(null);
   }
 
-  async function useNarrationVoice(mode: "select" | "query" | "replay" = "select") {
+  async function handleNarrationVoice(mode: "select" | "query" | "replay" = "select") {
     if (busy !== null) return;
     const voice = runnableVoices.find(item => item.profile_id === selectedVoiceId);
     if (mode === "select" && (!voice || pendingVoiceSelection)) return;
@@ -1401,11 +1401,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}
 
-        {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void useNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void useNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
+        {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
           <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={latestScript?.sections.length ?? 0} hasSelectedVoice={Boolean(workspace.plan.selected_voice)} voices={runnableVoices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy ?? (pendingVoiceSelection ? "voice-select" : null)}
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
-            onUseVoice={() => void useNarrationVoice()} />
+            onUseVoice={() => void handleNarrationVoice()} />
         ) : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} personRenders={workspace.person_renders} hasPerson={Boolean(workspace.plan.selected_person)} taskId={task.id} /> : null}
 
