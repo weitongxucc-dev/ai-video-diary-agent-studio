@@ -38,7 +38,7 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
   function verifyInput(key: string | undefined) {
     if (!key || key !== inputKey()) throw new Error("当前输入已变化，没有沿旧输入修订或采用制作目标");
   }
-  async function currentRequest(refresh = false) {
+  async function currentRequest(refresh = false, allowMissing = false) {
     const key = inputKey();
     if (parentCreationPromise) await parentCreationPromise;
     // Unset host environment fields are empty strings, not request identities.
@@ -52,7 +52,11 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
       const saved = await request(requestId ? `/api/creation-requests/${encodeURIComponent(requestId)}`
         : `/api/assistant/creation-request?assistant_turn_id=${encodeURIComponent(turnId!)}`);
       verifyInput(key);
-      if (saved === null) throw new Error("尚未查到原请求，不能证明请求未写入；保持原request_key，不能换ID重交。");
+      if (saved === null) {
+        if (allowMissing && !requestId && !creationUnknown && !needsRead) return null;
+        if (requestId || creationUnknown) needsRead = true;
+        throw new Error("尚未查到原请求，不能证明请求未写入；保持原request_key，不能换ID重交。");
+      }
       if (typeof saved.id !== "string" || !saved.id || requestId && saved.id !== requestId)
         throw new Error("回读目标与本轮已保存请求不一致，没有修改任务");
       creationRequest = saved;
@@ -116,9 +120,15 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
       details: {kind:"plan_preview", preview:{kind:"creation_request", request:created}}};
   }
   pi.registerTool({name: "read_creation_request", label: "读取制作目标",
-    description: "只读本轮绑定的原制作请求、当前修订、共同要求、窗口与逐条要求和阻断；冲突或结果未知先回读，不创建新目标或采用旧窗口。",
+    description: "只读本轮绑定的原制作请求、当前修订、共同要求、窗口与逐条要求和阻断；首次空查返回lookup_status:not_found，仅表示当前查询未发现，不证明从未提交。新目标沿原request_key保存；已有提交未知或旧绑定仍先对账，不创建新身份或采用旧窗口。",
     parameters: {type:"object", properties:{}, additionalProperties:false},
-    execute: async () => result(await currentRequest(true)),
+    execute: async () => {
+      const current = await currentRequest(true, true);
+      if (current) return result(current);
+      const details = {kind: "creation_request_lookup", lookup_status: "not_found", request_key: inputKey(),
+        instruction: "当前查询未发现请求，不表示提交未发生。新目标沿当前原request_key调用preview_creation_plan保存；曾提交而结果未知时先按原身份对账，不换ID或盲重试。"};
+      return {content: [{type: "text", text: JSON.stringify(details)}], details};
+    },
   });
   pi.registerTool({name: "revise_creation_request", label: "修订制作要求",
     description: "先读取当前制作目标，比较其revision后修订共同要求或多条关系/素材范围。只更新明确传入字段，保留原委托身份；会作废尚未采用的窗口，随后用prepare_creation_window保存实际逐条要求。已有采用任务不能改写，不自动创建或生成。",
@@ -159,7 +169,7 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
     },
     execute: async (_id: string, params: { goal: string; intent: IntakeIntent; target_count?: number; output_relation?: string; material_scope?: string; name?: string; language?: string; aspect_ratio?: string; duration_target_seconds?: number; presenter_share_target?: number; lipsync_quality?: "high" | "fast"; template_id?: string; template_version?: number; selected_voice?: any; selected_person?: any }) => {
       if (hasPreview()) throw new Error("本轮已生成新视频预检，请用户检查后再决定下一步");
-      if (creationUnknown) throw new Error("原目标保存结果未知，请先read_creation_request核对原请求，不另建目标");
+      if (creationUnknown || needsRead) throw new Error("原目标保存结果或修订待核对，请先read_creation_request核对原请求，不另建目标");
       const source = readActionSource();
       const turnId = source.turnId;
       if (!turnId) throw new Error("当前创作回合不可核验，没有保存制作目标");

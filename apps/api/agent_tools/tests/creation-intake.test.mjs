@@ -3,11 +3,132 @@ import assert from 'node:assert/strict';
 import {registerCreationPlans} from '../diary/creation-plans.ts';
 import {registerScriptTools} from '../diary/script-tools.ts';
 import {registerExecutionTools} from '../diary/execution-tools.ts';
+import {registerWorkspaceTools} from '../diary/workspace-tools.ts';
 
 function registry() {
   const tools = {};
   return {tools, pi: {registerTool: tool => {tools[tool.name] = tool;}}};
 }
+
+function creationReader(source, request) {
+  const {tools, pi} = registry();
+  let previewed = false;
+  registerCreationPlans(pi, {request, readActionSource: () => source,
+    hasPreview: () => previewed, markPreview: () => {previewed = true;}});
+  return {tools, previewed: () => previewed};
+}
+
+for (const binding of [undefined, '']) {
+  test(`empty first lookup is neutral and permits saving with the original key (${String(binding)})`, async () => {
+    const source = {turnId: 'first-read-turn', inputId: 'first-read-input', creationRequestId: binding}, calls = [];
+    let saved = null;
+    const reader = creationReader(source, async (path, init) => {
+      calls.push({path, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null});
+      if (init?.method === 'POST') {
+        saved = {id: 'actual-request', revision: 1, goal: '真实目标', target_count: 1, confirmed_count: 0,
+          intent: {kind: 'goal_delegation'}, requirements: {}, clarification_questions: [], current_window: null};
+      }
+      return saved;
+    });
+    const empty = await reader.tools.read_creation_request.execute('read', {});
+    assert.equal(empty.details.lookup_status, 'not_found');
+    assert.equal(empty.details.request_key, source.inputId);
+    assert.match(empty.details.instruction, /不表示提交未发生/);
+    assert.equal(Object.hasOwn(empty.details, 'submission_effect'), false);
+    assert.equal(Object.hasOwn(empty.details, 'preview'), false);
+    assert.equal(reader.previewed(), false);
+    assert.equal(calls.length, 1);
+    assert.equal(new URL(calls[0].path, 'http://test').searchParams.get('assistant_turn_id'), source.turnId);
+    await reader.tools.preview_creation_plan.execute('save', {goal: '真实目标', intent: {kind: 'goal_delegation'}});
+    assert.equal(calls[1].method, 'POST');
+    assert.equal(calls[1].body.request_key, source.inputId);
+    assert.equal(calls[1].body.assistant_turn_id, source.turnId);
+    assert.equal(reader.previewed(), true);
+    const readBack = await reader.tools.read_creation_request.execute('read-again', {});
+    assert.equal(readBack.details.preview.request.id, saved.id);
+  });
+}
+
+test('null after an unknown submission does not clear reconciliation or permit another POST', async () => {
+  const source = {turnId: 'unknown-turn', inputId: 'unknown-input'}, calls = [];
+  const reader = creationReader(source, async (path, init) => {
+    calls.push({path, method: init?.method || 'GET'});
+    if (init?.method === 'POST') throw new TypeError('response lost after submit');
+    return null;
+  });
+  const preview = () => reader.tools.preview_creation_plan.execute('save', {goal: '目标', intent: {kind: 'goal_delegation'}});
+  await assert.rejects(preview(), /response lost/);
+  await assert.rejects(reader.tools.read_creation_request.execute('reconcile', {}), /不能证明请求未写入/);
+  await assert.rejects(preview(), /先read_creation_request/);
+  await assert.rejects(reader.tools.prepare_creation_window.execute('prepare', {goals: [{goal: '目标'}]}), /先read_creation_request/);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(reader.previewed(), false);
+});
+
+test('null for an existing bound request does not permit creating a replacement identity', async () => {
+  const source = {turnId: 'bound-turn', creationRequestId: 'original-request'}, calls = [];
+  const reader = creationReader(source, async (path, init) => {calls.push({path, method: init?.method || 'GET'}); return null;});
+  await assert.rejects(reader.tools.read_creation_request.execute('read', {}), /不能证明请求未写入/);
+  await assert.rejects(reader.tools.preview_creation_plan.execute('save', {goal: '目标', intent: {kind: 'goal_delegation'}}), /先read_creation_request/);
+  assert.deepEqual(calls, [{path: '/api/creation-requests/original-request', method: 'GET'}]);
+});
+
+test('rebinding tools cannot turn an empty lookup into proof that the old input was never submitted', async () => {
+  const source = {turnId: 'restored-turn', inputId: 'restored-input'}, calls = [];
+  const request = async (path, init) => {
+    calls.push({path, method: init?.method || 'GET'});
+    if (init?.method === 'POST') throw new TypeError('original result unknown');
+    return null;
+  };
+  const first = creationReader(source, request);
+  await assert.rejects(first.tools.preview_creation_plan.execute('save', {goal: '目标', intent: {kind: 'goal_delegation'}}));
+  const restored = await creationReader(source, request).tools.read_creation_request.execute('read-restored', {});
+  assert.equal(restored.details.lookup_status, 'not_found');
+  assert.equal(restored.details.request_key, source.inputId);
+  assert.equal(JSON.stringify(restored).includes('not_created'), false);
+  assert.match(restored.details.instruction, /曾提交而结果未知.*原身份对账/);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+});
+
+function workspaceReader(request) {
+  const {tools, pi} = registry();
+  registerWorkspaceTools(pi, {request, taskId: undefined, stage: 'home', selectedRefs: [], selectedProfile: null,
+    selectedKnowledge: null, isTaskRead: () => false, verifyTaskVersion() {}, getEditCapabilities: () => null,
+    readMaterialSelection: () => null});
+  return tools;
+}
+
+for (const [returned, total] of [[0, 0], [8, 8], [19, 19], [3, 50]]) {
+  test(`recent workspace summaries remain bounded and report the actual count (${returned}/${total})`, async () => {
+    const calls = [];
+    const tools = workspaceReader(async path => {
+      calls.push(path);
+      return {total_count: total, items: Array.from({length: returned}, (_, index) => ({
+        id: `task-${index}`, name: `作品${index}`, stage: 'review', status: 'completed', output_path: '/private/never-project'}))};
+    });
+    const result = await tools.read_workspace_context.execute('read', {});
+    assert.deepEqual(calls, ['/api/creation-tasks']);
+    assert.equal(result.details.tasks.length, Math.min(returned, 8));
+    assert.equal(result.details.total_count, total);
+    assert.equal(result.details.truncated, total > Math.min(returned, 8));
+    assert.deepEqual(JSON.parse(result.content[0].text), result.details);
+    assert.equal(JSON.stringify(result).includes('never-project'), false);
+  });
+}
+
+test('content candidates preserve missing evidence rather than inventing it from system tags', async () => {
+  const tools = workspaceReader(async path => {
+    assert.ok(path.startsWith('/api/production/materials/search?'));
+    return [{asset_ref: 'asset:real', segment_ref: 'segment:real', score: .1, reasons: ['仅用途符合'],
+      match_tier: 'structural', evidence_excerpt: '', needs_confirmation: true,
+      system_tags: ['未经人工核实的机器描述'], start_seconds: 0, end_seconds: 5, duration_seconds: 5, time_range: '0–5'}];
+  });
+  const result = await tools.find_materials.execute('find', {query: '现场操作'});
+  assert.equal(result.details.matches[0].evidence_excerpt, '');
+  assert.equal(result.details.matches[0].needs_confirmation, true);
+  assert.equal(JSON.stringify(result).includes('未经人工核实的机器描述'), false);
+  assert.match(tools.find_materials.description, /find_knowledge/);
+});
 
 for (const kind of ['discussion', 'goal_delegation', 'final_script']) {
   test(`creation tools preserve ${kind} intent and per-delivery requirements`, async () => {
