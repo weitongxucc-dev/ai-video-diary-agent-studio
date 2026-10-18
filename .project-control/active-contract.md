@@ -63,6 +63,8 @@ A补绑`apps/api/app/conversation_repository.py`与新增`apps/api/tests/test_as
 
 C接回`apps/api/app/assistant/turn.py`、`apps/api/agent_tools/diary/transport.ts`（B已结束前批），补绑`apps/api/app/assistant/process_runner.py`、`apps/api/agent_runtime/host.mjs`，仅按架构§3.14的实际模型/请求阶段计时及SDK取消接线；不调大180/120/20秒既定限制，不新增重试或任务调度，不改B当前topics/script工具。直接验证独占新增`apps/api/tests/test_assistant_phase_deadlines.py`及`apps/api/agent_runtime/tests/phase-deadlines.test.mjs`，可运行原直接回归但不改其他测试。main由主控补已知接续异常的安全落库，并独占`apps/api/tests/test_assistant_goal_api.py`对应回归；未知异常保留通用兜底。
 
+C另接回`apps/api/agent_tools/diary/runtime.ts`及补绑`registration.ts`，仅沿既有AsyncLocalStorage调用域传递SDK实际toolCallId给请求阶段事件，防止并行工具互相延长等待；不改变业务参数、工具授权或回执投影。B不再写这两个文件。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。
