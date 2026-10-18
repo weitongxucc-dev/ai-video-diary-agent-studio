@@ -68,7 +68,8 @@ def send(state, message="只重新生成故事板，保留配音，不生成视�
 
 
 @pytest.mark.parametrize("stale_field", ["id", "sequence"])
-def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat, monkeypatch, stale_field):
+@pytest.mark.parametrize("stream", [False, True])
+def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat, monkeypatch, stale_field, stream):
     state = chat
     current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
     message = "保留这条尚未发送的修改要求"
@@ -79,15 +80,42 @@ def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat
         "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],
         "expected_timeline_version_id": "old-timeline" if stale_field == "id" else version.id,
         "expected_timeline_sequence": version.sequence - 1 if stale_field == "sequence" else version.sequence}
-    response = state.client.post(state.base_url + "/assistant/turn", json=payload)
-    assert response.status_code == 409
-    assert response.json() == {"detail": {"error": "creation_task_timeline_version_conflict",
-        "message": "当前任务版本已变化，请重新查看选中对象后发送。"}}
+    response = state.client.post(state.base_url + "/assistant/turn", json=payload,
+        headers={"Accept": "text/event-stream"} if stream else {})
+    if stream:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+        assert [event for event in events if event["type"] == "error"] == [{"type": "error", "status": 409,
+            "message": "当前任务版本已变化，请重新查看选中对象后发送。",
+            "failure": {"code": "creation_task_timeline_version_conflict"}}]
+        assert not any(event["type"] in {"turn_started", "result"} for event in events)
+    else:
+        assert response.status_code == 409
+        assert response.json() == {"detail": {"error": "creation_task_timeline_version_conflict",
+            "message": "当前任务版本已变化，请重新查看选中对象后发送。"}}
     assert state.conversations.request_context(payload["client_request_id"], current["id"], "ws", state.member.member_id) is None
     after = state.conversations.get(current["id"], "ws", state.member.member_id)
     assert (after["draft_text"], after["draft_version"]) == (message, draft["draft_version"])
     with state.conversations._connect() as conn:
         assert conn.execute("SELECT count(*) FROM assistant_conversation_turns WHERE conversation_id=?", (current["id"],)).fetchone()[0] == 0
+
+
+def test_stream_other_http_detail_does_not_expose_arbitrary_fields(chat):
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    @app.get("/stream")
+    def stream():
+        def execute(_publish):
+            raise HTTPException(status_code=409, detail={"error": "other_conflict",
+                "message": "private detail", "private": "must not escape"})
+        return main._assistant_stream_response(execute, workspace_id="ws")
+    response = TestClient(app).get("/stream")
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert [event for event in events if event["type"] == "error"] == [{"type": "error", "status": 409,
+        "message": "对话未能完成，请查看当前任务状态。"}]
+    assert "private" not in response.text
 
 
 def request_id(task_id, turn_id):

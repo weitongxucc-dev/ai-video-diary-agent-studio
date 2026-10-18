@@ -7430,6 +7430,12 @@ def _assistant_stream_response(
                 ).model_dump(mode="json", exclude_none=True)
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else "对话未能完成，请查看当前任务状态。"
+            failure = None
+            if (isinstance(exc.detail, dict)
+                    and exc.detail.get("error") == "creation_task_timeline_version_conflict"
+                    and isinstance(exc.detail.get("message"), str)):
+                detail = exc.detail["message"]
+                failure = {"code": "creation_task_timeline_version_conflict"}
             if turn_ref["id"]:
                 forget_turn_control(turn_ref["id"])
                 stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
@@ -7438,7 +7444,7 @@ def _assistant_stream_response(
             if not disconnected.is_set():
                 terminal_event = AssistantStreamEvent(
                     type="error", status=exc.status_code,
-                    message=_assistant_stream_safe_text(detail, workspace_id),
+                    message=_assistant_stream_safe_text(detail, workspace_id), failure=failure,
                 ).model_dump(mode="json", exclude_none=True)
         except Exception as exc:
             if turn_ref["id"]:
