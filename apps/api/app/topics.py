@@ -897,6 +897,12 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         source_inputs = [{**{key: source[key] for key in ("reference_id", "kind", "title")},
                           "text": pieces(source["text"], index=index, field="text", source_alias=source["reference_id"])}
                          for index, source in enumerate(sources, start=1)]
+        source_ordinals = {source["reference_id"]: ordinal for ordinal, source in enumerate(source_inputs, start=1)}
+        quote_ids_by_source = {source["reference_id"]: [piece["quote_id"] for piece in source["text"]]
+            for source in source_inputs}
+        for section in sections:
+            section["allowed_source_quote_ids"] = {
+                reference: quote_ids_by_source[reference] for reference in section["evidence_reference_ids"]}
 
         def candidate_quote(quote_id, section_index):
             entry = candidate_pieces.get(quote_id) if isinstance(quote_id, str) else None
@@ -961,7 +967,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "完整覆盖输入全部段落，index从1开始且唯一。grounded和constraints_met为布尔值。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
                     "candidate_quote_id须来自当前段的title/content/visual_prompt或全局总标题；"
-                    "source_quote_id须来自该段证据编号对应资料，资料片段须真正支持候选片段的事实，不能用无关文字。"
+                    "每段allowed_source_quote_ids按该段已声明资料列出本段可选的source_quote_id；"
+                    "source_quote_id只能从本段此映射选择，不借用其他段或未声明资料的片段。"
+                    "资料片段须真正支持候选片段的事实，不能用无关文字。"
                     "核查全部事实，supports用简短摘录说明依据，不用grounded:true代替真实依据。"
                     "核查范围不因精简报告而缩小；不要复述整段正文、穷举每个错误或输出长分析。"
                     "无据段grounded=false且supports为空，issues通常只报最重要的一项短问题。"
@@ -1009,7 +1017,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         diagnostics = {"requested_max_tokens": payload["max_tokens"], "finish_reason": None,
             "message_lengths": {"content": None, "reasoning_content": None, "refusal": None},
             "tool_call_count": None, "tool_arguments_length": None, "usage": {"prompt_tokens": None, "completion_tokens": None,
-                "total_tokens": None, "reasoning_tokens": None}, "section_index": None}
+                "total_tokens": None, "reasoning_tokens": None}, "section_index": None,
+            "section_count": len(sections), "source_count": len(source_inputs),
+            "support_reference_mismatch": None}
 
         def safe_count(value):
             return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
@@ -1086,7 +1096,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 raise self._review_failure("support_shape", diagnostics)
             if not isinstance(issues, list) or len(issues) > 3:
                 raise self._review_failure("issue_shape", diagnostics)
-            for support in supports:
+            for support_index, support in enumerate(supports, start=1):
                 if not isinstance(support, dict) or set(support) != {"candidate_quote_id", "source_quote_id"}:
                     raise self._review_failure("support_shape", diagnostics)
                 if candidate_quote(support["candidate_quote_id"], index) is None:
@@ -1095,6 +1105,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 if source is None:
                     raise self._review_failure("source_quote", diagnostics)
                 if source["source_alias"] not in section["evidence_reference_ids"]:
+                    diagnostics["support_reference_mismatch"] = {
+                        "support_index": support_index, "selected_source_ordinal": source["index"],
+                        "allowed_source_ordinals": [source_ordinals[reference] for reference in section["evidence_reference_ids"]]}
                     raise self._review_failure("support_reference", diagnostics)
             kinds = set()
             for issue in issues:

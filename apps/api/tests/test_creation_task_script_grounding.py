@@ -989,3 +989,49 @@ def test_m3_disabled_thinking_keeps_fact_and_complete_report_gate(outcome):
             generator.generate(inputs())
         assert error.value.code == ("script_fact_unsupported" if outcome == "unsupported" else "script_review_invalid")
     assert len(calls) == 2
+
+
+def test_each_review_section_receives_only_its_declared_source_quote_id_mapping():
+    source = replace(inputs(), sources=(*inputs().sources, CreationTaskTopicSource(
+        reference_id='second-fixed-source', kind='knowledge', title='第二份资料', text=FACT + '补充操作说明。')))
+    document = draft()
+    document['script']['sections'].append({**copy.deepcopy(document['script']['sections'][0]),
+        'evidence_reference_ids': ['evidence_2']})
+    review = reviewed(document)
+    review['sections'][1]['supports'][0]['source_quote_id'] = '@evidence_2:0'
+    calls = []
+    assert len(provider(document, review, calls).generate(source).sections) == 2
+    supplied = json.loads(calls[1][1]['messages'][1]['content'])
+    ids = {item['reference_id']: [piece['quote_id'] for piece in item['text']] for item in supplied['sources']}
+    assert supplied['script']['sections'][0]['allowed_source_quote_ids'] == {'evidence_1': ids['evidence_1']}
+    assert supplied['script']['sections'][1]['allowed_source_quote_ids'] == {'evidence_2': ids['evidence_2']}
+    assert ''.join(piece['text'] for piece in supplied['sources'][0]['text']) == source.sources[0].text
+    assert len(calls) == 2
+
+
+def test_fifth_section_wrong_source_still_rejects_and_reports_only_bounded_ordinals(caplog):
+    import logging
+
+    private_text = 'private-source-body-sentinel'
+    source = replace(inputs(), sources=(*inputs().sources, CreationTaskTopicSource(
+        reference_id='private-source-id-sentinel', kind='knowledge', title='private-source-title-sentinel',
+        text=FACT + private_text)))
+    document = draft()
+    document['script']['sections'] *= 5
+    review = reviewed(document)
+    review['sections'][4]['supports'][0]['source_quote_id'] = '@evidence_2:0'
+    calls = []
+    caplog.set_level(logging.WARNING, logger='app.topics')
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        provider(document, review, calls).generate(source)
+    assert failure.value.code == 'script_review_invalid' and not failure.value.retryable
+    records = [item for item in caplog.records if item.name == 'app.topics']
+    assert len(records) == 1
+    diagnostic = json.loads(records[0].getMessage().split(' ', 1)[1])
+    assert diagnostic['reason_code'] == 'support_reference' and diagnostic['section_index'] == 5
+    assert diagnostic['section_count'] == 5 and diagnostic['source_count'] == 2
+    assert diagnostic['support_reference_mismatch'] == {
+        'support_index': 1, 'selected_source_ordinal': 2, 'allowed_source_ordinals': [1]}
+    for secret in (private_text, 'private-source-id-sentinel', 'private-source-title-sentinel', FACT, 'isolated-key'):
+        assert secret not in caplog.text
+    assert len(records[0].getMessage()) < 1200 and len(calls) == 2
