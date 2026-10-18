@@ -122,6 +122,8 @@ B运行CPU绑定更新：1秒窗口实测仍在推理期间因1.345秒整机93.2
 
 A新增实际文案约束与接续绑定：在既有`topics.py`、`main.py`、`agent_tools/diary/script-tools.ts`、`runtime.ts`、`conversation_repository.py`及`assistant_goal_continuation.py`直接消费者和定向测试，将宿主核验的本轮真实要求纳入逐段核查，保留原方案约束并在核查后复核输入身份；`content`所有文字都会朗读，角标/署名/制作说明属于画面要求，不得作为旁白采用。文案采用工具复用当前任务回读返回实际阶段与缺项，按原自主制作授权接入已有接续，不让讨论/仅写稿启动制作。没有新工具系统、调度器或核查回退。声音写入回执/CAS方案暂仅只读，具体文件另绑。
 
+配音模型峰值优化续绑：A独占`apps/api/model_workers/qwen3_tts_worker.py`、新增本模型专属的`qwen3_text_embedding.py`及直接测试，按已核对上游调用链使用lazy加载，在主参数首次求值前将622,329,856字节BF16文字表替换为原权重按行只读查表，再求值其余主参数。查行保留原始位、顺序、重复、多维索引、ICL/声音/语言/字典和decoder精度；不改原模型文件、不量化降精度、不加跨调用缓存/通用加载器。明确校验safetensors字段/范围、短读/文件变化及行边界，不能在失败时静默回到全表常驻。测试允许微型MLX/nn.Embedding位级对比与真实权重少量行只读核对，不加载完整模型/不生成音频。主控独占受许可实际模型、峰值、输出与界面连续性实测；旧基线未出音频时不得宣称完整音频等同验证。
+
 生成前文案修订补齐：A额外拥有`creation/contracts.py::can_revise_script`及`main.py`文案核查/保存/确认直接消费者、Pi文案工具及直接测试，使同任务在narration/not_started且尚无配音/蒙太奇/时间线时可按明确要求修订。C在其独占`production.py::confirm_creation_task_script`补同事务的活动作业与旧版本保护；已锁定正文仍依原规则拒绝自动覆盖。修订复用现有核查、采用与版本入口，保留旧正文直到新稿通过；不能通过制造失败、删除任务、直接改数据库或绕过核查修复。讨论只保存草稿，不授权制作。两线先交换最小方法签名，不并发写同一文件。
 
 声音采用回执续绑：C独占`production.py::select_creation_task_narration_voice`及同对象原请求查询、`schemas.py::CreationTaskNarrationVoiceSelectionRequest`/对应回执类型、Web`lib/api/creation-tasks.ts`、`lib/types.ts`、`CreationTaskWorkspace.tsx`的声音选择调用及直接测试。复用既有`task_events`在同一事务校验workspace/member、固定声音版本、任务/方案修订及现有narration阶段，写入声音与不可变请求回执；同请求同输入回读、异输入拒绝，旧版本拒绝。Web使用真实当前修订/UUID并在丢响应时查原请求，不保留绕过版本检查的旧写入口。A仍独占`main.py`，C提交业务接口签名与薄路由建议，由A在现有路由接线；C不得编辑main.py。A当前文案修复完成后接Pi声音选择/原请求查询工具，不提前并发写共享文件。主控串行集成与实测。
