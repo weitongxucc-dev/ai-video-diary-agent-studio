@@ -840,11 +840,6 @@ class MontageRenderer:
         context = CpuRenderGrantContext(scheduler, grant, deadline_monotonic, temporary_disk_bytes, threads, cancel_event)
         frame_counts = [round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
             for clip in plan.clips]
-        paths = self._temporary_render_paths(output_path, temporary_disk_bytes)
-        # This is a payload lower bound; NUT/manifest overhead remains subject to the live aggregate cap.
-        raw_bytes = width * height * 3 // 2 * sum(frame_counts)
-        if raw_bytes + sum(path.stat().st_size for path in paths) >= temporary_disk_bytes:
-            raise ValueError("成片原始帧载荷与已有临时文件已耗尽同一许可磁盘上限")
         directory.mkdir()
         lines = ["ffconcat version 1.0"]
         for index, (clip, frames) in enumerate(zip(plan.clips, frame_counts)):
@@ -860,7 +855,8 @@ class MontageRenderer:
                 "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
                 "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
                 "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
-                "-an", "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
+                "-an", "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0",
+                "-g", "1", "-slices", "4", "-slicecrc", "1", "-pix_fmt", "yuv420p",
                 "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(remaining_bytes),
                 "-f", "nut", str(target)]
             _run_granted_media_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
@@ -1841,9 +1837,9 @@ def _plan_from_payload(data: dict[str, object]) -> MontagePlan:
 
 
 def _probe_serial_picture_input(path: Path, context, *, expected_size, expected_frames):
-    """Validate only our silent raw NUT intermediate, using frames rather than its last PTS."""
+    """Validate only our silent FFV1/NUT intermediate, using frames rather than its last PTS."""
     context.check()
-    command = ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+    command = ["ffprobe", "-v", "error", "-threads", str(context.threads), "-count_frames", "-show_entries",
         "stream=codec_type,codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames:format=format_name",
         "-of", "json", str(path)]
     completed = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=30,
@@ -1851,7 +1847,7 @@ def _probe_serial_picture_input(path: Path, context, *, expected_size, expected_
     data = json.loads(completed.stdout)
     streams = data.get("streams", [])
     if (data.get("format", {}).get("format_name") != "nut" or len(streams) != 1
-            or streams[0].get("codec_type") != "video" or streams[0].get("codec_name") != "rawvideo"
+            or streams[0].get("codec_type") != "video" or streams[0].get("codec_name") != "ffv1"
             or streams[0].get("pix_fmt") != "yuv420p"
             or (streams[0].get("width"), streams[0].get("height")) != expected_size
             or streams[0].get("r_frame_rate") != "30/1"

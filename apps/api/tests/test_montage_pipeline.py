@@ -5974,9 +5974,6 @@ def test_serial_lossless_hard_cut_uses_real_synthetic_media_and_original_frames(
         return runner(scheduler,grant,command,**kwargs)
     monkeypatch.setattr(montage,'_run_granted_media_command',recorded)
     with granted_media([blue,green,audio],kind='creation_render') as context:
-        # 48 raw 1080p frames alone exceed the shared fixture's old compressed allowance.
-        # This finite synthetic allowance is not a device calibration or a production default.
-        context.scheduler.resources.budget.cpu_render.additional_disk_bytes = 256*1024**2
         rendered=montage.MontageRenderer(tmp_path).render(plan,audio,job_staging_path=tmp_path/'job',subtitle_tracks=[],
             scheduler=context.scheduler,grant=context.grant,max_output_bytes=context.max_output_bytes,threads=context.threads,
             deadline_monotonic=context.deadline_monotonic)
@@ -5984,7 +5981,7 @@ def test_serial_lossless_hard_cut_uses_real_synthetic_media_and_original_frames(
     encodes=[command for command,_ in commands if command[0]=='ffmpeg']
     assert len(encodes)==3
     assert [command.count('-i') for command in encodes]==[1,1,2]
-    assert all(command[command.index('-c:v')+1]=='rawvideo' and command[command.index('-f')+1]=='nut'
+    assert all(command[command.index('-c:v')+1]=='ffv1' and command[command.index('-f')+1]=='nut'
         and '-crf' not in command for command in encodes[:2])
     assert encodes[-1][encodes[-1].index('-crf')+1]=='23'
     assert all(options['deadline_monotonic']==context.deadline_monotonic for _,options in commands)
@@ -6004,13 +6001,13 @@ def test_serial_lossless_hard_cut_uses_real_synthetic_media_and_original_frames(
     assert max(tail)<10  # Original final fade clock was retained across serial encoding.
 
 
-def _raw_picture_probe(frames=115):
+def _ffv1_picture_probe(frames=115):
     return {'format': {'format_name': 'nut', 'duration': str((frames-1)/30)}, 'streams': [{
-        'codec_type': 'video', 'codec_name': 'rawvideo', 'width': 1920, 'height': 1080,
+        'codec_type': 'video', 'codec_name': 'ffv1', 'width': 1920, 'height': 1080,
         'pix_fmt': 'yuv420p', 'r_frame_rate': '30/1', 'nb_read_frames': str(frames)}]}
 
 
-@pytest.mark.parametrize('disk_case', ['enough', 'raw_payload', 'existing_mix'])
+@pytest.mark.parametrize('disk_case', ['enough', 'below_raw_payload', 'existing_mix', 'write_excess'])
 def test_serial_picture_contract_keeps_900_frames_and_one_temporary_budget(tmp_path, monkeypatch, disk_case):
     """Command/probe contract only; byte placeholders are not media acceptance."""
     import app.montage as montage
@@ -6028,8 +6025,10 @@ def test_serial_picture_contract_keeps_900_frames_and_one_temporary_budget(tmp_p
     grant, cancelled, calls = object(), threading.Event(), []
     scheduler = SimpleNamespace(assert_grant=lambda current: current is grant or pytest.fail('grant changed'))
     deadline, budget = time.monotonic()+90, 3*1024**3
-    if disk_case != 'enough':
-        budget = 1920*1080*3//2*900 + (overhead.stat().st_size if disk_case == 'existing_mix' else -1)
+    if disk_case == 'below_raw_payload':
+        budget = 1024**2  # Finite byte-placeholder contract; not a measured FFV1 compression bound.
+    elif disk_case in {'existing_mix', 'write_excess'}:
+        budget = overhead.stat().st_size + (10 if disk_case == 'write_excess' else 0)
     frames_by_path = {}
     def command(current_scheduler, current_grant, argv, **options):
         assert current_scheduler is scheduler and current_grant is grant
@@ -6041,50 +6040,54 @@ def test_serial_picture_contract_keeps_900_frames_and_one_temporary_budget(tmp_p
             assert set(options['output_paths']) == {*previous, target}
             assert int(argv[argv.index('-fs')+1]) == budget-sum(path.stat().st_size for path in previous)
             frames_by_path[str(target)] = int(argv[argv.index('-frames:v')+1])
-            target.write_bytes(b'raw-placeholder')
+            target.write_bytes(b'x'*(int(argv[argv.index('-fs')+1])+1) if disk_case == 'write_excess' else b'ffv1-placeholder')
             assert options['max_output_file_bytes'] == budget
             return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
         assert '-count_frames' in argv
-        return SimpleNamespace(stdout=json.dumps(_raw_picture_probe(frames_by_path[argv[-1]])).encode())
+        assert argv[argv.index('-threads')+1] == '2'
+        return SimpleNamespace(stdout=json.dumps(_ffv1_picture_probe(frames_by_path[argv[-1]])).encode())
     monkeypatch.setattr(montage, '_run_granted_media_command', command)
-    if disk_case != 'enough':
-        with pytest.raises(ValueError, match='原始帧载荷'):
+    if disk_case in {'existing_mix', 'write_excess'}:
+        with pytest.raises(ValueError, match='同一许可磁盘上限'):
             montage.MontageRenderer(tmp_path)._render_serial_picture_input(plan, output.parent/'pictures',
-                output, budget, scheduler=scheduler, grant=grant, cancel_event=cancelled, threads=1, deadline_monotonic=deadline)
-        assert calls == [] and not (output.parent/'pictures').exists()
+                output, budget, scheduler=scheduler, grant=grant, cancel_event=cancelled, threads=2, deadline_monotonic=deadline)
+        assert len(calls) == (1 if disk_case == 'write_excess' else 0)
         return
     manifest = montage.MontageRenderer(tmp_path)._render_serial_picture_input(plan, output.parent/'pictures',
-        output, budget, scheduler=scheduler, grant=grant, cancel_event=cancelled, threads=1, deadline_monotonic=deadline)
+        output, budget, scheduler=scheduler, grant=grant, cancel_event=cancelled, threads=2, deadline_monotonic=deadline)
     encodes = [argv for argv, _ in calls if argv[0] == 'ffmpeg']
     assert list(frames_by_path.values()) == [115, 166, 151, 163, 161, 144]
     assert sum(frames_by_path.values()) == 900
     durations = [float(line.split()[1]) for line in manifest.read_text().splitlines() if line.startswith('duration ')]
     assert durations == pytest.approx([frames/30 for frames in frames_by_path.values()])
     assert sum(durations) == pytest.approx(30)
-    assert all(argv[-1].endswith('.nut') and argv[argv.index('-c:v')+1] == 'rawvideo'
+    assert all(argv[-1].endswith('.nut') and argv[argv.index('-c:v')+1] == 'ffv1'
         and argv[argv.index('-f')+1] == 'nut' and argv[argv.index('-pix_fmt')+1] == 'yuv420p'
-        and argv[argv.index('-threads:v')+1] == '1' and 'fps=30' in argv[argv.index('-vf')+1]
+        and argv[argv.index('-threads:v')+1] == '2' and 'fps=30' in argv[argv.index('-vf')+1]
         and '-crf' not in argv and '-movflags' not in argv for argv in encodes)
+    assert all(all(argv[argv.index(key)+1] == value for key, value in {
+        '-level':'3', '-coder':'0', '-context':'0', '-g':'1', '-slices':'4', '-slicecrc':'1'}.items()) for argv in encodes)
 
 
-@pytest.mark.parametrize('invalid', ['format', 'codec', 'size', 'pixels', 'fps', 'missing_fps', 'short', 'long', 'audio'])
+@pytest.mark.parametrize('invalid', ['format', 'codec', 'raw', 'size', 'pixels', 'fps', 'missing_fps', 'short', 'long', 'audio'])
 def test_serial_picture_probe_rejects_wrong_format_or_incomplete_frame_clock(tmp_path, monkeypatch, invalid):
     import app.montage as montage
     path = tmp_path/'internal.nut'
     path.write_bytes(b'probe-placeholder')
-    payload = _raw_picture_probe()
+    payload = _ffv1_picture_probe()
     video = payload['streams'][0]
     if invalid == 'format':
         payload['format']['format_name'] = 'mov,mp4,m4a,3gp,3g2,mj2'
     elif invalid == 'audio':
         payload['streams'].append({'codec_type': 'audio', 'codec_name': 'aac'})
     else:
-        key, value = {'codec': ('codec_name', 'h264'), 'size': ('width', 1280), 'pixels': ('pix_fmt', 'yuv422p'),
+        key, value = {'codec': ('codec_name', 'h264'), 'raw': ('codec_name', 'rawvideo'),
+            'size': ('width', 1280), 'pixels': ('pix_fmt', 'yuv422p'),
             'fps': ('r_frame_rate', '30000/1001'), 'missing_fps': ('r_frame_rate', None),
             'short': ('nb_read_frames', '114'), 'long': ('nb_read_frames', '116')}[invalid]
         video[key] = value
     context = SimpleNamespace(check=lambda: None, scheduler=object(), grant=object(), cancel_event=None,
-        deadline_monotonic=time.monotonic()+90, max_output_bytes=1024)
+        deadline_monotonic=time.monotonic()+90, max_output_bytes=1024, threads=2)
     monkeypatch.setattr(montage, '_run_granted_media_command', lambda *args, **kwargs:
         SimpleNamespace(stdout=json.dumps(payload).encode()))
     with pytest.raises(ValueError, match='中间片'):
@@ -6097,21 +6100,21 @@ def test_serial_picture_probe_keeps_file_budget(tmp_path, monkeypatch, size):
     path = tmp_path/'internal.nut'
     path.write_bytes(b'x'*size)
     context = SimpleNamespace(check=lambda: None, scheduler=object(), grant=object(), cancel_event=None,
-        deadline_monotonic=time.monotonic()+90, max_output_bytes=1024)
+        deadline_monotonic=time.monotonic()+90, max_output_bytes=1024, threads=2)
     monkeypatch.setattr(montage, '_run_granted_media_command', lambda *args, **kwargs:
-        SimpleNamespace(stdout=json.dumps(_raw_picture_probe()).encode()))
+        SimpleNamespace(stdout=json.dumps(_ffv1_picture_probe()).encode()))
     with pytest.raises(ValueError, match='许可输出上限'):
         montage._probe_serial_picture_input(path, context, expected_size=(1920,1080), expected_frames=115)
 
 
-def test_raw_intermediate_does_not_widen_h264_preview_or_final_gate(tmp_path, monkeypatch):
+def test_ffv1_intermediate_does_not_widen_h264_preview_or_final_gate(tmp_path, monkeypatch):
     import app.montage as montage
-    path = tmp_path/'raw.nut'
+    path = tmp_path/'ffv1.nut'
     path.write_bytes(b'probe-placeholder')
     context = SimpleNamespace(check=lambda: None, scheduler=object(), grant=object(), cancel_event=None,
         deadline_monotonic=time.monotonic()+90, max_output_bytes=1024)
     monkeypatch.setattr(montage, '_run_granted_media_command', lambda *args, **kwargs:
-        SimpleNamespace(returncode=0, stdout=json.dumps(_raw_picture_probe()).encode(), stderr=b''))
+        SimpleNamespace(returncode=0, stdout=json.dumps(_ffv1_picture_probe()).encode(), stderr=b''))
     with pytest.raises(ValueError, match='编码'):
         montage.probe_preview_video(path, context, expected_size=(1920,1080), expected_duration_seconds=115/30, silent=True)
     with pytest.raises(OSError, match='H.264'):
