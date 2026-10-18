@@ -957,13 +957,26 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             section["allowed_source_quote_ids"] = {
                 reference: quote_ids_by_source[reference] for reference in section["evidence_reference_ids"]}
 
-        def candidate_quote(quote_id, section_index):
+        def candidate_quote(quote_id, section_index, item_index):
             entry = candidate_pieces.get(quote_id) if isinstance(quote_id, str) else None
-            if entry is None or entry["index"] not in {0, section_index}:
-                return None
-            current = script.title if entry["index"] == 0 else getattr(script.sections[entry["index"] - 1], entry["field"])
-            if (hashlib.sha256(current.encode("utf-8")).hexdigest() != entry["full_digest"]
-                    or current[entry["start"]:entry["end"]] != entry["text"]):
+            mismatch = None
+            if quote_id is None or quote_id == "":
+                mismatch = "missing"
+            elif not isinstance(quote_id, str):
+                mismatch = "type"
+            elif entry is None:
+                mismatch = "unknown"
+            elif entry["index"] not in {0, section_index}:
+                mismatch = "cross_section"
+            else:
+                current = script.title if entry["index"] == 0 else getattr(script.sections[entry["index"] - 1], entry["field"])
+                if (hashlib.sha256(current.encode("utf-8")).hexdigest() != entry["full_digest"]
+                        or current[entry["start"]:entry["end"]] != entry["text"]):
+                    mismatch = "field_changed"
+            if mismatch:
+                diagnostics["candidate_quote_mismatch"] = {"subtype": mismatch, "item_index": item_index,
+                    "expected_section_index": section_index, "resolved_section_index": entry["index"] if entry else None,
+                    "candidate_field": entry["field"] if entry else None}
                 return None
             return entry
 
@@ -978,33 +991,42 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             return entry
 
         review_section_count = len(sections)
-        report_schema = {
-            "type": "object", "additionalProperties": False, "required": ["sections"],
-            "properties": {"sections": {"type": "array", "minItems": review_section_count, "maxItems": review_section_count,
-                "items": {"type": "object", "additionalProperties": False,
+
+        def review_section_schema(section):
+            candidate_ids = [piece["quote_id"] for piece in title_pieces]
+            candidate_ids += [piece["quote_id"] for field in ("title", "content", "visual_prompt") for piece in section[field]]
+            source_ids = [quote_id for values in section["allowed_source_quote_ids"].values() for quote_id in values]
+            issue_schemas = []
+            for kind in ("unsupported_fact", "goal_conflict"):
+                issue_schemas.append({
+                    "type": "object", "additionalProperties": False,
+                    "required": ["kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"],
+                    "properties": {
+                        "kind": {"type": "string", "enum": [kind]},
+                        "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128, "enum": candidate_ids},
+                        "reference_ids": {"type": "array", "minItems": 1 if kind == "unsupported_fact" else 0,
+                            "maxItems": 12, "uniqueItems": True,
+                            "description": "仅从当前段evidence_reference_ids原样选择资料别名，不重复；不得填片段ID、资料原ID或标题。",
+                            "items": {"type": "string", "minLength": 1, "maxLength": 128, "enum": section["evidence_reference_ids"]}},
+                        "missing_or_conflicting": {"type": "string", "minLength": 1, "maxLength": 300}}})
+            return {"type": "object", "additionalProperties": False,
                     "required": ["index", "supports", "issues"],
                     "properties": {
-                        "index": {"type": "integer", "minimum": 1, "maximum": review_section_count},
+                        "index": {"type": "integer", "enum": [section["index"]]},
                         "supports": {"type": "array", "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["candidate_quote_id", "source_quote_id"], "properties": {
                                 "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
-                                    "enum": list(candidate_pieces)},
+                                    "enum": candidate_ids},
                                 "source_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
-                                    "enum": list(source_pieces)}}}},
-                        "issues": {"type": "array", "maxItems": 3, "items": {
-                            "type": "object", "additionalProperties": False,
-                            "required": ["kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"],
-                            "properties": {
-                                "kind": {"type": "string", "enum": ["unsupported_fact", "goal_conflict"]},
-                                "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
-                                    "enum": list(candidate_pieces)},
-                                "reference_ids": {"type": "array", "maxItems": 12, "uniqueItems": True,
-                                    "description": "仅从当前段evidence_reference_ids原样选择资料别名，不重复；unsupported_fact必须非空，goal_conflict可为空。不得填片段ID、资料原ID或标题。",
-                                    "items": {"type": "string", "minLength": 1, "maxLength": 128,
-                                        "enum": list(aliases)}},
-                                "missing_or_conflicting": {"type": "string", "minLength": 1, "maxLength": 300}}}},
-                    }}}},
+                                    "enum": source_ids}}}},
+                        "issues": {"type": "array", "maxItems": 3, "items": {"anyOf": issue_schemas}},
+                    }}
+
+        report_schema = {
+            "type": "object", "additionalProperties": False, "required": ["sections"],
+            "properties": {"sections": {"type": "array", "minItems": review_section_count, "maxItems": review_section_count,
+                "items": {"anyOf": [review_section_schema(section) for section in sections]}}},
         }
         payload = {
             "model": self._model,
@@ -1016,7 +1038,11 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "性能、安全、备份、断电恢复、口型等承诺必须有资料支持；计划不能升级成已完成。"
                     "允许原创修辞、比喻、内容组织与转场，不把这些当成虚构事实。"
                     "核原始goal与requirements：0%露脸不得安排人物口播/口型段或宣称已对准口型；"
-                    "中文旁白与中英字幕分别核对，字幕双语不意味着旁白混读；暂停或暂不开始不能写成已生成/发布。"
+                    "旁白与字幕分别按本条明确要求核对，不默认要求双语字幕；字幕双语不意味着旁白混读。"
+                    "review_scope限定当前一条交付及本条已采用语言、时长；父目标的其它语言或其它条视频不要求在本稿中一并完成。"
+                    "原始goal和current_instruction保留用户授权与共同约束，不能由本条范围覆盖明确用户限制。"
+                    "本阶段只核查脚本计划；visual_prompt可计划角标、署名和字幕，不因实际图层尚未生成、未单独建片尾段而拒绝。"
+                    "实际成片是否实现这些计划交后续输出核验；不得把待执行计划当成已完成事实。暂停或暂不开始不能写成已生成/发布。"
                     "检查方案语言与原始目标的矛盾，不自行修改任何要求或编造完成状态。"
                     "current_instruction是宿主核验的本轮用户要求，与原方案一起核查，不遗漏本轮在原方案内的纠偏。"
                     "本轮文案要求不能暗改固定的language、时长、人物比例等制作授权；与原方案冲突时报告goal_conflict，不替用户改变方案。"
@@ -1031,6 +1057,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "结论只由具体问题表达，不另返回grounded、constraints_met等重复判断。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
                     "candidate_quote_id须来自当前段的title/content/visual_prompt或全局总标题；"
+                    "报告schema按index区分段落分支，所有候选和资料片段只能从该index分支的枚举选择，不跨段借用。"
                     "每段allowed_source_quote_ids按该段已声明资料列出本段可选的source_quote_id；"
                     "source_quote_id只能从本段此映射选择，不借用其他段或未声明资料的片段。"
                     "资料片段须真正支持候选片段的事实，不能用无关文字。"
@@ -1051,6 +1078,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 {"role": "user", "content": json.dumps({
                     "goal": input.goal, "current_instruction": input.current_instruction,
                     "review_section_count": review_section_count,
+                    "review_scope": {"stage": "script_draft", "delivery_count": 1, "language": input.language,
+                        "duration_target_seconds": input.duration_target_seconds, "presenter_share_target": input.presenter_share_target},
                     "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
                         "angle": input.topic_angle, "audience": input.topic_audience,
                         "outline": list(input.topic_outline)},
@@ -1088,6 +1117,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 "total_tokens": None, "reasoning_tokens": None}, "section_index": None,
             "section_count": len(sections), "source_count": len(source_inputs),
             "returned_sections_type": None, "returned_section_count": None,
+            "candidate_quote_mismatch": None,
             "support_reference_mismatch": None, "issue_reference_mismatch": None, "issue_shape_mismatch": None}
 
         def safe_count(value):
@@ -1169,7 +1199,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             for support_index, support in enumerate(supports, start=1):
                 if not isinstance(support, dict) or set(support) != {"candidate_quote_id", "source_quote_id"}:
                     raise self._review_failure("support_shape", diagnostics)
-                if candidate_quote(support["candidate_quote_id"], index) is None:
+                if candidate_quote(support["candidate_quote_id"], index, support_index) is None:
                     raise self._review_failure("support_quote", diagnostics)
                 source = source_quote(support["source_quote_id"])
                 if source is None:
@@ -1189,7 +1219,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "missing_keys": missing,
                         "unknown_key_count": len(set(issue) - issue_keys) if isinstance(issue, dict) else None}
                     raise self._review_failure("issue_shape", diagnostics)
-                fragment = candidate_quote(issue["candidate_quote_id"], index)
+                fragment = candidate_quote(issue["candidate_quote_id"], index, issue_index)
                 if fragment is None:
                     raise self._review_failure("issue_quote", diagnostics)
                 kind, refs = issue["kind"], issue["reference_ids"]

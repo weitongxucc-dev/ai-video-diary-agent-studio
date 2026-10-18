@@ -137,9 +137,10 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert tool['type'] == 'function' and tool['function']['name'] == 'submit_script_review'
     schema = tool['function']['parameters']
     assert schema['required'] == ['sections'] and schema['additionalProperties'] is False
-    properties = schema['properties']['sections']['items']['properties']
+    branch = schema['properties']['sections']['items']['anyOf'][0]
+    properties = branch['properties']
     assert set(properties) == {'index', 'supports', 'issues'}
-    assert schema['properties']['sections']['items']['required'] == ['index', 'supports', 'issues']
+    assert branch['required'] == ['index', 'supports', 'issues']
     assert set(properties['supports']['items']['properties']) == {'candidate_quote_id', 'source_quote_id'}
     candidate_ids = [piece['quote_id'] for piece in second['script']['title']]
     candidate_ids += [piece['quote_id'] for section in second['script']['sections']
@@ -147,12 +148,16 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     source_ids = [piece['quote_id'] for source in second['sources'] for piece in source['text']]
     assert properties['supports']['items']['properties']['candidate_quote_id']['enum'] == candidate_ids
     assert properties['supports']['items']['properties']['source_quote_id']['enum'] == source_ids
-    issue_properties = properties['issues']['items']['properties']
+    issue_properties = properties['issues']['items']['anyOf'][0]['properties']
     assert issue_properties['candidate_quote_id']['enum'] == candidate_ids
     assert issue_properties['reference_ids']['items']['enum'] == ['evidence_1']
     assert issue_properties['reference_ids']['uniqueItems'] is True
-    assert 'unsupported_fact必须非空，goal_conflict可为空' in issue_properties['reference_ids']['description']
-    assert not any(keyword in json.dumps(schema) for keyword in ('"oneOf"', '"anyOf"', '"if"', '"then"', '"$ref"'))
+    assert issue_properties['kind']['enum'] == ['unsupported_fact']
+    assert issue_properties['reference_ids']['minItems'] == 1
+    goal_properties = properties['issues']['items']['anyOf'][1]['properties']
+    assert goal_properties['kind']['enum'] == ['goal_conflict']
+    assert goal_properties['reference_ids']['minItems'] == 0
+    assert not any(keyword in json.dumps(schema) for keyword in ('"oneOf"', '"if"', '"then"', '"$ref"'))
     assert 'response_format' not in calls[0][1] and calls[0][1]['tool_choice'] == 'required'
     assert calls[0][1]['tools'][0]['function']['name'] == 'submit_script_draft'
     assert '事实只能来自' in calls[0][1]['messages'][0]['content']
@@ -169,11 +174,108 @@ def test_two_section_review_schema_pins_actual_count_and_keeps_template_count_se
     actual_input = json.loads(payload['messages'][1]['content'])
     sections_schema = payload['tools'][0]['function']['parameters']['properties']['sections']
     assert sections_schema['minItems'] == sections_schema['maxItems'] == 2
-    assert sections_schema['items']['properties']['index'] == {'type': 'integer', 'minimum': 1, 'maximum': 2}
+    assert [branch['properties']['index'] for branch in sections_schema['items']['anyOf']] == [
+        {'type': 'integer', 'enum': [1]}, {'type': 'integer', 'enum': [2]}]
     assert actual_input['review_section_count'] == len(actual_input['script']['sections']) == 2
     assert actual_input['requirements']['section_count'] == template_count
     assert '必须恰好返回2项' in payload['messages'][0]['content']
     assert payload['max_tokens'] == 8192
+
+
+def test_review_scope_keeps_chinese_delivery_and_planned_visuals_separate_from_parent_goal():
+    goal = '制作中英文各一条30秒视频，各用对应语言配音字幕；标明公开素材并保留署名和许可，不编造设备性能。'
+    visual = '计划在右上角显示公开素材演示，片尾显示作者署名及许可信息。'
+    document = draft(FACT, visual)
+    calls = []
+    result = provider(document, reviewed(document), calls).generate(replace(inputs(), goal=goal,
+        current_instruction=goal, duration_target_seconds=30, language='zh-CN', presenter_share_target=0))
+    assert result.sections[0].visual_prompt == visual and len(calls) == 2
+    data = json.loads(calls[1][1]['messages'][1]['content'])
+    assert data['goal'] == data['current_instruction'] == goal
+    assert data['review_scope'] == {'stage': 'script_draft', 'delivery_count': 1, 'language': 'zh-CN',
+        'duration_target_seconds': 30, 'presenter_share_target': 0}
+    system = calls[1][1]['messages'][0]['content']
+    assert '其它条视频不要求在本稿中一并完成' in system
+    assert '不因实际图层尚未生成、未单独建片尾段而拒绝' in system
+    assert '不默认要求双语字幕' in system
+    assert '不能由本条范围覆盖明确用户限制' in system
+
+
+def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_evidence():
+    source = replace(inputs(), sources=(*inputs().sources, CreationTaskTopicSource(
+        reference_id='other-fixed-source', kind='knowledge', title='第二份资料', text=FACT)))
+    document = draft()
+    document['script']['sections'].append({**copy.deepcopy(document['script']['sections'][0]),
+        'evidence_reference_ids': ['evidence_2']})
+    review = reviewed(document)
+    review['sections'][1]['supports'][0]['source_quote_id'] = '@evidence_2:0'
+    calls = []
+    assert len(provider(document, review, calls).generate(source).sections) == 2
+    payload = calls[1][1]
+    data = json.loads(payload['messages'][1]['content'])
+    schema = payload['tools'][0]['function']['parameters']['properties']['sections']
+    assert schema['minItems'] == schema['maxItems'] == 2
+    assert len(schema['items']['anyOf']) == 2
+    global_title_ids = [piece['quote_id'] for piece in data['script']['title']]
+    for section, branch in zip(data['script']['sections'], schema['items']['anyOf']):
+        props = branch['properties']
+        assert props['index'] == {'type': 'integer', 'enum': [section['index']]}
+        local_ids = global_title_ids + [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+        source_ids = [value for ids in section['allowed_source_quote_ids'].values() for value in ids]
+        support = props['supports']['items']['properties']
+        assert support['candidate_quote_id']['enum'] == local_ids
+        assert support['source_quote_id']['enum'] == source_ids
+        for issue_branch, kind in zip(props['issues']['items']['anyOf'], ('unsupported_fact', 'goal_conflict')):
+            issue = issue_branch['properties']
+            assert issue['kind']['enum'] == [kind]
+            assert issue['candidate_quote_id']['enum'] == local_ids
+            assert issue['reference_ids']['items']['enum'] == section['evidence_reference_ids']
+            assert issue['reference_ids']['minItems'] == (1 if kind == 'unsupported_fact' else 0)
+            assert issue['reference_ids']['uniqueItems'] is True
+    assert payload['max_tokens'] == 8192
+
+
+@pytest.mark.parametrize('role', ['support', 'issue'])
+@pytest.mark.parametrize('mismatch', ['missing', 'type', 'unknown', 'cross_section'])
+def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(caplog, role, mismatch):
+    import logging
+
+    document = draft()
+    document['script']['sections'].append(copy.deepcopy(document['script']['sections'][0]))
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        data = json.loads(body['messages'][1]['content'])
+        review = bound_review(reviewed(document), data)
+        bad_quote = {'missing': None, 'type': ['private-value'], 'unknown': 'private-unknown-quote',
+            'cross_section': data['script']['sections'][1]['content'][0]['quote_id']}[mismatch]
+        if role == 'support':
+            review['sections'][0]['supports'][0]['candidate_quote_id'] = bad_quote
+        else:
+            review['sections'][0]['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': bad_quote,
+                'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-issue-explanation'}]
+        return _review_tool_response(review)
+
+    caplog.set_level(logging.WARNING, logger='app.topics')
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        api_key='private-key', transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(inputs())
+    assert failure.value.reason_code == ('support_quote' if role == 'support' else 'issue_quote')
+    assert failure.value.code == 'script_review_invalid' and failure.value.review_issues is None
+    assert failure.value.retryable is False and len(calls) == 2
+    records = [record for record in caplog.records if record.name == 'app.topics']
+    assert len(records) == 1
+    text = records[0].getMessage()
+    diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))['candidate_quote_mismatch']
+    assert diagnostic == {'subtype': mismatch, 'item_index': 1, 'expected_section_index': 1,
+        'resolved_section_index': 2 if mismatch == 'cross_section' else None,
+        'candidate_field': 'content' if mismatch == 'cross_section' else None}
+    assert 'private-' not in text and FACT not in text and len(text) < 1200
 
 
 @pytest.mark.parametrize('returned,type_name,actual_count,reason', [
@@ -1211,8 +1313,9 @@ def test_issue_reference_rejection_reports_safe_subtype_without_fixing_model_ref
             return _response(document)
         data = json.loads(body['messages'][1]['content'])
         schema = body['tools'][0]['function']['parameters']
-        reference_schema = schema['properties']['sections']['items']['properties']['issues']['items']['properties']['reference_ids']
-        assert reference_schema['items']['enum'] == ['evidence_1', 'evidence_2']
+        reference_schema = schema['properties']['sections']['items']['anyOf'][0]['properties']['issues']['items']['anyOf'][0]['properties']['reference_ids']
+        assert reference_schema['items']['enum'] == ['evidence_1']
+        assert reference_schema['minItems'] == 1
         assert reference_schema['uniqueItems'] is True
         assert data['script']['sections'][0]['evidence_reference_ids'] == ['evidence_1']
         review = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
