@@ -172,6 +172,28 @@ class MaterialSegmentMatch:
     duration_seconds: float = 0.0
     time_range: str = ""
     tags: list[str] = field(default_factory=list)
+    visual_model_id: str | None = None
+    visual_model_version: str | None = None
+    visual_similarity: float | None = None
+    visual_sample_count: int = 0
+    visual_sample_timestamps: list[float] = field(default_factory=list)
+    evidence_excerpt: str = ""
+    needs_confirmation: bool = False
+
+
+@dataclass(frozen=True)
+class MaterialVisualFeature:
+    vector: list[float]
+    sample_count: int
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class MaterialSearchResult:
+    matches: list[MaterialSegmentMatch]
+    semantic_status: str
+    semantic_message: str
+    device_request_id: str | None = None
 
 
 def material_media_type_for(path: Path) -> MaterialMediaType | None:

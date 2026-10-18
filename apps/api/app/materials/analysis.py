@@ -1,7 +1,7 @@
 """Concrete material analysis with explicit execution ports and staged persistence."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import hashlib
 import json
 import logging
@@ -11,10 +11,10 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from app.materials.assets import MaterialAssetStore, _infer_system_tags, _scene_ranges, _segment_id
-from app.materials.contracts import MaterialAsset, MaterialSegment
+from app.materials.contracts import MaterialAsset, MaterialSegment, MaterialVisualFeature
 from app.materials.source_files import MaterialSourceFileAccess
 from app.models import utc_now
-from app.visual_semantics import SegmentWindow, VisualSemanticError, VisualSemanticProvider
+from app.visual_semantics import SegmentWindow, VisualSemanticError, VisualSemanticProvider, evidence_timestamps, visual_feature_version
 
 if TYPE_CHECKING:
     from app.material_speech import LocalMaterialSpeechAnalyzer
@@ -54,7 +54,7 @@ def _material_analysis_public_error(error: Exception) -> str:
     return "分析服务未能完成，请查看本机日志"
 
 
-def _cosine_similarity(left: list[float], right: list[float]) -> float:
+def visual_cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right) or not left:
         raise ValueError("画面与提示向量维度不一致")
     left_norm = sum(value * value for value in left) ** 0.5
@@ -73,8 +73,9 @@ def _visual_fingerprint(
 ) -> str:
     stat = path.stat()
     raw = (
-        f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:"
-        f"{segment.start_seconds:.3f}:{segment.end_seconds:.3f}:{model_id}"
+        f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_ino}:"
+        f"{segment.start_seconds:.3f}:{segment.end_seconds:.3f}:{model_id}:"
+        f"{visual_feature_version(model_id)}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -178,6 +179,28 @@ class MaterialAnalysisUseCase:
         if segment is None:
             return None
         return self._visual_feature_for_segment(asset, segment, model_id)
+
+    def read_visual_features(
+        self, workspace_id: str, candidates: Sequence[tuple[MaterialAsset, MaterialSegment]], model_id: str,
+    ) -> dict[tuple[str, str], MaterialVisualFeature]:
+        """Read only caller-qualified persisted segments, never enumerate private vectors."""
+        features = {}
+        with self._connect() as conn:
+            for asset, segment in candidates:
+                if asset.workspace_id != workspace_id or segment.asset_id != asset.id:
+                    raise ValueError("视觉候选归属不一致")
+                try:
+                    path = self.source_files.validated_library_file(asset.path)
+                    fingerprint = _visual_fingerprint(path, segment, model_id)
+                except (OSError, ValueError):
+                    continue
+                feature = self.assets.read_visual_segment_feature(conn, workspace_id,
+                    asset.id, segment.id, model_id, fingerprint)
+                if feature is not None:
+                    if feature.sample_count != len(evidence_timestamps(segment.start_seconds, segment.end_seconds)):
+                        raise ValueError("片段特征抽帧数量与原片时间范围不一致")
+                    features[(asset.id, segment.id)] = feature
+        return features
 
     def _visual_feature_for_segment(
         self, asset: MaterialAsset, segment: MaterialSegment, model_id: str
@@ -292,7 +315,7 @@ class MaterialAnalysisUseCase:
                 if not vector:
                     continue
                 scores = [
-                    _cosine_similarity(vector, prompt_vector)
+                    visual_cosine_similarity(vector, prompt_vector)
                     for prompt_vector in prompt_vectors
                 ]
                 a_roll_score = max(scores[: len(_A_ROLL_PROMPTS)])

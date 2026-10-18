@@ -143,6 +143,35 @@ def _markdown_sections(document: str) -> list[KnowledgeSection]:
 
 
 
+def _pdf_page_has_unread_content(page) -> bool:
+    """Confirm blank pages without rendering; unknown/painting operations need OCR."""
+    annotations = page.get("/Annots")
+    if annotations is not None and annotations.get_object():
+        return True
+    contents = page.get_contents()
+    if contents is None:
+        return False
+    # State, paths and clipping alone do not mark a page. Painting, images,
+    # nonempty unextractable text and unknown operators cannot certify a blank.
+    nonpainting = {
+        b"q", b"Q", b"cm", b"w", b"J", b"j", b"M", b"d", b"ri", b"i", b"gs",
+        b"m", b"l", b"c", b"v", b"y", b"h", b"re", b"n", b"W", b"W*",
+        b"BT", b"ET", b"Tc", b"Tw", b"Tz", b"TL", b"Tf", b"Tr", b"Ts",
+        b"Td", b"TD", b"Tm", b"T*", b"CS", b"cs", b"SC", b"SCN", b"sc",
+        b"scn", b"G", b"g", b"RG", b"rg", b"K", b"k", b"MP", b"DP",
+        b"BMC", b"BDC", b"EMC", b"BX", b"EX",
+    }
+    for operands, operator in contents.operations:
+        if operator in nonpainting:
+            continue
+        if operator in {b"Tj", b"TJ", b"'", b'"'}:
+            values = operands[0] if operator == b"TJ" else operands[-1:]
+            if all(isinstance(value, (int, float)) or value in ("", b"") for value in values):
+                continue
+        return True
+    return False
+
+
 def _parse_pdf(filename: str, data: bytes) -> ParsedKnowledgeFile:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -150,18 +179,23 @@ def _parse_pdf(filename: str, data: bytes) -> ParsedKnowledgeFile:
     try:
         reader = PdfReader(io.BytesIO(data))
         pages = [(page.extract_text() or "") for page in reader.pages]
+        missing_pages = [str(number) for number, (page, text) in enumerate(zip(reader.pages, pages), start=1)
+                         if not text.strip() and _pdf_page_has_unread_content(page)]
     except PdfReadError as exc:
         raise KnowledgeFileError(f"{filename} 不是可解析的 PDF：{exc}") from exc
+    if missing_pages:
+        raise KnowledgeFileError(
+            f"{filename} 第{'、'.join(missing_pages)}页没有可提取的文本层；"
+            "当前未接通 OCR，未导入整份资料。请核对这些页面或提供文本版本"
+        )
     if not pages or not any(page.strip() for page in pages):
-        raise KnowledgeFileError(f"{filename} 没有可提取的文本层，需人工确认或提供文本版本")
+        raise KnowledgeFileError(f"{filename} 没有可用的正文内容")
     sections: list[KnowledgeSection] = []
     parameters: list[KnowledgeParameter] = []
     full_pages: list[str] = []
     for number, page_text in enumerate(pages, start=1):
         text = page_text.strip()
         full_pages.append(text)
-        if not text:
-            continue
         locator = f"第{number}页"
         sections.append(KnowledgeSection(locator=locator, title=locator, text=text))
         parameters.extend(_parameters_from_text(locator, text))

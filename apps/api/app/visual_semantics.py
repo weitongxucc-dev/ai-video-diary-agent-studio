@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import subprocess
@@ -18,6 +19,36 @@ class VisualSemanticError(RuntimeError):
 
 
 MAX_SAMPLE_FRAMES = 3
+
+
+def visual_feature_version(model_id: str) -> str:
+    """The pinned encoder and pooling contract; old derived features become stale."""
+    if model_id == CHINESE_CLIP_VIT_B16.id:
+        return f"{CHINESE_CLIP_VIT_B16.revision}:mean-pool-3-v1"
+    return model_id
+
+
+@dataclass(frozen=True)
+class VisualQueryExecutionLimits:
+    """Explicit host-calibrated limits, with no permissive default budget."""
+
+    timeout_seconds: float
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    max_output_file_bytes: int
+    threads: int
+
+    def __post_init__(self):
+        if (type(self.timeout_seconds) not in {int, float}
+                or not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
+                or any(type(value) is not int or value <= 0 for value in (
+                    self.max_stdout_bytes, self.max_stderr_bytes,
+                    self.max_output_file_bytes, self.threads))):
+            raise ValueError("视觉查询执行范围必须由本机明确标定")
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(json.dumps(vars(self), sort_keys=True).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -110,6 +141,36 @@ class ChineseClipSubprocessProvider:
         self.worker_path = Path(worker_path).expanduser()
         self.model_path = Path(model_path).expanduser()
         self._runner = runner or self._run_command
+
+    def for_query_grant(self, scheduler, grant, limits: VisualQueryExecutionLimits):
+        """Bind a query worker to the existing host grant and group resource monitor."""
+        from app.device_scheduler import RecoveryBlocked
+        from app.granted_subprocess import run_granted_command
+        from app.host_resource_probes import HostResourceProbe
+
+        if grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:"):
+            raise PermissionError("视觉查询许可不属于此执行器")
+        scheduler.assert_grant(grant)
+        if (not isinstance(scheduler.resources, HostResourceProbe)
+                or scheduler.resources.scene_runtime_limits(grant, purpose="material_visual_query") is None):
+            raise RecoveryBlocked("视觉查询缺少已标定的进程组资源范围")
+
+        def run(command):
+            response = Path(command[command.index("--response") + 1])
+            environment = dict(os.environ, OMP_NUM_THREADS=str(limits.threads),
+                               MKL_NUM_THREADS=str(limits.threads), TOKENIZERS_PARALLELISM="false",
+                               HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+            result = run_granted_command(scheduler, grant, command,
+                timeout_seconds=limits.timeout_seconds,
+                max_stdout_bytes=limits.max_stdout_bytes, max_stderr_bytes=limits.max_stderr_bytes,
+                env=environment, output_paths=(response,),
+                max_output_file_bytes=limits.max_output_file_bytes,
+                resource_purpose="material_visual_query")
+            if result.returncode:
+                raise VisualSemanticError("视觉查询工作进程失败")
+
+        return ChineseClipSubprocessProvider(runtime_python_path=self.runtime_python_path,
+            worker_path=self.worker_path, model_path=self.model_path, runner=run)
 
     @property
     def readiness_problems(self) -> tuple[str, ...]:

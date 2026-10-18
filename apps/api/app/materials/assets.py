@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime
 import hashlib
 import json
+import math
 from itertools import pairwise
 from os import stat_result
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.materials.contracts import (
     MaterialAssetNote,
     MaterialMediaType,
     MaterialSegment,
+    MaterialVisualFeature,
     effective_segment_usage_role,
     material_media_type_for,
 )
@@ -44,6 +46,49 @@ class MaterialVersionConflict(ValueError):
 class MaterialAssetStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
+
+    def initialize_semantic_queries(self) -> None:
+        """Derived private query cache; the device queue alone owns execution state."""
+        with self._connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS material_semantic_queries (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, member_id TEXT NOT NULL,
+                identity_json TEXT NOT NULL, query_text TEXT NOT NULL,
+                model_id TEXT NOT NULL, index_version TEXT NOT NULL,
+                vector_json TEXT)""")
+
+    def save_semantic_query(self, query_id, workspace_id, identity, query, model_id, index_version):
+        with self._connect() as conn:
+            conn.execute("""INSERT OR IGNORE INTO material_semantic_queries
+                (id,workspace_id,member_id,identity_json,query_text,model_id,index_version)
+                VALUES (?,?,?,?,?,?,?)""", (query_id, workspace_id, identity["member_id"],
+                    json.dumps(identity, sort_keys=True), query, model_id, index_version))
+
+    def read_semantic_query(self, workspace_id, query_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            row = conn.execute("SELECT * FROM material_semantic_queries WHERE workspace_id=? AND id=?",
+                               (workspace_id, query_id)).fetchone()
+        if row is None:
+            raise KeyError(query_id)
+        return dict(row)
+
+    def commit_semantic_query(self, conn, workspace_id, query_id, vector):
+        conn.execute("UPDATE material_semantic_queries SET vector_json=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(vector), workspace_id, query_id))
+        return query_id
+
+    def read_visual_segment_feature(self, conn, workspace_id, asset_id, segment_id, model_id, fingerprint):
+        row = conn.execute("""SELECT vector_json,sample_count FROM material_segment_features
+            WHERE workspace_id=? AND asset_id=? AND segment_id=? AND model_id=? AND fingerprint=?""",
+            (workspace_id, asset_id, segment_id, model_id, fingerprint)).fetchone()
+        if row is None:
+            return None
+        vector = json.loads(row["vector_json"])
+        if (not isinstance(vector, list) or not vector
+                or any(type(value) not in {float, int} or not math.isfinite(value) for value in vector)
+                or sum(value * value for value in vector) <= 1e-12
+                or not 1 <= row["sample_count"] <= 3):
+            raise ValueError("已保存的视觉特征格式无效")
+        return MaterialVisualFeature(vector, row["sample_count"], fingerprint)
 
     def _disk_missing_asset_rows(
         self, conn: sqlite3.Connection, workspace_id: str,

@@ -91,9 +91,9 @@ def test_identical_copy_does_not_add_version_and_update_keeps_old_version(client
     first = _import_file(client, "产品资料.md", MARKDOWN.encode()).json()
     first_saved = _save(client, first["id"]).json()
 
-    # 同内容副本：不同文件名、新的 source_item_id，也不新增知识条目或版本。
+    # 同一成员的同内容副本复用原件回执，也不新增知识条目或版本。
     copy_source = _import_file(client, "产品资料-副本.md", MARKDOWN.encode()).json()
-    assert copy_source["id"] != first["id"]
+    assert copy_source["id"] == first["id"]
     copy_saved = _save(client, copy_source["id"]).json()
     assert copy_saved["id"] == first_saved["id"]
     assert copy_saved["version"] == first_saved["version"]
@@ -137,9 +137,72 @@ def test_pdf_import_uses_real_page_locators(client):
 
 
 def test_pdf_without_text_layer_fails_and_writes_nothing(client):
-    scanned = _text_pdf(["", ""])
-    assert _import_file(client, "扫描件.pdf", scanned).status_code == 422
+    scanned = _pdf_pages("scan", "scan")
+    response = _import_file(client, "扫描件.pdf", scanned)
+    assert response.status_code == 422
+    assert "第1、2页" in response.json()["detail"]
     assert client.get("/api/sources/items").json()["total_count"] == 0
+
+
+def test_mixed_pdf_reports_unread_pages_and_writes_nothing(client):
+    mixed = _pdf_pages("Power: 700", "scan", "Last text page", "drawing")
+    response = _import_file(client, "mixed.pdf", mixed)
+    assert response.status_code == 422
+    assert "第2、4页" in response.json()["detail"]
+    assert "未导入整份资料" in response.json()["detail"]
+    assert client.get("/api/sources/items").json()["total_count"] == 0
+
+
+def _pdf_pages(*kinds):
+    """Real PdfWriter pages: empty, text, embedded bitmap and painted vector."""
+    import io
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer = PdfWriter()
+    for kind in kinds:
+        if kind not in {"blank", "scan", "drawing", "state_blank"}:
+            writer.add_page(PdfReader(io.BytesIO(_text_pdf([kind]))).pages[0])
+            continue
+        page = writer.add_blank_page(width=612, height=792)
+        if kind == "blank":
+            continue
+        stream = DecodedStreamObject()
+        if kind == "scan":
+            # Bitmap text "700W", with no PDF text objects or text layer.
+            glyphs = ([31, 1, 2, 4, 8, 8, 8], [14, 17, 17, 17, 17, 17, 14],
+                      [14, 17, 17, 17, 17, 17, 14], [17, 17, 17, 21, 21, 21, 10])
+            pixels = bytes(0 if glyphs[x // 6][y] & (1 << (4 - x % 6)) else 255
+                           for y in range(7) for x in range(24) if x % 6 < 5)
+            image = DecodedStreamObject()
+            image.set_data(pixels)
+            image.update({NameObject("/Type"): NameObject("/XObject"),
+                NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(20),
+                NameObject("/Height"): NumberObject(7), NameObject("/BitsPerComponent"): NumberObject(8),
+                NameObject("/ColorSpace"): NameObject("/DeviceGray")})
+            page[NameObject("/Resources")] = DictionaryObject({NameObject("/XObject"):
+                DictionaryObject({NameObject("/Scan"): writer._add_object(image)})})
+            stream.set_data(b"q 400 0 0 140 72 600 cm /Scan Do Q")
+        elif kind == "drawing":
+            stream.set_data(b"0 0 100 100 re f")
+        else:
+            stream.set_data(b"q 1 0 0 1 0 0 cm Q")
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    result = io.BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
+def test_pdfwriter_blank_pages_keep_original_page_numbers(client):
+    pdf = _pdf_pages("blank", "Power: 700", "state_blank", "Last page", "blank")
+    response = _import_file(client, "blank-pages.pdf", pdf)
+    assert response.status_code == 200
+    sections = response.json()["sections"]
+    assert [item["locator"] for item in sections] == [f"第{index}页" for index in range(1, 6)]
+    assert [item["text"] for item in sections] == ["", "Power: 700", "", "Last page", ""]
+    saved = _save(client, response.json()["id"]).json()
+    detail = client.get(f"/api/knowledge-items/{saved['id']}").json()
+    assert detail["versions"][0]["sections"] == sections
 
 
 def test_unsupported_format_and_bad_base64_fail_explicitly(client):
