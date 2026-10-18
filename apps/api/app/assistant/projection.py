@@ -52,6 +52,19 @@ def _safe_business_failure(value: object, *, secrets=()) -> dict:
     if "section_index" in value and (value["section_index"] is None
             or type(value["section_index"]) is int and 1 <= value["section_index"] <= 20):
         safe["section_index"] = value["section_index"]
+    field = value.get("candidate_field")
+    section = value.get("candidate_section_index")
+    fragment = value.get("candidate_fragment_index")
+    digest = value.get("candidate_field_digest")
+    if (value.get("error") in ("script_fact_unsupported", "script_goal_conflict")
+            and isinstance(field, str) and field in {"title", "content", "visual_prompt"}
+            and type(value.get("section_index")) is int and 1 <= value["section_index"] <= 20
+            and type(section) is int and 0 <= section <= 20
+            and (field == "title" if section == 0 else section == value.get("section_index"))
+            and type(fragment) is int and 0 <= fragment <= {"title": 0, "content": 19, "visual_prompt": 4}[field]
+            and isinstance(digest, str) and re.fullmatch(r"[a-f0-9]{64}", digest)):
+        safe.update(candidate_section_index=section, candidate_field=field,
+            candidate_fragment_index=fragment, candidate_field_digest=digest)
     return {key: text for key, text in safe.items()
             if not isinstance(text, str) or not any(secret and secret in text for secret in secrets)}
 

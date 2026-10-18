@@ -17,6 +17,7 @@ RUNNER = r"""
 const {createBusinessRequest,RequestNotSubmitted} = await import(new URL('../agent_tools/diary/transport.ts', process.argv[1]));
 const {createDiaryTools} = await import(new URL('../agent_tools/diary/runtime.ts', process.argv[1]));
 const {registerExecutionTools} = await import(new URL('../agent_tools/diary/execution-tools.ts', process.argv[1]));
+const {createHash} = await import('node:crypto');
 const credentials = {authorization:'Bearer opaque-auth-value',cookie:'session=opaque-cookie-value',localMemberToken:'opaque-member-value'};
 const detail = {error:'creation_window_revision_conflict', reason:'方案修订已变化，请读取新版。',repair_action:'读取原请求后修订窗口。',
  stage:'window_confirmation',request_id:'request-a',window_id:'window-a',current_window_id:'window-b',plan_id:'plan-a',expected_revision:2,current_revision:3,
@@ -67,6 +68,14 @@ const localTools=new Map();let localCalls=0;
 globalThis.fetch=async()=>{localCalls++;throw new Error('must not contact HTTP');};
 await createDiaryTools({...environment,AI_VIDEO_DIARY_AGENT_TASK_READ_READY:'0'}).register({registerTool:tool=>localTools.set(tool.name,tool)});
 output.local={result:await localTools.get('regenerate_storyboard').execute('local',{}),calls:localCalls};
+const scriptTools=new Map(),script={title:'总标题😀',sections:[{title:'段落',content:'有据的说明。',visual_prompt:'展示画面',evidence_reference_ids:['source-a']}]};
+const scriptLocation={candidate_section_index:0,candidate_field:'title',candidate_fragment_index:0,
+ candidate_field_digest:createHash('sha256').update(script.title,'utf8').digest('hex')};
+globalThis.fetch=async(url)=>url.endsWith('/script-context')?Response.json({creation_intent:{kind:'discussion'}})
+ :Response.json({detail:{error:'script_goal_conflict',reason_code:'goal_conflict',section_index:1,retryable:false,
+  ...scriptLocation,reason:'private-model-explanation',repair_action:'private-response-body'}},{status:422});
+await createDiaryTools(environment).register({registerTool:tool=>scriptTools.set(tool.name,tool)});
+output.scriptRejection=await scriptTools.get('preview_script_draft').execute('script-call',script);
 // A failure before POST must not consume the one-write guard; an unknown POST must.
 const execution=new Map();let marked=0,mode='not_ready',posts=0,turnId;
 registerExecutionTools({registerTool:tool=>execution.set(tool.name,tool)},{taskId:'task-a',isTaskRead:()=>true,
@@ -219,7 +228,7 @@ def test_nested_receipt_and_durable_roundtrip_keep_safe_typed_fields(tool_bounda
     assert type(stored["failure"]["current_revision"]) is int
 
 
-@pytest.mark.parametrize("receipt_kind", ["business", "sdk_validation"])
+@pytest.mark.parametrize("receipt_kind", ["business", "sdk_validation", "script_locator"])
 def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boundary, tmp_path, monkeypatch, receipt_kind):
     from types import SimpleNamespace
     from fastapi import FastAPI
@@ -233,6 +242,7 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
     monkeypatch.setattr(main, "conversation_repo", repo)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _workspace: SimpleNamespace(effective_llm_api_key="synthetic-secret"))
     event = (_project(tool_boundary["caught"]) if receipt_kind == "business"
+        else _project(tool_boundary["scriptRejection"], "preview_script_draft") if receipt_kind == "script_locator"
         else _project({"isError": True, "details": {}, "content": [{"type": "text", "text":
             'Validation failed for tool "preview_creation_plan":\n'
             '  - selected_person.profile_id: must have required properties profile_id, version\n\nReceived arguments:\n'
@@ -255,6 +265,11 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
         assert delivered["failure"]["submission_effect"] == "not_submitted"
         assert delivered["failure"]["tool_name"] == "preview_creation_plan"
         assert "private" not in json.dumps(events)
+    elif receipt_kind == "script_locator":
+        assert delivered["failure"]["candidate_section_index"] == delivered["failure"]["candidate_fragment_index"] == 0
+        assert delivered["failure"]["candidate_field"] == "title"
+        assert "总标题" in delivered["failure"]["reason"] and "本次未保存送审稿" in delivered["failure"]["reason"]
+        assert "private-model-explanation" not in json.dumps(events) and "private-response-body" not in json.dumps(events)
 
 
 @pytest.mark.parametrize("details", [None, {}])
@@ -311,3 +326,32 @@ def test_projection_whitelist_does_not_accept_raw_or_wrongly_typed_fields():
     assert set(safe) == {"reason", "repair_action", "error", "stage", "submission_effect", "request_id"}
     assert _safe_business_failure({"tool_name": ["preview_creation_plan"]}) == {}
     assert _safe_business_failure({"tool_name": "unknown_tool"}) == {}
+
+
+@pytest.mark.parametrize("invalid", [
+    {"candidate_section_index": True}, {"candidate_section_index": -1}, {"candidate_section_index": 21},
+    {"candidate_section_index": 2}, {"candidate_section_index": 0, "candidate_field": "content"},
+    {"candidate_field": ["content"]}, {"candidate_field": "unknown"}, {"candidate_fragment_index": 20},
+    {"candidate_field": "title", "candidate_fragment_index": 1}, {"candidate_field_digest": "private-key"},
+    {"candidate_fragment_index": None}, {"section_index": True}, {"error": "script_review_invalid"},
+])
+def test_projection_drops_invalid_or_partial_script_location_atomically(invalid):
+    failure = {"error": "script_fact_unsupported", "section_index": 1, "candidate_section_index": 1,
+        "candidate_field": "content", "candidate_fragment_index": 0, "candidate_field_digest": "a" * 64, **invalid}
+    safe = _safe_business_failure(failure)
+    assert not any(key.startswith("candidate_") for key in safe)
+
+
+def test_verified_script_location_reaches_model_and_projection_without_free_review_text(tool_boundary):
+    import hashlib
+
+    result = tool_boundary["scriptRejection"]
+    failure = result["details"]["failure"]
+    assert failure["candidate_field_digest"] == hashlib.sha256('总标题😀'.encode('utf-8')).hexdigest()
+    assert failure["candidate_section_index"] == failure["candidate_fragment_index"] == 0
+    assert failure["candidate_field"] == "title"
+    assert failure["section_index"] == 1
+    assert json.loads(result["content"][0]["text"]) == failure
+    assert result["structuredContent"]["failure"] == failure
+    assert _project(result, "preview_script_draft")["failure"] == failure
+    assert "private-model-explanation" not in json.dumps(result) and "private-response-body" not in json.dumps(result)

@@ -1,11 +1,33 @@
 import type {TaskVersion,ActionSource} from './contracts.ts';
 
-export type ScriptDraftFailure = {
+export type ScriptCandidateLocation = {
+  candidate_section_index: number;
+  candidate_field: "title" | "content" | "visual_prompt";
+  candidate_fragment_index: number;
+  candidate_field_digest: string;
+};
+
+export type ScriptDraftFailure = Partial<ScriptCandidateLocation> & {
   error: "script_review_invalid" | "script_fact_unsupported" | "script_goal_conflict";
   reason_code: string;
   section_index: number | null;
   retryable: boolean;
 };
+
+export function safeScriptCandidateLocation(value: any): ScriptCandidateLocation | undefined {
+  if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)) return undefined;
+  const section = value.candidate_section_index, field = value.candidate_field;
+  const fragment = value.candidate_fragment_index, digest = value.candidate_field_digest;
+  if (!Number.isInteger(value.section_index) || value.section_index < 1 || value.section_index > 20
+      || !Number.isInteger(section) || section < 0 || section > 20
+      || !["title", "content", "visual_prompt"].includes(field)
+      || (section === 0 ? field !== "title" : section !== value.section_index)
+      || !Number.isInteger(fragment) || fragment < 0
+      || fragment > (field === "title" ? 0 : field === "visual_prompt" ? 4 : 19)
+      || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) return undefined;
+  return {candidate_section_index: section, candidate_field: field,
+    candidate_fragment_index: fragment, candidate_field_digest: digest};
+}
 
 export type BusinessFailure = Record<string, string | number | boolean | null> & {
   error: string; reason: string; repair_action: string;
@@ -52,6 +74,7 @@ export function safeBusinessFailure(value: any, secrets: string[] = []): Partial
   if (typeof value?.retryable === "boolean") safe.retryable = value.retryable;
   if (value?.section_index === null || (Number.isInteger(value?.section_index) && value.section_index >= 1 && value.section_index <= 20))
     safe.section_index = value.section_index;
+  Object.assign(safe, safeScriptCandidateLocation(value));
   for (const [key, text] of Object.entries(safe))
     if (typeof text === "string" && secrets.some(secret => secret && text.includes(secret))) delete safe[key];
   return safe;
@@ -70,7 +93,7 @@ function scriptDraftFailure(detail: any): ScriptDraftFailure | undefined {
   return {error, reason_code: validReason ? reason : "unavailable",
     section_index: Number.isInteger(detail.section_index) && detail.section_index >= 1 && detail.section_index <= 20
       ? detail.section_index : null,
-    retryable: detail.retryable === true};
+    retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail)};
 }
 
 export class BusinessRequestError extends Error {

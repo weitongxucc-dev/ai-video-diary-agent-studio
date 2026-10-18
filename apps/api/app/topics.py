@@ -619,6 +619,10 @@ class CreationTaskScriptGenerationError(RuntimeError):
         retryable: bool,
         reason_code: str | None = None,
         section_index: int | None = None,
+        candidate_section_index: int | None = None,
+        candidate_field: Literal["title", "content", "visual_prompt"] | None = None,
+        candidate_fragment_index: int | None = None,
+        candidate_field_digest: str | None = None,
     ) -> None:
         self.code = code
         self.reason = reason
@@ -627,6 +631,10 @@ class CreationTaskScriptGenerationError(RuntimeError):
         self.retryable = retryable
         self.reason_code = reason_code
         self.section_index = section_index
+        self.candidate_section_index = candidate_section_index
+        self.candidate_field = candidate_field
+        self.candidate_fragment_index = candidate_fragment_index
+        self.candidate_field_digest = candidate_field_digest
         super().__init__(f"{code}: {reason}")
 
 
@@ -925,7 +933,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 digest = hashlib.sha256(json.dumps(binding, separators=(",", ":")).encode()).hexdigest()[:12]
                 quote_id = (f"s{index}_{ordinal}_{digest}" if source_alias is not None
                             else f"c{index}{field[0]}_{ordinal}_{digest}")
-                entry = {"index": index, "field": field, "source_alias": source_alias,
+                entry = {"index": index, "field": field, "ordinal": ordinal, "source_alias": source_alias,
                          "start": start, "end": end, "text": fragment, "full_digest": full_digest}
                 (source_pieces if source_alias is not None else candidate_pieces)[quote_id] = entry
                 result.append({"quote_id": quote_id, "text": fragment})
@@ -1074,7 +1082,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "tool_call_count": None, "tool_arguments_length": None, "usage": {"prompt_tokens": None, "completion_tokens": None,
                 "total_tokens": None, "reasoning_tokens": None}, "section_index": None,
             "section_count": len(sections), "source_count": len(source_inputs),
-            "support_reference_mismatch": None, "issue_reference_mismatch": None}
+            "support_reference_mismatch": None, "issue_reference_mismatch": None, "issue_shape_mismatch": None}
 
         def safe_count(value):
             return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
@@ -1163,15 +1171,33 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     raise self._review_failure("support_reference", diagnostics)
             kinds = set()
             for issue_index, issue in enumerate(issues, start=1):
-                if not isinstance(issue, dict) or set(issue) != {"kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"}:
+                issue_keys = {"kind", "candidate_quote_id", "reference_ids", "missing_or_conflicting"}
+                if not isinstance(issue, dict) or set(issue) != issue_keys:
+                    missing = sorted(issue_keys - set(issue)) if isinstance(issue, dict) else []
+                    diagnostics["issue_shape_mismatch"] = {"issue_index": issue_index,
+                        "subtype": "not_object" if not isinstance(issue, dict) else "missing_keys" if missing else "extra_keys",
+                        "missing_keys": missing,
+                        "unknown_key_count": len(set(issue) - issue_keys) if isinstance(issue, dict) else None}
                     raise self._review_failure("issue_shape", diagnostics)
                 fragment = candidate_quote(issue["candidate_quote_id"], index)
                 if fragment is None:
                     raise self._review_failure("issue_quote", diagnostics)
                 kind, refs = issue["kind"], issue["reference_ids"]
                 detail = issue["missing_or_conflicting"]
-                if (not isinstance(kind, str) or kind not in {"unsupported_fact", "goal_conflict"}
-                        or not isinstance(detail, str) or not detail.strip() or len(detail) > 300):
+                shape_error = None
+                if not isinstance(kind, str):
+                    shape_error = "kind_not_string"
+                elif kind not in {"unsupported_fact", "goal_conflict"}:
+                    shape_error = "kind_unknown"
+                elif not isinstance(detail, str):
+                    shape_error = "detail_not_string"
+                elif not detail.strip():
+                    shape_error = "detail_empty"
+                elif len(detail) > 300:
+                    shape_error = "detail_too_long"
+                if shape_error:
+                    diagnostics["issue_shape_mismatch"] = {"issue_index": issue_index, "subtype": shape_error,
+                        "detail_length": len(detail) if isinstance(detail, str) else None}
                     raise self._review_failure("issue_shape", diagnostics)
                 reference_error = None
                 if not isinstance(refs, list):
@@ -1216,7 +1242,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "sampled_reference_forms": forms}
                     raise self._review_failure("issue_reference", diagnostics)
                 kinds.add(kind)
-                all_issues.append((index, {**issue, "field": fragment["field"], "quote": fragment["text"]}))
+                all_issues.append((index, {**issue, "field": fragment["field"], "quote": fragment["text"],
+                    "candidate_section_index": fragment["index"], "candidate_fragment_index": fragment["ordinal"],
+                    "candidate_field_digest": fragment["full_digest"]}))
             if "unsupported_fact" not in kinds and not supports:
                 raise self._review_failure("support_shape", diagnostics)
         if len(all_issues) > 12:
@@ -1239,7 +1267,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                       if unsupported else f"{detail} 请核对制作方案，或修改冲突表述后重新生成。")
             raise self._failure(code="script_fact_unsupported" if unsupported else "script_goal_conflict",
                 reason=reason, impact="未保存这份新草稿，已有草稿保持原样。", repair_action=repair, retryable=False,
-                reason_code="unsupported_fact" if unsupported else "goal_conflict", section_index=index)
+                reason_code="unsupported_fact" if unsupported else "goal_conflict", section_index=index,
+                candidate_section_index=issue["candidate_section_index"], candidate_field=issue["field"],
+                candidate_fragment_index=issue["candidate_fragment_index"], candidate_field_digest=issue["candidate_field_digest"])
 
 
     def _review_failure(self, reason_code: str, diagnostics: dict) -> CreationTaskScriptGenerationError:
@@ -1328,6 +1358,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         retryable: bool,
         reason_code: str | None = None,
         section_index: int | None = None,
+        candidate_section_index: int | None = None,
+        candidate_field: Literal["title", "content", "visual_prompt"] | None = None,
+        candidate_fragment_index: int | None = None,
+        candidate_field_digest: str | None = None,
     ) -> CreationTaskScriptGenerationError:
         return CreationTaskScriptGenerationError(
             code=code,
@@ -1337,6 +1371,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             retryable=retryable,
             reason_code=reason_code,
             section_index=section_index,
+            candidate_section_index=candidate_section_index,
+            candidate_field=candidate_field,
+            candidate_fragment_index=candidate_fragment_index,
+            candidate_field_digest=candidate_field_digest,
         )
 
 

@@ -323,9 +323,13 @@ def test_api_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch)
 def test_script_http_errors_preserve_safe_category_section_and_retryability(
     api_state, monkeypatch, endpoint, code, reason_code, section_index,
 ):
+    location = ({'candidate_section_index': 0, 'candidate_field': 'title',
+        'candidate_fragment_index': 0, 'candidate_field_digest': 'a' * 64} if code == 'script_fact_unsupported'
+        else {'candidate_section_index': section_index, 'candidate_field': 'visual_prompt',
+            'candidate_fragment_index': 2, 'candidate_field_digest': 'b' * 64} if code == 'script_goal_conflict' else {})
     failure = CreationTaskScriptGenerationError(code=code, reason='安全的分段失败说明。',
         impact='没有保存草稿。', repair_action='先核对指定段落及资料。', retryable=False,
-        reason_code=reason_code, section_index=section_index)
+        reason_code=reason_code, section_index=section_index, **location)
     def reject(*args):
         raise failure
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings:
@@ -336,6 +340,7 @@ def test_script_http_errors_preserve_safe_category_section_and_retryability(
     detail = response.json()['detail']
     assert {key: detail[key] for key in ('error', 'reason_code', 'section_index', 'retryable')} == {
         'error': code, 'reason_code': reason_code, 'section_index': section_index, 'retryable': False}
+    assert {key: value for key, value in detail.items() if key.startswith('candidate_')} == location
     assert api_state.repository.list_creation_task_scripts('local', 'task') == []
 
 
@@ -1192,3 +1197,111 @@ def test_valid_issue_references_still_reject_unfounded_content_or_goal_conflict(
         provider(document, review, calls).generate(inputs())
     assert failure.value.code == expected_code and failure.value.retryable is False
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('field,target_section,text,fragment_index', [
+    ('title', 0, '  总标题😀  ', 0),
+    ('title', 1, '段落标题😀', 0),
+    ('content', 1, '😀' * 200 + FACT, 1),
+    ('visual_prompt', 1, '😀' * 401, 2),
+])
+def test_content_rejection_locator_is_derived_from_the_verified_candidate_fragment(field, target_section, text, fragment_index):
+    import hashlib
+    from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection
+
+    section_fields = {'title': '段落', 'content': FACT, 'visual_prompt': '展示素材用途'}
+    title = '总标题'
+    if target_section == 0:
+        title = text
+    else:
+        section_fields[field] = text
+    candidate = CreationTaskGeneratedScript(title=title, language='zh-CN', sections=(
+        CreationTaskGeneratedScriptSection(**section_fields, evidence_reference_ids=('knowledge:fixture:v1',)),))
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        data = json.loads(body['messages'][1]['content'])
+        fragments = data['script']['title'] if target_section == 0 else data['script']['sections'][0][field]
+        assert ''.join(piece['text'] for piece in fragments) == text
+        assert 0 < len(fragments[fragment_index]['text']) <= 200
+        return _review_tool_response({'sections': [{'index': 1, 'supports': [], 'issues': [{
+            'kind': 'unsupported_fact', 'candidate_quote_id': fragments[fragment_index]['quote_id'],
+            'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-model-explanation'}]}]})
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.check_draft(inputs(), candidate)
+    error = failure.value
+    assert error.code == 'script_fact_unsupported' and error.section_index == 1
+    assert error.candidate_section_index == target_section and error.candidate_field == field
+    assert error.candidate_fragment_index == fragment_index
+    assert error.candidate_field_digest == hashlib.sha256(text.encode('utf-8')).hexdigest()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('change,subtype,missing_keys,unknown_count', [
+    ('not_object', 'not_object', [], None),
+    ('missing', 'missing_keys', ['reference_ids'], 0),
+    ('extra', 'extra_keys', [], 1),
+    ('missing_and_extra', 'missing_keys', ['reference_ids'], 1),
+    ('kind_type', 'kind_not_string', None, None),
+    ('kind_value', 'kind_unknown', None, None),
+    ('detail_type', 'detail_not_string', None, None),
+    ('detail_empty', 'detail_empty', None, None),
+    ('detail_long', 'detail_too_long', None, None),
+])
+def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure(caplog, change, subtype, missing_keys, unknown_count):
+    import logging
+
+    document = draft()
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        data = json.loads(body['messages'][1]['content'])
+        review = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
+            detail='private-original-detail'), data)
+        issue = review['sections'][0]['issues'][0]
+        if change == 'not_object':
+            review['sections'][0]['issues'][0] = 'private-not-an-object'
+        elif change in {'missing', 'missing_and_extra'}:
+            del issue['reference_ids']
+        if change in {'extra', 'missing_and_extra'}:
+            issue['private-unknown-key'] = 'private-unknown-value'
+        elif change == 'kind_type':
+            issue['kind'] = {'private-key': 'private-value'}
+        elif change == 'kind_value':
+            issue['kind'] = 'private-unknown-kind'
+        elif change == 'detail_type':
+            issue['missing_or_conflicting'] = {'private-key': 'private-value'}
+        elif change == 'detail_empty':
+            issue['missing_or_conflicting'] = '  \n '
+        elif change == 'detail_long':
+            issue['missing_or_conflicting'] = 'private-long-detail' * 30
+        return _review_tool_response(review)
+
+    caplog.set_level(logging.WARNING, logger='app.topics')
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        api_key='private-key-value', transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(inputs())
+    assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == 'issue_shape'
+    assert failure.value.candidate_field is None and failure.value.candidate_field_digest is None
+    assert failure.value.retryable is False and len(calls) == 2
+    records = [record for record in caplog.records if record.name == 'app.topics']
+    assert len(records) == 1
+    text = records[0].getMessage()
+    diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))
+    shape = diagnostic['issue_shape_mismatch']
+    assert shape['subtype'] == subtype and shape['issue_index'] == 1
+    if missing_keys is not None:
+        assert shape['missing_keys'] == missing_keys and shape['unknown_key_count'] == unknown_count
+    else:
+        assert type(shape['detail_length']) is int or shape['detail_length'] is None
+    assert 'private-' not in text and FACT not in text and len(text) < 1200

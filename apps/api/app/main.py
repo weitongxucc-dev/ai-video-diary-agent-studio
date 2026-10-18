@@ -6672,6 +6672,10 @@ def _topic_failure_response(
     retryable: bool,
     reason_code: str | None = None,
     section_index: int | None = None,
+    candidate_section_index: int | None = None,
+    candidate_field: str | None = None,
+    candidate_fragment_index: int | None = None,
+    candidate_field_digest: str | None = None,
 ) -> HTTPException:
     return HTTPException(
         status_code=status_code,
@@ -6683,6 +6687,10 @@ def _topic_failure_response(
             "retryable": retryable,
             **({"reason_code": reason_code} if reason_code is not None else {}),
             **({"section_index": section_index} if section_index is not None else {}),
+            **({"candidate_section_index": candidate_section_index} if candidate_section_index is not None else {}),
+            **({"candidate_field": candidate_field} if candidate_field is not None else {}),
+            **({"candidate_fragment_index": candidate_fragment_index} if candidate_fragment_index is not None else {}),
+            **({"candidate_field_digest": candidate_field_digest} if candidate_field_digest is not None else {}),
         },
     )
 
@@ -7184,6 +7192,21 @@ def _require_current_script_inputs(
     return reader_id, local_diagnostic
 
 
+def _creation_task_script_goal(plan: CreationPlan, task: CreationTask, viewer_user_id: str | None) -> str:
+    from app.creation.intent_use_case import CreationIntentUseCase
+
+    try:
+        return CreationIntentUseCase.script_goal(production_repo, plan, task, viewer_user_id=viewer_user_id)
+    except (KeyError, ValueError) as exc:
+        raise _topic_failure_response(
+            status_code=409, error="script_goal_source_changed",
+            reason="当前任务的原始制作要求不可读取，或与已采用方案的来源不一致。",
+            impact="未调用文字模型，未保存或采用新文案。",
+            repair_action="读取当前任务及原创作请求，核对采用来源和当前成员权限后再制作。",
+            retryable=False,
+        ) from exc
+
+
 @app.post(
     "/api/creation-tasks/{task_id}/assistant/reply-transfer",
     response_model=CreationTaskScriptsResponse,
@@ -7268,7 +7291,8 @@ def save_assistant_script_draft(
     binding = (asdict(plan), asdict(topic), tuple(sources), input_references)
     topic_origin = _script_topic_origin(workspace_id, plan, topic)
     script_input = CreationTaskScriptInput(
-        goal=plan.goal, language=plan.language, presenter_share_target=plan.presenter_share_target,
+        goal=_creation_task_script_goal(plan, task, reader[0]),
+        language=plan.language, presenter_share_target=plan.presenter_share_target,
         duration_target_seconds=plan.duration_target_seconds, topic_title=topic.title,
         topic_angle=topic.angle if topic_origin == "generated" else "", topic_audience=topic.audience, topic_outline=tuple(topic.outline),
         topic_origin=topic_origin,
@@ -7296,7 +7320,10 @@ def save_assistant_script_draft(
         raise _topic_failure_response(status_code=422 if content_failure or prevalidation else 502,
             error=exc.code, reason=exc.reason, impact="本轮修订未保存，原有草稿和任务保持原样。",
             repair_action=("请核对文案段落、资料引用和方案时长，修改后再提交。" if prevalidation else exc.repair_action),
-            retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index) from exc
+            retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index,
+            candidate_section_index=exc.candidate_section_index, candidate_field=exc.candidate_field,
+            candidate_fragment_index=exc.candidate_fragment_index,
+            candidate_field_digest=exc.candidate_field_digest) from exc
     record_llm_service_verification(_workspace_settings_for(workspace_id), ok=True, cause="verified", workspace_id=workspace_id)
     # The model call can outlive source permissions or the current plan/topic.
     # Re-read those bindings; the repository still owns the final draft CAS.
@@ -8297,6 +8324,7 @@ def generate_creation_task_script(
     _require_automation_task_open(request,workspace_id,task_id)
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
+    script_goal = _creation_task_script_goal(plan, task, _content_reader(request, workspace_id)[0])
     selected_topic = next(
         (
             candidate
@@ -8376,7 +8404,7 @@ def generate_creation_task_script(
         generated: CreationTaskGeneratedScript = (
             _creation_task_script_generator_for(_workspace_settings_for(workspace_id)).generate(
                 CreationTaskScriptInput(
-                    goal=plan.goal,
+                    goal=script_goal,
                     language=plan.language,
                     presenter_share_target=plan.presenter_share_target,
                     duration_target_seconds=plan.duration_target_seconds,
@@ -8426,6 +8454,10 @@ def generate_creation_task_script(
             retryable=exc.retryable,
             reason_code=exc.reason_code,
             section_index=exc.section_index,
+            candidate_section_index=exc.candidate_section_index,
+            candidate_field=exc.candidate_field,
+            candidate_fragment_index=exc.candidate_fragment_index,
+            candidate_field_digest=exc.candidate_field_digest,
         ) from exc
     record_llm_service_verification(
         _workspace_settings_for(workspace_id), ok=True, cause="verified",
