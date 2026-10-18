@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'companion_surfaces.dart';
+import '../data/host_session.dart';
 
 class CompanionAccountPage extends StatelessWidget {
   const CompanionAccountPage({
@@ -9,7 +10,11 @@ class CompanionAccountPage extends StatelessWidget {
     required this.hasSample,
     required this.onVoice,
     required this.onDisconnect,
+    this.session,
+    this.voiceStatus,
   });
+  final HostSession? session;
+  final String? voiceStatus;
   final Widget connectionCard;
   final bool hasConnection;
   final bool hasSample;
@@ -43,7 +48,7 @@ class CompanionAccountPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 15),
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -56,7 +61,9 @@ class CompanionAccountPage extends StatelessWidget {
                       ),
                       SizedBox(height: 6),
                       Text(
-                        '正式账号尚未接入，点击查看说明',
+                        hasConnection
+                            ? '${session?.name ?? '已保存账号'} · ${session?.role == 'owner' ? '设备主账号' : '设备成员'}'
+                            : '扫描电脑二维码并使用正式账号登录',
                         style: TextStyle(
                           fontSize: 12,
                           color: Color(0xff697183),
@@ -98,7 +105,7 @@ class CompanionAccountPage extends StatelessWidget {
               ),
               title: const Text('我的声音样本', style: TextStyle(fontSize: 14)),
               subtitle: Text(
-                !hasSample ? '录制、试听后再选择发送' : '已保留声音样本，尚未发送',
+                voiceStatus ?? (!hasSample ? '读取电脑采样任务后录音' : '已保留此任务的录音'),
                 style: const TextStyle(fontSize: 12, color: Color(0xff697183)),
               ),
               trailing: const Icon(
@@ -194,8 +201,10 @@ class CompanionAccountPage extends StatelessWidget {
                     color: const Color(0xfff0f3fa),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Text(
-                    '当前手机版本还未接入正式账号登录，因此暂时不能注册或修改昵称、头像。现有主机开发连接也不等于正式账号登录。',
+                  child: Text(
+                    hasConnection
+                        ? '当前连接已绑定正式账号、电脑和工作区。退出连接会移除此手机保存的登录凭证，原素材与录音保留。'
+                        : '在电脑端打开手机连接并生成二维码，使用同一正式账号登录后配对。新成员请扫描电脑主账号生成的成员邀请。',
                     style: TextStyle(
                       fontSize: 13,
                       color: Color(0xff697183),
@@ -205,7 +214,7 @@ class CompanionAccountPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  '本地选择素材、填写说明和录制声音不需要先注册。主机访问与个人资料设置仍由正式账号验证权限。',
+                  '素材可先保存在手机。录音使用电脑创建的采样任务和同一朗读文本；手机暂不提供注册或个人资料修改。',
                   style: TextStyle(
                     fontSize: 13,
                     color: Color(0xff697183),

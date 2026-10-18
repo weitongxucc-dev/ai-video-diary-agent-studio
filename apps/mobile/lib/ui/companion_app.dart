@@ -5,12 +5,13 @@ import '../data/mobile_store.dart';
 import '../data/local_media_draft.dart';
 import '../data/local_media_draft_controller.dart';
 import '../data/voice_sample_controller.dart';
+import '../data/voice_sampling_controller.dart';
+import '../data/transfer_controller.dart';
 import 'companion_surfaces.dart';
 import 'companion_materials_page.dart';
 import 'companion_progress_page.dart';
 import 'companion_account_page.dart';
 import 'material_review_sheet.dart';
-import 'debug_connection_sheet.dart';
 import 'companion_navigation_bar.dart';
 import 'connection_sheet.dart';
 import 'voice_sample_sheet.dart';
@@ -70,16 +71,25 @@ class _CompanionHomeState extends State<CompanionHome>
   int tab = 0;
   final notes = TextEditingController();
   final draft = LocalMediaDraftController();
+  late final transfers = TransferController(store);
+  late final sampling = VoiceSamplingController(store);
   late final voice = VoiceSampleController(
-    sample: () => draft.sample,
-    onRecorded: draft.setSample,
+    sample: () => sampling.sample,
+    beforeRecording: sampling.beginCapture,
+    onRecorded: sampling.saveRecording,
   );
-  late final homeState = Listenable.merge([store, draft, voice]);
+  late final homeState = Listenable.merge([
+    store,
+    draft,
+    voice,
+    sampling,
+    transfers,
+  ]);
   MobileStore get store => widget.store;
   List<DraftVideo> get files => draft.files;
   bool get choosing => draft.choosing;
   bool get draftReady => draft.ready;
-  String? get sample => draft.sample;
+  String? get sample => sampling.sample;
   String? get localError => draft.error;
 
   @override
@@ -97,6 +107,8 @@ class _CompanionHomeState extends State<CompanionHome>
     notes.dispose();
     draft.dispose();
     voice.dispose();
+    sampling.dispose();
+    transfers.dispose();
     super.dispose();
   }
 
@@ -130,11 +142,15 @@ class _CompanionHomeState extends State<CompanionHome>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      builder: (context) => MaterialReviewSheet(
-        files: files,
-        notes: notes,
-        hasConnection: store.session != null,
-        onNotesChanged: draft.updateNotes,
+      builder: (context) => ListenableBuilder(
+        listenable: transfers,
+        builder: (context, _) => MaterialReviewSheet(
+          transfers: transfers,
+          files: files,
+          notes: notes,
+          hasConnection: store.session != null,
+          onNotesChanged: draft.updateNotes,
+        ),
       ),
     );
     await _saveDraft();
@@ -144,10 +160,7 @@ class _CompanionHomeState extends State<CompanionHome>
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (context) => ConnectionSheet(
-      store: store,
-      debugBuilder: (context) => DebugConnectionSheet(store: store),
-    ),
+    builder: (context) => ConnectionSheet(store: store),
   );
 
   Widget _connectionCard() => HostConnectionCard(
@@ -179,7 +192,12 @@ class _CompanionHomeState extends State<CompanionHome>
   }
 
   Future<void> _voice() async {
+    if (store.session == null) {
+      await _connect();
+      if (!mounted || store.session == null) return;
+    }
     voice.openSheet();
+    unawaited(sampling.load());
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -188,14 +206,15 @@ class _CompanionHomeState extends State<CompanionHome>
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (context) => ListenableBuilder(
-        listenable: Listenable.merge([draft, voice]),
+        listenable: Listenable.merge([sampling, voice]),
         builder: (context, _) => VoiceSampleSheet(
+          sampling: sampling,
           recording: voice.recording,
           hasSample: voice.hasSample,
           busy: voice.busy,
           playing: voice.playing,
           seconds: voice.seconds,
-          error: voice.error ?? localError,
+          error: voice.error ?? sampling.error,
           onRecord: voice.toggleRecording,
           onPlay: voice.listen,
           onClose: () => Navigator.pop(context),
@@ -287,6 +306,8 @@ class _CompanionHomeState extends State<CompanionHome>
                           onRemove: draft.removeAt,
                         ),
                         CompanionProgressPage(
+                          store: store,
+                          transfers: transfers,
                           files: files,
                           hasConnection: store.session != null,
                           connected: store.connected,
@@ -300,6 +321,10 @@ class _CompanionHomeState extends State<CompanionHome>
                           onReview: _review,
                         ),
                         CompanionAccountPage(
+                          session: store.session,
+                          voiceStatus: sampling.task == null
+                              ? null
+                              : sampling.status,
                           connectionCard: _connectionCard(),
                           hasConnection: store.session != null,
                           hasSample: sample != null,

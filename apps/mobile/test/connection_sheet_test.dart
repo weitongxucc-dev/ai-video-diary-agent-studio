@@ -30,7 +30,6 @@ void main() {
             body: ConnectionSheet(
               store: store,
               discovery: PermissionDeniedDiscovery(),
-              debugBuilder: (_) => const Text('legacy debug input'),
             ),
           ),
         ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../data/voice_sampling_controller.dart';
 
 class VoiceSampleSheet extends StatelessWidget {
   const VoiceSampleSheet({
@@ -12,7 +13,9 @@ class VoiceSampleSheet extends StatelessWidget {
     required this.onPlay,
     required this.onClose,
     this.error,
+    this.sampling,
   });
+  final VoiceSamplingController? sampling;
   final bool recording, hasSample, busy, playing;
   final int seconds;
   final String? error;
@@ -22,7 +25,9 @@ class VoiceSampleSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final duration =
         '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
-    final state = recording
+    final state = sampling != null && !recording && !playing
+        ? sampling!.status
+        : recording
         ? '正在录音，结束后可试听'
         : playing
         ? '正在试听，点击下方可停止'
@@ -82,14 +87,58 @@ class VoiceSampleSheet extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
+                    if (sampling != null) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              sampling!.task?.displayName ?? '电脑采样任务',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '读取电脑采样任务',
+                            onPressed: recording || busy || sampling!.busy
+                                ? null
+                                : sampling!.load,
+                            icon: const Icon(Icons.refresh),
+                          ),
+                        ],
+                      ),
+                      if (sampling!.tasks.isNotEmpty)
+                        DropdownButtonFormField<String>(
+                          initialValue: sampling!.task?.id,
+                          key: ValueKey(sampling!.task?.id),
+                          isExpanded: true,
+                          items: sampling!.tasks
+                              .map(
+                                (task) => DropdownMenuItem(
+                                  value: task.id,
+                                  child: Text(
+                                    task.displayName,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: recording || busy || sampling!.busy
+                              ? null
+                              : (id) {
+                                  if (id != null) sampling!.select(id);
+                                },
+                        ),
+                      if (sampling!.busy) const LinearProgressIndicator(),
+                      const SizedBox(height: 12),
+                    ],
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: const Color(0xfff2f4f9),
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Text(
-                        '你好，这是我的声音。今天想和你分享一件有意思的事。我希望视频里的讲解，能像平时的我一样自然。',
+                      child: Text(
+                        sampling?.task?.referenceText ??
+                            '连接电脑并读取采样任务后，这里显示需要朗读的原文。',
                         style: TextStyle(fontSize: 14, height: 1.8),
                       ),
                     ),
@@ -172,7 +221,15 @@ class VoiceSampleSheet extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: busy ? null : onRecord,
+              onPressed:
+                  busy ||
+                      (sampling != null &&
+                          !recording &&
+                          (sampling!.busy ||
+                              sampling!.task?.status != 'awaiting_sample' ||
+                              sampling!.queryRequired))
+                  ? null
+                  : onRecord,
               style: FilledButton.styleFrom(
                 minimumSize: const Size(double.infinity, 50),
                 shape: RoundedRectangleBorder(
@@ -193,6 +250,31 @@ class VoiceSampleSheet extends StatelessWidget {
                     : '开始录音',
               ),
             ),
+            if (sampling != null) ...[
+              const SizedBox(height: 10),
+              FilledButton.tonalIcon(
+                onPressed:
+                    !hasSample ||
+                        recording ||
+                        busy ||
+                        sampling!.busy ||
+                        sampling!.received
+                    ? null
+                    : sampling!.submitOrQuery,
+                icon: Icon(
+                  sampling!.queryRequired
+                      ? Icons.refresh
+                      : Icons.upload_outlined,
+                ),
+                label: Text(
+                  sampling!.received
+                      ? '电脑已接收'
+                      : sampling!.queryRequired
+                      ? '查询原发送结果'
+                      : '发送此任务的录音',
+                ),
+              ),
+            ],
             const SizedBox(height: 10),
             OutlinedButton.icon(
               onPressed: !hasSample || recording || busy ? null : onPlay,

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:yaohe_mobile/data/host_api.dart';
 import 'package:yaohe_mobile/data/mobile_store.dart';
+import 'fixtures.dart';
 
 class GatedStorage extends FlutterSecureStorage {
   GatedStorage([Map<String, String>? initial]) : values = {...?initial};
@@ -66,15 +67,10 @@ void main() {
   test(
     'failed reconnect retains exact last confirmed record and time without claiming connected',
     () async {
-      const session = HostSession(
-        address: 'https://host',
-        memberId: 'member-a',
-        name: 'A',
-        token: 'token',
-      );
+      final session = sessionFixture();
       FlutterSecureStorage.setMockInitialValues({
         'yaohe_session': jsonEncode(session.toJson()),
-        'tasks:https://host:member-a': jsonEncode({
+        testCacheKey: jsonEncode({
           'tasks': [
             {'id': 'persisted-task', 'status': 'running'},
           ],
@@ -82,6 +78,7 @@ void main() {
         }),
       });
       final store = MobileStore(
+        auth: authFixture(),
         api: HostApi(client: MockClient((_) async => http.Response('', 503))),
       );
       await store.initialize();
@@ -96,26 +93,25 @@ void main() {
     },
   );
 
-  const savedSession = HostSession(
-    address: 'https://host',
-    memberId: 'member-a',
-    name: 'A',
-    token: 'token',
-  );
+  final savedSession = sessionFixture();
   Map<String, String> savedValues() => {
     'yaohe_session': jsonEncode(savedSession.toJson()),
   };
   http.Response success(http.Request request) => http.Response(
-    request.url.path.endsWith('whoami')
-        ? '{"member_id":"member-a"}'
+    request.url.path.endsWith('/companion/session')
+        ? jsonEncode(identityFixture())
         : '{"items":[{"id":"task-a","name":"confirmed task","status":"running","stage":"script"}]}',
     200,
   );
 
   http.Response joinSuccess(http.Request request) =>
-      request.url.path.endsWith('/join')
+      request.url.path.endsWith('/pairings/accept')
       ? http.Response(
-          jsonEncode({...savedSession.toJson(), 'member_token': 'new-token'}),
+          jsonEncode({
+            'target_workspace_id': 'workspace-a',
+            'device_id': 'device-a',
+            'member_id': 'member-a',
+          }),
           200,
         )
       : success(request);
@@ -132,13 +128,18 @@ void main() {
         }
       };
       final store = MobileStore(
+        auth: authFixture(),
         storage: storage,
         api: HostApi(
           client: MockClient((request) async => joinSuccess(request)),
         ),
       );
       addTearDown(store.dispose);
-      final joining = store.join('https://host', 'invite', 'A');
+      final joining = store.connect(
+        invitationFixture(),
+        'member.test',
+        'password',
+      );
       await entered.future;
       final disconnecting = store.disconnect();
       expect(store.session, isNull);
@@ -150,14 +151,14 @@ void main() {
     },
   );
 
-  for (final delayedKey in ['yaohe_session', 'tasks:https://host:member-a']) {
+  for (final delayedKey in ['yaohe_session', testCacheKey]) {
     test(
       'initialization cannot restore $delayedKey after disconnect',
       () async {
         final entered = Completer<void>(), release = Completer<void>();
         final storage = GatedStorage({
           ...savedValues(),
-          'tasks:https://host:member-a': jsonEncode({
+          testCacheKey: jsonEncode({
             'tasks': [
               {'id': 'old-task'},
             ],
@@ -172,6 +173,7 @@ void main() {
         };
         var requests = 0;
         final store = MobileStore(
+          auth: authFixture(),
           storage: storage,
           api: HostApi(
             client: MockClient((request) async {
@@ -203,6 +205,7 @@ void main() {
       await release.future;
     };
     final store = MobileStore(
+      auth: authFixture(),
       storage: storage,
       api: HostApi(client: MockClient((request) async => success(request))),
     );
@@ -214,7 +217,7 @@ void main() {
     expect(storage.values['yaohe_session'], isNull);
   });
 
-  test('new join persists after an earlier pending disconnect', () async {
+  test('new connection persists after an earlier pending disconnect', () async {
     final entered = Completer<void>(), release = Completer<void>();
     final storage = GatedStorage(savedValues());
     storage.deleteGate = (_) async {
@@ -222,6 +225,7 @@ void main() {
       await release.future;
     };
     final store = MobileStore(
+      auth: authFixture(),
       storage: storage,
       api: HostApi(client: MockClient((request) async => joinSuccess(request))),
     );
@@ -229,18 +233,26 @@ void main() {
     await store.initialize();
     final disconnecting = store.disconnect();
     await entered.future;
-    final joining = store.join('https://host', 'invite', 'A');
+    final joining = store.connect(
+      invitationFixture(),
+      'member.test',
+      'password',
+    );
     await Future<void>.delayed(Duration.zero);
     expect(store.session, isNull);
     expect(
-      jsonDecode(storage.values['yaohe_session']!)['member_token'],
+      jsonDecode(
+        storage.values['yaohe_session']!,
+      )['credentials']['access_token'],
       'token',
     );
     release.complete();
     await Future.wait([disconnecting, joining]);
-    expect(store.session?.token, 'new-token');
+    expect(store.session?.credentials.accessToken, 'new-token');
     expect(
-      jsonDecode(storage.values['yaohe_session']!)['member_token'],
+      jsonDecode(
+        storage.values['yaohe_session']!,
+      )['credentials']['access_token'],
       'new-token',
     );
     expect(store.connected, true);
@@ -252,6 +264,7 @@ void main() {
       FlutterSecureStorage.setMockInitialValues(savedValues());
       var available = false, calls = 0;
       final store = MobileStore(
+        auth: authFixture(),
         api: HostApi(
           client: MockClient((request) async {
             calls++;
@@ -281,6 +294,7 @@ void main() {
     FlutterSecureStorage.setMockInitialValues(savedValues());
     var calls = 0;
     final store = MobileStore(
+      auth: authFixture(),
       api: HostApi(
         client: MockClient((request) async {
           calls++;
@@ -303,9 +317,11 @@ void main() {
       final pendingIdentity = Completer<http.Response>();
       var delayIdentity = false, taskReads = 0;
       final store = MobileStore(
+        auth: authFixture(),
         api: HostApi(
           client: MockClient((request) async {
-            if (request.url.path.endsWith('whoami') && delayIdentity) {
+            if (request.url.path.endsWith('/companion/session') &&
+                delayIdentity) {
               return pendingIdentity.future;
             }
             if (request.url.path.endsWith('creation-tasks')) taskReads++;
@@ -319,7 +335,9 @@ void main() {
       final pending = store.refresh();
       await Future<void>.delayed(Duration.zero);
       await store.disconnect();
-      pendingIdentity.complete(http.Response('{"member_id":"member-a"}', 200));
+      pendingIdentity.complete(
+        http.Response(jsonEncode(identityFixture()), 200),
+      );
       await pending;
       expect(taskReads, 1);
       expect(store.session, isNull);

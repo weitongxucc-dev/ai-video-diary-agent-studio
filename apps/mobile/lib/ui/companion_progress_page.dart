@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import '../data/local_media_draft.dart';
+import '../data/mobile_store.dart';
+import '../data/transfer_controller.dart';
+import 'transfer_status_list.dart';
+import 'task_result_sheet.dart';
 import 'companion_surfaces.dart';
 
 class CompanionProgressPage extends StatefulWidget {
@@ -16,7 +20,11 @@ class CompanionProgressPage extends StatefulWidget {
     required this.onConnect,
     required this.onPrepare,
     required this.onReview,
+    this.transfers,
+    this.store,
   });
+  final TransferController? transfers;
+  final MobileStore? store;
   final List<DraftVideo> files;
   final bool hasConnection;
   final bool connected;
@@ -81,14 +89,18 @@ class _CompanionProgressPageState extends State<CompanionProgressPage> {
           else
             LocalVideoList(files: widget.files, onReview: widget.onReview),
           const SizedBox(height: 16),
-          const Text(
-            '这些素材尚未发送。电脑版的手机接收服务接通后，才会显示真实发送进度和接收结果。',
+          Text(
+            widget.transfers?.drafts.isNotEmpty == true
+                ? '下面显示电脑最近确认的接收记录。重连后可查询原请求。'
+                : '确认素材与说明后，点击发送给电脑。',
             style: TextStyle(
               fontSize: 13,
               color: Color(0xff697183),
               height: 1.7,
             ),
           ),
+          if (widget.transfers != null)
+            TransferStatusList(controller: widget.transfers!),
           const SizedBox(height: 18),
           OutlinedButton(
             onPressed: widget.onPrepare,
@@ -248,56 +260,66 @@ class _CompanionProgressPageState extends State<CompanionProgressPage> {
     ),
   );
 
-  Future<void> _taskDetails(
-    Map<String, dynamic> task,
-  ) => showModalBottomSheet<void>(
-    context: context,
-    useSafeArea: true,
-    isScrollControlled: true,
-    builder: (context) => Padding(
-      padding: EdgeInsets.fromLTRB(
-        22,
-        22,
-        22,
-        22 + MediaQuery.paddingOf(context).bottom,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              task['name'] as String,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              _status(task['status'] as String?),
-              style: const TextStyle(color: blue),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '当前阶段：${_stage(task['stage'] as String?)}',
-              style: const TextStyle(fontSize: 14),
-            ),
-            if (task['stage_reason'] is String)
-              Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: Text(
-                  task['stage_reason'] as String,
-                  style: const TextStyle(color: Color(0xff697183), height: 1.7),
+  Future<void> _taskDetails(Map<String, dynamic> task) =>
+      showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        builder: (context) => widget.store != null
+            ? TaskResultSheet(
+                store: widget.store!,
+                taskId: task['id'] as String,
+              )
+            : Padding(
+                padding: EdgeInsets.fromLTRB(
+                  22,
+                  22,
+                  22,
+                  22 + MediaQuery.paddingOf(context).bottom,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        task['name'] as String,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        _status(task['status'] as String?),
+                        style: const TextStyle(color: blue),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '当前阶段：${_stage(task['stage'] as String?)}',
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      if (task['stage_reason'] is String)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 16),
+                          child: Text(
+                            task['stage_reason'] as String,
+                            style: const TextStyle(
+                              color: Color(0xff697183),
+                              height: 1.7,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 26),
+                      OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('返回进度'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            const SizedBox(height: 26),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('返回进度'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
+      );
 
   String _status(String? status) => switch (status) {
     'created' => '已创建',

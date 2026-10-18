@@ -1,19 +1,13 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../data/connection_invitation.dart';
 import '../data/host_discovery.dart';
 import '../data/mobile_store.dart';
 import 'invitation_scanner.dart';
 
 class ConnectionSheet extends StatefulWidget {
-  const ConnectionSheet({
-    super.key,
-    required this.store,
-    required this.debugBuilder,
-    this.discovery,
-  });
+  const ConnectionSheet({super.key, required this.store, this.discovery});
   final MobileStore store;
-  final WidgetBuilder debugBuilder;
   final HostDiscovery? discovery;
   @override
   State<ConnectionSheet> createState() => _ConnectionSheetState();
@@ -24,9 +18,10 @@ class _ConnectionSheetState extends State<ConnectionSheet>
   late final discovery =
       widget.discovery ?? HostDiscovery(serviceType: '_yaohe._tcp');
   late final updates = Listenable.merge([discovery, widget.store]);
-  bool scanning = false;
+  final account = TextEditingController(), password = TextEditingController();
+  ConnectionInvitation? invitation;
   String? scanMessage;
-
+  bool scanning = false;
   @override
   void initState() {
     super.initState();
@@ -40,13 +35,15 @@ class _ConnectionSheetState extends State<ConnectionSheet>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) {
       unawaited(discovery.stop());
-    } else if (!scanning && widget.store.session == null) {
+    } else if (!scanning &&
+        invitation == null &&
+        widget.store.session == null) {
       unawaited(discovery.start());
     }
   }
 
   Future<void> scan() async {
-    if (scanning) return;
+    if (scanning || widget.store.loading) return;
     setState(() => scanning = true);
     await discovery.stop();
     if (!mounted) return;
@@ -55,20 +52,47 @@ class _ConnectionSheetState extends State<ConnectionSheet>
       MaterialPageRoute(builder: (_) => const InvitationScanner()),
     );
     if (!mounted) return;
+    ConnectionInvitation? next;
+    String? message;
+    if (content != null) {
+      try {
+        next = ConnectionInvitation.parse(content);
+      } on FormatException catch (failure) {
+        message = failure.message;
+      } on TypeError {
+        message = '邀请格式不完整，请在电脑重新生成手机邀请。';
+      }
+    }
     setState(() {
       scanning = false;
       if (content != null) {
-        // The desktop has not frozen an invitation envelope or authentication
-        // bootstrap yet. Never guess a URL/token, display the raw credential,
-        // or send a stored member credential to an advertised endpoint.
-        scanMessage = '二维码已读取，当前版本还不能完成配对。电脑版的手机配对服务接通后再试。';
+        invitation = next;
+        scanMessage = message;
+        password.clear();
       }
     });
+  }
+
+  Future<void> connect() async {
+    final selected = invitation;
+    if (selected == null) return;
+    await widget.store.connect(selected, account.text, password.text);
+    password.clear();
+    if (!mounted) return;
+    final bound = widget.store.session;
+    if (widget.store.error == null &&
+        bound?.deviceId == selected.deviceId &&
+        bound?.workspaceId == selected.workspaceId &&
+        bound?.address == selected.endpoint.toString()) {
+      Navigator.pop(context);
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    account.dispose();
+    password.dispose();
     discovery.dispose();
     super.dispose();
   }
@@ -79,224 +103,133 @@ class _ConnectionSheetState extends State<ConnectionSheet>
     builder: (context, _) => Padding(
       padding: EdgeInsets.fromLTRB(
         22,
-        8,
+        14,
         22,
-        22 +
-            MediaQuery.paddingOf(context).bottom +
-            MediaQuery.viewInsetsOf(context).bottom,
+        22 + MediaQuery.viewInsetsOf(context).bottom,
       ),
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xffdce2ed),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
             Row(
               children: [
                 const Expanded(
                   child: Text(
-                    '连接我的曜核',
+                    '连接电脑上的曜核',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
                   ),
                 ),
                 IconButton(
-                  tooltip: '关闭连接界面',
+                  tooltip: '关闭连接',
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, size: 20),
+                  icon: const Icon(Icons.close),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            const Text(
-              '在电脑上打开曜核，并让手机连接同一网络。首次连接需要扫描主账号的邀请。',
-              style: TextStyle(color: Color(0xff697183), height: 1.7),
-            ),
-            const SizedBox(height: 22),
+            const Text('请扫描自己电脑上生成的手机邀请。设备发现仅提供候选，扫描后仍需账号登录与主机核验。'),
+            const SizedBox(height: 18),
             if (widget.store.session != null) ...[
-              _deviceTile(
-                title: '已保存的曜核连接',
-                subtitle: widget.store.connected
-                    ? '已核验使用者：${widget.store.session!.name}'
-                    : '连接记录已保留，等待重新核验',
-                trailing: widget.store.loading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(
-                        Icons.wifi,
-                        size: 20,
-                        color: Color(0xff697183),
-                      ),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
+              Text('已保存绑定：${widget.store.session!.name}'),
+              Text(widget.store.connected ? '成员、设备与工作区已核验' : '尚未重新取得主机回执'),
+              TextButton(
                 onPressed: widget.store.loading ? null : widget.store.refresh,
-                icon: const Icon(Icons.refresh, size: 19),
-                label: const Text('重新连接'),
+                child: const Text('重新连接'),
               ),
-              if (widget.store.error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(
-                    widget.store.error!,
-                    style: const TextStyle(
-                      color: Color(0xffa33a3a),
-                      height: 1.7,
-                    ),
-                  ),
-                ),
-            ] else ...[
+            ],
+            if (invitation == null) ...[
               if (discovery.searching)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const SizedBox(
-                        height: 18,
+                      SizedBox(
                         width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 1.7),
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                      const SizedBox(width: 12),
-                      Text(
-                        discovery.services.isEmpty
-                            ? '正在查找同一网络里的曜核…'
-                            : '找到 ${discovery.services.length} 个服务，仍在查找',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Color(0xff697183),
-                        ),
-                      ),
+                      SizedBox(width: 12),
+                      Text('正在查找电脑上的曜核'),
                     ],
                   ),
                 ),
               for (final service in discovery.services)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _deviceTile(
-                    title: service.name ?? '未命名的曜核服务',
-                    subtitle: '已发现，尚未验证或绑定',
-                    trailing: IconButton(
-                      tooltip: '扫描邀请以确认设备',
-                      onPressed: scan,
-                      icon: const Icon(
-                        Icons.qr_code_scanner,
-                        color: Color(0xff3864f6),
-                      ),
-                    ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.computer),
+                  title: Text(service.name ?? '未命名的曜核服务'),
+                  subtitle: const Text('已发现，尚未验证或绑定'),
+                  trailing: IconButton(
+                    tooltip: '扫描邀请以确认设备',
+                    onPressed: scan,
+                    icon: const Icon(Icons.qr_code_scanner),
                   ),
                 ),
-              if (discovery.error != null)
-                _information(discovery.error!)
-              else if (!discovery.searching && discovery.services.isEmpty)
-                _information('暂未找到曜核。请确认电脑版已打开、手机与电脑连接同一网络，再重新查找。'),
-              const SizedBox(height: 8),
-              TextButton.icon(
+              if (discovery.error != null) Text(discovery.error!),
+              TextButton(
                 onPressed: discovery.searching ? null : discovery.start,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('重新查找'),
+                child: const Text('重新查找'),
+              ),
+            ] else ...[
+              const SizedBox(height: 12),
+              Text('电脑地址：${invitation!.endpoint}'),
+              Text('设备：${invitation!.deviceId}'),
+              Text('工作区：${invitation!.workspaceId}'),
+              Text('账号登录到：${invitation!.auth.url.host}'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: account,
+                keyboardType: TextInputType.text,
+                enableSuggestions: false,
+                textCapitalization: TextCapitalization.none,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: '账号',
+                  helperText: '与电脑版相同的账号',
+                ),
+                enabled: !widget.store.loading,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: password,
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: const InputDecoration(labelText: '密码'),
+                enabled: !widget.store.loading,
+                onSubmitted: (_) => connect(),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: widget.store.loading ? null : connect,
+                child: Text(widget.store.loading ? '正在登录并核验' : '登录并连接此电脑'),
               ),
             ],
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: scanning ? null : scan,
-              icon: const Icon(Icons.qr_code_scanner, size: 21),
-              label: Text(widget.store.session == null ? '扫描邀请二维码' : '扫描新的邀请'),
-            ),
             if (scanMessage != null)
               Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: _information(scanMessage!),
-              ),
-            const SizedBox(height: 16),
-            _information('手机配对服务仍在电脑版开发中。当前可真实查找和识码，尚不能确认绑定；选择的视频和录音仍保留在手机。'),
-            if (kDebugMode)
-              ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                title: const Text(
-                  '开发调试连接',
-                  style: TextStyle(fontSize: 13, color: Color(0xff697183)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  scanMessage!,
+                  style: const TextStyle(color: Colors.red),
                 ),
-                children: [widget.debugBuilder(context)],
               ),
+            if (widget.store.error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  widget.store.error!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: scanning || widget.store.loading ? null : scan,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: Text(invitation == null ? '扫描邀请二维码' : '重新扫描电脑邀请'),
+            ),
           ],
         ),
       ),
-    ),
-  );
-
-  Widget _information(String message) => Container(
-    padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(
-      color: const Color(0xfff0f3fa),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Text(
-      message,
-      style: const TextStyle(
-        fontSize: 13,
-        color: Color(0xff697183),
-        height: 1.7,
-      ),
-    ),
-  );
-
-  Widget _deviceTile({
-    required String title,
-    required String subtitle,
-    required Widget trailing,
-  }) => Container(
-    padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Row(
-      children: [
-        Image.asset(
-          'assets/images/mini-host.png',
-          width: 42,
-          height: 56,
-          excludeFromSemantics: true,
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xff697183),
-                  height: 1.6,
-                ),
-              ),
-            ],
-          ),
-        ),
-        trailing,
-      ],
     ),
   );
 }

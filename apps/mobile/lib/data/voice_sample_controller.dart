@@ -9,10 +9,12 @@ class VoiceSampleController extends ChangeNotifier {
   VoiceSampleController({
     required String? Function() sample,
     required Future<void> Function(String) onRecorded,
+    Future<bool> Function()? beforeRecording,
     VoiceRecording? recorder,
     VoicePlayback? player,
     Future<String> Function()? recordingDirectory,
-  }) : _sample = sample,
+  }) : _beforeRecording = beforeRecording,
+       _sample = sample,
        _onRecorded = onRecorded,
        _recorder = recorder ?? NativeVoiceRecording(),
        _player = player ?? NativeVoicePlayback(),
@@ -25,6 +27,7 @@ class VoiceSampleController extends ChangeNotifier {
     });
   }
 
+  final Future<bool> Function()? _beforeRecording;
   final String? Function() _sample;
   final Future<void> Function(String) _onRecorded;
   final VoiceRecording _recorder;
@@ -82,6 +85,13 @@ class VoiceSampleController extends ChangeNotifier {
         if (_disposed || _closing || generation != _sheetGeneration) return;
         final directory = await _recordingDirectory();
         await _player.stop();
+        if (_disposed ||
+            _closing ||
+            generation != _sheetGeneration ||
+            _stopRecordingRequested) {
+          return;
+        }
+        if (_beforeRecording != null && !await _beforeRecording()) return;
         if (_disposed ||
             _closing ||
             generation != _sheetGeneration ||

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../data/local_media_draft.dart';
+import '../data/transfer_controller.dart';
+import 'transfer_status_list.dart';
 import 'companion_surfaces.dart';
 
 class MaterialReviewSheet extends StatelessWidget {
@@ -9,7 +11,9 @@ class MaterialReviewSheet extends StatelessWidget {
     required this.notes,
     required this.hasConnection,
     required this.onNotesChanged,
+    this.transfers,
   });
+  final TransferController? transfers;
   final List<DraftVideo> files;
   final TextEditingController notes;
   final bool hasConnection;
@@ -62,7 +66,7 @@ class MaterialReviewSheet extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    !hasConnection ? '素材保存在手机，连接后再交给曜核' : '已保存连接，素材接收服务尚未接通',
+                    !hasConnection ? '素材保存在手机，连接后再交给曜核' : '发送后由电脑核验完整文件并登记素材',
                     style: const TextStyle(
                       fontSize: 13,
                       color: Color(0xff697183),
@@ -110,21 +114,38 @@ class MaterialReviewSheet extends StatelessWidget {
           const SizedBox(height: 10),
           TextField(
             controller: notes,
+            enabled: !(transfers?.busy ?? false),
             onChanged: onNotesChanged,
             maxLines: 3,
             decoration: const InputDecoration(hintText: '想保留哪些重点？'),
           ),
           const SizedBox(height: 16),
           const Text(
-            '电脑版的手机素材接收服务仍在开发。视频与说明会保留在手机，尚未发送，也不会自动开始制作。',
+            '视频和说明会按当前连接发送给电脑。接收成功后进入素材库，原手机文件继续保留。',
             style: TextStyle(
               fontSize: 13,
               color: Color(0xff697183),
               height: 1.7,
             ),
           ),
+          if (transfers != null) ...[
+            const SizedBox(height: 16),
+            TransferStatusList(controller: transfers!),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed:
+                  !hasConnection ||
+                      files.isEmpty ||
+                      transfers!.busy ||
+                      transfers!.restoring
+                  ? null
+                  : () => transfers!.prepareAndSend(files, notes.text),
+              icon: const Icon(Icons.upload_outlined),
+              label: const Text('发送这些素材与说明'),
+            ),
+          ],
           const SizedBox(height: 20),
-          FilledButton(
+          OutlinedButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('保存素材与说明'),
           ),
