@@ -114,7 +114,7 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 B运行CPU绑定更新：1秒窗口实测仍在推理期间因1.345秒整机93.2%终止配音，窗口veto实验未通过，不继续扩大窗口或91阈值。B独占`host_resource_probes.py`、`member_permits.py`、`granted_subprocess.py`、`server.py`受许可启动器直接消费者及定向测试，以Mac自检后台CPU调度替代配音运行的整机百分比否决；成功自检后才exec，子孙继承，失败不执行重任务。保持91%新任务准入、内存/IO/RSS/线程/取消/时限与原进程登记ACK回收协议；累计CPU和进程组样本仍为有界诊断，不将缺指标当0。退役配音旧瞬时和1秒运行veto及无效起始窗口控制，不保留旧兼容分支；其他kind待验独立列出。显式实验策略须绑定背景调度机制与证据，旧窗口档不可默默当新档。B还拥有既有`profile_preview_execution.py`和直接测试，修正声音预览text_chars与制作同口径计入参考文本；不调其他数值。主控独占模型、GUI响应和实验配置验证，B不跑模型或打包。
 
-B持续内存观察续绑：独占`host_memory.py`、`device_runtime.py`、`bootstrap.py::bind_device_runtime`及直接测试，按架构§3.12.1在同一HostMemoryMonitor以既有1秒节奏独立观察基础健康，准入/运行仍实时检查；同锁采样与窗口写入，启动在派发前，pause/resume保留观察，stop仅在执行单元退出后停止并join，停止超时仍观察，不产生第二监测实例或调度器。保留2秒gap/10秒恢复和全部保护，不加配置；慢核验/多队列、测量未知/critical、并发与退出须定向验证。追加独占`creation/execution_control.py`仅通用resource_busy文案及其直接测试，统一改为“本机资源检查尚未通过，正在等待满足制作条件。”，不将未知/漏采称为内存不足。A本批不写bootstrap/执行控制文件。主控仍独占实际模型、GUI/打包与原请求重启恢复。
+B持续基础资源观察续绑（替换本轮memory-only线程装配）：独占`host_resource_probes.py`、`host_memory.py`、`device_runtime.py`、`bootstrap.py::bind_device_runtime`及原直接测试。按架构§3.12.1由同一HostResourceProbe持有唯一基础观察线程，以既有1秒节奏驱动同一memory_monitor及既有_admission_io真实累计端点，退役内存专属线程，不能每指标新增线程或事实源。准入/运行仍实时检查；IO采样、历史写入、许可切换串行，身份核验不持该锁；运行IO按request/generation隔离。暂停/执行停止超时仍观察，退出停止并join。保持2秒memory gap/10秒恢复、3秒IO窗口及全部资源阈值，不加配置；未知、设备变化、回退、真实断档必须重积，不补零。直接验证慢核验与单任务可同时积满两窗口、并发、失效与单线程回收，主控独占正式原请求恢复及媒体实测。`creation/execution_control.py`中已集成中性等待文案保持冻结。A/C不写上述消费者。
 
 C资源等待文案续绑：独占`lib/api/task-media.ts`及已有`task-media-api.test.ts`、`AssistantConversationPanel.test.tsx`对应文案断言，将通用resource_busy改为与后端同一句中性等待，不改同请求resource_wait的具体原因/数值或重新采样。不新增测试体系/缓存/重试。
 
