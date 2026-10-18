@@ -1352,6 +1352,51 @@ def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeyp
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
 
+@pytest.mark.parametrize("boundary", ["files", "stdout", "stderr"])
+def test_output_limit_captures_file_measurement_before_cleanup_and_separates_pipes(
+    tmp_path, monkeypatch, caplog, grant_entry, boundary,
+):
+    import app.granted_subprocess as commands
+    grant = Grant("request", "workspace", "creation_job", "job", "render:digest",
+                  "a" * 64, 2, 7, "PRIVATE_TOKEN", tmp_path / "isolated.sqlite")
+    class Scheduler(RecordingScheduler):
+        def assert_grant(self, current):
+            assert current == grant
+    scheduler = Scheduler()
+    first, second, missing = (tmp_path / name for name in ("PRIVATE_FIRST", "PRIVATE_SECOND", "PRIVATE_MISSING"))
+    code = "import pathlib,sys,time; "
+    if boundary == "files":
+        code += f"pathlib.Path({str(first)!r}).write_bytes(b'x'*768); pathlib.Path({str(second)!r}).write_bytes(b'x'*512); "
+        cleanup = commands._terminate_and_verify
+        def change_files_after_termination(*args):
+            cleanup(*args)
+            first.write_bytes(b"x")
+            second.unlink()
+        monkeypatch.setattr(commands, "_terminate_and_verify", change_files_after_termination)
+    else:
+        code += f"print('PRIVATE_PIPE'*200,file=sys.{boundary},flush=True); "
+    code += "time.sleep(5)"
+    with pytest.raises(GrantedCommandOutputLimit) as stopped:
+        run_granted_command(scheduler, grant, [sys.executable, "-c", code],
+            timeout_seconds=2, max_stdout_bytes=64, max_stderr_bytes=64,
+            output_paths=(first, second, missing), max_output_file_bytes=1024)
+    error = stopped.value
+    payload = json.loads(next(r.args[0] for r in caplog.records if r.msg == "Granted command diagnostic: %s"))
+    if boundary == "files":
+        expected = {"actual_bytes": 1280, "maximum_bytes": 1024, "output_count": 2}
+        assert error.file_sample == expected
+        assert error.command_diagnostics["output_file_sample"] == payload["output_file_sample"] == expected
+        assert first.stat().st_size == 1 and not second.exists()  # Receipt predates cleanup.
+    else:
+        assert error.file_sample is None
+        assert "output_file_sample" not in error.command_diagnostics and "output_file_sample" not in payload
+    assert payload["request_id"] == grant.request_id and payload["attempt_number"] == 2
+    assert payload["permit_generation"] == 7 and payload["child"]["pid"] == scheduler.children[0].pid
+    assert payload["exec_ack"] and payload["group_released"]
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+    assert "PRIVATE" not in caplog.text and str(tmp_path) not in caplog.text
+
+
 
 def _script_budget():
     # Explicit unit fixture, not device calibration or permission to run a job.

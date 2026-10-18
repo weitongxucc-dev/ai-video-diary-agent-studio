@@ -55,6 +55,8 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
         payload["decision"] = failure.decision.diagnostic_payload()
     if isinstance(failure, GrantedCommandResourceLimit):
         payload["process_resource_sample"] = failure.resource_sample
+    if diagnostic.get("output_file_sample") is not None:
+        payload["output_file_sample"] = diagnostic["output_file_sample"]
     if diagnostic.get("process_cpu_observation") is not None:
         payload["process_cpu_observation"] = diagnostic["process_cpu_observation"]
     # These bounded execution receipts must reach the existing API stderr log,
@@ -82,7 +84,9 @@ class GrantedCommandCancelled(GrantedCommandError):
 
 
 class GrantedCommandOutputLimit(GrantedCommandError):
-    pass
+    def __init__(self, message: str, *, file_sample: dict[str, int] | None = None):
+        self.file_sample = file_sample
+        super().__init__(message)
 
 
 class GrantedCommandResourceLimit(GrantedCommandError):
@@ -340,13 +344,17 @@ def run_granted_command(
                 next_permission_sample = time.monotonic() + _PERMISSION_SAMPLE_SECONDS
             if max_output_file_bytes is not None:
                 output_size = 0
+                output_count = 0
                 for target in output_paths:
                     try:
                         output_size += Path(target).stat().st_size
+                        output_count += 1
                     except FileNotFoundError:
                         continue  # atomic temporary/final rename during worker output
                 if output_size > max_output_file_bytes:
-                    raise GrantedCommandOutputLimit("Generated files exceeded the stage output budget")
+                    raise GrantedCommandOutputLimit("Generated files exceeded the stage output budget",
+                        file_sample={"actual_bytes": output_size, "maximum_bytes": max_output_file_bytes,
+                                     "output_count": output_count})
 
         with selectors.DefaultSelector() as selector:
             assert process.stdout is not None and process.stderr is not None
@@ -430,6 +438,8 @@ def run_granted_command(
                 "returncode": process.returncode if process is not None else None,
                 "process_cpu_observation": process_cpu_observation,
             }
+            if isinstance(exc, GrantedCommandOutputLimit) and exc.file_sample is not None:
+                exc.command_diagnostics["output_file_sample"] = exc.file_sample
             _record_command_diagnostics(grant, child, exc.command_diagnostics, failure=exc)
         raise
     finally:
