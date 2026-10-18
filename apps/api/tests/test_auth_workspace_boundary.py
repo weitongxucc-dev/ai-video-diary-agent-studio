@@ -234,7 +234,8 @@ def test_resolve_workspace_returns_none_when_no_membership(auth_ctx):
         assert ctx.resolve_workspace_id("user-1", "user-token") is None
 
 
-def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
+def test_resolve_workspace_reports_unavailable_on_upstream_error(auth_ctx):
+    from app.auth import AuthDependencyUnavailableError
     ctx, _, _, _ = auth_ctx
 
     class FakeResponse:
@@ -242,7 +243,7 @@ def test_resolve_workspace_raises_forbidden_on_http_error(auth_ctx):
         content = b"boom"
 
     with mock.patch("app.auth.httpx.get", return_value=FakeResponse()), pytest.raises(
-        ForbiddenError
+        AuthDependencyUnavailableError
     ):
         ctx.resolve_workspace_id("user-1", "user-token")
 
@@ -290,6 +291,77 @@ def test_is_onboarding_complete_reads_only_the_resolved_workspace(auth_ctx):
         "select": "completed_at",
     }
     assert kwargs["headers"]["Authorization"] == "Bearer user-token"
+
+
+@pytest.mark.parametrize("stage", ["membership", "onboarding"])
+@pytest.mark.parametrize("failure", ["timeout", "upstream", "invalid_json", "invalid_shape"])
+def test_unavailable_auth_read_returns_fixed_503_before_conversation_write(auth_ctx, monkeypatch, stage, failure):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.is_onboarding_complete = SupabaseAuthContext.is_onboarding_complete.__get__(ctx)
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    handler = mock.Mock(side_effect=AssertionError("unverified access must not reach the conversation handler"))
+    monkeypatch.setattr(main_module, "_assistant_conversation_for_request", handler)
+    calls = []
+    def read(request):
+        calls.append(request)
+        current_stage = "membership" if request.url.path.endswith("/workspace_members") else "onboarding"
+        if current_stage == stage:
+            if failure == "timeout":
+                raise httpx.ConnectTimeout("private URL and credential must not escape", request=request)
+            if failure == "upstream":
+                return httpx.Response(503, text="private upstream detail")
+            if failure == "invalid_json":
+                return httpx.Response(200, text="private invalid JSON")
+            return httpx.Response(200, json=[{}])
+        return httpx.Response(200, json=[{"workspace_id": "ws-a", "role": "owner"}])
+    with httpx.Client(transport=httpx.MockTransport(read)) as transport:
+        ctx.bind_http_client(transport)
+        response = TestClient(main_module.app).patch("/api/assistant/conversations/existing",
+            json={"draft_text": "保留尚未保存的草稿", "expected_draft_version": 0},
+            headers={"Authorization": "Bearer " + _sign_token("user-a", key=private_pem)})
+    assert response.status_code == 503
+    assert response.json() == {"error": "auth_dependency_unavailable",
+        "detail": "暂时无法核实工作区访问权限或初始化状态，请稍后重试。"}
+    assert len(calls) == (1 if stage == "membership" else 2)
+    handler.assert_not_called()
+
+
+@pytest.mark.parametrize("stage, status, rows", [
+    ("membership", 200, []), ("membership", 401, []), ("membership", 403, []),
+    ("onboarding", 200, []), ("onboarding", 200, [{"completed_at": None}]), ("onboarding", 403, []),
+])
+def test_verified_auth_denials_still_return_403_before_conversation_write(auth_ctx, monkeypatch, stage, status, rows):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.is_onboarding_complete = SupabaseAuthContext.is_onboarding_complete.__get__(ctx)
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    handler = mock.Mock(side_effect=AssertionError("denied access must not reach the conversation handler"))
+    monkeypatch.setattr(main_module, "_assistant_conversation_for_request", handler)
+    def read(request):
+        current_stage = "membership" if request.url.path.endswith("/workspace_members") else "onboarding"
+        return (httpx.Response(status, json=rows) if current_stage == stage else
+            httpx.Response(200, json=[{"workspace_id": "ws-a", "role": "owner"}]))
+    with httpx.Client(transport=httpx.MockTransport(read)) as transport:
+        ctx.bind_http_client(transport)
+        response = TestClient(main_module.app).patch("/api/assistant/conversations/existing",
+            json={"draft_text": "尚未保存", "expected_draft_version": 0},
+            headers={"Authorization": "Bearer " + _sign_token("user-a", key=private_pem)})
+    assert response.status_code == 403 and response.json()["error"] == "forbidden"
+    handler.assert_not_called()
+
+
+def test_missing_token_still_returns_401_without_remote_or_conversation_access(auth_ctx, monkeypatch):
+    ctx, settings, _, _ = auth_ctx
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    handler = mock.Mock(side_effect=AssertionError("missing identity must not reach the conversation handler"))
+    monkeypatch.setattr(main_module, "_assistant_conversation_for_request", handler)
+    with mock.patch("app.auth.httpx.get") as read:
+        response = TestClient(main_module.app).patch("/api/assistant/conversations/existing", json={})
+    assert response.status_code == 401 and response.json()["error"] == "unauthorized"
+    read.assert_not_called()
+    handler.assert_not_called()
 
 
 # ── Middleware: 401 vs 403 vs 200 ───────────────────────────────────────

@@ -72,6 +72,7 @@ from app.subtitle_schedule import subtitle_schedule, narration_schedule, retime_
 from app.avatar_lipsync import (compile_person_edit_command, AvatarAndLipSyncService, AvatarPreviewService, avatar_lipsync_cache_key, avatar_lipsync_provider_from_settings)
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, PronunciationEntry, VoiceProfile as VersionedVoiceProfile, profile_use_failure)
 from app.auth import (
+    AuthDependencyUnavailableError,
     AuthPrincipal,
     ForbiddenError,
     OnboardingStateError,
@@ -543,6 +544,7 @@ from app.automation_runtime import AutomationRuntime
 app = FastAPI(title="AI视频日记 Agent Studio API")
 logger = logging.getLogger(__name__)
 app.state.creation_permit_client = None
+app.state.auth_http_client = None
 
 
 # Register before every driver that can verify a creation identity.
@@ -557,6 +559,21 @@ def stop_creation_permit_transport() -> None:
     if client is not None:
         client.close()
         app.state.creation_permit_client = None
+
+
+@app.on_event("startup")
+def start_auth_transport() -> None:
+    if app.state.auth_http_client is None:
+        app.state.auth_http_client = httpx.Client(timeout=10.0)
+    auth_context.bind_http_client(app.state.auth_http_client)
+
+
+def stop_auth_transport() -> None:
+    client = app.state.auth_http_client
+    if client is not None:
+        client.close()
+        auth_context.bind_http_client(None)
+        app.state.auth_http_client = None
 
 
 app.add_middleware(
@@ -645,6 +662,7 @@ def _publish_runtime_dependencies(candidate: RuntimeDependencies) -> None:
     video_inbox, video_processor, video_pipeline = media.inbox, media.processor, media.pipeline
     draft_workspace, source_tracker = media.drafts, media.source_tracker
     vault, service, workflow = content.vault, content.episodes, content.workflow
+    candidate.auth.bind_http_client(app.state.auth_http_client)
     auth_context = candidate.auth
     runtime_env_path = runtime_env_file_path()
     set_auth_enabled(settings.auth_enabled)
@@ -845,6 +863,9 @@ async def auth_boundary_middleware(request: Request, call_next):
             status_code=403,
             content={"error": "forbidden", "detail": str(exc)},
         )
+    except AuthDependencyUnavailableError as exc:
+        return JSONResponse(status_code=503,
+            content={"error": "auth_dependency_unavailable", "detail": str(exc)})
     except DeviceAccountError as exc:
         return JSONResponse(status_code=DEVICE_ACCOUNT_ERROR_STATUS[exc.kind],
             content={"error": exc.kind, "detail": str(exc)})
@@ -14202,6 +14223,8 @@ def _goal_request(goal):
         except (UnauthorizedError, ForbiddenError):
             saved["blocked"] = True
             return None
+        except AuthDependencyUnavailableError:
+            return None
         state["principal"] = AuthPrincipal(member_id, workspace_id, access_token=token)
         headers.append((b"authorization", saved["authorization"].encode()))
         if saved["cookie"]:
@@ -14969,6 +14992,7 @@ def stop_creation_execution_worker() -> None:
 
 app.on_event("startup")(start_assistant_continuation_driver)
 # Shutdown hooks run in registration order; every transport user stops first.
+app.on_event("shutdown")(stop_auth_transport)
 app.on_event("shutdown")(stop_creation_permit_transport)
 
 

@@ -41,6 +41,13 @@ class ForbiddenError(Exception):
     """Valid token but no authorized workspace membership -> HTTP 403."""
 
 
+class AuthDependencyUnavailableError(Exception):
+    """The remote membership/onboarding fact could not be verified -> HTTP 503."""
+
+    def __init__(self) -> None:
+        super().__init__("暂时无法核实工作区访问权限或初始化状态，请稍后重试。")
+
+
 class OnboardingStateError(Exception):
     """Trusted onboarding-state persistence failed."""
 
@@ -77,8 +84,13 @@ def extract_bearer_token(request: Request) -> str | None:
 class SupabaseAuthContext:
     """Verifies Supabase JWTs and resolves workspace membership server-side."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, http_client: httpx.Client | None = None) -> None:
         self._settings = settings
+        self._http_client = http_client
+
+    def bind_http_client(self, client: httpx.Client | None) -> None:
+        """Borrow the application-owned transport; only its owner may close it."""
+        self._http_client = client
 
     @property
     def enabled(self) -> bool:
@@ -151,39 +163,44 @@ class SupabaseAuthContext:
                 raise ForbiddenError("invalid selected workspace") from exc
             params["workspace_id"] = f"eq.{selected_workspace_id}"
         try:
-            response = httpx.get(url, headers=headers, params=params, timeout=10.0)
+            get = self._http_client.get if self._http_client is not None else httpx.get
+            response = get(url, headers=headers, params=params, timeout=10.0)
         except httpx.HTTPError as exc:
-            logger.warning("workspace membership lookup failed: %s", exc)
-            raise ForbiddenError("unable to resolve workspace membership") from exc
+            logger.warning("workspace membership lookup failed: %s", type(exc).__name__)
+            raise AuthDependencyUnavailableError() from exc
         if response.status_code != 200:
             logger.warning(
                 "workspace membership lookup returned HTTP %s",
                 response.status_code,
             )
-            raise ForbiddenError("unable to resolve workspace membership")
+            if response.status_code in {401, 403}:
+                raise ForbiddenError("unable to resolve workspace membership")
+            raise AuthDependencyUnavailableError()
         try:
-            rows = response.json() if response.content else []
-        except ValueError:
-            rows = []
-        if not isinstance(rows, list) or not rows:
+            rows = response.json()
+        except ValueError as exc:
+            raise AuthDependencyUnavailableError() from exc
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("workspace_id"), str) or not row["workspace_id"]
+            for row in rows
+        ):
+            raise AuthDependencyUnavailableError()
+        if not rows:
             return None
         if selected_workspace_id is not None:
             return selected_workspace_id if any(
-                isinstance(row, dict) and row.get("workspace_id") == selected_workspace_id for row in rows
+                row["workspace_id"] == selected_workspace_id for row in rows
             ) else None
         owner = next(
             (
                 row
                 for row in rows
-                if isinstance(row, dict) and row.get("role") == "owner"
+                if row.get("role") == "owner"
             ),
             None,
         )
         chosen = owner if owner is not None else rows[0]
-        if not isinstance(chosen, dict):
-            return None
-        workspace_id = chosen.get("workspace_id")
-        return str(workspace_id) if workspace_id else None
+        return chosen["workspace_id"]
 
     def complete_onboarding(
         self,
@@ -249,26 +266,29 @@ class SupabaseAuthContext:
             "select": "completed_at",
         }
         try:
-            response = httpx.get(url, headers=headers, params=params, timeout=10.0)
+            get = self._http_client.get if self._http_client is not None else httpx.get
+            response = get(url, headers=headers, params=params, timeout=10.0)
         except httpx.HTTPError as exc:
-            logger.warning("onboarding state lookup failed: %s", exc)
-            raise ForbiddenError("unable to resolve onboarding state") from exc
+            logger.warning("onboarding state lookup failed: %s", type(exc).__name__)
+            raise AuthDependencyUnavailableError() from exc
         if response.status_code != 200:
             logger.warning(
                 "onboarding state lookup returned HTTP %s",
                 response.status_code,
             )
-            raise ForbiddenError("unable to resolve onboarding state")
+            if response.status_code in {401, 403}:
+                raise ForbiddenError("unable to resolve onboarding state")
+            raise AuthDependencyUnavailableError()
         try:
-            rows = response.json() if response.content else []
-        except ValueError:
-            rows = []
-        return bool(
-            isinstance(rows, list)
-            and len(rows) == 1
-            and isinstance(rows[0], dict)
-            and rows[0].get("completed_at")
-        )
+            rows = response.json()
+        except ValueError as exc:
+            raise AuthDependencyUnavailableError() from exc
+        if not isinstance(rows, list) or len(rows) > 1 or (rows and (
+            not isinstance(rows[0], dict) or "completed_at" not in rows[0]
+            or (rows[0]["completed_at"] is not None and not isinstance(rows[0]["completed_at"], str))
+        )):
+            raise AuthDependencyUnavailableError()
+        return bool(rows and rows[0]["completed_at"])
 
     def authenticate(self, request: Request) -> AuthPrincipal:
         """Authenticate a request and resolve its authorized workspace.
