@@ -114,6 +114,10 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 B运行CPU绑定更新：1秒窗口实测仍在推理期间因1.345秒整机93.2%终止配音，窗口veto实验未通过，不继续扩大窗口或91阈值。B独占`host_resource_probes.py`、`member_permits.py`、`granted_subprocess.py`、`server.py`受许可启动器直接消费者及定向测试，以Mac自检后台CPU调度替代配音运行的整机百分比否决；成功自检后才exec，子孙继承，失败不执行重任务。保持91%新任务准入、内存/IO/RSS/线程/取消/时限与原进程登记ACK回收协议；累计CPU和进程组样本仍为有界诊断，不将缺指标当0。退役配音旧瞬时和1秒运行veto及无效起始窗口控制，不保留旧兼容分支；其他kind待验独立列出。显式实验策略须绑定背景调度机制与证据，旧窗口档不可默默当新档。B还拥有既有`profile_preview_execution.py`和直接测试，修正声音预览text_chars与制作同口径计入参考文本；不调其他数值。主控独占模型、GUI响应和实验配置验证，B不跑模型或打包。
 
+B持续内存观察续绑：独占`host_memory.py`、`device_runtime.py`、`bootstrap.py::bind_device_runtime`及直接测试，按架构§3.12.1在同一HostMemoryMonitor以既有1秒节奏独立观察基础健康，准入/运行仍实时检查；同锁采样与窗口写入，启动在派发前，pause/resume保留观察，stop仅在执行单元退出后停止并join，停止超时仍观察，不产生第二监测实例或调度器。保留2秒gap/10秒恢复和全部保护，不加配置；慢核验/多队列、测量未知/critical、并发与退出须定向验证。追加独占`creation/execution_control.py`仅通用resource_busy文案及其直接测试，统一改为“本机资源检查尚未通过，正在等待满足制作条件。”，不将未知/漏采称为内存不足。A本批不写bootstrap/执行控制文件。主控仍独占实际模型、GUI/打包与原请求重启恢复。
+
+C资源等待文案续绑：独占`lib/api/task-media.ts`及已有`task-media-api.test.ts`、`AssistantConversationPanel.test.tsx`对应文案断言，将通用resource_busy改为与后端同一句中性等待，不改同请求resource_wait的具体原因/数值或重新采样。不新增测试体系/缓存/重试。
+
 配音实测诊断续绑：B在既有`profile_preview_execution.py`、`granted_subprocess.py`及直接测试保留同一request/attempt的运行拒绝决定和有界模型阶段/内存诊断，复用现有日志归属；不能只剩通用`resource_pressure`而丢失判定依据。不记录参考文字、凭据或完整请求，不扩大输出预算或新建监控事实库。原始决定缺失的历史实验保持未知，修复后由主控再安排单次受控验证。
 
 真实文案失败续绑：A独占`topics.py`、`agent_tools/diary/transport.ts`、`script-tools.ts`及直接测试，将逐段核查的固定错误类别、段号及可重试性经现有业务错误回执提供给Agent，区分核查报告契约无效与文案事实无依据；不透传模型原始输出、来源全文或凭据，不放宽事实门、不增加盲重试或超时。文案工具明确`content`仅含实际朗读正文，画面署名与许可说明不得混入旁白。给定主题的公开响应允许真实的无模型快照，不能伪造模型配置来满足DTO。
