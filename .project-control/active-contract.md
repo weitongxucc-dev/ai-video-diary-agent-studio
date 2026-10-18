@@ -128,6 +128,8 @@ A新增实际文案约束与接续绑定：在既有`topics.py`、`main.py`、`a
 
 声音采用回执续绑：C独占`production.py::select_creation_task_narration_voice`及同对象原请求查询、`schemas.py::CreationTaskNarrationVoiceSelectionRequest`/对应回执类型、Web`lib/api/creation-tasks.ts`、`lib/types.ts`、`CreationTaskWorkspace.tsx`的声音选择调用及直接测试。复用既有`task_events`在同一事务校验workspace/member、固定声音版本、任务/方案修订及现有narration阶段，写入声音与不可变请求回执；同请求同输入回读、异输入拒绝，旧版本拒绝。Web使用真实当前修订/UUID并在丢响应时查原请求，不保留绕过版本检查的旧写入口。A仍独占`main.py`，C提交业务接口签名与薄路由建议，由A在现有路由接线；C不得编辑main.py。A当前文案修复完成后接Pi声音选择/原请求查询工具，不提前并发写共享文件。主控串行集成与实测。
 
+C配音准备页与资料加载续绑：在现有`CreationTaskWorkspace.tsx`、`creation-task/NarrationPreparation.tsx`、现有`ScriptEditor`定义所在文件及直接测试，移除can_revise_script对声音控件的互斥隐藏，保留修改文案与采用声音并列；传递完整声音候选并展示真实不可用原因，不把过滤后的空数组称为无档案。只采用声音的按钮明确命名，不能假称已生成；触及按钮复用现有shadcn Button/AppSelect，保持设计token和左栏不变。资料请求未完成时展示读取中，不能提前声称当前无资料；复用现有加载状态，不加缓存/轮询/错误兜底框架。主控负责原生页面复验，C不运行模型或打包。
+
 C新增独占绑定`apps/web/src/components/HomeCommandComposer.tsx`及`__tests__/HomeCommandComposer.test.tsx`：真实首页会话携带任务目标保存并采用文案后，复用既有`onTaskUpdated`刷新当前任务；将真实`script_draft`回执纳入刷新条件，保留会话/目标切换的晚回包保护。不新增缓存、事件总线或轮询层，不变更左侧名称与分区。
 
 C续绑正式模式外壳的直接身份消费者：`hooks/useLocalMemberIdentity.ts`及其定向测试、`components/AppShell.tsx`的必要调用点。仅阻止正式模式启动本地whoami/写入本地成员凭据，保持正式设备角色由已有核验入口获得，不新增另一套身份事实源；本地模式既有行为保留，不改左栏名称或分区。手机及设置候选已提交后保持冻结，后续实机发现的具体缺口再划转。
