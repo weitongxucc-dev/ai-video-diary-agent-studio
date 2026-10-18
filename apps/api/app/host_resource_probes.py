@@ -623,9 +623,6 @@ def admit_resource(kind: str, request: Mapping[str, object],
     if threads > capacity.cpu_threads_ceiling:
         raise ResourceAdmissionRejected(
             f"cpu_threads={threads} exceeds sampled host ceiling {capacity.cpu_threads_ceiling}")
-    if capacity.load_avg_1m is not None and capacity.load_avg_1m >= capacity.cpu_count:
-        raise ResourceAdmissionRejected(
-            f"host load average {capacity.load_avg_1m:.2f} saturates {capacity.cpu_count} cores")
     return ResourceAdmission(
         kind=kind,
         granted=granted,

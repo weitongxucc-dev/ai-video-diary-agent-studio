@@ -824,11 +824,18 @@ def test_admit_resource_rejects_type_mismatch():
                        capacity=_capacity())
 
 
-def test_admit_resource_rejects_when_host_load_saturated():
-    request = {"cpu_threads": 2, "wall_clock_s": 60.0,
-               "max_source_duration_s": 60.0, "sampling_fps": 2.0}
-    with pytest.raises(ResourceAdmissionRejected, match="saturates"):
-        admit_resource("mat_scene_probe", request, capacity=_capacity(load=16.0, cpu_count=16))
+@pytest.mark.parametrize("kind,declared", [
+    ("creation_render", _render_declared()),
+    ("mat_scene_probe", {"cpu_threads": 2, "wall_clock_s": 60.0,
+                         "max_source_duration_s": 60.0, "sampling_fps": 2.0}),
+])
+@pytest.mark.parametrize("load", [8.0, 8.11])
+def test_admit_resource_keeps_high_historical_load_as_diagnostic(kind, declared, load):
+    capacity = _capacity(load=load, cpu_count=8)
+    admission = admit_resource(kind, declared, capacity=capacity)
+    assert admission.granted == declared
+    assert admission.cpu_threads_ceiling == capacity.cpu_threads_ceiling
+    assert admission.load_avg_1m == load
 
 
 def test_sample_host_capacity_real_derives_conservative_ceiling():

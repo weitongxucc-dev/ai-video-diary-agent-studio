@@ -33,8 +33,9 @@ def _capacity(*, ceiling=8, cpu_count=16, memory=2**33, load=0.5):
                         available_memory_bytes=memory, load_avg_1m=load)
 
 
-def test_admit_creation_render_legal_returns_deterministic_budget():
-    capacity = _capacity()
+@pytest.mark.parametrize("load", [0.5, 8.11])
+def test_admit_creation_render_legal_returns_deterministic_budget(load):
+    capacity = _capacity(cpu_count=8, load=load)
     request = dict(source_duration_s=12.5, input_count=3, cpu_threads=4, wall_clock_s=120.0)
     first = admit_creation_render(**request, capacity=capacity)
     second = admit_creation_render(**request, capacity=capacity)
@@ -42,6 +43,7 @@ def test_admit_creation_render_legal_returns_deterministic_budget():
     assert first.kind == "creation_render"
     assert first.granted == request
     assert first.cpu_threads_ceiling == capacity.cpu_threads_ceiling
+    assert first.load_avg_1m == load
 
 
 def test_admit_creation_render_rejects_over_limit():
