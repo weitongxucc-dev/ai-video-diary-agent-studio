@@ -302,6 +302,37 @@ def test_api_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch)
     assert json.loads(calls[1][1]['messages'][1]['content'])['requirements']['presenter_share_target'] == api_state.plan.presenter_share_target
 
 
+def test_provided_topic_without_generated_metadata_reaches_real_script_provider(api_state, monkeypatch):
+    state = api_state
+    with state.repository._connect() as conn:
+        plan = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
+        plan['creation_intent'] = {'kind': 'goal_delegation', 'topic_title': '本机工作区导览',
+            'source': {'kind': 'user_action', 'member_id': state.owner.member_id, 'request_id': 'provided-topic-fixture'}}
+        topic = json.loads(conn.execute("SELECT payload FROM topic_candidates WHERE id='topic'").fetchone()[0])
+        topic.update(angle='', audience='', outline=[])
+        run = json.loads(conn.execute("SELECT payload FROM topic_generation_runs WHERE id='topic-run'").fetchone()[0])
+        run['route_snapshot'] = {'operation': 'provided_topic', 'provider': 'none'}
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'", (json.dumps(plan),))
+        conn.execute("UPDATE topic_candidates SET payload=? WHERE id='topic'", (json.dumps(topic),))
+        conn.execute("UPDATE topic_generation_runs SET payload=? WHERE id='topic-run'", (json.dumps(run),))
+    document, calls = draft(), []
+    set_api_provider(monkeypatch, document, reviewed(document), calls)
+    response = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
+    assert response.status_code == 200, response.text
+    supplied = json.loads(calls[0][1]['messages'][1]['content'])['confirmed_topic']
+    assert supplied == {'origin': 'provided', 'title': '本机工作区导览', 'angle': '', 'audience': '', 'outline': []}
+    assert len(calls) == 2
+    assert state.repository.get_creation_task('local', 'task').selected_topic_id == 'topic'
+
+
+def test_generated_topic_still_requires_its_actual_metadata():
+    calls = []
+    generator = provider(draft(), reviewed(draft()), calls)
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(replace(inputs(), topic_angle='', topic_audience='', topic_outline=()))
+    assert failure.value.code == 'input_invalid' and calls == []
+
+
 @pytest.mark.parametrize('failure', ['unsupported', 'goal', 'review', 'transport', 'http'])
 def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_state, monkeypatch, failure):
     repository = api_state.repository

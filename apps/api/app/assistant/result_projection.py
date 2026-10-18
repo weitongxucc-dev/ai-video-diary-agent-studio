@@ -13,6 +13,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     action_result = None
     action_failed = False
     topic_result = None
+    script_result = None
     topic_failed = False
     material_result = None
     material_write_result = None
@@ -79,7 +80,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {
             "preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request", "preview_creation_plan", "prepare_creation_window", "preview_script_draft",
             "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
-            "generate_creation_task_topics", "read_creation_execution", *action_tools,
+            "generate_creation_task_topics", "adopt_creation_task_topic", "read_creation_execution", *action_tools,
             "read_selected_material", "update_selected_material_tags",
             "read_material_library_status", "search_material_library",
         }:
@@ -147,12 +148,16 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                         read_job_id = ((details.get("status") or {}).get("job") or {}).get("id")
                         if submitted_job_id and submitted_job_id == read_job_id:
                             action_result = {**action_result, "status": details["status"]}
-            if event.get("toolName") == "generate_creation_task_topics":
+            if event.get("toolName") in {"generate_creation_task_topics", "adopt_creation_task_topic"}:
                 topic_failed = bool(event.get("isError"))
                 if not topic_failed:
                     details = (event.get("result") or {}).get("details") or {}
                     if details.get("kind") == "topic_generation":
                         topic_result = details.get("topics")
+            if event.get("toolName") == "preview_script_draft" and kind in {"script_draft", "topic_generation"} and not event.get("isError"):
+                details = (event.get("result") or {}).get("details") or {}
+                if details.get("kind") == "script_draft":
+                    script_result = details.get("preview")
             if not event.get("isError"):
                 details = (event.get("result") or {}).get("details") or {}
                 if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
@@ -256,10 +261,14 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
             answer = f"制作动作已返回；当前作业状态：{job_status or '未知'}。请以任务页回读为准。"
         return answer, {"kind": "execution_result" if action is None else "execution_action", "action": action, "status": status,
             **{key:action_result[key] for key in ("input_id","input_turn_id") if key in action_result}}
+    if script_result is not None:
+        return ("实际文案版本已按原委托采用，可以继续制作；尚未生成成片。" if script_result.get("adopted")
+            else answer), script_result
     if topic_result is not None:
         topics = topic_result.get("candidates") or []
         count = len(topics)
-        return f"已为当前任务生成 {count} 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。", {
+        return ("真实主题已按原委托采用，可以继续文案。" if topic_result.get("selected_topic_id") else
+            f"已为当前任务生成 {count} 个选题候选；尚未采用。"), {
             "kind": "topic_generation", "topics": topic_result,
         }
     if kind == "plan_preview" and isinstance(preview, dict) and preview.get("kind") == "creation_request":
@@ -271,7 +280,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         elif request_planning_failed:
             lines.append("当前这组方案没有准备完成，请查看本轮失败提示后修复；目标仍保留。")
         elif saved.get("current_window"):
-            lines.append(f"已准备当前 {len(saved['current_window']['entries'])} 条方案，等你检查和确认。")
+            count = len(saved["current_window"]["entries"])
+            lines.append(f"当前 {count} 条方案已按原委托采用，任务已保存。" if saved["current_window"]["status"] == "confirmed"
+                else f"当前 {count} 条讨论方案已保存，尚未采用。" if (saved.get("intent") or {}).get("kind") == "discussion"
+                else f"已准备当前 {count} 条方案，等你检查和采用。")
         else:
             lines.append("制作目标尚待规划，可以在工作台准备当前这组具体方案。")
         lines.append("尚未生成成片；后续进度以独立任务的实际结果为准。")

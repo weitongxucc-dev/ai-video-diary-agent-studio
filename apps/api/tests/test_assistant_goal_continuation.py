@@ -286,11 +286,52 @@ def test_bounded_output_checkpoint_does_not_certify_all_instruction_steps(repo):
         "task_version":{"timeline_version_id":"version:one", "timeline_sequence":1}, "completed_output_checkpoint":checkpoint})
     assert svc.reconcile() == 1 and len(calls) == 1
     goal = repo.get_task_goal(turn["id"])
-    assert goal["status"] == "no_progress"
+    assert goal["status"] == "output_checked"
     assert goal["waiting_reason"] == "bounded_output_checkpoint_completed"
     assert goal["completed_output_checkpoint"] == checkpoint
     assert "complete_original_instruction" in goal["unfinished_steps"]
     assert "PNG中文与边框" in goal["original_instruction"]
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_verified_production_settles_separately_from_output_check(repo, succeeded):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, phase="execution", status="succeeded" if succeeded else "failed", job_id="execution:one")
+    production = {"scope": "production", "status": "succeeded" if succeeded else "failed",
+        "job_id": "execution:one", "timeline_version_id": "version:one", "video_ready": succeeded}
+    svc, calls = service(repo, response={}, readiness={"status": "ready",
+        "task_version": {"timeline_version_id": "version:one", "timeline_sequence": 1},
+        "production_result": production})
+    assert svc.reconcile() == 1 and len(calls) == 1
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == ("production_completed" if succeeded else "production_failed")
+    assert goal["waiting_reason"] == ("output_not_checked" if succeeded else "production_failed")
+    assert goal["production_result"] == production
+    assert "completed_output_checkpoint" not in goal
+    assert "complete_original_instruction" in goal["unfinished_steps"]
+    assert svc.reconcile() == 0 and len(calls) == 1
+
+
+def test_new_business_action_clears_old_production_result(repo):
+    _, turn, _, _ = original(repo)
+    emit(repo, turn, phase="execution", job_id="execution:one")
+    svc, _ = service(repo, response={"media_job": {"job_id": "observation:new", "status": "queued"}},
+        readiness={"status": "ready", "task_version": {"timeline_version_id": "version:one", "timeline_sequence": 1},
+            "production_result": {"status": "succeeded", "job_id": "execution:one", "timeline_version_id": "version:one"}})
+    assert svc.reconcile() == 1
+    goal = repo.get_task_goal(turn["id"])
+    assert goal["status"] == "waiting_result" and "production_result" not in goal
+
+
+def test_host_projection_does_not_promote_success_without_playable_output():
+    from types import SimpleNamespace
+    from app.assistant_goal_continuation import GoalResultProjection
+
+    task = SimpleNamespace(current_timeline_version_id="current")
+    version = SimpleNamespace(sequence=2)
+    for facts in ({}, {"execution_status": {"job": {"id": "render", "status": "succeeded"}, "video_ready": False}}):
+        projected = GoalResultProjection.ready(task, version, None, facts, False, [], [], None)
+        assert "production_result" not in projected and "completed_output_checkpoint" not in projected
 
 
 def test_proposal_waits_real_adoption_then_new_version_drives_remaining_goal(repo):

@@ -124,6 +124,12 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     assert "尚未" not in repo.get_turn(turn["id"])["assistant_text"]
     assert service.reconcile() == 1 and len(children) == 1, repo.get_task_goal(turn["id"])["waiting_reason"]
     assert service.reconcile() == 0
+    settled = repo.get_task_goal(turn["id"])
+    assert settled["status"] == "production_completed" and settled["waiting_reason"] == "output_not_checked"
+    assert settled["production_result"] == {"scope": "production", "status": "succeeded", "job_id": job.id,
+        "timeline_version_id": "render-version", "video_ready": True}
+    assert "completed_output_checkpoint" not in settled
+    assert ConversationRepository(repo.database_path).get_task_goal(turn["id"])["production_result"] == settled["production_result"]
     stored = repo.get_task_goal(turn["id"])["request_context"]
     assert stored == context, "the original user snapshot must stay immutable"
     assert repo.get(chat["id"], "ws", state.member.member_id)["selected_reference"] == selected

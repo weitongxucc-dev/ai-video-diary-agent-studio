@@ -17,7 +17,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
         || (execution.job && execution.job.task_id !== taskId)) {
       throw new Error("后台安排响应不可读或任务身份不一致，不能推断为空或未排队");
     }
-    const scriptContext = stage === "script"
+    const scriptContext = task.task?.stage === "script"
       ? await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/script-context`)
       : null;
     currentScriptDraftUpdatedAt = typeof scriptContext?.draft?.updated_at === "string"
@@ -74,6 +74,10 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       } : null,
       execution: executionFacts(execution),
       plan: plan ? {
+        creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
+          topic_title: plan.creation_intent.topic_title,
+          protected_body_digest: plan.creation_intent.final_script?.body_digest} : null,
+        adoption: plan.adoption,
         goal: metadata(plan.goal, 1000), language: plan.language, aspect_ratio: plan.aspect_ratio,
         duration_target_seconds: plan.duration_target_seconds, target_count: plan.target_count,
         template_id: metadata(plan.template_id, 120), template_version: plan.template_version,

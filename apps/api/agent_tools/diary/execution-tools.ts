@@ -3,10 +3,10 @@ import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 
-export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal}: {
-  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
+export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal}: {
+  request: BusinessRequest; taskId: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
 }) {
-  if (taskId && stage !== "topic" && stage !== "script") {
+  if (taskId) {
     pi.registerTool({
       name: "read_creation_execution", label: "读取原制作作业",
       description: "只读指定普通制作作业，使用原 job_id，不走媒体预览作业接口。最多20秒有限GET等待，不重启或恢复制作；若任务已有新作业明确拒绝，不把新作业当原结果。job succeeded仍须video_ready才是当前有效成片。",

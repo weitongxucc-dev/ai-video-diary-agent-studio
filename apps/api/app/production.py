@@ -504,6 +504,8 @@ class CreationPlan:
     created_at: datetime = field(default_factory=utc_now)
     confirmed_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    creation_intent: dict[str, object] | None = None
+    adoption: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -597,7 +599,7 @@ class ScriptGenerationRun:
     retryable: bool | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
-    run_kind: Literal["generation", "assistant_reply_transfer"] = "generation"
+    run_kind: Literal["generation", "assistant_reply_transfer", "provided_copy"] = "generation"
     source_reply_reference: dict[str, str] | None = None
 
 
@@ -627,6 +629,8 @@ class CreationTaskScript:
     # 复用稿没有自己的生成记录，这里记下它来自文案库的哪一条，供界面如实标注。
     reused_from_entry_id: str | None = None
     source_reply_reference: dict[str, str] | None = None
+    adoption: dict[str, object] | None = None
+    locked_body_digest: str | None = None
 
 
 @dataclass
@@ -4277,7 +4281,9 @@ class ProductionRepository:
 
     def confirm_creation_request_window(self, workspace_id: str, request_id: str, window_id: str, *,
                                        expected_revision: int, input_fingerprint: str,
-                                       verified_owner_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
+                                       verified_owner_user_id: str | None = None, local_diagnostic: bool = False,
+                                       adoption_kind: Literal["manual", "delegated_system"] = "manual") -> dict:
+        from app.creation.intent_use_case import CreationIntentUseCase
         owner = content_owner(verified_owner_user_id)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -4292,9 +4298,14 @@ class ProductionRepository:
             self._creation_request_revision(row,expected_revision)
             if window["status"] != "proposed" or row["current_window_id"] != window_id:
                 raise CreationRequestConflict("该规划窗口已失效，请审阅当前窗口")
+            intent = json.loads(row["requirements_json"]).get("creation_intent")
+            adoption = CreationIntentUseCase.adoption(intent, kind=adoption_kind, member_id=owner,
+                version=window["input_fingerprint"])
             for item in conn.execute("SELECT * FROM creation_request_items WHERE window_id=? ORDER BY ordinal", (window_id,)).fetchall():
                 plan = self._creation_plan_from_payload(json.loads(item["plan_payload"]))
                 task = self._creation_task_from_payload(json.loads(item["task_payload"]))
+                plan.creation_intent = intent
+                CreationIntentUseCase.use_provided_copy(plan, intent)
                 plan,task = self.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=owner,local_diagnostic=local_diagnostic)
                 for match in plan.material_matches:
                     asset_row = self._material_assets._asset_payload_visibility_row_by_id(
@@ -4312,11 +4323,61 @@ class ProductionRepository:
                     self.creation_plan_voice_reference(workspace_id,plan.selected_voice.profile_id,plan.selected_voice.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
                 if plan.selected_person:
                     self.creation_plan_person_reference(workspace_id,plan.selected_person.profile_id,plan.selected_person.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
+                plan.adoption = {**adoption, "version": plan.preflight_fingerprint,
+                    "window_input_fingerprint": window["input_fingerprint"], "plan_id": plan.id, "preflight_fingerprint": plan.preflight_fingerprint,
+                    "request_id": request_id, "request_revision": row["revision"], "window_id": window_id}
                 self.insert_confirmed_creation_plan(conn,plan,task)
+                self._apply_creation_intent(conn, plan, task, intent, adoption)
             now = utc_now().isoformat()
             conn.execute("UPDATE creation_request_windows SET status='confirmed',confirmed_at=? WHERE id=?", (now,window_id))
             conn.execute("UPDATE creation_requests SET status='active',revision=revision+1,updated_at=? WHERE id=?", (now,request_id))
             return self._creation_request_header(conn,self._creation_request_row(conn,workspace_id,request_id,owner,local_diagnostic))
+
+    def _apply_creation_intent(self, conn, plan, task, intent, adoption):
+        """Adopt provided topic/copy inside the same Plan + Task transaction."""
+        from app.creation.intent_use_case import CreationIntentUseCase
+        CreationIntentUseCase.use_provided_copy(plan, intent)
+        final = intent.get("final_script") if intent else None
+        title = (intent.get("topic_title") or (final["title"] if final else None)) if intent else None
+        now = utc_now()
+        if title and not task.selected_topic_id:
+            topic_run = TopicGenerationRun(f"provided_topic_run_{task.id}", task.workspace_id, task.id, plan.id,
+                "succeeded", {"operation": "provided_topic", "provider": "none"}, "provided-topic/v1", [], started_at=now, finished_at=now)
+            topic = TopicCandidate(f"provided_topic_{task.id}", task.workspace_id, task.id, topic_run.id,
+                title, "", "", [], 0, selection_status="confirmed", created_at=now)
+            conn.execute("INSERT INTO topic_generation_runs VALUES(?,?,?,?,?,?,?)", (topic_run.id, task.workspace_id,
+                task.id, plan.id, _json_payload(topic_run), now.isoformat(), now.isoformat()))
+            conn.execute("INSERT INTO topic_candidates VALUES(?,?,?,?,?,?)", (topic.id, task.workspace_id,
+                task.id, topic_run.id, _json_payload(topic), now.isoformat()))
+            task.selected_topic_id = topic.id
+            task.stage, task.stage_status, task.recovery_point = "script", "not_started", "script"
+            task.status, task.progress = "running", max(task.progress, 20)
+        if final:
+            script = CreationTaskScript(f"provided_script_{task.id}", task.workspace_id, task.id,
+                f"provided_script_run_{task.id}", task.selected_topic_id, final["title"], plan.language,
+                [CreationTaskScriptSection(f"provided_section_{task.id}", final["title"], final["text"], "", [])],
+                selection_status="confirmed", created_at=now, updated_at=now, confirmed_at=now,
+                source_reply_reference=final.get("source_reply_reference"), locked_body_digest=final["body_digest"])
+            script.adoption = {**CreationIntentUseCase.adoption(intent, kind=adoption["kind"],
+                member_id=plan.owner_user_id, version=script.updated_at.isoformat()),
+                "script_id": script.id, "body_digest": final["body_digest"]}
+            run = ScriptGenerationRun(script.run_id, task.workspace_id, task.id, plan.id, task.selected_topic_id,
+                "succeeded", {"operation": "provided_final_copy", "provider": "none"}, "provided-copy/v1", [],
+                started_at=now, finished_at=now, run_kind="provided_copy", source_reply_reference=script.source_reply_reference)
+            conn.execute("INSERT INTO script_generation_runs VALUES(?,?,?,?,?,?,?,?)", (run.id, task.workspace_id,
+                task.id, plan.id, run.topic_id, _json_payload(run), now.isoformat(), now.isoformat()))
+            conn.execute("INSERT INTO creation_task_scripts VALUES(?,?,?,?,?,?)", (script.id, task.workspace_id,
+                task.id, run.id, _json_payload(script), script.updated_at.isoformat()))
+            task.confirmed_script_id = script.id
+            task.stage, task.stage_status, task.recovery_point = "narration", "not_started", "narration"
+            task.status, task.progress = "running", max(task.progress, 40)
+        if title or final:
+            task.updated_at = now
+            conn.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+                (_json_payload(task), now.isoformat(), task.workspace_id, task.id))
+        self.append_task_event(TaskEvent(f"creation_adopted_{task.id}", task.workspace_id, task.id, None,
+            "creation_intent_adopted", {"plan_id": plan.id, "plan_adoption": plan.adoption,
+                "script_id": task.confirmed_script_id, "script_adoption": script.adoption if final else None}), connection=conn)
 
     def list_creation_request_items(self, workspace_id: str, request_id: str, *, after_ordinal: int = 0, limit: int = 20,
                                    viewer_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
@@ -7158,7 +7219,8 @@ class ProductionRepository:
         ]
 
     def confirm_topic_candidate(
-        self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None
+        self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None,
+        adoption_kind: Literal["manual", "delegated_system"] = "manual", verified_owner_user_id: str | None = None,
     ) -> tuple[CreationTask, TopicCandidate]:
         if title is not None:
             title = title.strip()
@@ -7175,6 +7237,11 @@ class ProductionRepository:
             if task_row is None:
                 raise KeyError(task_id)
             task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            from app.creation.intent_use_case import CreationIntentUseCase
+            plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
+            plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))
+            adoption = CreationIntentUseCase.adoption(plan.creation_intent, kind=adoption_kind,
+                member_id=content_owner(verified_owner_user_id) or task.owner_user_id, version=candidate_id)
             candidate_row = conn.execute(
                 """
                 SELECT payload FROM topic_candidates
@@ -7217,6 +7284,8 @@ class ProductionRepository:
                 "UPDATE topic_candidates SET payload = ? WHERE id = ?",
                 (_json_payload(candidate), candidate.id),
             )
+            self.append_task_event(TaskEvent(f"topic_adopted_{candidate.id}", workspace_id, task_id, None,
+                "topic_adopted", {"topic_id": candidate.id, "title": candidate.title, "adoption": adoption}), connection=conn)
             conn.execute(
                 """
                 UPDATE creation_tasks SET payload = ?, updated_at = ?
@@ -8071,14 +8140,9 @@ class ProductionRepository:
         title: str,
         sections: list[CreationTaskScriptSection],
         expected_updated_at: datetime | str | None = None,
+        adoption_kind: Literal["manual", "delegated_system"] = "manual",
+        verified_owner_user_id: str | None = None,
     ) -> tuple[CreationTask, CreationTaskScript]:
-        if not title.strip() or not sections or any(
-            not section.content.strip()
-            or not section.visual_prompt.strip()
-            or not section.evidence_reference_ids
-            for section in sections
-        ):
-            raise ValueError("确认文案必须包含正文、画面建议和来源证据")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task_row = conn.execute(
@@ -8097,6 +8161,23 @@ class ProductionRepository:
                 raise ValueError("确认文案必须提供当前 updated_at")
             if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
                 raise ValueError("文案草稿修订已变化，请重新读取后再确认")
+            from app.creation.intent_use_case import CreationIntentUseCase
+            plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
+            plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))
+            adoption = CreationIntentUseCase.adoption(plan.creation_intent, kind=adoption_kind,
+                member_id=content_owner(verified_owner_user_id) or task.owner_user_id, version=script.updated_at.isoformat())
+            if script.locked_body_digest:
+                if hashlib.sha256("".join(part.content for part in sections).encode()).hexdigest() != script.locked_body_digest:
+                    raise ValueError("此文案已按定稿锁定，不能通过重复确认改写正文；请明确采用新的定稿。")
+                return task, script
+            if not title.strip() or not sections or any(not part.content.strip() or not part.visual_prompt.strip()
+                    or not part.evidence_reference_ids for part in sections):
+                raise ValueError("确认文案必须包含正文、画面建议和来源证据")
+            if task.confirmed_script_id and task.confirmed_script_id != script.id:
+                current = conn.execute("SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
+                    (workspace_id, task_id, task.confirmed_script_id)).fetchone()
+                if current and json.loads(current["payload"]).get("locked_body_digest"):
+                    raise ValueError("当前定稿已锁定，不能用其他候选文案替换。")
             confirmed_script_repair = (
                 task.confirmed_script_id == script_id
                 and script.selection_status == "confirmed"
@@ -8135,6 +8216,8 @@ class ProductionRepository:
             script.selection_status = "confirmed"
             script.confirmed_at = now
             script.updated_at = now
+            script.adoption = {**adoption, "script_id": script.id, "version": now.isoformat(),
+                "body_digest": hashlib.sha256("".join(part.content for part in script.sections).encode()).hexdigest()}
             self._demote_other_confirmed_scripts(
                 conn,
                 workspace_id=workspace_id,

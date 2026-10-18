@@ -30,6 +30,8 @@ def client_state(tmp_path, monkeypatch):
     live_fingerprint = ["a" * 64]
     def preflight(_request, workspace_id, payload):
         return replace(entries(count=1)[0][0], goal=payload.goal, name=payload.name or payload.goal,
+            language=payload.language, aspect_ratio=payload.aspect_ratio,
+            presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
             duration_target_seconds=payload.duration_target_seconds, preflight_fingerprint=live_fingerprint[0])
     monkeypatch.setattr(main, "_creation_plan_preflight", preflight)
     app = FastAPI()
@@ -150,6 +152,229 @@ def test_ninth_window_item_and_duplicate_goal_are_rejected(client_state):
     for goals in [[{"goal": str(i)} for i in range(9)], [{"goal": "相同"}, {"goal": "相同"}]]:
         assert c.client.post(base, headers=c.alice, json={"expected_revision": saved["revision"], "goals": goals}).status_code == 422
     assert c.repository.list_creation_tasks("request-test") == []
+
+
+def test_language_variants_keep_individual_requirements_through_replan_and_adoption(client_state):
+    c = client_state
+    saved = create(c, goal="产品介绍中英文各一条", target_count=2, output_relation="variants",
+        language="zh-CN", duration_target_seconds=60).json()
+    base = "/api/creation-requests/" + saved["id"]
+    planned = c.client.post(base + "/windows", headers=c.alice, json={"expected_revision": saved["revision"],
+        "goals": [{"goal": "同一产品介绍"}, {"goal": "同一产品介绍", "requirements": {
+            "language": "en-US", "duration_target_seconds": 30, "aspect_ratio": "16:9",
+            "presenter_share_target": 0, "lipsync_quality": "fast"}}]})
+    assert planned.status_code == 200, planned.text
+    data = planned.json()
+    c.live_fingerprint[0] = "b" * 64
+    replanned = c.client.post(base + "/windows/" + data["current_window"]["id"] + "/replan", headers=c.alice,
+        json={"expected_revision": data["revision"]})
+    assert replanned.status_code == 200, replanned.text
+    data = replanned.json()
+    window = data["current_window"]
+    confirmation = {"expected_revision": data["revision"], "input_fingerprint": window["input_fingerprint"]}
+    for _ in range(2):
+        confirmed = c.client.post(base + "/windows/" + window["id"] + "/confirm", headers=c.alice, json=confirmation)
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["confirmed_count"] == 2
+    plans = [entry["plan"] for entry in c.client.get(base + "/items", headers=c.alice).json()["items"]]
+    assert [(p["language"], p["duration_target_seconds"], p["aspect_ratio"]) for p in plans] == [
+        ("zh-CN", 60, "9:16"), ("en-US", 30, "16:9")]
+    assert plans[1]["presenter_share_target"] == 0 and plans[1]["lipsync_quality"] == "fast"
+    assert len(c.repository.list_creation_tasks("request-test")) == 2
+
+
+def test_explicit_default_override_is_duplicate_of_inherited_delivery(client_state):
+    c = client_state
+    saved = create(c, language="en-US").json()
+    response = c.client.post("/api/creation-requests/" + saved["id"] + "/windows", headers=c.alice,
+        json={"expected_revision": saved["revision"], "goals": [{"goal": "同主题"},
+            {"goal": "同主题", "name": "另一个名字", "requirements": {"language": "en-US"}}]})
+    assert response.status_code == 422
+    assert c.repository.list_creation_tasks("request-test") == []
+
+
+def prepare_one(c, intent):
+    saved = create(c, goal="按已给定内容制作1条视频", target_count=1, intent=intent).json()
+    base = "/api/creation-requests/" + saved["id"]
+    planned = c.client.post(base + "/windows", headers=c.alice,
+        json={"expected_revision": saved["revision"], "goals": [{"goal": "同一作品"}]})
+    assert planned.status_code == 200, planned.text
+    data = planned.json()
+    window = data["current_window"]
+    return base, data, base + "/windows/" + window["id"] + "/confirm", {
+        "expected_revision": data["revision"], "input_fingerprint": window["input_fingerprint"],
+        "adoption_kind": "delegated_system"}
+
+
+def test_discussion_cannot_be_adopted_or_start_a_task(client_state):
+    c = client_state
+    base, data, url, confirmation = prepare_one(c, {"kind": "discussion", "topic_title": "先讨论这个主题"})
+    for kind in ("manual", "delegated_system"):
+        rejected = c.client.post(url, headers=c.alice, json={**confirmation, "adoption_kind": kind})
+        assert rejected.status_code == 409 and "讨论" in rejected.text
+    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.client.get(base, headers=c.alice).json()["intent"]["kind"] == "discussion"
+
+
+def test_delegated_existing_topic_is_adopted_without_topic_generation(client_state):
+    c = client_state
+    _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "用户已有主题"})
+    adopted = c.client.post(url, headers=c.alice, json=confirmation)
+    assert adopted.status_code == 200, adopted.text
+    entry = adopted.json()["current_window"]["entries"][0]
+    assert entry["plan"]["adoption"]["kind"] == "delegated_system"
+    assert entry["plan"]["adoption"]["operator"] == "system"
+    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    assert task.stage == "script" and task.selected_topic_id
+    topics = c.repository.list_topic_candidates("request-test", task.id)
+    assert len(topics) == 1 and topics[0].title == "用户已有主题"
+    run = c.repository.latest_topic_generation_run("request-test", task.id)
+    assert run.route_snapshot == {"operation": "provided_topic", "provider": "none"}
+
+
+def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state):
+    import hashlib
+    from dataclasses import replace
+    c = client_state
+    text = "  第一段保留空格。\n\n第二段：标点、换行和末尾空格都不改。  "
+    _base, _data, url, confirmation = prepare_one(c,
+        {"kind": "final_script", "final_script": {"title": "准确版本", "text": text}})
+    first = c.client.post(url, headers=c.alice, json=confirmation)
+    assert first.status_code == 200, first.text
+    second = c.client.post(url, headers=c.alice, json=confirmation)
+    assert second.status_code == 200
+    entry = first.json()["current_window"]["entries"][0]
+    assert second.json()["current_window"]["entries"][0]["task_id"] == entry["task_id"]
+    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    assert task.stage == "narration" and task.confirmed_script_id
+    script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
+    assert script.sections[0].content == text
+    assert script.locked_body_digest == hashlib.sha256(text.encode()).hexdigest()
+    assert script.adoption["kind"] == "delegated_system" and script.adoption["script_id"] == script.id
+    with pytest.raises(ValueError, match="定稿锁定"):
+        c.repository.confirm_creation_task_script("request-test", task.id, script.id, title=script.title,
+            sections=[replace(script.sections[0], content="模型改写版本")], expected_updated_at=script.updated_at,
+            verified_owner_user_id=c.member.member_id, adoption_kind="delegated_system")
+    assert c.repository.get_creation_task_script("request-test", script.id).sections[0].content == text
+    assert len(c.repository.list_creation_task_scripts("request-test", task.id)) == 1
+
+
+def test_final_copy_failure_rolls_back_entire_window(client_state):
+    import sqlite3
+    c = client_state
+    base, _data, url, confirmation = prepare_one(c,
+        {"kind": "final_script", "final_script": {"title": "原稿", "text": "用户准确正文"}})
+    with c.repository._connect() as conn:
+        conn.execute("CREATE TRIGGER fail_final_copy BEFORE INSERT ON creation_task_scripts "
+            "BEGIN SELECT RAISE(ABORT,'copy write failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="copy write failed"):
+        c.client.post(url, headers=c.alice, json=confirmation)
+    assert c.repository.list_creation_tasks("request-test") == []
+    saved = c.client.get(base, headers=c.alice).json()
+    assert saved["confirmed_count"] == 0 and saved["current_window"]["status"] == "proposed"
+    with c.repository._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM creation_plans").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM topic_candidates").fetchone()[0] == 0
+
+
+def test_delegated_script_adoption_records_real_version_without_fake_human_action(client_state):
+    from app.production import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
+    c = client_state
+    _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "明确主题"})
+    adopted = c.client.post(url, headers=c.alice, json=confirmation).json()
+    task = c.repository.get_creation_task("request-test", adopted["current_window"]["entries"][0]["task_id"])
+    run = ScriptGenerationRun("declared-fixture-run", "request-test", task.id, task.plan_id, task.selected_topic_id,
+        "running", {"provider": "declared_fixture"}, "fixture/v1", [{"reference_id": "declared-fixture-source"}])
+    c.repository.start_script_generation(run)
+    draft = CreationTaskScript("declared-fixture-script", "request-test", task.id, run.id, task.selected_topic_id,
+        "有来源的文案", "zh-CN", [CreationTaskScriptSection("section", "段落", "已核对的正文", "明确画面", ["declared-fixture-source"])])
+    _task, _run, draft = c.repository.complete_script_generation(run.id, draft)
+    task, script = c.repository.confirm_creation_task_script("request-test", task.id, draft.id, title=draft.title,
+        sections=draft.sections, expected_updated_at=draft.updated_at, adoption_kind="delegated_system",
+        verified_owner_user_id=c.member.member_id)
+    assert task.confirmed_script_id == script.id and task.stage == "narration"
+    assert script.adoption["operator"] == "system" and script.adoption["kind"] == "delegated_system"
+    assert script.adoption["version"] == script.updated_at.isoformat()
+    assert script.adoption["authorization_source"]["member_id"] == c.member.member_id
+
+
+def test_fixed_copy_duration_conflict_keeps_text_and_creates_no_task(client_state):
+    c = client_state
+    text = "这是不可自动删改的定稿。" * 120
+    saved = create(c, goal="按定稿制作1条视频", target_count=1, duration_target_seconds=15,
+        intent={"kind": "final_script", "final_script": {"title": "长稿", "text": text}}).json()
+    base = "/api/creation-requests/" + saved["id"]
+    response = c.client.post(base + "/windows", headers=c.alice,
+        json={"expected_revision": saved["revision"], "goals": [{"goal": "原稿制作"}]})
+    assert response.status_code == 409 and "不会自动删词" in response.text
+    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.client.get(base, headers=c.alice).json()["intent"]["final_script"]["text"] == text
+
+
+def test_actual_chinese_english_each_one_input_is_two_variants_not_one_bilingual_video(client_state):
+    c = client_state
+    message = "制作产品介绍，中文和英文各一条"
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "双版本")
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message, str(uuid4()), 1)
+    wrong = create(c, target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"])
+    assert wrong.status_code == 409
+    saved = create(c, target_count=2, output_relation=None, assistant_turn_id=turn["id"], request_key=turn["id"],
+        intent={"kind": "goal_delegation"})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["target_count"] == 2 and saved.json()["output_relation"] == "variants"
+    assert saved.json()["clarification_questions"] == []
+
+
+def test_consumed_input_gets_its_own_request_and_cannot_reuse_original_authority(client_state):
+    from starlette.requests import Request
+    c = client_state
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "输入切换")
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, "制作1条视频", 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
+        "制作1条视频", str(uuid4()), 1)
+    initial = create(c, target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"], intent={"kind": "goal_delegation"})
+    assert initial.status_code == 200
+    original_base = '/api/creation-requests/' + initial.json()['id']
+    original_window = c.client.post(original_base + '/windows', headers=c.alice,
+        json={'expected_revision': initial.json()['revision'], 'goals': [{'goal': '原输入的独立视频'}]}).json()
+    message, input_id = "先讨论新的产品介绍，不要制作", str(uuid4())
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 2)
+    c.conversations.enqueue_input(chat["id"], "request-test", c.member.member_id, target_turn_id=turn["id"],
+        client_request_id=input_id, message=message, mode="steer", expected_draft_version=3,
+        expected_reference_version=0, request_context={"kind": "home"})
+    c.conversations.transition_input(chat["id"], "request-test", c.member.member_id, input_id, "consumed")
+    assert create(c, target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"], intent={"kind": "goal_delegation"}).status_code == 409
+    headers = {**c.alice, "X-Assistant-Input-ID": input_id}
+    window = original_window['current_window']
+    rejected = c.client.post(original_base + '/windows/' + window['id'] + '/confirm', headers=headers,
+        json={'expected_revision': original_window['revision'], 'input_fingerprint': window['input_fingerprint'],
+            'adoption_kind': 'delegated_system', 'assistant_turn_id': turn['id']})
+    assert rejected.status_code == 409 and '讨论' in rejected.text
+    body = {"request_key": input_id, "assistant_turn_id": turn["id"], "goal": "模型旧目标", "target_count": 1,
+        "intent": {"kind": "discussion"}}
+    current = c.client.post('/api/creation-requests', headers=headers, json=body)
+    assert current.status_code == 200, current.text
+    assert current.json()["goal"] == message and current.json()["id"] != initial.json()["id"]
+    assert current.json()["intent"]["source"]["input_id"] == input_id
+    request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
+    recovered = main._assistant_creation_request_for_turn(request, c.conversations.get_turn(turn["id"]))
+    assert recovered["id"] == current.json()["id"]
+
+
+def test_discussion_task_input_can_save_draft_but_cannot_adopt_production(client_state):
+    from starlette.requests import Request
+    c = client_state
+    chat = c.conversations.create("request-test", c.member.member_id, "task", "bound-task", "只讨论")
+    message = "先讨论文案，不要制作"
+    c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message,
+        str(uuid4()), 1, {"kind": "task", "task_id": "bound-task", "stage": "script"})
+    request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
+    main._assistant_creation_adoption_scope("bound-task", request, turn["id"], draft_only=True)
+    with pytest.raises(main.HTTPException) as failure:
+        main._assistant_creation_adoption_scope("bound-task", request, turn["id"])
+    assert failure.value.status_code == 409 and "讨论" in str(failure.value.detail)
 
 
 def test_original_turn_scope_and_exact_saved_request_recovery(client_state):

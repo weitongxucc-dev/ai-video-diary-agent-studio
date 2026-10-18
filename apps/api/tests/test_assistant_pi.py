@@ -415,7 +415,9 @@ def test_script_save_summary_does_not_invent_zero_sections_from_identity_only_re
     result = {"details": {"kind": "script_draft", "preview": {"script_id": "draft-one"}},
               "content": [{"type": "text", "text": '{"title":"真实草稿","section_count":3}'}]}
     summary = _safe_tool_result_summary("preview_script_draft", result, False)
-    assert summary == "文案草稿已保存，尚待你检查和确认。"
+    assert summary == "文案草稿已保存，尚未采用。"
+    adopted = {"details": {"kind": "script_draft", "preview": {"script_id": "draft-one", "adopted": True}}}
+    assert _safe_tool_result_summary("preview_script_draft", adopted, False) == "实际文案版本已按原委托采用，尚未生成成片。"
     assert "0 段" not in summary
     assert _safe_tool_result_summary("preview_script_draft", result, True).startswith("这一步没有完成")
 
@@ -557,19 +559,20 @@ def test_pi_topic_generation_reply_preserves_real_candidates_and_unconfirmed_sta
         {"type": "agent_settled"},
     ])
     reply, generated = project_event_fixture(output, "topic_generation")
-    assert reply == "已为当前任务生成 1 个选题候选；它们尚未被选择或确认，请在工作台查看并明确选择。"
+    assert reply == "已为当前任务生成 1 个选题候选；尚未采用。"
     assert generated == {"kind": "topic_generation", "topics": topics}
 
 
-def test_task_turn_exposes_only_stage_tools_and_named_actions(monkeypatch):
+def test_task_turn_exposes_continuation_tools_and_bound_named_actions(monkeypatch):
     calls = []
     monkeypatch.setattr("app.assistant_pi._run_turn", lambda _settings, **kwargs: calls.append(kwargs) or ("ok", None))
     for stage in ("topic", "script", "narration"):
         run_task_turn(None, workspace_id="local", task_id="task-one", message="用自然语言表达意图",
                       stage=stage, selected_refs=[], playhead_ms=None)
     assert "generate_creation_task_topics" in calls[0]["tool_names"]
-    assert "start_creation_execution" not in calls[0]["tool_names"]
-    assert "start_creation_execution" not in calls[1]["tool_names"]
+    assert "adopt_creation_task_topic" in calls[0]["tool_names"]
+    assert "start_creation_execution" in calls[0]["tool_names"]
+    assert "start_creation_execution" in calls[1]["tool_names"]
     assert "preview_script_draft" in calls[1]["tool_names"]
     assert all(name in calls[2]["tool_names"] for name in (
         "start_creation_execution", "resume_creation_execution", "cancel_creation_execution",
@@ -962,7 +965,7 @@ def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
 
 def test_original_input_and_late_receipts_are_separate_creation_results():
     from app.assistant.result_projection import project_business_result
-    request = {"id": "request-real", "target_count": 1, "clarification_questions": [], "current_window": {"entries": [1]}}
+    request = {"id": "request-real", "target_count": 1, "clarification_questions": [], "current_window": {"status": "proposed", "entries": [1]}}
     event = {"type": "tool_execution_end", "toolName": "prepare_creation_window", "isError": False,
              "result": {"details": {"kind": "plan_preview", "invocation_input_id": "original-turn", "preview": {"kind": "creation_request", "request": request}}}}
     completion = {"status": "settled", "answer": "已保存", "input_id": "original-turn", "tool_results": [event]}

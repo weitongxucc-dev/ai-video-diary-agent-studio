@@ -552,6 +552,7 @@ class CreationTaskScriptInput:
     script_structure: tuple[str, ...] = ()
     script_section_count: int | None = None
     presenter_share_target: int = 0
+    topic_origin: Literal["generated", "provided"] = "generated"
 
 
 @dataclass(frozen=True)
@@ -635,13 +636,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="将目标时长设置在 15 到 600 秒之间。",
                 retryable=False,
             )
-        required_texts = (
-            input.goal,
-            input.topic_title,
-            input.topic_angle,
-            input.topic_audience,
-        )
-        if any(not value.strip() for value in required_texts) or not input.topic_outline:
+        required_texts = (input.goal, input.topic_title)
+        generated_details_missing = (input.topic_origin != "provided" and
+            (not input.topic_angle.strip() or not input.topic_audience.strip() or not input.topic_outline))
+        if any(not value.strip() for value in required_texts) or generated_details_missing:
             raise self._failure(
                 code="input_invalid",
                 reason="已确认选题缺少生成文案所需的信息。",
@@ -744,6 +742,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "role": "system",
                     "content": (
                         "你是短视频口播文案生成器。按指定语言写正文，只调用一次submit_script_draft提交候选，不在content写报告，不执行动作。"
+                        "confirmed_topic.origin为provided表示用户给定主题；空角度、受众、大纲表示未指定，不补造这些元数据，按实际标题与goal起草。"
                         "事实只能来自 sources 的 text；资料标题、目标、已确认选题及大纲、风格和画面设想不是已实现事实。"
                         "可原创修辞、比喻、组织和转场，但每段至少保留一条有资料支持的内容。"
                         "不得凭空承诺性能、安全、备份、恢复或口型能力；来源中的计划、可能和限制必须保留。"
@@ -779,6 +778,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             "script_structure": list(input.script_structure),
                             "duration_target_seconds": input.duration_target_seconds,
                             "confirmed_topic": {
+                                "origin": input.topic_origin,
                                 "title": input.topic_title.strip(),
                                 "angle": input.topic_angle.strip(),
                                 "audience": input.topic_audience.strip(),
@@ -975,7 +975,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "不写Markdown；在有限输出内完整核查，不能用少核几段来假装通过。"
                 )},
                 {"role": "user", "content": json.dumps({
-                    "goal": input.goal, "confirmed_topic": {"title": input.topic_title,
+                    "goal": input.goal, "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
                         "angle": input.topic_angle, "audience": input.topic_audience,
                         "outline": list(input.topic_outline)},
                     "style_instruction": input.style_instruction,

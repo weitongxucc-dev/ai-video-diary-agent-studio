@@ -88,7 +88,8 @@ class GoalContinuationService:
                     advanced += 1
                 continue
             if readiness == "ready":
-                self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"), expected_goal=goal)
+                self.repo.record_goal_output_checkpoint(root["id"], fresh.get("completed_output_checkpoint"),
+                    production_result=fresh.get("production_result"), expected_goal=goal)
             if readiness in {"waiting_identity", "waiting_result", "waiting_unknown"}:
                 self.repo.update_goal_checkpoint(root["id"], status=readiness,
                     waiting_reason=fresh.get("reason", readiness), event_id=event["event_id"] if fresh.get("consume_event") else None, expected_goal=goal,
@@ -345,11 +346,20 @@ class GoalResultProjection:
 
     @staticmethod
     def ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint):
+        execution = facts.get("execution_status") or {}
+        job = execution.get("job") or {}
+        production_result = None
+        if job.get("status") == "failed" or job.get("status") == "succeeded" and execution.get("video_ready"):
+            # These facts came from the bound execution reader, not the model's
+            # reply. A playable result does not prove that output was checked.
+            production_result = {"scope": "production", "status": job["status"], "job_id": job["id"],
+                "timeline_version_id": task.current_timeline_version_id, "video_ready": bool(execution.get("video_ready"))}
         return {"status": "ready", "task_version": {"timeline_version_id": task.current_timeline_version_id,
             "timeline_sequence": version.sequence if version else 0,
             **({"removed_selected_refs": removed_refs} if removed_refs else {})}, "facts": facts,
             "actor": actor, "no_side_effect": no_side_effect, "completed_source_slots": completed_sources,
-            **({"completed_output_checkpoint": checkpoint} if checkpoint else {})}
+            **({"completed_output_checkpoint": checkpoint} if checkpoint else {}),
+            **({"production_result": production_result} if production_result else {})}
 
     def source_belongs_to_goal(self, goal, source):
         bound = self.conversations.get_task_goal(source["assistant_turn_id"])

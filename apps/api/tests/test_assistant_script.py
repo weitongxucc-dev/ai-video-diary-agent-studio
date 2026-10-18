@@ -27,7 +27,7 @@ def _assistant_task_session(tmp_path: Path, monkeypatch, task_id: str):
 
 
 def _task_turn_payload(conversations, member_id: str, conversation: dict, message: str,
-                       stage: str, refs: list[str] | None = None, *, playhead_ms=None):
+                       stage: str, refs: list[str] | None = None, *, playhead_ms=None, reference_version=None):
     current = conversations.get(conversation["id"], conversation["workspace_id"], member_id)
     saved = conversations.save_draft(
         conversation["id"], conversation["workspace_id"], member_id,
@@ -38,6 +38,7 @@ def _task_turn_payload(conversations, member_id: str, conversation: dict, messag
         "conversation_id": conversation["id"], "message": message,
         "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
         "context_stage": stage, "selected_object_refs": refs or [], "playhead_ms": playhead_ms,
+        **({"expected_reference_version": reference_version} if reference_version is not None else {}),
     }
 
 
@@ -108,7 +109,11 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
 
 
 def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_path, monkeypatch):
+    from dataclasses import asdict
     from datetime import datetime
+    import json
+    from starlette.requests import Request
+    from app.creation.contracts import TimelineVersion
     from app.creation_execution import CreationExecution, CreationExecutionActor
     from app.montage import MontageClip
     from app.production import JobRun, MaterialAsset, MaterialSegment, TaskEvent
@@ -132,31 +137,27 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     calls = []
     task = CreationTask(id="task-one", workspace_id="local", plan_id="plan-one", name="选择范围验收",
                            scenario="选择范围验收", stage="review", confirmed_script_id="script-one",
-                           narration_cache_key="narration-one", current_timeline_version_id=None,
+                           narration_cache_key="narration-one", current_timeline_version_id="scope-timeline",
                            montage_plan_id="plan-one", visibility="shared", owner_user_id=None)
     montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
                               status="rendered", output_path="rendered-video", duration_seconds=30,
                               clips=[clip], graphic_overlays=[])
-    repo = SimpleNamespace(
-        get_asset=material_repo.get_asset,
-        get_narration_artifact=lambda workspace_id, key: SimpleNamespace(
+    with material_repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+    material_repo.create_timeline_version(TimelineVersion(
+        id=task.current_timeline_version_id, workspace_id=task.workspace_id, task_id=task.id,
+        parent_version_id=None, sequence=1, created_by_operation_id=None,
+        snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [
+            {"id": "segment-current", "workspace_id": task.workspace_id, "task_id": task.id}]}))
+    task = material_repo.get_creation_task("local", task.id)
+    monkeypatch.setattr(material_repo, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
             task_id=task.id, script_id=task.confirmed_script_id,
-        ),
-        list_narration_segments=lambda workspace_id, task_id, script_id: [
+        ))
+    monkeypatch.setattr(material_repo, "list_narration_segments", lambda workspace_id, task_id, script_id: [
             SimpleNamespace(id="segment-current", status="ready"),
-        ],
-        get_creation_task_montage_plan=lambda workspace_id, task_id: {},
-        get_creation_task=lambda workspace_id, task_id: task,
-        get_job_run=material_repo.get_job_run,
-        get_task_event=material_repo.get_task_event,
-        list_task_events=material_repo.list_task_events,
-        append_task_event=material_repo.append_task_event,
-        _connect=material_repo._connect,
-    )
-    monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "_creation_task_or_404", lambda workspace_id, task_id: task
-                        if workspace_id == "local" and task_id == task.id else
-                        (_ for _ in ()).throw(HTTPException(status_code=404, detail="task not found")))
+        ])
+    monkeypatch.setattr(material_repo, "get_creation_task_montage_plan", lambda workspace_id, task_id: {})
+    monkeypatch.setattr(main_module, "production_repo", material_repo)
     monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
     monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
     def no_execution(*_):
@@ -167,24 +168,44 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     def run_turn(_settings, **kwargs):
         calls.append(kwargs)
         if "把真实排队状态显示给我" in kwargs["message"]:
+            bound_request = Request({"type": "http", "headers": [(b"x-local-member-token", token.encode())]})
+            source, existing = main_module._assistant_execution_source(task.id, bound_request, kwargs["turn_id"],
+                "start", "actual-scope-input")
+            assert existing is None
             job = material_repo.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
                 kind="creation_task_execution", idempotency_key="scope-execution", input_digest="actual-scope-input"))
             actor = CreationExecutionActor("local", member_id)
             material_repo.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
                 task_id=task.id, job_id=job.id, event_type="creation_execution_started",
                 payload={"input_digest": job.input_digest, **actor.identity_payload()}))
+            status = main_module._bind_assistant_execution_result(task.id, bound_request, kwargs["turn_id"],
+                main_module._creation_execution_status("local", task.id), source=source)
             return "连续制作已提交并排队，尚未完成。", {
                 "kind": "execution_action", "action": "start",
-                "status": main_module._creation_execution_status("local", task.id),
+                "status": status,
             }
         return "请检查修改。", None
     monkeypatch.setattr(main_module, "run_task_turn", run_turn)
     client = TestClient(main_module.app)
     headers = {"X-Local-Member-Token": token}
     for stage, ref in (("montage", "clip:clip-current"), ("review", "narration:segment-current")):
+        current = conversations.get(conversation["id"], "local", member_id)
+        selected = conversations.save_reference(conversation["id"], "local", member_id,
+            {"kind": "selection", "items": [{"kind": "shot" if ref.startswith("clip:") else "narration",
+                "task_id": task.id, "object_id": ref.split(":", 1)[1], "version": task.current_timeline_version_id,
+                "label": "当前镜头" if ref.startswith("clip:") else "当前配音"}]}, current["reference_version"])
+        if stage == "montage":
+            stale = client.post("/api/creation-tasks/task-one/assistant/turn", headers=headers, json=
+                _task_turn_payload(conversations, member_id, conversation, "请检查当前片段", stage, [ref],
+                    reference_version=selected["reference_version"] - 1))
+            assert stale.status_code == 409 and "选中引用已变化" in stale.text
+            assert calls == []
         response = client.post("/api/creation-tasks/task-one/assistant/turn", headers=headers, json=
-                               _task_turn_payload(conversations, member_id, conversation, "请检查当前片段", stage, [ref]))
+                               _task_turn_payload(conversations, member_id, conversation, "请检查当前片段", stage, [ref],
+                                   reference_version=selected["reference_version"]))
         assert response.status_code == 200, response.text
+    current = conversations.get(conversation["id"], "local", member_id)
+    conversations.save_reference(conversation["id"], "local", member_id, None, current["reference_version"])
     for ref in ("clip:clip-from-other-task", "clip:clip-removed"):
         response = client.post("/api/creation-tasks/task-one/assistant/turn", headers=headers, json=
                                _task_turn_payload(conversations, member_id, conversation, "请检查旧镜头", "montage", [ref]))
@@ -193,6 +214,8 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                           _task_turn_payload(conversations, member_id, conversation, "请检查当前片段", "montage"))
     assert foreign.status_code == 404
     task.stage = "narration"
+    with material_repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
     premature = client.post("/api/creation-tasks/task-one/assistant/turn", headers=headers, json=
                             _task_turn_payload(conversations, member_id, conversation, "请检查旧镜头", "montage"))
     assert premature.status_code == 409

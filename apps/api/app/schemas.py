@@ -856,7 +856,7 @@ class CreationPlanDefaultsRequest(BaseModel):
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     duration_target_seconds: int = Field(default=60, ge=15, le=600)
-    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 20
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     lipsync_quality: Literal["high", "fast"] = "high"
     selected_voice: PlanProfileReference | None = None
     selected_person: PlanProfileReference | None = None
@@ -1020,6 +1020,8 @@ class CreationTaskTopicGenerateRequest(BaseModel):
 
 class CreationTaskTopicConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    adoption_kind: Literal["manual", "delegated_system"] = "manual"
+    assistant_turn_id: UUID | None = None
     title: str | None = Field(default=None, min_length=1, max_length=80)
 
     @field_validator("title")
@@ -1121,6 +1123,8 @@ class CreationTaskScriptConfirmRequest(BaseModel):
     sections: list[CreationTaskScriptSectionRequest] = Field(min_length=1, max_length=20)
 
     expected_updated_at: datetime
+    adoption_kind: Literal["manual", "delegated_system"] = "manual"
+    assistant_turn_id: UUID | None = None
 
 
 class CreationTaskScriptDraftSectionRequest(BaseModel):
@@ -1139,6 +1143,7 @@ class CreationTaskScriptDraftRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sections: list[CreationTaskScriptDraftSectionRequest] = Field(min_length=1, max_length=20)
     expected_updated_at: datetime | None = None
+    assistant_turn_id: UUID | None = None
 
 
 class AssistantReplyScriptTransferRequest(BaseModel):
@@ -1188,6 +1193,8 @@ class CreationTaskScriptResponse(BaseModel):
     confirmed_at: datetime | None
     reused_from_entry_id: str | None = None
     source_reply_reference: dict[str, str] | None = None
+    adoption: dict[str, object] | None = None
+    locked_body_digest: str | None = None
 
 
 class CreationTaskScriptsResponse(BaseModel):
@@ -1955,6 +1962,18 @@ class AssistantConversationTurnResponse(BaseModel):
     updated_at: datetime
 
 
+class AssistantConversationRequestResponse(BaseModel):
+    client_request_id: UUID
+    conversation_id: UUID
+    user_message: str
+    request_context: dict[str, object]
+    expected_draft_version: int
+    expected_reference_version: int | None
+    outcome: Literal["consumed", "recovered"]
+    turn_id: UUID | None
+    turn_status: Literal["running", "completed", "failed", "stopped"] | None
+
+
 class AssistantConversationResponse(BaseModel):
     selected_reference: AssistantSavedReference | None = None
     reference_version: int = Field(default=0, ge=0)
@@ -2302,6 +2321,8 @@ class CreationTaskEditJobReplayResponse(BaseModel):
 
 
 class CreationPlanPreviewResponse(BaseModel):
+    creation_intent: dict[str, object] | None = None
+    adoption: dict[str, object] | None = None
     template_id: str | None = None
     template_version: int | None = None
     template_settings: dict[str, object] = Field(default_factory=dict)
@@ -2329,12 +2350,27 @@ class CreationPlanPreviewResponse(BaseModel):
     preflight_fingerprint: str
 
 
+class CreationFinalScriptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=160)
+    text: str = Field(min_length=1, max_length=80000)
+    reply_origin: AssistantReplyPlanOriginRequest | None = None
+
+
+class CreationIntentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["goal_delegation", "discussion", "final_script"]
+    topic_title: str | None = Field(default=None, min_length=1, max_length=80)
+    final_script: CreationFinalScriptRequest | None = None
+
+
 class CreationRequestCreateRequest(CreationPlanDefaultsRequest):
     target_count: int = Field(default=1, ge=1, le=9_007_199_254_740_991)
     request_key: UUID
     output_relation: Literal["single", "different_topics", "variants", "series"] | None = None
     material_scope: Literal["workspace_library", "today_received"] = "workspace_library"
     assistant_turn_id: UUID | None = None
+    intent: CreationIntentRequest | None = None
 
 
 class CreationRequestReviseRequest(BaseModel):
@@ -2345,10 +2381,23 @@ class CreationRequestReviseRequest(BaseModel):
     requirements: CreationPlanDefaultsRequest | None = None
 
 
+class CreationRequestDeliveryRequirements(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    lipsync_quality: Literal["high", "fast"] = "high"
+    selected_voice: PlanProfileReference | None = None
+    selected_person: PlanProfileReference | None = None
+
+
 class CreationRequestWindowGoal(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goal: str = Field(min_length=1, max_length=2000)
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    requirements: CreationRequestDeliveryRequirements | None = None
 
     @field_validator("goal")
     @classmethod
@@ -2368,6 +2417,8 @@ class CreationRequestWindowConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
     input_fingerprint: str = Field(min_length=64, max_length=64)
+    adoption_kind: Literal["manual", "delegated_system"] = "manual"
+    assistant_turn_id: UUID | None = None
 
 
 class CreationRequestWindowReplanRequest(BaseModel):
@@ -2401,6 +2452,7 @@ class CreationRequestResponse(BaseModel):
     target_count: int = Field(ge=1)
     output_relation: Literal["single", "different_topics", "variants", "series"] | None = None
     requirements: dict[str, object]
+    intent: dict[str, object] | None = None
     material_scope: dict[str, object]
     clarification_questions: list[str]
     revision: int = Field(ge=1)
@@ -3090,6 +3142,7 @@ class KnowledgeItemVersionResponse(BaseModel):
     version: str
     content_hash: str | None = None
     source_item_id: str | None = None
+    original_source_item_id: str | None = None
     title: str
     body: str | None
     file_reference: str | None

@@ -12,6 +12,10 @@ from app.assistant.inputs import active_input, latest_consumed_input
 from app.assistant.goal_inputs import input_goal_authorization
 
 
+GOAL_TERMINAL_STATUSES = {"invalidated", "no_progress", "limit_reached",
+                          "production_completed", "production_failed", "output_checked"}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -509,6 +513,25 @@ class ConversationRepository:
             ).fetchone()
         return json.loads(row["request_context_json"]) if row else None
 
+    def get_request_receipt(self, client_request_id: str, conversation_id: str, workspace_id: str, member_id: str) -> dict | None:
+        """Reconcile the original submitted request, independent of current draft/target."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT r.*,t.status AS turn_status FROM assistant_conversation_request_receipts r "
+                "JOIN assistant_conversations c ON c.id=r.conversation_id AND c.workspace_id=r.workspace_id AND c.member_id=r.member_id "
+                "LEFT JOIN assistant_conversation_turns t ON t.id=r.turn_id AND t.conversation_id=r.conversation_id "
+                "WHERE r.client_request_id=? AND r.conversation_id=? AND r.workspace_id=? AND r.member_id=?",
+                (client_request_id, conversation_id, workspace_id, member_id),
+            ).fetchone()
+        if row is None:
+            return None
+        context = json.loads(row["request_context_json"])
+        return {"client_request_id": row["client_request_id"], "conversation_id": row["conversation_id"],
+            "user_message": row["user_message"], "request_context": context,
+            "expected_draft_version": row["expected_draft_version"],
+            "expected_reference_version": context.get("expected_reference_version"),
+            "outcome": row["outcome"], "turn_id": row["turn_id"], "turn_status": row["turn_status"]}
+
     def task_turn_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str) -> dict:
         """Read the consumed, trusted task snapshot for an active tool call."""
         with self._connect() as conn:
@@ -659,7 +682,7 @@ class ConversationRepository:
             else:
                 root = self._goal_root(conn, turn_id)
                 if (root and root["goal"].get("source_input_id") == input_id
-                        and root["goal"]["status"] not in {"invalidated", "no_progress", "limit_reached"}):
+                        and root["goal"]["status"] not in GOAL_TERMINAL_STATUSES):
                     self._write_goal(conn, root, {**root["goal"], "status": "invalidated",
                         "waiting_reason": "unrelated_timeline_change", "unfinished_steps": []})
         return True
@@ -724,18 +747,21 @@ class ConversationRepository:
             root = self._goal_root(conn, turn_id)
         return root["goal"] if root else None
 
-    def record_goal_output_checkpoint(self, turn_id: str, checkpoint: dict | None, *, expected_goal: dict | None = None) -> bool:
+    def record_goal_output_checkpoint(self, turn_id: str, checkpoint: dict | None, *,
+                                     production_result: dict | None = None, expected_goal: dict | None = None) -> bool:
         """A bounded host observation projection; never certifies the whole instruction."""
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             root = self._goal_root(conn, turn_id)
-            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
+            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in GOAL_TERMINAL_STATUSES:
                 return False
             goal = dict(root["goal"])
             if checkpoint:
                 goal["completed_output_checkpoint"] = checkpoint
             else:
                 goal.pop("completed_output_checkpoint", None)
+            if production_result is not None:
+                goal["production_result"] = production_result
             self._write_goal(conn, root, goal)
         return True
 
@@ -762,7 +788,7 @@ class ConversationRepository:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             root = self._goal_root(conn, turn_id)
-            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
+            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in GOAL_TERMINAL_STATUSES:
                 return False
             self._write_goal(conn, root, {**root["goal"], "completed_source_slots": list(completed.values())})
         return True
@@ -829,7 +855,7 @@ class ConversationRepository:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             root = self._goal_root(conn, root_id)
-            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in {"invalidated", "no_progress", "limit_reached"}:
+            if not self._goal_revision_matches(root, expected_goal) or root["goal"]["status"] in GOAL_TERMINAL_STATUSES:
                 return False
             goal = {**root["goal"], "status": status, "waiting_reason": waiting_reason}
             if task_version is not None:
@@ -921,6 +947,9 @@ class ConversationRepository:
             checkpoint = goal.get("completed_output_checkpoint")
             if checkpoint and checkpoint.get("timeline_version_id") != goal["target_snapshot"].get("timeline_version_id"):
                 goal.pop("completed_output_checkpoint")
+            production = goal.get("production_result")
+            if production and production.get("timeline_version_id") != goal["target_snapshot"].get("timeline_version_id"):
+                goal.pop("production_result")
             self._write_goal(conn, root, goal)
         return {"turn_id": turn_id, "conversation_id": root["conversation_id"], "goal": goal,
                 "request_context": context, "event": event, "source_turn_id": candidate["source_turn_id"]}
@@ -981,10 +1010,23 @@ class ConversationRepository:
             checkpoint = current_goal.get("completed_output_checkpoint")
             if new_action or checkpoint and checkpoint.get("timeline_version_id") != current_goal["target_snapshot"].get("timeline_version_id"):
                 current_goal.pop("completed_output_checkpoint", None)
+            production = current_goal.get("production_result")
+            if new_action or production and production.get("timeline_version_id") != current_goal["target_snapshot"].get("timeline_version_id"):
+                current_goal.pop("production_result", None)
+            reason = status
+            if status == "no_progress":
+                if current_goal.get("completed_output_checkpoint"):
+                    status, reason = "output_checked", "bounded_output_checkpoint_completed"
+                elif current_goal.get("production_result"):
+                    succeeded = current_goal["production_result"]["status"] == "succeeded"
+                    status = "production_completed" if succeeded else "production_failed"
+                    reason = "output_not_checked" if succeeded else "production_failed"
+                    steps = ["check_actual_output" if succeeded else "resolve_production_failure", "complete_original_instruction"]
+                else:
+                    reason = "no_new_business_action"
             goal = {**current_goal, "status": status, "unfinished_steps": steps,
                     "next_checkpoint": steps[0] if steps else None,
-                    "waiting_reason": ("bounded_output_checkpoint_completed" if current_goal.get("completed_output_checkpoint")
-                        else "no_new_business_action") if status == "no_progress" else status}
+                    "waiting_reason": reason}
             self._write_goal(conn, root, goal)
         return goal
 

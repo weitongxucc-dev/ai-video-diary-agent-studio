@@ -1,8 +1,8 @@
-import type {BusinessRequest, ToolRegistrar} from './contracts.ts';
+import type {BusinessRequest, ToolRegistrar, ActionSource} from './contracts.ts';
 import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
 
-export function registerScriptTools(pi: ToolRegistrar, {request, taskId, stage, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
-  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
+export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
+  request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
 }) {
   pi.registerTool({
     name: "find_knowledge",
@@ -19,7 +19,8 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, stage, 
       const offset = params.offset ?? 0, limit = params.limit ?? 5;
       if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 5)
         throw new Error("知识读取范围必须是有界整数分页");
-      if (stage !== "script") {
+      const current = taskId ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`) : null;
+      if (current?.task?.stage !== "script") {
         const query = new URLSearchParams({query: params.query, offset: String(offset), limit: String(limit)});
         const data = await request(`/api/knowledge-items/search?${query}`);
         const details = {matches: data.items, total_count: data.total_count, offset: data.offset, limit: data.limit,
@@ -55,7 +56,7 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, stage, 
   pi.registerTool({
     name: "preview_script_draft",
     label: "保存待确认文案",
-    description: "只为当前任务保存一份待用户检查的完整文案草稿；不会确认文案或开始制作。每段必须引用当前任务允许的来源 ID。",
+    description: "保存当前任务完整文案及真实来源。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
     parameters: {
       type: "object",
       properties: {
@@ -76,22 +77,34 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, stage, 
       required: ["title", "sections"], additionalProperties: false,
     },
     execute: async (_id: string, params: { title: string; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
-      if (!taskId || stage !== "script") throw new Error("当前步骤不能保存文案草稿");
+      if (!taskId) throw new Error("当前步骤不能保存文案草稿");
       if (!isTaskRead()) throw new Error("请先读取当前任务和允许使用的资料");
-      if (hasPreview()) throw new Error("本轮已保存文案草稿，请用户检查后再继续");
+      if (hasPreview()) throw new Error("本轮已有尚未采用的方案，不能另写文案");
+      const context = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
       const draft = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, {
         method: "POST",
-        body: JSON.stringify({ title: params.title, sections: params.sections.map((section, index) => ({
+        body: JSON.stringify({ title: params.title, assistant_turn_id: readActionSource().turnId, sections: params.sections.map((section, index) => ({
           ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
         })), ...(getScriptDraftUpdatedAt() ? { expected_updated_at: getScriptDraftUpdatedAt() } : {}) }),
       });
       if (typeof draft.updated_at === "string") setScriptDraftUpdatedAt(draft.updated_at);
-      markPreview();
-      const preview = { script_id: draft.id };
+      const delegated = context.creation_intent?.kind === "goal_delegation";
+      if (delegated) {
+        const adopted = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(draft.id)}/confirm`, {
+          method: "POST", body: JSON.stringify({title: draft.title, sections: draft.sections,
+            expected_updated_at: draft.updated_at, adoption_kind: "delegated_system", assistant_turn_id: readActionSource().turnId}),
+        });
+        if (adopted.task?.confirmed_script_id !== draft.id || !adopted.scripts?.some((item: any) => item.id === draft.id
+            && item.selection_status === "confirmed" && item.adoption?.kind === "delegated_system")) {
+          throw new Error("文案采用未返回对应实际版本，没有宣称采用完成");
+        }
+      } else markPreview();
+      const preview = {script_id: draft.id, adopted: delegated};
       return {
         content: [{ type: "text", text: JSON.stringify({
           title: draft.title, section_count: draft.sections.length,
-          instruction: "文案已保存为待确认草稿，请用户在工作台检查并明确确认。尚未开始制作。",
+          instruction: delegated ? "实际文案版本已按原委托采用；继续已授权制作步骤，尚未生成成片。"
+            : "文案已保存为草稿，尚未采用或开始制作。",
         }) }],
         details: { kind: "script_draft", preview },
       };

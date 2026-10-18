@@ -70,9 +70,9 @@ export function createDiaryTools(environment: Record<string, string | undefined>
         getMediaScriptCapabilities, getDeclaredCapabilities: () => declarations.initialMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview});
       typedEdits.registerPreview(pi);
     }
-    registerTopicTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview});
-    registerScriptTools(pi, {request, taskId, stage, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt});
-    registerExecutionTools(pi, {request, taskId, stage, isTaskRead, hasCreationAction, markCreationAction,
+    registerTopicTools(pi, {request, taskId, readActionSource, verifyTaskVersion, isTaskRead, hasPreview, markPreview});
+    registerScriptTools(pi, {request, taskId, readActionSource, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt});
+    registerExecutionTools(pi, {request, taskId, isTaskRead, hasCreationAction, markCreationAction,
       hasEditControlWrite: hasHistoryControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal});
     return registerControlledCodemode(pi);
   }

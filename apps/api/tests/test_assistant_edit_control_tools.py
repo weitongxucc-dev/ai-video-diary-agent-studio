@@ -18,7 +18,7 @@ globalThis.fetch=async(url,init)=>{
  if(path==='/api/creation-requests'&&method==='POST'){
   await new Promise(resolve=>setTimeout(resolve,25));
   if(input.failure==='parent_create')return{ok:false,status:503,json:async()=>({detail:'目标保存失败'})};
-  savedParent={id:'request-parent',revision:7,goal:body.goal,target_count:body.target_count,clarification_questions:[],current_window:null};
+  savedParent={id:'request-parent',revision:7,goal:body.goal,target_count:body.target_count,intent:body.intent,clarification_questions:[],current_window:null};
   return{ok:true,json:async()=>structuredClone(savedParent)};
  }
  if(path==='/api/creation-requests/request-parent'&&method==='GET')return{ok:true,json:async()=>structuredClone(savedParent)};
@@ -236,7 +236,8 @@ def test_prepare_window_loads_only_host_bound_saved_parent(tmp_path, context, bl
 
 @pytest.mark.parametrize("failure", [None, "parent_create"])
 def test_parallel_prepare_waits_for_same_create_promise_without_polling_or_recreating(tmp_path, context, failure):
-    create = {"tool": "preview_creation_plan", "params": {"goal": "一万条明确目标", "target_count": 10000, "output_relation": "independent_topics"}}
+    create = {"tool": "preview_creation_plan", "params": {"goal": "一万条明确目标", "target_count": 10000,
+        "output_relation": "different_topics", "intent": {"kind": "discussion"}}}
     prepare = {"tool": "prepare_creation_window", "params": {"goals": [{"goal": "第一条"}, {"goal": "第二条"}, {"goal": "第三条"}]}}
     out = call(tmp_path, context, [create, prepare], task=False, parallel=True, failure=failure)
     assert len([item for item in posts(out) if item["path"] == "/api/creation-requests"]) == 1
@@ -254,7 +255,7 @@ def test_parallel_prepare_waits_for_same_create_promise_without_polling_or_recre
 
 @pytest.mark.parametrize("failure", [None, "parent_create"])
 def test_parallel_create_is_claimed_before_await_and_never_submits_twice(tmp_path, context, failure):
-    create = {"tool": "preview_creation_plan", "params": {"goal": "完整目标", "target_count": 100}}
+    create = {"tool": "preview_creation_plan", "params": {"goal": "完整目标", "target_count": 100, "intent": {"kind": "discussion"}}}
     out = call(tmp_path, context, [create, create], task=False, parallel=True, failure=failure)
     assert len(posts(out)) == 1
     assert not out["steps"][1]["ok"]

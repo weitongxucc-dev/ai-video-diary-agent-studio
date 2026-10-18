@@ -52,7 +52,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         blockers = preview.get("blockers") if isinstance(preview.get("blockers"), list) else []
         return f"新建方案预检已返回，{len(blockers)} 项需处理；尚未创建任务。"
     if tool_name == "preview_script_draft":
-        return "文案草稿已保存，尚待你检查和确认。"
+        return "实际文案版本已按原委托采用，尚未生成成片。" if (details.get("preview") or {}).get("adopted") else "文案草稿已保存，尚未采用。"
     if tool_name == "apply_typed_edit":
         return "修改保存请求已返回；以原请求回读的时间线版本为准，可整项撤销。"
     if tool_name == "preview_typed_edit":

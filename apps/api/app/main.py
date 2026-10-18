@@ -270,6 +270,7 @@ from app.workspace_settings import (
     workspace_settings,
 )
 from app.source_repository import KnowledgeVersionConflict, SourceRepository
+from app.knowledge_file_store import KnowledgeOriginalUnavailable, KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
 from app.home_aggregation import aggregate_home
 from app.schemas import (
     AssistantConversationCreateRequest,
@@ -280,6 +281,7 @@ from app.schemas import (
     AssistantConversationDraftRestoreResponse,
     AssistantConversationListResponse,
     AssistantConversationResponse,
+    AssistantConversationRequestResponse,
     AssistantConversationStopRequest,
     AssistantConversationUpdateRequest,
     JobProgressResponse,
@@ -2844,6 +2846,8 @@ def _creation_plan_preflight(
 def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewResponse:
     return CreationPlanPreviewResponse.model_validate(
         {
+            "creation_intent": plan.creation_intent,
+            "adoption": plan.adoption,
             "template_id": plan.template_id,
             "template_version": plan.template_version,
             "template_settings": plan.template_settings,
@@ -5089,17 +5093,19 @@ def assistant_knowledge_reference(knowledge_item_id: str, request: Request, vers
 
 def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict | None:
     workspace_id, member_id, _row = _assistant_conversation_for_request(request, turn["conversation_id"])
-    # Only the exact original input may recover a missing SDK projection. An
-    # appended input invalidates that attribution even when the old write exists.
-    if any(item["target_turn_id"] == turn["id"] and item["status"] in {"consumed", "completed", "interrupted"}
-           for item in conversation_repo.list_inputs(turn["conversation_id"], workspace_id, member_id)):
+    from app.assistant.inputs import active_input, latest_consumed_input
+    current_turn = conversation_repo.get_turn(turn["id"])
+    latest = latest_consumed_input(current_turn["events"])
+    if latest and latest["status"] == "interrupted":
         return None
+    active = active_input(current_turn["events"])
+    request_key = active["input_id"] if active else turn["id"]
     owner, diagnostic = _content_reader(request, workspace_id)
     if not owner:
         return None
     with production_repo._connect() as conn:
         saved = conn.execute("SELECT id FROM creation_requests WHERE workspace_id=? AND owner_user_id=? AND request_key=?",
-                             (workspace_id, owner, turn["id"])).fetchone()
+                             (workspace_id, owner, request_key)).fetchone()
     if saved is None:
         return None
     return production_repo.get_creation_request(workspace_id, saved["id"],
@@ -5172,6 +5178,15 @@ def list_assistant_conversations(request: Request, scope_kind: str, scope_id: st
 def get_assistant_conversation(conversation_id: str, request: Request):
     _workspace_id, _member_id, row = _assistant_conversation_for_request(request, conversation_id)
     return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
+
+
+@app.get("/api/assistant/conversations/{conversation_id}/requests/{client_request_id}", response_model=AssistantConversationRequestResponse)
+def get_assistant_conversation_request(conversation_id: str, client_request_id: UUID, request: Request):
+    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
+    receipt = conversation_repo.get_request_receipt(str(client_request_id), conversation_id, workspace_id, member_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="当前对话中没有这次请求的保存回执。")
+    return AssistantConversationRequestResponse.model_validate(receipt)
 
 
 @app.post("/api/assistant/conversations/{conversation_id}/resume", response_model=AssistantConversationResponse)
@@ -5820,7 +5835,9 @@ def _creation_request_response(data: dict) -> CreationRequestResponse:
     current = data.get("current_window")
     if current is not None:
         current = {**current, "entries": [_creation_request_item_response(item) for item in current["entries"]]}
-    return CreationRequestResponse.model_validate({**data, "current_window": current})
+    return CreationRequestResponse.model_validate({**data, "current_window": current,
+        "intent": data["requirements"].get("creation_intent"),
+        "requirements": {key: value for key, value in data["requirements"].items() if key != "creation_intent"}})
 
 
 def _creation_request_item_response(item: dict) -> dict:
@@ -5876,14 +5893,32 @@ def _creation_number(value: str) -> int:
 
 
 def _explicit_creation_constraints(goal: str) -> tuple[int | None, int | None]:
+    from app.creation.intent_use_case import CreationIntentUseCase
     number = r"[0-9零〇一二两三四五六七八九十百千万]+"
     count = re.search(rf"({number})\s*(?:条|个|支)(?:短)?视频|(?:做|制作|生成|剪成)\s*({number})\s*(?:条|个|支)(?!镜头)", goal)
     duration = re.search(rf"(?:每条|每个|每支)(?:视频)?(?:为|做成|时长|要|控制在|长|约|大约|是|的|\s)*({number})\s*(分钟|秒钟|秒)", goal)
     if duration is None:
         duration = re.search(rf"(?:做成|制作|剪成)(?:一(?:个|条))?\s*({number})\s*(分钟|秒钟|秒)(?:的)?(?:短)?视频", goal)
     count_value = _creation_number(next(value for value in count.groups() if value)) if count else None
+    if count_value is None and CreationIntentUseCase.is_bilingual_variant_goal(goal):
+        count_value = 2
     duration_value = _creation_number(duration[1]) * (60 if duration[2] == "分钟" else 1) if duration else None
     return count_value, duration_value
+
+
+def _creation_request_input(request: Request, turn_id: str):
+    from app.assistant.inputs import active_input, latest_consumed_input
+    turn = conversation_repo.get_turn(turn_id)
+    if turn is None or turn["status"] != "running":
+        raise HTTPException(status_code=409, detail="当前创作回合已变化，没有保存或采用制作目标。")
+    _assistant_conversation_for_request(request, turn["conversation_id"])
+    latest = latest_consumed_input(turn["events"])
+    if latest and latest["status"] == "interrupted":
+        raise HTTPException(status_code=409, detail="当前输入已中断，不能恢复先前制作授权。")
+    active = active_input(turn["events"])
+    if request.headers.get("x-assistant-input-id") != (active["input_id"] if active else None):
+        raise HTTPException(status_code=409, detail="制作目标不属于当前已消费输入，没有沿旧输入保存或采用。")
+    return turn, active["message"] if active else turn["user_message"], active
 
 
 @app.post("/api/creation-requests", response_model=CreationRequestResponse, status_code=201)
@@ -5893,14 +5928,11 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
     if not owner:
         raise HTTPException(status_code=403, detail="请先确认当前成员，再保存制作目标。")
     goal = payload.goal
+    source_input = None
     if payload.assistant_turn_id is not None:
-        turn = conversation_repo.get_turn(str(payload.assistant_turn_id))
-        if turn is None or turn["status"] != "running":
-            raise HTTPException(status_code=409, detail="当前创作回合已变化，没有保存制作目标。")
-        _assistant_conversation_for_request(request, turn["conversation_id"])
-        if str(payload.request_key) != turn["id"]:
+        turn, goal, source_input = _creation_request_input(request, str(payload.assistant_turn_id))
+        if str(payload.request_key) != (source_input["input_id"] if source_input else turn["id"]):
             raise HTTPException(status_code=409, detail="制作目标必须沿本轮固定身份保存，不能重复建立。")
-        goal = turn["user_message"]
     stated_count, stated_duration = _explicit_creation_constraints(goal)
     if stated_count is not None and stated_count != payload.target_count:
         raise HTTPException(status_code=409, detail="总数量与用户原句不一致，没有保存错误的制作目标。")
@@ -5912,14 +5944,35 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
         scope = "workspace_library"
     relation = "single" if payload.target_count == 1 else payload.output_relation
     if payload.assistant_turn_id is not None and payload.target_count > 1:
+        from app.creation.intent_use_case import CreationIntentUseCase
         explicit_relation = ("series" if re.search(r"系列|分集", goal) else
-            "variants" if re.search(r"同(?:一|一个)?主题.{0,12}(?:版本|风格)|不同版本", goal) else
+            "variants" if CreationIntentUseCase.is_bilingual_variant_goal(goal) or re.search(r"同(?:一|一个)?主题.{0,12}(?:版本|风格)|不同版本", goal) else
             "different_topics" if re.search(r"不同主题|各自主题|多个主题", goal) else None)
         if explicit_relation is not None and relation not in {None, explicit_relation}:
             raise HTTPException(status_code=409, detail="多条视频的关系与用户原句不一致，没有保存错误的方案。")
         relation = explicit_relation
-    values = payload.model_dump(mode="json", exclude={"request_key", "output_relation", "material_scope", "assistant_turn_id"})
+    values = payload.model_dump(mode="json", exclude={"request_key", "output_relation", "material_scope", "assistant_turn_id", "intent"})
     values.update(goal=goal, target_count=1)
+    if payload.intent is not None:
+        from app.creation.intent_use_case import CreationIntentUseCase
+        intent = payload.intent.model_dump(mode="json")
+        final = intent.get("final_script")
+        if final and final.get("reply_origin"):
+            origin = final["reply_origin"]
+            reference, reply_text, reply_owner = _verified_assistant_reply(request, origin["conversation_id"], origin["turn_id"], None)
+            if reply_owner != owner or final["text"] != reply_text:
+                raise HTTPException(status_code=409, detail="定稿与指定回复的实际正文不一致，没有采用改写的版本。")
+            final["source_reply_reference"] = reference
+        source = ({"kind": "conversation_input", "member_id": owner, "request_id": str(payload.request_key),
+            "conversation_id": turn["conversation_id"], "turn_id": turn["id"],
+            "message_digest": hashlib.sha256(goal.encode()).hexdigest(),
+            **({"input_id": source_input["input_id"], "input_turn_id": turn["id"]} if source_input else {})} if payload.assistant_turn_id is not None else
+            {"kind": "user_action", "member_id": owner, "request_id": str(payload.request_key)})
+        try:
+            values["creation_intent"] = CreationIntentUseCase.receive_intent(intent, source=source,
+                target_count=payload.target_count, original_message=goal if payload.assistant_turn_id else None)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     fingerprint = hashlib.sha256(json.dumps({
         "goal": goal, "target_count": payload.target_count, "output_relation": relation,
         "requirements": values, "material_scope": scope,
@@ -5950,6 +6003,8 @@ def revise_creation_request(request_id: str, request: Request, payload: Creation
     relation = payload.output_relation or current["output_relation"]
     scope = payload.material_scope or current["material_scope"]["kind"]
     requirements = payload.requirements.model_dump(mode="json") if payload.requirements else current["requirements"]
+    if payload.requirements and current["requirements"].get("creation_intent"):
+        requirements["creation_intent"] = current["requirements"]["creation_intent"]
     if requirements["target_count"] != 1:
         raise HTTPException(status_code=422, detail="每条方案只制作一条视频；总数量保存在制作目标中。")
     try:
@@ -5971,18 +6026,27 @@ def preview_creation_request_window(request_id: str, request: Request, payload: 
 
 def _prepare_creation_request_window(request_id: str, request: Request, payload: CreationRequestWindowPreviewRequest,
     *, replace_window_id: str | None = None):
+    from app.creation.intent_use_case import CreationIntentUseCase
     current = _creation_request_or_404(request, request_id)
     if current["clarification_questions"]:
         raise HTTPException(status_code=409, detail="先确认制作目标中尚未明确的条件，再准备逐条方案。")
-    if len({item.goal for item in payload.goals}) != len(payload.goals):
-        raise HTTPException(status_code=422, detail="每条视频需要具体目标，不能复制相同目标凑数。")
     workspace_id = current_workspace_id(request)
     owner, diagnostic = _content_reader(request, workspace_id)
     entries = []
-    for item in payload.goals:
-        inputs = CreationPlanPreviewRequest.model_validate({**current["requirements"], "goal": item.goal,
-            "name": item.name, "target_count": 1})
+    deliveries = [CreationPlanPreviewRequest.model_validate(CreationIntentUseCase.delivery_inputs(
+        current["requirements"], goal=item.goal, name=item.name,
+        overrides=item.requirements.model_dump(mode="json", exclude_unset=True) if item.requirements else {}))
+        for item in payload.goals]
+    try:
+        CreationIntentUseCase.check_distinct_deliveries([item.model_dump(mode="json") for item in deliveries])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    for inputs in deliveries:
         plan = _creation_plan_preflight(request, workspace_id, inputs)
+        try:
+            plan = CreationIntentUseCase.use_provided_copy(plan, current["requirements"].get("creation_intent"))
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         plan.id = f"plan_{uuid4().hex[:12]}"
         task = CreationTask(id=f"task_{uuid4().hex[:12]}", workspace_id=workspace_id,
             plan_id=plan.id, name=plan.name, scenario=plan.goal)
@@ -6004,17 +6068,29 @@ def _prepare_creation_request_window(request_id: str, request: Request, payload:
 
 @app.post("/api/creation-requests/{request_id}/windows/{window_id}/replan", response_model=CreationRequestResponse)
 def replan_creation_request_window(request_id: str, window_id: str, request: Request, payload: CreationRequestWindowReplanRequest):
+    from app.creation.intent_use_case import CreationIntentUseCase
     current = _creation_request_or_404(request, request_id)
     window = current["current_window"]
     if window is None or window["id"] != window_id or window["status"] != "proposed":
         raise HTTPException(status_code=409, detail="这组方案已处理，请重新读取当前制作目标。")
     inputs = CreationRequestWindowPreviewRequest.model_validate({"expected_revision": payload.expected_revision,
-        "goals": [{"goal": entry["plan"]["goal"], "name": entry["plan"]["name"]} for entry in window["entries"]]})
+        "goals": [{"goal": entry["plan"]["goal"], "name": entry["plan"]["name"],
+            "requirements": {key: value for key, value in CreationIntentUseCase.frozen_delivery_inputs(
+                current["requirements"], entry["plan"]).items()
+                if key in {*CreationIntentUseCase.DELIVERY_FIELDS, "selected_voice", "selected_person"}}}
+            for entry in window["entries"]]})
     return _prepare_creation_request_window(request_id, request, inputs, replace_window_id=window_id)
 
 
 @app.post("/api/creation-requests/{request_id}/windows/{window_id}/confirm", response_model=CreationRequestResponse)
 def confirm_creation_request_window(request_id: str, window_id: str, request: Request, payload: CreationRequestWindowConfirmRequest):
+    from app.creation.intent_use_case import CreationIntentUseCase
+    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
+        _turn, message, _input = _creation_request_input(request, str(payload.assistant_turn_id))
+        try:
+            CreationIntentUseCase.reject_discussion_only_input(message)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     current = _creation_request_or_404(request, request_id)
     window = current["current_window"]
     if window is None or window["id"] != window_id:
@@ -6022,9 +6098,13 @@ def confirm_creation_request_window(request_id: str, window_id: str, request: Re
     if window["status"] == "proposed":
         for entry in window["entries"]:
             frozen = entry["plan"]
-            inputs = CreationPlanPreviewRequest.model_validate({**current["requirements"],
-                "goal": frozen["goal"], "name": frozen["name"], "target_count": 1})
-            live = _creation_plan_preflight(request, current_workspace_id(request), inputs)
+            inputs = CreationPlanPreviewRequest.model_validate(
+                CreationIntentUseCase.frozen_delivery_inputs(current["requirements"], frozen))
+            try:
+                live = CreationIntentUseCase.use_provided_copy(_creation_plan_preflight(request, current_workspace_id(request), inputs),
+                    current["requirements"].get("creation_intent"))
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             if live.preflight_fingerprint != frozen["preflight_fingerprint"]:
                 raise HTTPException(status_code=409, detail="方案使用的素材、资料或制作条件已变化，请重新准备这组方案。")
     owner, diagnostic = _content_reader(request, current_workspace_id(request))
@@ -6032,6 +6112,7 @@ def confirm_creation_request_window(request_id: str, window_id: str, request: Re
         data = production_repo.confirm_creation_request_window(
             current_workspace_id(request), request_id, window_id, expected_revision=payload.expected_revision,
             input_fingerprint=payload.input_fingerprint, verified_owner_user_id=owner, local_diagnostic=diagnostic,
+            adoption_kind=payload.adoption_kind,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -6659,12 +6740,15 @@ def confirm_creation_task_topic(
     payload: CreationTaskTopicConfirmRequest,
 ) -> CreationTaskTopicsResponse:
     workspace_id = current_workspace_id(request)
+    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
+        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     try:
         task, _ = production_repo.confirm_topic_candidate(
             workspace_id,
             task_id,
             topic_id,
             title=payload.title,
+            adoption_kind=payload.adoption_kind, verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task topic not found") from exc
@@ -6721,6 +6805,28 @@ def get_creation_task_workspace(
     )
 
 
+def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: str, *, draft_only: bool = False):
+    from app.creation.intent_use_case import CreationIntentUseCase
+    workspace_id = current_workspace_id(request)
+    owner = _content_reader(request, workspace_id)[0]
+    try:
+        origin = conversation_repo.task_turn_source(turn_id, workspace_id, owner, task_id)
+        if origin.get("input_id") != request.headers.get("x-assistant-input-id"):
+            raise ValueError("采用动作不属于当前已消费输入，没有沿旧输入采用。")
+        if not draft_only:
+            CreationIntentUseCase.reject_discussion_only_input(origin["raw_command"])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _script_topic_origin(workspace_id: str, plan: CreationPlan, topic: CreationTaskTopicCandidate) -> Literal["generated", "provided"]:
+    intent = plan.creation_intent
+    if not intent or not (intent.get("topic_title") or intent.get("final_script")):
+        return "generated"
+    run = production_repo.get_topic_generation_run(workspace_id, topic.run_id)
+    return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"
+
+
 def _assistant_script_inputs(workspace_id: str, task_id: str):
     task = _creation_task_or_404(workspace_id, task_id)
     if task.stage != "script" or task.confirmed_script_id:
@@ -6762,6 +6868,7 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
     return {
         "task_id": task.id,
         "goal": plan.goal,
+        "creation_intent": plan.creation_intent,
         "language": plan.language,
         "duration_target_seconds": plan.duration_target_seconds,
         "presenter_share_target": plan.presenter_share_target,
@@ -6904,6 +7011,8 @@ def save_assistant_script_draft(
     from app.topics import CreationTaskGeneratedScriptSection
 
     workspace_id = current_workspace_id(request)
+    if payload.assistant_turn_id is not None:
+        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
     task, plan, topic, sources, input_references = _assistant_script_inputs(workspace_id, task_id)
     reader = _require_current_script_inputs(request, workspace_id, plan, input_references)
     sections = [CreationTaskScriptSection(**section.model_dump()) for section in payload.sections]
@@ -6920,10 +7029,12 @@ def save_assistant_script_draft(
     elif payload.expected_updated_at is not None:
         raise HTTPException(status_code=409, detail="草稿版本已变化，请重新读取后再保存")
     binding = (asdict(plan), asdict(topic), tuple(sources), input_references)
+    topic_origin = _script_topic_origin(workspace_id, plan, topic)
     script_input = CreationTaskScriptInput(
         goal=plan.goal, language=plan.language, presenter_share_target=plan.presenter_share_target,
         duration_target_seconds=plan.duration_target_seconds, topic_title=topic.title,
-        topic_angle=topic.angle, topic_audience=topic.audience, topic_outline=tuple(topic.outline),
+        topic_angle=topic.angle if topic_origin == "generated" else "", topic_audience=topic.audience, topic_outline=tuple(topic.outline),
+        topic_origin=topic_origin,
         sources=tuple(sources), style_instruction=str(plan.template_settings.get("style_instruction", "")),
         script_structure=tuple(plan.template_settings.get("script_structure", [])),
         script_section_count=(plan.template_settings.get("script_section_count")
@@ -7730,7 +7841,9 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
             candidate = production_repo.get_creation_task_script(workspace_id, script_id)
         except KeyError as exc:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
-        if candidate.task_id != task_id or candidate.selection_status != "draft":
+        adopted = (candidate.selection_status == "confirmed" and candidate.adoption
+            and candidate.adoption["kind"] == "delegated_system")
+        if candidate.task_id != task_id or candidate.selection_status != "draft" and not adopted:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
         script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
         edit_preview = None
@@ -7760,8 +7873,6 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     elif isinstance(preview, dict) and preview.get("kind") == "execution_action":
         action = preview.get("action")
         status = preview.get("status")
-        if trusted_stage in {"topic", "script"}:
-            raise HTTPException(status_code=502, detail="选题和待确认文案阶段不能开始、继续或取消制作。")
         if (action not in {"start", "resume", "cancel"} or not isinstance(status, dict)
                 or status.get("task_id") != task_id):
             raise HTTPException(status_code=502, detail="对话没有返回可核实的制作作业状态。")
@@ -7942,6 +8053,7 @@ def generate_creation_task_script(
                     presenter_share_target=plan.presenter_share_target,
                     duration_target_seconds=plan.duration_target_seconds,
                     topic_title=selected_topic.title,
+                    topic_origin=_script_topic_origin(workspace_id, plan, selected_topic),
                     topic_angle=selected_topic.angle,
                     topic_audience=selected_topic.audience,
                     topic_outline=tuple(selected_topic.outline),
@@ -8041,6 +8153,8 @@ def confirm_creation_task_script(
     payload: CreationTaskScriptConfirmRequest,
 ) -> CreationTaskScriptsResponse:
     workspace_id = current_workspace_id(request)
+    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
+        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     try:
@@ -8074,6 +8188,8 @@ def confirm_creation_task_script(
                 for section in payload.sections
             ],
             expected_updated_at=payload.expected_updated_at,
+            adoption_kind=payload.adoption_kind,
+            verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task script not found") from exc
@@ -12074,7 +12190,7 @@ def save_source_item_to_knowledge(
             source_item_id,
             verified_owner_user_id=_content_reader(request, workspace_id)[0],
         )
-    except KeyError as exc:
+    except (KeyError, PermissionError) as exc:
         raise HTTPException(status_code=404, detail="source item not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -12101,7 +12217,7 @@ def import_knowledge_file(
     request: Request,
     payload: KnowledgeFileImportRequest,
 ) -> SourceItemDetailResponse:
-    """导入 Markdown/文本/PDF 文件：保存全文、真实出处和显式参数。
+    """导入 Markdown/文本/PDF/Word/Excel 文件：保存全文、真实出处和显式参数。
 
     解析失败（不支持格式、扫描件无文本层）直接报错，不写入伪造正文。
     """
@@ -12122,9 +12238,8 @@ def import_knowledge_file(
         account_or_rule="知识文件导入",
     )
     try:
-        item = source_repository.save_source_items(
+        item = source_repository.save_source_file(
             workspace_id,
-            [
                 SourceItem(
                     id=f"source_{uuid4().hex}",
                     workspace_id=workspace_id,
@@ -12144,12 +12259,37 @@ def import_knowledge_file(
                     sections=parsed.sections,
                     parameters=parsed.parameters,
                     use_state=payload.use_state,
-                )
-            ],
-        )[0]
+                ), data, verified_owner_user_id=_content_reader(request, workspace_id)[0],
+        )
+    except KnowledgeOriginalIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KnowledgeOriginalStorageError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _source_item_response(item)
+
+
+@app.get("/api/knowledge-items/{knowledge_item_id}/versions/{version}/original")
+def download_knowledge_original(knowledge_item_id: str, version: str, request: Request):
+    workspace_id = current_workspace_id(request)
+    owner, diagnostic = _content_reader(request, workspace_id)
+    try:
+        original = source_repository.read_knowledge_original(workspace_id, knowledge_item_id, version,
+            user_id=owner, local_diagnostic=diagnostic)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到可访问的资料原件或固定版本。") from exc
+    except KnowledgeOriginalUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KnowledgeOriginalIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KnowledgeOriginalStorageError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return Response(original.content, media_type=original.content_type, headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(original.filename, safe='')}",
+        "ETag": f'"{original.content_hash}"', "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/knowledge-items/search", response_model=KnowledgeSearchResponse)
@@ -13949,6 +14089,12 @@ def _run_goal_turn(claim, fresh):
     # A verified adoption may legitimately move review back to montage. Keep
     # the original selection and enforce the same current object validator.
     stage = context["stage"]
+    if stage in {"topic", "script"} and task.confirmed_script_id:
+        from app.creation.intent_use_case import CreationIntentUseCase
+        adopted_script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+        adopted_plan = _creation_plan_for_task_or_404(workspace_id, task)
+        if CreationIntentUseCase.adopted_for_execution(adopted_plan, adopted_script):
+            stage = task.stage
     if (claim["event"].get("status") == "confirmed" and "adopted_operation" in fresh["facts"]
             or stage == "review" and task.stage == "montage"):
         stage = task.stage
@@ -14171,8 +14317,19 @@ def _assistant_execution_source(task_id, request, turn_id, action, input_digest=
         raise HTTPException(status_code=409, detail="原助手制作要求已被新的真人要求替代")
     snapshot = origin["context"].get("target_snapshot", {})
     version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if origin["context"].get("stage") in {"topic", "script"} or not origin["raw_command"].strip():
+    if not origin["raw_command"].strip():
         raise HTTPException(status_code=409, detail="原助手制作要求的阶段或目标版本已失效")
+    if origin["context"].get("stage") in {"topic", "script"}:
+        from app.creation.intent_use_case import CreationIntentUseCase
+        plan = _creation_plan_for_task_or_404(task.workspace_id, task)
+        script = (production_repo.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+            if task.confirmed_script_id else None)
+        if not CreationIntentUseCase.adopted_for_execution(plan, script):
+            raise HTTPException(status_code=409, detail="原回合尚无已授权采用的实际文案版本，不能开始制作。")
+        try:
+            CreationIntentUseCase.reject_discussion_only_input(origin["raw_command"])
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
             task.current_timeline_version_id, version.sequence if version else 0):
         successor = (_assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
