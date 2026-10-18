@@ -1,3 +1,4 @@
+import {conversationCommand} from './conversation-commands.mjs';
 import {CliError} from './errors.mjs';
 import {readCommand} from './read-commands.mjs';
 import {scriptCommand} from './script-commands.mjs';
@@ -7,6 +8,7 @@ import {jobCommand} from './job-commands.mjs';
 
 export async function dispatch(api,args) {
   const [group,command] = args.positional;
+  if (group === 'conversation') return conversationCommand(api,args);
   if (['capabilities','task','material'].includes(group)) return readCommand(api,args);
   if (['tool','script'].includes(group)) return scriptCommand(api,args);
   if (group === 'execution') return executionCommand(api,args);

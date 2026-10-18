@@ -12,7 +12,7 @@
 
 产品已要求CLI、MCP及飞书/钉钉可指挥同一创作系统，完整范围见[产品外部调用](product-requirements.md#123-climcp与消息产品指挥)和[架构适配边界](system-architecture.md#316-climcp与平台消息适配)。本页下方仍只列当前源码真实命令，不将目标能力写成已可执行命令。
 
-当前CLI已有能力/素材/任务读取、编辑预览应用、图片程序、制作作业及历史控制。待补齐：自然语言目标与持续对话、定稿采用和逐条语言配置、安装包中的可发现入口、所有写入的独立持久回执及受权产物取得。尤其现有制作开始/恢复与撤销/重做的未知结果限制仍按下文执行；不能因新要求而盲重发。
+当前CLI已有能力/素材/任务读取、编辑预览应用、图片程序、制作作业、历史控制及自然语言会话入口。自然语言意图的实际制作能力由API决定，入口接通不表示自主制作/逐条语言已通过。待补齐：完整定稿采用和逐条语言配置、安装包中的可发现入口、所有写入的独立持久回执及受权产物取得。尤其现有制作开始/恢复与撤销/重做的未知结果限制仍按下文执行；不能因新要求而盲重发。
 
 MCP服务端、飞书和钉钉适配需各自实现与实测，当前CLI代码不证明它们已经存在；Pi可调用外部MCP不等于曜核已能被MCP调用。新协议复用服务端能力schema与同一业务用例，客户端不复制参数规则、任务库或调度。协议完成后再追加精确命令/配置示例，并用真实客户端和同一作品验收。
 
@@ -35,6 +35,23 @@ POSIX 上文件必须由当前用户拥有、权限恰为 `0600`，且为普通�
 node scripts/yaohe.mjs --help
 node scripts/yaohe.mjs --config /private/path/config.json task inspect TASK
 ```
+
+## 自然语言会话
+
+```bash
+node scripts/yaohe.mjs conversation create --file conversation.json
+node scripts/yaohe.mjs conversation inspect CONVERSATION
+node scripts/yaohe.mjs conversation draft CONVERSATION --file draft.json
+node scripts/yaohe.mjs conversation turn CONVERSATION --file turn.json --request-id UUID
+node scripts/yaohe.mjs conversation turn CONVERSATION --file task-turn.json --request-id UUID --task TASK
+node scripts/yaohe.mjs conversation request CONVERSATION UUID
+```
+
+create文件指定`scope_kind`、`scope_id`及可选`title`，例如`{"scope_kind":"home","scope_id":"home","title":"产品介绍"}`。创建对话不创建视频任务。
+
+先inspect，再显式draft保存`{"draft_text":"只讨论介绍片文案，不开始制作","expected_draft_version":0}`；版本来自实际读取。turn文件提供相同`message`、保存后返回的`expected_draft_version`及`expected_reference_version`。CLI不替用户覆盖新草稿，不把浏览页面当作新目标。指定`--task`时还需`context_stage`，可传期望时间线版本/序号、选中对象及播放头，沿现有任务回合接口。
+
+发送复用服务端Pi会话和业务幂等，固定UUID绑定同一内容；请求默认等待120秒，可设`--timeout-seconds`至300秒。完成回合不等于制作完成，读取返回的真实任务/作业结果。HTTP结果未知时保留原请求定位，通过request查询原回执；不按最新一轮猜成功，不自动重发或重建会话。create和draft也不自动重试。插话/撤回、随包发现及全部制作回执仍需独立接通验收。
 
 ## 能力、对象与素材读取
 

@@ -609,3 +609,40 @@ test('update and revoke lost replies are not automatically repeated',async t=>{
   assert.equal((await f.cli('tool','revoke',TOOL,'--expected-tool-version','1')).code,4);
   assert.deepEqual(f.calls.map(call=>call.method),['PATCH','POST']);
 });
+
+test('conversation turn preserves fixed draft/reference and task bindings without an implicit draft write',async t=>{
+  const c='4d2caf71-fda5-4ab7-a382-541a1b7ef688';
+  const f=await fixture(t,(call,res)=>send(res,200,{turn_id:'turn_original',turn_status:'completed',reply:'已修改'}));
+  const file=join(f.directory,'turn.json');
+  const payload={message:'只修改第二条字幕',expected_draft_version:9,expected_reference_version:3,context_stage:'montage',expected_timeline_version_id:'version_original',expected_timeline_sequence:7};
+  await writeFile(file,JSON.stringify(payload));
+  const result=await f.cli('conversation','turn',c,'--task',TASK,'--request-id',REQUEST,'--file',file);
+  assert.equal(result.code,0);
+  assert.equal(f.calls.length,1);
+  assert.equal(f.calls[0].url,PREFIX+'/assistant/turn');
+  assert.deepEqual(f.calls[0].body,{...payload,conversation_id:c,client_request_id:REQUEST});
+  assert.equal(result.json.request_locator,`/api/assistant/conversations/${c}/requests/${REQUEST}`);
+});
+
+test('conversation lost response never resubmits or substitutes latest turn and exposes exact receipt locator',async t=>{
+  const c='4d2caf71-fda5-4ab7-a382-541a1b7ef688';
+  const f=await fixture(t,(_call,res)=>res.destroy());
+  const file=join(f.directory,'turn.json');
+  await writeFile(file,JSON.stringify({message:'制作一条介绍片',expected_draft_version:1,expected_reference_version:0}));
+  const result=await f.cli('conversation','turn',c,'--request-id',REQUEST,'--file',file);
+  assert.equal(result.code,4); assert.equal(f.calls.length,1);
+  assert.equal(result.json.client_request_id,REQUEST);
+  assert.equal(result.json.request_locator,`/api/assistant/conversations/${c}/requests/${REQUEST}`);
+});
+
+test('conversation draft conflict and forged identity are not repaired by overwriting',async t=>{
+  const c='4d2caf71-fda5-4ab7-a382-541a1b7ef688';
+  const f=await fixture(t,(_call,res)=>send(res,409,{detail:'assistant_draft_conflict'}));
+  const file=join(f.directory,'draft.json');
+  await writeFile(file,JSON.stringify({draft_text:'最终稿',expected_draft_version:2}));
+  assert.equal((await f.cli('conversation','draft',c,'--file',file)).code,1);
+  assert.equal(f.calls.length,1);
+  await writeFile(file,JSON.stringify({message:'生成',expected_draft_version:3,expected_reference_version:0,member_id:'other'}));
+  assert.equal((await f.cli('conversation','turn',c,'--file',file,'--request-id',REQUEST)).code,2);
+  assert.equal(f.calls.length,1);
+});
