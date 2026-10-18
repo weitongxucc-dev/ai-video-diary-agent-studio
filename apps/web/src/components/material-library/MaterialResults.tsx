@@ -9,6 +9,7 @@ import styles from "../MaterialLibraryControls.module.css";
 type Props = {
     assets: MaterialAsset[];
     selectedId: string | null;
+    selectionDisabled: boolean;
     viewMode: "grid" | "list";
     hasFilters: boolean;
     hasTagFilter: boolean;
@@ -20,14 +21,14 @@ type Props = {
     onResetFilters: () => void;
     onImport: () => void;
 };
-export function MaterialResults({ assets, selectedId, viewMode, hasFilters, hasTagFilter, intakeBound, failedThumbnails, onThumbnailFailure, onSelect, onReference, onResetFilters, onImport }: Props) {
+export function MaterialResults({ assets, selectedId, selectionDisabled, viewMode, hasFilters, hasTagFilter, intakeBound, failedThumbnails, onThumbnailFailure, onSelect, onReference, onResetFilters, onImport }: Props) {
     return <>
         {assets.length ? (<div className={`library-grid ${styles.results}${viewMode === "list" ? ` is-list ${styles.objectList}` : ""}`}>
           {assets.map((asset) => {
                 const AssetStateIcon = asset.analysis_status === "failed" ? CircleAlert
                     : asset.analysis_status === "blocked" ? CircleMinus : asset.use_state === "excluded" ? CircleDot
                         : asset.analysis_status === "ready" ? CircleCheck : CircleDashed;
-                return (<div className={styles.referenceEntry} key={asset.id}><button className={`library-card ${styles.materialCard}${selectedId === asset.id ? " is-selected" : ""}`} data-open-details onClick={() => onSelect(asset)} type="button">
+                return (<div className={styles.referenceEntry} key={asset.id}><button className={`library-card ${styles.materialCard}${selectedId === asset.id ? " is-selected" : ""}`} data-open-details disabled={selectionDisabled} onClick={() => onSelect(asset)} type="button">
                 <span className="library-card__poster">
                   {failedThumbnails[asset.id] ? <Film className="library-card__fallback-icon" size={22}/> : asset.media_type === "image" ? (<img alt="" aria-hidden="true" loading="lazy" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>) : asset.media_type === "audio" ? (<Volume2 className="library-card__fallback-icon" size={22}/>) : (<WorkspaceVideo aria-hidden="true" muted playsInline preload="metadata" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>)}
                   {asset.media_type === "video" ? (<Film className="library-card__fallback-icon" size={22}/>) : null}
@@ -46,7 +47,7 @@ export function MaterialResults({ assets, selectedId, viewMode, hasFilters, hasT
                   </small>
                   <small>{asset.user_tags.slice(0, 2).join(" · ") || roleLabel(asset)} · {reviewLabel(asset)}</small>
                 </span>
-              </button>{onReference ? <button className={styles.referenceButton} type="button" title="引用到对话" aria-label={`引用到对话：${fileLabel(asset.file_name)}`} onClick={() => onReference(asset)}><MessageSquarePlus size={16} /></button> : null}</div>);
+              </button>{onReference ? <button className={styles.referenceButton} type="button" disabled={selectionDisabled} title="引用到对话" aria-label={`引用到对话：${fileLabel(asset.file_name)}`} onClick={() => onReference(asset)}><MessageSquarePlus size={16} /></button> : null}</div>);
             })}
           </div>) : (<div className="library-empty">
             <Film size={23}/>

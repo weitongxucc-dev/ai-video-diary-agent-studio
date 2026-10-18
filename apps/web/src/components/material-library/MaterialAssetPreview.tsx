@@ -38,7 +38,7 @@ export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSeg
           {mediaLabel(asset.media_type)} · {roleLabel(asset)} · {reviewLabel(asset)}
         </span>
       </div>
-      <div className={styles.rangeHeading}><span>{segmentScope && segment ? `当前范围：${duration(segment.start_seconds)}–${duration(segment.end_seconds)}` : "当前范围：整条素材"}</span>{segmentScope ? <button onClick={onSelectAsset} type="button">切回整条素材</button> : null}</div>
+      <div className={styles.rangeHeading}><span>{segmentScope && segment ? `当前范围：${duration(segment.start_seconds)}–${duration(segment.end_seconds)}` : "当前范围：整条素材"}</span>{segmentScope ? <button disabled={disabled} onClick={onSelectAsset} type="button">切回整条素材</button> : null}</div>
       {previewFailed ? <p className={styles.analysisMessage} role="alert">原素材暂时无法预览，请连接原盘或检查文件后重试。<button type="button" onClick={onRetryPreview}>重新读取预览</button></p> : null}
       <p className={styles.modalitySummary}>{analysisSummary(asset)}</p>
       {asset.analysis_status === "pending" ? (<div className={styles.analysisMessage}>
@@ -61,7 +61,7 @@ export function MaterialAssetPreview({ asset, segment, segmentScope, selectedSeg
                     "等待补充片段描述"}
               </p>
               <ChevronRight size={14}/>
-            </button>{onReferenceSegment ? <button className={styles.referenceButton} type="button" title="引用到对话" aria-label={`引用到对话：${fileLabel(asset.file_name)} · 片段 ${duration(segment.start_seconds)}–${duration(segment.end_seconds)}`} onClick={() => onReferenceSegment(segment)}><MessageSquarePlus size={16} /></button> : null}</div>))}
+            </button>{onReferenceSegment ? <button className={styles.referenceButton} type="button" disabled={disabled} title="引用到对话" aria-label={`引用到对话：${fileLabel(asset.file_name)} · 片段 ${duration(segment.start_seconds)}–${duration(segment.end_seconds)}`} onClick={() => onReferenceSegment(segment)}><MessageSquarePlus size={16} /></button> : null}</div>))}
         </div>) : null}
   </>;
 }

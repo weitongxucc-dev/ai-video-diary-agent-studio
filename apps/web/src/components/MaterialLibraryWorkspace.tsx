@@ -21,7 +21,7 @@ import { useMaterialUsageRecords } from "./material-library/useMaterialUsageReco
 import { useMaterialBusinessObjects } from "./material-library/useMaterialBusinessObjects";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw, Search, Sparkles, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { useAssistantMaterialReference, useAssistantSelection } from "./AssistantConversationProvider";
@@ -87,6 +87,7 @@ export function MaterialLibraryWorkspace({
   const [viewMode, setViewMode] = useWorkspaceViewState<"grid" | "list">("library.viewMode", "grid");
   const [actionBusy, setBusy] = useState<Busy>(null);
   const [listBusy, setListBusy] = useState<"search" | "load" | null>(null);
+  const [needsVisibleRead, setNeedsVisibleRead] = useState(false);
   const [scanReadRevision, setScanReadRevision] = useState(0);
   const [error, setError] = useState("");
   const { intake, intakeError, intakeBusy, refreshIntakeStatus, bindIntake, confirmCopy, readIntakeAfterScan } = useMaterialIntake();
@@ -168,6 +169,7 @@ export function MaterialLibraryWorkspace({
   const { pending: notesPending, voiceNote, voiceNoteNotice, noteDrafts, noteErrors, noteSaved, noteBatchIds, batchContext, batchNoteError, batchNoteSaved,
     resetVoiceNote, changeAssetNote, cancelSpokenNote, startVoiceNote, receiveVoiceNote, saveNotes, chooseBatchAsset, changeBatchContext } = useMaterialNotes(selected?.id ?? null, replaceAsset);
   const busy: Busy = notesPending ? "notes" : actionBusy ?? listBusy;
+  const selectionBlocked = needsVisibleRead || listBusy === "search";
   const noteBatchAssets = assets.filter(asset => noteBatchIds.includes(asset.id));
   const noteDraft = selected ? noteDrafts[selected.id] ?? selected.user_description : "";
   const tagScope = selected && selectedSegment ? `${selected.id}:${selectedSegment.id}` : "";
@@ -260,6 +262,7 @@ export function MaterialLibraryWorkspace({
           const refreshed = libraries.flatMap((page) => page.assets);
           setAcceptedSearch(scope);
           setAssets(refreshed);
+          setNeedsVisibleRead(false);
           setTotalCount(libraries[0]?.total_count ?? 0);
           setHasMore(refreshed.length < (libraries[0]?.total_count ?? 0));
         }
@@ -302,6 +305,7 @@ export function MaterialLibraryWorkspace({
           if (!active || !ownsListRead(scope, request) || revision !== assetWriteRevision.current) return;
           setAcceptedSearch(scope);
           setAssets(result.assets);
+          setNeedsVisibleRead(false);
           setTotalCount(result.total_count);
           setHasMore(result.has_more);
           if (
@@ -400,6 +404,7 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectAsset(asset: MaterialAsset, explicit = true) {
+    if (explicit && selectionBlocked) return;
     setLocatedAsset(null);
     resetVoiceNote();
     selectionRevision.current += 1;
@@ -423,6 +428,7 @@ export function MaterialLibraryWorkspace({
   }
 
   function appendMaterialReference(asset: MaterialAsset, segment?: MaterialSegment) {
+    if (selectionBlocked) return;
     referenceSelection?.select([{
       kind: "material",
       label: segment
@@ -443,6 +449,7 @@ export function MaterialLibraryWorkspace({
   }
 
   function selectSegment(segment: MaterialSegment, explicit = true) {
+    if (explicit && selectionBlocked) return;
     selectionRevision.current += 1;
     setSelectedSegmentId(segment.id);
     clearSegmentEditAnchor();
@@ -495,7 +502,7 @@ export function MaterialLibraryWorkspace({
     }
   }
 
-  async function refreshLibrary() {
+  const refreshLibrary = useCallback(async () => {
     const request = ++listReadSequence.current;
     const revision = assetWriteRevision.current;
     const searchAtRequest = lastSearch.current;
@@ -510,11 +517,25 @@ export function MaterialLibraryWorkspace({
       const refreshed = pages.flatMap(page => page.assets);
       setAcceptedSearch(searchAtRequest);
       setAssets(refreshed); setTotalCount(pages[0].total_count); setHasMore(refreshed.length < pages[0].total_count);
+      setNeedsVisibleRead(false);
       setFailedThumbnails({});
     } catch (cause) {
       if (ownsListRead(searchAtRequest, request)) setError(visibleError(cause, "素材列表刷新失败，请重试。"));
     } finally { if (ownsListRead(searchAtRequest, request)) setListBusy(null); }
-  }
+  }, [assets.length, initialLibrary.limit, query, filter, initialTag, mediaType, ownsListRead]);
+
+  const wasViewActive = useRef(viewActive);
+  useLayoutEffect(() => {
+    const resumed = viewActive && !wasViewActive.current;
+    wasViewActive.current = viewActive;
+    if (!viewActive) {
+      listReadSequence.current += 1;
+      setListBusy(null);
+      setNeedsVisibleRead(true);
+    } else if (resumed) {
+      void refreshLibrary();
+    }
+  }, [viewActive, refreshLibrary]);
 
   function constrainSegmentPlayback(media: HTMLMediaElement) {
     if (assistantSelection?.scope !== "segment" || !selectedSegment) return;
@@ -748,7 +769,7 @@ export function MaterialLibraryWorkspace({
 
   const inspector = selected ? (
     <div className={`library-inspector ${styles.inspector}`}>
-      <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} onReferenceSegment={referenceSelection ? segment => appendMaterialReference(selected, segment) : undefined} />
+      <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null || selectionBlocked} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} onReferenceSegment={referenceSelection ? segment => appendMaterialReference(selected, segment) : undefined} />
       <details className={styles.detailSection}><summary>原文件与来源</summary><p>文件名：{selected.file_name}</p><p>原文件：{selected.path}</p>{selected.source_url ? <p>来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a></p> : null}</details>
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
@@ -896,7 +917,7 @@ export function MaterialLibraryWorkspace({
             {error}
           </div>
         ) : null}
-        {busy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : null}
+        {listBusy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : needsVisibleRead ? <p className={styles.searchStatus} role="status">请刷新素材列表后再选择或引用。</p> : null}
 
         {selectionLost || segmentLost ? (
           <div className="library-error" role="alert">
@@ -911,7 +932,7 @@ export function MaterialLibraryWorkspace({
           </div>
         ) : null}
 
-        <MaterialResults assets={visible} selectedId={selected?.id ?? null} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onReference={referenceSelection ? appendMaterialReference : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
+        <MaterialResults assets={visible} selectedId={selected?.id ?? null} selectionDisabled={selectionBlocked} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onReference={referenceSelection ? appendMaterialReference : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
         {hasMore ? (
           <div className="library-load-more">
             <Button variant="ghost"

@@ -77,6 +77,7 @@ import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeSt
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
+import { WorkspacePageContext } from "@/components/workbench/context";
 import { AssistantConversationProvider, useAssistantMaterialReference, useAssistantSelection } from "@/components/AssistantConversationProvider";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", visibility:"private", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
@@ -451,14 +452,16 @@ it("clears only the query with focus retained and resets all filters separately"
   await waitFor(() => expect(getProductionMaterials).toHaveBeenLastCalledWith(expect.objectContaining({ query:"", reviewStatus:"all" })));
 });
 
-it("does not let a late search response replace a newer explicit selection", async () => {
+it("blocks new selection during search and does not let its late response replace the existing selection", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
   let resolveSearch!: (value: typeof library) => void;
   vi.mocked(getProductionMaterials).mockImplementationOnce(() => new Promise((resolve) => { resolveSearch = resolve; }));
   render(<MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);
+  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "延迟搜索" } });
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
+  expect(screen.getByRole("button", { name: /^0:04local\.mp4/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /^0:04local\.mp4/ }));
   await act(async () => resolveSearch({ ...library, assets: [taggedAsset], total_count: 1 }));
   await screen.findByText(/选中的素材已不在当前列表/);
   expect(screen.getByText(/素材说明不会写入其他素材|未保存的说明不会写入其他素材/)).toBeInTheDocument();
@@ -1591,6 +1594,91 @@ it("retains the usable collection on explicit refresh failure and retries the re
   fireEvent.click(screen.getByRole("button", { name:"刷新素材列表" }));
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.queryByText("素材列表暂不可用")).not.toBeInTheDocument());
+});
+
+it("refreshes immediately on tab activation and blocks stale selections without upgrading existing references", async () => {
+  let resolveRead!: (value: typeof twoAssetLibrary) => void;
+  vi.mocked(getProductionMaterials).mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve; }));
+  const viewState = new Map<string, unknown>();
+  const updateShell = vi.fn();
+  function References() {
+    const reference = useAssistantMaterialReference();
+    const selection = useAssistantSelection();
+    return <><output aria-label="当前固定引用">{JSON.stringify(reference?.reference ?? null)}</output><output aria-label="已追加引用">{JSON.stringify(selection?.items ?? [])}</output></>;
+  }
+  const page = (active: boolean) => <WorkspacePageContext.Provider value={{id:"/library", href:"/library", active, updateShell, viewState}}><AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[], total_count:0}}/><References/></AssistantConversationProvider></WorkspacePageContext.Provider>;
+  const view = render(page(true));
+  await screen.findByRole("button", {name:"引用到对话：local.mp4"});
+  expect(getProductionMaterials).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name:/^0:04local\.mp4/}));
+  fireEvent.click(screen.getByRole("button", {name:/^0:01.*0:03/}));
+  fireEvent.click(screen.getByRole("button", {name:"引用到对话：local.mp4 · 片段 0:01–0:03"}));
+  const frozen = screen.getByLabelText("当前固定引用").textContent;
+  const appended = screen.getByLabelText("已追加引用").textContent;
+  expect(JSON.parse(frozen!).selection.expected_updated_at).toBe(asset.updated_at);
+  view.rerender(page(false));
+  view.rerender(page(true));
+  expect(getProductionMaterials).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({offset:0, limit:24}));
+  expect(screen.getByText("正在更新素材列表…")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:/^0:04自造素材B\.mp4/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:/^0:01.*0:03/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:"切回整条素材"})).toBeDisabled();
+  for (const name of ["引用到对话：local.mp4", "引用到对话：local.mp4 · 片段 0:01–0:03"]) {
+    const button = screen.getByRole("button", {name});
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+  }
+  fireEvent.click(screen.getByRole("button", {name:/^0:04自造素材B\.mp4/}));
+  expect(screen.getByLabelText("当前固定引用")).toHaveTextContent(frozen!);
+  expect(screen.getByLabelText("已追加引用")).toHaveTextContent(appended!);
+  const updated = {...taggedAsset, duration_seconds:25.578, updated_at:"2026-10-18T05:10:58Z"};
+  await act(async () => resolveRead({...twoAssetLibrary, assets:[updated, otherAsset]}));
+  expect(screen.queryByText("正在更新素材列表…")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", {name:/^0:25\.578local\.mp4/})).toBeEnabled();
+  expect(screen.getByLabelText("当前固定引用")).toHaveTextContent(frozen!);
+  expect(screen.getByLabelText("已追加引用")).toHaveTextContent(appended!);
+  fireEvent.click(screen.getByRole("button", {name:/^0:25\.578local\.mp4/}));
+  await waitFor(() => expect(JSON.parse(screen.getByLabelText("当前固定引用").textContent!).selection.expected_updated_at).toBe(updated.updated_at));
+  expect(getProductionMaterials).toHaveBeenCalledTimes(1);
+});
+
+it("keeps stale selection blocked after activation refresh failure and allows an explicit retry", async () => {
+  vi.mocked(getProductionMaterials).mockRejectedValueOnce(new Error("素材列表暂不可用"));
+  const viewState = new Map<string, unknown>();
+  const updateShell = vi.fn();
+  const page = (active: boolean) => <WorkspacePageContext.Provider value={{id:"/library", href:"/library", active, updateShell, viewState}}><MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[], total_count:0}}/></WorkspacePageContext.Provider>;
+  const view = render(page(false));
+  expect(getProductionMaterials).not.toHaveBeenCalled();
+  view.rerender(page(true));
+  await screen.findByText("素材列表暂不可用");
+  expect(screen.getByText("请刷新素材列表后再选择或引用。")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:"刷新素材列表"})).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", {name:"刷新素材列表"}));
+  await waitFor(() => expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeEnabled());
+  expect(getProductionMaterials).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("请刷新素材列表后再选择或引用。")).not.toBeInTheDocument();
+});
+
+it("ignores a late activation read after hiding and waits for the current tab read", async () => {
+  let resolveOld!: (value: typeof library) => void;
+  let resolveCurrent!: (value: typeof library) => void;
+  vi.mocked(getProductionMaterials).mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { resolveCurrent = resolve; }));
+  const viewState = new Map<string, unknown>();
+  const updateShell = vi.fn();
+  const page = (active: boolean) => <WorkspacePageContext.Provider value={{id:"/library", href:"/library", active, updateShell, viewState}}><MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[], total_count:0}}/></WorkspacePageContext.Provider>;
+  const view = render(page(false));
+  view.rerender(page(true));
+  view.rerender(page(false));
+  view.rerender(page(true));
+  await act(async () => resolveOld({...library, assets:[{...asset, file_name:"过期回包.mp4"}]}));
+  expect(screen.queryByRole("button", {name:/过期回包/})).not.toBeInTheDocument();
+  expect(screen.getByText("正在更新素材列表…")).toBeInTheDocument();
+  expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeDisabled();
+  await act(async () => resolveCurrent({...library, assets:[{...asset, duration_seconds:25.578}]}));
+  expect(screen.getByRole("button", {name:/^0:25\.578local\.mp4/})).toBeEnabled();
+  expect(getProductionMaterials).toHaveBeenCalledTimes(2);
 });
 
 it("does not let a late explicit refresh overwrite the active search", async () => {
