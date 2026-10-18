@@ -298,7 +298,7 @@ def test_existing_task_transfer_does_not_require_plan_created_from_reply(tmp_pat
     assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
 
-def test_existing_draft_requires_explicit_current_revision_and_confirmed_script_is_immutable(tmp_path: Path) -> None:
+def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_version(tmp_path: Path) -> None:
     repo, plan, task = ready_task_for_transfer(tmp_path)
     _, _, original = transfer(repo, plan, task)
     current_task = repo.get_creation_task(WORKSPACE, task.id)
@@ -398,25 +398,41 @@ def test_existing_draft_requires_explicit_current_revision_and_confirmed_script_
         )
     assert repo.get_creation_task(WORKSPACE, task.id).confirmed_script_id == replacement.id
     assert repo.get_creation_task_script(WORKSPACE, replacement.id) == confirmed
-    replay_task, replay_script = repo.confirm_creation_task_script(
+    # A current CAS plus an explicit manual edit is a new revision. This
+    # endpoint has no request identity that would make it a replay.
+    manual_section = replace(confirmed.sections[0], content="用户明确手工修订后的正文")
+    revised_task, revised_script = repo.confirm_creation_task_script(
         WORKSPACE, task.id, replacement.id,
-        title="确认后的重复请求", sections=[replace(before.sections[0], content="重放不能覆盖")],
+        title="用户手工修订稿", sections=[manual_section],
         expected_updated_at=confirmed.updated_at,
+        adoption_kind="manual", verified_owner_user_id=OWNER,
     )
-    assert replay_task.confirmed_script_id == replacement.id
-    assert replay_script == confirmed
+    assert revised_task.confirmed_script_id == confirmed.id == revised_script.id
+    assert revised_task.stage == "narration" and revised_task.stage_status == "not_started"
+    assert revised_script.title == "用户手工修订稿"
+    assert revised_script.sections == [manual_section]
+    assert revised_script.selection_status == "confirmed"
+    assert revised_script.updated_at != confirmed.updated_at
+    assert revised_script.adoption["kind"] == "manual"
+    assert revised_script.adoption["member_id"] == OWNER
+    assert revised_script.adoption["version"] == revised_script.updated_at.isoformat()
+    assert revised_script.adoption["body_digest"] == hashlib.sha256(manual_section.content.encode()).hexdigest()
+    saved_library = repo.get_script_library_entry(WORKSPACE, library_entry.id)
+    assert saved_library == read_back
+    assert saved_library.sections[0].content == REPLY_TEXT != revised_script.sections[0].content
     with pytest.raises(ValueError, match="已确认文案不能"):
         transfer(
             repo,
             plan,
-            confirmed_task,
+            revised_task,
             request_id="after-confirmation",
             replace_existing_script_id=replacement.id,
-            expected_script_updated_at=confirmed.updated_at,
+            expected_script_updated_at=revised_script.updated_at,
             script_id=replacement.id,
             run_id="reply-run-three",
         )
-    assert repo.get_creation_task_script(WORKSPACE, replacement.id).sections == before.sections
+    assert repo.get_creation_task_script(WORKSPACE, replacement.id) == revised_script
+    assert repo.get_script_library_entry(WORKSPACE, library_entry.id) == read_back
 
 
 def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_replays_same_result(tmp_path, monkeypatch):
