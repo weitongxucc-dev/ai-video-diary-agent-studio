@@ -838,14 +838,20 @@ class MontageRenderer:
         from app.creation_execution import CpuRenderGrantContext
         width, height = canvas_size(plan.aspect_ratio)
         context = CpuRenderGrantContext(scheduler, grant, deadline_monotonic, temporary_disk_bytes, threads, cancel_event)
+        frame_counts = [round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+            for clip in plan.clips]
+        paths = self._temporary_render_paths(output_path, temporary_disk_bytes)
+        # This is a payload lower bound; NUT/manifest overhead remains subject to the live aggregate cap.
+        raw_bytes = width * height * 3 // 2 * sum(frame_counts)
+        if raw_bytes + sum(path.stat().st_size for path in paths) >= temporary_disk_bytes:
+            raise ValueError("成片原始帧载荷与已有临时文件已耗尽同一许可磁盘上限")
         directory.mkdir()
         lines = ["ffconcat version 1.0"]
-        for index, clip in enumerate(plan.clips):
+        for index, (clip, frames) in enumerate(zip(plan.clips, frame_counts)):
             source = Path(clip.source_path).expanduser().resolve()
             if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
                 raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
-            target = directory / f"clip-{index:03}.mp4"
-            frames = round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
+            target = directory / f"clip-{index:03}.nut"
             paths = self._temporary_render_paths(output_path, temporary_disk_bytes)
             remaining_bytes = temporary_disk_bytes - sum(path.stat().st_size for path in paths)
             if remaining_bytes <= 0:
@@ -854,14 +860,14 @@ class MontageRenderer:
                 "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
                 "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
                 "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
-                "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "0", "-pix_fmt", "yuv420p",
+                "-an", "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
                 "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(remaining_bytes),
-                "-movflags", "+faststart", str(target)]
+                "-f", "nut", str(target)]
             _run_granted_media_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic, output_paths=(*paths, target), max_output_file_bytes=temporary_disk_bytes)
             self._temporary_render_paths(output_path, temporary_disk_bytes)
-            probe_preview_video(target, context, expected_size=(width,height), expected_duration_seconds=frames/30, silent=True)
-            lines.append(f"file {target.name}")
+            _probe_serial_picture_input(target, context, expected_size=(width,height), expected_frames=frames)
+            lines.extend((f"file {target.name}", f"duration {frames/30:.10f}"))
         manifest = directory / "picture.ffconcat"
         manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._temporary_render_paths(output_path, temporary_disk_bytes)
@@ -1832,6 +1838,27 @@ def _plan_from_payload(data: dict[str, object]) -> MontagePlan:
         cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
         clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
     )
+
+
+def _probe_serial_picture_input(path: Path, context, *, expected_size, expected_frames):
+    """Validate only our silent raw NUT intermediate, using frames rather than its last PTS."""
+    context.check()
+    command = ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+        "stream=codec_type,codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames:format=format_name",
+        "-of", "json", str(path)]
+    completed = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=30,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
+    data = json.loads(completed.stdout)
+    streams = data.get("streams", [])
+    if (data.get("format", {}).get("format_name") != "nut" or len(streams) != 1
+            or streams[0].get("codec_type") != "video" or streams[0].get("codec_name") != "rawvideo"
+            or streams[0].get("pix_fmt") != "yuv420p"
+            or (streams[0].get("width"), streams[0].get("height")) != expected_size
+            or streams[0].get("r_frame_rate") != "30/1"
+            or streams[0].get("nb_read_frames") != str(expected_frames)):
+        raise ValueError("成片内部中间片的NUT编码、画幅、像素格式、30fps帧数或静音范围不符合请求")
+    if not path.is_file() or not 0 < path.stat().st_size <= context.max_output_bytes:
+        raise ValueError("成片内部中间片不符合许可输出上限")
 
 
 def probe_preview_video(path: Path, context, *, expected_size, expected_duration_seconds, silent=False):
