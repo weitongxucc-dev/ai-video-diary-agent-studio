@@ -5,6 +5,7 @@ import { AssistantConversationContext } from "../AssistantConversationContext";
 import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { CreationTask } from "@/lib/types";
 import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
 
 const queuedStoryboard: AssistantStoryboardRegeneration = {
   kind: "storyboard_regeneration_receipt", action: "submit",
@@ -580,11 +581,67 @@ describe("HomeCommandComposer", () => {
     expect(mocks.editAsk).toHaveBeenCalledOnce();
   });
 
-  it.each(["task", "conversation", "unmount"].flatMap(change => ["script", "storyboard"].map(kind => [change, kind])))
+  it("reads current task facts after a typed version conflict, preserving the unsent draft and fixed references", async () => {
+    configuredModel();
+    const task = {id: "task-1", stage: "montage", name: "当前作品",
+      current_timeline_version_id: "v1", timeline_sequence: 1} as CreationTask;
+    mocks.selection = {version: 7, items: [{kind: "shot", task_id: task.id, object_id: "clip-1", version: "v1", label: "镜头 1"}],
+      select: vi.fn(), remove: vi.fn()};
+    const fixedReferences = structuredClone(mocks.selection.items);
+    const onTaskUpdated = vi.fn();
+    mocks.sendTaskTurn.mockRejectedValueOnce(new CreationPlanApiError(409, "creation_task_timeline_version_conflict", "当前任务版本已变化，请重新查看选中对象后发送。"));
+    const view = render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated}/>);
+    const input = await readyInput("任务对话要求");
+    fireEvent.change(input, {target: {value: "核对并补齐片尾图层"}});
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "发送"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    expect(input).toHaveValue("核对并补齐片尾图层");
+    expect(screen.getByText("作品版本已变化，正在重新读取；原要求与引用保持原值，暂不发送。")).toBeVisible();
+    expect(screen.getByRole("button", {name: "正在处理"})).toBeDisabled();
+    const originalConversationId = mocks.sendTaskTurn.mock.calls[0][1].conversation_id;
+    expect(mocks.saved.get(originalConversationId)?.turns).toHaveLength(0);
+    expect(mocks.selection.items).toEqual(fixedReferences);
+    expect(mocks.selection.select).not.toHaveBeenCalled();
+    expect(mocks.selection.remove).not.toHaveBeenCalled();
+
+    view.rerender(<HomeCommandComposer task={{...task, current_timeline_version_id: "v2", timeline_sequence: 2}} onTaskUpdated={onTaskUpdated}/>);
+    expect(screen.getByText("当前作品已重新读取，请核对内容与引用后再发送；原要求已保留。")).toBeVisible();
+    expect(input).toHaveValue("核对并补齐片尾图层");
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    expect(mocks.selection.items).toEqual(fixedReferences);
+    expect(mocks.sendTaskTurn).toHaveBeenCalledOnce();
+    expect(onTaskUpdated).toHaveBeenCalledOnce();
+    expect(mocks.saved.get(originalConversationId)?.turns).toHaveLength(0);
+  });
+
+  it.each([
+    new CreationPlanApiError(409, "another_conflict", "当前任务版本已变化，请重新查看选中对象后发送。"),
+    new CreationPlanApiError(403, "creation_task_timeline_version_conflict", "当前权限不可用。"),
+    new CreationPlanApiError(409, null, "当前任务版本已变化，请重新查看选中对象后发送。"),
+    new Error("当前任务版本已变化，请重新查看选中对象后发送。"),
+  ])("keeps non-target errors unchanged without refreshing the task (%#)", async failure => {
+    configuredModel();
+    const onTaskUpdated = vi.fn();
+    mocks.sendTaskTurn.mockRejectedValueOnce(failure);
+    render(<HomeCommandComposer task={{id: "task-1", stage: "montage", name: "当前作品"} as CreationTask} onTaskUpdated={onTaskUpdated}/>);
+    const input = await readyInput("任务对话要求");
+    fireEvent.change(input, {target: {value: "保留未发送要求"}});
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "发送"}));
+    expect(await screen.findAllByText(failure.message)).not.toHaveLength(0);
+    expect(input).toHaveValue("保留未发送要求");
+    expect(onTaskUpdated).not.toHaveBeenCalled();
+    expect(mocks.sendTaskTurn).toHaveBeenCalledOnce();
+  });
+
+  it.each(["task", "conversation", "unmount"].flatMap(change => ["script", "storyboard", "version_conflict"].map(kind => [change, kind])))
   ("does not refresh after changing %s with a late %s receipt", async (change, kind) => {
     configuredModel();
     let finish!: (value: unknown) => void;
-    mocks.editAsk.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const result = new Promise((resolve, reject) => { finish = kind === "version_conflict" ? reject : resolve; });
+    if (kind === "version_conflict") mocks.sendTaskTurn.mockReturnValueOnce(result);
+    else mocks.editAsk.mockReturnValueOnce(result);
     const task = { id: "task-1", stage: "script", name: "原任务" } as CreationTask;
     const onTaskUpdated = vi.fn();
     function SharedConversation({ selectedTask }: { selectedTask: CreationTask }) {
@@ -599,24 +656,25 @@ describe("HomeCommandComposer", () => {
     fireEvent.change(await readyInput("任务对话要求"), { target: { value: "保存当前文案" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledOnce());
-    const originalConversationId = mocks.editAsk.mock.calls[0][1].conversation_id;
+    await waitFor(() => expect(mocks.sendTaskTurn).toHaveBeenCalledOnce());
+    const originalConversationId = mocks.sendTaskTurn.mock.calls[0][1].conversation_id;
     if (change === "task") view.rerender(<SharedConversation selectedTask={{ ...task, id: "task-2" }} />);
     else if (change === "conversation") {
       fireEvent.click(screen.getByRole("button", { name: "切换共享会话" }));
       await waitFor(() => expect(screen.getByLabelText("共享会话ID").textContent).not.toBe(originalConversationId));
     } else view.unmount();
-    await act(async () => finish({
+    await act(async () => finish(kind === "version_conflict"
+      ? new CreationPlanApiError(409, "creation_task_timeline_version_conflict", "当前任务版本已变化。") : {
       reply: "原请求已回读。", provider: "fixture", model: "fixture", edit_preview: null,
       script_draft: kind === "script" ? { id: "script-1", task_id: task.id, selection_status: "confirmed" } : null,
       storyboard_regeneration: kind === "storyboard" ? queuedStoryboard : null,
       execution_action: null, topic_candidates: null, timeline_action: null,
     }));
     expect(onTaskUpdated).not.toHaveBeenCalled();
-    expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject(kind === "script"
+    if (kind !== "version_conflict") expect(mocks.saved.get(originalConversationId)?.turns.at(-1)?.result).toMatchObject(kind === "script"
       ? { kind: "task_turn", script_draft: "saved" }
       : { kind: "task_turn", response: {storyboard_regeneration: queuedStoryboard} });
-    expect(mocks.editAsk).toHaveBeenCalledOnce();
+    expect(mocks.editAsk).toHaveBeenCalledTimes(kind === "version_conflict" ? 0 : 1);
   });
 
   it("keeps a queued person proposal pending without enabling an uncommitted undo", async () => {

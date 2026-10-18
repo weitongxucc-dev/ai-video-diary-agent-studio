@@ -4,6 +4,7 @@ import { AlertCircle } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
 import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
@@ -111,7 +112,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   latestTaskFacts.current = task;
   // A command return is not a task read; retain a read barrier until new immutable facts arrive.
   const [taskAwaitingRead, setTaskAwaitingRead] = useState<CreationTask | null>(null);
+  const [taskVersionConflict, setTaskVersionConflict] = useState<CreationTask | null>(null);
   const awaitingTaskRead = Boolean(task && taskAwaitingRead === task);
+  const awaitingVersionRead = Boolean(task && taskVersionConflict === task);
   const undoAvailable = task?.can_undo === true && !awaitingTaskRead;
   const [modelConfigured, setModelConfigured] = useState(false);
   const [pending, setPending] = useState<"chat" | "confirm" | "undo" | null>(null);
@@ -126,7 +129,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setRequestBinding(null); setRequestOpen(false);
     setActivePlanTurnId(null);
     shareRevision.current += 1; setShareValue(20); setQualityValue("high"); setShareUpdating(false);
-    setTaskPreview(null); setTaskPreviewOpen(false); setTaskAwaitingRead(null);
+    setTaskPreview(null); setTaskPreviewOpen(false); setTaskAwaitingRead(null); setTaskVersionConflict(null);
     setError(null); setTaskActionStatus(null);
     restoredPlanKey.current = null;
     return () => { scopeRevision.current += 1; shareRevision.current += 1; };
@@ -164,11 +167,12 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
   async function sendToAssistant(rawMessage: string) {
     const command = rawMessage.trim();
-    if (!command || pending) return;
+    if (!command || pending || awaitingVersionRead) return;
     const referenceSnapshot = latestSelectionSnapshot.current;
     const revision = scopeRevision.current;
     setPending("chat");
     setError(null);
+    setTaskVersionConflict(null);
     setTaskActionStatus(null);
     setPreview(null);
     setPreviewOpen(false);
@@ -234,7 +238,13 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           cause instanceof Error ? cause.message : "本轮没有建立持久轮次，请检查后可重试。");
       }
       if (revision === scopeRevision.current && (!requestConversationId || assistant.isCurrentConversation(requestConversationId))) {
-        setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+        if (task && cause instanceof CreationPlanApiError && cause.status === 409 && cause.code === "creation_task_timeline_version_conflict") {
+          setTaskVersionConflict(latestTaskFacts.current);
+          setError(null);
+          onTaskUpdated?.();
+        } else {
+          setError(cause instanceof Error ? cause.message : "对话没有完成，请检查模型设置。");
+        }
       }
     } finally {
       if (!requestConversationId || assistant.isCurrentConversation(requestConversationId)) setPending(null);
@@ -397,12 +407,12 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
       <AssistantConversationPanel
         autoFocus={autoFocus}
-        busy={pending !== null}
+        busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}
         input={assistant.draftText}
         inputLabel={task ? "任务对话要求" : materialContext ? "素材对话" : "制作要求"}
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
-        onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setRequestBinding(null); setRequestOpen(false); setPending(null); setShareUpdating(false); setError(null); }}
+        onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setRequestBinding(null); setRequestOpen(false); setPending(null); setShareUpdating(false); setError(null); setTaskVersionConflict(null); }}
         onSend={sendToAssistant}
         onTransferReply={taskContext?.onTransferReply}
         transferDraftState={taskContext?.transferDraftState}
@@ -449,6 +459,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         </div>
       </HomeCardDialog> : null}
       {error ? <div className="home-composer__error" role="alert"><AssistantFailureMessage message={error}/></div> : null}
+      {taskVersionConflict && taskVersionConflict.id === task?.id ? <p role="status">{awaitingVersionRead
+        ? "作品版本已变化，正在重新读取；原要求与引用保持原值，暂不发送。"
+        : "当前作品已重新读取，请核对内容与引用后再发送；原要求已保留。"}</p> : null}
       {awaitingTaskRead ? <p role="status">正在回读当前草稿，撤销暂不可用。</p> : null}
       {task && undoAvailable ? <div className="home-composer__footer"><button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button></div> : null}
     </div>

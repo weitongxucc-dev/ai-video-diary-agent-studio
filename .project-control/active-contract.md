@@ -172,4 +172,8 @@ C任务版本冲突恢复续绑（C1，现有CAS不放宽）：f314真实英文�
 
 同一C1版本冲突机器码薄接线归A：仅`main.py`第7864行所在任务助手发送前版本门及直接HTTP测试，将409纯字符串detail变为现有传输已支持的`{error: "creation_task_timeline_version_conflict", message: 原提示}`，保留409、检查条件和拒绝发生在建回合之前。A/C先对齐DTO；无身份/权限/CAS放宽，不做其它错误码治理。其余A源码仍冻结，主控审核后统一构建。
 
+同一C1正式SSE薄适配续绑A/C：A在`main.py::_assistant_stream_response`现有HTTPException错误投影仅识别上述固定版本冲突码，沿已有AssistantStreamEvent.failure字段传`{code: "creation_task_timeline_version_conflict"}`并保留原安全message/status，不能透传任意detail或新增鉴权字段；补正式SSE拒绝无turn测试。C在现有creation-transport流式error分支读取同一固定failure.code并抛已有CreationPlanApiError，接原冲突恢复消费者。普通错误保持原投影/行为，双方先对齐，不新增事件体系或schema。
+
+C自主接续后的作品事实回读续绑（C1，解决真实人工交替拒绝）：前述四文件C1候选先冻结交主控集成；C随后仅独占`HomeCommandComposer.tsx`及其直接测试，观察既有持久会话中新到达的、宿主已验证的同task business_result/apply confirmed回执（operation_id/result_version_id完整），按同会话/任务/操作身份去重，复用onTaskUpdated，不新增轮询/缓存或从模型文本猜成功。跨作品、切换会话/目标及晚回包不得触发旧作品动作；刷新不修改固定引用、不自动重发/渲染/清草稿。直接验证初回合/自主接续第二项后的新事实回读、同操作不重复、跨task/会话与晚回包隔离；主控同候选实际“对话两项修改→人工画面保存”无手动刷新复验。其余Web文件保持冻结；A仅SSE薄适配。
+
 同一集成候选完成真实输入到输出、连续三类精修与人工交替、撤销和重启恢复；正式UI满足左栏保护及shadcn/DESIGN并通过实际可见操作。当前收口先以Mac电脑端核心闭环为准。手机联动恢复后必须按开发清单§1.1.4在同一集成候选完成两端真实输入、制作回看与重启恢复；Android/iOS分别列证据，任一未验不写全平台完成。CLI/MCP及平台按各自真实客户端单列证据。未运行、缺配置、模型不可用或仅测试通过不得写成通过。资源设计缺陷、预算准备未实现和Windows适配未实现不得归为环境阻断；真实配音/视频可工作与高压保护恢复两面均须通过，Windows独立平台实机门移至下一阶段，不作为当前Mac桌面核心收口条件。文档变更检查链接与唯一权威，代码与运行证据分别记录。活动合同只保留当前执行绑定，历史通过Git追溯。

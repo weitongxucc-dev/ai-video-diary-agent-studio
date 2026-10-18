@@ -54,6 +54,46 @@ it('Blob media reads retain the selected source and trusted member identity', as
   });
 });
 
+it.each(['JSON', 'stream', 'SSE error'])('preserves the typed task-version conflict from the %s response', async mode => {
+  const message = '当前任务版本已变化，请重新查看选中对象后发送。';
+  const fetchMock = vi.fn(async () => mode === 'SSE error' ? new Response(`data: ${JSON.stringify({
+    type: 'error', status: 409, failure: {code: 'creation_task_timeline_version_conflict'}, message,
+  })}\n\n`, {headers: {'Content-Type': 'text/event-stream'}}) : Response.json({detail: {
+    error: 'creation_task_timeline_version_conflict', message,
+  }}, {status: 409}));
+  vi.stubGlobal('fetch', fetchMock);
+  const {creationPlanRequest, assistantStreamRequest, CreationPlanApiError} = await import('../api/creation-transport');
+  const failure = await (mode === 'JSON' ? creationPlanRequest('/api/task-conflict')
+    : assistantStreamRequest('/api/task-conflict', {}, vi.fn())).catch(error => error);
+  expect(failure).toBeInstanceOf(CreationPlanApiError);
+  expect(failure).toMatchObject({status: 409, code: 'creation_task_timeline_version_conflict', message});
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
+
+it.each([null, 'another_conflict'])('leaves an ordinary SSE error unchanged for failure code %s', async code => {
+  const fetchMock = vi.fn(async () => new Response(`data: ${JSON.stringify({
+    type: 'error', status: 409, message: '原错误提示', ...(code ? {failure: {code}} : {}),
+  })}\n\n`));
+  vi.stubGlobal('fetch', fetchMock);
+  const {assistantStreamRequest} = await import('../api/creation-transport');
+  await expect(assistantStreamRequest('/api/task-conflict', {}, vi.fn())).rejects.toMatchObject({
+    status: 409, code: null, message: '原错误提示',
+  });
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
+
+it.each(['JSON', 'stream'])('leaves a non-target %s HTTP error unchanged', async mode => {
+  const fetchMock = vi.fn(async () => Response.json({detail: {
+    error: 'another_conflict', message: '不属于本次适配的提示',
+  }}, {status: 409}));
+  vi.stubGlobal('fetch', fetchMock);
+  const {creationPlanRequest, assistantStreamRequest} = await import('../api/creation-transport');
+  await expect(mode === 'JSON' ? creationPlanRequest('/api/task-conflict')
+    : assistantStreamRequest('/api/task-conflict', {}, vi.fn())).rejects.toMatchObject({
+    status: 409, code: 'another_conflict', message: '请求失败：409',
+  });
+});
+
 it('server requests use only the existing verified provider and preserve caller cancellation', async () => {
   vi.stubGlobal('window', undefined);
   vi.stubEnv('API_PORT', '9319');

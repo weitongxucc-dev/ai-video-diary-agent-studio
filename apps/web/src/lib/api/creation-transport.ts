@@ -66,9 +66,11 @@ export async function creationPlanRequest<T>(path: string, init?: RequestInit): 
                 ? detail
                 : typeof details.detail === "string"
                     ? details.detail
-                    : typeof payload === "string"
-                        ? payload
-                        : `请求失败：${response.status}`, typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason);
+                    : code === "creation_task_timeline_version_conflict" && typeof details.message === "string"
+                        ? details.message
+                        : typeof payload === "string"
+                            ? payload
+                            : `请求失败：${response.status}`, typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason);
     }
     return payload as T;
 }
@@ -102,6 +104,7 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
         const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
         throw new CreationPlanApiError(response.status, typeof details.error === "string" ? details.error : null, typeof detail === "string" ? detail
             : typeof details.detail === "string" ? details.detail
+                : details.error === "creation_task_timeline_version_conflict" && typeof details.message === "string" ? details.message
                 : `请求失败：${response.status}`, typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, typeof details.reason === "string" ? details.reason : null);
     }
     const reader = response.body?.getReader();
@@ -124,7 +127,9 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
             return;
         }
         if (value.type === "error") {
-            throw new CreationPlanApiError(typeof value.status === "number" ? value.status : 0, null, typeof value.message === "string" ? value.message : "对话没有完成，请检查任务状态。");
+            const failure = value.failure && typeof value.failure === "object" ? value.failure as Record<string, unknown> : null;
+            const code = failure?.code === "creation_task_timeline_version_conflict" ? failure.code : null;
+            throw new CreationPlanApiError(typeof value.status === "number" ? value.status : 0, code, typeof value.message === "string" ? value.message : "对话没有完成，请检查任务状态。");
         }
         if (value.type === "turn_started" && typeof value.turn_id === "string") {
             const turnState = value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped"
