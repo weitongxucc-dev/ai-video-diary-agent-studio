@@ -53,7 +53,7 @@
 
 C补绑`apps/api/tests/test_device_runtime.py`，仅将既有Owner测试夹具同步当前本地复核协议，并将虚拟时钟改为随实际观察tick而非每次内存读取推进，保留原行为断言与生产资源门槛。
 
-B补绑`apps/api/agent_tools/diary/script-tools.ts`与`apps/api/agent_tools/tests/script-failure-feedback.test.mjs`，仅保留既有文案拒绝中服务器验证过的字段、实际段号、片段序号和字段摘要；同步其已绑定topics/transport/projection/直接测试。main错误出口由主控薄透传四个有限字段，不传上游自由说明或原始响应，不增加诊断系统，不将画面/标题拒绝误称正文拒绝。
+B补绑`apps/api/agent_tools/diary/script-tools.ts`与`apps/api/agent_tools/tests/script-failure-feedback.test.mjs`，保留既有文案拒绝中服务器验证过的字段、实际段号、片段序号和字段摘要；同步其已绑定topics/transport/projection/直接测试。main错误出口由主控薄透传。既有核查已收集的问题按原上限12项完整回传，每项绑定本次稿件摘要；经格式验证的核查说明可作为最多300字符的非指令数据保留，沿现有凭据/路径清理，不传原始响应、未知字段或异常正文。无效定位不得携带该项说明；不新增核查器/诊断系统，不放宽事实、引用、授权或报告有效性检查，不将画面/标题拒绝误称正文拒绝。
 
 A补绑`apps/api/app/creation/intent_use_case.py`及新增`apps/api/tests/test_creation_script_goal_authority.py`：仅沿已采用请求的现有原目标/来源/任务绑定，为两条文案入口解析可信用户目标；目标委托不将Agent自拟文案当固定正文。复用公开仓储，源不匹配明确拒绝，不新增存储或放宽可见性。main调用由主控负责；topics仍B独占。
 
