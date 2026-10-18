@@ -15,7 +15,7 @@
    共用一个锁、一张队列、一个驱动线程，不另起第二套许可状态。
 4. 整机预算与探针是真实来源（``host_resource_probes``）。没有标定预算就明确
    报「尚未标定」，不造默认值、不造一个永远返回 None 的假探针，也不改动既有
-   资源门禁。
+   有效CPU/IO/磁盘及进程门禁。交换总量旧配置只保留诊断，不恢复其独立否决。
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ from app.host_resource_probes import (
 from app.local_members import LocalMember, LocalMemberService
 from app.device_accounts import DeviceAccountService
 from app.repository import LEGACY_WORKSPACE_ID
+from app.host_memory import MemoryPolicy, validate_observation_cadence
 
 
 class PermitIdentityUnavailable(RuntimeError):
@@ -227,14 +228,13 @@ def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
 _HOST_BUDGET_ENV = {
     "max_cpu_percent": "DEVICE_HOST_MAX_CPU_PERCENT",
     "min_available_memory_bytes": "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES",
-    "max_swap_used_bytes": "DEVICE_HOST_MAX_SWAP_USED_BYTES",
     "min_free_disk_bytes": "DEVICE_HOST_MIN_FREE_DISK_BYTES",
     "max_disk_io_bytes_per_second": "DEVICE_HOST_MAX_DISK_IO_BYTES_PER_SECOND",
     "max_unit_input_bytes": "DEVICE_HOST_MAX_UNIT_INPUT_BYTES",
 }
 
 _INT_HOST_BUDGET_FIELDS = frozenset({
-    "min_available_memory_bytes", "max_swap_used_bytes", "min_free_disk_bytes",
+    "min_available_memory_bytes", "min_free_disk_bytes",
     "max_disk_io_bytes_per_second", "max_unit_input_bytes",
 })
 
@@ -262,6 +262,7 @@ def host_budget_from_env(
     cpu_render: CpuRenderBudget | None = None,
     media_script: MediaScriptBudget | None = None,
     material_visual_query: MaterialVisualQueryBudget | None = None,
+    memory_policy: MemoryPolicy | None = None,
 ) -> HostBudget:
     """从显式标定值读出整机预算。
 
@@ -288,8 +289,31 @@ def host_budget_from_env(
         for field, value in raw.items()
         if field in _INT_HOST_BUDGET_FIELDS
     }
-    return HostBudget(max_cpu_percent=max_cpu_percent, cpu_render=cpu_render, media_script=media_script,
-                      material_visual_query=material_visual_query, **numbers)
+    # Deprecated setting is optional diagnostic context. Malformed/absent legacy
+    # values cannot recreate an indirect admission veto after the old rule retires.
+    try:
+        legacy_swap = int(source.get("DEVICE_HOST_MAX_SWAP_USED_BYTES", ""))
+        legacy_swap = legacy_swap if legacy_swap >= 0 else None
+    except ValueError:
+        legacy_swap = None
+    return HostBudget(max_cpu_percent=max_cpu_percent, max_swap_used_bytes=legacy_swap,
+                      cpu_render=cpu_render, media_script=media_script,
+                      material_visual_query=material_visual_query, memory_policy=memory_policy, **numbers)
+
+
+def memory_policy_from_env(environ: Mapping[str, str] | None = None) -> MemoryPolicy | None:
+    """Developer bridge for a separately reviewed profile, never an auto-calibrator."""
+    source = os.environ if environ is None else environ
+    raw = source.get("DEVICE_HOST_MEMORY_POLICY_JSON", "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("memory policy must be an explicit profile object")
+        return MemoryPolicy(**payload)
+    except (TypeError, ValueError) as exc:
+        raise HostBudgetUncalibrated(f"内存压力策略尚未准备：{exc}") from None
 
 
 #: CPU 成片预算的标定项。与整机预算一样，全部来自这台设备的标定结果。
@@ -366,8 +390,15 @@ def build_host_probes(
     database_path: str | Path,
     disk_paths: tuple[str | Path, ...],
     budget: HostBudget,
+    device_poll_interval_seconds: float | None = None,
 ) -> tuple[HostResourceProbe, HostProcessProbe]:
     """真实整机探针：资源采样 + POSIX 进程身份，不提供任何替代实现。"""
+    if budget.memory_policy is not None:
+        try:
+            validate_observation_cadence(budget.memory_policy,
+                device_poll_interval_seconds=device_poll_interval_seconds, probe_seconds=budget.sample_seconds)
+        except ValueError as exc:
+            raise HostBudgetUncalibrated(f"内存恢复观测节奏尚未准备：{exc}") from None
     return (
         HostResourceProbe(database_path, disk_paths=disk_paths, budget=budget),
         HostProcessProbe(),

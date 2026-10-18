@@ -5,7 +5,8 @@ one idempotent device unit. The queue is the only execution-state owner.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ import re
 from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork
 from app.granted_subprocess import GrantedCommandCancelled
+from app.host_resource_probes import HostResourceRefusal, material_visual_query_resources
 from app.materials.analysis import visual_cosine_similarity
 from app.materials.contracts import (
     MaterialAsset, MaterialSegment, MaterialSearchResult, MaterialSegmentMatch,
@@ -36,16 +38,20 @@ def _digest(value):
 
 class MaterialRetrievalService:
     def __init__(self, *, assets, analysis, provider, database_path, verify_identity,
-                 actor_from_identity, execution_limits=None):
+                 actor_from_identity, query_budget=None):
         self.assets, self.analysis, self.provider = assets, analysis, provider
         self.database_path = Path(database_path)
         self.verify_identity, self.actor_from_identity = verify_identity, actor_from_identity
-        self.execution_limits = execution_limits
+        self.query_budget = query_budget
         assets.initialize_semantic_queries()
 
     @property
     def index_version(self):
         return visual_feature_version(self.provider.model_id)
+
+    @property
+    def execution_limits(self):
+        return self.query_budget.execution_limits if self.query_budget is not None else None
 
     def registration(self):
         return OwnerRegistration(self, MaterialQueryExecutor(self))
@@ -69,10 +75,10 @@ class MaterialRetrievalService:
             raise ValueError("视觉查询输入身份已变化")
         if self.execution_limits is None or not self.provider.ready:
             raise VisualSemanticError("视觉查询模型或本机执行范围未就绪")
-        digest = _digest([row["id"], self.execution_limits.digest])
-        resources = {"kind": "material_visual_query", "model_id": self.provider.model_id,
-            "model_version": self.index_version, "query_chars": len(row["query_text"]),
-            "text_count": 1, "execution_limits": asdict(self.execution_limits)}
+        resources = material_visual_query_resources(self.query_budget, query_chars=len(row["query_text"]))
+        if (resources["model_id"], resources["model_version"]) != (self.provider.model_id, self.index_version):
+            raise VisualSemanticError("视觉查询标定与当前编码器版本不一致")
+        digest = _digest([row["id"], resources])
         return actor, digest, f"visual-query:v1:{digest}", resources
 
     def verify_submission(self, intent, actor):
@@ -252,6 +258,12 @@ class MaterialQueryExecutor:
             scheduler.complete_unit(grant, checkpoint_database_path=owner.database_path,
                 checkpoint_write=lambda conn, _: owner.assets.commit_semantic_query(
                     conn, grant.workspace_id, grant.owner_id, vector))
+        except HostResourceRefusal as exc:
+            if exc.recoverable_pressure:
+                scheduler.defer_unit(grant, reason="resource_pressure",
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
+            else:
+                scheduler.fail_unit(grant, reason="visual_query_resource_unavailable", failure_write=lambda *_: None)
         except RecoveryBlocked:
             raise
         except GrantedCommandCancelled:

@@ -1,7 +1,7 @@
-"""Measured, fail-closed host probes for bounded CPU-only device units.
+"""Measured, fail-closed host probes for explicitly bounded device units.
 
-The caller supplies limits established for this machine. Model/GPU residency
-is deliberately unsupported until an owner can measure and release it.
+The caller supplies calibrated per-unit limits. Admission and registered child
+groups share native memory pressure/recovery; process accounting is separate.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.quality_worker_runtime import QualityBudget, budget_identity
 from app.model_runtime import CHINESE_CLIP_VIT_B16
 from app.visual_semantics import VisualQueryExecutionLimits, visual_feature_version
+from app.host_memory import HostMemoryMonitor, MemoryPolicy
 
 
 logger = logging.getLogger(__name__)
@@ -149,8 +150,9 @@ class SceneRuntimeLimits:
     max_process_rss_bytes: int
     max_process_threads: int
     min_host_available_memory_bytes: int
-    max_host_swap_used_bytes: int
+    max_host_swap_used_bytes: int | None  # Legacy diagnostic only; never a live gate.
     sample_seconds: float
+    memory_monitor: HostMemoryMonitor | None = None
 
 
 @dataclass(frozen=True)
@@ -396,7 +398,7 @@ def material_visual_query_refusal(resources, budget: MaterialVisualQueryBudget |
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
-    max_swap_used_bytes: int
+    max_swap_used_bytes: int | None  # Legacy configuration retained only for historical diagnostics.
     min_free_disk_bytes: int
     max_disk_io_bytes_per_second: int
     max_unit_input_bytes: int
@@ -414,12 +416,13 @@ class HostBudget:
     quality: QualityBudget | None = None
     cover: CoverBudget | None = None
     material_visual_query: MaterialVisualQueryBudget | None = None
+    memory_policy: MemoryPolicy | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
             raise ValueError("CPU budget and sample interval must be positive")
         if any(value < 0 for value in (
-            self.min_available_memory_bytes, self.max_swap_used_bytes,
+            self.min_available_memory_bytes,
             self.min_free_disk_bytes, self.max_disk_io_bytes_per_second,
             self.max_unit_input_bytes,
         )):
@@ -621,6 +624,9 @@ class HostResourceRefusal(RecoveryBlocked):
             "size_bytes": ("输入大小", "字节"),
             "text_chars": ("配音文字数量", "字"),
             "query_chars": ("画面查询文字数量", "字"),
+            "memory_policy": ("内存压力与恢复", ""),
+            "memory_pressure": ("操作系统内存压力", "状态"),
+            "commit_headroom_bytes": ("Windows提交余量", "字节"),
             "section_count": ("段落数量", "段"),
             "reference_bytes": ("参考音频大小", "字节"),
             "duration_seconds": ("配音时长", "秒"),
@@ -658,12 +664,27 @@ class HostResourceRefusal(RecoveryBlocked):
             "material_visual_query_budget_unavailable": "素材画面查询专属预算尚未标定",
             "material_visual_query_profile_changed": "素材画面查询标定已变化，原声明不可执行",
             "material_visual_query_fields_invalid": "素材画面查询的模型、长度或执行声明不一致",
+            "memory_policy_unavailable": "当前平台的内存压力与恢复策略尚未准备",
+            "memory_pressure_critical": "操作系统报告严重内存压力",
+            "memory_headroom_insufficient": "当前可用内存低于系统保留余量",
+            "memory_task_budget_insufficient": "当前余量不满足此任务新增需求，其他可运行任务仍可推进",
+            "memory_task_commit_budget_insufficient": "当前Windows提交余量不满足此任务新增需求",
+            "memory_commit_headroom_insufficient": "Windows系统提交安全余量不足",
+            "memory_commit_measurement_unavailable": "Windows提交余量测量不可用",
+            "memory_commit_budget_unavailable": "当前任务的Windows提交增量预算尚未准备",
+            "memory_measurement_unavailable": "当前平台的内存压力测量不可用",
+            "memory_observation_stale": "内存压力观测不连续或已过期",
+            "memory_observation_gap": "实际观测间隔超出策略范围，正在重新建立稳定窗口",
+            "memory_recovery_stabilizing": "内存压力恢复正在等待已标定的稳定窗口",
             "granted_resources_unreadable": "当前许可的阶段资源记录不可读取",
             "declared_resources_exceed_budget": "阶段输入超出已标定的设备预算",
         }
         details = []
         for metric, check in decision.checks.items():
             if check.get("passed") is not False:
+                continue
+            if metric in {"memory_policy", "memory_pressure"}:
+                details.append(f"{labels[metric][0]}：{check.get('actual', check.get('value', 'unknown'))}")
                 continue
             label, unit = (("目标磁盘可用空间", "字节") if metric.startswith("disk_free_bytes:")
                            else labels[metric])
@@ -680,16 +701,27 @@ class HostResourceRefusal(RecoveryBlocked):
                 details.append(f"{labels[decision.reason.split(':', 1)[1]][0]}声明无效")
             else:
                 details.append(reasons[decision.reason])
+        elif decision.reason in reasons and decision.reason.startswith("memory_"):
+            details.append(reasons[decision.reason])
         super().__init__("运行中资源未知或不足，须在安全边界让出：" + "；".join(details)
                          + "。请检查本机资源与该阶段预算后再试，当前任务保持。")
 
     @property
     def recoverable_pressure(self) -> bool:
-        if self.decision.verdict is not False or self.decision.reason is not None:
+        if self.decision.verdict is None and self.decision.reason in {
+            "memory_measurement_unavailable", "memory_observation_stale", "memory_observation_gap", "memory_commit_measurement_unavailable",
+        }:
+            return True
+        if self.decision.verdict is not False or self.decision.reason not in {
+            None, "memory_pressure_critical", "memory_headroom_insufficient",
+            "memory_commit_headroom_insufficient", "memory_recovery_stabilizing",
+            "memory_task_budget_insufficient", "memory_task_commit_budget_insufficient",
+        }:
             return False
         failed = [name for name, check in self.decision.checks.items() if check.get("passed") is False]
         return bool(failed) and all(name in {
-            "cpu_percent", "available_memory_bytes", "swap_used_bytes", "disk_io_bytes_per_second",
+            "cpu_percent", "available_memory_bytes", "memory_pressure", "memory_policy",
+            "commit_headroom_bytes", "disk_io_bytes_per_second",
         } or name.startswith("disk_free_bytes:") for name in failed)
 
 
@@ -731,12 +763,14 @@ class HostResourceProbe:
     _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta", "platform_publish"})
 
     def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...],
-                 budget: HostBudget, io_paths: Mapping[str, str | Path] | None = None) -> None:
+                 budget: HostBudget, io_paths: Mapping[str, str | Path] | None = None,
+                 memory_monitor: HostMemoryMonitor | None = None) -> None:
         if not disk_paths:
             raise ValueError("At least one material/output disk path is required")
         self.database_path = Path(database_path).expanduser().resolve()
         self.disk_paths = tuple(Path(path).expanduser().resolve() for path in disk_paths)
         self.budget = budget
+        self.memory_monitor = memory_monitor or HostMemoryMonitor(budget.memory_policy)
         # Measurement history only; permissions and readiness are always fresh.
         # A32.1: bounded initial narration observation, not hardware calibration.
         self.io_window_seconds = 3.0
@@ -816,7 +850,8 @@ class HostResourceProbe:
                 "busy_percent": "UNAVAILABLE: request times are not utilization",
                 "process_io": "UNAVAILABLE: host counters cannot attribute a process"}, None
 
-    def _sample(self, resources: dict[str, object], *, running_io: bool = False, running_render: bool = False) -> HostResourceDecision:
+    def _sample(self, resources: dict[str, object], *, running_io: bool = False, running_render: bool = False,
+                running: bool = False) -> HostResourceDecision:
         checks: dict[str, dict[str, object]] = {}
 
         def decision(verdict: bool | None, reason: str | None = None,
@@ -1087,11 +1122,14 @@ class HostResourceProbe:
             required_disk = self.budget.min_free_disk_bytes + scene.additional_disk_bytes
         else:
             return decision(None, "unsupported_resource_kind")
+        memory_running = running or running_io or running_render
+        additional_memory = max(0, required_memory - self.budget.min_available_memory_bytes)
+        if memory_running:
+            required_memory = self.budget.min_available_memory_bytes
         # Known thresholds remain available even when a later metric is unreadable.
         checks.update({
             "cpu_percent": {"maximum": self.budget.max_cpu_percent},
             "available_memory_bytes": {"minimum": required_memory},
-            "swap_used_bytes": {"maximum": self.budget.max_swap_used_bytes},
             "disk_io_bytes_per_second": {"maximum": self.budget.max_disk_io_bytes_per_second},
             **{f"disk_free_bytes:{path}": {"minimum": required_disk} for path in self.disk_paths},
         })
@@ -1134,13 +1172,22 @@ class HostResourceProbe:
                     "delta_bytes": io_bytes,
                 }
             sampling = "available_memory_bytes"
-            memory = psutil.virtual_memory()
-            checks[sampling] = {"actual": memory.available, "minimum": required_memory,
-                                "passed": memory.available >= required_memory}
-            sampling = "swap_used_bytes"
-            swap = psutil.swap_memory()
-            checks[sampling] = {"actual": swap.used, "maximum": self.budget.max_swap_used_bytes,
-                                "passed": swap.used <= self.budget.max_swap_used_bytes}
+            memory_decision = self.memory_monitor.check(system_reserve_bytes=self.budget.min_available_memory_bytes,
+                additional_memory_bytes=0 if memory_running else additional_memory,
+                additional_commit_bytes=0 if memory_running else resources.get("additional_commit_bytes"))
+            memory = memory_decision.sample
+            checks[sampling] = {"actual": memory.available_bytes, "minimum": required_memory,
+                "passed": None if memory.available_bytes is None else memory.available_bytes >= required_memory}
+            checks["memory_pressure"] = {**memory.facts.get("pressure", {}),
+                "passed": None if memory.pressure == "unknown" else memory.pressure != "critical"}
+            checks["memory_policy"] = {"passed": memory_decision.verdict, **memory_decision.payload()}
+            if memory.platform == "win32":
+                checks["commit_headroom_bytes"] = {"actual": memory.commit_headroom_bytes,
+                    "minimum": memory_decision.required_commit_headroom_bytes,
+                    "passed": None if memory.commit_headroom_bytes is None or memory_decision.required_commit_headroom_bytes is None
+                    else memory.commit_headroom_bytes >= memory_decision.required_commit_headroom_bytes}
+            checks["swap_used_bytes"] = {**memory.facts.get("swap_used_bytes", {"value": None}),
+                "diagnostic_only": True, "legacy_configured_limit": self.budget.max_swap_used_bytes}
             disks = []
             for path in self.disk_paths:
                 sampling = f"disk_free_bytes:{path}"
@@ -1150,10 +1197,10 @@ class HostResourceProbe:
                                     "passed": disk.free >= required_disk}
         except (OSError, psutil.Error, ValueError) as exc:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
-        # Exactly the existing host gates, evaluated from this observation only.
+        if memory_decision.verdict is not True:
+            return decision(memory_decision.verdict, memory_decision.reason, duration)
+        # CPU, IO and disk gates remain unchanged. Swap totals are diagnostic only.
         passed = (cpu <= self.budget.max_cpu_percent
-                        and memory.available >= required_memory
-                        and swap.used <= self.budget.max_swap_used_bytes
                         and all(disk.free >= required_disk for disk in disks)
                         and checks["disk_io_bytes_per_second"]["passed"])
         if sustained and passed and not running_io and not evidence["window_complete"]:
@@ -1215,7 +1262,7 @@ class HostResourceProbe:
         elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             decision = self._sample(resources, running_render=True)
         else:
-            decision = (self._sample(resources) if resources is not None else
+            decision = (self._sample(resources, running=True) if resources is not None else
                     HostResourceDecision(None, {}, {}, "granted_resources_unreadable"))
         if decision.verdict is not True:
             raise HostResourceRefusal(decision)
@@ -1233,19 +1280,19 @@ class HostResourceProbe:
                     or material_visual_query_refusal(resources, query) is not None):
                 raise RecoveryBlocked("视觉查询许可、专属标定或执行用途不一致")
             return SceneRuntimeLimits(query.max_process_rss_bytes, query.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, query.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, query.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") == "cover_generation":
             cover = self.budget.cover
             if cover is None or resources.get("budget_digest") != cover.digest:
                 raise RecoveryBlocked("封面独立进程预算尚未标定或已经变化")
             return SceneRuntimeLimits(cover.max_process_rss_bytes, cover.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, cover.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, cover.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") == "quality_check":
             quality = self.budget.quality
             if quality is None or resources.get("budget_digest") != budget_identity(quality):
                 raise RecoveryBlocked("质检独立进程预算尚未标定或已经变化")
             return SceneRuntimeLimits(quality.max_process_rss_bytes, quality.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, quality.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, quality.runtime_sample_seconds, self.memory_monitor)
         if purpose is not None:
             if (purpose != "audio_mix" or resources.get("kind") not in {"creation_render", "creation_presenter_render"}
                     or not isinstance(resources.get("audio_mix"), dict)
@@ -1261,25 +1308,25 @@ class HostResourceProbe:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 raise RecoveryBlocked("CPU 成片进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds, self.memory_monitor)
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
                 raise RecoveryBlocked("隔离脚本进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(script.max_process_rss_bytes, script.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, script.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, script.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") == "task_output_observation":
             observation = self.budget.observation
             if observation is None or resources.get("execution_mode") != "local_ffmpeg_apple_vision":
                 raise RecoveryBlocked("本地输出 OCR 进程预算尚未标定")
             return SceneRuntimeLimits(observation.max_process_rss_bytes, observation.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, observation.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, observation.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") == "task_audio":
             audio = self.budget.cpu_audio
             if audio is None:
                 raise RecoveryBlocked("CPU 音频进程预算尚未标定")
             return SceneRuntimeLimits(audio.max_process_rss_bytes, audio.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") in {"creation_narration", "creation_person_render"}:
             narration = (self.budget.presenter if resources["kind"] == "creation_person_render"
                          else self.budget.narration)
@@ -1288,7 +1335,7 @@ class HostResourceProbe:
             return SceneRuntimeLimits(
                 narration.max_process_rss_bytes, narration.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
-                narration.runtime_sample_seconds,
+                narration.runtime_sample_seconds, self.memory_monitor,
             )
         if resources.get("kind") != "material_scene_window":
             return None
@@ -1298,7 +1345,7 @@ class HostResourceProbe:
         return SceneRuntimeLimits(
             scene.max_process_rss_bytes, scene.max_process_threads,
             self.budget.min_available_memory_bytes,
-            self.budget.max_swap_used_bytes, scene.runtime_sample_seconds,
+            self.budget.max_swap_used_bytes, scene.runtime_sample_seconds, self.memory_monitor,
         )
 
     def released(self, grant: Grant) -> bool | None:

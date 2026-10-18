@@ -7,12 +7,14 @@ import threading
 import time
 import wave
 from dataclasses import asdict, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.creation_execution import CreationExecutionActor, CreationStageGrantContext
 from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork
 from app.models import utc_now
+from app.host_resource_probes import HostResourceRefusal
 from app.persistence_json import _json_payload
 
 OWNER = "media_preview"
@@ -196,6 +198,24 @@ class ProfilePreviewExecutor:
                                         checkpoint_write=lambda conn, _: write(conn, result))
             else:
                 scheduler.fail_unit(grant, reason="preview_failed", failure_write=lambda conn, _: write(conn, result))
+        except HostResourceRefusal as exc:
+            if not exc.recoverable_pressure:
+                terminal = replace(owner.read(run.workspace_id, run.id), status="failed", finished_at=utc_now(),
+                    output_path=None, reason=exc.decision.reason or "resource_unavailable",
+                    impact="预览资源声明或能力准备不可用，未发布输出。", repair_action=str(exc))
+                scheduler.fail_unit(grant, reason="preview_resources_unavailable",
+                                    failure_write=lambda conn, _: write(conn, terminal))
+            else:
+                # defer_unit proves child-group release before returning the permit.
+                # The wrapper above has suppressed the service's provisional failed record.
+                current = owner.read(run.workspace_id, run.id)
+                waiting = replace(current, status="queued", finished_at=None,
+                    output_path=None, reason="resource_pressure", impact="预览等待系统压力恢复，保留原请求。",
+                    repair_action="系统稳定后自动继续，无需重新生成请求。")
+                scheduler.defer_unit(grant, reason="resource_pressure",
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30),
+                    owner_database_path=owner.repository.database_path,
+                    owner_write=lambda conn, _: write(conn, waiting))
         except RecoveryBlocked:
             raise  # Keep the permit and unfinished record when child release is unknown.
         except Exception as exc:

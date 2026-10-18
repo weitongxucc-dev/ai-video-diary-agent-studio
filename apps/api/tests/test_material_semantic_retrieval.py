@@ -1,5 +1,6 @@
 """Real SQLite/queue contracts with explicit synthetic encoder boundaries; no model load."""
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from app.device_runtime import OwnerRouter
 from app.device_scheduler import DeviceScheduler, RecoveryBlocked
 from app.materials.analysis import _visual_fingerprint
 from app.materials.retrieval import MaterialRetrievalService, OWNER
+from app.host_resource_probes import MaterialVisualQueryBudget
 from app.models import utc_now
 from app.persistence_json import _json_payload
 from app.visual_semantics import ChineseClipSubprocessProvider, VisualQueryExecutionLimits, visual_feature_version
@@ -39,7 +41,8 @@ def setup(tmp_path):
         provider=provider, database_path=repo.database_path,
         verify_identity=lambda actor: "ready" if actor.member_id in active else "unauthorized",
         actor_from_identity=CreationExecutionActor.from_event,
-        execution_limits=VisualQueryExecutionLimits(10, 1024, 1024, 10000, 1))
+        query_budget=MaterialVisualQueryBudget(provider.model_id, visual_feature_version(provider.model_id),
+            120, 10., 1024, 1024, 10000, 1, 10000, 4, .1, 20000, 20000))
     actor = CreationExecutionActor("workspace", "member-a")
     with repo._connect() as conn:
         for index, segment in enumerate(asset.segments):
@@ -183,13 +186,13 @@ def test_queue_deduplicates_and_executor_atomically_publishes_query_vector(setup
     # Another process/service instance reads the same persisted cache after restart.
     restarted = MaterialRetrievalService(assets=s.service.assets, analysis=s.service.analysis,
         provider=s.provider, database_path=s.repo.database_path, verify_identity=s.service.verify_identity,
-        actor_from_identity=CreationExecutionActor.from_event, execution_limits=s.service.execution_limits)
+        actor_from_identity=CreationExecutionActor.from_event, query_budget=s.service.query_budget)
     assert restarted.search("workspace", query="feeding operation", actor=s.actor, viewer_user_id="member-a").matches
 
 
 def test_missing_budget_does_not_submit_or_invoke_encoder(setup, tmp_path):
     s = setup
-    s.service.execution_limits = None
+    s.service.query_budget = None
     result = _search(s, query="feeding operation", scheduler=_queue(s, tmp_path))
     assert result.semantic_status == "unavailable" and result.device_request_id is None
     assert "执行范围" in result.semantic_message and s.calls == []
@@ -300,3 +303,32 @@ def test_manual_correction_uses_current_text_and_preserves_exact_lexical_selecti
     assert result.matches[0].evidence_excerpt.startswith("人工核对")
     assert result.matches[0].needs_confirmation
     assert _search(s, query="设备", automatic_selection=True).matches == []
+
+
+def test_query_pressure_releases_and_resumes_same_device_request(setup, tmp_path, monkeypatch):
+    from app.host_memory import MemoryDecision, MemorySample
+    from app.granted_subprocess import GrantedCommandMemoryPressure
+    s = setup
+    scheduler = _queue(s, tmp_path)
+    clock = [datetime.now(timezone.utc)]
+    scheduler.clock = lambda: clock[0]
+    result = _search(s, query="feeding operation", scheduler=scheduler)
+    grant = scheduler.pick_and_grant()
+    def stop(*_):
+        sample = MemorySample("darwin", 0., "synthetic", "critical", 1000, None, {})
+        raise GrantedCommandMemoryPressure(MemoryDecision(False, "memory_pressure_critical", sample, 100, None, 0.))
+    monkeypatch.setattr(s.provider, "for_query_grant", stop)
+    s.service.registration().executor.execute(grant, scheduler)
+    view = scheduler.view_for(result.device_request_id, s.actor)
+    assert view["state"] == "blocked" and view["wait_reason"] == "resource_pressure"
+    with s.repo._connect() as conn:
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+    assert scheduler.pick_and_grant() is None
+    monkeypatch.setattr(s.provider, "for_query_grant", lambda *_: SimpleNamespace(embed_texts=lambda _: [[1.0, 0.0]]))
+    clock[0] += timedelta(seconds=31)
+    resumed = scheduler.pick_and_grant()
+    assert resumed is not None and resumed.request_id == grant.request_id
+    assert resumed.attempt_number == grant.attempt_number and resumed.generation > grant.generation
+    s.service.registration().executor.execute(resumed, scheduler)
+    assert scheduler.view_for(grant.request_id, s.actor)["state"] == "done"
+    assert _search(s, query="feeding operation").semantic_status == "ready"

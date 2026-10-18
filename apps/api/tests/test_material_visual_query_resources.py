@@ -20,6 +20,7 @@ from app.member_permits import HostBudgetUncalibrated, host_budget_from_env, mat
 from app.model_runtime import CHINESE_CLIP_VIT_B16
 from app.visual_semantics import visual_feature_version
 from tests.test_member_permits import _HOST_ENV
+from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 
 def _budget():
@@ -92,7 +93,8 @@ def bound(tmp_path):
             (grant.request_id, grant.workspace_id, grant.owner_type, grant.owner_id, grant.unit_key,
              grant.input_digest, grant.attempt_number, grant.generation, "granted", json.dumps(resources)))
     probe = HostResourceProbe(database, disk_paths=(tmp_path,),
-        budget=HostBudget(75, 100, 50, 200, 100, 1024, material_visual_query=query))
+        budget=HostBudget(75, 100, 50, 200, 100, 1024, material_visual_query=query),
+        memory_monitor=IsolatedMemoryMonitor())
     return SimpleNamespace(query=query, resources=resources, grant=grant, probe=probe, tmp_path=tmp_path)
 
 
@@ -186,12 +188,17 @@ def test_admission_reserves_own_memory_and_disk_while_running_checks_host_headro
     assert s.probe.continue_unit(s.grant) is True
 
 
-@pytest.mark.parametrize("metric,value", [("cpu", 76), ("memory", 99), ("swap", 51), ("disk", 1199), ("io", 101)])
+@pytest.mark.parametrize("metric,value", [("cpu", 76), ("memory", 99), ("disk", 1199), ("io", 101)])
 def test_query_keeps_existing_live_host_thresholds(bound, monkeypatch, metric, value):
     _sample_host(bound, monkeypatch, **{metric: value})
     with pytest.raises(HostResourceRefusal) as stopped:
         bound.probe.continue_unit(bound.grant)
     assert stopped.value.decision.verdict is False
+
+
+def test_query_swap_total_is_diagnostic_and_not_a_pressure_veto(bound, monkeypatch):
+    _sample_host(bound, monkeypatch, swap=2**50)
+    assert bound.probe.continue_unit(bound.grant) is True
 
 
 def test_process_monitor_counts_the_whole_query_group(bound, monkeypatch):

@@ -1122,8 +1122,15 @@ class DeviceScheduler:
         return checkpoint_ref
 
     def defer_unit(self, grant: Grant, *, reason: DeferReason,
-                   retry_not_before_utc: datetime | None = None) -> None:
+                   retry_not_before_utc: datetime | None = None,
+                   owner_write: FailureWrite | None = None,
+                   owner_database_path: str | Path | None = None) -> None:
         """Return a released unit to the queue without claiming work completed."""
+        if owner_write is not None:
+            if owner_database_path is None or Path(owner_database_path).expanduser().resolve() != self.database_path:
+                raise ValueError("业务等待回写与设备许可必须在同一 Production SQLite 库")
+        elif owner_database_path is not None:
+            raise ValueError("业务等待回写缺少事务回调")
         allowed: set[str] = {"dependency_unavailable", "input_stale", "authorization_lost",
                              "resource_pressure", "window_closed", "device_active",
                              "worker_interrupted", "transient_failure"}
@@ -1146,6 +1153,8 @@ class DeviceScheduler:
                     or (reason == "window_closed" and
                         (request.policy.window is None or request.policy.window.contains(now)))):
                 raise ValueError("等待原因与当前业务状态不符")
+            if owner_write is not None:
+                owner_write(conn, grant)
             stamp = _stamp(now)
             self._record_event(conn, row, "deferred", reason, None, stamp)
             conn.execute(

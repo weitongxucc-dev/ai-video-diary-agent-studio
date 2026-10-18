@@ -13,6 +13,15 @@ from types import SimpleNamespace
 
 import pytest
 import psutil
+from tests.host_memory_boundary import IsolatedMemoryMonitor, isolated_runtime_limits
+
+
+@pytest.fixture(autouse=True)
+def isolated_native_pressure_boundary(monkeypatch):
+    # This file isolates CPU/IO/child-group behavior. Native policy/recovery has
+    # its own counterexamples in test_host_memory.py; never read the developer's
+    # changing OS warning state to decide these unrelated checks.
+    monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 from app.host_resource_probes import MediaScriptBudget
 from app.device_scheduler import RecoveryBlocked
@@ -121,7 +130,7 @@ def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monke
     scheduler.resources = HostResourceProbe(tmp_path / "isolated.sqlite", disk_paths=(tmp_path,),
         budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
     monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda _grant:
-        SceneRuntimeLimits(1024 ** 3, 16, 1, 2**63, 0.05))
+        isolated_runtime_limits(1024 ** 3, 16, 1, 2**63, 0.05))
     sample = commands._check_scene_runtime
     def sampled(*args):
         rss_samples.append(time.monotonic())
@@ -235,7 +244,7 @@ def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits
     assert probe.continue_unit(SimpleNamespace()) is True
 
 
-@pytest.mark.parametrize("failure", ["headroom","cpu","swap","memory_unknown","scope_unknown"])
+@pytest.mark.parametrize("failure", ["headroom","cpu","memory_unknown","scope_unknown"])
 def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure):
     render = replace(_render_budget(),additional_memory_bytes=2*1024**3)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
@@ -265,7 +274,7 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
     monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=10000))
     monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=0))
     process=SimpleNamespace(pid=100,poll=lambda:None)
-    limits=SceneRuntimeLimits(1024,2,100,100,.1)
+    limits=isolated_runtime_limits(1024,2,100,100,.1)
     if accepted:
         _check_scene_runtime(process,child,limits)
     else:
@@ -282,7 +291,7 @@ def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", [
-    "cpu_percent", "available_memory_bytes", "swap_used_bytes",
+    "cpu_percent", "available_memory_bytes",
     "disk_free_bytes", "disk_io_bytes_per_second", "memory_unknown", None,
 ])
 def test_admission_logs_same_observation_without_resampling(
@@ -837,7 +846,6 @@ def test_sample_host_capacity_unavailable_fails_explicitly(monkeypatch):
 @pytest.mark.parametrize("metric,actual,threshold", [
     ("cpu_percent", 76, 75),
     ("available_memory_bytes", 99, 100),
-    ("swap_used_bytes", 51, 50),
     ("disk_free_bytes", 199, 200),
     ("disk_io_bytes_per_second", 101, 100),
 ])
@@ -871,7 +879,8 @@ def test_runtime_refusal_contains_the_same_samples_and_unchanged_thresholds(
     assert decision.verdict is False and failed["passed"] is False
     assert failed["actual"] == actual
     assert failed["minimum" if metric in {"available_memory_bytes", "disk_free_bytes"} else "maximum"] == threshold
-    assert all(check["passed"] for name, check in decision.checks.items() if name != key)
+    assert all(check.get("passed") is not False for name, check in decision.checks.items()
+               if name not in {key, "memory_policy"})
     assert decision.observed_interval_seconds == 1
     assert calls == ["io", "io"]  # No second observation to explain the first refusal.
     label = {"cpu_percent": "CPU占用", "available_memory_bytes": "可用内存", "swap_used_bytes": "交换空间已用量",
@@ -1044,7 +1053,7 @@ def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, m
     scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
         budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
     monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current:
-        SceneRuntimeLimits(1024**3, 16, 1, 2**63, 0.1))
+        isolated_runtime_limits(1024**3, 16, 1, 2**63, 0.1))
     scheduler.began = time.monotonic()
     with pytest.raises(HostResourceRefusal) as stopped:
         run_granted_command(scheduler, grant, [sys.executable, "-c",
@@ -1233,7 +1242,7 @@ def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeyp
     scheduler = PreviewScheduler()
     scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
                                             budget=HostBudget(100,1,2**63,1,2**63,1024))
-    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current: SceneRuntimeLimits(10**9,16,1,2**63,0.05))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current: isolated_runtime_limits(10**9,16,1,2**63,0.05))
     def controlled_sample(*args):
         if scenario == "resource_limit":
             raise GrantedCommandResourceUnavailable("synthetic resource sample limit")

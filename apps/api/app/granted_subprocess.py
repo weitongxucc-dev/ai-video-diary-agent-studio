@@ -16,7 +16,7 @@ from pathlib import Path
 import psutil
 
 from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, RecoveryBlocked
-from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits
+from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits, HostResourceDecision, HostResourceRefusal
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,20 @@ class GrantedCommandResourceLimit(GrantedCommandError):
 class GrantedCommandResourceUnavailable(GrantedCommandError):
     """Host pressure or an unavailable scene process sample stopped execution."""
 
+    def __init__(self, message: str, *, memory_decision=None):
+        self.memory_decision = memory_decision
+        super().__init__(message)
+
+
+class GrantedCommandMemoryPressure(GrantedCommandResourceUnavailable, HostResourceRefusal):
+    """Existing creation and material executors both recognize a recoverable wait."""
+
+    def __init__(self, memory):
+        self.memory_decision = memory.payload()
+        checks = {"memory_policy": {"passed": memory.verdict, "actual": memory.sample.pressure,
+                                     **self.memory_decision}}
+        HostResourceRefusal.__init__(self, HostResourceDecision(memory.verdict, {}, checks, memory.reason))
+
 
 def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentity,
                          limits: SceneRuntimeLimits) -> None:
@@ -91,9 +105,12 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                         raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling") from exc
         if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
             raise GrantedCommandResourceLimit(rss=rss, threads=threads, limits=limits)
-        if (psutil.virtual_memory().available < limits.min_host_available_memory_bytes
-                or psutil.swap_memory().used > limits.max_host_swap_used_bytes):
-            raise GrantedCommandResourceUnavailable("Host memory pressure during scene decode")
+        if limits.memory_monitor is None:
+            raise GrantedCommandResourceUnavailable("Native memory policy is unavailable")
+        memory = limits.memory_monitor.check(system_reserve_bytes=limits.min_host_available_memory_bytes,
+                                              additional_commit_bytes=0)
+        if memory.verdict is not True:
+            raise GrantedCommandMemoryPressure(memory)
     except psutil.NoSuchProcess as exc:
         if process.poll() is None:
             try:
