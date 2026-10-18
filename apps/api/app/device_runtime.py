@@ -21,6 +21,7 @@ from app.device_scheduler import (
     OwnerVerifier,
     ProcessProbe,
     RecoveryBlocked,
+    StaleGrantInput,
     ResourceProbe,
     ResourceAdmissionWrite,
     RetryReason,
@@ -167,7 +168,12 @@ class DeviceRuntime:
                 registration = self.registrations.get(grant.owner_type)
                 if registration is None:
                     raise RecoveryBlocked("获准对象缺少执行器，许可保留供核查")
-                self.scheduler.assert_grant(grant)
+                try:
+                    self.scheduler.assert_grant(grant)
+                except StaleGrantInput:
+                    self.scheduler.defer_unit(grant, reason="input_stale")
+                    self.scheduler.assert_released(grant)
+                    return True
                 if self._stop.is_set():
                     raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
                 registration.executor.execute(grant, self.scheduler)

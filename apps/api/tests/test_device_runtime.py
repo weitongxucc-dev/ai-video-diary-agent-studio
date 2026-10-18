@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from app.device_scheduler import (
     DeviceScheduler,
     ProcessIdentity,
     RecoveryBlocked,
+    StaleGrantInput,
     SchedulePolicy,
     SubmissionIntent,
     VerifiedSession,
@@ -492,3 +494,113 @@ def test_unknown_resource_sample_never_reaches_executor(tmp_path):
     assert executor.calls == []
     assert runtime.scheduler._get(request.id).wait_reason == "resource_unknown"
     assert runtime.stop(0.1) is True
+
+
+def _post_grant_owner_change(tmp_path, verdict):
+    """Change business input after a real grant, without forging its fences."""
+    owner, executor, states, grants = Owner(), CompletingExecutor(), {}, []
+    owner.check_current = lambda request, conn: states.get(request.owner_id, "ready")
+    runtime = _runtime(tmp_path, registrations={"job_run": OwnerRegistration(owner, executor)})
+    request = runtime.scheduler.submit(_intent("old-input"), "member")
+    pick = runtime.scheduler.pick_and_grant
+    def race():
+        grant = pick()
+        if grant is not None:
+            grants.append(grant)
+            if grant.request_id == request.id:
+                states[grant.owner_id] = verdict
+        return grant
+    runtime.scheduler.pick_and_grant = race
+    return runtime, request, executor, states, grants
+
+
+def test_explicit_stale_before_executor_releases_and_next_valid_unit_runs(tmp_path, caplog):
+    runtime, request, executor, _, grants = _post_grant_owner_change(tmp_path, "stale")
+    next_request = runtime.scheduler.submit(_intent("valid-input"), "member")
+    assert runtime.run_once() is True
+    stale = runtime.scheduler._get(request.id)
+    assert (stale.state, stale.wait_reason) == ("blocked", "input_stale")
+    assert executor.calls == [] and runtime.last_error is None and not runtime._stop.is_set()
+    assert runtime.scheduler._held_fd is None
+    with sqlite3.connect(runtime.scheduler.database_path) as conn:
+        assert conn.execute("SELECT state,request_id,children_json FROM device_permit WHERE id=1").fetchone() == ("free", None, "[]")
+        assert conn.execute("SELECT event_type,reason,prior_state FROM device_request_events WHERE request_id=? ORDER BY id DESC LIMIT 1",
+            (request.id,)).fetchone() == ("deferred", "input_stale", "granted")
+    decision = [json.loads(record.args[0]) for record in caplog.records if record.msg == "Device owner current check refused: %s"][-1]
+    assert decision == {"request_id": request.id, "attempt_number": 1, "permit_generation": grants[0].generation, "verdict": "stale"}
+    assert runtime.run_once() is True
+    assert len(executor.calls) == 1 and executor.calls[0].request_id == next_request.id
+    assert runtime.scheduler._get(next_request.id).state == "done"
+    assert runtime.last_error is None and runtime.stop(.1)
+
+
+@pytest.mark.parametrize("verdict", ["unknown", "unauthorized", "dependency", "unexpected PRIVATE_INPUT"])
+def test_other_owner_refusals_still_stop_with_held_permit(tmp_path, caplog, verdict):
+    runtime, request, executor, _, _ = _post_grant_owner_change(tmp_path, verdict)
+    with pytest.raises(PermissionError) as stopped:
+        runtime.run_once()
+    assert not isinstance(stopped.value, StaleGrantInput)
+    assert runtime.last_error is stopped.value and runtime._stop.is_set()
+    assert executor.calls == [] and runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.scheduler._held_fd is not None
+    decision = [json.loads(record.args[0]) for record in caplog.records if record.msg == "Device owner current check refused: %s"][-1]
+    assert decision["verdict"] == (verdict if verdict in {"unknown", "unauthorized", "dependency"} else "unknown")
+    assert "PRIVATE_INPUT" not in caplog.text
+    assert runtime.stop(.1)
+
+
+@pytest.mark.parametrize("gate", ["child_active", "child_unknown", "resource_unknown"])
+def test_stale_does_not_bypass_child_or_resource_release_proof(tmp_path, gate):
+    runtime, request, executor, _, _ = _post_grant_owner_change(tmp_path, "stale")
+    if gate == "resource_unknown":
+        runtime.scheduler.resources.released = lambda grant: None
+    else:
+        runtime.scheduler.processes.children_released = lambda children: False if gate == "child_active" else None
+    with pytest.raises(RecoveryBlocked):
+        runtime.run_once()
+    assert runtime.last_error is not None and runtime._stop.is_set()
+    assert executor.calls == [] and runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.scheduler._held_fd is not None and runtime.stop(.1)
+
+
+@pytest.mark.parametrize("second_verdict", ["ready", "unknown", "unauthorized", "dependency"])
+def test_stale_defer_rechecks_owner_in_its_original_transaction(tmp_path, second_verdict):
+    runtime, request, executor, states, _ = _post_grant_owner_change(tmp_path, "stale")
+    defer = runtime.scheduler.defer_unit
+    def changed(grant, **kwargs):
+        states[grant.owner_id] = second_verdict
+        return defer(grant, **kwargs)
+    runtime.scheduler.defer_unit = changed
+    with pytest.raises(ValueError, match="等待原因"):
+        runtime.run_once()
+    assert executor.calls == [] and runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.scheduler._held_fd is not None and runtime.last_error is not None and runtime.stop(.1)
+
+
+def test_stale_business_input_cannot_hide_corrupted_permit(tmp_path):
+    runtime, request, executor, _, _ = _post_grant_owner_change(tmp_path, "stale")
+    pick = runtime.scheduler.pick_and_grant
+    def corrupt():
+        grant = pick()
+        with sqlite3.connect(runtime.scheduler.database_path) as conn:
+            conn.execute("UPDATE device_permit SET generation=generation+1 WHERE id=1")
+        return grant
+    runtime.scheduler.pick_and_grant = corrupt
+    with pytest.raises(PermissionError) as stopped:
+        runtime.run_once()
+    assert not isinstance(stopped.value, StaleGrantInput)
+    assert executor.calls == [] and runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.scheduler._held_fd is not None and runtime.last_error is stopped.value and runtime.stop(.1)
+
+
+def test_stale_error_inside_executor_keeps_original_stop_boundary(tmp_path):
+    class FailedExecutor:
+        def execute(self, grant, scheduler):
+            raise StaleGrantInput("executor failure")
+    runtime = _runtime(tmp_path, executor=FailedExecutor())
+    request = runtime.scheduler.submit(_intent("job"), "member")
+    with pytest.raises(StaleGrantInput) as stopped:
+        runtime.run_once()
+    assert runtime.last_error is stopped.value and runtime._stop.is_set()
+    assert runtime.scheduler._get(request.id).state == "granted"
+    assert runtime.scheduler._held_fd is not None and runtime.stop(.1)

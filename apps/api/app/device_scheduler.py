@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -32,6 +33,13 @@ DeferReason = Literal["dependency_unavailable", "input_stale", "authorization_lo
 
 class RecoveryBlocked(RuntimeError):
     """The host may still be occupied; no further heavy unit is admitted."""
+
+
+class StaleGrantInput(PermissionError):
+    """The owner explicitly rejected current inputs; permit fencing is separate."""
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -957,7 +965,17 @@ class DeviceScheduler:
         row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
         if row is not None and not _material_key_has_digest(row["owner_type"], row["unit_key"]):
             raise PermissionError("旧素材请求缺少阶段输入摘要，不能执行")
-        if row is None or self.owners.check_current(self._request(row), conn) != "ready":
+        if row is None:
+            raise PermissionError("输入版本或共享授权已失效")
+        verdict = self.owners.check_current(self._request(row), conn)
+        if verdict != "ready":
+            logger.warning("Device owner current check refused: %s", json.dumps({
+                "request_id": grant.request_id, "attempt_number": grant.attempt_number,
+                "permit_generation": grant.generation,
+                "verdict": verdict if verdict in ("stale", "unauthorized", "dependency", "unknown") else "unknown",
+            }))
+            if verdict == "stale":
+                raise StaleGrantInput("输入版本已过期")
             raise PermissionError("输入版本或共享授权已失效")
 
     def assert_grant(self, grant: Grant) -> None:
