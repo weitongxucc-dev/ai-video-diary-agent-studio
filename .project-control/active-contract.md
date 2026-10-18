@@ -55,6 +55,8 @@ C补绑`apps/api/tests/test_device_runtime.py`，仅将既有Owner测试夹具�
 
 B补绑`apps/api/agent_tools/diary/script-tools.ts`与`apps/api/agent_tools/tests/script-failure-feedback.test.mjs`，仅保留既有文案拒绝中服务器验证过的字段、实际段号、片段序号和字段摘要；同步其已绑定topics/transport/projection/直接测试。main错误出口由主控薄透传四个有限字段，不传上游自由说明或原始响应，不增加诊断系统，不将画面/标题拒绝误称正文拒绝。
 
+A补绑`apps/api/app/creation/intent_use_case.py`及新增`apps/api/tests/test_creation_script_goal_authority.py`：仅沿已采用请求的现有原目标/来源/任务绑定，为两条文案入口解析可信用户目标；目标委托不将Agent自拟文案当固定正文。复用公开仓储，源不匹配明确拒绝，不新增存储或放宽可见性。main调用由主控负责；topics仍B独占。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。
