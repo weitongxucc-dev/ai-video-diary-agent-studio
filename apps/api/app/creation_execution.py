@@ -391,15 +391,15 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         if not isinstance(actor, CreationExecutionActor) or audio_mix_facts is None:
             raise PermissionError("音轨成片缺少当前成员或已许可来源解析器")
         audio_mix = audio_mix_facts(task.workspace_id, task.id, montage, actor=actor)
-    if any(item.get("kind") != "image" for item in montage.graphic_overlays):
-        raise ValueError("CPU 成片当前仅支持已登记PNG图片图层")
+    if any(item.get("kind") not in {"image", "text"} for item in montage.graphic_overlays):
+        raise ValueError("CPU 成片当前仅支持文字和已登记PNG图片图层")
     validate_overlays(montage.graphic_overlays, montage.duration_seconds)
     graphics = []
-    if montage.graphic_overlays:
+    image_refs = dict.fromkeys(item["source_ref"] for item in montage.graphic_overlays if item.get("kind") == "image")
+    if image_refs:
         if not isinstance(actor, CreationExecutionActor) or graphic_source_facts is None:
             raise PermissionError("图片成片缺少当前成员或已登记来源解析器")
-        graphics = [graphic_source_facts(task.workspace_id, task.id, ref, actor=actor)
-                    for ref in dict.fromkeys(item["source_ref"] for item in montage.graphic_overlays)]
+        graphics = [graphic_source_facts(task.workspace_id, task.id, ref, actor=actor) for ref in image_refs]
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
            for clip in montage.clips):
         raise ValueError("本机人像效果尚无受许可执行路径")

@@ -98,15 +98,38 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
         state.resolver(state.task.workspace_id, task_id, state.source['source_ref'], actor=actor)
 
 
-@pytest.mark.parametrize('unsupported', ['text', 'arrow', 'audio', 'actor'])
+def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path):
+    state.montage.graphic_overlays = [TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()]
+    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    before, resources = facts(state, graphic_source_facts=None)
+    assert resources['overlay_count'] == 1 and resources['input_bytes'] == 512 + 4096
+    assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
+    state.montage.graphic_overlays[0]['text'] = '不同的画面文字'
+    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    after, changed = facts(state, graphic_source_facts=None)
+    assert after != before and changed == resources
+
+
+def test_text_does_not_weaken_mixed_png_source_authority(state):
+    state.montage.graphic_overlays[1] = TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()
+    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+        creation_task_montage_plan_to_payload(state.montage))
+    _, resources = facts(state)
+    png = state.resolver(state.task.workspace_id, state.task.id, state.source['source_ref'], actor=state.actor)
+    assert resources['overlay_count'] == 2 and resources['input_bytes'] == 512 + 4096 + png['size_bytes']
+    with pytest.raises(PermissionError):
+        facts(state, actor=None)
+
+
+@pytest.mark.parametrize('unsupported', ['arrow', 'audio', 'actor'])
 def test_normal_render_keeps_unsupported_paths_blocked(state, unsupported):
     if unsupported == 'actor':
         with pytest.raises(PermissionError):
             facts(state, actor=None)
         return
-    if unsupported == 'text':
-        state.montage.graphic_overlays = [TextOverlay(text='unsupported', start_seconds=0, end_seconds=1).model_dump()]
-    elif unsupported == 'arrow':
+    if unsupported == 'arrow':
         state.montage.graphic_overlays = [ArrowOverlay(name='unsupported', x=.5, y=.5, start_seconds=0, end_seconds=1).model_dump()]
     else:
         state.montage.audio_timeline = main.narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
