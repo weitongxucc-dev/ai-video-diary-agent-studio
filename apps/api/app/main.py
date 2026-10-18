@@ -328,6 +328,7 @@ from app.schemas import (
     CreationTaskNarrationResponse,
     CreationTaskRecordingAdoptRequest,
     CreationTaskNarrationVoiceSelectionRequest,
+    CreationTaskNarrationVoiceSelectionResponse,
     CreationTaskPersonRenderRequest,
     CreationTaskPersonRenderResponse,
     CreationTaskPersonRendersResponse,
@@ -6926,8 +6927,11 @@ def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: 
             raise ValueError("采用动作不属于当前已消费输入，没有沿旧输入采用。")
         if not draft_only:
             CreationIntentUseCase.reject_discussion_only_input(origin["raw_command"])
+            if re.search(r"(?:不要|先别|先不|暂不|不)(?:采用|覆盖原稿|替换原稿|覆盖已采用稿|替换已采用稿)", origin["raw_command"]):
+                raise ValueError("本轮未授权采用或替换，原稿保持不变；请明确采用修订后再替换。")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return origin
 
 
 def _script_topic_origin(workspace_id: str, plan: CreationPlan, topic: CreationTaskTopicCandidate) -> Literal["generated", "provided"]:
@@ -6940,7 +6944,11 @@ def _script_topic_origin(workspace_id: str, plan: CreationPlan, topic: CreationT
 
 def _assistant_script_inputs(workspace_id: str, task_id: str):
     task = _creation_task_or_404(workspace_id, task_id)
-    if task.stage != "script" or task.confirmed_script_id:
+    if task.confirmed_script_id and task.can_revise_script:
+        confirmed = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+        if confirmed.locked_body_digest:
+            raise HTTPException(status_code=409, detail="当前定稿正文已锁定，不能自动改写；请明确采用新的定稿。")
+    elif task.stage != "script" or task.confirmed_script_id:
         raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     topic = next((item for item in production_repo.list_topic_candidates(workspace_id, task_id)
@@ -6964,6 +6972,8 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
     task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
     scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
     draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
+    if task.can_revise_script and task.confirmed_script_id:
+        draft = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
     retained_draft = None
     if draft and not production_repo.script_knowledge_inputs_current(workspace_id, task.id, draft.id):
         retained_draft, draft = draft, None
@@ -7127,8 +7137,9 @@ def save_assistant_script_draft(
     from app.topics import CreationTaskGeneratedScriptSection
 
     workspace_id = current_workspace_id(request)
+    instruction_origin = None
     if payload.assistant_turn_id is not None:
-        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+        instruction_origin = _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
     task, plan, topic, sources, input_references = _assistant_script_inputs(workspace_id, task_id)
     reader = _require_current_script_inputs(request, workspace_id, plan, input_references)
     sections = [CreationTaskScriptSection(**section.model_dump()) for section in payload.sections]
@@ -7136,8 +7147,11 @@ def save_assistant_script_draft(
     if any(not set(section.evidence_reference_ids).issubset(allowed) for section in sections):
         raise HTTPException(status_code=422, detail="文案引用了本次任务以外的资料")
     scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
+    revising_confirmed = bool(task.confirmed_script_id and task.can_revise_script)
+    if revising_confirmed:
+        scripts = [production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)]
     updating = bool(scripts and scripts[0].selection_status == "draft" and task.stage_status == "waiting_for_user")
-    if updating:
+    if updating or revising_confirmed:
         if payload.expected_updated_at is None:
             raise HTTPException(status_code=422, detail="请先读取当前草稿，再提交修订。")
         if payload.expected_updated_at != scripts[0].updated_at:
@@ -7151,6 +7165,7 @@ def save_assistant_script_draft(
         duration_target_seconds=plan.duration_target_seconds, topic_title=topic.title,
         topic_angle=topic.angle if topic_origin == "generated" else "", topic_audience=topic.audience, topic_outline=tuple(topic.outline),
         topic_origin=topic_origin,
+        current_instruction=instruction_origin["raw_command"] if instruction_origin else "",
         sources=tuple(sources), style_instruction=str(plan.template_settings.get("style_instruction", "")),
         script_structure=tuple(plan.template_settings.get("script_structure", [])),
         script_section_count=(plan.template_settings.get("script_section_count")
@@ -7182,7 +7197,25 @@ def save_assistant_script_draft(
     current_reader = _require_current_script_inputs(request, workspace_id, current_plan, current_refs)
     if binding != (asdict(current_plan), asdict(current_topic), tuple(current_sources), current_refs) or reader != current_reader:
         raise HTTPException(status_code=409, detail="方案、选题或资料已变化，修订没有写入，请重新读取当前任务。")
-    if updating:
+    if instruction_origin is not None and instruction_origin != _assistant_creation_adoption_scope(
+            task_id, request, str(payload.assistant_turn_id), draft_only=True):
+        raise HTTPException(status_code=409, detail="本轮要求已变化，旧要求核查的文案没有保存，请读取当前输入。")
+    if revising_confirmed:
+        if instruction_origin is not None:
+            # Revising an adopted body is itself adoption. A discussion-only
+            # agent request must never be converted into a manual adoption.
+            _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
+        delegated = bool(instruction_origin and plan.creation_intent and plan.creation_intent["kind"] == "goal_delegation")
+        try:
+            task, draft = production_repo.confirm_creation_task_script(workspace_id, task_id, scripts[0].id,
+                title=payload.title, sections=sections, expected_updated_at=payload.expected_updated_at,
+                adoption_kind="delegated_system" if delegated else "manual", verified_owner_user_id=reader[0])
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if delegated:
+            _goal_service().record_script_adoption(str(payload.assistant_turn_id), workspace_id, reader[0],
+                task, plan, draft, instruction_origin)
+    elif updating:
         try:
             draft = production_repo.update_assistant_script_draft(
                 workspace_id, task_id, scripts[0].id, title=payload.title, sections=sections,
@@ -7455,7 +7488,7 @@ def _assistant_turn_scope(
         if payload.selected_object_refs or payload.playhead_ms is not None:
             raise HTTPException(status_code=422, detail="选题对话不能选择剪辑对象")
         return "topic", []
-    if task.stage == "script" or task.confirmed_script_id is None:
+    if task.stage == "script" or task.confirmed_script_id is None or stage == "script" and task.can_revise_script:
         if stage != "script":
             raise HTTPException(status_code=409, detail="当前任务尚未完成文案确认，不能使用剪辑对话")
         _assistant_script_inputs(workspace_id, task.id)
@@ -7958,7 +7991,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         except KeyError as exc:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
         adopted = (candidate.selection_status == "confirmed" and candidate.adoption
-            and candidate.adoption["kind"] == "delegated_system")
+            and production_repo.get_creation_task(workspace_id, task_id).confirmed_script_id == candidate.id)
         if candidate.task_id != task_id or candidate.selection_status != "draft" and not adopted:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
         script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
@@ -8271,8 +8304,9 @@ def confirm_creation_task_script(
     payload: CreationTaskScriptConfirmRequest,
 ) -> CreationTaskScriptsResponse:
     workspace_id = current_workspace_id(request)
+    instruction_origin = None
     if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
-        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
+        instruction_origin = _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     try:
@@ -8296,7 +8330,7 @@ def confirm_creation_task_script(
             "请压缩正文后再确认。"
         ))
     try:
-        task, _ = production_repo.confirm_creation_task_script(
+        task, adopted_script = production_repo.confirm_creation_task_script(
             workspace_id,
             task_id,
             script_id,
@@ -8320,35 +8354,36 @@ def confirm_creation_task_script(
             repair_action=str(exc),
             retryable=False,
         ) from exc
+    if instruction_origin is not None:
+        _goal_service().record_script_adoption(str(payload.assistant_turn_id), workspace_id,
+            _content_reader(request, workspace_id)[0], task, plan, adopted_script, instruction_origin)
     return _creation_task_scripts_response(workspace_id, task)
 
 
 @app.post(
     "/api/creation-tasks/{task_id}/narration/voice",
-    response_model=CreationTaskWorkspaceResponse,
+    response_model=CreationTaskNarrationVoiceSelectionResponse,
 )
 def select_creation_task_narration_voice(
     task_id: str,
     request: Request,
     payload: CreationTaskNarrationVoiceSelectionRequest,
-) -> CreationTaskWorkspaceResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
+) -> CreationTaskNarrationVoiceSelectionResponse:
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    if payload.assistant_turn_id is not None:
+        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     try:
-        selected_voice, pronunciation_references = _resolve_creation_task_voice_selection(
-            workspace_id=workspace_id,
-            task=task,
-            plan=plan,
+        receipt = production_repo.select_creation_task_narration_voice(
+            workspace_id=task.workspace_id, task_id=task.id, member_id=member_id, request_id=str(payload.request_id),
             voice_profile_id=payload.voice_profile_id,
             voice_version=payload.voice_version,
+            expected_plan_updated_at=payload.expected_plan_updated_at,
+            expected_task_updated_at=payload.expected_task_updated_at,
         )
-        _, task = production_repo.select_creation_task_narration_voice(
-            workspace_id=workspace_id,
-            task_id=task.id,
-            selected_voice=selected_voice,
-            pronunciation_references=pronunciation_references,
-        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到当前任务或配音声音。") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except MediaAuthorityError as exc:
         raise _topic_failure_response(
             status_code=409,
@@ -8367,7 +8402,21 @@ def select_creation_task_narration_voice(
             repair_action=str(exc),
             retryable=False,
         ) from exc
-    return _creation_task_workspace_response(workspace_id, task)
+    return CreationTaskNarrationVoiceSelectionResponse.model_validate(receipt)
+
+
+@app.get("/api/creation-tasks/{task_id}/narration/voice/requests/{request_id}",
+    response_model=CreationTaskNarrationVoiceSelectionResponse)
+def get_creation_task_narration_voice_selection(task_id: str, request_id: UUID, request: Request):
+    task, member_id = _exact_edit_access(task_id, request)
+    try:
+        receipt = production_repo.get_creation_task_narration_voice_selection(
+            workspace_id=task.workspace_id, task_id=task.id, request_id=str(request_id), member_id=member_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到当前成员的原声音采用请求。") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return CreationTaskNarrationVoiceSelectionResponse.model_validate(receipt)
 
 
 @app.post(
@@ -14120,6 +14169,12 @@ def _verify_current_goal(goal, event):
     decision = owner.verify_version(goal, event, task)
     if decision is not None:
         return decision
+    if event.get("phase") == "script_adoption":
+        if task.confirmed_script_id != event["script_id"]:
+            return {"status": "invalidated", "reason": "adopted_script_changed"}
+        script = production_repo.get_creation_task_script(workspace_id, event["script_id"])
+        if script.updated_at.isoformat() != event["script_version"]:
+            return {"status": "invalidated", "reason": "adopted_script_changed"}
     try:
         completed_sources = _goal_completed_sources(goal, actor)
     except (KeyError, ValueError, PermissionError, OSError):

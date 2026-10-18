@@ -414,6 +414,7 @@ class CreationTask:
             self.confirmed_script_id and not self.narration_cache_key
             and not self.montage_plan_id and not self.current_timeline_version_id
             and ((self.stage == "script" and self.stage_status == "failed")
+                 or (self.stage == "narration" and self.stage_status == "not_started")
                  or self.needs_script_duration_repair)
         )
 

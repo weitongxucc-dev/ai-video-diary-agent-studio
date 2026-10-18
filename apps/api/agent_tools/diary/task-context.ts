@@ -17,7 +17,8 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
         || (execution.job && execution.job.task_id !== taskId)) {
       throw new Error("后台安排响应不可读或任务身份不一致，不能推断为空或未排队");
     }
-    const scriptContext = task.task?.stage === "script"
+    const scriptContext = (task.task?.stage === "script" || task.task?.can_revise_script
+        && !(task.scripts || []).find((item: any) => item.id === task.task.confirmed_script_id)?.locked_body_digest)
       ? await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/script-context`)
       : null;
     currentScriptDraftUpdatedAt = typeof scriptContext?.draft?.updated_at === "string"
@@ -51,12 +52,14 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       stage: task.task?.stage,
       status: task.task?.status,
       stage_status: task.task?.stage_status,
+      updated_at: task.task?.updated_at,
       stage_reason: metadata(task.task?.stage_reason),
       stage_impact: metadata(task.task?.stage_impact, 500),
       stage_repair_action: metadata(task.task?.stage_repair_action, 500),
       current_timeline_version_id: task.task?.current_timeline_version_id,
       timeline_sequence: task.task?.timeline_sequence,
       confirmed_script_id: confirmedScriptId,
+      can_revise_script: task.task?.can_revise_script === true,
       confirmed_script: confirmedScript ? {
         id: confirmedScript.id, title: metadata(confirmedScript.title), language: confirmedScript.language,
         selection_status: confirmedScript.selection_status, updated_at: confirmedScript.updated_at,
@@ -81,6 +84,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       available_voice_count: (task.available_voices || []).length,
       available_voices_truncated: (task.available_voices || []).length > 24,
       plan: plan ? {
+        id: plan.id, updated_at: plan.updated_at,
         creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
           topic_title: plan.creation_intent.topic_title,
           protected_body_digest: plan.creation_intent.final_script?.body_digest} : null,

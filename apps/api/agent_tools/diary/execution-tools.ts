@@ -3,10 +3,66 @@ import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 
-export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal}: {
+export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal, readCurrentTaskFacts, typedRequestId}: {
   request: BusinessRequest; taskId: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
+  readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    let voiceAttempt: {inputKey: string; requestId: string} | null = null;
+    const voiceRequestPath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice/requests/${encodeURIComponent(id)}`;
+    pi.registerTool({name: "read_narration_voice_selection", label: "查询原声音选择",
+      description: "只读原声音采用UUID的不可变回执；响应丢失先查询，不重复提交。回执不是当前方案，继续制作前回读当前任务。",
+      parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}}, required: ["request_id"], additionalProperties: false},
+      execute: async (_id: string, params: {request_id: string}) => {
+        const receipt = await request(voiceRequestPath(params.request_id));
+        if (receipt.task_id !== taskId || receipt.request_id !== params.request_id) throw new Error("原声音选择回执身份不一致");
+        const current = await readCurrentTaskFacts();
+        const details = {kind: "voice_selection_receipt", receipt, current_task_facts: current};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      }});
+    pi.registerTool({name: "select_narration_voice", label: "选择配音声音",
+      description: "仅用户明确要求时，为当前已采用稿选择候选中的固定声音版本。限配音未开始或失败状态；不修改默认声音、不生成配音。成功回读后可沿原授权继续制作。未知结果只查询原请求。",
+      parameters: {type: "object", properties: {voice_profile_id: {type: "string", minLength: 1, maxLength: 120},
+        voice_version: {type: "string", minLength: 1, maxLength: 120}}, required: ["voice_profile_id", "voice_version"], additionalProperties: false},
+      execute: async (callId: string, params: {voice_profile_id: string; voice_version: string}) => {
+        const source = readActionSource();
+        if (!source.turnId || !isTaskRead()) throw new Error("请先读取当前任务和可信要求，再选择声音");
+        const inputKey = source.inputId ?? source.turnId;
+        if (voiceAttempt?.inputKey === inputKey) throw new Error(`本轮声音选择已提交，先查询原请求 ${voiceAttempt.requestId}，不重复写入`);
+        const before = await readCurrentTaskFacts();
+        if (before.task_id !== taskId || before.stage !== "narration" || !["not_started", "failed"].includes(before.stage_status))
+          throw new Error("当前任务不在可选择声音的配音状态");
+        const selected = before.available_voices?.find((voice: any) => voice.profile_id === params.voice_profile_id && voice.version === params.voice_version);
+        if (!selected?.runnable) throw new Error("所选固定声音不在当前可用候选中，请按实际候选重新选择");
+        if (typeof before.plan?.updated_at !== "string" || typeof before.updated_at !== "string")
+          throw new Error("当前任务缺少方案或任务修订，没有提交声音选择");
+        if ((readActionSource().inputId ?? readActionSource().turnId) !== inputKey) throw new Error("当前要求已变化，没有提交旧输入的声音选择");
+        const requestId = typedRequestId(source.turnId, callId);
+        voiceAttempt = {inputKey, requestId};
+        let receipt;
+        try {
+          receipt = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`, {method: "POST",
+            body: JSON.stringify({...params, request_id: requestId, assistant_turn_id: source.turnId,
+              expected_plan_updated_at: before.plan.updated_at, expected_task_updated_at: before.updated_at})});
+        } catch (error) {
+          const unknown = !(error instanceof BusinessRequestError);
+          const failure = {reason: unknown ? "声音选择响应未知，尚未宣称绑定完成。" : "声音选择未完成，请按当前任务条件处理。",
+            repair_action: `先查询原请求 ${requestId}；不要重复提交声音选择。`};
+          const details = {kind: unknown ? "voice_selection_unknown" : "voice_selection_rejected", request_id: requestId,
+            query_url: voiceRequestPath(requestId), failure};
+          return {isError: true, content: [{type: "text", text: JSON.stringify(details)}], details};
+        }
+        if (receipt.task_id !== taskId || receipt.request_id !== requestId
+            || receipt.selected_voice?.profile_id !== params.voice_profile_id || receipt.selected_voice?.version !== params.voice_version)
+          throw new Error(`声音采用回执不匹配，先查询原请求 ${requestId}`);
+        const current = await readCurrentTaskFacts();
+        if (current.task_id !== taskId || current.plan?.selected_voice?.profile_id !== params.voice_profile_id
+            || current.plan?.selected_voice?.version !== params.voice_version
+            || current.plan.updated_at !== receipt.plan_updated_at || current.updated_at !== receipt.task_updated_at)
+          throw new Error(`声音采用后的任务版本已变化，先查询原请求 ${requestId}并重新读取当前任务`);
+        const details = {kind: "voice_selected", receipt, current_task_facts: current};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      }});
     pi.registerTool({
       name: "read_creation_execution", label: "读取原制作作业",
       description: "只读指定普通制作作业，使用原 job_id，不走媒体预览作业接口。最多20秒有限GET等待，不重启或恢复制作；若任务已有新作业明确拒绝，不把新作业当原结果。job succeeded仍须video_ready才是当前有效成片。",

@@ -697,6 +697,43 @@ class ConversationRepository:
             conn.execute("BEGIN IMMEDIATE")
             return self._register_task_goal(conn, turn_id, running_execution=running_execution)
 
+    def record_task_script_adoption(self, turn_id: str, workspace_id: str, member_id: str, task_id: str, *,
+                                    script_id: str, script_version: str, source: dict) -> bool:
+        """Record the host-verified adoption, never a model claim of progress."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT t.*,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id WHERE t.id=? "
+                "AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (turn_id, workspace_id, member_id)).fetchone()
+            if row is None or row["status"] != "running" or source["conversation_id"] != row["conversation_id"]:
+                return False
+            context = json.loads(row["request_context_json"])
+            events = json.loads(row["events_json"])
+            active = active_input(events)
+            actual_context = active["request_context"] if active else context
+            input_id = active["input_id"] if active else context.get("source_input_id")
+            if (actual_context.get("kind"), actual_context.get("task_id"), input_id) != (
+                    "task", task_id, source.get("input_id")):
+                return False
+            proof = {"kind": "script_adoption", "id": script_id, "version": script_version,
+                     **({"input_id": input_id} if input_id else {})}
+            result = json.loads(row["result_json"] or "{}")
+            proofs = result.get("goal_business_actions", [])
+            if proof not in proofs:
+                result["goal_business_actions"] = [*proofs, proof]
+            snapshot = actual_context.get("target_snapshot", {})
+            event = {"type": "business_result", "event_id": f"script-adopted:{task_id}:{script_id}:{script_version}",
+                "phase": "script_adoption", "status": "confirmed", "task_id": task_id,
+                "script_id": script_id, "script_version": script_version,
+                "base_version_id": snapshot.get("timeline_version_id"), "result_version_id": snapshot.get("timeline_version_id"),
+                **({"input_id": input_id} if input_id else {})}
+            if event not in events:
+                events.append(event)
+            conn.execute("UPDATE assistant_conversation_turns SET events_json=?,result_json=?,updated_at=? WHERE id=?",
+                (json.dumps(events, ensure_ascii=False), json.dumps(result, ensure_ascii=False), _now(), turn_id))
+            return True
+
     def register_creation_task_goals(self, source_turn_id: str, workspace_id: str, member_id: str,
                                      adoption: dict, task_contexts: list[dict]) -> list[str]:
         """Persist host-verified adopted tasks without inventing a user message.
@@ -796,11 +833,12 @@ class ConversationRepository:
         proofs=[proof for proof in result.get("goal_business_actions",[]) if proof.get("input_id") == input_id]
         execution=((response.get("execution_status") or {}).get("job") or {}).get("id")
         submitted_execution=any(proof["kind"] == "execution_status" and proof["id"] == execution for proof in proofs)
+        submitted_script=any(proof["kind"] == "script_adoption" for proof in proofs)
         if running_execution and not submitted_execution:
             return None
         if authorization and not proofs:
             return None
-        if not any(response.get(key) for key in ("media_job","edit_preview","edit_request")) and not submitted_execution:
+        if not any(response.get(key) for key in ("media_job","edit_preview","edit_request")) and not submitted_execution and not submitted_script:
             return None
         waiting="waiting_adoption" if response.get("edit_preview") else "waiting_unknown" if (response.get("edit_request") or {}).get("status") in {"result_unknown","unknown"} else "waiting_result"
         goal={"original_turn_id":root_id,"original_instruction":authorization["original_instruction"] if authorization else root_row["user_message"],
@@ -896,7 +934,7 @@ class ConversationRepository:
                 root = self._goal_root(conn, root_row["id"])
                 if root is None:
                     continue
-                turns = conn.execute("SELECT t.id,t.status,t.events_json,r.request_context_json "
+                turns = conn.execute("SELECT t.id,t.status,t.events_json,t.result_json,r.request_context_json "
                                      "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                                      "WHERE t.conversation_id=? AND t.sequence>=? ORDER BY t.sequence",
                                      (root["conversation_id"], root["sequence"])).fetchall()
@@ -910,6 +948,12 @@ class ConversationRepository:
                     if turn["status"] == "running":
                         continue
                     for event in json.loads(turn["events_json"]):
+                        if event.get("phase") == "script_adoption":
+                            # Once this input submitted execution, its real
+                            # execution result owns the next wakeup.
+                            actions = json.loads(turn["result_json"] or "{}").get("goal_business_actions", [])
+                            if any(item["kind"] == "execution_status" and item.get("input_id") == event.get("input_id") for item in actions):
+                                continue
                         if (event.get("type") == "business_result" and event.get("event_id")
                                 and event["event_id"] not in root["goal"]["handled_event_ids"]
                                 and self._business_effect_key(event) not in handled
@@ -1053,7 +1097,8 @@ class ConversationRepository:
                 return {"media_job": (item.get("media_job") or {}).get("job_id"),
                         "edit_preview": ((item.get("edit_preview") or {}).get("proposal") or {}).get("id"),
                         "edit_request": (item.get("edit_request") or {}).get("request_id"),
-                        "execution_status": ((item.get("execution_status") or {}).get("job") or {}).get("id")}
+                        "execution_status": ((item.get("execution_status") or {}).get("job") or {}).get("id"),
+                        "script_adoption": (item.get("script_draft") or {}).get("id")}
 
             ids = receipt_ids(response)
             original_ids = receipt_ids(json.loads(root["result_json"] or "{}").get("response", {}))
@@ -1061,7 +1106,7 @@ class ConversationRepository:
             trigger_ids = {"media_job": claim["event"].get("job_id"),
                            "edit_preview": claim["event"].get("proposal_id"),
                            "edit_request": claim["event"].get("request_id"),
-                           "execution_status": claim["event"].get("job_id")}
+                           "execution_status": claim["event"].get("job_id"), "script_adoption": claim["event"].get("script_id")}
             # Only the host writes this proof after reading the actual job /
             # intent / request source and checking that it belongs to this
             # child. A model result or another terminal read is not progress.
@@ -1070,6 +1115,12 @@ class ConversationRepository:
                 original_ids[kind], source_ids[kind], trigger_ids[kind]})) for kind, identifier in ids.items()}
             new_action = any(identifier and (kind, identifier) in owned and identifier != trigger_ids[kind]
                              for kind, identifier in ids.items())
+            # A real adoption may have completed before the model returned an
+            # unrelated/empty preview. Its persisted host proof still counts.
+            new_action = new_action or any(item["kind"] == "script_adoption"
+                and (item["id"], item.get("version")) != (trigger_ids["script_adoption"], claim["event"].get("script_version"))
+                and item.get("input_id") == claim["goal"].get("source_input_id")
+                for item in result.get("goal_business_actions", []))
             proposal = (response.get("edit_preview") or {}).get("proposal") or {}
             media = response.get("media_job") or {}
             execution = (response.get("execution_status") or {}).get("job") or {}
@@ -1261,7 +1312,7 @@ class ConversationRepository:
         result = dict(incoming)
         if previous.get("goal_continuation"):
             result["goal_continuation"] = previous["goal_continuation"]
-        proofs = [item for item in previous.get("goal_business_actions", []) if item.get("kind") == "execution_status"]
+        proofs = [item for item in previous.get("goal_business_actions", []) if item.get("kind") in {"execution_status", "script_adoption"}]
         if proofs:
             result["goal_business_actions"] = [*proofs, *[item for item in result.get("goal_business_actions", []) if item not in proofs]]
             execution = previous.get("response", {}).get("execution_status")

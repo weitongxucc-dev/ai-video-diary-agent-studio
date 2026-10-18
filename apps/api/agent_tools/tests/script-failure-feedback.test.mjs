@@ -16,6 +16,7 @@ function rejectedTool(detail) {
     }});
   registerScriptTools({registerTool: tool => {tools[tool.name] = tool;}}, {request, taskId: 'task',
     readActionSource: () => source, isTaskRead: () => true, hasPreview: () => false,
+    readCurrentTaskFacts: async () => {throw new Error('rejection cannot refresh saved task facts');},
     markPreview() {throw new Error('rejection is not a saved preview');},
     getScriptDraftUpdatedAt: () => null, setScriptDraftUpdatedAt() {throw new Error('rejection cannot advance draft CAS');}});
   return {tool: tools.preview_script_draft, calls, source};

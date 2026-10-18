@@ -67,11 +67,17 @@ test('adopted script can start production in the same bound task despite initial
   const context = {request, taskId: 'bound-task', stage: 'topic', isTaskRead: () => true,
     readActionSource: () => ({turnId: 'trusted-turn'}),
     hasPreview: () => pendingPreview, markPreview: () => {pendingPreview = true;}};
-  registerScriptTools(pi, {...context, getScriptDraftUpdatedAt: () => null, setScriptDraftUpdatedAt() {}});
+  registerScriptTools(pi, {...context, getScriptDraftUpdatedAt: () => null, setScriptDraftUpdatedAt() {},
+    readCurrentTaskFacts: async () => ({task_id: 'bound-task', stage: 'narration', stage_status: 'not_started',
+      confirmed_script_id: draft.id, plan: {selected_voice: null}, execution: {job: null}})});
   registerExecutionTools(pi, {...context, hasCreationAction: () => false, markCreationAction() {}, hasEditControlWrite: () => false,
     readActionSource: () => ({turnId: 'trusted-turn'}), getSignal: () => undefined});
   const adopted = await tools.preview_script_draft.execute('save', {title: draft.title, sections: [section]});
   assert.equal(adopted.details.preview.adopted, true);
+  const facts = JSON.parse(adopted.content[0].text).current_task_facts;
+  assert.equal(facts.stage, 'narration');
+  assert.equal(facts.confirmed_script_id, draft.id);
+  assert.equal(facts.plan.selected_voice, null);
   assert.equal(pendingPreview, false);
   assert.deepEqual(calls.find(call => call.path.endsWith('/scripts/saved-script/confirm')).body,
     {title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, adoption_kind: 'delegated_system', assistant_turn_id: 'trusted-turn'});
@@ -80,4 +86,41 @@ test('adopted script can start production in the same bound task despite initial
   const start = calls.find(call => call.path.includes('/execution/start?'));
   assert.ok(start.path.includes('bound-task') && start.path.includes('assistant_turn_id=trusted-turn'));
   assert.deepEqual(start.body, {script_id: 'saved-script', input_digest: 'actual-digest', requirements_confirmed: true});
+});
+
+for (const kind of ['manual', 'delegated_system']) {
+  test(`an already adopted ${kind} revision is read back without a second confirmation`, async () => {
+    const {tools, pi} = registry(), calls = [];
+    const adopted = {id: 'same-script', title: '已修订', sections: [], updated_at: 'new-revision',
+      selection_status: 'confirmed', adoption: {kind}};
+    registerScriptTools(pi, {taskId: 'task', isTaskRead: () => true, hasPreview: () => false,
+      markPreview() {throw new Error('adopted revision is not an unadopted preview');},
+      readActionSource: () => ({turnId: 'turn'}), getScriptDraftUpdatedAt: () => 'old-revision', setScriptDraftUpdatedAt() {},
+      readCurrentTaskFacts: async () => ({task_id: 'task', stage: 'narration', confirmed_script_id: adopted.id}),
+      request: async (path, init) => {
+        calls.push(path);
+        if (path.endsWith('/script-context')) return {creation_intent: {kind: 'goal_delegation'}};
+        if (path.endsWith('/script-draft')) return adopted;
+        throw new Error('revision must not be confirmed twice');
+      }});
+    const result = await tools.preview_script_draft.execute('call', {title: adopted.title, sections: []});
+    assert.equal(result.details.preview.adopted, true);
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.parse(result.content[0].text).current_task_facts.stage, 'narration');
+  });
+}
+
+test('a newly consumed input cannot adopt a draft checked under the previous instruction', async () => {
+  const {tools, pi} = registry(), source = {turnId: 'turn', inputId: 'old-input'}, calls = [];
+  registerScriptTools(pi, {taskId: 'task', isTaskRead: () => true, hasPreview: () => false, markPreview() {},
+    readActionSource: () => source, getScriptDraftUpdatedAt: () => null, setScriptDraftUpdatedAt() {},
+    readCurrentTaskFacts: async () => {throw new Error('old checked draft is not adopted');},
+    request: async path => {
+      calls.push(path);
+      if (path.endsWith('/script-context')) return {creation_intent: {kind: 'goal_delegation'}};
+      if (path.endsWith('/script-draft')) {source.inputId = 'new-input'; return {id: 'draft', updated_at: 'revision'};}
+      throw new Error('must not adopt using changed input');
+    }});
+  await assert.rejects(tools.preview_script_draft.execute('call', {title: '文案', sections: []}), /要求已变化/);
+  assert.equal(calls.length, 2);
 });

@@ -178,3 +178,33 @@ def test_new_user_message_invalidates_adopted_task_continuation(client_state):
         str(uuid4()), draft["draft_version"], request_context={"kind": "home"})
     assert continuation.reconcile() == 0 and calls == []
     assert c.conversations.get_task_goal(roots[0])["status"] == "invalidated"
+
+
+@pytest.mark.parametrize('execution_already_submitted', [False, True])
+def test_adoption_inside_home_child_continues_once_unless_execution_already_owns_the_wakeup(
+    client_state, execution_already_submitted,
+):
+    c = client_state
+    _, source, saved, _ = adopted(c)
+    calls = []
+    def run(claim, fresh):
+        calls.append(claim)
+        task_id = claim['goal']['task_id']
+        if len(calls) == 1:
+            origin = c.conversations.task_turn_source(claim['turn_id'], 'request-test', c.member.member_id, task_id)
+            assert c.conversations.record_task_script_adoption(claim['turn_id'], 'request-test', c.member.member_id,
+                task_id, script_id='actual-adopted-script', script_version='fixed-version', source=origin)
+            if execution_already_submitted:
+                c.conversations.record_task_execution(claim['turn_id'], 'request-test', c.member.member_id, task_id,
+                    {'task_id': task_id, 'job': {'id': 'actual-execution', 'status': 'queued'}})
+            c.conversations.finish_turn(claim['turn_id'], 'completed', '真实采用已记录。',
+                result={'response': {'script_draft': {'id': 'actual-adopted-script'}}})
+        else:
+            c.conversations.finish_turn(claim['turn_id'], 'completed', '后续边界回读完成。', result={})
+    continuation = GoalContinuationService(c.conversations, verify_current_goal=lambda *_: {
+        'status': 'ready', 'task_version': {'timeline_version_id': None, 'timeline_sequence': 0}}, run_goal_turn=run)
+    continuation.register_creation_request(source['id'], 'request-test', c.member.member_id, saved)
+    assert continuation.reconcile() == 1
+    assert continuation.reconcile() == (0 if execution_already_submitted else 1)
+    assert continuation.reconcile() == 0
+    assert len(calls) == (1 if execution_already_submitted else 2)

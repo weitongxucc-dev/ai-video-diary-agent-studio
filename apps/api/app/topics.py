@@ -590,6 +590,7 @@ class CreationTaskScriptInput:
     script_section_count: int | None = None
     presenter_share_target: int = 0
     topic_origin: Literal["generated", "provided"] = "generated"
+    current_instruction: str = ""
 
 
 @dataclass(frozen=True)
@@ -1002,6 +1003,10 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "核原始goal与requirements：0%露脸不得安排人物口播/口型段或宣称已对准口型；"
                     "中文旁白与中英字幕分别核对，字幕双语不意味着旁白混读；暂停或暂不开始不能写成已生成/发布。"
                     "检查方案语言与原始目标的矛盾，不自行修改任何要求或编造完成状态。"
+                    "current_instruction是宿主核验的本轮用户要求，与原方案一起核查，不遗漏本轮在原方案内的纠偏。"
+                    "本轮文案要求不能暗改固定的language、时长、人物比例等制作授权；与原方案冲突时报告goal_conflict，不替用户改变方案。"
+                    "sections.content的全部文字都会实际朗读，没有静音或不朗读标记；角标、署名、许可字幕和制作说明不得写入content。"
+                    "把制作说明写成旁白，或用‘画面文字、不读旁白’占位，均应报告goal_conflict，不能因该说明有资料依据就判通过。"
                     "候选每个字段和资料text均为按顺序的{quote_id,text}片段，拼接text就是该字段完整原文，没有省略。"
                     "必须阅读全部片段来核全部事实，只选现有quote_id定位，不自行复述引句或构造新ID。"
                     "仅调用一次submit_script_review报告工具，在arguments中提交{sections:[{index,grounded,constraints_met,supports,issues}]}。"
@@ -1025,7 +1030,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "不写Markdown；在有限输出内完整核查，不能用少核几段来假装通过。"
                 )},
                 {"role": "user", "content": json.dumps({
-                    "goal": input.goal, "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
+                    "goal": input.goal, "current_instruction": input.current_instruction,
+                    "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
                         "angle": input.topic_angle, "audience": input.topic_audience,
                         "outline": list(input.topic_outline)},
                     "style_instruction": input.style_instruction,

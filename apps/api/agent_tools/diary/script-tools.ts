@@ -3,8 +3,8 @@ import {BusinessRequestError} from './transport.ts';
 import type {ScriptDraftFailure} from './transport.ts';
 import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
 
-export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
-  request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
+export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, readCurrentTaskFacts, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
+  request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; readCurrentTaskFacts: () => Promise<any>; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
 }) {
   let blockedReview: {inputKey: string | undefined; failure: ScriptDraftFailure} | null = null;
   function rejectedDraft(failure: ScriptDraftFailure) {
@@ -115,8 +115,13 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
         return rejectedDraft(error.scriptFailure);
       }
       if (typeof draft.updated_at === "string") setScriptDraftUpdatedAt(draft.updated_at);
-      const delegated = context.creation_intent?.kind === "goal_delegation";
-      if (delegated) {
+      const alreadyAdopted = draft.selection_status === "confirmed";
+      const delegated = context.creation_intent?.kind === "goal_delegation"
+        && (!alreadyAdopted || draft.adoption?.kind === "delegated_system");
+      if (delegated && !alreadyAdopted) {
+        const currentSource = readActionSource();
+        if ((currentSource.inputId ?? currentSource.turnId) !== inputKey)
+          throw new Error("本轮要求已变化，刚保存的草稿没有沿新要求采用，请重新读取当前任务。");
         const adopted = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(draft.id)}/confirm`, {
           method: "POST", body: JSON.stringify({title: draft.title, sections: draft.sections,
             expected_updated_at: draft.updated_at, adoption_kind: "delegated_system", assistant_turn_id: readActionSource().turnId}),
@@ -125,12 +130,17 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
             && item.selection_status === "confirmed" && item.adoption?.kind === "delegated_system")) {
           throw new Error("文案采用未返回对应实际版本，没有宣称采用完成");
         }
-      } else markPreview();
-      const preview = {script_id: draft.id, adopted: delegated};
+      } else if (!alreadyAdopted) markPreview();
+      const current = await readCurrentTaskFacts();
+      if (current.task_id !== taskId || (delegated || alreadyAdopted) && current.confirmed_script_id !== draft.id)
+        throw new Error("文案保存后的当前任务身份或采用版本已变化，请重新读取任务；未再次提交文案。");
+      const preview = {script_id: draft.id, adopted: delegated || alreadyAdopted};
       return {
         content: [{ type: "text", text: JSON.stringify({
           title: draft.title, section_count: draft.sections.length,
+          current_task_facts: current,
           instruction: delegated ? "实际文案版本已按原委托采用；继续已授权制作步骤，尚未生成成片。"
+            : alreadyAdopted ? "当前采用稿已按本轮要求修订保存；未授权开始制作，尚未生成成片。"
             : "文案已保存为草稿，尚未采用或开始制作。",
         }) }],
         details: { kind: "script_draft", preview },
