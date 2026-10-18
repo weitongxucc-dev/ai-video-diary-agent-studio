@@ -35,9 +35,11 @@ export function createDiaryTools(environment: Record<string, string | undefined>
   const typedRequestId = (turn: string, call: string) => requestIdentity(taskId, turn, call);
   const callScope = createToolCallScope(readActionSource);
   const failures = new AsyncLocalStorage<{first?: BusinessFailure}>();
-  const {getSignal} = callScope;
+  const {getSignal, getToolCallId} = callScope;
   const request = createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion,
-    readCredentials, readActionSource, getSignal, fetchRequest: (input, init) => fetch(input, init),
+    readCredentials, readActionSource, getSignal,
+    getToolCallId: environment.AI_VIDEO_DIARY_AGENT_HOST_PROTOCOL === "phase-v1" ? getToolCallId : undefined,
+    fetchRequest: (input, init) => fetch(input, init),
     onFailure: failure => {
       const call = failures.getStore();
       if (call && !call.first) call.first = failure;

@@ -1,0 +1,220 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {mkdtemp, writeFile, mkdir, rm} from "node:fs/promises";
+import {realpathSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {dirname, join} from "node:path";
+import {execFileSync, spawn} from "node:child_process";
+import {once} from "node:events";
+import {pathToFileURL, fileURLToPath} from "node:url";
+import {openCreationSession} from "../session.mjs";
+import {createToolCallScope} from "../../agent_tools/diary/registration.ts";
+import {createBusinessRequest, BusinessResultUnknown} from "../../agent_tools/diary/transport.ts";
+import {registerPreviewJobReader} from "../../agent_tools/diary/preview-job-reader.ts";
+import {registerExecutionTools} from "../../agent_tools/diary/execution-tools.ts";
+
+const modulePath = join(dirname(dirname(realpathSync(execFileSync("which", ["pi"], {encoding:"utf8"}).trim()))), "index.js");
+const streamModule = pathToFileURL(join(dirname(dirname(modulePath)), "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js")).href;
+const {AssistantMessageEventStream} = await import(streamModule);
+const hostPath = fileURLToPath(new URL("../host.mjs", import.meta.url));
+const transportUrl = new URL("../../agent_tools/diary/transport.ts", import.meta.url).href;
+const scopeUrl = new URL("../../agent_tools/diary/registration.ts", import.meta.url).href;
+const usage = {input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
+const message = content => ({role:"assistant", content, api:"openai-completions", provider:"ai-video-diary",
+  model:"synthetic", stopReason:content[0].type === "toolCall" ? "toolUse" : "stop", timestamp:Date.now(), usage});
+
+async function fixture() {
+  const cwd = await mkdtemp(join(tmpdir(), "diary-phase-"));
+  await writeFile(join(cwd,"models.json"), JSON.stringify({providers:{"ai-video-diary":{
+    baseUrl:"http://127.0.0.1:9",api:"openai-completions",apiKey:"synthetic-unused",
+    models:[{id:"synthetic",contextWindow:16384,maxTokens:1024}]}}}));
+  return {cwd, modulePath, modelId:"synthetic", sessionId:"11111111-1111-4111-8111-111111111111",
+    sessionDir:join(cwd,"sessions"), systemPrompt:"合成事件验证，不访问供应商。"};
+}
+
+function captureRequests() {
+  const events = [];
+  const original = process.stdout.write;
+  process.stdout.write = function(chunk, ...args) {
+    if (String(chunk).startsWith('{"type":"diary_business_request"')) {
+      events.push(JSON.parse(String(chunk)));
+      const callback = args.find(arg => typeof arg === "function");
+      callback?.(); return true;
+    }
+    return original.call(this, chunk, ...args);
+  };
+  return {events, restore:() => {process.stdout.write = original;}};
+}
+
+test("both existing job readers keep their 20-second bounded GET wait", async () => {
+  const tools = new Map(), budgets = [];
+  const registrar = {registerTool:tool=>tools.set(tool.name,tool)};
+  const original = AbortSignal.timeout;
+  AbortSignal.timeout = milliseconds => {
+    budgets.push(milliseconds);
+    return AbortSignal.abort(); // Virtual deadline, with one final actual pending read.
+  };
+  try {
+    const reads = [];
+    const request = async path => {reads.push(path);return path.includes("/media-jobs/")
+      ? {job_id:"job",status:"queued"} : {task_id:"task",job:{id:"job",task_id:"task",status:"running"}};};
+    registerPreviewJobReader(registrar,{request,taskId:"task",getSignal:()=>undefined,onPreviewJobObserved:()=>{}});
+    registerExecutionTools(registrar,{request,taskId:"task",getSignal:()=>undefined});
+    for (const name of ["read_task_media_job","read_creation_execution"]) {
+      const result=await tools.get(name).execute("read",{job_id:"job",wait_seconds:20});
+      assert.equal(result.details.wait.deadline_reached,true);
+      assert.equal(result.details.wait.queried_only,true);
+      await assert.rejects(tools.get(name).execute("read",{job_id:"job",wait_seconds:21}),/0–20/);
+    }
+    assert.deepEqual(budgets,[20000,20000]);assert.equal(reads.length,2);
+  } finally {AbortSignal.timeout=original;}
+});
+
+test("parallel and nested scopes retain the actual outer SDK call; HTTP budget stays 120s", async () => {
+  const scope = createToolCallScope(() => ({turnId:"turn",inputId:"input",inputTurnId:"source"}));
+  const tools = new Map();
+  const registrar = scope.bind({registerTool: tool => tools.set(tool.name,tool)});
+  const pending = new Map();
+  const captured = captureRequests();
+  const milliseconds = [];
+  const timeout = AbortSignal.timeout;
+  AbortSignal.timeout = value => {milliseconds.push(value); return timeout(value);};
+  try {
+    const request = createBusinessRequest({apiBase:"http://unused", selectedTaskVersion:null,
+      verifyTaskVersion:()=>{},readCredentials:()=>({authorization:"private-fixture"}),
+      getSignal:scope.getSignal,getToolCallId:scope.getToolCallId,
+      fetchRequest:async (_url, init) => new Promise((resolve,reject) => {
+        pending.set(scope.getToolCallId(), () => resolve(new Response("{}")));
+        init.signal.addEventListener("abort",()=>reject(new Error("aborted")),{once:true});
+      })});
+    registrar.registerTool({name:"nested",execute:async()=>{await request("/operation",{method:"POST"});return {details:{}};}});
+    registrar.registerTool({name:"outer",execute:async (_id,_args,signal)=>tools.get("nested").execute("nested-id",{},signal)});
+    const first = new AbortController(), second = new AbortController();
+    const a = tools.get("outer").execute("sdk-a",{},first.signal);
+    const b = tools.get("outer").execute("sdk-b",{},second.signal);
+    await new Promise(resolve=>setImmediate(resolve));
+    first.abort();
+    await assert.rejects(a, error => error instanceof BusinessResultUnknown && error.businessFailure.submission_effect === "unknown");
+    pending.get("sdk-b")();
+    await b;
+    assert.deepEqual(milliseconds,[120000,120000]);
+    assert.deepEqual(captured.events.map(event=>[event.tool_call_id,event.phase]),
+      [["sdk-a","start"],["sdk-b","start"],["sdk-a","end"],["sdk-b","end"]]);
+    assert.equal(new Set(captured.events.map(event=>event.request_id)).size,2);
+    for (const event of captured.events) {
+      assert.deepEqual(Object.keys(event).sort(),["type","phase","tool_call_id","request_id","write","timeout_ms"].sort());
+      assert.equal(event.timeout_ms,120000); assert.equal(event.write,true);
+    }
+    assert.doesNotMatch(JSON.stringify(captured.events),/private-fixture|operation|unused|nested-id/);
+  } finally {captured.restore();AbortSignal.timeout=timeout;}
+});
+
+test("actual Pi 1.3 emits model/tool turn boundaries and compaction_start/end", async () => {
+  const options = await fixture();
+  const captured = captureRequests();
+  let current;
+  try {
+    const scope = createToolCallScope(()=>({turnId:"turn"}));
+    const tools = [];
+    const request = createBusinessRequest({apiBase:"http://unused",selectedTaskVersion:null,verifyTaskVersion:()=>{},
+      readCredentials:()=>({}),getSignal:scope.getSignal,getToolCallId:scope.getToolCallId,
+      fetchRequest:async()=>new Response("{}")});
+    scope.bind({registerTool:tool=>tools.push(tool)}).registerTool({name:"review_fixture",label:"合成核查",
+      description:"只验证SDK请求边界",parameters:{type:"object",properties:{}},execute:async()=>{
+        await request("/review",{method:"POST"});await request("/confirm",{method:"POST"});
+        return {content:[{type:"text",text:"保存了合成回执"}],details:{recorded:true}};
+      }});
+    current = await openCreationSession({...options,tools:["review_fixture"],customTools:tools,
+      extensionFactories:[agent=>agent.on("session_before_compact",event=>({compaction:{summary:"synthetic summary",
+        firstKeptEntryId:event.preparation.firstKeptEntryId,tokensBefore:event.preparation.tokensBefore}}))]});
+    current.session.settingsManager.applyOverrides({compaction:{enabled:false,keepRecentTokens:10,reserveTokens:1024}});
+    const events = [];
+    current.session.subscribe(event=>events.push(event));
+    let calls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const answer = message(calls++ === 0 ? [{type:"toolCall",id:"sdk-review",name:"review_fixture",arguments:{}}]
+        : [{type:"text",text:"合成核查完成。".repeat(40)}]);
+      queueMicrotask(()=>{stream.push({type:"done",reason:answer.stopReason,message:answer});stream.end(answer);});
+      return stream;
+    };
+    await current.session.prompt("只使用合成工具核查本次输入。".repeat(40),{source:"rpc"});
+    assert.equal(calls,2);
+    assert.equal(events.filter(event=>event.type === "turn_start").length,2);
+    const start = events.findIndex(event=>event.type === "tool_execution_start");
+    const end = events.findIndex(event=>event.type === "tool_execution_end");
+    assert.ok(start>events.findIndex(event=>event.type === "message_end"));
+    assert.ok(end>start);
+    assert.ok(events.slice(end+1).some(event=>event.type === "turn_start"));
+    assert.equal(events[start].toolCallId,"sdk-review");
+    assert.deepEqual(captured.events.map(event=>[event.tool_call_id,event.phase]),
+      [["sdk-review","start"],["sdk-review","end"],["sdk-review","start"],["sdk-review","end"]]);
+    await current.session.compact();
+    const compaction = events.filter(event=>["compaction_start","compaction_end"].includes(event.type));
+    assert.deepEqual(compaction.map(event=>event.type),["compaction_start","compaction_end"]);
+    assert.equal(compaction[0].reason,"manual"); assert.equal(compaction[1].aborted,false);
+  } finally {current?.session.dispose();captured.restore();await rm(options.cwd,{recursive:true,force:true});}
+});
+
+test("stdin abort reaches actual SDK signal and retains an unknown write receipt", {timeout:10000}, async () => {
+  const options = await fixture();
+  let child;
+  try {
+    // Only the model stream and HTTP boundary are synthetic; session lifecycle,
+    // tool execution, cancellation signal and host protocol are the real SDK.
+    const wrapper = join(options.cwd,"sdk/dist");
+    await mkdir(wrapper,{recursive:true});
+    await writeFile(join(options.cwd,"sdk/package.json"),JSON.stringify({type:"module",version:"1.3.0"}));
+    await writeFile(join(wrapper,"index.js"),`
+      export * from ${JSON.stringify(pathToFileURL(modulePath).href)};
+      import {createAgentSession as open} from ${JSON.stringify(pathToFileURL(modulePath).href)};
+      import {AssistantMessageEventStream} from ${JSON.stringify(streamModule)};
+      import {createBusinessRequest} from ${JSON.stringify(transportUrl)};
+      import {createToolCallScope} from ${JSON.stringify(scopeUrl)};
+      export async function createAgentSession(options) {
+        const scope=createToolCallScope(()=>({turnId:"turn"})),tools=[];
+        const request=createBusinessRequest({apiBase:"http://unused",selectedTaskVersion:null,verifyTaskVersion:()=>{},
+          readCredentials:()=>({}),getSignal:scope.getSignal,getToolCallId:scope.getToolCallId,
+          fetchRequest:async(_url,init)=>new Promise((_resolve,reject)=>{
+            init.signal.addEventListener("abort",()=>reject(new Error("cancelled")),{once:true});
+          })});
+        scope.bind({registerTool:tool=>tools.push(tool)}).registerTool({name:"fixture_write",label:"合成写入",
+          description:"合成未知写入",parameters:{type:"object",properties:{}},execute:async()=>{
+            try {await request("/write",{method:"POST"});throw new Error("unexpected completion");}
+            catch(error){return {isError:true,content:[{type:"text",text:"原写入结果未知"}],details:{failure:error.businessFailure}};}
+          }});
+        const current=await open({...options,customTools:[...options.customTools,...tools]});
+        current.session.settingsManager.setCompactionEnabled(false);
+        let calls=0;
+        current.session.agent.streamFunction=()=>{
+          if(calls++)throw new Error("cancelled model was restarted");
+          const stream=new AssistantMessageEventStream(),answer=${JSON.stringify(message([{type:"toolCall",id:"sdk-write",name:"fixture_write",arguments:{}}]))};
+          queueMicrotask(()=>{stream.push({type:"done",reason:"toolUse",message:answer});stream.end(answer);});return stream;
+        };return current;
+      }
+    `);
+    child=spawn(process.execPath,[hostPath],{stdio:["pipe","pipe","pipe"]});
+    const lines=[];let pending="",stderr="",aborted=false;
+    child.stderr.on("data",value=>{stderr+=value;});
+    child.stdout.on("data",value=>{
+      pending+=value;
+      for (;;) {
+        const newline=pending.indexOf("\n");if(newline<0)break;
+        const event=JSON.parse(pending.slice(0,newline));pending=pending.slice(newline+1);lines.push(event);
+        if(event.type==="diary_business_request"&&event.phase==="start"&&!aborted){
+          aborted=true;child.stdin.write('{"type":"diary_abort"}\n');
+        }
+      }
+    });
+    const exited=once(child,"exit");
+    child.stdin.write(JSON.stringify({...options,modulePath:join(wrapper,"index.js"),tools:["fixture_write"],
+      message:"合成SDK取消",inputEnabled:false,controlEnabled:true})+"\n");
+    const [code]=await exited;
+    assert.equal(code,0,stderr);
+    assert.ok(lines.some(event=>event.type==="diary_abort_ack"));
+    const receipt=lines.find(event=>event.type==="tool_execution_end");
+    assert.equal(receipt.result.details.failure.submission_effect,"unknown");
+    assert.equal(receipt.isError,true);
+    assert.equal(lines.filter(event=>event.type==="diary_business_request").length,2);
+  } finally {if(child?.exitCode===null)child.kill("SIGKILL");await rm(options.cwd,{recursive:true,force:true});}
+});

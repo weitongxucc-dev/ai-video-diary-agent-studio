@@ -44,6 +44,23 @@ def isolated_host_preflight(monkeypatch):
     })
 
 
+def _install_model_stream(monkeypatch, stream):
+    def version(cmd, **_kwargs):
+        assert cmd[-1] == "--version"
+        return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+    monkeypatch.setattr(pi_module.subprocess, "run", version)
+    monkeypatch.setattr(pi_module, "_run_pi_streaming", stream)
+
+
+def _stream_completed(cmd, *, stdout, on_event, stderr=""):
+    projector = _PiStreamProjector()
+    for line in pi_module._business_event_lines(stdout):
+        event = projector.project(line)
+        if event:
+            on_event(event)
+    return sdk_completed(cmd, 0, stdout=stdout, stderr=stderr)
+
+
 def test_stopping_assistant_turn_terminates_its_controlled_child_group(tmp_path):
     turn_id = "synthetic-turn-stop"
     started = threading.Event()
@@ -627,11 +644,9 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
                         llm_api_key_provider="minimax")
     commands = []
 
-    def fake_run(cmd, **_kwargs):
-        if cmd[-1] == "--version":
-            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        commands.append(json.loads(_kwargs["input"]))
-        return sdk_completed(cmd, 0, stdout="\n".join([
+    def fake_stream(cmd, **kwargs):
+        commands.append(json.loads(kwargs["message"]))
+        return _stream_completed(cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "tool_execution_end", "toolName": "preview_script_draft",
                         "isError": False, "result": {"details": {"kind": "script_draft",
                         "preview": {"script_id": "draft-one"}}}}),
@@ -640,7 +655,7 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
             '{"type":"agent_settled"}',
         ]), stderr="")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    _install_model_stream(monkeypatch, fake_stream)
     for task_id in ("task-one", "task-one", "task-two"):
         reply, preview = run_task_turn(settings, workspace_id="workspace-one", task_id=task_id,
                                        message="把开头改短", stage="script", selected_refs=[], playhead_ms=None)
@@ -656,7 +671,7 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
     assert commands[3]["sessionId"] != commands[0]["sessionId"]
     edit_tools = set(commands[3]["tools"])
     assert {"preview_typed_edit", "read_task_edit_capabilities", "read_task_object", "start_creation_execution"} <= edit_tools
-    assert "generate_creation_task_topics" not in edit_tools and "preview_script_draft" not in edit_tools
+    assert "generate_creation_task_topics" not in edit_tools and "preview_script_draft" in edit_tools
 
 
 
@@ -669,17 +684,15 @@ def test_turn_passes_verified_member_token_to_the_tool_runtime(monkeypatch, tmp_
                         llm_api_key_provider="minimax")
     envs = []
 
-    def fake_run(cmd, **kwargs):
-        if cmd[-1] == "--version":
-            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+    def fake_stream(cmd, **kwargs):
         envs.append(kwargs["env"])
-        return sdk_completed(cmd, 0, stdout="\n".join([
+        return _stream_completed(cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
             '{"type":"agent_settled"}',
         ]), stderr="")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    _install_model_stream(monkeypatch, fake_stream)
     run_task_turn(settings, workspace_id="workspace-one", task_id="task-one", message="检查",
                   stage="montage", selected_refs=[], playhead_ms=None,
                   local_member_token="member-token-one", caller_user_id="user-one")
@@ -701,17 +714,15 @@ def test_trusted_callers_do_not_share_the_pi_session(monkeypatch, tmp_path):
                         llm_api_key_provider="minimax")
     sessions = []
 
-    def fake_run(cmd, **_kwargs):
-        if cmd[-1] == "--version":
-            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        sessions.append(json.loads(_kwargs["input"])["sessionId"])
-        return sdk_completed(cmd, 0, stdout="\n".join([
+    def fake_stream(cmd, **kwargs):
+        sessions.append(json.loads(kwargs["message"])["sessionId"])
+        return _stream_completed(cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "好的。"}]}}),
             '{"type":"agent_settled"}',
         ]), stderr="")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    _install_model_stream(monkeypatch, fake_stream)
     for user_id in ("user-one", "user-one", "user-two"):
         run_plan_turn(settings, workspace_id="workspace-a", conversation_id="conv-one", message="你好",
                       caller_user_id=user_id)
@@ -733,22 +744,20 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     captured = {}
 
-    def fake_run(cmd, **kwargs):
-        if cmd[-1] == "--version":
-            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+    def fake_stream(cmd, **kwargs):
         captured.update(cmd=cmd, kwargs=kwargs)
-        return sdk_completed(cmd, 0, stdout="\n".join([
+        return _stream_completed(cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "收到。"}]}}),
             '{"type":"agent_settled"}',
         ]), stderr="")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    _install_model_stream(monkeypatch, fake_stream)
     answer, preview = run_task_turn(settings, workspace_id="workspace-1", task_id="task-1",
                                     message="请说明当前任务", stage="montage",
                                     selected_refs=["clip:clip-1"], playhead_ms=1200)
     assert (answer, preview) == ("收到。", None)
-    model_input = json.loads(json.loads(captured["kwargs"]["input"])["message"].split("本轮输入（JSON）：\n", 1)[1])
+    model_input = json.loads(json.loads(captured["kwargs"]["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert model_input["original_user_instruction"] == "请说明当前任务"
     assert captured["kwargs"]["env"]["PATH"].split(__import__("os").pathsep)[0] == str(fake_pi.parent)
     assert captured["kwargs"]["env"]["AI_VIDEO_DIARY_LLM_KEY"] == "private-test-key"
@@ -767,16 +776,16 @@ def test_continuation_input_preserves_authorization_without_replaying_its_first_
     captured = {}
     def completed(_cmd, **kwargs):
         captured.update(kwargs)
-        return sdk_completed(_cmd, 0, stdout="\n".join([
+        return _stream_completed(_cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
                 "content": [{"type": "text", "text": "依据实际完成来源继续。"}]}}), '{"type":"agent_settled"}']), stderr="")
-    monkeypatch.setattr(pi_module.subprocess, "run", completed)
+    monkeypatch.setattr(pi_module, "_run_pi_streaming", completed)
     raw = "先创建图片，提交后本轮结束；成功后观察并准备修改，等我采用。"
     context = {"next_checkpoint": "read_completed_source_and_continue", "unfinished_steps": ["read_completed_source_and_continue"],
                "completed_source_slots": [{"name": "title.png", "source_ref": "artifacts/actual/title.png"}]}
     run_task_turn(settings, workspace_id="local", task_id="task", message=raw, stage="montage", selected_refs=[],
         playhead_ms=None, continuation_context=context)
-    payload = json.loads(json.loads(captured["input"])["message"].split("本轮输入（JSON）：\n", 1)[1])
+    payload = json.loads(json.loads(captured["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert payload["original_authorization_context"] == raw and "original_user_instruction" not in payload
     assert payload["trusted_continuation_checkpoint"] == context
     assert captured["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == raw
@@ -802,11 +811,11 @@ def test_pi_reasoning_split_does_not_change_other_models(monkeypatch, tmp_path, 
     monkeypatch.setattr("app.assistant_pi._pi_executable", lambda: "/synthetic/pi")
     captured = {}
 
-    def capture_run(_cmd, **kwargs):
+    def capture_stream(_cmd, **kwargs):
         captured.update(json.loads((Path(kwargs["cwd"]) / "models.json").read_text()))
         raise RuntimeError("offline request boundary")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", capture_run)
+    monkeypatch.setattr(pi_module, "_run_pi_streaming", capture_stream)
     settings = Settings(model_root_path=str(tmp_path / "models"), llm_provider=provider,
                         llm_api_key="synthetic-key", llm_api_key_provider=provider,
                         llm_base_url="https://example.com/v1", llm_model=model)
@@ -947,17 +956,15 @@ def test_new_plan_conversations_do_not_share_pi_session(monkeypatch, tmp_path):
                         llm_api_key_provider="minimax")
     sessions = []
 
-    def fake_run(cmd, **_kwargs):
-        if cmd[-1] == "--version":
-            return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
-        sessions.append(json.loads(_kwargs["input"])["sessionId"])
-        return sdk_completed(cmd, 0, stdout="\n".join([
+    def fake_stream(cmd, **kwargs):
+        sessions.append(json.loads(kwargs["message"])["sessionId"])
+        return _stream_completed(cmd, on_event=kwargs["on_event"], stdout="\n".join([
             json.dumps({"type": "message_end", "message": {"role": "assistant",
                 "stopReason": "stop", "content": [{"type": "text", "text": "请补充目标。"}]}}),
             '{"type":"agent_settled"}',
         ]), stderr="")
 
-    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    _install_model_stream(monkeypatch, fake_stream)
     for conversation_id in ("one", "one", "two"):
         run_plan_turn(settings, workspace_id="workspace-a", conversation_id=conversation_id,
                       message="你好", authorization=None, cookie=None)

@@ -65,6 +65,8 @@ C接回`apps/api/app/assistant/turn.py`、`apps/api/agent_tools/diary/transport.
 
 C另接回`apps/api/agent_tools/diary/runtime.ts`及补绑`registration.ts`，仅沿既有AsyncLocalStorage调用域传递SDK实际toolCallId给请求阶段事件，防止并行工具互相延长等待；不改变业务参数、工具授权或回执投影。B不再写这两个文件。
 
+A接回`apps/api/tests/test_assistant_pi_failures.py`、`test_assistant_pi.py`，仅把旧非流式`subprocess.run`模型桩适配为统一阶段runner，保留原失败归因、安全和停止断言；不得恢复生产双运行路径或伪造模型成功。真实版本探测仍用原subprocess桩；阶段超时文案沿实际新语义，未知写入断言不能放宽。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。

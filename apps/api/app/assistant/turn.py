@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 from app.config import Settings
 from app.assistant.failures import _fail, AssistantUnavailable, FAILURE_RUNTIME_MISSING, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
-from app.assistant.projection import _safe_business_failure, _PiStreamProjector, _business_event_lines
+from app.assistant.projection import _safe_business_failure
 from app.assistant.turn_control import AssistantStopped, TurnControl
 from app.assistant.sessions import SessionLocks
 from app.assistant.runtime_context import prepare_runtime
@@ -103,7 +103,6 @@ def run_turn(
         if on_event:
             on_event(event)
 
-    streaming = on_event is not None or turn_id is not None or input_handler is not None
     model_message = message
     memory_facts = None
     try:
@@ -148,38 +147,32 @@ def run_turn(
             "sessionDir": str(root / "sessions"), "sessionId": str(session_id),
             "modelId": model, "systemPrompt": prompt, "extensionPath": str(extension),
             "tools": tool_names.split(","), "message": model_message, "inputEnabled": input_handler is not None,
+            "controlEnabled": True,
         }, ensure_ascii=False) + "\n"
-        result = (run_process(
+        result = run_process(
             cmd, message=model_message, env=env, cwd=runtime_root,
             timeout_seconds=180, on_event=observe_event, turn_id=turn_id,
             keep_turn_control=keep_turn_control, input_handler=input_handler,
-        ) if streaming else subprocess.run(
-            cmd, input=model_message, text=True, capture_output=True, timeout=180,
-            env=env, cwd=runtime_root, check=False,
-        ))
+        )
     except subprocess.TimeoutExpired as exc:
-        # This is the bridge's wall-clock deadline, not evidence of a provider timeout.
-        if not streaming:
-            output = exc.stdout or ""
-            if isinstance(output, bytes):
-                output = output.decode("utf-8", errors="replace")
-            projector = _PiStreamProjector()
-            for line in _business_event_lines(output):
-                event = projector.project(line)
-                if event is not None:
-                    observe_event(event)
+        # A host phase deadline is not evidence that the provider timed out.
+        phase = getattr(exc, "phase", None)
+        waiting = ({"model": "本次模型调用等待超时", "compaction": "本次模型上下文压缩等待超时",
+                    "startup": "会话启动等待超时", "business_request": "业务请求等待超时",
+                    "tool": "业务工具执行等待超时"}.get(phase, "会话阶段等待超时"))
+        tool_timeout = phase in {"tool", "business_request"} or phase is None and saw_tool
         repair = "先查询原请求及当前对象，核实已提交动作的结果；未知写入不得盲重试。"
         if first_business_failure:
             code = first_business_failure.get("error") or first_business_failure.get("code")
             reason = first_business_failure.get("reason") or "业务操作未完成。"
-            headline = (f"业务回执（{code}）：" if code else "业务回执：") + reason + " 会话随后达到总等待时限，原回执保留。"
+            headline = (f"业务回执（{code}）：" if code else "业务回执：") + reason + f" {waiting}，原回执保留。"
             if not pending_tools and first_business_failure.get("repair_action"):
                 repair = first_business_failure["repair_action"]
             raise _fail(FAILURE_TOOL_FAILED, explanation=headline, repair_action=repair) from exc
         raise AssistantUnavailable(
-            ("业务工具仍未返回，会话总等待超时，工具结果未知。" if pending_tools else "会话总等待超时，未取得完整回复。")
+            waiting + ("，工具结果未知。" if pending_tools or tool_timeout else "，未取得完整回复。")
             + " 下一步：" + repair,
-            cause=FAILURE_TOOL_FAILED if saw_tool else "bridge_timeout", service_contacted=False,
+            cause=FAILURE_TOOL_FAILED if tool_timeout else "bridge_timeout", service_contacted=False,
         ) from exc
     except OSError as exc:
         raise _fail(

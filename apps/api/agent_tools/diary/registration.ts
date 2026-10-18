@@ -12,9 +12,10 @@ const inputBoundActions = new Set([
 ]);
 
 export function createToolCallScope(readActionSource: () => ActionSource) {
-  const signal = new AsyncLocalStorage<AbortSignal | undefined>();
+  const call = new AsyncLocalStorage<{signal: AbortSignal | undefined; toolCallId: string}>();
   return {
-    getSignal: () => signal.getStore(),
+    getSignal: () => call.getStore()?.signal,
+    getToolCallId: () => call.getStore()?.toolCallId,
     bind: (agent: ToolRegistrar): ToolRegistrar => new Proxy(agent,{get(target,property) {
       if (property !== 'registerTool') {
         const value=Reflect.get(target,property);
@@ -22,7 +23,7 @@ export function createToolCallScope(readActionSource: () => ActionSource) {
       }
       return (tool: any) => target.registerTool({...tool,
       outputSchema: {type: "object", additionalProperties: true},
-      execute: (...args: any[]) => signal.run(args[2], async () => {
+      execute: (...args: any[]) => call.run({signal: args[2], toolCallId: call.getStore()?.toolCallId ?? args[0]}, async () => {
         const source = readActionSource();
         const result = await tool.execute(...args);
         const details = {...result.details, invocation_input_id: source.inputId || source.turnId || null,

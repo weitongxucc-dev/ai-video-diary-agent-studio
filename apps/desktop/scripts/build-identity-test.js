@@ -107,6 +107,7 @@ function main() {
     fs.unlinkSync(path.join(root, 'apps/desktop/runtime/untracked.js'));
 
     write(root, '.env', 'SECRET=must-not-be-hashed');
+    write(root, 'apps/api/agent_runtime/tests/phase-deadlines.test.mjs', 'synthetic SDK fixture');
     write(root, 'apps/desktop/dist/old-output/ignored.txt', 'generated output');
     const changedExcluded = generate(root);
     assert.equal(changedExcluded.candidateInputDigest, changedIncluded.candidateInputDigest, 'credentials and output directories must not change identity');

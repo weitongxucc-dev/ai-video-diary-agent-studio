@@ -1,4 +1,5 @@
 import type {TaskVersion,ActionSource} from './contracts.ts';
+import {randomUUID} from 'node:crypto';
 
 export type ScriptCandidateLocation = {
   candidate_section_index: number;
@@ -150,12 +151,13 @@ export class BusinessResultUnknown extends Error {
   constructor(failure: BusinessFailure) {super(failure.reason); this.businessFailure = failure;}
 }
 
-export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, fetchRequest, onFailure}: {
+export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, getToolCallId, fetchRequest, onFailure}: {
   apiBase?: string; taskId?: string; selectedTaskVersion: TaskVersion | null;
   verifyTaskVersion: (workspace: any) => void;
   readCredentials: () => {authorization?: string; cookie?: string; localMemberToken?: string};
   readActionSource?:()=>ActionSource;
   getSignal: () => AbortSignal | undefined; fetchRequest: typeof fetch;
+  getToolCallId?: () => string | undefined;
   onFailure?: (failure: BusinessFailure) => void;
 }) {
   async function request(path: string, init?: RequestInit, reportFailure = true) {
@@ -210,34 +212,46 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
       }
     }
     const activeSignal = getSignal();
-    const timeout = AbortSignal.timeout(120000);
+    const timeoutMs = 120000;
+    const timeout = AbortSignal.timeout(timeoutMs);
     const signal = AbortSignal.any([timeout, ...(activeSignal ? [activeSignal] : []), ...(init?.signal ? [init.signal] : [])]);
     if (signal.aborted) return notSubmitted("request_aborted_before_submit", "调用已停止，请求未提交。", "connection");
     const unknown = (error: string, stage: string) => reject(new BusinessResultUnknown({...locators, error, stage,
       reason: write ? "业务请求响应中断，写入结果未知。" : "业务读取未取得有效响应。", submission_effect: write ? "unknown" : "not_submitted",
       repair_action: write ? "先查询原请求及当前对象，确定未写入后才能修订并再次提交；不要盲重试。" : "重新读取原请求及当前对象状态。"}));
-    let response: Response;
-    try { response = await fetchRequest(`${apiBase}${path}`, {...init, headers, signal}); }
-    catch { return unknown("business_connection_lost", "connection"); }
-    let body: any;
-    try { body = await response.json(); }
-    catch { return unknown("business_response_unreadable", "response_decode"); }
-    if (!response.ok) {
-      const detail = typeof body?.detail === "string" ? {reason: body.detail} : body?.detail;
-      const scriptFailure = scriptDraftFailure(detail, secrets);
-      const safe = safeBusinessFailure(detail, secrets);
-      const effect = safe.submission_effect ?? (response.status < 500 || scriptFailure ? "rejected" : "unknown");
-      const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${response.status}`,
-        stage: safe.stage || "business_request", submission_effect: effect,
-        reason: scriptFailure ? "文案审核未通过，草稿未保存。" : safe.reason || `业务操作失败（${response.status}）。`,
-        repair_action: effect === "unknown" ? ("先查询原请求及当前对象，确定未写入后才能修订并再次提交；不要盲重试。"
-          + (safe.repair_action ? ` 确定未写入后再处理：${safe.repair_action}` : "")).slice(0, 500)
-          : safe.repair_action || "读取当前对象和原请求，按拒绝原因修订后再提交。"};
-      if (effect === "unknown") return reject(new BusinessResultUnknown(failure));
-      if (effect === "not_submitted") return reject(new RequestNotSubmitted(failure.reason, failure));
-      return reject(new BusinessRequestError(failure.reason, response.status, failure.repair_action, scriptFailure, failure));
+    const toolCallId = getToolCallId?.();
+    const requestId = randomUUID();
+    const phase = (value: "start" | "end") => {
+      if (toolCallId) process.stdout.write(JSON.stringify({type: "diary_business_request", phase: value,
+        tool_call_id: toolCallId, request_id: requestId, write, timeout_ms: timeoutMs}) + "\n");
+    };
+    phase("start");
+    try {
+      let response: Response;
+      try { response = await fetchRequest(`${apiBase}${path}`, {...init, headers, signal}); }
+      catch { return unknown("business_connection_lost", "connection"); }
+      let body: any;
+      try { body = await response.json(); }
+      catch { return unknown("business_response_unreadable", "response_decode"); }
+      if (!response.ok) {
+        const detail = typeof body?.detail === "string" ? {reason: body.detail} : body?.detail;
+        const scriptFailure = scriptDraftFailure(detail, secrets);
+        const safe = safeBusinessFailure(detail, secrets);
+        const effect = safe.submission_effect ?? (response.status < 500 || scriptFailure ? "rejected" : "unknown");
+        const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${response.status}`,
+          stage: safe.stage || "business_request", submission_effect: effect,
+          reason: scriptFailure ? "文案审核未通过，草稿未保存。" : safe.reason || `业务操作失败（${response.status}）。`,
+          repair_action: effect === "unknown" ? ("先查询原请求及当前对象，确定未写入后才能修订并再次提交；不要盲重试。"
+            + (safe.repair_action ? ` 确定未写入后再处理：${safe.repair_action}` : "")).slice(0, 500)
+            : safe.repair_action || "读取当前对象和原请求，按拒绝原因修订后再提交。"};
+        if (effect === "unknown") return reject(new BusinessResultUnknown(failure));
+        if (effect === "not_submitted") return reject(new RequestNotSubmitted(failure.reason, failure));
+        return reject(new BusinessRequestError(failure.reason, response.status, failure.repair_action, scriptFailure, failure));
+      }
+      return body;
+    } finally {
+      phase("end");
     }
-    return body;
   }
 
   return (path: string, init?: RequestInit) => request(path, init);
