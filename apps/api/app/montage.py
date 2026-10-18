@@ -447,15 +447,24 @@ class MontagePlanner:
             narration_segment_ids_by_section=narration_segment_ids_by_section,
             narration_segment_durations_by_section=narration_segment_durations_by_section,
         )
+        cues_by_section: dict[str, list[NarrationCue]] = {}
+        for cue in cues:
+            cues_by_section.setdefault(cue.source_section_id, []).append(cue)
+        sections_by_id = {section.id: section for section in script.sections}
+        # Captions keep their own clock. A shot covers the adopted semantic
+        # section's measured narration span, anchored to its first display cue.
+        visual_cues = [replace(section_cues[0], text=sections_by_id[section_id].content,
+            duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3))
+            for section_id, section_cues in cues_by_section.items()]
         person_render_by_section = person_render_by_section or {}
-        if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in cues):
+        if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in visual_cues):
             raise ValueError("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
         visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
         retrieval_cues = {
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
-            for cue in cues
+            for cue in visual_cues
         }
         cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
             workspace_id, list(retrieval_cues.values()), b_roll_candidates
@@ -465,7 +474,7 @@ class MontagePlanner:
         asset_usage: dict[str, int] = {}
         timeline_cursor = 0.0
         person_source_cursor: dict[str, float] = {}
-        for cue in cues:
+        for cue in visual_cues:
             clip_duration = round(cue.duration_seconds, 3)
             if cue.source_section_id in person_render_by_section:
                 render_id, render_duration = person_render_by_section[cue.source_section_id]

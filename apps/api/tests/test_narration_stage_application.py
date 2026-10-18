@@ -25,6 +25,9 @@ from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, crea
 from app.narration import NarrationGenerator
 from app.production import CreationPlanPersonReference, CreationPlanVoiceReference, SubtitleCue, SubtitleTrack
 from app.voice_clone import Qwen3TTSSubprocessProvider
+from app.creation.narration_stage_use_case import NarrationStageUseCase
+from app.audio_timeline import narration_audio_timeline
+from app.subtitle_schedule import narration_schedule
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset
 
@@ -47,6 +50,101 @@ def _file_fact(path):
     path=Path(path);stat=path.stat()
     return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'size':stat.st_size,
         'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns,'inode':stat.st_ino}
+
+
+def _metadata_retime_plan(durations, caption_durations=None):
+    """Frozen narration/shot metadata only; no audio or media tool is invoked."""
+    cues, clips, segments = [], [], []
+    cursor = 0.
+    for index, duration in enumerate(durations):
+        segment_id = f"audio-{index}"
+        cue_id = f"cue-{len(cues)}"
+        for part in (caption_durations[index] if caption_durations else [duration]):
+            cues.append(NarrationCue(f"cue-{len(cues)}", f"section-{index}", f"caption {len(cues)}", part, segment_id))
+        clips.append(MontageClip(f"scene-{index}", cue_id, "asset", "source", "workspace://metadata-source.mp4",
+            0., duration, cursor, round(cursor + duration, 3), 1., ["metadata fixture"], False))
+        segments.append(SimpleNamespace(id=segment_id, duration_seconds=duration, status="ready"))
+        cursor = round(cursor + duration, 3)
+    plan = CreationTaskMontagePlan("metadata-plan", "workspace", "task", "script", "Fixed segments",
+        "ready", cues, clips, cursor, 0, narration_audio_path="narration://artifact/original")
+    repository = SimpleNamespace(get_asset=lambda *_: SimpleNamespace(segments=[SimpleNamespace(id="source", end_seconds=100.)]))
+    return NarrationStageUseCase(repository, None, None, None), plan, segments
+
+
+def test_local_retime_preserves_semantic_shots_manual_split_and_other_caption_groups():
+    case, plan, segments = _metadata_retime_plan([7.68, 5.36, 6.64, 5.68],
+        [[3.238, .376, 3.464, .602], [3.496, 1.864], [2.639, 4.001], [2.882, 2.798]])
+    original = plan.clips[0]
+    plan.clips[:1] = [replace(original, timeline_end_seconds=3.84, source_end_seconds=3.84, manually_selected=True),
+        replace(original, id="manual-second-half", timeline_start_seconds=3.84, source_start_seconds=3.84, manually_selected=True)]
+    snapshot = creation_task_montage_plan_to_payload(plan)
+    segments[0] = SimpleNamespace(id=segments[0].id, duration_seconds=8.68, status="ready")
+    updated = case.retime_for_segments("workspace", plan, segments, "narration://artifact/replaced-one-segment")
+    assert [clip.id for clip in updated.clips] == [clip.id for clip in plan.clips]
+    assert [(clip.timeline_start_seconds, clip.timeline_end_seconds) for clip in updated.clips] == [
+        (0, 4.34), (4.34, 8.68), (8.68, 14.04), (14.04, 20.68), (20.68, 26.36)]
+    assert all(clip.manually_selected for clip in updated.clips[:2])
+    assert [(cue.id, cue.text, cue.narration_segment_id) for cue in updated.cues] == [
+        (cue.id, cue.text, cue.narration_segment_id) for cue in plan.cues]
+    assert [cue.duration_seconds for cue in updated.cues[4:]] == [cue.duration_seconds for cue in plan.cues[4:]]
+    assert sum(cue.duration_seconds for cue in updated.cues[:4]) == pytest.approx(8.68)
+    assert narration_schedule(updated.cues, updated.duration_seconds)[4].start_seconds == pytest.approx(8.68)
+    assert creation_task_montage_plan_to_payload(plan) == snapshot
+
+
+def test_local_retime_maps_a_manual_shot_across_two_narration_segments():
+    case, plan, segments = _metadata_retime_plan([7.68, 5.36, 6.64, 5.68])
+    first, second = plan.clips[:2]
+    plan.clips[:2] = [replace(first, timeline_end_seconds=9., source_end_seconds=9., manually_selected=True),
+        replace(second, timeline_start_seconds=9., source_end_seconds=4.04, manually_selected=True)]
+    segments[0] = SimpleNamespace(id=segments[0].id, duration_seconds=8.68, status="ready")
+    updated = case.retime_for_segments("workspace", plan, segments, "narration://artifact/replaced")
+    assert updated.clips[0].timeline_end_seconds == 10.
+    assert (updated.clips[1].timeline_start_seconds, updated.clips[1].timeline_end_seconds) == (10., 14.04)
+    assert [clip.cue_id for clip in updated.clips] == [clip.cue_id for clip in plan.clips]
+
+
+def test_local_retime_keeps_manual_silent_tail_outside_narration_coverage():
+    case, plan, segments = _metadata_retime_plan([3.84, 5.52, 5.04, 5.44, 5.36])
+    plan.clips[-1] = replace(plan.clips[-1], source_start_seconds=12., source_end_seconds=17.36)
+    tail = replace(plan.clips[-1], id="clip_8944d73f572e", timeline_start_seconds=25.2,
+        timeline_end_seconds=30., source_start_seconds=7.2, source_end_seconds=12., manually_selected=True)
+    plan.clips.append(tail)
+    plan.duration_seconds = 30.
+    plan.audio_timeline = narration_audio_timeline(plan.narration_audio_path, 25.2)
+    snapshot = creation_task_montage_plan_to_payload(plan)
+    segments[0] = SimpleNamespace(id=segments[0].id, duration_seconds=4.84, status="ready")
+    updated = case.retime_for_segments("workspace", plan, segments, "narration://artifact/replaced")
+    result = updated.clips[-1]
+    assert (result.id, result.cue_id, result.manually_selected) == (tail.id, tail.cue_id, True)
+    assert (result.timeline_start_seconds, result.timeline_end_seconds) == (26.2, 31.)
+    assert (result.source_start_seconds, result.source_end_seconds) == (7.2, 12.)
+    assert updated.duration_seconds == 31.
+    assert narration_schedule(updated.cues, updated.duration_seconds)[-1].end_seconds == pytest.approx(26.2)
+    assert updated.audio_timeline.tracks[0].clips[0].source_end_ms == 26200
+    assert creation_task_montage_plan_to_payload(plan) == snapshot
+
+
+@pytest.mark.parametrize("guard", ["locked", "source_too_short", "outside_clock", "too_short_to_keep_boundary"])
+def test_retime_rejects_expansion_that_cannot_preserve_the_existing_shot(guard):
+    case, plan, segments = _metadata_retime_plan([7.68, 5.36])
+    if guard == "locked":
+        plan.clips[0].locked = True
+        message = "已锁定镜头"
+    elif guard == "source_too_short":
+        case.repository.get_asset = lambda *_: SimpleNamespace(segments=[SimpleNamespace(id="source", end_seconds=7.68)])
+        message = "超过当前镜头可用范围"
+    elif guard == "outside_clock":
+        plan.clips[0].timeline_start_seconds = -1
+        message = "镜头边界不在原配音时间轴内"
+    else:
+        message = "新配音时长不足以保留当前镜头边界"
+    snapshot = creation_task_montage_plan_to_payload(plan)
+    segments[0] = SimpleNamespace(id=segments[0].id,
+        duration_seconds=.0001 if guard == "too_short_to_keep_boundary" else 8.68, status="ready")
+    with pytest.raises(ValueError, match=message):
+        case.retime_for_segments("workspace", plan, segments, "narration://artifact/replaced")
+    assert creation_task_montage_plan_to_payload(plan) == snapshot
 
 
 @pytest.fixture

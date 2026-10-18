@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+from dataclasses import replace
 
 import pytest
 
 from app.montage import MontagePlanner
+from app.subtitle_schedule import narration_schedule
 from app.production import (
     CreationTaskScript,
     CreationTaskScriptSection,
@@ -97,3 +99,55 @@ def test_invalid_segment_clock_is_rejected(task_inputs, clock):
             **task_inputs, duration_target_seconds=120, narration_duration_seconds=120,
             narration_segment_durations_by_section=clock,
         )
+
+
+@pytest.fixture
+def english_semantic_inputs(task_inputs):
+    text = [
+        "The footage shows an outdoor maize shelling site, with people working beside a green cylindrical machine.",
+        "A belt and pulley drive is clearly visible on the side of the machine.",
+        "White woven sacks, a blue tarp, and containers are arranged nearby in the open.",
+        "Workers gather around the machine, working together in the open air.",
+    ]
+    sections = [CreationTaskScriptSection(id=f"s{index}", title=f"Scene {index}", content=content,
+        visual_prompt=f"Scene {index}", evidence_reference_ids=[]) for index, content in enumerate(text, 1)]
+    return {**task_inputs, "script": replace(task_inputs["script"], sections=sections),
+        "duration_target_seconds": 30, "narration_duration_seconds": 25.36,
+        "narration_segment_ids_by_section": {f"s{i}": f"audio_s{i}" for i in range(1, 5)},
+        "narration_segment_durations_by_section": dict(zip((f"s{i}" for i in range(1, 5)), [7.68, 5.36, 6.64, 5.68]))}
+
+
+@pytest.mark.parametrize("presenter", [False, True])
+def test_four_semantic_shots_preserve_ten_english_caption_cues(english_semantic_inputs, presenter):
+    values = english_semantic_inputs
+    if presenter:
+        values = {**values, "assets": [], "presenter_share_target": 100,
+            "person_render_by_section": {section: (f"render_{section}", duration)
+                for section, duration in values["narration_segment_durations_by_section"].items()}}
+    plan = MontagePlanner().build_for_creation_task(**values)
+    assert len(plan.clips) == 4 and len(plan.cues) == 10
+    assert [(clip.timeline_start_seconds, clip.timeline_end_seconds) for clip in plan.clips] == [
+        (0, 7.68), (7.68, 13.04), (13.04, 19.68), (19.68, 25.36)]
+    assert [clip.cue_id for clip in plan.clips] == ["cue_001", "cue_005", "cue_007", "cue_009"]
+    assert [cue.narration_segment_id for cue in plan.cues] == [
+        "audio_s1"] * 4 + ["audio_s2"] * 2 + ["audio_s3"] * 2 + ["audio_s4"] * 2
+    captions = narration_schedule(plan.cues, plan.duration_seconds)
+    assert [cue.text for cue in captions] == [
+        "The footage shows an outdoor maize shelling", "site,",
+        "with people working beside a green cylindrical", "machine.",
+        "A belt and pulley drive is clearly visible on", "the side of the machine.",
+        "White woven sacks, a blue tarp,", "and containers are arranged nearby in the open.",
+        "Workers gather around the machine,", "working together in the open air."]
+    assert [round(cue.end_seconds - cue.start_seconds, 3) for cue in captions] == [
+        3.238, .376, 3.464, .602, 3.496, 1.864, 2.639, 4.001, 2.882, 2.798]
+    assert captions[-1].end_seconds == pytest.approx(25.36)
+    assert plan.narration_audio_path == values["narration_audio_path"]
+    assert all(bool(clip.person_render_id) is presenter for clip in plan.clips)
+
+
+def test_semantic_shot_cannot_use_caption_fragments_to_hide_insufficient_source(english_semantic_inputs):
+    asset = english_semantic_inputs["assets"][0]
+    values = {**english_semantic_inputs, "assets": [replace(asset,
+        segments=[replace(segment, end_seconds=segment.start_seconds + 7) for segment in asset.segments])]}
+    with pytest.raises(ValueError, match="B-roll 镜头时长不足"):
+        MontagePlanner().build_for_creation_task(**values)

@@ -1603,6 +1603,37 @@ def test_creation_task_planner_uses_confirmed_script_and_logical_material_refere
     assert restored == plan
 
 
+def test_semantic_shot_query_is_independent_of_english_caption_rows(tmp_path):
+    # Metadata boundary only: no video fixture generation, decoder or model.
+    source = tmp_path / "metadata-only.mp4"
+    source.write_bytes(b"metadata-only source")
+    script = CreationTaskScript(id="script", workspace_id="workspace_a", task_id="task",
+        run_id="run", topic_id="topic", title="One semantic scene", language="en-US",
+        selection_status="confirmed", sections=[CreationTaskScriptSection(id="section", title="Machine",
+            content="The footage shows an outdoor maize shelling site, with people working beside a green cylindrical machine.",
+            visual_prompt="Green maize shelling machine", evidence_reference_ids=[])])
+    asset = MaterialAsset(id="asset", workspace_id="workspace_a", file_name=source.name,
+        path=str(source), size_bytes=source.stat().st_size,
+        modified_at=datetime.fromtimestamp(source.stat().st_mtime, timezone.utc),
+        duration_seconds=12, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        segments=[MaterialSegment(id="source", asset_id="asset", start_seconds=0, end_seconds=12,
+            description="Green maize shelling machine", usage_role="b_roll", review_status="approved")])
+    queries = []
+    provider = SimpleNamespace(ready=True, model_id="synthetic-semantic-port",
+        embed_texts=lambda values: queries.extend(values) or [[1., 0.] for _ in values])
+    plan = MontagePlanner(semantic_provider=provider, visual_feature_loader=lambda *_: [1., 0.]).build_for_creation_task(
+        duration_target_seconds=30, workspace_id="workspace_a", task_id="task", script=script,
+        profile=ProductionProfile(workspace_id="workspace_a"), assets=[asset],
+        media_reference_for_asset=lambda _: "workspace://metadata-only.mp4",
+        narration_audio_path="narration://artifact/frozen", narration_duration_seconds=7.68,
+        narration_segment_ids_by_section={"section": "fixed-audio"},
+        narration_segment_durations_by_section={"section": 7.68})
+    assert queries == ["Green maize shelling machine"]
+    assert len(plan.cues) == 4 and len(plan.clips) == 1
+    assert plan.clips[0].timeline_end_seconds == 7.68 and plan.clips[0].cue_id == plan.cues[0].id
+    assert creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan)) == plan
+
+
 def test_presenter_share_selects_only_needed_narration_sections(tmp_path):
     sections = [(f"section_{index}", 4.0) for index in range(5)]
     assert select_presenter_sections(sections, 0) == []

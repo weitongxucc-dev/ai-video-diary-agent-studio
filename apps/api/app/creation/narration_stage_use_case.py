@@ -144,11 +144,17 @@ class NarrationStageUseCase:
         cues_by_segment: dict[str, list[NarrationCue]] = {}
         for cue in updated.cues:
             cues_by_segment.setdefault(cue.narration_segment_id, []).append(cue)
+        segment_clocks = []
+        old_voice_end = new_voice_end = 0.0
         for segment_id, cues in cues_by_segment.items():
             segment_duration = duration_by_segment.get(segment_id)
             if segment_duration is None or segment_duration <= 0:
                 raise ValueError('时间线引用了不可用的配音片段')
             old_total = sum((cue.duration_seconds for cue in cues))
+            segment_clocks.append((old_voice_end, old_voice_end + old_total,
+                                   new_voice_end, new_voice_end + segment_duration))
+            old_voice_end += old_total
+            new_voice_end += segment_duration
             cursor = allocated = 0.0
             for cue in cues:
                 cursor += cue.duration_seconds
@@ -156,23 +162,29 @@ class NarrationStageUseCase:
                 cue.duration_seconds = round(end - allocated, 3)
                 allocated = end
         cue_by_id = {cue.id: cue for cue in updated.cues}
-        old_duration_by_cue: dict[str, float] = {}
-        for clip in plan.clips:
-            old_duration_by_cue[clip.cue_id] = old_duration_by_cue.get(clip.cue_id, 0.0) + clip.timeline_end_seconds - clip.timeline_start_seconds
-        allocated_by_cue: dict[str, float] = {}
-        used_by_cue: dict[str, float] = {}
-        cursor = 0.0
+
+        def retimed_boundary(position):
+            for old_start, old_end, new_start, new_end in segment_clocks:
+                if old_start - 1e-06 <= position <= old_end + 1e-06:
+                    return new_start + (position - old_start) * (new_end - new_start) / (old_end - old_start)
+            if position >= old_voice_end:
+                # Manual picture tails have no speech coverage, even when they
+                # inherit the preceding cue ID. Preserve their elapsed time.
+                return new_voice_end + position - old_voice_end
+            raise ValueError('镜头边界不在原配音时间轴内，无法可靠调整。')
+
         for index, clip in enumerate(updated.clips):
             cue = cue_by_id.get(clip.cue_id)
             if cue is None:
                 raise ValueError('镜头缺少对应的字幕与配音时间段')
             old_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
             playback_rate = clip_playback_rate(clip)
-            used_by_cue[cue.id] = used_by_cue.get(cue.id, 0.0) + old_duration
-            allocated_end = round(cue.duration_seconds * used_by_cue[cue.id] / old_duration_by_cue[cue.id], 3)
-            duration = round(allocated_end - allocated_by_cue.get(cue.id, 0.0), 3)
-            allocated_by_cue[cue.id] = allocated_end
-            if clip.locked and (abs(cursor - clip.timeline_start_seconds) > 0.001 or abs(duration - old_duration) > 0.001):
+            start = round(retimed_boundary(clip.timeline_start_seconds), 3)
+            end = round(retimed_boundary(clip.timeline_end_seconds), 3)
+            duration = round(end - start, 3)
+            if duration <= 0:
+                raise ValueError('新配音时长不足以保留当前镜头边界。')
+            if clip.locked and (abs(start - clip.timeline_start_seconds) > 0.001 or abs(duration - old_duration) > 0.001):
                 raise ValueError('配音时长变化会修改已锁定镜头，请先解锁受影响镜头')
             if index:
                 previous = plan.clips[index - 1]
@@ -189,12 +201,11 @@ class NarrationStageUseCase:
             if source_end is None or clip.source_start_seconds + duration * playback_rate > source_end + 1e-06:
                 raise ValueError('调整后的配音时长超过当前镜头可用范围，请先替换或放宽该镜头。')
             clip.source_end_seconds = round(clip.source_start_seconds + duration * playback_rate, 3)
-            clip.timeline_start_seconds = round(cursor, 3)
-            cursor += duration
-            clip.timeline_end_seconds = round(cursor, 3)
-        updated.duration_seconds = round(cursor, 3)
+            clip.timeline_start_seconds = start
+            clip.timeline_end_seconds = end
+        updated.duration_seconds = round(retimed_boundary(plan.duration_seconds), 3)
         if updated.audio_timeline is not None:
-            updated.audio_timeline = rebind_narration_audio(updated.audio_timeline, plan.narration_audio_path or '', narration_reference, round(plan.duration_seconds * 1000), round(updated.duration_seconds * 1000))
+            updated.audio_timeline = rebind_narration_audio(updated.audio_timeline, plan.narration_audio_path or '', narration_reference, round(old_voice_end * 1000), round(new_voice_end * 1000))
         updated.narration_audio_path = narration_reference
         updated.output_path = None
         updated.subtitle_path = None
