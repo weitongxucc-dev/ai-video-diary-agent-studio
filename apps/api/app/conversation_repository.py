@@ -587,16 +587,11 @@ class ConversationRepository:
                     raise ValueError("制作提交不属于当前任务的原目标。")
             else:
                 root = {"id": turn_id, "conversation_id": origin["conversation_id"], "goal": {}}
+            if input_id is not None:
+                root={**root,"goal":{**root["goal"],"workspace_id":workspace_id,"member_id":member_id,
+                    "source_input_id":input_id,"source_input_turn_id":origin["input_turn_id"]}}
             if not self._goal_origin_current(conn, root):
                 raise ValueError("原助手制作要求已被新的真人要求或追加输入替代。")
-            if input_id is not None:
-                row = conn.execute("SELECT t.events_json FROM assistant_conversation_turns t "
-                    "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
-                    "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
-                    (origin["input_turn_id"], origin["conversation_id"], workspace_id, member_id)).fetchone()
-                consumed = latest_consumed_input(json.loads(row["events_json"])) if row else None
-                if consumed is None or consumed["input_id"] != input_id or consumed["status"] == "interrupted":
-                    raise ValueError("制作提交的追加输入已变化或中断，没有沿旧要求执行。")
             return origin
 
     @staticmethod
@@ -611,8 +606,18 @@ class ConversationRepository:
             origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
                 (origin_id,)).fetchone()
             consumed = latest_consumed_input(json.loads(origin["events_json"]))
-            return (origin["status"] == "completed" and (consumed is None or consumed["status"] != "interrupted")
-                and (consumed["input_id"] if consumed else None) == adoption["source"].get("input_id"))
+            if (origin["status"] != "completed" or consumed and consumed["status"] == "interrupted"
+                    or (consumed["input_id"] if consumed else None) != adoption["source"].get("input_id")):
+                return False
+        goal=root["goal"]
+        if goal.get("source_input_id"):
+            owner=conn.execute("SELECT t.events_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (goal["source_input_turn_id"],root["conversation_id"],goal["workspace_id"],goal["member_id"])).fetchone()
+            consumed=latest_consumed_input(json.loads(owner["events_json"])) if owner else None
+            if consumed is None or consumed["input_id"] != goal["source_input_id"] or consumed["status"] == "interrupted":
+                return False
         return True
 
     def task_result_source(self, turn_id: str, workspace_id: str, member_id: str, task_id: str, *,
@@ -862,17 +867,41 @@ class ConversationRepository:
         root_id=original_context.get("original_turn_id",turn_id) if original_context.get("source_kind") == "business_event" else turn_id
         root_row=conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=? AND conversation_id=?",
                               (root_id,row["conversation_id"])).fetchone()
-        authorization=input_goal_authorization(conn,root_row,row)
+        if root_row is None:
+            return None
+        previous=json.loads(root_row["result_json"] or "{}").get("goal_continuation")
+        adoption=(previous or {}).get("creation_adoption")
+        authorization_root=root_row
+        if adoption and original_context.get("source_kind") == "business_event":
+            if (previous["current_turn_id"] != turn_id
+                    or (previous["workspace_id"],previous["member_id"],previous["task_id"])
+                        != (row["workspace_id"],row["member_id"],original_context.get("task_id"))
+                    or original_context.get("goal_revision",0) != previous.get("revision",0)
+                        and previous.get("source_input_turn_id") != turn_id):
+                return None
+            # The claim freezes this task's prior instruction. Merge only this
+            # child's consumed inputs, never intervening sibling-task inputs.
+            authorization_root={**dict(root_row),"sequence":row["sequence"],
+                "user_message":original_context["goal_instruction"]}
+        authorization=input_goal_authorization(conn,authorization_root,row)
+        if authorization and adoption and authorization["includes_root_instruction"]:
+            authorization["authorization_inputs"]=[
+                *[item for item in previous.get("authorization_inputs",[]) if item["turn_id"] != turn_id],
+                *authorization["authorization_inputs"]]
+            authorization["includes_root_instruction"]=previous.get("includes_root_instruction",True)
         if latest_consumed_input(json.loads(row["events_json"])) and authorization is None:
             return None
         context=authorization["request_context"] if authorization else original_context
-        if context.get("kind") != "task" or not context.get("task_id") or (not authorization and (not row["user_message"] or context.get("source_kind"))):
+        if (context.get("kind") != "task" or not context.get("task_id")
+                or context["task_id"] != original_context.get("task_id")
+                or (not authorization and (not row["user_message"] or context.get("source_kind")))):
             return None
-        latest_user=conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? AND user_message!='' ORDER BY sequence DESC LIMIT 1",(row["conversation_id"],)).fetchone()
-        if latest_user is None or latest_user["id"] != root_id:
+        origin_goal={**(previous or {}),"workspace_id":row["workspace_id"],"member_id":row["member_id"],
+            **({"source_input_id":authorization["source_input_id"],"source_input_turn_id":authorization["source_input_turn_id"]}
+               if authorization else {})}
+        if not self._goal_origin_current(conn,{"id":root_id,"conversation_id":row["conversation_id"],"goal":origin_goal}):
             return None
         result=json.loads(row["result_json"] or "{}")
-        previous=json.loads(root_row["result_json"] or "{}").get("goal_continuation")
         input_id=authorization["source_input_id"] if authorization else None
         if previous and previous.get("source_input_id") == input_id:
             return previous
@@ -894,6 +923,7 @@ class ConversationRepository:
             "status":waiting,"unfinished_steps":["await_real_adoption" if waiting == "waiting_adoption" else "observe_actual_result","complete_original_instruction"],
             "round_count":0,"handled_event_ids":[],"current_turn_id":turn_id,
             "revision":max((previous or {}).get("revision",0)+1,authorization["input_sequence"]) if authorization else 0,
+            **({"creation_adoption":adoption} if adoption else {}),
             **({key:value for key,value in authorization.items() if key not in {"input_sequence","original_instruction","request_context"}} if authorization else {})}
         self._write_goal(conn,{"id":root_id},goal)
         return goal

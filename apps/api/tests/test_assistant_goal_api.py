@@ -465,7 +465,8 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_actual_start_is_persisted_before_model_failure_then_original_job_continues(state, monkeypatch, streaming):
+@pytest.mark.parametrize("continuation_failure", [False, True])
+def test_actual_start_is_persisted_before_model_failure_then_original_job_continues(state, monkeypatch, streaming, continuation_failure):
     state.finish()
     material_execution_input(state)
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
@@ -480,6 +481,9 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
         calls.append(kwargs)
         if kwargs.get("continuation_context"):
             assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["id"] == job_ids[0]
+            if continuation_failure:
+                raise pi.AssistantUnavailable("业务回执 script_goal_conflict；同步核查后模型等待超时。来源 /Volumes/private/source.wav",
+                    cause="tool_failed", service_contacted=False)
             return "已回读原制作作业，尚无语义或听感结论。", None
         turn_id = kwargs["turn_id"]
         turn_ids.append(turn_id)
@@ -526,7 +530,15 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
     original = state.client.get(state.base_url + "/execution", params={"job_id":job_ids[0]})
     assert original.status_code == 200 and original.json()["job"]["id"] == job_ids[0]
     main.start_assistant_continuation_driver()
-    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
+    wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == (
+        "waiting_unknown" if continuation_failure else "no_progress"))
+    if continuation_failure:
+        child = state.conversations.get_turn(calls[-1]["turn_id"])
+        assert child["status"] == "failed" and child["result"]["kind"] == "failure"
+        assert "script_goal_conflict" in child["result"]["message"]
+        assert child["assistant_text"] == child["result"]["message"]
+        assert "/Volumes/" not in child["assistant_text"]
+        assert child["result"].get("reason") != "goal_runner_interrupted"
     assert len(calls) == 2 and main._project_assistant_execution_results() == 0
     assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
 

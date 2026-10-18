@@ -26,13 +26,12 @@ def human_turn(repo, chat, message, context):
     return turn
 
 
-def additional_input(repo, chat, turn_id, *, context, status="consumed"):
-    message = "按本轮新要求生成，保留字幕修改。"
+def additional_input(repo, chat, turn_id, *, context, status="consumed", message="按本轮新要求生成，保留字幕修改。", mode="steer"):
     current = repo.get(chat["id"], "w", "m")
     draft = repo.save_draft(chat["id"], "w", "m", message, current["draft_version"])
     input_id = str(uuid4())
     repo.enqueue_input(chat["id"], "w", "m", target_turn_id=turn_id, client_request_id=input_id,
-        message=message, mode="steer", expected_draft_version=draft["draft_version"], expected_reference_version=0,
+        message=message, mode=mode, expected_draft_version=draft["draft_version"], expected_reference_version=0,
         request_context=context)
     if status != "accepted":
         repo.transition_input(chat["id"], "w", "m", input_id, "consumed" if status == "interrupted" else status)
@@ -179,3 +178,145 @@ def test_ordinary_task_and_its_consumed_input_continuation_keep_current_source(r
     assert source["input_turn_id"] == turn["id"] and "字幕改蓝" in source["raw_command"]
     with pytest.raises(ValueError):
         repo.task_execution_source(claim["turn_id"], "w", "m", "t", input_id="stale-input")
+
+
+def record_child_execution(state, claim, input_id, job):
+    task = claim["goal"]["task_id"]
+    actual = {"task_id": task, "job": {"id": job, "status": "queued"}}
+    state.repo.record_task_execution(claim["turn_id"], "w", "m", task, actual, input_id=input_id)
+    return state.repo.get_task_goal(claim["turn_id"])
+
+
+def complete_child_execution(state, claim, input_id, job):
+    repo = state.repo
+    repo.transition_input(state.chat["id"], "w", "m", input_id, "completed")
+    repo.finish_turn(claim["turn_id"], "completed")
+    event = {"type": "business_result", "event_id": "completed-" + job, "task_id": claim["goal"]["task_id"],
+        "input_id": input_id, "phase": "execution", "status": "succeeded", "job_id": job,
+        "base_version_id": "v1", "result_version_id": "v1"}
+    assert repo.project_business_result(claim["turn_id"], "w", "m", event, response_patch={}, message="实际结果已核验。")
+
+
+@pytest.mark.parametrize("home_input", [False, True])
+@pytest.mark.parametrize("mode", ["steer", "follow_up"])
+def test_consumed_derived_input_with_effect_registers_and_resumes_a_new_revision(repo, home_input, mode):
+    state = adopted_goals(repo, home_input=home_input)
+    stale_candidate = next(item for item in repo.goal_event_candidates() if item["root"]["goal"]["task_id"] == "cn")
+    claim = claim_task(state, "cn")
+    sibling = repo.get_task_goal(state.roots[1])
+    input_id, message = additional_input(repo, state.chat, claim["turn_id"], mode=mode,
+        message="中文字幕另改为蓝色后再生成。",
+        context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
+    assert repo.register_task_goal(claim["turn_id"], running_execution=True) is None
+    assert repo.get_task_goal(claim["turn_id"])["revision"] == 0
+    goal = record_child_execution(state, claim, input_id, "new-input-job")
+    assert goal["revision"] == 1 and goal["source_input_id"] == input_id and goal["status"] == "waiting_result"
+    assert goal["source_input_turn_id"] == claim["turn_id"]
+    assert goal["creation_adoption"] == claim["goal"]["creation_adoption"]
+    assert goal["includes_root_instruction"] == (mode == "steer")
+    assert goal["original_instruction"].count(message) == 1
+    assert (state.instruction in goal["original_instruction"]) == (mode == "steer")
+    assert repo.get_task_goal(state.roots[1]) == sibling
+    assert record_child_execution(state, claim, input_id, "new-input-job")["revision"] == 1
+    complete_child_execution(state, claim, input_id, "new-input-job")
+    assert repo.settle_goal_round(claim) is None  # The revision-zero claim cannot settle the new input.
+    assert repo.claim_goal_event(stale_candidate, VERSION, max_rounds=6) is None
+    resumed = claim_task(state, "cn")
+    source = repo.task_execution_source(resumed["turn_id"], "w", "m", "cn", input_id=input_id)
+    assert source["raw_command"] == goal["original_instruction"]
+    assert resumed["goal"]["revision"] == 1
+    next_input, next_message = additional_input(repo, state.chat, resumed["turn_id"], message="把这次中文旁白再放慢一点。",
+        context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
+    assert repo.task_execution_source(resumed["turn_id"], "w", "m", "cn", input_id=next_input)["raw_command"] == next_message
+    next_goal = record_child_execution(state, resumed, next_input, "next-input-job")
+    assert next_goal["revision"] == 2 and next_goal["includes_root_instruction"] == (mode == "steer")
+    assert (state.instruction in next_goal["original_instruction"]) == (mode == "steer")
+    assert next_goal["original_instruction"].count(message) == next_goal["original_instruction"].count(next_message) == 1
+
+
+@pytest.mark.parametrize("status", ["accepted", "withdrawn", "interrupted"])
+def test_unconsumed_withdrawn_or_interrupted_input_cannot_register_from_a_late_receipt(repo, status):
+    state = adopted_goals(repo)
+    claim = claim_task(state, "cn")
+    input_id, _ = additional_input(repo, state.chat, claim["turn_id"], status=status,
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    goal = record_child_execution(state, claim, input_id, "late-invalid-input")
+    assert goal["revision"] == 0 and "source_input_id" not in goal
+
+
+def test_consumed_text_and_unowned_response_cannot_register_a_new_revision(repo):
+    state = adopted_goals(repo)
+    claim = claim_task(state, "cn")
+    input_id, _ = additional_input(repo, state.chat, claim["turn_id"],
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    repo.transition_input(state.chat["id"], "w", "m", input_id, "completed")
+    repo.finish_turn(claim["turn_id"], "completed", result={"response": {"media_job": {"job_id": "unowned", "status": "queued"}}})
+    assert repo.register_task_goal(claim["turn_id"]) is None
+    assert repo.get_task_goal(claim["turn_id"])["revision"] == 0
+
+
+@pytest.mark.parametrize("task", ["en", "unrelated-task"])
+def test_input_for_another_task_cannot_revise_or_inherit_this_adopted_goal(repo, task):
+    state = adopted_goals(repo)
+    claim = claim_task(state, "cn")
+    sibling = repo.get_task_goal(state.roots[1])
+    input_id, _ = additional_input(repo, state.chat, claim["turn_id"],
+        context={"kind": "task", "task_id": task, "target_snapshot": VERSION})
+    goal = record_child_execution(state, claim, input_id, "wrong-task-effect")
+    assert goal["revision"] == 0 and "source_input_id" not in goal
+    assert repo.get_task_goal(state.roots[1]) == sibling
+
+
+def test_revisions_merge_only_this_child_and_freeze_prior_task_requirements(repo):
+    state = adopted_goals(repo)
+    sibling = claim_task(state, "en")
+    en_input, _ = additional_input(repo, state.chat, sibling["turn_id"], message="英文独立后续要求。", mode="follow_up",
+        context={"kind": "task", "task_id": "en", "target_snapshot": VERSION})
+    record_child_execution(state, sibling, en_input, "en-job")
+    complete_child_execution(state, sibling, en_input, "en-job")
+    sibling_goal = repo.get_task_goal(state.roots[1])
+    first = claim_task(state, "cn")
+    cn_input, first_text = additional_input(repo, state.chat, first["turn_id"], message="中文字幕改蓝色。",
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    record_child_execution(state, first, cn_input, "cn-job-1")
+    repo.transition_input(state.chat["id"], "w", "m", cn_input, "completed")
+    second_input, second_text = additional_input(repo, state.chat, first["turn_id"], message="中文片头缩小一些。",
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    assert repo.task_execution_source(first["turn_id"], "w", "m", "cn", input_id=second_input)["raw_command"] == second_text
+    goal = record_child_execution(state, first, second_input, "cn-job-2")
+    assert goal["revision"] == 2
+    assert goal["original_instruction"].count(state.instruction) == goal["original_instruction"].count(first_text) == 1
+    assert goal["original_instruction"].count(second_text) == 1 and "英文独立后续要求" not in goal["original_instruction"]
+    assert [item["input_id"] for item in goal["authorization_inputs"]] == [cn_input, second_input]
+    complete_child_execution(state, first, second_input, "cn-job-2")
+    next_claim = claim_task(state, "cn")
+    third_input, third_text = additional_input(repo, state.chat, next_claim["turn_id"], message="中文旁白音量降低。",
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    assert repo.task_execution_source(next_claim["turn_id"], "w", "m", "cn", input_id=third_input)["raw_command"] == third_text
+    newest = record_child_execution(state, next_claim, third_input, "cn-job-3")
+    assert newest["revision"] == 3 and newest["original_instruction"].count(third_text) == 1
+    assert [item["input_id"] for item in newest["authorization_inputs"]] == [cn_input, second_input, third_input]
+    assert repo.get_task_goal(state.roots[1]) == sibling_goal
+    # Late work from an earlier child can only add its own history, not replace
+    # the current child's revision or restore its old execution authority.
+    record_child_execution(state, first, cn_input, "late-old-child")
+    assert repo.get_task_goal(next_claim["turn_id"]) == newest
+    with pytest.raises(ValueError):
+        repo.task_execution_source(first["turn_id"], "w", "m", "cn", input_id=cn_input)
+
+
+@pytest.mark.parametrize("stop", ["stopped", "interrupted"])
+def test_cancelled_or_interrupted_input_cannot_be_inherited_by_a_later_claim(repo, stop):
+    state = adopted_goals(repo)
+    claim = claim_task(state, "cn")
+    input_id, _ = additional_input(repo, state.chat, claim["turn_id"],
+        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+    record_child_execution(state, claim, input_id, "before-stop")
+    if stop == "interrupted":
+        repo.transition_input(state.chat["id"], "w", "m", input_id, "interrupted")
+    repo.finish_turn(claim["turn_id"], "stopped" if stop == "stopped" else "failed")
+    event = {"type": "business_result", "event_id": "late-stopped-input", "task_id": "cn", "input_id": input_id,
+        "phase": "execution", "status": "succeeded", "job_id": "before-stop"}
+    assert repo.project_business_result(claim["turn_id"], "w", "m", event, response_patch={}, message="旧结果保留。")
+    candidates = [item for item in repo.goal_event_candidates() if item["root"]["goal"]["task_id"] == "cn"]
+    assert not candidates or repo.claim_goal_event(candidates[0], VERSION, max_rounds=6) is None

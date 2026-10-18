@@ -14582,6 +14582,12 @@ def _run_goal_turn(claim, fresh):
         if tail:
             conversation_repo.append_event(turn_id, {"type": "text_delta", "delta": tail})
         _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, stage)
+    except AssistantUnavailable as exc:
+        failure_message = _assistant_stream_safe_text(str(exc), workspace_id)
+        conversation_repo.finish_turn(turn_id, "failed", failure_message, result={
+            "kind": "failure", "message": failure_message,
+        })
+        raise
     except AssistantStopped:
         if assistant_continuation_driver is not None and assistant_continuation_driver.stop_event.is_set():
             conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
