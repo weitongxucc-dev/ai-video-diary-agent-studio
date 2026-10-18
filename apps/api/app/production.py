@@ -4582,6 +4582,134 @@ class ProductionRepository:
             data["visibility"] = str(row["visibility"])
         return self._creation_plan_from_payload(data)
 
+    @staticmethod
+    def _knowledge_adoption_event_id(workspace_id: str, member_id: str, request_id: str) -> str:
+        return "event_knowledge_adoption_" + hashlib.sha256(
+            json.dumps([workspace_id, member_id, request_id]).encode()).hexdigest()
+
+    @staticmethod
+    def _knowledge_adoption_owner(task: CreationTask, member_id: str) -> None:
+        if not member_id or not content_readable(user_id=member_id, local_diagnostic=False,
+                visibility=task.visibility, owner_user_id=task.owner_user_id):
+            raise KeyError(task.id)
+        if task.owner_user_id and task.owner_user_id != member_id:
+            raise PermissionError("当前成员不能更改此任务的资料。")
+
+    def get_task_knowledge_adoption(
+        self, workspace_id: str, task_id: str, request_id: str, *, member_id: str,
+    ) -> dict[str, object]:
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            self._knowledge_adoption_owner(task, member_id)
+            row = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_knowledge_adopted'",
+                (workspace_id, self._knowledge_adoption_event_id(workspace_id, member_id, request_id))).fetchone()
+            if row is None or row["task_id"] != task_id:
+                raise KeyError(request_id)
+            return json.loads(row["payload_json"])["receipt"]
+
+    def adopt_task_knowledge(
+        self, workspace_id: str, task_id: str, *, member_id: str, request_id: str,
+        expected_plan_updated_at: datetime | str, expected_task_updated_at: datetime | str,
+        requested_references: tuple[tuple[str, str], ...],
+        resolve_references: Callable[[], list[CreationPlanKnowledgeReference]],
+    ) -> dict[str, object]:
+        """Append fixed inputs and their immutable receipt under one write lock."""
+        if not request_id.strip():
+            raise ValueError("采用资料需要稳定请求身份。")
+        fingerprint = hashlib.sha256(json.dumps({"task_id": task_id, "member_id": member_id,
+            "references": requested_references}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        event_id = self._knowledge_adoption_event_id(workspace_id, member_id, request_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            self._knowledge_adoption_owner(task, member_id)
+            previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
+            if previous:
+                payload = json.loads(previous["payload_json"])
+                if previous["task_id"] != task_id or payload["fingerprint"] != fingerprint:
+                    raise ValueError("此资料采用请求已用于不同任务或资料，未重复采用。")
+                return payload["receipt"]
+            row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
+            if row is None:
+                raise KeyError(task.plan_id)
+            plan = self._creation_plan_from_payload(json.loads(row["payload"]))
+            if (_revision_value(plan.updated_at) != _revision_value(expected_plan_updated_at)
+                    or _revision_value(task.updated_at) != _revision_value(expected_task_updated_at)):
+                raise ValueError("方案或任务版本已变化，请读取当前版本后重新采用资料。")
+            resolved = resolve_references()
+            existing = {item.id: item for item in plan.knowledge_references}
+            added = []
+            for item in resolved:
+                if item.id in existing:
+                    if existing[item.id] != item:
+                        raise ValueError("任务已固定了此资料的另一版本或授权；本入口只追加，不覆盖旧引用。")
+                else:
+                    existing[item.id] = item
+                    added.append(item)
+            if added:
+                if task.stage_status == "running" or conn.execute(
+                    "SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
+                    (workspace_id, task_id)).fetchone():
+                    raise ValueError("此任务仍有未结束的制作或生成作业；先等作业结算或取消，再采用资料。")
+                if (task.stage not in {"topic", "script"} or task.confirmed_script_id or task.narration_cache_key
+                        or task.montage_plan_id or task.current_timeline_version_id or task.output_ready):
+                    raise ValueError("此任务已有采用稿或下游结果，需要明确文案修订及影响范围；本次未追加或改动原结果。")
+                if len(existing) + len(plan.source_references) > 64:
+                    raise ValueError("文案输入最多64份资料，请只采用本次需要的固定资料。")
+            before = [asdict(item) for item in plan.knowledge_references]
+            previous_status = task.stage_status
+            now = utc_now()
+            if added:
+                plan.knowledge_references.extend(added)
+                plan.updated_at = task.updated_at = now
+                if task.stage == "script":
+                    task.stage_status, task.status, task.recovery_point = "not_started", "running", "script"
+                    task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
+                conn.execute("UPDATE creation_plans SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+                    (_json_payload(plan), now.isoformat(), workspace_id, plan.id))
+                conn.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+                    (_json_payload(task), now.isoformat(), workspace_id, task.id))
+            retained = conn.execute("SELECT COUNT(*) FROM creation_task_scripts WHERE workspace_id=? AND task_id=?",
+                (workspace_id, task_id)).fetchone()[0]
+            receipt = {"request_id": request_id, "task_id": task_id, "plan_id": plan.id,
+                "status": "adopted" if added else "unchanged", "recorded_at": now.isoformat(),
+                "added_references": [asdict(item) for item in added], "previous_references": before,
+                "knowledge_references": [asdict(item) for item in plan.knowledge_references],
+                "plan_updated_at": _revision_value(plan.updated_at), "task_updated_at": _revision_value(task.updated_at),
+                "retained_script_count": retained, "previous_stage_status": previous_status,
+                "next_step": "generate_new_script" if added and task.stage == "script" else "unchanged" if not added else "continue_topic"}
+            self.append_task_event(TaskEvent(event_id, workspace_id, task_id, None, "task_knowledge_adopted",
+                {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
+            return receipt
+
+    @staticmethod
+    def _knowledge_inputs_current(
+        conn: sqlite3.Connection, workspace_id: str, task_id: str, plan_id: str,
+        input_references: list[dict[str, object]],
+    ) -> bool:
+        adopted = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? AND event_type='task_knowledge_adopted' "
+            "AND json_extract(payload_json,'$.receipt.status')='adopted' LIMIT 1", (workspace_id, task_id)).fetchone()
+        if not adopted:
+            return True
+        row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, plan_id)).fetchone()
+        planned = {(item["id"], item["version"]) for item in json.loads(row["payload"])["knowledge_references"]}
+        bound = {(item["object_id"], item["version_or_identity"]) for item in input_references if item.get("kind") == "knowledge"}
+        return planned.issubset(bound)
+
+    def script_knowledge_inputs_current(self, workspace_id: str, task_id: str, script_id: str) -> bool:
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            return self._script_knowledge_inputs_current(conn, task, script_id)
+
+    def _script_knowledge_inputs_current(self, conn: sqlite3.Connection, task: CreationTask, script_id: str) -> bool:
+        row = conn.execute("SELECT r.payload FROM creation_task_scripts s LEFT JOIN script_generation_runs r ON r.id=s.run_id "
+            "AND r.workspace_id=s.workspace_id AND r.task_id=s.task_id WHERE s.workspace_id=? AND s.task_id=? AND s.id=?",
+            (task.workspace_id, task.id, script_id)).fetchone()
+        if row is None:
+            raise KeyError(script_id)
+        references = json.loads(row["payload"])["input_references"] if row["payload"] else []
+        return self._knowledge_inputs_current(conn, task.workspace_id, task.id, task.plan_id, references)
+
     def get_creation_task(
         self,
         workspace_id: str,
@@ -7316,6 +7444,7 @@ class ProductionRepository:
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (run.workspace_id, run.task_id),
@@ -7325,6 +7454,8 @@ class ProductionRepository:
             task = self._creation_task_from_payload(json.loads(str(row["payload"])))
             if task.plan_id != run.plan_id or task.selected_topic_id != run.topic_id:
                 raise ValueError("文案运行与已确认选题不一致")
+            if not self._knowledge_inputs_current(conn, run.workspace_id, run.task_id, run.plan_id, run.input_references):
+                raise ValueError("任务已追加资料，请重新读取全部固定引用后生成新稿。")
             duration_repair = task.needs_script_duration_repair and task.can_revise_script
             if not duration_repair and (
                 task.stage != "script"
@@ -7506,6 +7637,8 @@ class ProductionRepository:
                         reply_owner_user_id=content_owner(verified_owner_user_id),
                     )
                 self._validate_assistant_reply_inputs(plan, references_by_id)
+                if not self._knowledge_inputs_current(conn, workspace_id, task_id, plan.id, input_references):
+                    raise ValueError("任务已追加资料，请重新读取全部固定引用后另存回复文案。")
 
                 current_scripts = conn.execute(
                     "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? ORDER BY updated_at DESC, id DESC",
@@ -7515,6 +7648,10 @@ class ProductionRepository:
                     self._creation_task_script_from_payload(json.loads(str(current_scripts[0]["payload"])))
                     if current_scripts else None
                 )
+                if latest is not None and not self._script_knowledge_inputs_current(conn, task, latest.id):
+                    if replace_existing_script_id is not None or expected_script_updated_at is not None:
+                        raise ValueError("任务已追加资料，旧稿仅保留为历史；请基于当前资料另存新稿。")
+                    latest = None
                 if latest is not None:
                     if (
                         replace_existing_script_id != latest.id
@@ -7948,6 +8085,8 @@ class ProductionRepository:
                 raise ValueError("更新文案草稿必须提供当前 updated_at")
             if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
                 raise ValueError("文案草稿修订已变化，请重新读取后再保存")
+            if not self._script_knowledge_inputs_current(conn, task, script.id):
+                raise ValueError("任务已追加资料，旧稿仅保留为历史；请基于当前资料另存新稿。")
             if (
                 task.stage != "script"
                 or task.stage_status != "waiting_for_user"
@@ -8161,6 +8300,8 @@ class ProductionRepository:
                 raise ValueError("确认文案必须提供当前 updated_at")
             if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
                 raise ValueError("文案草稿修订已变化，请重新读取后再确认")
+            if not self._script_knowledge_inputs_current(conn, task, script.id):
+                raise ValueError("任务已追加资料，不能采用旧资料生成的草稿；请基于当前资料另存新稿。")
             from app.creation.intent_use_case import CreationIntentUseCase
             plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
             plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))

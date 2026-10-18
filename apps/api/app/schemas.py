@@ -1106,6 +1106,31 @@ class CreationTaskScriptGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TaskKnowledgeAdoptionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_plan_updated_at: datetime
+    expected_task_updated_at: datetime
+    knowledge_references: list[PlanKnowledgeReference] = Field(min_length=1, max_length=64)
+    assistant_turn_id: UUID | None = None
+
+
+class TaskKnowledgeAdoptionResponse(BaseModel):
+    request_id: UUID
+    task_id: str
+    plan_id: str
+    status: Literal["adopted", "unchanged"]
+    recorded_at: datetime
+    added_references: list[CreationPlanKnowledgeReferenceResponse]
+    previous_references: list[CreationPlanKnowledgeReferenceResponse]
+    knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
+    plan_updated_at: datetime
+    task_updated_at: datetime
+    retained_script_count: int
+    previous_stage_status: str
+    next_step: Literal["generate_new_script", "continue_topic", "unchanged"]
+
+
 class CreationTaskScriptSectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2321,6 +2346,7 @@ class CreationTaskEditJobReplayResponse(BaseModel):
 
 
 class CreationPlanPreviewResponse(BaseModel):
+    updated_at: datetime | None = None
     creation_intent: dict[str, object] | None = None
     adoption: dict[str, object] | None = None
     template_id: str | None = None

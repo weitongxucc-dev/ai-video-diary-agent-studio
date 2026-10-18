@@ -311,6 +311,8 @@ from app.schemas import (
     CreationTaskTopicsResponse,
     CreationTaskScriptConfirmRequest,
     CreationTaskScriptDraftRequest,
+    TaskKnowledgeAdoptionRequest,
+    TaskKnowledgeAdoptionResponse,
     AssistantReplyScriptTransferRequest,
     CreationTaskScriptResponse,
     CreationTaskScriptGenerateRequest,
@@ -2848,6 +2850,7 @@ def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewRe
         {
             "creation_intent": plan.creation_intent,
             "adoption": plan.adoption,
+            "updated_at": plan.updated_at,
             "template_id": plan.template_id,
             "template_version": plan.template_version,
             "template_settings": plan.template_settings,
@@ -6805,6 +6808,41 @@ def get_creation_task_workspace(
     )
 
 
+@app.post("/api/creation-tasks/{task_id}/knowledge-adoptions", response_model=TaskKnowledgeAdoptionResponse)
+def adopt_creation_task_knowledge(
+    task_id: str, request: Request, payload: TaskKnowledgeAdoptionRequest,
+) -> TaskKnowledgeAdoptionResponse:
+    from app.creation.knowledge_adoption_use_case import KnowledgeAdoptionCommand, TaskKnowledgeAdoptionUseCase
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    if payload.assistant_turn_id is not None:
+        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+    command = KnowledgeAdoptionCommand(str(payload.request_id), payload.expected_plan_updated_at,
+        payload.expected_task_updated_at, tuple((item.knowledge_item_id, item.version) for item in payload.knowledge_references))
+    try:
+        receipt = TaskKnowledgeAdoptionUseCase(production_repo, source_repository).adopt(task.workspace_id, task_id, member_id, command)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到可引用的固定资料版本或当前任务。") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return TaskKnowledgeAdoptionResponse.model_validate(receipt)
+
+
+@app.get("/api/creation-tasks/{task_id}/knowledge-adoptions/{request_id}", response_model=TaskKnowledgeAdoptionResponse)
+def get_creation_task_knowledge_adoption(
+    task_id: str, request_id: UUID, request: Request,
+) -> TaskKnowledgeAdoptionResponse:
+    task, member_id = _exact_edit_access(task_id, request)
+    try:
+        receipt = production_repo.get_task_knowledge_adoption(task.workspace_id, task_id, str(request_id), member_id=member_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="没有找到此成员在当前任务中的原资料采用回执。") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return TaskKnowledgeAdoptionResponse.model_validate(receipt)
+
+
 def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: str, *, draft_only: bool = False):
     from app.creation.intent_use_case import CreationIntentUseCase
     workspace_id = current_workspace_id(request)
@@ -6853,6 +6891,9 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
     task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
     scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
     draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
+    retained_draft = None
+    if draft and not production_repo.script_knowledge_inputs_current(workspace_id, task.id, draft.id):
+        retained_draft, draft = draft, None
     reply_event = next((event for event in production_repo.list_task_events(workspace_id, task.id)
                         if event.event_type == "assistant_reply_plan_confirmed"
                         and event.payload.get("plan_id") == plan.id), None)
@@ -6885,6 +6926,8 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
                    "sections": [asdict(section) for section in draft.sections]}
                   if draft is not None else None),
         "reply_origin": reply_origin,
+        "retained_draft": ({"id": retained_draft.id, "title": retained_draft.title,
+            "updated_at": retained_draft.updated_at, "reason": "资料已追加，旧稿保留；新一轮文案将使用新引用。"} if retained_draft else None),
     }
 
 
