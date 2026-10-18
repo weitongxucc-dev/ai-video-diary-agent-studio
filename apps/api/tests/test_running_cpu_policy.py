@@ -3,17 +3,22 @@ from dataclasses import asdict, replace
 import json
 import shutil
 import sys
+import threading
 from types import SimpleNamespace
 
 import psutil
 import pytest
 
-from app.device_scheduler import Grant
+from app.device_scheduler import Grant, RecoveryBlocked
 from app.host_memory import MemoryDecision, MemorySample
 from app.host_resource_probes import (
-    HostBudget, HostResourceProbe, HostResourceRefusal, NarrationBudget, RuntimeCpuPolicy,
+    CpuAudioBudget, CpuRenderBudget, HostBudget, HostResourceProbe, HostResourceRefusal,
+    NarrationBudget, RuntimeCpuPolicy,
 )
-from app.member_permits import HostBudgetUncalibrated, build_host_probes, creation_stage_budgets_from_env
+from app.member_permits import (
+    HostBudgetUncalibrated, build_host_probes, clip_preview_budget_from_env,
+    cpu_render_budget_from_env, creation_stage_budgets_from_env,
+)
 
 
 POLICY = RuntimeCpuPolicy("darwin_background", "synthetic-test-evidence")
@@ -29,17 +34,23 @@ def narration(policy=POLICY):
     return NarrationBudget(80, 1, 1024, 15, 1024, 2, 120, 1024, 64, .1, 1024, 1024, policy)
 
 
-@pytest.fixture
-def probe(tmp_path, monkeypatch):
+def render(policy=POLICY):
+    return CpuRenderBudget(30, 30*320*240, 320, 240, 1024, 6, 2, 1024, 2, 90, 1024, 1024, 64, policy)
+
+
+@pytest.fixture(params=["narration", "cpu_render"])
+def probe(tmp_path, monkeypatch, request):
     import app.host_resource_probes as module
     clock, instant_cpu, memory, io_passed = [10.0], [40.0], ["normal"], [True]
     class Monitor:
         def check(self, *, system_reserve_bytes, additional_memory_bytes=0, additional_commit_bytes=None):
             sample = MemorySample("darwin", clock[0], "synthetic", memory[0], 10**9, None, {})
-            return MemoryDecision(memory[0] != "critical", "memory_pressure_critical" if memory[0] == "critical" else None,
+            verdict = None if memory[0] == "unknown" else memory[0] != "critical"
+            return MemoryDecision(verdict, "memory_pressure_critical" if memory[0] == "critical" else None,
                 sample, system_reserve_bytes + additional_memory_bytes, None, 10)
     value = HostResourceProbe(tmp_path / "test.sqlite", disk_paths=(tmp_path,),
-        budget=HostBudget(91, 100, None, 100, 10**9, 10**9, narration=narration()), memory_monitor=Monitor())
+        budget=HostBudget(91, 100, None, 100, 10**9, 10**9,
+            **{request.param: narration() if request.param == "narration" else render()}), memory_monitor=Monitor())
     monkeypatch.setattr(module, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
@@ -48,20 +59,28 @@ def probe(tmp_path, monkeypatch):
         return instant_cpu[0]
     monkeypatch.setattr(module.psutil, "cpu_percent", cpu_percent)
     monkeypatch.setattr(module, "_cpu_counter", lambda: endpoint(clock[0], clock[0] * 8))
-    monkeypatch.setattr(module.psutil, "disk_io_counters", lambda **kwargs: {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)})
+    def disk_io_counters(*, perdisk=False):
+        if perdisk:
+            return {"disk0": SimpleNamespace(read_bytes=0, write_bytes=0)}
+        return SimpleNamespace(read_bytes=0, write_bytes=0 if io_passed[0] else clock[0]*10**10)
+    monkeypatch.setattr(module.psutil, "disk_io_counters", disk_io_counters)
     monkeypatch.setattr(module.psutil, "disk_usage", lambda path: SimpleNamespace(free=10**9))
     monkeypatch.setattr(value, "_io_evidence", lambda *args: ({"actual": 0 if io_passed[0] else 10**10,
         "maximum": 10**9, "passed": io_passed[0], "window_complete": True}, None))
     resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts", "text_chars": 17,
         "section_count": 1, "reference_bytes": 1024, "duration_seconds": 15,
         "max_output_bytes": 1024, "threads": 2, "timeout_seconds": 120}
+    if request.param == "cpu_render":
+        resources = {"kind": "creation_render", "execution_mode": "cpu_ffmpeg", "duration_seconds": 30,
+            "width_px": 320, "height_px": 240, "input_bytes": 1024, "clip_count": 6, "overlay_count": 2,
+            "max_output_bytes": 1024, "threads": 2, "timeout_seconds": 90}
     request = SimpleNamespace(id="request", workspace_id="workspace", owner_type="media_preview", owner_id="preview",
         unit_key="voice:digest", input_digest="a" * 64, attempt_number=1, resources=resources)
     grant = Grant(request.id, request.workspace_id, request.owner_type, request.owner_id, request.unit_key,
         request.input_digest, 1, 1, "PRIVATE_TOKEN", value.database_path)
     monkeypatch.setattr(value, "_grant_resources", lambda grant: resources)
     return SimpleNamespace(value=value, clock=clock, instant=instant_cpu, memory=memory, io=io_passed,
-                           request=request, grant=grant, resources=resources)
+                           request=request, grant=grant, resources=resources, budget_kind=resources["kind"])
 
 
 def test_91_only_limits_admission_while_full_cpu_is_runtime_diagnostic(probe, monkeypatch, caplog):
@@ -100,16 +119,24 @@ def test_cpu_unknown_never_becomes_idle_or_unknown_os_background_policy(probe, m
     assert record["cpu"]["state"] == "unknown" and record["cpu"]["actual"] is None
 
 
-@pytest.mark.parametrize("gate", ["memory", "io"])
-def test_other_protections_still_refuse_during_background_runtime(probe, gate):
+@pytest.mark.parametrize("gate", ["memory", "io", "disk", "memory_unknown", "io_unknown"])
+def test_other_protections_still_refuse_during_background_runtime(probe, monkeypatch, gate):
+    import app.host_resource_probes as module
     if gate == "memory":
         probe.memory[0] = "critical"
-    else:
+    elif gate == "io":
         probe.io[0] = False
+    elif gate == "memory_unknown":
+        probe.memory[0] = "unknown"
+    elif gate == "io_unknown":
+        monkeypatch.setattr(module.psutil, "disk_io_counters", lambda **_: None)
+    else:
+        monkeypatch.setattr(module.psutil, "disk_usage", lambda _: SimpleNamespace(free=0))
     with pytest.raises(HostResourceRefusal) as stopped:
         probe.value.continue_unit(probe.grant)
-    assert stopped.value.decision.verdict is False
-    assert stopped.value.recoverable_pressure
+    assert stopped.value.decision.verdict is (None if gate.endswith("unknown") else False)
+    if not gate.endswith("unknown"):
+        assert stopped.value.recoverable_pressure
     if gate == "memory":
         assert stopped.value.decision.reason == "memory_pressure_critical"
 
@@ -118,54 +145,122 @@ def test_absent_policy_or_unsupported_platform_is_explicit(probe, monkeypatch):
     import app.host_resource_probes as module
     monkeypatch.setattr(module, "sys", SimpleNamespace(platform="win32"))
     assert probe.value.admit(probe.request).reason == "cpu_policy_platform_unsupported"
-    probe.value.budget = replace(probe.value.budget, narration=narration(None))
+    budget_name = "narration" if probe.budget_kind == "creation_narration" else "cpu_render"
+    probe.value.budget = replace(probe.value.budget, **{budget_name: replace(getattr(probe.value.budget, budget_name), running_cpu_policy=None)})
     assert probe.value.admit(probe.request).reason == "cpu_policy_unavailable"
     with pytest.raises(HostResourceRefusal) as stopped:
         probe.value.continue_unit(probe.grant)
     assert stopped.value.decision.reason == "cpu_policy_unavailable"
+    if budget_name == "cpu_render":
+        with pytest.raises(RecoveryBlocked, match="后台CPU调度策略尚未准备"):
+            probe.value.scene_runtime_limits(probe.grant)
 
 
-def test_policy_parser_requires_os_mechanism_and_rejects_old_window_schema(tmp_path):
-    values = asdict(narration())
+@pytest.mark.parametrize("probe", ["cpu_render"], indirect=True)
+@pytest.mark.parametrize("kind,budget_name", [
+    ("creation_presenter_render", "presenter_cpu_render"), ("task_clip_preview", "clip_preview"),
+])
+def test_other_render_kinds_do_not_inherit_the_background_policy(probe, kind, budget_name):
+    probe.value.budget = replace(probe.value.budget, **{budget_name: render()})
+    probe.resources["kind"] = kind
+    if kind == "task_clip_preview":
+        probe.resources.update(silent=True, clip_preview=True, output_count=2, preview_window_limit_seconds=5.,
+            duration_seconds=5, clip_count=1, overlay_count=0)
+    probe.instant[0] = 100
+    with pytest.raises(HostResourceRefusal) as stopped:
+        probe.value.continue_unit(probe.grant)
+    assert stopped.value.decision.checks["cpu_percent"]["passed"] is False
+    limits = probe.value.scene_runtime_limits(probe.grant)
+    assert not limits.background_cpu and not limits.collect_cpu
+
+
+@pytest.mark.parametrize("kind", ["narration", "cpu_render"])
+def test_policy_parser_requires_os_mechanism_and_rejects_old_window_schema(tmp_path, kind):
+    values = asdict(narration() if kind == "narration" else render())
     values.pop("running_cpu_policy")
-    environment = {"DEVICE_NARRATION_" + key.upper(): str(value) for key, value in values.items()}
-    result, _ = creation_stage_budgets_from_env(environment)
+    if kind == "cpu_render":
+        preview = clip_preview_budget_from_env({"DEVICE_CLIP_PREVIEW_" + key.upper(): str(value) for key, value in values.items()})
+        assert preview.running_cpu_policy is None
+    prefix = "DEVICE_" + kind.upper() + "_"
+    environment = {prefix + key.upper(): str(value) for key, value in values.items()}
+    def parse():
+        return creation_stage_budgets_from_env(environment)[0] if kind == "narration" else cpu_render_budget_from_env(environment)
+    result = parse()
     assert result.running_cpu_policy is None
-    environment["DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON"] = json.dumps(asdict(POLICY))
-    result, _ = creation_stage_budgets_from_env(environment)
+    environment[prefix + "RUNNING_CPU_POLICY_JSON"] = json.dumps(asdict(POLICY))
+    result = parse()
     assert result.running_cpu_policy == POLICY
     resources, _ = build_host_probes(database_path=tmp_path / "db", disk_paths=(tmp_path,),
-        budget=HostBudget(91, 100, None, 100, 10**9, 10**9, narration=result), device_poll_interval_seconds=2)
-    assert resources.budget.narration.running_cpu_policy == POLICY
+        budget=HostBudget(91, 100, None, 100, 10**9, 10**9, **{kind: result}), device_poll_interval_seconds=2)
+    assert getattr(resources.budget, kind).running_cpu_policy == POLICY
     for invalid in ({"window_seconds": 1, "max_sample_gap_seconds": 2, "evidence_reference": "old"},
                     {"mode": "darwin_background", "evidence_reference": ""},
-                    {"mode": "unverified", "evidence_reference": "other"}):
-        environment["DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON"] = json.dumps(invalid)
+                    {"mode": "unverified", "evidence_reference": "other"}, []):
+        environment[prefix + "RUNNING_CPU_POLICY_JSON"] = json.dumps(invalid)
         with pytest.raises(HostBudgetUncalibrated):
-            creation_stage_budgets_from_env(environment)
+            parse()
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Darwin background scheduling requires macOS")
-@pytest.mark.parametrize("command", ["descendant", "ffmpeg"])
-def test_real_narration_broker_sets_background_for_model_and_media_commands(tmp_path, monkeypatch, caplog, command):
-    from app.granted_subprocess import run_granted_command
+@pytest.mark.parametrize("kind,command", [
+    ("narration", "descendant"), ("narration", "ffmpeg"),
+    ("render", "descendant"), ("audio_mix", "descendant"),
+    ("render", "cancel"), ("render", "timeout"),
+])
+def test_real_broker_sets_background_for_registered_commands_and_descendants(tmp_path, monkeypatch, caplog, kind, command):
+    from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout, run_granted_command
     from app.host_resource_probes import HostProcessProbe
     from tests.host_memory_boundary import IsolatedMemoryMonitor
-    grant = Grant("request", "workspace", "creation_job" if command == "descendant" else "media_preview",
-        "owner", "narration:digest" if command == "descendant" else "voice:digest",
+    grant = Grant("request", "workspace", "media_preview" if command == "ffmpeg" else "creation_job",
+        "owner", "render:digest" if kind != "narration" else "voice:digest" if command == "ffmpeg" else "narration:digest",
         "a" * 64, 1, 7, "PRIVATE_TOKEN", tmp_path / "test.sqlite")
     budget = replace(narration(), max_process_rss_bytes=1024**3, additional_memory_bytes=1024**3)
+    render_budget = replace(render(), additional_memory_bytes=1024**3)
+    audio_budget = CpuAudioBudget(1, 1024, 30, 30, 48000, 2, 1024, 2, 90, 1024**3, 64, .1, 1024**3, 1024)
     class Scheduler:
         processes = HostProcessProbe()
         resources = HostResourceProbe(grant.database_path, disk_paths=(tmp_path,),
-            budget=HostBudget(91, 1, None, 1, 10**12, 10**9, narration=budget),
+            budget=HostBudget(91, 1, None, 1, 10**12, 10**9,
+                narration=budget, cpu_render=render_budget, cpu_audio=audio_budget),
             memory_monitor=IsolatedMemoryMonitor())
         def assert_grant(self, current):
             assert current == grant
         def register_child(self, current, child):
             self.child = child
     scheduler = Scheduler()
-    monkeypatch.setattr(scheduler.resources, "_grant_resources", lambda _: {"kind": "creation_narration"})
+    resources = {"kind": "creation_narration"} if kind == "narration" else {"kind": "creation_render", "execution_mode": "cpu_ffmpeg"}
+    if kind == "audio_mix":
+        resources["audio_mix"] = {"kind": "task_audio", "execution_mode": "cpu_ffmpeg",
+            "input_count": 0, "input_bytes": 0, "source_duration_limit_seconds": 30,
+            "source_sample_rate_limit": 48000, "source_channels_limit": 2,
+            "output_duration_limit_seconds": 30, "output_sample_rate_limit": 48000, "output_channels_limit": 2,
+            "max_output_bytes": 1024, "threads": 2, "timeout_seconds": 90,
+            "input_policy": "probe_then_bounded_decode", "inputs": []}
+    monkeypatch.setattr(scheduler.resources, "_grant_resources", lambda _: resources)
+    if command in {"cancel", "timeout"}:
+        ready = tmp_path / "background-ready"
+        code = "import pathlib,time; pathlib.Path(" + repr(str(ready)) + ").touch(); time.sleep(5)"
+        cancelled = threading.Event()
+        def cancel_when_running():
+            while not ready.exists() and not cancelled.wait(.01):
+                pass
+            cancelled.set()
+        worker = threading.Thread(target=cancel_when_running) if command == "cancel" else None
+        if worker:
+            worker.start()
+        try:
+            with pytest.raises(GrantedCommandCancelled if worker else GrantedCommandTimeout):
+                run_granted_command(scheduler, grant, [sys.executable, "-c", code], timeout_seconds=1,
+                    max_stdout_bytes=8192, max_stderr_bytes=1024, cancel_event=cancelled)
+            assert ready.exists()
+            assert scheduler.processes.children_released((scheduler.child,)) is True
+            diagnostic = [json.loads(r.args[0]) for r in caplog.records if r.msg == "Granted command diagnostic: %s"][-1]
+            assert diagnostic["cpu_policy_markers"] and "PRIVATE_TOKEN" not in caplog.text
+        finally:
+            cancelled.set()
+            if worker:
+                worker.join(timeout=1)
+        return
     if command == "descendant":
         readback = "import ctypes,json,os; c=ctypes.CDLL(None,use_errno=True); ctypes.set_errno(0); b=c.getpriority(4,0); print(json.dumps({'background':b,'errno':ctypes.get_errno(),'pid':os.getpid(),'pgid':os.getpgrp()}))"
         code = "import subprocess,sys,time; " + readback + "; subprocess.run([sys.executable,'-c'," + repr(readback) + "],check=True); time.sleep(1.1)"
@@ -176,7 +271,8 @@ def test_real_narration_broker_sets_background_for_model_and_media_commands(tmp_
             pytest.skip("ffmpeg unavailable")
         argv = [executable, "-version"]
     result = run_granted_command(scheduler, grant, argv, timeout_seconds=4,
-        max_stdout_bytes=8192, max_stderr_bytes=1024)
+        max_stdout_bytes=8192, max_stderr_bytes=1024,
+        resource_purpose="audio_mix" if kind == "audio_mix" else None)
     assert result.returncode == 0
     assert b"GRANT_CPU_POLICY mode=darwin_background state=verified background=1 errno=0" in result.stderr
     assert scheduler.processes.children_released((scheduler.child,)) is True

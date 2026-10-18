@@ -86,6 +86,7 @@ class CpuRenderBudget:
     additional_memory_bytes: int
     additional_disk_bytes: int
     max_process_threads: int
+    running_cpu_policy: RuntimeCpuPolicy | None = None
 
     def __post_init__(self) -> None:
         if (not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds <= 0
@@ -104,6 +105,8 @@ class CpuRenderBudget:
             raise ValueError("Render limits must be explicit nonnegative integers")
         if self.max_process_threads < self.max_threads:
             raise ValueError("Render process thread cap must cover the requested encoder threads")
+        if self.running_cpu_policy is not None and not isinstance(self.running_cpu_policy, RuntimeCpuPolicy):
+            raise ValueError("Render running CPU policy must be explicit")
 
 
 @dataclass(frozen=True)
@@ -168,7 +171,7 @@ class RuntimeCpuPolicy:
     def __post_init__(self):
         if (self.mode != "darwin_background"
                 or not isinstance(self.evidence_reference, str) or not self.evidence_reference.strip()):
-            raise ValueError("配音运行CPU策略必须明确指定darwin_background及本机实验证据")
+            raise ValueError("运行CPU策略必须明确指定darwin_background及本机实验证据")
 
 
 def _cpu_counter():
@@ -726,8 +729,8 @@ class HostResourceRefusal(RecoveryBlocked):
             "input_bytes": ("素材输入大小", "字节"),
         }
         reasons = {
-            "cpu_policy_unavailable": "配音后台CPU调度策略尚未准备",
-            "cpu_policy_platform_unsupported": "当前平台尚无已核验的配音后台CPU调度适配",
+            "cpu_policy_unavailable": "后台CPU调度策略尚未准备",
+            "cpu_policy_platform_unsupported": "当前平台尚无已核验的后台CPU调度适配",
             "io_window_incomplete": "磁盘持续观察窗口尚未完成",
             "io_observation_gap": "运行中磁盘持续观察间隔超出窗口",
             "disk_devices_changed": "磁盘采样设备集合变化",
@@ -1071,8 +1074,10 @@ class HostResourceProbe:
             return HostResourceDecision(verdict, dict(resources), checks, reason, interval)
 
         kind, size = resources.get("kind"), resources.get("size_bytes")
-        cpu_policy = self.budget.narration.running_cpu_policy if kind == "creation_narration" and self.budget.narration else None
-        if kind == "creation_narration" and self.budget.narration is not None and cpu_policy is None:
+        cpu_budget = (self.budget.narration if kind == "creation_narration" else
+                      self.budget.cpu_render if kind == "creation_render" else None)
+        cpu_policy = cpu_budget.running_cpu_policy if cpu_budget is not None else None
+        if cpu_budget is not None and cpu_policy is None:
             return decision(None, "cpu_policy_unavailable")
         if cpu_policy is not None and sys.platform != "darwin":
             return decision(None, "cpu_policy_platform_unsupported")
@@ -1432,7 +1437,7 @@ class HostResourceProbe:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
         if memory_decision.verdict is not True:
             return decision(memory_decision.verdict, memory_decision.reason, duration)
-        # Narration's runtime CPU protection is verified in the grant exec broker.
+        # Runtime background scheduling is verified in the grant exec broker.
         passed = (cpu_passed
                         and all(disk.free >= required_disk for disk in disks)
                         and checks["disk_io_bytes_per_second"]["passed"])
@@ -1494,7 +1499,7 @@ class HostResourceProbe:
                     self._running_io_key = key
                 decision = self._sample(resources, running_io=True, cpu_grant=grant)
         elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
-            decision = self._sample(resources, running_render=True)
+            decision = self._sample(resources, running_render=True, cpu_grant=grant)
         else:
             decision = (self._sample(resources, running=True) if resources is not None else
                     HostResourceDecision(None, {}, {}, "granted_resources_unreadable"))
@@ -1506,6 +1511,9 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        background_cpu = resources.get("kind") == "creation_render"
+        if background_cpu and (self.budget.cpu_render is None or self.budget.cpu_render.running_cpu_policy is None):
+            raise RecoveryBlocked("CPU 成片后台CPU调度策略尚未准备")
         if resources.get("kind") == "material_visual_query" or purpose == "material_visual_query":
             query = self.budget.material_visual_query
             if (grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:")
@@ -1542,7 +1550,8 @@ class HostResourceProbe:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 raise RecoveryBlocked("CPU 成片进程预算尚未标定或执行模式无效")
             return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds, self.memory_monitor)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds, self.memory_monitor,
+                collect_cpu=background_cpu, background_cpu=background_cpu)
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
@@ -1560,7 +1569,8 @@ class HostResourceProbe:
             if audio is None:
                 raise RecoveryBlocked("CPU 音频进程预算尚未标定")
             return SceneRuntimeLimits(audio.max_process_rss_bytes, audio.max_process_threads,
-                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds, self.memory_monitor)
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, audio.runtime_sample_seconds, self.memory_monitor,
+                collect_cpu=background_cpu, background_cpu=background_cpu)
         if resources.get("kind") in {"creation_narration", "creation_person_render"}:
             narration = (self.budget.presenter if resources["kind"] == "creation_person_render"
                          else self.budget.narration)

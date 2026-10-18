@@ -214,7 +214,7 @@ def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
     budgets = []
     for kind, prefix in ((PresenterBudget, "DEVICE_PRESENTER_"),
                          (CpuRenderBudget, "DEVICE_PRESENTER_CPU_RENDER_")):
-        names = {item.name: prefix + item.name.upper() for item in fields(kind)}
+        names = {item.name: prefix + item.name.upper() for item in fields(kind) if item.name != "running_cpu_policy"}
         if not any(environment.get(name, "").strip() for name in names.values()):
             budgets.append(None)
             continue
@@ -353,7 +353,7 @@ def cpu_render_budget_from_env(
     排查，所以缺任何一项都返回 ``None``，让成片阶段在主机门禁上被拒绝。
     """
     source = os.environ if environ is None else environ
-    values: dict[str, float | int] = {}
+    values: dict[str, float | int | RuntimeCpuPolicy] = {}
     missing: list[str] = []
     for field, env_name in _CPU_RENDER_ENV.items():
         raw = source.get(env_name, "").strip()
@@ -369,15 +369,18 @@ def cpu_render_budget_from_env(
     if missing:
         raise HostBudgetUncalibrated("CPU 成片预算尚未标定：缺少 " + "、".join(missing))
     try:
+        raw_policy = source.get("DEVICE_CPU_RENDER_RUNNING_CPU_POLICY_JSON", "").strip()
+        if raw_policy:
+            values["running_cpu_policy"] = RuntimeCpuPolicy(**json.loads(raw_policy))
         return CpuRenderBudget(**values)  # type: ignore[arg-type]
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HostBudgetUncalibrated(f"CPU 成片预算无效：{exc}") from exc
 
 
 def clip_preview_budget_from_env(environ: Mapping[str, str] | None = None) -> CpuRenderBudget | None:
     """Independent measured profile; never borrow the full-movie allowance."""
     source = os.environ if environ is None else environ
-    names = {item.name: "DEVICE_CLIP_PREVIEW_" + item.name.upper() for item in fields(CpuRenderBudget)}
+    names = {item.name: "DEVICE_CLIP_PREVIEW_" + item.name.upper() for item in fields(CpuRenderBudget) if item.name != "running_cpu_policy"}
     if not any(source.get(name, "").strip() for name in names.values()):
         return None
     missing = [name for name in names.values() if not source.get(name, "").strip()]

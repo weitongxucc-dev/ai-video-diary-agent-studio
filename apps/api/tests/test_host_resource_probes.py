@@ -205,6 +205,7 @@ def _render_budget():
         max_output_bytes=1_000_000, max_threads=1, max_timeout_seconds=5,
         additional_memory_bytes=128*1024**2, additional_disk_bytes=64*1024**2,
         max_process_threads=16,  # Finite synthetic process/disk profile, not a machine default.
+        running_cpu_policy=RuntimeCpuPolicy("darwin_background", "synthetic-render-test-evidence"),
     )
 
 
@@ -242,10 +243,12 @@ def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits
     assert limits.max_process_rss_bytes == render.additional_memory_bytes
     assert limits.max_process_threads == 16 and limits.min_host_available_memory_bytes == 1024**3
     assert limits.sample_seconds == .01
-    assert probe.continue_unit(SimpleNamespace()) is True
+    assert limits.collect_cpu and limits.background_cpu
+    grant = Grant("request", "workspace", "creation_job", "job", "render:digest", "a"*64, 1, 1, "token", probe.database_path)
+    assert probe.continue_unit(grant) is True
 
 
-@pytest.mark.parametrize("failure", ["headroom","cpu","memory_unknown","scope_unknown"])
+@pytest.mark.parametrize("failure", ["headroom","memory_unknown","scope_unknown"])
 def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure):
     render = replace(_render_budget(),additional_memory_bytes=2*1024**3)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
@@ -256,10 +259,11 @@ def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch
             raise OSError("synthetic unknown sample")
         return SimpleNamespace(available=1024**3-1 if failure=="headroom" else 2*1024**3)
     monkeypatch.setattr(psutil,"virtual_memory",memory)
-    monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:92 if failure=="cpu" else 20)
-    monkeypatch.setattr(psutil,"swap_memory",lambda:SimpleNamespace(used=1025 if failure=="swap" else 0))
+    monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:pytest.fail("Running render reused admission CPU gate"))
+    monkeypatch.setattr(psutil,"swap_memory",lambda:SimpleNamespace(used=0))
+    grant = Grant("request", "workspace", "creation_job", "job", "render:digest", "a"*64, 1, 1, "token", probe.database_path)
     with pytest.raises(HostResourceRefusal):
-        probe.continue_unit(SimpleNamespace())
+        probe.continue_unit(grant)
 
 
 @pytest.mark.parametrize("rss,threads,accepted", [(1024,2,True),(1025,2,False),(1024,3,False)])
