@@ -1,6 +1,6 @@
 """知识文件解析：全文、真实出处定位和显式参数。
 
-出处只用载体真实存在的定位：PDF 用页码，Markdown 用标题层级分段序号。
+出处只用载体真实存在的定位：PDF 页码、Markdown 段落、Word 段落/表格、Excel 工作表/单元格。
 扫描件没有文本层时明确失败，不 OCR、不猜参数。
 """
 
@@ -14,7 +14,9 @@ from pathlib import Path
 
 MARKDOWN_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 PDF_SUFFIXES = frozenset({".pdf"})
-SUPPORTED_SUFFIXES = MARKDOWN_SUFFIXES | PDF_SUFFIXES
+WORD_SUFFIXES = frozenset({".docx"})
+EXCEL_SUFFIXES = frozenset({".xlsx"})
+SUPPORTED_SUFFIXES = MARKDOWN_SUFFIXES | PDF_SUFFIXES | WORD_SUFFIXES | EXCEL_SUFFIXES
 
 
 class KnowledgeFileError(ValueError):
@@ -53,6 +55,12 @@ def parse_knowledge_file(filename: str, data: bytes) -> ParsedKnowledgeFile:
         return _parse_markdown(filename, data)
     if suffix in PDF_SUFFIXES:
         return _parse_pdf(filename, data)
+    if suffix in WORD_SUFFIXES:
+        from app.knowledge_parsers.word import parse_docx
+        return parse_docx(filename, data)
+    if suffix in EXCEL_SUFFIXES:
+        from app.knowledge_parsers.excel import parse_xlsx
+        return parse_xlsx(filename, data)
     raise KnowledgeFileError(f"不支持的知识文件格式：{suffix or filename}")
 
 

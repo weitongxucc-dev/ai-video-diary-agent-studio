@@ -143,7 +143,7 @@ def test_pdf_without_text_layer_fails_and_writes_nothing(client):
 
 
 def test_unsupported_format_and_bad_base64_fail_explicitly(client):
-    assert _import_file(client, "资料.docx", b"binary").status_code == 422
+    assert _import_file(client, "资料.doc", b"binary").status_code == 422
     bad = client.post(
         "/api/source-items/file",
         json={"filename": "a.md", "content_base64": "not base64!"},
@@ -251,3 +251,39 @@ def test_parse_knowledge_file_keeps_heading_structure():
 def test_markdown_without_body_fails():
     with pytest.raises(KnowledgeFileError):
         parse_knowledge_file("空.md", b"---\ntitle: x\n---\n")
+
+
+@pytest.mark.parametrize("suffix", ["docx", "xlsx"])
+def test_office_upload_save_search_and_version_evidence_use_existing_routes(client, suffix):
+    from tests.test_knowledge_office_ingestion import word_file, excel_file
+
+    data = word_file() if suffix == "docx" else excel_file()
+    response = _import_file(client, f"产品资料.{suffix}", data)
+    assert response.status_code == 200, response.text
+    source = response.json()
+    expected = "表1!R2C2" if suffix == "docx" else "'电气规格'!B2"
+    assert any(parameter == {"key":"额定功率", "value":"1200", "unit":"W", "locator":expected}
+               for parameter in source["parameters"])
+    assert next(section for section in source["sections"] if section["locator"] == expected)["text"] == "1200"
+    saved_response = _save(client, source["id"])
+    assert saved_response.status_code == 200, saved_response.text
+    saved = saved_response.json()
+    hits = client.get("/api/knowledge-items/search", params={"query":"YH-Z9"})
+    assert hits.status_code == 200 and hits.json()["total_count"] == 1
+    found = hits.json()["items"][0]
+    assert found["id"] == saved["id"] and found["version"] == "1"
+    detail = client.get(f"/api/knowledge-items/{found['id']}")
+    assert detail.status_code == 200
+    version = detail.json()["versions"][0]
+    assert version["source_item_id"] == source["id"]
+    assert version["sections"] == source["sections"]
+    assert version["parameters"] == source["parameters"]
+    assert version["content_hash"] == source["content_hash"]
+
+
+@pytest.mark.parametrize("suffix", ["docx", "xlsx"])
+def test_damaged_office_upload_does_not_write_a_source_or_knowledge_item(client, suffix):
+    response = _import_file(client, f"损坏.{suffix}", b"damaged office bytes")
+    assert response.status_code == 422 and "损坏" in response.json()["detail"]
+    assert client.get("/api/sources/items").json()["total_count"] == 0
+    assert client.get("/api/knowledge-items").json()["total_count"] == 0
