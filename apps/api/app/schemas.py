@@ -966,6 +966,8 @@ class MaterialSegmentMatchResponse(BaseModel):
     reasons: list[str]
     rank: int = 0
     match_tier: str = "structural"
+    evidence_excerpt: str = ""
+    needs_confirmation: bool = True
     matched_terms: list[str] = Field(default_factory=list)
     matched_conditions: list[str] = Field(default_factory=list)
     asset_file_name: str = ""
