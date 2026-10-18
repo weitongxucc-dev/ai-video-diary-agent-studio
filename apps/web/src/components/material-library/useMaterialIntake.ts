@@ -1,15 +1,18 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { useWorkspacePage } from "../workbench/context";
 import { getMaterialIntakeStatus, bindMaterialIntake, confirmMaterialCopyComplete } from "@/lib/api";
 import type { MaterialPendingCopy } from "@/lib/types";
 import type { IntakeStatus } from './material-state';
 import { visibleError } from './material-errors';
 export function useMaterialIntake() {
+    const viewActive = useWorkspacePage()?.active ?? true;
     const [intake, setIntake] = useState<IntakeStatus | null>(null);
     const [intakeError, setIntakeError] = useState("");
     const [intakeBusy, setIntakeBusy] = useState<"bind" | "refresh" | "confirm" | null>("refresh");
     const intakeRevision = useRef(0);
     useEffect(() => {
+        if (!viewActive) return;
         let active = true;
         let inFlight = false;
         async function refresh() {
@@ -40,7 +43,7 @@ export function useMaterialIntake() {
                 void refresh();
         }, 15000);
         return () => { active = false; window.clearInterval(timer); };
-    }, []);
+    }, [viewActive]);
     async function refreshIntakeStatus() {
         const revision = ++intakeRevision.current;
         setIntakeBusy("refresh");

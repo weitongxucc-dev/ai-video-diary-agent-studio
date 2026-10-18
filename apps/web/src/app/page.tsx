@@ -1,9 +1,10 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useWorkspaceSearchParams as useSearchParams } from "@/components/workbench/context";
 import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { HomeDashboardLive } from "@/components/HomeWorkspace";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 
 export const dynamic = "force-dynamic";
 
@@ -22,5 +23,5 @@ function HomeShell() {
 }
 
 export default function HomePage() {
-  return <Suspense fallback={null}><HomeShell /></Suspense>;
+  return <Suspense fallback={null}><WorkspaceRoute label="首页"><HomeShell /></WorkspaceRoute></Suspense>;
 }

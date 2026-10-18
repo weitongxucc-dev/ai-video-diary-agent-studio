@@ -1,4 +1,6 @@
 "use client";
+import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
+import { useWorkspacePage } from "../workbench/context";
 import type { TaskMediaJob, TaskMediaJobPage, TaskMediaResultMap } from "@/lib/types";
 import NextImage from "next/image";
 import { creationTaskFailureReason, creationTaskRepairAction } from "@/lib/creation-task-status";
@@ -32,6 +34,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
     pendingEditJobId: string | null;
     onEditSettled: (jobId: string, status: string) => Promise<void>;
 }) {
+    const viewActive = useWorkspacePage()?.active ?? true;
     const settledCallback = useRef(onEditSettled);
     settledCallback.current = onEditSettled;
     const [progress, setProgress] = useState<TaskJobProgress | null>(null);
@@ -44,7 +47,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
     const [mediaRetry, setMediaRetry] = useState(0);
     const [mediaLoading, setMediaLoading] = useState(false);
     useEffect(() => {
-        if (!detailsOpen)
+        if (!viewActive || !detailsOpen)
             return;
         const controller = new AbortController();
         setMediaLoading(true);
@@ -61,8 +64,9 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
             }
         });
         return () => controller.abort();
-    }, [taskId, detailsOpen, mediaCursor, mediaRetry]);
+    }, [viewActive, taskId, detailsOpen, mediaCursor, mediaRetry]);
     useEffect(() => {
+        if (!viewActive) return;
         let active = true;
         let timer: number | undefined;
         setReadError(null);
@@ -95,7 +99,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
         void read();
         return () => { active = false; window.clearTimeout(timer); };
         // 开始/重试制作后作业事实会变，重新读一次；空态不会一直轮询。
-    }, [taskId, refreshToken, retryTick, pendingEditJobId]);
+    }, [viewActive, taskId, refreshToken, retryTick, pendingEditJobId]);
     async function cancelCurrentMedia() {
         if (!progress?.current)
             return;
@@ -150,7 +154,7 @@ export function RecoveredMediaResult({ taskId, graphicEditor, job, result }: {
     if (job.result_kind === "graphic_source")
         return <RecoveredGraphicSource key={`${taskId}:${(result as TaskMediaResultMap["graphic_source"]).artifact_id}`} taskId={taskId} source={result as TaskMediaResultMap["graphic_source"]} graphicEditor={graphicEditor}/>;
     if (job.result_kind === "audio_listen")
-        return <audio aria-label="恢复的音频试听" controls preload="metadata" src={apiUrl((result as TaskMediaResultMap["audio_listen"]).audio_url)}/>;
+        return <WorkspaceAudio aria-label="恢复的音频试听" controls preload="metadata" src={apiUrl((result as TaskMediaResultMap["audio_listen"]).audio_url)}/>;
     if (job.result_kind === "audio_source") {
         const source = result as TaskMediaResultMap["audio_source"];
         return <p role="status">已读取音频：{source.name} · {(source.duration_ms / 1000).toFixed(1)} 秒；尚未添加到音轨。</p>;

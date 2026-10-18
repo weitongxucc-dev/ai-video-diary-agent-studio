@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { CreationTaskWorkspace } from "@/components/CreationTaskWorkspace";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 import {
   getCreationTaskTopics,
   getCreationTaskWorkspace,
@@ -21,10 +22,10 @@ export default async function TaskPage({ params }: Props) {
     getCreationTaskTopics(taskId).catch(() => null),
   ]);
   return (
-    <CreationTaskWorkspace
+    <WorkspaceRoute label={workspace.task.name}><CreationTaskWorkspace
       initialTasks={taskList}
       initialTopics={topics}
       initialWorkspace={workspace}
-    />
+    /></WorkspaceRoute>
   );
 }

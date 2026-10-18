@@ -6,6 +6,7 @@ import type { CreationTaskSubtitleTrack, CreationTaskWorkspace as WorkspaceState
 vi.mock("next/image",()=>({default:({alt,unoptimized,...props}:ImgHTMLAttributes<HTMLImageElement>&{unoptimized?:boolean})=>{void unoptimized;return <img alt={alt} {...props}/>;}}));
 vi.mock("@/lib/api",()=>({apiUrl:(path:string)=>path}));
 import { SubtitleWorkspace } from "../SubtitleWorkspace";
+import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 function track(language:"zh-CN"|"en-US",id:string):CreationTaskSubtitleTrack {
  return {id,workspace_id:"fixture",task_id:"fixture-task",timeline_version_id:"version-1",language,source_language:null,
  style:{name:"default",font_family:"PingFang SC",font_size:language==="zh-CN"?40:28,primary_color:"#FFFFFF",emphasis_color:"#FFD54F",position:"bottom",bilingual_order:"source_then_translation",enabled:true},
@@ -17,12 +18,26 @@ function fixture():WorkspaceState {
  cover_asset:{id:"cover-1",timeline_version_id:"version-1",frame_time_seconds:2.4,title:"自建封面",layout:{title_position:"bottom"},status:"valid",artifact_ref:"fixture-cover"},
  subtitle_translation_capability:{available:true,message:"本轮fixture",repair_action:null},cover_frame_capability:{available:true,message:"本轮fixture",repair_action:null}} as WorkspaceState;
 }
-function mount(workspace=fixture(),activeTrack=workspace.subtitle_tracks[0],busy=false){
+function mount(workspace=fixture(),activeTrack=workspace.subtitle_tracks[0],busy=false,slot?:WorkspacePageSlot){
  const callbacks={onDraftChange:vi.fn(),onPreviewExact:vi.fn(),onSelectCover:vi.fn(),onSelectCue:vi.fn(),onSelectTrack:vi.fn(),onSaveCover:vi.fn(),onSaveSubtitle:vi.fn(),onUndo:vi.fn(),onRedo:vi.fn()};
- const result=render(<SubtitleWorkspace {...callbacks} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} canUndo={workspace.task.can_undo} canRedo={workspace.task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} activeTrack={activeTrack} busy={busy} selectedCover={false} selectedCueId={null}/>);return {...result,...callbacks};
+ const content=<SubtitleWorkspace {...callbacks} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} canUndo={workspace.task.can_undo} canRedo={workspace.task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} activeTrack={activeTrack} busy={busy} selectedCover={false} selectedCueId={null}/>;
+ const result=render(slot?<WorkspacePageContext.Provider value={slot}>{content}</WorkspacePageContext.Provider>:content);return {...result,...callbacks};
 }
 beforeEach(()=>{Object.defineProperty(window,"matchMedia",{configurable:true,value:()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})});});
 describe("compact subtitle workspace real callbacks",()=>{
+ it("restores closed-view cue, style and cover drafts only on their original timeline version",()=>{
+  const w=fixture();const slot:WorkspacePageSlot={id:"/tasks/fixture-task",href:"/tasks/fixture-task",active:true,updateShell:vi.fn(),viewState:new Map()};
+  const first=mount(w,w.subtitle_tracks[0],false,slot);
+  fireEvent.change(screen.getByLabelText("字幕 1 文本"),{target:{value:"关闭前的字幕草稿"}});
+  fireEvent.click(screen.getByRole("tab",{name:"样式"}));fireEvent.change(screen.getByLabelText("字幕字号"),{target:{value:"48"}});
+  fireEvent.click(screen.getByRole("tab",{name:"封面"}));fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"关闭前的封面草稿"}});fireEvent.change(screen.getByLabelText("封面画面时间"),{target:{value:"4"}});
+  first.unmount();const reopened=mount(w,w.subtitle_tracks[0],false,slot);
+  expect(screen.getByLabelText("封面标题")).toHaveValue("关闭前的封面草稿");expect(screen.getByLabelText("封面画面时间")).toHaveValue(4);
+  fireEvent.click(screen.getByRole("tab",{name:"样式"}));expect(screen.getByLabelText("字幕字号")).toHaveValue(48);
+  fireEvent.click(screen.getByRole("tab",{name:"字幕"}));expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("关闭前的字幕草稿");expect(reopened.onPreviewExact).not.toHaveBeenCalled();
+  reopened.unmount();const next=fixture();next.task.current_timeline_version_id="version-2";mount(next,next.subtitle_tracks[0],false,slot);
+  expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("自建字幕第一条");fireEvent.click(screen.getByRole("tab",{name:"样式"}));expect(screen.getByLabelText("字幕字号")).toHaveValue(40);fireEvent.click(screen.getByRole("tab",{name:"封面"}));expect(screen.getByLabelText("封面标题")).toHaveValue("自建封面");
+ });
  it("keeps preview and playhead across view-only navigation without a mutation",async()=>{
   const c=mount();const user=userEvent.setup();const video=screen.getByLabelText("字幕成片预览") as HTMLVideoElement;video.currentTime=2.4;
   await user.click(screen.getByRole("tab",{name:"样式"}));expect(screen.queryByLabelText("当前编辑字幕轨道")).not.toBeInTheDocument();

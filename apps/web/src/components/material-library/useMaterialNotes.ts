@@ -1,4 +1,5 @@
 "use client";
+import { useWorkspaceViewState } from "../workbench/context";
 import { useEffect, useRef, useState } from "react";
 import { updateMaterialNotes, transcribeMaterialVoiceNote } from "@/lib/api";
 import type { MaterialAsset } from "@/lib/types";
@@ -13,11 +14,11 @@ export function useMaterialNotes(selectedAssetId: string | null, onAssetSaved: (
     } | null>(null);
     const voiceNoteRef = useRef<typeof voiceNote>(null);
     const [voiceNoteNotice, setVoiceNoteNotice] = useState("");
-    const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+    const [noteDrafts, setNoteDrafts] = useWorkspaceViewState<Record<string, string>>("material-notes.noteDrafts", {});
     const [noteErrors, setNoteErrors] = useState<Record<string, string>>({});
     const [noteSaved, setNoteSaved] = useState<Record<string, boolean>>({});
-    const [noteBatchIds, setNoteBatchIds] = useState<string[]>([]);
-    const [batchContext, setBatchContext] = useState("");
+    const [noteBatchIds, setNoteBatchIds] = useWorkspaceViewState<string[]>("material-notes.noteBatchIds", []);
+    const [batchContext, setBatchContext] = useWorkspaceViewState("material-notes.batchContext", "");
     const [batchNoteError, setBatchNoteError] = useState("");
     const [batchNoteSaved, setBatchNoteSaved] = useState(false);
     useEffect(() => {

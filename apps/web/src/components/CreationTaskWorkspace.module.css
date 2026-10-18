@@ -56,74 +56,6 @@
 .progress strong { font-size: 22px; font-weight: 500; }
 .progress span { color: var(--text-3); font-size: 12px; }
 
-.stageRail {
-  margin: 24px 0;
-  border: 1px solid var(--border-1);
-  border-radius: 10px;
-  overflow-x: auto;
-  background: var(--surface-1);
-  scrollbar-width: thin;
-}
-
-.stageRail ol {
-  display: grid;
-  width: 100%;
-  min-width: 760px;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.stageRail li {
-  min-height: 64px;
-  border-right: 1px solid var(--border-1);
-  color: var(--text-2);
-}
-
-.stageRail li:last-child { border-right: 0; }
-.stageRail li > button {
-  display: grid;
-  width: 100%;
-  min-height: 64px;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-  padding: 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-.stageRail li > button:hover:not(:disabled),
-.stageRail li > button[aria-pressed="true"] { background: var(--surface-2); }
-.stageRail li > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.stageRail li > button:disabled { cursor: default; }
-.stageMarker {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid var(--border-2);
-  border-radius: 50%;
-  font-size: 12px;
-}
-
-.stageCopy { display: grid; min-width: 0; gap: 2px; }
-.stageCopy strong { overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.stageCopy small { overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.stageRail .done { color: var(--success); }
-.stageRail .done .stageMarker { border-color: color-mix(in srgb, var(--success) 45%, var(--border-1)); }
-.stageRail .current { box-shadow: inset 0 -2px var(--accent); color: var(--text-1); }
-.stageRail .current .stageMarker { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
-.stageRail .partial { color: var(--warning); }
-.stageRail .partial .stageMarker { border-color: color-mix(in srgb, var(--warning) 55%, var(--border-1)); }
-.stageRail .unavailable { color: var(--text-3); }
-.stageRail .unavailable .stageMarker { border-style: dashed; }
-.stageRail .upcoming { color: var(--text-3); }
-.stageRail .skipped { color: var(--text-3); }
-.stageRail .skipped .stageMarker { border-style: dashed; }
 
 .artifactStatus {
   display: inline-flex;
@@ -446,9 +378,6 @@
 .videoReview a { color: var(--accent); }
 .editingHeader { display: flex; align-items: center; gap: 12px; }
 .editingHeader h1 { margin: 0; font-size: 22px; font-weight: 500; line-height: 1.3; }
-.editingHeader + .stageRail { margin: 12px 0; }
-.editingHeader + .stageRail li,
-.editingHeader + .stageRail li > button { min-height: 52px; }
 .subtitleWorkspace .contextCommandBar { position: static; box-shadow: none; backdrop-filter: none; }
 .inspectorRepair { margin-top: 12px !important; color: var(--warning) !important; font-size: 13px; }
 
@@ -644,3 +573,7 @@
 
 .scriptReview [role="tabpanel"] > .workSection { border:0; padding:12px 0 0; background:transparent; }
 .runtimeState { color:var(--text-2); font-size:13px; }
+
+.viewNavigation { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:40px; flex-shrink:0; padding:4px 12px; border-bottom:1px solid var(--border-1); background:var(--surface-1); }
+.viewNavigation > [data-slot="tabs-list"] { min-width:0; overflow:auto; }
+.viewNavigation > button { flex-shrink:0; }

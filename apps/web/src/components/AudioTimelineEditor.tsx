@@ -1,4 +1,6 @@
 "use client";
+import { WorkspaceAudio } from "./workbench/WorkspaceMedia";
+import { useWorkspaceViewState } from "./workbench/context";
 
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -42,11 +44,11 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
   onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
-  const [zoom, setZoom] = useState(1);
-  const [role, setRole] = useState("audio-music");
-  const [solo, setSolo] = useState<string[]>([]);
-  const [start, setStart] = useState(0);
-  const [end, setEnd] = useState(Math.min(10,duration));
+  const [zoom, setZoom] = useWorkspaceViewState("audio.zoom", 1);
+  const [role, setRole] = useWorkspaceViewState("audio.role", "audio-music");
+  const [solo, setSolo] = useWorkspaceViewState<string[]>("audio.solo", []);
+  const [start, setStart] = useWorkspaceViewState("audio.start", 0);
+  const [end, setEnd] = useWorkspaceViewState("audio.end", Math.min(10,duration));
   const [audio, setAudio] = useState<{url:string;start:number;end:number;soloKey:string;context:string} | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +123,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
     </div>
   );
   return <section className={ui.audioTimeline} aria-label="多轨音频">
-    <div className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
+    <div data-workspace-scroll="audio-tracks" className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
         <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>独听</button></div>
       <div className={ui.audioLane}>{track.clips.map(clip => <button type="button" key={`${clip.id}:${clip.source_ref}`} className={ui.audioClip} aria-label={`选择音频：${clip.name}`} aria-pressed={selectedId === clip.id}
@@ -138,7 +140,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
       {listenControls}
     </div>
     {job?.context === listenContext && job.value.status !== "succeeded" ? <p role="status">{taskMediaJobLabel(job.value)}{["queued", "running", "interrupted"].includes(job.value.status) ? <button className={ui.button} type="button" onClick={() => void cancelListen()}>{job.value.result_kind === "audio_source" ? "取消音频处理" : "取消试听"}</button> : null}</p> : null}
-    {audio && audio.context===listenContext && audio.start===start && audio.end===end && audio.soloKey===solo.join(",") ? <audio aria-label="选区音频试听" controls src={apiUrl(audio.url)} onPlay={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} onTimeUpdate={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} /> : null}
+    {audio && audio.context===listenContext && audio.start===start && audio.end===end && audio.soloKey===solo.join(",") ? <WorkspaceAudio aria-label="选区音频试听" controls src={apiUrl(audio.url)} onPlay={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} onTimeUpdate={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} /> : null}
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }
@@ -148,10 +150,8 @@ export function AudioTimelineInspector({ track, clip, versionId, playhead, busy,
   busy: boolean; onPreview: (input: AudioEditInput) => void; onDraftChange: () => void;
 }) {
   const target = clip ?? track;
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  useEffect(() => { setValues({}); }, [versionId, target.id, target.gain_db, target.muted, clip?.timeline_start_ms,
-    clip?.source_start_ms, clip?.source_end_ms, clip?.playback_rate, clip?.fade_in_ms, clip?.fade_out_ms,
-    clip?.denoise_db, clip?.loudness_target_lufs, clip?.locked, track.duck_under_voice]);
+  const [values, setValues] = useWorkspaceViewState<Record<string, unknown>>(`audio-inspector:${versionId}:${target.id}`+".values", {});
+
   function update(key: string, value: unknown, apply = false) {
     const next = { ...values, [key]: value };
     onDraftChange(); setValues(next);

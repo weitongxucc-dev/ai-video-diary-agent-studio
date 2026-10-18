@@ -32,12 +32,15 @@ import {
   useMemo,
   useRef,
   useState,
+  useLayoutEffect,
   Suspense,
   type ComponentType,
   type ReactNode,
   type CSSProperties,
 } from "react";
-import { HomeCommandComposer } from "@/components/HomeCommandComposer";
+import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
+import { Button } from "./ui/button";
+import { useWorkspacePage } from "./workbench/context";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
 import { HelpPanel } from "@/components/HelpPanel";
@@ -121,6 +124,9 @@ export type AppShellProps = {
   toolbar?: ReactNode;
   toolbarActions?: ReactNode;
   inspectorDismissKey?: string;
+  assistantContext?: HomeCommandComposerProps;
+  workspaceTabs?: ReactNode;
+  closeBlockedReason?: string;
 };
 
 function creationTaskHref(task: CreationTask) {
@@ -191,7 +197,13 @@ export function applyTheme(mode: ThemeMode) {
 
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 
-export function AppShell({
+export function AppShell(props: AppShellProps) {
+  const page = useWorkspacePage();
+  useLayoutEffect(() => { if (page) page.updateShell(page.id, props); }, [page, props]);
+  return page ? props.children : <AppShellFrame {...props} />;
+}
+
+export function AppShellFrame({
   children,
   creationTasks,
   inspector: providedInspector,
@@ -209,6 +221,7 @@ export function AppShell({
   editorLayout = false,
   toolbar,
   toolbarActions,
+  workspaceTabs,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
   const [nativeMac, setNativeMac] = useState(false);
@@ -364,7 +377,7 @@ export function AppShell({
     <div className={`desktop-shell ${editorShell.shell}${nativeMac ? ` ${editorShell.nativeMac}` : ""}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
       {nativeMac ? <div className={editorShell.nativeTitlebar} aria-hidden /> : null}
       {sidebarOpen ? (
-        <button
+        <Button variant="ghost"
           aria-label="关闭侧栏"
           className="sidebar-backdrop"
           onClick={() => setSidebarOpen(false)}
@@ -380,7 +393,7 @@ export function AppShell({
             </span>
             <span>曜核1.0</span>
           </Link>
-          <button aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={16} /></button>
+          <Button variant="ghost" aria-label={panels.collapsed ? "展开导航栏" : "收起导航栏"} title={panels.collapsed ? "展开导航栏" : "收起导航栏"} className="shell-icon-button" onClick={panels.toggleLeft} type="button"><PanelLeft size={16} /></Button>
         </div>
 
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
@@ -401,7 +414,7 @@ export function AppShell({
             {taskReadState === "loading" ? <p className="desktop-creation-tasks-empty" role="status">{recentTasks.length ? "正在更新创作任务…" : "正在读取创作任务…"}</p> : null}
             {taskReadState === "error" ? <div className="desktop-creation-tasks-empty" role="alert">
               <p>暂时无法读取创作任务。{recentTasks.length ? "已有任务仍可打开。" : ""}</p>
-              <button className="shell-icon-button" aria-label="重新读取创作任务" title="重新读取创作任务" onClick={() => void refreshRecentTasks()} type="button"><RefreshCw size={16}/></button>
+              <Button variant="ghost" className="shell-icon-button" aria-label="重新读取创作任务" title="重新读取创作任务" onClick={() => void refreshRecentTasks()} type="button"><RefreshCw size={16}/></Button>
               <details><summary>失败详情</summary><p>{taskReadError}</p></details>
             </div> : null}
             {recentTasks.length ? recentTasks.map((task) => {
@@ -427,7 +440,7 @@ export function AppShell({
             {members.length > 3 ? <span className={shellUi.avatarCount} data-avatar-count aria-hidden="true">+{members.length - 3}</span> : null}
           </Link> : <Link className={shellUi.memberStatus} href="/settings?section=creators" title={membersState === "loading" ? "正在读取成员名册" : membersState === "error" ? "成员名册暂不可读，打开设置处理" : localAuthMode ? "尚无成员，打开成员设置" : "打开成员设置"}>{membersState === "loading" ? "读取名册…" : membersState === "error" ? "名册暂不可读" : "成员设置"}</Link>}
           <div className={shellUi.quickControls}>
-            <button className={shellUi.quickButton} type="button" aria-label="切换明暗主题" title="切换明暗主题" onClick={toggleTheme}><SunMoon size={16} aria-hidden="true"/></button>
+            <Button variant="ghost" className={shellUi.quickButton} type="button" aria-label="切换明暗主题" title="切换明暗主题" onClick={toggleTheme}><SunMoon size={16} aria-hidden="true"/></Button>
             <Link className={shellUi.quickButton} href="/settings" aria-label="设备设置" title={workspaceStatus ? `设备设置 · ${workspaceStatus.label}` : "设备设置"}><Settings size={16} aria-hidden="true"/></Link>
           </div>
         </nav>
@@ -435,40 +448,41 @@ export function AppShell({
       </aside>
 
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div className={`${editorShell.contentGrid}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+        <div className={`${editorShell.contentGrid}${workspaceTabs ? ` ${editorShell.tabbed}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+        {workspaceTabs ? <div className={editorShell.workspaceTabs}>{workspaceTabs}</div> : null}
         <header className="desktop-toolbar">
           <div className="desktop-toolbar__leading">
-            <button aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">
+            <Button variant="ghost" aria-label="打开侧栏" className="shell-icon-button desktop-menu-button" onClick={() => setSidebarOpen(true)} type="button">
               <Menu size={17} />
-            </button>
-            {!editorLayout ? <button aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
+            </Button>
+            {!editorLayout ? <Button variant="ghost" aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
-            </button> : null}
+            </Button> : null}
             {toolbar ?? <Suspense fallback={<ToolbarLocationContent pathname={pathname} />}>
               <ToolbarLocation pathname={pathname} />
             </Suspense>}
             <Suspense fallback={null}><PreflightDraftReturn /></Suspense>
           </div>
           <div className="desktop-toolbar__actions">
-            <button aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></button>
+            <Button variant="ghost" aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></Button>
             {toolbarActions}
-            {quickAvailable ? <button aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(false); setQuickOpen(true); }} type="button">镜头参数</button> : null}
-            <button aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
+            {quickAvailable ? <Button variant="ghost" aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(false); setQuickOpen(true); }} type="button">镜头参数</Button> : null}
+            <Button variant="ghost" aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
               <Search size={16} />
 
-            </button>
-            {providedInspector ? <button className={editorShell.detailsButton} onClick={() => { setQuickOpen(false); setDetailsOpen(true); }} type="button">查看详情</button> : null}
-            {panels.collapsed ? <><button type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
+            </Button>
+            {providedInspector ? <Button variant="ghost" className={editorShell.detailsButton} onClick={() => { setQuickOpen(false); setDetailsOpen(true); }} type="button">查看详情</Button> : null}
+            {panels.collapsed ? <><Button variant="ghost" type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></Button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
             {!localAuthMode ? (
               <form action="/auth/signout" method="post">
-                <button aria-label="退出登录" className="shell-icon-button" type="submit"><UserRound size={17} /></button>
+                <Button variant="ghost" aria-label="退出登录" className="shell-icon-button" type="submit"><UserRound size={17} /></Button>
               </form>
             ) : null}
           </div>
         </header>
 
           <section aria-label="创作助手" className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><button aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></button></div></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}>
               {conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </div>

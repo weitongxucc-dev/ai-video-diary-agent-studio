@@ -1,0 +1,18 @@
+.host,.root { height:100dvh; min-width:0; min-height:0; }
+.host[hidden] { display:none; }
+.page { height:100%; min-width:0; min-height:0; overflow:auto; }
+.page[hidden] { display:none; }
+.page:has([data-editor-workspace]) { overflow:hidden; }
+.tabScroll { height:40px; width:100%; }
+.tabList { gap:0; height:40px; padding:4px 8px; }
+.tab { display:flex; align-items:center; max-width:240px; border:1px solid transparent; border-radius:8px; }
+.tab[data-active] { background:var(--surface-1); border-color:var(--border-1); }
+.tab .tabTrigger { max-width:208px; height:30px; padding:0 8px; border:0; background:transparent; }
+.tabTrigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tab .close { width:28px; height:28px; padding:4px; flex-shrink:0; }
+.close svg { width:14px; height:14px; }
+.target { display:flex; flex-shrink:0; gap:8px; align-items:center; min-height:32px; padding:0 12px; color:var(--text-2); font-size:12px; border-bottom:1px solid var(--border-1); }
+.target > button:not([data-slot]) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0; border:0; color:var(--text-1); background:transparent; font:inherit; text-align:left; cursor:pointer; }
+.target [data-slot="button"] { width:28px; height:28px; }
+.loading { margin:16px; color:var(--text-3); }
+.closeError { position:absolute; z-index:50; right:16px; bottom:16px; display:flex; align-items:center; gap:12px; max-width:min(480px,90%); padding:12px 16px; border:1px solid var(--border-2); border-radius:10px; background:var(--surface-1); box-shadow:0 8px 24px #171c3020; }

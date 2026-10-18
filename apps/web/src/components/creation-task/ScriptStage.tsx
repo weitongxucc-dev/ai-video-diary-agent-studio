@@ -1,4 +1,5 @@
 "use client";
+import { useWorkspaceViewState } from "../workbench/context";
 import { Tabs } from "@base-ui/react/tabs";
 import Link from "next/link";
 import { Check, LoaderCircle } from "lucide-react";
@@ -138,7 +139,7 @@ export function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: {
     repairing: boolean;
     onConfirm: (script: CreationTaskScript) => void;
 }) {
-    const [draft, setDraft] = useState(script);
+    const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
     const [sources, setSources] = useState<{
         reference_id: string;
         title: string;

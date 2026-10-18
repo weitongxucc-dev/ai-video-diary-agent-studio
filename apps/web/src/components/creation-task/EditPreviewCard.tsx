@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo, WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import NextImage from "next/image";
 import { Check, LoaderCircle } from "lucide-react";
 import { useEffect, useRef } from "react";
@@ -58,7 +59,7 @@ export function PreviewVideo({ url, label, muted, pauseOthers }: {
         };
         frameRef.current = requestAnimationFrame(tick);
     };
-    return <video ref={videoRef} className={editorUi.effectPreview} aria-label={label} controls muted={muted} playsInline preload="metadata" src={apiUrl(url)} onLoadedMetadata={event => { if (range)
+    return <WorkspaceVideo ref={videoRef} className={editorUi.effectPreview} aria-label={label} controls muted={muted} playsInline preload="metadata" src={apiUrl(url)} onLoadedMetadata={event => { if (range)
         event.currentTarget.currentTime = range.start; }} onPlay={event => {
             pauseOthers(event.currentTarget);
             if (range && (event.currentTarget.currentTime < range.start || event.currentTarget.currentTime >= range.end)) {
@@ -108,10 +109,10 @@ export function EditPreviewCard({ preview, busy, compact = false, command, onCan
           {steps.length ? <fieldset className={editorUi.propertySection}><legend>选择修改</legend>{steps.map(step => <label className={editorUi.actionRow} key={step.index}><input type="checkbox" aria-label={`保留修改${step.index + 1}：${step.command}`} disabled={busy !== null || commandChanged} checked={selectedSteps.includes(step.index)} onChange={event => onChosen?.(event.target.checked ? [...selectedSteps, step.index] : selectedSteps.filter(index => index !== step.index))}/><span>{step.index + 1}. {step.command}</span></label>)}</fieldset> : null}
           {(selectionChanged || commandChanged) ? <p role="status">内容已变，请重看效果。</p> : <div className={ui.previewDiff}>
             <section><small>修改前</small><strong>{preview.proposal.preview.before.label}</strong><span>{preview.proposal.preview.before.detail}</span>{preview.proposal.preview.before.image_url ? <a href={apiUrl(preview.proposal.preview.before.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改前字幕样式"><NextImage alt="修改前字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.before.image_url)}/>查看原尺寸</a> : null}{preview.proposal.preview.before.video_url ? <PreviewVideo url={preview.proposal.preview.before.video_url} label="修改前画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { previewRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current)
-            media.pause(); }); }}/> : null}{preview.proposal.preview.before.audio_url ? <audio aria-label="修改前音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget)
+            media.pause(); }); }}/> : null}{preview.proposal.preview.before.audio_url ? <WorkspaceAudio aria-label="修改前音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget)
             audio.pause(); }); }} src={apiUrl(preview.proposal.preview.before.audio_url)}/> : null}</section>
             <section><small>修改后</small><strong>{preview.proposal.preview.after.label}</strong><span>{preview.proposal.preview.after.detail}</span>{preview.proposal.preview.after.image_url ? <a href={apiUrl(preview.proposal.preview.after.image_url)} target="_blank" rel="noreferrer" aria-label="原尺寸修改后字幕样式"><NextImage alt="修改后字幕样式" className={editorUi.subtitleStylePreview} width={1080} height={1920} unoptimized src={apiUrl(preview.proposal.preview.after.image_url)}/>查看原尺寸</a> : null}{preview.proposal.preview.after.video_url ? <PreviewVideo url={preview.proposal.preview.after.video_url} label="修改后画面" muted={!(["EditCompoundTimeline", "RemoveSilence", "TrimClip"].includes(preview.proposal.operation.operation_type))} pauseOthers={current => { previewRef.current?.querySelectorAll<HTMLMediaElement>("audio,video").forEach(media => { if (media !== current)
-            media.pause(); }); }}/> : null}{preview.proposal.preview.after.audio_url ? <audio aria-label="修改后音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget)
+            media.pause(); }); }}/> : null}{preview.proposal.preview.after.audio_url ? <WorkspaceAudio aria-label="修改后音频" controls onPlay={event => { previewRef.current?.querySelectorAll("audio").forEach(audio => { if (audio !== event.currentTarget)
             audio.pause(); }); }} src={apiUrl(preview.proposal.preview.after.audio_url)}/> : null}</section>
           </div>}
           {preview.proposal.preview.text_changes?.length ? <details className={editorUi.textChanges} open><summary>字幕变化 · {preview.proposal.preview.text_changes.length}</summary><ol>{preview.proposal.preview.text_changes.map(change => <li key={change.cue_id}><span>修改前：{change.before}</span><span>修改后：{change.after}</span></li>)}</ol></details> : null}

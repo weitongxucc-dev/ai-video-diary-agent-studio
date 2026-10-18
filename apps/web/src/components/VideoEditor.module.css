@@ -12,17 +12,6 @@
 .primary:hover:not(:disabled) { filter: brightness(.96); }
 .button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.stageRail { min-width: 0; max-width: 100%; flex: 0 0 auto; border-bottom: 1px solid var(--border-1); padding: 0 20px; container-type: inline-size; }
-.stageRail li { flex: 0 0 auto; }
-.stageRail .stageList { overflow-x: auto; display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
-.stageRail button { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
-.stageRail button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
-.stageRail button:disabled { color: var(--text-3); cursor: default; }
-
-@container (max-width: 680px) {
-  .stageRail .stageList { gap: 2px; }
-  .stageRail button { gap: 4px; padding-inline: 6px; }
-}
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 20px; overflow: auto; }
 .editorBody { flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
 .editorBody > .stage { height: 100%; overflow: visible; }
@@ -124,7 +113,7 @@
 .previewEffects strong { margin-right: 8px; font-weight: 500; }
 .previewActions { display: flex; flex-wrap:wrap; justify-content: flex-end; gap: 8px; }
 .feedback { display: flex; align-items: center; gap: 8px; padding: 6px 20px; color: var(--text-2); background: var(--surface-2); font-size: 13px; }
-@media (max-width: 1279px) { .stage { padding-inline: 16px; } .stageRail { padding-inline: 12px; } .stageRail button { padding-inline: 8px; } }
+@media (max-width: 1279px) { .stage { padding-inline: 16px; } }
 
 
 .audioTimeline { display: grid; gap: 8px; min-width: 0; }

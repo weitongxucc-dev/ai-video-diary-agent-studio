@@ -4,6 +4,7 @@
 .shell :global(.desktop-toolbar) { grid-column: 2; grid-row: 1; height: 56px; min-height: 56px; padding: 0 16px; background: var(--surface-1); gap: 12px; }
 .shell :global(.desktop-toolbar__leading) { flex: 1; min-width: 0; }
 .shell :global(.desktop-toolbar__actions) { flex: 0 0 auto; gap: 4px; }
+.shell :global(.desktop-menu-button) { display:none; }
 .shell :global(.desktop-main-scroll) { overflow: auto; scrollbar-gutter: stable; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { overflow: hidden; scrollbar-gutter: auto; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { position: relative; }
@@ -41,6 +42,13 @@
 @media (prefers-reduced-motion: reduce) { .shell :global(.desktop-nav-row), .shell :global(.shell-icon-button), .conversationBody :global(.home-composer form) { transition: none; } }
 .contentGrid { display: grid; grid-template-columns: var(--editor-right) minmax(0, 1fr); grid-template-rows:56px minmax(0,1fr); min-height: 0; min-width: 0; gap: 0; padding: 0; }
 .contentGrid > :global(.desktop-main-scroll) { grid-column: 2; grid-row: 2; }
+.tabbed { grid-template-rows:40px 56px minmax(0,1fr); }
+.shell:global(.video-editor-shell) .tabbed[data-editor-toolbar-parent] { grid-template-rows:40px auto minmax(0,1fr); }
+.tabbed > :global(.desktop-toolbar) { grid-row:2; }
+.tabbed > :global(.desktop-main-scroll) { grid-row:3; }
+.tabbed .conversation { grid-row:1 / span 3; }
+.workspaceTabs { grid-column:2; grid-row:1; min-width:0; overflow:hidden; background:var(--surface-2); border-bottom:1px solid var(--border-1); }
+.tabbed.workspaceCollapsed .workspaceTabs { display:none; }
 .conversation { grid-column: 1; grid-row: 1 / span 2; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface-2); border: 0; border-right: 1px solid var(--border-1); border-radius: 0; }
 .conversationHeader { display: flex; justify-content: space-between; align-items: center; height:56px; padding:0 14px; flex-shrink:0; border-bottom: 1px solid var(--border-1); }
 .conversationHeader span { display: flex; align-items: center; gap: 9px; font-weight: 500; }

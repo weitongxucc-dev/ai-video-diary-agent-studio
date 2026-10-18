@@ -1,4 +1,6 @@
 "use client";
+import { InputGroup, InputGroupTextarea } from "./ui/input-group";
+import { Button } from "./ui/button";
 
 import { ReferenceChips } from "./ui/reference-chips";
 
@@ -74,8 +76,10 @@ const goalStateLabels: Record<string, string> = {
   running: "正在执行", waiting_result: "等待后台结果", waiting_adoption: "等待查看并采用修改",
   waiting_identity: "等待核验身份", waiting_unknown: "请求结果待核实", invalidated: "原目标已停止接续",
   no_progress: "接续未取得新进展", limit_reached: "接续已暂停",
+  production_completed: "成片已生成", production_failed: "制作未完成", output_checked: "输出检查已返回",
 };
 const goalReasonLabels: Record<string, string> = {
+  output_not_checked: "成片已生成；输出尚未检查。",
   await_real_adoption: "实际预览已返回，请查看修改方案后决定是否采用。",
   await_actual_preview_result: "正在等待原预览作业返回，草稿尚未改变。",
   read_original_request_result: "先查询原请求的实际结果，避免重复提交。",
@@ -104,7 +108,7 @@ const executionStatusLabels: Record<string, string> = {
 };
 
 function completedGoalOutput(value: NonNullable<ReturnType<typeof assistantConversationGoal>>) {
-  return value.goal.status === "no_progress" && value.goal.waiting_reason === "bounded_output_checkpoint_completed"
+  return value.goal.status === "output_checked" || value.goal.status === "no_progress" && value.goal.waiting_reason === "bounded_output_checkpoint_completed"
     ? value.goal.completed_output_checkpoint : undefined;
 }
 
@@ -116,9 +120,10 @@ function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: 
   const current = turns.find(turn => turn.id === goal.current_turn_id);
   const tools = turns.flatMap(turn => turnTools(turn).map(tool => ({turn, tool})));
   const currentTool = current && turnTools(current).reverse().find(tool => tool.state === "running");
-  const execution = [...turns].reverse().map(turn => assistantTaskTurnResult(turn)?.response?.execution_status).find(Boolean);
+  const execution = [...turns].reverse().map(turn => assistantTaskTurnResult(turn)?.response?.execution_status)
+    .find(value => value && (!goal.production_result || value.job?.id === goal.production_result.job_id && value.job?.status === goal.production_result.status));
   const job = execution?.job;
-  const videoReady = goal.status !== "invalidated" && execution?.video_ready === true;
+  const videoReady = goal.status !== "invalidated" && (goal.production_result?.video_ready === true || execution?.video_ready === true);
   const media = [...turns].reverse().map(turn => assistantTaskTurnResult(turn)?.response?.media_job).find(Boolean);
   const reason = goal.waiting_reason && goalReasonLabels[goal.waiting_reason];
   const completed = completedGoalOutput(value);
@@ -142,6 +147,9 @@ function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: 
           ? <p>此前有中断或未完成调用；制作与技术检查已恢复完成，历史记录保留。</p> : null}
       </div> : null}
       {reason && reason !== currentStep ? <p>{reason}</p> : null}
+      {goal.status === "production_completed" && !completed ? <p>当前成片已生成，尚未完成输出检查；不能据此判断画面和声音质量。</p> : null}
+      {goal.production_result && !execution ? <div className="assistant-goal-receipt" aria-label="实际制作结果"><p>{goal.production_result.status === "succeeded" && goal.production_result.video_ready ? "成片已生成，当前输出有效。" : "制作未完成，请查看原任务的实际原因。"}</p></div> : null}
+      {goal.status === "production_failed" ? <p>制作未完成，原任务和已保存修改仍保留，可查看实际失败原因后继续。</p> : null}
       {tools.length ? <ol aria-label="本次目标的执行步骤">{tools.map(({turn, tool}, index) => <li key={`${turn.id}:${tool.tool_id}:${index}`} data-state={tool.state}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
         <ToolResult tool={tool} reading={reading} readingKey={`goal:${root.id}:${turn.id}:${tool.tool_id}:diagnostic`}/>
@@ -156,10 +164,10 @@ function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: 
           {executionStageLabels[stage.stage] ?? "制作步骤"} · {executionStatusLabels[stage.status] ?? "状态待核实"}
         </li>)}</ul> : null}
       </div> : null}
-      {completed || videoReady && job?.status === "succeeded"
+      {completed || videoReady && (goal.production_result?.status === "succeeded" || job?.status === "succeeded")
         ? <Link className="assistant-text-action" href={`/tasks/${encodeURIComponent(goal.task_id)}`}>查看对应任务与成片</Link> : null}
       {refreshPaused && active ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
-      {active || job?.status === "interrupted" ? <button className="assistant-text-action" type="button" disabled={readingResult} onClick={onRead}>{readingResult ? "正在查询…" : "查询目标进展"}</button> : null}
+      {active || job?.status === "interrupted" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={readingResult} onClick={onRead}>{readingResult ? "正在查询…" : "查询目标进展"}</Button> : null}
     </div>
   </ReadingDetails>;
 }
@@ -182,7 +190,7 @@ function AssistantText({ text }: { text: string }) {
     } catch { setCopyError(true); }
   }
   const label = copied ? "已复制" : copyError ? "复制未成功" : "复制回复";
-  return <button className="assistant-copy assistant-icon-action" aria-label={label} title={label} onClick={() => void copy()} type="button">{copied ? <Check size={14}/> : <Copy size={14}/>}</button>;
+  return <Button variant="ghost" className="assistant-copy assistant-icon-action" aria-label={label} title={label} onClick={() => void copy()} type="button">{copied ? <Check size={14}/> : <Copy size={14}/>}</Button>;
 }
 
 function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
@@ -209,14 +217,14 @@ export function AssistantConversationHeaderActions({ state, busy, onConversation
   const disabled = state.loading || busy || running;
   const fail = (cause: unknown) => state.setError(cause instanceof Error ? cause.message : "对话操作没有完成，请重试。");
   return <div className="assistant-header-actions">
-    <button className="assistant-icon-action" type="button" aria-label="历史对话" title="历史对话" disabled={disabled}
-      onClick={() => { void state.loadList().then(() => setHistoryOpen(true)).catch(fail); }}><History size={15}/></button>
-    <button className="assistant-icon-action" type="button" aria-label="新对话" title="新对话" disabled={disabled}
-      onClick={() => { void state.createNew().then(next => { onConversationChange?.(); onInput(next.draft_text); }).catch(fail); }}><Plus size={15}/></button>
+    <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="历史对话" title="历史对话" disabled={disabled}
+      onClick={() => { void state.loadList().then(() => setHistoryOpen(true)).catch(fail); }}><History size={15}/></Button>
+    <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="新对话" title="新对话" disabled={disabled}
+      onClick={() => { void state.createNew().then(next => { onConversationChange?.(); onInput(next.draft_text); }).catch(fail); }}><Plus size={15}/></Button>
     {children}
     {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">
-      {state.conversations.map(item => <button type="button" key={item.id} aria-current={item.id === state.conversation?.id ? "true" : undefined}
-        onClick={() => { void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); }).catch(fail); }}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></button>)}
+      {state.conversations.map(item => <Button variant="ghost" type="button" key={item.id} aria-current={item.id === state.conversation?.id ? "true" : undefined}
+        onClick={() => { void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); }).catch(fail); }}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></Button>)}
       {!state.conversations.length ? <p>还没有可恢复的对话。</p> : null}
     </div>{legacyHistory}</HomeCardDialog> : null}
   </div>;
@@ -268,13 +276,13 @@ function ReplyActions({ turn, onTransferReply, onCreatePlanFromReply, transferDr
     }
   }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node) && !menu.current?.contains(event.relatedTarget as Node)) setOpen(false); }}>
     <AssistantText text={turn.assistant_text}/>
-    {onTransferReply || onCreatePlanFromReply ? <button ref={trigger} className="assistant-icon-action" type="button" aria-label="回复操作" title="回复操作" aria-haspopup="menu" aria-expanded={open} onKeyDown={event => { if (!open && ["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); } }} onClick={() => setOpen(value => !value)}><MoreHorizontal size={15}/></button> : null}
+    {onTransferReply || onCreatePlanFromReply ? <Button variant="ghost" ref={trigger} className="assistant-icon-action" type="button" aria-label="回复操作" title="回复操作" aria-haspopup="menu" aria-expanded={open} onKeyDown={event => { if (!open && ["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); } }} onClick={() => setOpen(value => !value)}><MoreHorizontal size={15}/></Button> : null}
     {open ? createPortal(<div ref={menu} style={position} className="assistant-reply-menu" role="menu" aria-label="回复操作">
-      {onTransferReply ? <button type="button" role="menuitem" disabled={transferDraftState === "confirmed"} title={transferDraftState === "confirmed" ? "当前文案已确认，不能替换。" : undefined} onClick={useReply}>{transferDraftState === "draft" ? "替换当前草稿并带入回复" : transferDraftState === "confirmed" ? "文案已确认" : "带入文案草稿"}</button> : null}
-      {onCreatePlanFromReply ? <button type="button" role="menuitem" onClick={() => { close(); onCreatePlanFromReply(turn); }}>带入新任务文案</button> : null}
+      {onTransferReply ? <Button variant="ghost" type="button" role="menuitem" disabled={transferDraftState === "confirmed"} title={transferDraftState === "confirmed" ? "当前文案已确认，不能替换。" : undefined} onClick={useReply}>{transferDraftState === "draft" ? "替换当前草稿并带入回复" : transferDraftState === "confirmed" ? "文案已确认" : "带入文案草稿"}</Button> : null}
+      {onCreatePlanFromReply ? <Button variant="ghost" type="button" role="menuitem" onClick={() => { close(); onCreatePlanFromReply(turn); }}>带入新任务文案</Button> : null}
     </div>, document.body) : null}
     {confirmReplace ? <HomeCardDialog kind="confirmation" title="替换待确认文案" onClose={() => setConfirmReplace(false)}
-      footer={<><button type="button" data-card-cancel onClick={() => setConfirmReplace(false)}>取消</button><button type="button" onClick={() => { setConfirmReplace(false); onTransferReply?.(turn, true); }}>确认替换并带入回复</button></>}>
+      footer={<><Button variant="ghost" type="button" data-card-cancel onClick={() => setConfirmReplace(false)}>取消</Button><Button variant="ghost" type="button" onClick={() => { setConfirmReplace(false); onTransferReply?.(turn, true); }}>确认替换并带入回复</Button></>}>
       <p>这会覆盖当前待确认文案；已确认的文案不会被替换。</p>
     </HomeCardDialog> : null}
   </div>;
@@ -320,7 +328,7 @@ function ResourceWaitReceipt({ receipt, reading, readingKey }: {
   </ReadingDetails>;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean }) {
+function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false, productionRecovered = false }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -389,14 +397,15 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {job?.status !== "cancelled" && job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
-      {onOpenEditProposal && canOpenTurnProposal(turn) ? <button type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</button> : null}
-      {pendingResult || unknownRequest || job?.status === "interrupted" ? <button type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</button> : null}
+      {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
+      {pendingResult || unknownRequest || job?.status === "interrupted" ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
     </div></ReadingDetails> : null}
-    {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <button className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</button> : null}
+    {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</Button> : null}
     {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
+      : productionRecovered ? "本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。"
       : businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
-    {(turn.status === "failed" || turn.status === "stopped") && turn.user_message.trim() && !unknownRequest ? <button className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></button> : null}
+    {(turn.status === "failed" || turn.status === "stopped") && turn.user_message.trim() && !unknownRequest ? <Button variant="ghost" className="assistant-icon-action" aria-label="继续编辑本条要求" type="button" disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></Button> : null}
     {turn.status !== "running" && turn.assistant_text.trim() ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined} onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
   </article>;
 }
@@ -660,7 +669,7 @@ export function AssistantConversationPanel({
     void submit();
   }
 
-  const headerActions = <AssistantConversationHeaderActions state={state} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <button className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></button> : null}</AssistantConversationHeaderActions>;
+  const headerActions = <AssistantConversationHeaderActions state={state} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <Button variant="ghost" className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></Button> : null}</AssistantConversationHeaderActions>;
   return <section ref={panelRef} className={`assistant-conversation-panel${compact ? " is-compact" : ""}`} aria-label={`助手对话：${conversation?.title ?? "新对话"}`}>
     {headerSlot ? createPortal(headerActions, headerSlot) : <div className="assistant-conversation-caption">{headerActions}</div>}
     {goalProgress ? <GoalProgress value={goalProgress} reading={reading} refreshPaused={state.businessRefreshPaused}
@@ -677,36 +686,37 @@ export function AssistantConversationPanel({
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
         {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused}
+          productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
           outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
       {state.loading ? <p role="status">正在恢复对话…</p> : null}
     </div>
-    {showJumpToLatest && turns.length ? <button className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); }}><ArrowDown size={16} aria-hidden="true"/></button> : null}
+    {showJumpToLatest && turns.length ? <Button variant="ghost" className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); }}><ArrowDown size={16} aria-hidden="true"/></Button> : null}
     </div>
-    {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><button type="button" onClick={referenceStatus.cancel}>清除不可用引用</button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
+    {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
     {turns.flatMap(turn=>turn.events.filter(event=>event.type === "assistant_input")).map(item=> item.type === "assistant_input" ? <div className="assistant-input-receipt" key={item.input_id}>
       <p>{item.message}</p><span>{{accepted:"已接收，等待安全点",consumed:"已生效，正在处理",completed:"本次要求已处理",withdrawn:"已撤回",rejected:"未执行",interrupted:"处理已中断"}[item.status]}</span>
-      {item.reason ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <button type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</button> : null}
+      {item.reason ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <Button variant="ghost" type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</Button> : null}
     </div> : null)}
-    <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}>
+    <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
       {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); focus?.focus(); }}/> : null}
       {menuOpen ? <div className="assistant-slash-menu" role="listbox" aria-label="对话命令" id={`${diagnosticsId}-commands`} style={{ maxHeight: menuMaxHeight }}>
-        {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <button role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
+        {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <Button variant="ghost" role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
           <Icon size={16}/><span><strong>{item.title}</strong><small>{item.description}</small></span><code>{item.syntax}</code>
-        </button>; }) : <p>{capabilities ? "没有匹配的已接通命令" : "正在读取可用命令…"}</p>}
+        </Button>; }) : <p>{capabilities ? "没有匹配的已接通命令" : "正在读取可用命令…"}</p>}
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
-      <textarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
+      <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
       {currentRunning ? <label className="assistant-input-mode">追加要求<select aria-label="追加要求处理方式" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点调整当前目标</option><option value="follow_up">本轮完成后处理</option></select></label> : null}
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
-        {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <button className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></button>
+        {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <Button variant="ghost" className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></Button>
           : null}
-        <button className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></button>
+        <Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button>
       </div>
       <span className="assistant-visually-hidden" id={`${diagnosticsId}-input-help`}>Enter 发送，Shift+Enter 换行；中文组合输入不会发送。{sendDisabled ? sendReason : "输入 / 查找命令。"}</span>
-    </form>
+    </InputGroup></form>
       {capabilities && diagnosticsExpanded ? <HomeCardDialog title="对话诊断" onClose={() => setDiagnosticsExpanded(false)}><div className="assistant-capability-diagnostics" id={diagnosticsId}>
         <p>对话服务：{capabilities.runtime.status === "ready" ? "已就绪" : capabilities.runtime.reason}</p>
         <p>可用命令：{capabilities.application_commands.join("、")}</p>
@@ -714,7 +724,7 @@ export function AssistantConversationPanel({
         <p>{capabilities.prompt_templates.reason}</p>
         <p>引用会固定到选中时的版本；版本变化后需要重新选择。助手会区分工具回执与实际画面、声音的检查结果。</p>
       </div></HomeCardDialog> : null}
-    {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">{state.conversations.map(item => <button type="button" key={item.id} onClick={() => void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); focus?.focus(); }).catch(cause => setError(cause.message))}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></button>)}</div></HomeCardDialog> : null}
+    {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">{state.conversations.map(item => <Button variant="ghost" type="button" key={item.id} onClick={() => void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); focus?.focus(); }).catch(cause => setError(cause.message))}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></Button>)}</div></HomeCardDialog> : null}
     {error || state.error ? <div className="assistant-conversation-error" role="alert"><AssistantFailureMessage message={error ?? state.error ?? ""}/></div> : null}
   </section>;
 }

@@ -1,6 +1,8 @@
 "use client";
+import { useWorkspaceViewState } from "./workbench/context";
+import { WorkspaceVideo } from "./workbench/WorkspaceMedia";
 import NextImage from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Languages, Play, Save, Undo2, Redo2, Settings2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskMontage, CreationTaskCoverAsset, CreationTaskCapability } from "@/lib/types";
@@ -44,6 +46,7 @@ function cueTextWithLineBreaks(cue: CreationTaskSubtitleCue) {
 }
 
 function SubtitleCueEditor({
+  versionId,
   busy,
   cue,
   index,
@@ -53,6 +56,7 @@ function SubtitleCueEditor({
   selected,
   track,
 }: {
+  versionId: string | null;
   busy: boolean;
   cue: CreationTaskSubtitleCue;
   index: number;
@@ -64,18 +68,13 @@ function SubtitleCueEditor({
 }) {
   const storedText = cueTextWithLineBreaks(cue);
   const storedTerms = cueEmphasisTerms(cue);
-  const [text, setText] = useState(storedText);
-  const [terms, setTerms] = useState(cueEmphasisTerms(cue));
-  const [start, setStart] = useState(String(cue.start_seconds));
-  const [end, setEnd] = useState(String(cue.end_seconds));
-  useEffect(() => {
-    setText(storedText); setTerms(storedTerms);
-    setStart(String(cue.start_seconds)); setEnd(String(cue.end_seconds));
-    setSplitOffset(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
-    setSplitTime(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
-  }, [cue.id, cue.text, storedText, cue.start_seconds, cue.end_seconds, storedTerms]);
-  const [splitOffset, setSplitOffset] = useState(Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
-  const [splitTime, setSplitTime] = useState(Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
+  const [text, setText] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".text", storedText);
+  const [terms, setTerms] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".terms", cueEmphasisTerms(cue));
+  const [start, setStart] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".start", String(cue.start_seconds));
+  const [end, setEnd] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".end", String(cue.end_seconds));
+
+  const [splitOffset, setSplitOffset] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".splitOffset", Math.max(1, Math.floor(Array.from(cue.text).length / 2)));
+  const [splitTime, setSplitTime] = useWorkspaceViewState(`cue:${versionId}:${track.id}:${cue.id}:${storedText}:${cue.start_seconds}:${cue.end_seconds}:${storedTerms}`+".splitTime", Number(((cue.start_seconds + cue.end_seconds) / 2).toFixed(3)));
   const validTime = start.trim() !== "" && end.trim() !== "" && Number(start) >= 0 && Number(end) > Number(start);
   const changed = Number(start) !== cue.start_seconds || Number(end) !== cue.end_seconds || text !== storedText || terms !== cueEmphasisTerms(cue);
   // UpdateSubtitleCue 的 text 上限 96 字（CreationTaskExactEditRequest，schemas.py）。按 Unicode 字符计数，
@@ -127,7 +126,8 @@ function SubtitleCueEditor({
   );
 }
 
-function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
+function SubtitleStyleEditor({ style, cacheKey, busy, onDraftChange, onPreview }: {
+  cacheKey: string;
   style: CreationTaskSubtitleTrack["style"]; busy: boolean; onDraftChange: () => void;
   onPreview: (input: CreationTaskExactEditInput) => void;
 }) {
@@ -140,8 +140,7 @@ function SubtitleStyleEditor({ style, busy, onDraftChange, onPreview }: {
   }), [style.name, style.font_family, style.font_size, style.primary_color, style.emphasis_color,
     style.position, style.bilingual_order, style.enabled, style.stroke_width, style.stroke_color,
     style.background_color, style.background_opacity]);
-  const [draft, setDraft] = useState(initial);
-  useEffect(() => { setDraft(initial); }, [initial]);
+  const [draft, setDraft] = useWorkspaceViewState(`subtitle.style:${cacheKey}:${JSON.stringify(initial)}`, initial);
   const changed = JSON.stringify(draft) !== JSON.stringify(initial);
   const save=(value=draft)=>{
     if(busy||!value.font_family.trim())return;
@@ -203,16 +202,17 @@ export function SubtitleWorkspace({
 }) {
   const sourceTrack = tracks.find((track) => track.language === "zh-CN") ?? activeTrack;
   const translationTrack = tracks.find((track) => track.language === "en-US") ?? null;
-  const [frameTime, setFrameTime] = useState(cover?.frame_time_seconds ?? 0);
-  const [coverTitle, setCoverTitle] = useState(cover?.title ?? "");
-  const [titlePosition, setTitlePosition] = useState<"center" | "bottom">(cover?.layout.title_position ?? "bottom");
-  const [findText, setFindText] = useState("");
-  const [replaceText, setReplaceText] = useState("");
-  const [saveSubtitleMode, setSaveSubtitleMode] = useState<"zh" | "en" | "zh-en">(
+  const coverDraftKey = JSON.stringify([versionId, cover?.id, cover?.timeline_version_id, cover?.frame_time_seconds, cover?.title, cover?.layout.title_position]);
+  const [frameTime, setFrameTime] = useWorkspaceViewState(`subtitle.frameTime:${coverDraftKey}`, cover?.frame_time_seconds ?? 0);
+  const [coverTitle, setCoverTitle] = useWorkspaceViewState(`subtitle.coverTitle:${coverDraftKey}`, cover?.title ?? "");
+  const [titlePosition, setTitlePosition] = useWorkspaceViewState<"center" | "bottom">(`subtitle.titlePosition:${coverDraftKey}`, cover?.layout.title_position ?? "bottom");
+  const [findText, setFindText] = useWorkspaceViewState("subtitle.findText", "");
+  const [replaceText, setReplaceText] = useWorkspaceViewState("subtitle.replaceText", "");
+  const [saveSubtitleMode, setSaveSubtitleMode] = useWorkspaceViewState<"zh" | "en" | "zh-en">("subtitle.saveSubtitleMode",
     activeTrack.language === "en-US" ? "en" : "zh",
   );
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [view, setView] = useState<"subtitle" | "style" | "cover">("subtitle");
+  const [view, setView] = useWorkspaceViewState<"subtitle" | "style" | "cover">("subtitle.view", "subtitle");
   const chineseVisible = sourceTrack.language === "zh-CN" && sourceTrack.status === "valid" && sourceTrack.style.enabled !== false;
   const englishVisible = translationTrack?.status === "valid" && translationTrack.style.enabled !== false;
   const chineseSavable = tracks.some((track) => track.language === "zh-CN" && track.status === "valid" && track.cues.length > 0);
@@ -224,21 +224,19 @@ export function SubtitleWorkspace({
   const currentCue = activeTrack.cues[currentCueIndex];
   const coverChanged = coverTitle !== (cover?.title ?? "") || frameTime !== (cover?.frame_time_seconds ?? 0) || titlePosition !== (cover?.layout.title_position ?? "bottom");
 
-  useEffect(() => {
-    setFrameTime(cover?.frame_time_seconds ?? 0);
-    setCoverTitle(cover?.title ?? "");
-    setTitlePosition(cover?.layout.title_position ?? "bottom");
-  }, [cover?.id, cover?.timeline_version_id, cover?.frame_time_seconds, cover?.title, cover?.layout.title_position]);
-
   function seekFrame(next: number) {
     const bounded = Math.max(0, Math.min(duration, next));
     setFrameTime(bounded);
     if (videoRef.current) videoRef.current.currentTime = bounded;
   }
 
+  const cuePosition = `${versionId}:${activeTrack.id}:${selectedCueId}:${currentCue?.start_seconds}`;
+  const positionedCue = useRef(cuePosition);
   useEffect(() => {
+    if (positionedCue.current === cuePosition) return;
+    positionedCue.current = cuePosition;
     if (selectedCueId && currentCue) seekFrame(currentCue.start_seconds);
-  }, [selectedCueId, activeTrack.id, currentCue?.start_seconds]);
+  }, [cuePosition]);
 
   function enableBilingual() {
     onSelectTrack(sourceTrack.id);
@@ -270,7 +268,7 @@ export function SubtitleWorkspace({
         <div className={styles.columns}>
           <section className={styles.mediaPanel}>
             <header><span><Play size={15}/>{montage?.output_url ? "当前成片" : "草稿字幕"}</span><small>{duration.toFixed(1)} 秒</small></header>
-            {montage?.output_url ? <video key={versionId} aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} style={{aspectRatio:(montage.aspect_ratio ?? planAspectRatio).replace(":","/")}} src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)}/> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
+            {montage?.output_url ? <WorkspaceVideo key={versionId} aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} style={{aspectRatio:(montage.aspect_ratio ?? planAspectRatio).replace(":","/")}} src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)}/> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
           </section>
           <div className={styles.editor}>
             {view === "subtitle" ? <div className={styles.trackChoice}><span>编辑轨道</span><AppSelect aria-label="当前编辑字幕轨道" disabled={busy} value={activeTrack.id} onValueChange={onSelectTrack}>{tracks.map(track=><AppSelectOption key={track.id} value={track.id}>{track.language === "zh-CN" ? "中文轨" : "英文轨"} · {track.cues.length} 条</AppSelectOption>)}</AppSelect></div> : null}
@@ -283,10 +281,10 @@ export function SubtitleWorkspace({
               </div>
               {!translationCapability.available && !translationTrack ? <details className={styles.propertySection}><summary>翻译暂不可用</summary><p>{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p></details> : null}
               <label className={styles.cueSelection}><span>选择字幕</span><AppSelect aria-label="选择字幕" disabled={busy} onValueChange={newValue => { const cue=activeTrack.cues.find(item=>item.id===newValue);if(cue){onSelectCue(cue.id);if(videoRef.current)videoRef.current.currentTime=cue.start_seconds;} }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue,index)=><AppSelectOption key={cue.id} value={cue.id}>{index+1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</AppSelectOption>)}</AppSelect></label>
-              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor key={`${taskId}:${versionId}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
+              <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor versionId={versionId} key={`${taskId}:${versionId}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
               <details className={styles.propertySection}><summary>全文查找替换</summary><label className={styles.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event=>{setFindText(event.target.value);onDraftChange();}}/></label><label className={styles.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event=>{setReplaceText(event.target.value);onDraftChange();}}/></label><button className={styles.secondaryButton} type="button" disabled={busy || !findText || findText===replaceText} onClick={()=>onPreviewExact({operation_type:"ReplaceSubtitleText",track_id:activeTrack.id,find_text:findText,replacement_text:replaceText})}>应用全文替换</button></details>
             </Tabs.Panel>
-            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor key={`${taskId}:${versionId}:${sourceTrack.id}`} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
+            <Tabs.Panel value="style" keepMounted className={styles.panel}><p className={styles.styleScope}>全部字幕样式 · 中英文共用</p><SubtitleStyleEditor cacheKey={`${taskId}:${versionId}:${sourceTrack.id}`} style={sourceTrack.style} busy={busy} onDraftChange={onDraftChange} onPreview={onPreviewExact}/></Tabs.Panel>
             <Tabs.Panel value="cover" keepMounted className={styles.panel}>
               <section className={selectedCover ? styles.selectedCover : undefined} onFocus={onSelectCover} aria-label="封面编辑">
                 {cover?.status === "valid" && cover.artifact_ref ? <NextImage className={styles.coverImage} alt={cover.title} height={1280} src={apiUrl(`/api/creation-tasks/${taskId}/covers/${cover.id}/image`)} unoptimized width={720}/> : null}

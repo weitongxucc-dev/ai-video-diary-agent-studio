@@ -1,4 +1,5 @@
 "use client";
+import { useWorkspaceViewState } from "./workbench/context";
 import { useState } from "react";
 import type { CreationTaskMontageClip, VisualEditInput, VisualEffects } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
@@ -8,8 +9,8 @@ export function VisualEffectsInspector({clip,allClipIds,versionId,busy,portraitA
   onPreview:(input:VisualEditInput)=>void;onDraftChange:()=>void;
 }) {
   const original={fade_in_seconds:0,fade_out_seconds:0,zoom:1,rotation:0,offset_x:0,offset_y:0,beauty_strength:0,skin_exposure:0,...(clip.visual_effects ?? {exposure:0,contrast:1,saturation:1,temperature:0})};
-  const [effects,setEffects]=useState<VisualEffects>(original);
-  const [all,setAll]=useState(false);
+  const [effects,setEffects]=useWorkspaceViewState<VisualEffects>(`visual:${clip.id}:${versionId}`+".effects", original);
+  const [all,setAll]=useWorkspaceViewState(`visual:${clip.id}:${versionId}`+".all", false);
   const save=(value=effects,allClips=all)=>onPreview({base_version_id:versionId,clip_ids:allClips?allClipIds:[clip.id],effects:value});
   const changed=Object.keys(effects).some(key=>effects[key as keyof VisualEffects]!==original[key as keyof VisualEffects]);
   const controls: {key:keyof VisualEffects;label:string;min:number;max:number;step:number}[]=[

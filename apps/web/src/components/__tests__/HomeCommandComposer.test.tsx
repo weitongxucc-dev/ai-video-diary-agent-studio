@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
+const mocks = vi.hoisted(() => ({ selection: null as ReturnType<typeof import("../AssistantConversationProvider").useAssistantSelection>, saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
+vi.mock("@/components/AssistantConversationProvider", async importOriginal => ({
+  ...(await importOriginal<typeof import("../AssistantConversationProvider")>()),
+  useAssistantSelection: () => mocks.selection,
+}));
 vi.mock("@/lib/api", () => {
   const saved = mocks.saved;
   function makeConversation(scope: { scope_kind: "home" | "task" | "material"; scope_id: string }, id = `conversation-${scope.scope_kind}-${scope.scope_id}`) {
@@ -100,7 +104,7 @@ vi.mock("@/lib/api", () => {
   };
 });
 
-afterEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
+afterEach(() => { mocks.selection = null; vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("HomeCommandComposer", () => {
   function configuredModel() {
@@ -205,6 +209,29 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask.mock.calls[0][0]).toBe("本轮原始制作要求");
     expect(mocks.ask.mock.calls[0][1]).toBe(oldConversationId);
     expect(mocks.materialAsk).not.toHaveBeenCalled();
+  });
+
+  it("keeps a task draft unsent when its persisted reference changes during the draft checkpoint", async () => {
+    configuredModel();
+    const task = {id:"task-1",stage:"montage",name:"产品介绍",current_timeline_version_id:"v1",timeline_sequence:1} as CreationTask;
+    mocks.selection={version:1,items:[{kind:"shot",task_id:task.id,object_id:"clip-1",version:"v1",label:"镜头 1"}],select:vi.fn(),remove:vi.fn()};
+    let releaseInitialSave!:()=>void;
+    mocks.updateConversation.mockImplementationOnce((id:string,update:{draft_text?:string;expected_draft_version?:number})=>new Promise(resolve=>{
+      releaseInitialSave=()=>{const existing=mocks.saved.get(id)!;const {expected_draft_version:_expected,...changes}=update;const updated={...existing,...changes,draft_version:existing.draft_version+1};mocks.saved.set(id,updated);resolve(updated);};
+    }));
+    const view=render(<HomeCommandComposer task={task}/>);
+    const input=await readyInput("任务对话要求");
+    vi.useFakeTimers();
+    fireEvent.change(input,{target:{value:"调整原镜头，保留这段草稿"}});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(451);});
+    fireEvent.click(screen.getByRole("button",{name:"发送"}));
+    mocks.selection={...mocks.selection,version:2,items:[{kind:"shot",task_id:task.id,object_id:"clip-2",version:"v1",label:"镜头 2"}]};
+    view.rerender(<HomeCommandComposer task={task}/>);
+    await act(async()=>{releaseInitialSave();await Promise.resolve();await Promise.resolve();});
+    vi.useRealTimers();
+    await waitFor(()=>expect(input).toHaveValue("调整原镜头，保留这段草稿"));
+    expect(mocks.sendTaskTurn).not.toHaveBeenCalled();expect(mocks.materialAsk).not.toHaveBeenCalled();expect(mocks.ask).not.toHaveBeenCalled();
+    expect(await screen.findByText("会话或引用已切换；本轮没有发送，原要求已保留为草稿。",{exact:false})).toBeVisible();
   });
 
   it("allows library status questions without a selected object and does not write back", async () => {

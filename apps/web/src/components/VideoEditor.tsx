@@ -1,4 +1,6 @@
 "use client";
+import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
+import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
 
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
@@ -54,12 +56,13 @@ export function ClipThumbnail({ clip, taskId, className, statusId }: { clip: Cre
 }
 
 function StaticClipThumbnail({ clip, taskId, className, statusId }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string }) {
+  const viewActive = useWorkspacePage()?.active ?? true;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const missing = !clip.person_render_id && !clip.asset_id;
   const url = sourceUrl(clip, taskId);
   useEffect(() => {
-    if (missing) return;
+    if (!viewActive || missing || state === "ready") return;
     let video: HTMLVideoElement | null = null;
     let disposed = false;
     const destroyVideo = () => {
@@ -106,7 +109,7 @@ function StaticClipThumbnail({ clip, taskId, className, statusId }: { clip: Crea
     });
     scheduled.start();
     return () => { disposed = true; destroyVideo(); scheduled.release(); };
-  }, [missing, url, clip.source_start_seconds]);
+  }, [viewActive, missing, url, clip.source_start_seconds]);
   const message = missing ? "未关联媒体" : state === "loading" ? "读取缩略图…" : state === "error" ? "缩略图读取失败" : "缩略图已定位";
   return <span className={`${mediaUi.thumbnail} ${className ?? mediaUi.thumbnailFill}`} data-media-state={missing ? "missing" : state}>
     <canvas ref={canvasRef} width={1} height={1} aria-hidden="true" />
@@ -128,7 +131,7 @@ function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded
     positioned.current = true;
     setState("ready");
   }
-  const video = missing ? null : <video key={retry} ref={videoRef} className={bounded ? mediaUi.sourceVideo : undefined} style={bounded && dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined}
+  const video = missing ? null : <WorkspaceVideo key={retry} ref={videoRef} className={bounded ? mediaUi.sourceVideo : undefined} style={bounded && dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined}
     controls={preview} muted={!preview} playsInline preload="metadata" src={sourceUrl(clip, taskId)}
     onLoadedMetadata={event => {
       const current = event.currentTarget;
@@ -149,21 +152,22 @@ function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded
   </span>;
 }
 
-function CanvasControls({ ratio, fitMode, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>Promise<boolean>;onDraftChange:()=>void}) {
-  const [draft,setDraft]=useState(ratio);
-  const [fit,setFit]=useState<""|"fill"|"fit">(fitMode);
+function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview, onDraftChange }: {ratio:"9:16"|"16:9"|"1:1";fitMode:""|"fill"|"fit";versionId:string|null;editError?:string;busy:boolean;onPreview:(input:CreationTaskExactEditInput)=>Promise<boolean>;onDraftChange:()=>void}) {
+  const [draft,setDraft]=useWorkspaceViewState(`canvas:${versionId}:${ratio}:${fitMode}.ratio`, ratio);
+  const [fit,setFit]=useWorkspaceViewState<""|"fill"|"fit">(`canvas:${versionId}:${ratio}:${fitMode}.fit`, fitMode);
   const [open,setOpen]=useState(false);
-  useEffect(() => { setDraft(ratio); setFit(fitMode); }, [ratio, fitMode]);
   return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
     <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
     <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
     <small>填满：可能裁切 · 完整：可能留边</small>
+    {editError ? <p role="alert">{editError}</p> : null}
     </div>
   </HomeCardDialog> : null}</>;
 }
 
 type VideoStageMontage = Pick<CreationTaskMontage, "clips" | "cues" | "duration_seconds" | "output_url" | "low_confidence_clip_count" | "aspect_ratio" | "graphic_overlays">;
-export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay }:  {
+export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError }:  {
+  editError?: string;
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
@@ -171,9 +175,10 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
   initialTime: number; renderAction: ReactNode; audioTracks?: (subtitleTrack: ReactNode) => ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
 }) {
-  const [time, setTime] = useState(initialTime);
+  const viewActive = useWorkspacePage()?.active ?? true;
+  const [time, setTime] = useWorkspaceViewState("video.time", initialTime);
   const [playing, setPlaying] = useState(false);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useWorkspaceViewState("video.muted", false);
   const outputIdentity = JSON.stringify([taskId, versionId, montage.output_url]);
   const [outputState, setOutputState] = useState<{ identity: string; state: "loading" | "ready" | "error" }>({ identity: outputIdentity, state: "loading" });
   const playbackState = outputState.identity === outputIdentity ? outputState.state : "loading";
@@ -191,6 +196,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const [playerSize, setPlayerSize] = useState<{ width: number; height: number } | null>(null);
   const selected = montage.clips.find(clip => clip.id === selectedId);
   useEffect(() => {
+    if (!viewActive) return;
     const viewport = playerViewport.current;
     if (!viewport) return;
     const resize = () => {
@@ -203,7 +209,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     observer.observe(viewport);
     resize();
     return () => observer.disconnect();
-  }, [previewRatio]);
+  }, [viewActive, previewRatio]);
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
   function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
   function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
@@ -212,11 +218,12 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const subtitleTrack = (
 <div className={ui.track}><span>字幕</span><div className={ui.subtitleLane}>{(subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false))?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ left: `${cue.start_seconds / montage.duration_seconds * 100}%`, width: `${(cue.end_seconds - cue.start_seconds) / montage.duration_seconds * 100}%` }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => { onSelect(clip.id); seek(cue.start_seconds); }}>{cue.text}</button> : null; })}</div></div>
   );
+  if (!viewActive) return null;
   return <div className={ui.stage}>
-    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{aspectRatio} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={aspectRatio} fitMode={canvasFitMode} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
+    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{aspectRatio} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}>{onPreview ? <CanvasControls ratio={aspectRatio} fitMode={canvasFitMode} versionId={versionId} editError={editError} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={aspectRatio} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
-      {montage.output_url ? <video key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
+      {montage.output_url ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
         onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = initialTime; }}
         onLoadedData={event => { if (event.currentTarget.readyState >= 2) outputEvent(event.currentTarget, "ready"); }} onCanPlay={event => outputEvent(event.currentTarget, "ready")}
         onTimeUpdate={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }} onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }}
@@ -239,7 +246,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <button className={ui.iconButton} aria-label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></button>
     </div> : null}
     {onSelectOverlay && montage.graphic_overlays?.length ? <div className={ui.overlayList} aria-label="图文叠加层">{montage.graphic_overlays.map((item,index)=><button className={ui.button} type="button" key={item.id} disabled={busy} aria-pressed={selectedOverlayId===item.id} onClick={()=>onSelectOverlay(item.id)}>{item.kind==="image"?"图片":item.kind==="arrow"?"箭头":"标题"}{index+1} · {item.kind==="image"||item.kind==="arrow"?item.name:item.text}</button>)}</div> : null}
-    <div className={ui.storyboard} aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-describedby={`${storyboardId}-thumbnail-${index}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
+    <div className={ui.storyboard} data-workspace-scroll="storyboard" aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-describedby={`${storyboardId}-thumbnail-${index}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div>
@@ -292,7 +299,7 @@ export function ClipTimelineAudioPreview({ taskId, versionId, start, end, busy }
     } catch (cause) { if (currentContext.current === snapshot) setError({ context, message: cause instanceof Error ? cause.message : "试听取消未完成" }); }
   }
   return <>
-    {audio?.context === context ? <audio aria-label="当前镜头混音" controls preload="metadata" src={apiUrl(audio.url)} />
+    {audio?.context === context ? <WorkspaceAudio aria-label="当前镜头混音" controls preload="metadata" src={apiUrl(audio.url)} />
       : <button className={ui.button} type="button" disabled={busy || working} onClick={() => void listen()}>{working ? "生成试听…" : "试听声音"}</button>}
     {job?.context === context && job.value.status !== "succeeded" ? <p role="status">{taskMediaJobLabel(job.value)}{["queued", "running", "interrupted"].includes(job.value.status) ? <button className={ui.button} type="button" onClick={() => void cancelListen()}>取消试听</button> : null}</p> : null}
     {error?.context === context ? <p role="alert">{error.message}</p> : null}
@@ -304,7 +311,7 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
   onDraftStateChange: (draft: VideoClipDraft) => void; onDraftChange: () => void;
   onPreview: (input: CreationTaskExactEditInput) => void; onOpenDetails: () => void;
 }) {
-  const [tab, setTab] = useState<"trim" | "frame" | "replace">("trim");
+  const [tab, setTab] = useWorkspaceViewState<"trim" | "frame" | "replace">("video.tab", "trim");
   const latestDraft = useRef(draft);
   const lastApplied = useRef<string | null>(null);
   useEffect(() => { if (!busy) lastApplied.current = null; }, [busy]);
@@ -376,28 +383,15 @@ export function VideoClipInspector({ clip, index, count, taskId, versionId, subt
   candidates: MontageClipCandidate[]; replacing: boolean; onAddSegment?: () => void; inserting?: boolean; onPerson: (command: string) => void; onAddOriginal?: () => void; onVisualPreview?: (input: import("@/lib/types").VisualEditInput) => void;
 }) {
   const [tab, setTab] = useState("properties");
-  const [start, setStart] = useState(initialDraft?.start ?? clip.source_start_seconds);
-  const [transitionSeconds,setTransitionSeconds]=useState(clip.transition_in_seconds ?? 0);
-  const [linkedRate, setLinkedRate] = useState(1);
-  const [rate, setRate] = useState(Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3)));
-  const [splitAt, setSplitAt] = useState(Number(((clip.timeline_start_seconds + clip.timeline_end_seconds) / 2).toFixed(3)));
-  const [mode, setMode] = useState(initialDraft?.mode ?? clip.fit_mode ?? "fill");
-  const [x, setX] = useState(initialDraft?.x ?? clip.crop_x ?? .5);
-  const [y, setY] = useState(initialDraft?.y ?? clip.crop_y ?? .5);
-  useEffect(() => {
-    const nextStart = initialDraft?.start ?? clip.source_start_seconds;
-    const nextMode = initialDraft?.mode ?? clip.fit_mode ?? "fill";
-    const nextX = initialDraft?.x ?? clip.crop_x ?? .5;
-    const nextY = initialDraft?.y ?? clip.crop_y ?? .5;
-    setStart(nextStart);
-    setMode(nextMode);
-    setX(nextX);
-    setY(nextY);
-    setTransitionSeconds(clip.transition_in_seconds ?? 0);
-    setRate(Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3)));
-    setLinkedRate(1);
-    setSplitAt(Number(((clip.timeline_start_seconds + clip.timeline_end_seconds) / 2).toFixed(3)));
-  }, [clip.id, clip.source_start_seconds, clip.source_end_seconds, clip.timeline_start_seconds, clip.timeline_end_seconds, clip.fit_mode, clip.crop_x, clip.crop_y, clip.transition_in_seconds, initialDraft?.start, initialDraft?.mode, initialDraft?.x, initialDraft?.y]);
+  const [start, setStart] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".start", initialDraft?.start ?? clip.source_start_seconds);
+  const [transitionSeconds,setTransitionSeconds]=useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".transitionSeconds", clip.transition_in_seconds ?? 0);
+  const [linkedRate, setLinkedRate] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".linkedRate", 1);
+  const [rate, setRate] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".rate", Number(((clip.source_end_seconds - clip.source_start_seconds) / (clip.timeline_end_seconds - clip.timeline_start_seconds)).toFixed(3)));
+  const [splitAt, setSplitAt] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".splitAt", Number(((clip.timeline_start_seconds + clip.timeline_end_seconds) / 2).toFixed(3)));
+  const [mode, setMode] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".mode", initialDraft?.mode ?? clip.fit_mode ?? "fill");
+  const [x, setX] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".x", initialDraft?.x ?? clip.crop_x ?? .5);
+  const [y, setY] = useWorkspaceViewState(`clip:${clip.id}:${versionId}`+".y", initialDraft?.y ?? clip.crop_y ?? .5);
+
   const captionTrack = subtitleTracks.find(item => item.language === "zh-CN" && item.status === "valid")
     ?? subtitleTracks.find(item => item.status === "valid");
   const captions = captionTrack?.cues.filter(item => item.start_seconds < clip.timeline_end_seconds && item.end_seconds > clip.timeline_start_seconds) ?? [];

@@ -1,0 +1,42 @@
+.tabs { min-width:0; min-height:0; }
+.tabsList { display:flex; align-items:center; gap:4px; width:max-content; min-height:32px; padding:3px; border-radius:8px; background:var(--surface-2); }
+.tabsList[data-variant="line"] { border-radius:0; background:transparent; }
+.tabsTrigger { position:relative; display:inline-flex; flex:none; align-items:center; justify-content:center; gap:8px; height:32px; min-width:0; padding:0 12px; border:1px solid transparent; border-radius:8px; color:var(--text-2); background:transparent; font:inherit; font-weight:400; white-space:nowrap; cursor:pointer; transition:background 140ms,color 140ms; }
+.tabsTrigger:hover { background:var(--surface-3); color:var(--text-1); }
+.tabsTrigger[data-active] { color:var(--text-1); background:var(--surface-1); border-color:var(--border-1); font-weight:500; }
+.tabsTrigger:disabled { opacity:.5; pointer-events:none; }
+.tabsTrigger:focus-visible,.button:focus-visible,.scrollViewport:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.tabsContent { min-width:0; min-height:0; outline:none; }
+.tabsContent[hidden] { display:none; }
+.button { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:8px; height:32px; padding:0 12px; border:1px solid transparent; border-radius:8px; background:var(--accent); color:var(--accent-contrast); font:inherit; font-weight:500; white-space:nowrap; cursor:pointer; transition:background 140ms; }
+.button[data-size="icon"] { width:32px; padding:0; }
+.button[data-variant="outline"] { border-color:var(--border-2); background:var(--surface-1); color:var(--text-1); }
+.button[data-variant="secondary"] { background:var(--surface-2); color:var(--text-1); }
+.button[data-variant="ghost"],.button[data-variant="link"] { background:transparent; color:var(--text-2); }
+.button[data-variant="destructive"] { color:var(--danger); background:var(--surface-2); }
+.button:hover { filter:brightness(.96); }
+.button[data-variant="ghost"]:hover { background:var(--surface-3); filter:none; }
+.button:disabled,.button[aria-disabled="true"] { opacity:.5; pointer-events:none; }
+.button svg,.tabsTrigger svg { width:16px; height:16px; flex-shrink:0; stroke-width:1.7; }
+.scrollArea { position:relative; min-width:0; }
+.scrollViewport { width:100%; height:100%; border-radius:inherit; outline:none; }
+.scrollbar { display:flex; padding:1px; touch-action:none; user-select:none; }
+.scrollbar[data-orientation="horizontal"] { height:8px; flex-direction:column; }
+.scrollbar[data-orientation="vertical"] { width:8px; }
+.scrollThumb { flex:1; border-radius:99px; background:var(--border-2); }
+.menuPositioner { z-index:100; outline:none; }
+.menu { max-height:var(--available-height); min-width:200px; overflow:auto; padding:4px; border:1px solid var(--border-2); border-radius:8px; background:var(--surface-1); color:var(--text-1); box-shadow:var(--shadow-md,0 8px 24px #171c3020); outline:none; }
+.menuItem { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:32px; padding:4px 8px; border-radius:6px; outline:none; font-size:13px; cursor:default; }
+.menuItem small { color:var(--text-3); font-size:12px; }
+.menuItem[data-highlighted] { background:var(--surface-3); }
+.menuItem[data-disabled] { opacity:.5; pointer-events:none; }
+.inputGroup { position:relative; display:flex; align-items:center; min-width:0; height:32px; border:1px solid var(--border-2); border-radius:8px; background:var(--surface-1); }
+.inputGroup:has([data-slot="input-group-control"]:focus-visible) { border-color:var(--focus); outline:2px solid var(--focus); outline-offset:1px; }
+.inputGroup[data-composer] { display:block; height:auto; border:0; border-radius:0; background:transparent; }
+.inputGroup[data-composer]:focus-within { outline:none; }
+.inputAddon { display:flex; align-items:center; gap:8px; flex-shrink:0; padding:0 8px; color:var(--text-3); cursor:text; }
+.inputAddon[data-align="inline-end"] { order:2; }
+.inputControl { flex:1; min-width:0; width:100%; border:0; border-radius:0; padding:4px 8px; outline:none; box-shadow:none; background:transparent; color:var(--text-1); font:inherit; }
+.inputControl:focus-visible { outline:none; box-shadow:none; }
+.inputControl:disabled { opacity:.5; }
+@media (prefers-reduced-motion:reduce) { .tabsTrigger,.button { transition:none; } }

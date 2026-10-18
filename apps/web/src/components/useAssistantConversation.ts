@@ -45,6 +45,13 @@ function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
     && Array.isArray(checkpoint.unavailable) && checkpoint.unavailable.every(item => item && typeof item === "object"
       && typeof item.scope === "string" && typeof item.reason === "string")
     ? checkpoint as AssistantGoalContinuation["completed_output_checkpoint"] : undefined;
+  const production = value.production_result && typeof value.production_result === "object"
+    ? value.production_result as Record<string, unknown> : null;
+  const productionResult = production?.scope === "production" && ["succeeded", "failed"].includes(String(production.status))
+    && typeof production.job_id === "string" && production.job_id.length > 0
+    && (production.timeline_version_id === null || typeof production.timeline_version_id === "string")
+    && typeof production.video_ready === "boolean"
+    ? production as AssistantGoalContinuation["production_result"] : undefined;
   return {
     original_turn_id: turn.id, task_id: value.task_id,
     status: value.status, current_turn_id: value.current_turn_id,
@@ -53,6 +60,7 @@ function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
     ...(Array.isArray(value.unfinished_steps) && value.unfinished_steps.every(step => typeof step === "string")
       ? {unfinished_steps: value.unfinished_steps as string[]} : {}),
     ...(completedOutput ? {completed_output_checkpoint: completedOutput} : {}),
+    ...(productionResult ? {production_result: productionResult} : {}),
   } satisfies AssistantGoalContinuation;
 }
 

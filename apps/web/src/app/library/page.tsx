@@ -1,4 +1,5 @@
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 import {
   getMaterialCollections,
   getMaterialLibraryInsights,
@@ -25,6 +26,5 @@ export default async function LibraryPage({ searchParams }: { searchParams?: Pro
     getMaterialLibraryInsights().catch(() => insights),
     getMaterialCollections().catch(() => collections),
   ]);
-  // URL 是标签筛选的唯一来源：标签变化时重挂载，清除后不会残留上一次的筛选状态
-  return <MaterialLibraryWorkspace key={tag ?? "all"} initialLibrary={library} initialInsights={insights} initialCollections={collections} initialTag={tag} />;
+  return <WorkspaceRoute label="素材库"><MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={collections} initialTag={tag} /></WorkspaceRoute>;
 }

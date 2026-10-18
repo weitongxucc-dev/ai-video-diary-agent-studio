@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { UserRound } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
@@ -46,7 +47,7 @@ export function PersonStageView({ busy, onGenerate, onOpenNarration, onSelect, s
       {narration && presenterShareTarget !== null && presenterShareTarget > 0 && !selectedPerson
             ? <div className={styles.emptyAction}><UserRound size={30}/><h2>尚未选择当前人物</h2><p>声音档案中的关联人物不能替代本任务的已选人物。请先在制作方案中选择人物版本，再为配音片段生成口型。</p></div>
             : null}
-      {presenterShareTarget === 0 && renders.length ? <details className={styles.requirementDetails}><summary>已保存口型（{renders.length} 段）</summary>{renders.map(render => <article key={render.id}><p>{personRenderStageDetail(render.status)}</p>{render.status === "ready" && render.media_url ? <video controls preload="metadata" aria-label="已保存口型预览" className={styles.materialPreview} src={apiUrl(render.media_url)}/> : null}</article>)}</details> : null}
+      {presenterShareTarget === 0 && renders.length ? <details className={styles.requirementDetails}><summary>已保存口型（{renders.length} 段）</summary>{renders.map(render => <article key={render.id}><p>{personRenderStageDetail(render.status)}</p>{render.status === "ready" && render.media_url ? <WorkspaceVideo controls preload="metadata" aria-label="已保存口型预览" className={styles.materialPreview} src={apiUrl(render.media_url)}/> : null}</article>)}</details> : null}
       {narration && presenterShareTarget !== null && presenterShareTarget > 0 && selectedPerson ? <>
         <div className={styles.narrationSegments}>
           {narration.segments.map((segment, index) => (<article className={selectedSegmentId === segment.id ? styles.selectedSegment : ""} key={segment.id}>

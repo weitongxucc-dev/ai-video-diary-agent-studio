@@ -14,12 +14,20 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 
-type HomeCommandComposerProps = {
+export type HomeCommandComposerProps = {
   assignLocation?: (url: string) => void;
   autoFocus?: boolean;
   task?: CreationTask | null;
   onTaskUpdated?: () => void;
   pageContext?: { pathname: string };
+  taskContext?: {
+    stage: string;
+    selectedObjectRefs: string[];
+    getPlayheadMs: () => number | null;
+    onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
+    transferDraftState?: "none" | "draft" | "confirmed";
+    onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
+  };
   materialContext?: {
     selection: MaterialAssistantSelection | null;
     label: string | null;
@@ -64,8 +72,11 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
   </>;
 }
 
-export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext }: HomeCommandComposerProps) {
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext, taskContext }: HomeCommandComposerProps) {
   const selectionState = useAssistantSelection();
+  const selectionSnapshot = JSON.stringify([selectionState?.version, selectionState?.items]);
+  const latestSelectionSnapshot = useRef(selectionSnapshot);
+  latestSelectionSnapshot.current = selectionSnapshot;
   const materialReference = useAssistantMaterialReference();
   const profileReference = useAssistantProfileReference()?.reference;
   const knowledgeReference = useAssistantKnowledgeReference()?.reference;
@@ -154,6 +165,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   async function sendToAssistant(rawMessage: string) {
     const command = rawMessage.trim();
     if (!command || pending) return;
+    const referenceSnapshot = latestSelectionSnapshot.current;
     const revision = scopeRevision.current;
     setPending("chat");
     setError(null);
@@ -172,22 +184,26 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistant.bindTurnEvents(turn.conversationId, turn.localTurnId);
       const expectedDraftVersion = await turn.draftCheckpoint;
-      if (!assistant.isCurrentConversation(turn.conversationId)) {
+      if (!assistant.isCurrentConversation(turn.conversationId) || referenceSnapshot !== latestSelectionSnapshot.current) {
+        const message = "会话或引用已切换；本轮没有发送，原要求已保留为草稿。";
         await assistant.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
-          "页面或会话已切换；本轮没有发送，原要求已保留为草稿。");
+          message);
+        if (assistant.isCurrentConversation(turn.conversationId)) setError(message);
         return;
       }
       if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
           conversation_id: turn.conversationId,
-          message: command, context_stage: task.stage,
+          message: command, context_stage: taskContext?.stage ?? task.stage,
           client_request_id: turn.clientRequestId,
           expected_draft_version: expectedDraftVersion,
           expected_reference_version: selectionState?.version,
           expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence,
           ...(profileReference ? {selected_profile_reference:{kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version}} : {}),
           ...(knowledgeReference ? {selected_knowledge_reference:{knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})}} : {}),
-          selected_object_refs: [], playhead_ms: null,
+          // With a saved selection, the API derives refs from its frozen CAS.
+          // Removing a chip must not resurrect a page's previous local selection.
+          selected_object_refs: selectionState ? [] : taskContext?.selectedObjectRefs ?? [], playhead_ms: taskContext?.getPlayheadMs() ?? null,
         }, onStreamEvent);
         if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
@@ -201,8 +217,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           : await sendWorkspaceAssistantPlanTurn(command, turn.conversationId,
           turn.clientRequestId, expectedDraftVersion, onStreamEvent, profileReference ? {kind:profileReference.kind,profile_id:profileReference.profile_id,version:profileReference.version} : undefined, knowledgeReference ? {knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})} : undefined, selectionState?.version)) as WorkspaceAssistantPlanTurnResponse & { material_result?: MaterialAssistantResult };
         if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
+        if (assistant.isCurrentConversation(turn.conversationId) && materialContext?.selection && result.material_result) materialContext.onResult(materialContext.selection, result.material_result);
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
-        if (materialContext?.selection && result.material_result) materialContext.onResult(materialContext.selection, result.material_result);
         setRequestBinding(result.creation_request ? { id: result.creation_request.id, conversationId: turn.conversationId, revision } : null);
         setRequestOpen(Boolean(result.creation_request));
         setPreview(result.creation_request ? null : result.plan_preview);
@@ -384,10 +400,13 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         busy={pending !== null}
         configured={modelConfigured}
         input={assistant.draftText}
-        inputLabel={materialContext ? "素材对话" : task ? "任务对话要求" : "制作要求"}
+        inputLabel={task ? "任务对话要求" : materialContext ? "素材对话" : "制作要求"}
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
         onConversationChange={() => { scopeRevision.current += 1; shareRevision.current += 1; setRequestBinding(null); setRequestOpen(false); setPending(null); setShareUpdating(false); setError(null); }}
         onSend={sendToAssistant}
+        onTransferReply={taskContext?.onTransferReply}
+        transferDraftState={taskContext?.transferDraftState}
+        onOpenEditProposal={taskContext?.onOpenEditProposal}
         onCreatePlanFromReply={scopeKind === "home" && !task ? startPlanFromReply : undefined}
         onOpenCreationRequest={scopeKind === "home" ? turn => {
           const id = turn.result?.creation_request_id;
@@ -396,7 +415,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           setRequestBinding({ id, conversationId, revision: scopeRevision.current });
           setRequestOpen(true);
         } : undefined}
-        scopeLabel={materialContext ? (materialContext.label ?? (materialContext.selection ? "当前素材" : "素材库")) : task ? task.name : pathname === "/" ? "首页创作" : "工作区对话"}
+        scopeLabel={task ? task.name : materialContext ? (materialContext.label ?? (materialContext.selection ? "当前素材" : "素材库")) : pathname === "/" ? "首页创作" : "工作区对话"}
         state={assistant}
       />
       {taskActionStatus ? <p role="status" aria-live="polite">{taskActionStatus}</p> : null}

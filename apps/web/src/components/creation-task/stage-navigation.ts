@@ -23,11 +23,7 @@ export const stageLabels = {
     publish: "发布",
 };
 export function defaultWorkspaceView(workspace: WorkspaceState): WorkspaceView {
-    const hasValidSubtitle = workspace.subtitle_tracks.some((track) => track.status === "valid");
-    const hasValidCover = workspace.cover_asset?.status === "valid";
-    if (workspace.task.stage === "review" && workspace.montage?.output_url && hasValidSubtitle && !hasValidCover) {
-        return "subtitle_cover";
-    }
+    if (workspace.montage) return "montage";
     return workspace.task.stage;
 }
 export type ProductStageState = "done" | "skipped" | "current" | "upcoming";

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export function useEditorPanels(enabled: boolean) {
-  const [left, setLeft] = useState(160);
+  const [left, setLeft] = useState(280);
   // Only an explicit user resize becomes a remembered width. Responsive defaults
   // must not turn into a permanent 360px preference on the first visit.
   const [right, setRight] = useState<number | null>(null);
@@ -20,7 +20,8 @@ export function useEditorPanels(enabled: boolean) {
     const savedRight = Number(localStorage.getItem("video-workspace-chat-width"));
     if (Number.isFinite(savedLeft) && savedLeft >= 160) setLeft(clamp(savedLeft, 160, 280));
     if (Number.isFinite(savedRight) && savedRight >= 320) setRight(clamp(savedRight, 320, 480));
-    setCollapsed(localStorage.getItem("video-editor-left-collapsed") === "true");
+    const savedCollapse = localStorage.getItem("video-editor-left-collapsed");
+    setCollapsed(savedCollapse === null ? window.innerWidth < 1200 : savedCollapse === "true");
     setChatCollapsed(localStorage.getItem("video-workspace-chat-collapsed") === "true");
     setWorkspaceCollapsed(localStorage.getItem("video-editor-workspace-collapsed") === "true");
     setLoaded(true);

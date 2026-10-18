@@ -251,7 +251,7 @@ export default function SourcesPage() {
           <section hidden={entryMode !== "file"} className="source-manual-entry">
             <header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF。</p></div></header>
             <form className={styles.entryForm} onSubmit={importFile}>
-              <label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf" name="file" required type="file" aria-describedby="knowledge-file-state" aria-invalid={Boolean(fileError)} onInvalid={event => { event.preventDefault(); setFileError("请先选择一个 Markdown、文本或 PDF 文件。"); }} onChange={event => {
+              <label><span>选择文件</span><input accept=".md,.markdown,.txt,.pdf,.docx,.xlsx" name="file" required type="file" aria-describedby="knowledge-file-state" aria-invalid={Boolean(fileError)} onInvalid={event => { event.preventDefault(); setFileError("请先选择一个 Markdown、文本、PDF、Word 或 Excel 文件。"); }} onChange={event => {
                 const file = event.target.files?.[0];
                 setFileName(file?.name ?? null);
                 setFileError(file ? validateKnowledgeFile(file) : null);
@@ -286,8 +286,8 @@ export default function SourcesPage() {
 }
 
 function validateKnowledgeFile(file: File | undefined): string | null {
-  if (!file) return "请先选择一个 Markdown、文本或 PDF 文件。";
-  if (!/\.(md|markdown|txt|pdf)$/i.test(file.name)) return "请选择 Markdown、文本或 PDF 文件。";
+  if (!file) return "请先选择一个 Markdown、文本、PDF、Word 或 Excel 文件。";
+  if (!/\.(md|markdown|txt|pdf|docx|xlsx)$/i.test(file.name)) return "请选择 Markdown、文本、PDF、Word 或 Excel 文件。";
   if (file.size === 0) return "文件为空，请选择有正文的文件。";
   return null;
 }

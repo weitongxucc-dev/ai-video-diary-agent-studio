@@ -1,4 +1,7 @@
 "use client";
+import { Button } from "./ui/button";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
+import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
 import { MaterialNotesEditor } from "./material-library/MaterialNotesEditor";
 import { MaterialSegmentTags } from "./material-library/MaterialSegmentTags";
 import { MaterialSegmentEditor } from "./material-library/MaterialSegmentEditor";
@@ -27,7 +30,7 @@ import { HomeCardDialog } from "@/components/HomeCardDialog";
 import styles from "./MaterialLibraryControls.module.css";
 import { getProductionMaterial } from "@/lib/api/materials";
 import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference } from "@/lib/assistant-reference";
-import { useSearchParams } from "next/navigation";
+import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
 import type { AssistantReferenceItem } from "@/lib/types/assistant";
 import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
 import { analyzeProductionMaterial, createMaterialCollection, getMaterialLibraryInsights, getProductionMaterials, reviewProductionMaterial, retryMaterialIntake, scanMaterialIntake, updateProductionMaterialSegment, updateMaterialUseState, updateMaterialAssetTags } from "@/lib/api";
@@ -51,6 +54,7 @@ export function MaterialLibraryWorkspace({
   // 来自 /library?tag= 的精确标签筛选；URL 是唯一来源，清除后由页面重挂载恢复
   initialTag?: string;
 }) {
+  const viewActive = useWorkspacePage()?.active ?? true;
   const searchParams = useSearchParams();
   const locateQuery = searchParams?.get("locate_ref") ?? "";
   const [assets, setAssets] = useState(initialLibrary.assets);
@@ -65,22 +69,22 @@ export function MaterialLibraryWorkspace({
   const [collections, setCollections] = useState(
     initialCollections.collections,
   );
-  const [selectedId, setSelectedId] = useState(
+  const [selectedId, setSelectedId] = useWorkspaceViewState("library.selectedId",
     initialLibrary.assets[0]?.id ?? "",
   );
-  const [selectedSegmentId, setSelectedSegmentId] = useState(
+  const [selectedSegmentId, setSelectedSegmentId] = useWorkspaceViewState("library.selectedSegmentId",
     initialLibrary.assets[0]?.segments[0]?.id ?? "",
   );
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useWorkspaceViewState("library.query", "");
   const [importOpen, setImportOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [previewErrorId, setPreviewErrorId] = useState<string | null>(null);
   const [previewReadTick, setPreviewReadTick] = useState(0);
   const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
   const searchInput = useRef<HTMLInputElement>(null);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [filter, setFilter] = useWorkspaceViewState<Filter>("library.filter", "all");
+  const [mediaType, setMediaType] = useWorkspaceViewState<MediaTypeFilter>("library.mediaType", "all");
+  const [viewMode, setViewMode] = useWorkspaceViewState<"grid" | "list">("library.viewMode", "grid");
   const [actionBusy, setBusy] = useState<Busy>(null);
   const [listBusy, setListBusy] = useState<"search" | "load" | null>(null);
   const [scanReadRevision, setScanReadRevision] = useState(0);
@@ -94,21 +98,21 @@ export function MaterialLibraryWorkspace({
   const setMaterialReference = persistentReference?.setReference;
   const lastPublishedSelection = useRef<MaterialAssistantSelection | null>(null);
   const [assistantSelection, setAssistantSelection] = useState<MaterialAssistantSelection | null>(null);
-  const [assetTagDrafts, setAssetTagDrafts] = useState<Record<string, string>>({});
+  const [assetTagDrafts, setAssetTagDrafts] = useWorkspaceViewState<Record<string, string>>("library.assetTagDrafts", {});
   const [assetTagErrors, setAssetTagErrors] = useState<Record<string, string>>({});
   const [assetTagsPendingId, setAssetTagsPendingId] = useState<string | null>(null);
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
-  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
-  const [collectionQuery, setCollectionQuery] = useState("");
-  const [collectionDraft, setCollectionDraft] = useState(
+  const [tagDrafts, setTagDrafts] = useWorkspaceViewState<Record<string, string>>("library.tagDrafts", {});
+  const [collectionQuery, setCollectionQuery] = useWorkspaceViewState("library.collectionQuery", "");
+  const [collectionDraft, setCollectionDraft] = useWorkspaceViewState("library.collectionDraft",
     initialLibrary.assets[0]?.segments[0]?.collection_ids[0] ?? "",
   );
-  const [newCollectionName, setNewCollectionName] = useState("");
-  const [descriptionDraft, setDescriptionDraft] = useState(initialLibrary.assets[0]?.segments[0]?.description ?? "");
-  const [transcriptDraft, setTranscriptDraft] = useState(initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
-  const [usageRoleDraft, setUsageRoleDraft] = useState<MaterialSegment["usage_role"]>(initialLibrary.assets[0]?.segments[0]?.usage_role ?? "unassigned");
-  const [editAnchor, setEditAnchor] = useState<SegmentEditAnchor | null>(null);
-  const editAnchorRef = useRef<SegmentEditAnchor | null>(null);
+  const [newCollectionName, setNewCollectionName] = useWorkspaceViewState("library.newCollectionName", "");
+  const [descriptionDraft, setDescriptionDraft] = useWorkspaceViewState("library.descriptionDraft", initialLibrary.assets[0]?.segments[0]?.description ?? "");
+  const [transcriptDraft, setTranscriptDraft] = useWorkspaceViewState("library.transcriptDraft", initialLibrary.assets[0]?.segments[0]?.transcript ?? "");
+  const [usageRoleDraft, setUsageRoleDraft] = useWorkspaceViewState<MaterialSegment["usage_role"]>("library.usageRoleDraft", initialLibrary.assets[0]?.segments[0]?.usage_role ?? "unassigned");
+  const [editAnchor, setEditAnchor] = useWorkspaceViewState<SegmentEditAnchor | null>("library.editAnchor", null);
+  const editAnchorRef = useRef<SegmentEditAnchor | null>(editAnchor);
   const editDraftRevision = useRef(0);
   const sourceVideo = useRef<HTMLVideoElement>(null);
   const sourceAudio = useRef<HTMLAudioElement>(null);
@@ -119,7 +123,7 @@ export function MaterialLibraryWorkspace({
     [filter, query, initialTag, mediaType, initialLibrary.limit]);
   const lastSearch = useRef(searchScope);
   lastSearch.current = searchScope;
-  const initialSearch = useRef(searchScope);
+  const initialSearch = useRef(query || filter !== "all" || mediaType !== "all" ? null : searchScope);
   const [acceptedSearch, setAcceptedSearch] = useState(searchScope);
   const listReadSequence = useRef(0);
   const assetWriteRevision = useRef(0);
@@ -233,7 +237,7 @@ export function MaterialLibraryWorkspace({
   }, [locateQuery]);
 
   useEffect(() => {
-    if (!intake?.bound_to_current_workspace || busy !== null) return;
+    if (!viewActive || !intake?.bound_to_current_workspace || busy !== null) return;
     let active = true;
     let inFlight = false;
     const timer = window.setInterval(async () => {
@@ -267,7 +271,7 @@ export function MaterialLibraryWorkspace({
       }
     }, 15000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, mediaType, query, selectedId, ownsListRead]);
+  }, [viewActive, assets.length, busy, filter, initialLibrary.limit, initialTag, intake?.bound_to_current_workspace, mediaType, query, selectedId, ownsListRead]);
 
   // 首屏是服务端按「全部」渲染的，URL 里的类型在挂载后才读回来，
   // 于是下面那次搜索会带上类型重新取第一页；URL 里没有类型时状态不变，不会多取一次。
@@ -780,14 +784,14 @@ export function MaterialLibraryWorkspace({
           <dd>
             <div className={styles.useStateOptions} role="group" aria-label="素材使用状态">
               {useStateOptions.map((option) => (
-                <button
+                <Button variant="ghost"
                   aria-pressed={selected.use_state === option.value}
                   className={selected.use_state === option.value ? styles.isSelected : ""}
                   disabled={busy !== null}
                   key={option.value}
                   onClick={() => void changeUseState(option.value)}
                   type="button"
-                >{option.label}</button>
+                >{option.label}</Button>
               ))}
             </div>
             <small className={styles.useStateImpact}>{useStateOptions.find((option) => option.value === selected.use_state)?.impact}</small>
@@ -806,17 +810,17 @@ export function MaterialLibraryWorkspace({
       ) : null}
       <div className="library-inspector__actions">
         {selected.analysis_status === "failed" ? (
-          <button disabled={busy !== null} onClick={() => void retryFailedAsset()} type="button">
+          <Button variant="ghost" disabled={busy !== null} onClick={() => void retryFailedAsset()} type="button">
             <RefreshCw size={14} />
             {busy === "retry" ? "正在重试…" : "重试分析"}
-          </button>
+          </Button>
         ) : selected.analysis_status === "ready" ? (
-          <button disabled={busy !== null} onClick={() => void analyze()} type="button">
+          <Button variant="ghost" disabled={busy !== null} onClick={() => void analyze()} type="button">
             <RefreshCw size={14} />
             {busy === "analyze" ? "分析中…" : "重新分析"}
-          </button>
+          </Button>
         ) : null}
-        <button
+        <Button variant="ghost"
           className="is-primary"
           disabled={busy !== null}
           onClick={() => void review("approved", "b_roll")}
@@ -824,7 +828,7 @@ export function MaterialLibraryWorkspace({
         >
           <Check size={14} />
           用作配图
-        </button>
+        </Button>
       </div>
       {selectedSegment ? (
         <MaterialSegmentEditor segment={selectedSegment} speechAnalysis={selected.speech_analysis} descriptionDraft={descriptionDraft} transcriptDraft={transcriptDraft} usageRoleDraft={usageRoleDraft} disabled={busy !== null} saving={busy === "segment"}
@@ -840,6 +844,7 @@ export function MaterialLibraryWorkspace({
     <AppShell
       inspector={inspector}
       inspectorTitle="素材详情"
+      assistantContext={{ materialContext: { selection: materialAssistantSelection, label: materialAssistantLabel, onResult: applyMaterialAssistantResult } }}
       conversation={<HomeCommandComposer materialContext={{
         selection: materialAssistantSelection,
         label: materialAssistantLabel,
@@ -848,17 +853,17 @@ export function MaterialLibraryWorkspace({
     >
       <div className={`modern-library ${styles.workspace}`}>
         <div className={`library-toolbar ${styles.toolbar}`}>
-          <label data-input-group className={`library-search ${styles.search}`}>
-            <Search size={15} />
-            <input
+          <InputGroup data-input-group aria-label="素材检索" className={`library-search ${styles.search}`}>
+            <InputGroupAddon><Search size={16} /></InputGroupAddon>
+            <InputGroupInput
               aria-label="搜索素材"
               ref={searchInput}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索文件、画面、标签或标签夹…"
               value={query}
             />
-            {query ? <button aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></button> : null}
-          </label>
+            {query ? <Button variant="ghost" aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></Button> : null}
+          </InputGroup>
           <AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
           <AppSelect className={styles.filterSelect} aria-label="审核状态筛选" value={filter} onValueChange={newValue => setFilter(newValue as Filter)}><AppSelectOption value="all">全部确认状态</AppSelectOption><AppSelectOption value="raw">未人工确认</AppSelectOption><AppSelectOption value="approved">已人工确认</AppSelectOption><AppSelectOption value="rejected">已标记排除</AppSelectOption></AppSelect>
           {initialTag ? (
@@ -872,18 +877,18 @@ export function MaterialLibraryWorkspace({
           {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
             <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
           ) : (
-            <button className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</button>
+            <Button variant="ghost" className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</Button>
           ) : null}
           <div className="library-view-toggle" role="group" aria-label="列表显示方式">
-            <button aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></button>
-            <button aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></button>
+            <Button variant="ghost" aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></Button>
+            <Button variant="ghost" aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></Button>
           </div>
-          <button className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></button>
-          <button className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16} />导入素材</button>
+          <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button>
+          <Button variant="ghost" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16} />导入素材</Button>
 
         </div>
-        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span><button className={styles.iconButton} aria-label="查看素材统计" title="查看素材统计" onClick={() => setStatisticsOpen(true)} type="button"><Info size={16} /></button></div>
-        {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><button onClick={() => setImportOpen(true)} type="button">查看接入</button></div> : null}
+        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span><Button variant="ghost" className={styles.iconButton} aria-label="查看素材统计" title="查看素材统计" onClick={() => setStatisticsOpen(true)} type="button"><Info size={16} /></Button></div>
+        {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><Button variant="ghost" onClick={() => setImportOpen(true)} type="button">查看接入</Button></div> : null}
 
         {error ? (
           <div className="library-error" role="alert">
@@ -909,7 +914,7 @@ export function MaterialLibraryWorkspace({
         <MaterialResults assets={visible} selectedId={selected?.id ?? null} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onReference={referenceSelection ? appendMaterialReference : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
         {hasMore ? (
           <div className="library-load-more">
-            <button
+            <Button variant="ghost"
               disabled={busy !== null || acceptedSearch !== searchScope}
               onClick={() => void loadMore()}
               type="button"
@@ -920,7 +925,7 @@ export function MaterialLibraryWorkspace({
               {busy === "load"
                 ? "正在载入…"
                 : `载入更多（剩余 ${Math.max(0, totalCount - assets.length)}）`}
-            </button>
+            </Button>
           </div>
         ) : null}
         <details className={styles.notesEditor}>
@@ -933,7 +938,7 @@ export function MaterialLibraryWorkspace({
           <p>当前选中 {noteBatchAssets.length} 份；只更新这些素材的背景，各自说明保持不变。</p>
           {batchNoteError ? <p role="alert">{batchNoteError}</p> : null}
           {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
-          <button disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</button>
+          <Button variant="ghost" disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</Button>
         </details>
 
         {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>

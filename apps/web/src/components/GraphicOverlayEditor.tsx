@@ -1,6 +1,7 @@
 "use client";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
-import {useEffect,useState} from "react";
+import {useState} from "react";
+import {useWorkspaceViewState} from "./workbench/context";
 import {getCreationTaskGraphicSources,importCreationTaskGraphic} from "@/lib/api";
 import type {CreationTaskExactEditInput,TextOverlay,ImageOverlay,ArrowOverlay,GraphicOverlay,GraphicSource} from "@/lib/types";
 import ui from "./VideoEditor.module.css";
@@ -17,13 +18,12 @@ function arrowProblem(draft:ArrowDraft):string|null{
  if(!/^#[0-9a-fA-F]{6}$/.test(draft.color))return"箭头颜色需为 #RRGGBB 六位十六进制";
  return null;
 }
-export function GraphicOverlayEditor({taskId,items,duration,busy,onPreview,onDraftChange,selectedId,onSelect}:{taskId:string;items:GraphicOverlay[];duration:number;busy:boolean;
+export function GraphicOverlayEditor({taskId,versionId,items,duration,busy,onPreview,onDraftChange,selectedId,onSelect}:{taskId:string;versionId?:string|null;items:GraphicOverlay[];duration:number;busy:boolean;
  onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void;selectedId?:string|null;onSelect?:(id:string|null)=>void}) {
  const blank=():Draft=>({text:"",start_seconds:0,end_seconds:Math.min(3,duration),x:.5,y:.15,width:.8,font_size:64,font_family:"PingFang SC",color:"#FFFFFF"});
  const blankArrow=():ArrowDraft=>({kind:"arrow",x:Number.NaN,y:Number.NaN,name:"",purpose:"",start_seconds:0,end_seconds:Math.min(3,duration),position:"right-top",color:"#FFFFFF"});
  const selectedItem=items.find(item=>item.id===selectedId);
- const [draft,setDraft]=useState<Draft>(()=>selectedItem??blank());
- useEffect(()=>{setDraft(selectedItem??blank());},[selectedId,selectedItem,duration]);
+ const [draft,setDraft]=useWorkspaceViewState<Draft>(`graphic:${taskId}:${versionId}:${selectedId??"new"}:${JSON.stringify(selectedItem)}:${duration}`,()=>selectedItem??blank());
  const [sources,setSources]=useState<GraphicSource[]>([]);
  const [working,setWorking]=useState(false),[error,setError]=useState<string|null>(null);
  const disabled=busy||working;

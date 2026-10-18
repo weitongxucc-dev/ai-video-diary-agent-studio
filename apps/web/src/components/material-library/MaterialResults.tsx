@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
 import { CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleMinus, Film, MessageSquarePlus, Volume2 } from "lucide-react";
 import type { MaterialAsset } from "@/lib/types";
@@ -28,7 +29,7 @@ export function MaterialResults({ assets, selectedId, viewMode, hasFilters, hasT
                         : asset.analysis_status === "ready" ? CircleCheck : CircleDashed;
                 return (<div className={styles.referenceEntry} key={asset.id}><button className={`library-card ${styles.materialCard}${selectedId === asset.id ? " is-selected" : ""}`} data-open-details onClick={() => onSelect(asset)} type="button">
                 <span className="library-card__poster">
-                  {failedThumbnails[asset.id] ? <Film className="library-card__fallback-icon" size={22}/> : asset.media_type === "image" ? (<img alt="" aria-hidden="true" loading="lazy" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>) : asset.media_type === "audio" ? (<Volume2 className="library-card__fallback-icon" size={22}/>) : (<video aria-hidden="true" muted playsInline preload="metadata" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>)}
+                  {failedThumbnails[asset.id] ? <Film className="library-card__fallback-icon" size={22}/> : asset.media_type === "image" ? (<img alt="" aria-hidden="true" loading="lazy" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>) : asset.media_type === "audio" ? (<Volume2 className="library-card__fallback-icon" size={22}/>) : (<WorkspaceVideo aria-hidden="true" muted playsInline preload="metadata" src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} onError={() => onThumbnailFailure(asset.id)}/>)}
                   {asset.media_type === "video" ? (<Film className="library-card__fallback-icon" size={22}/>) : null}
                   <small>
                     {asset.media_type === "image" ? mediaLabel(asset.media_type) : duration(asset.duration_seconds)}

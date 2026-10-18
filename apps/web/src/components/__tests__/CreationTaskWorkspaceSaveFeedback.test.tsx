@@ -379,6 +379,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     useElectronSave(saveRenderedVideo);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
@@ -405,6 +407,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     useElectronSave(saveRenderedVideo);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     const alert = await screen.findByRole("alert");
@@ -422,6 +426,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     useElectronSave(saveRenderedVideo);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
@@ -441,6 +447,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     useElectronSave(saveRenderedVideo);
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     await screen.findByRole("alert");
@@ -458,6 +466,8 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     Reflect.deleteProperty(window, "electronAPI");
 
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={reviewWorkspace()} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
     const alert = await screen.findByRole("alert");
@@ -502,6 +512,7 @@ describe("CreationTaskWorkspace 字幕保存", () => {
     const workspace = subtitleWorkspace();
     mocks.getWorkspace.mockResolvedValue(workspace);
     render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspace} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^字幕与封面：/ }));
     fireEvent.click(screen.getByRole("button",{name:"字幕导出设置"}));
     await chooseSelectValue(screen.getByRole("combobox", { name: "保存字幕语言" }), "zh-en");
     fireEvent.keyDown(document.activeElement!,{key:"Escape"});

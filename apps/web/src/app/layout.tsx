@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { AssistantConversationProvider } from "@/components/AssistantConversationProvider";
 import { ToastProvider } from "@/components/PixelToast";
+import { Workbench } from "@/components/workbench/Workbench";
 import "./globals.css";
 import "./modern-overrides.css";
 
@@ -23,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ToastProvider><AssistantConversationProvider>{children}</AssistantConversationProvider></ToastProvider>
+        <ToastProvider><AssistantConversationProvider><Workbench>{children}</Workbench></AssistantConversationProvider></ToastProvider>
       </body>
     </html>
   );

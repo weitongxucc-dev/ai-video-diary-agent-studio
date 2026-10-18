@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo, WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
 import NextImage from "next/image";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
@@ -121,7 +122,7 @@ export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClip
       {previewAsset ? <HomeCardDialog kind="detail" title={previewAsset.file_name} onClose={() => setPreviewAsset(null)}>
         <p>{materialUseLabel(previewAsset.use_state)} · {materialAnalysisLabel(previewAsset.analysis_status)}</p>
         <p>原始素材预览；是否可采用仍由当前任务的真实媒体和使用条件检查决定。</p>
-        {previewAsset.media_type === "image" ? <NextImage alt={previewAsset.file_name} src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)} width={720} height={1280} unoptimized className={styles.materialPreview}/> : previewAsset.media_type === "audio" ? <audio aria-label="候选素材预览" controls src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)}/> : <video aria-label="候选素材预览" className={styles.materialPreview} controls preload="metadata" src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)}/>}
+        {previewAsset.media_type === "image" ? <NextImage alt={previewAsset.file_name} src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)} width={720} height={1280} unoptimized className={styles.materialPreview}/> : previewAsset.media_type === "audio" ? <WorkspaceAudio aria-label="候选素材预览" controls src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)}/> : <WorkspaceVideo aria-label="候选素材预览" className={styles.materialPreview} controls preload="metadata" src={apiUrl(`/api/production/materials/${encodeURIComponent(previewAsset.id)}/media`)}/>}
         <Link href="/library">在素材库检查来源与使用范围</Link>
       </HomeCardDialog> : null}
     </section>);

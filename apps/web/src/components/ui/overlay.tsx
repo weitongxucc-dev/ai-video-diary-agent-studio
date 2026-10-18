@@ -4,7 +4,8 @@ import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { AlertDialog as BaseAlertDialog } from "@base-ui/react/alert-dialog";
 import { Popover as BasePopover } from "@base-ui/react/popover";
 import { X } from "lucide-react";
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { MediaVisibilityContext } from "./media-visibility";
 import styles from "../SideCards.module.css";
 
 export type OverlayProps = {
@@ -35,6 +36,7 @@ function useMediaEscape(open: boolean, onClose: () => void) {
 
 export function Dialog({ title, children, footer, open, onClose, anchor, sheet = false }: OverlayProps & { sheet?: boolean }) {
   const { id, node } = useMediaEscape(open, onClose);
+  const visible = useContext(MediaVisibilityContext) && open;
   return <BaseDialog.Root open={open} modal={!sheet} disablePointerDismissal={sheet} onOpenChange={(next, details) => {
     if (document.fullscreenElement && details.reason === "escape-key") { details.cancel(); return; }
     if (!next) onClose();
@@ -43,7 +45,7 @@ export function Dialog({ title, children, footer, open, onClose, anchor, sheet =
       {!sheet ? <BaseDialog.Backdrop className={styles.modalShade} /> : null}
       <BaseDialog.Popup ref={node} aria-modal={sheet ? undefined : true} finalFocus={anchor} className={`${styles.card} ${sheet ? styles.sheet : styles.modal}`} data-overlay-id={id}>
         <header><BaseDialog.Title>{title}</BaseDialog.Title><BaseDialog.Close aria-label="关闭卡片"><X size={16}/></BaseDialog.Close></header>
-        <div className={styles.body}>{children}</div>
+        <MediaVisibilityContext.Provider value={visible}><div className={styles.body}>{children}</div></MediaVisibilityContext.Provider>
         {footer ? <footer>{footer}</footer> : null}
       </BaseDialog.Popup>
     </BaseDialog.Portal>
@@ -54,6 +56,7 @@ export function Sheet(props: OverlayProps) { return <Dialog {...props} sheet/>; 
 
 export function AlertDialog({ title, children, footer, open, onClose, anchor }: OverlayProps) {
   const popup = useRef<HTMLDivElement>(null);
+  const visible = useContext(MediaVisibilityContext) && open;
   return <BaseAlertDialog.Root open={open} onOpenChange={(next, details) => {
     if (details.reason === "escape-key" || details.reason === "outside-press") { details.cancel(); return; }
     if (!next) onClose();
@@ -63,7 +66,7 @@ export function AlertDialog({ title, children, footer, open, onClose, anchor }: 
       <BaseAlertDialog.Popup ref={popup} aria-modal="true" className={`${styles.card} ${styles.modal}`} finalFocus={anchor}
         initialFocus={() => popup.current?.querySelector<HTMLElement>("[data-card-cancel]") ?? popup.current?.querySelector<HTMLElement>("button") ?? true}>
         <header><BaseAlertDialog.Title>{title}</BaseAlertDialog.Title></header>
-        <div className={styles.body}>{children}</div>
+        <MediaVisibilityContext.Provider value={visible}><div className={styles.body}>{children}</div></MediaVisibilityContext.Provider>
         {footer ? <footer>{footer}</footer> : null}
       </BaseAlertDialog.Popup>
     </BaseAlertDialog.Portal>
@@ -71,12 +74,13 @@ export function AlertDialog({ title, children, footer, open, onClose, anchor }: 
 }
 
 export function Popover({ title, children, footer, open, onClose, anchor }: OverlayProps) {
+  const visible = useContext(MediaVisibilityContext) && open;
   return <BasePopover.Root open={open} onOpenChange={next => { if (!next) onClose(); }}>
     <BasePopover.Portal keepMounted>
       <BasePopover.Positioner anchor={anchor} side="bottom" align="end" sideOffset={6} collisionPadding={12} className={styles.positioner}>
         <BasePopover.Popup className={`${styles.card} ${styles.selection}`} finalFocus={anchor}>
           <header><BasePopover.Title>{title}</BasePopover.Title><BasePopover.Close aria-label="关闭卡片"><X size={16}/></BasePopover.Close></header>
-          <div className={styles.body}>{children}</div>
+          <MediaVisibilityContext.Provider value={visible}><div className={styles.body}>{children}</div></MediaVisibilityContext.Provider>
           {footer ? <footer>{footer}</footer> : null}
         </BasePopover.Popup>
       </BasePopover.Positioner>

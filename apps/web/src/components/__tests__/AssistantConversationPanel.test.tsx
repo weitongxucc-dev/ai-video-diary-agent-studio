@@ -148,6 +148,22 @@ function goalTaskConversation(status = "waiting_result") {
 }
 
 describe("actual goal progress", () => {
+  it("shows verified production completion without claiming output inspection or reviving an old failure", () => {
+    const saved = goalTaskConversation("production_completed");
+    saved.turns[0].status = "failed";
+    const goal = saved.turns[0].result!.goal_continuation as Record<string, unknown>;
+    goal.waiting_reason = "output_not_checked";
+    goal.production_result = { scope: "production", status: "succeeded", job_id: "finished-job", timeline_version_id: "v5", video_ready: true };
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务" />);
+    const summary = screen.getByLabelText("本次目标执行状态");
+    expect(summary).toHaveTextContent("本次目标 · 成片已生成");
+    expect(screen.getByText("本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。")).toBeVisible();
+    fireEvent.click(summary);
+    expect(screen.getByText("成片已生成；输出尚未检查。")).toBeVisible();
+    expect(screen.queryByLabelText("实际输出检查范围")).not.toBeInTheDocument();
+    expect(screen.queryByText("接续未取得新进展")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看对应任务与成片" })).toHaveAttribute("href", "/tasks/task-one");
+  });
   it("distinguishes a returned submission, a queued job and an actual video, without adding a completion estimate", () => {
     const saved = goalTaskConversation();
     saved.turns[0].events = [{type: "tool_end", tool_id: 1, label: "开始制作", ok: true, summary: "制作请求已返回，当前作业已排队。"}];

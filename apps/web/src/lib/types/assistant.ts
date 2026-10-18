@@ -71,6 +71,13 @@ export type AssistantGoalContinuation = {
     status: string;
     waiting_reason?: string;
     unfinished_steps?: string[];
+    production_result?: {
+        scope: "production";
+        status: "succeeded" | "failed";
+        job_id: string;
+        timeline_version_id: string | null;
+        video_ready: boolean;
+    };
     completed_output_checkpoint?: {
         status: "completed";
         scope: "production_and_output_observation";

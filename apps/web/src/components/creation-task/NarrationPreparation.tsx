@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
 import { AppSelect, AppSelectOption } from "../AppSelect";
 import { AlertCircle, Check, LoaderCircle, Mic, Volume2 } from "lucide-react";
@@ -34,7 +35,7 @@ export function NarrationPreparation({ taskId, canReviseScript, scriptConfirmed,
               {recordingsError ? <p role="alert">已保存录音读取失败：{recordingsError}</p> : null}
               {recordings.map((recording) => (<article key={recording.source_ref}>
                   <strong>本机录音 · {(recording.duration_ms / 1000).toFixed(1)} 秒</strong>
-                  <audio controls preload="metadata" src={apiUrl(recording.audio_url)}/>
+                  <WorkspaceAudio controls preload="metadata" src={apiUrl(recording.audio_url)}/>
                   <span>{recording.applied ? "已采用为当前配音" : "已保存 · 尚未采用"}</span>
                   {!recording.applied ? (scriptConfirmed && scriptSectionCount === 1 ?
                 <button className="modern-primary-button" disabled={busy !== null} onClick={() => onAdoptRecording(recording)} type="button">{busy === "recording-adopt" ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}采用这段录音</button>

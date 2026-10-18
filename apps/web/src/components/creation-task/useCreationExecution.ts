@@ -1,4 +1,5 @@
 "use client";
+import { useWorkspacePage } from "../workbench/context";
 import { useEffect, useRef, useState } from "react";
 import { getCreationExecution, getCreationTaskWorkspace, previewCreationExecution } from "@/lib/api";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTaskWorkspace } from "@/lib/types";
@@ -17,6 +18,7 @@ function executionSnapshot(execution: CreationExecutionStatus) {
 }
 // Production facts own a separate lifecycle from selection, chat, and unsaved inputs.
 export function useCreationExecution({ taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
+    const viewActive = useWorkspacePage()?.active ?? true;
     const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
     const [execution, setExecution] = useState<CreationExecutionStatus | null>(null);
     const [executionError, setExecutionError] = useState<ReturnType<typeof errorDetails> | null>(null);
@@ -30,6 +32,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
     const workspaceRead = useRef<(execution: CreationExecutionStatus) => Promise<boolean>>(async () => false);
     const commandRequest = useRef(0);
     useEffect(() => {
+        if (!viewActive) return;
         let active = true;
         let timer: number | undefined;
         let snapshot = "";
@@ -105,7 +108,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         pollExecution.current = () => void poll();
         void poll();
         return () => { active = false; pollExecution.current = () => undefined; workspaceRead.current = async () => false; window.clearTimeout(timer); };
-    }, [taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion]);
+    }, [viewActive, taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion]);
     function acceptExecution(next: CreationExecutionStatus) {
         if (next.task_id === currentTask.current)
             setExecution(next);

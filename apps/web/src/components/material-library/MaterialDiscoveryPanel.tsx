@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo, WorkspaceAudio } from "../workbench/WorkspaceMedia";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -137,8 +138,8 @@ function CandidatePreview({ candidate, sessionId }: { candidate: DiscoveryCandid
       // The authenticated local endpoint validates the candidate before serving bytes.
       // eslint-disable-next-line @next/next/no-img-element
       ? <img src={src} alt={candidate.file_name} onError={() => setFailed(true)} />
-      : candidate.media_type === "audio" ? <audio src={src} controls preload="metadata" onError={() => setFailed(true)} onLoadedMetadata={e => setDuration(e.currentTarget.duration)} />
-      : <video src={src} controls preload="metadata" onError={() => setFailed(true)} onLoadedMetadata={e => setDuration(e.currentTarget.duration)} />}
+      : candidate.media_type === "audio" ? <WorkspaceAudio src={src} controls preload="metadata" onError={() => setFailed(true)} onLoadedMetadata={e => setDuration(e.currentTarget.duration)} />
+      : <WorkspaceVideo src={src} controls preload="metadata" onError={() => setFailed(true)} onLoadedMetadata={e => setDuration(e.currentTarget.duration)} />}
     {duration !== null && Number.isFinite(duration) ? <p>时长 {duration.toFixed(1)} 秒</p> : null}
   </>;
 }

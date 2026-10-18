@@ -49,6 +49,7 @@ describe("real avatar group and existing theme controls", () => {
   beforeEach(() => {
     identity.role = null; identity.ready = true; identity.error = null;
     localStorage.clear();
+    localStorage.setItem("video-editor-left-collapsed", "false");
     membersApi.mockReset();membersApi.mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]});
     vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "local");
     Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }) });

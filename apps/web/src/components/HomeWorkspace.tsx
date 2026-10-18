@@ -1,4 +1,5 @@
 "use client";
+import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
 
 import Link from "next/link";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
@@ -115,10 +116,10 @@ function MaterialPreview({ asset, controls = false }: { asset: MaterialAsset; co
   const url = `/api/production/materials/${encodeURIComponent(asset.id)}/media`;
   if (failed) return <span className={styles.mediaUnavailable}>预览暂不可用</span>;
   if (asset.media_type === "audio") return controls
-    ? <audio aria-label="原素材预览" controls preload="metadata" src={url} onError={() => setFailed(true)} />
+    ? <WorkspaceAudio aria-label="原素材预览" controls preload="metadata" src={url} onError={() => setFailed(true)} />
     : <Volume2 aria-hidden size={20} />;
   if (asset.media_type === "image") return <img alt={controls ? `原素材预览：${asset.file_name}` : ""} src={url} loading="lazy" onError={() => setFailed(true)} />;
-  return <video aria-label={controls ? "原素材预览" : undefined} aria-hidden={!controls} controls={controls} muted={!controls} playsInline preload="metadata" src={url} onError={() => setFailed(true)} />;
+  return <WorkspaceVideo aria-label={controls ? "原素材预览" : undefined} aria-hidden={!controls} controls={controls} muted={!controls} playsInline preload="metadata" src={url} onError={() => setFailed(true)} />;
 }
 
 export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets = null }: {
