@@ -542,6 +542,22 @@ from app.automation_runtime import AutomationRuntime
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
 logger = logging.getLogger(__name__)
+app.state.creation_permit_client = None
+
+
+# Register before every driver that can verify a creation identity.
+@app.on_event("startup")
+def start_creation_permit_transport() -> None:
+    if app.state.creation_permit_client is None:
+        app.state.creation_permit_client = httpx.Client(timeout=5.0)
+
+
+def stop_creation_permit_transport() -> None:
+    client = app.state.creation_permit_client
+    if client is not None:
+        client.close()
+        app.state.creation_permit_client = None
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -13639,8 +13655,11 @@ def _request_permit_actor(request: Request, workspace_id: str) -> CreationExecut
 
 def _verify_creation_identity(actor: CreationExecutionActor) -> str:
     if actor.device_id is not None:
+        client = app.state.creation_permit_client
+        if client is None:
+            return "unknown"
         try:
-            service = DeviceAccountService(settings, trusted_device_credential())
+            service = DeviceAccountService(settings, trusted_device_credential(), creation_permit_client=client)
         except (DeviceAccountError, HTTPException):
             return "unknown"
         return service.creation_permit(actor.device_id, actor.user_id, actor.workspace_id)
@@ -14942,6 +14961,8 @@ def stop_creation_execution_worker() -> None:
 
 
 app.on_event("startup")(start_assistant_continuation_driver)
+# Shutdown hooks run in registration order; every transport user stops first.
+app.on_event("shutdown")(stop_creation_permit_transport)
 
 
 @app.api_route("/api/episodes", methods=_LEGACY_WRITE_METHODS)

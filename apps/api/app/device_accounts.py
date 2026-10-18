@@ -66,12 +66,15 @@ class DeviceMemberContext:
 class DeviceAccountService:
     """Call restricted Supabase RPCs with a verified user's bearer token."""
 
-    def __init__(self, settings: Settings, trusted_device: DeviceCredential) -> None:
+    def __init__(self, settings: Settings, trusted_device: DeviceCredential,
+                 *, creation_permit_client: httpx.Client | None = None) -> None:
         if not settings.auth_enabled or not settings.supabase_url or not settings.supabase_publishable_key:
             raise DeviceAccountError("unavailable", "authenticated device service is not configured")
         self._base_url = settings.supabase_url.rstrip("/")
         self._publishable_key = settings.supabase_publishable_key
         self._device = trusted_device
+        # Borrow only the transport; the application owns its lifetime.
+        self._creation_permit_client = creation_permit_client
 
     @property
     def device_id(self) -> str:
@@ -101,7 +104,8 @@ class DeviceAccountService:
         except (ValueError, TypeError, AttributeError):
             return "unauthorized"
         try:
-            response = httpx.post(
+            post = self._creation_permit_client.post if self._creation_permit_client is not None else httpx.post
+            response = post(
                 f"{self._base_url}/rest/v1/rpc/device_creation_permit",
                 headers={"apikey": self._publishable_key, "Content-Type": "application/json"},
                 json={"target_device_id": device_id, "device_proof": self._device.proof,
