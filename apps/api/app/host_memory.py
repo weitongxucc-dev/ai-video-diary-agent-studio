@@ -13,11 +13,15 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 import math
+import logging
 import sys
 import threading
 import time
 
 import psutil
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -242,6 +246,53 @@ class HostMemoryMonitor:
         self.policy, self.sampler, self.clock = policy, sampler, clock
         self._healthy_since = self._last_observed = None
         self._lock = threading.Lock()
+        self._observer_lock = threading.Lock()
+        self._observer_stop = threading.Event()
+        self._observer_thread: threading.Thread | None = None
+
+    @property
+    def observing(self) -> bool:
+        with self._observer_lock:
+            return self._observer_thread is not None and self._observer_thread.is_alive()
+
+    def start_observing(self, *, system_reserve_bytes: int, interval_seconds: float) -> None:
+        """Observe base health independently of owner/network and unit execution time."""
+        if (type(system_reserve_bytes) is not int or system_reserve_bytes <= 0
+                or type(interval_seconds) not in {int, float} or not math.isfinite(interval_seconds)
+                or interval_seconds <= 0
+                or self.policy is not None and interval_seconds >= self.policy.max_sample_gap_seconds):
+            raise ValueError("Memory observation needs explicit system headroom and a cadence within the policy gap")
+        with self._observer_lock:
+            if self._observer_thread is not None and self._observer_thread.is_alive():
+                if self._observer_stop.is_set():
+                    raise RuntimeError("Memory observation is still stopping")
+                return
+            self._observer_stop.clear()
+            self._observer_thread = threading.Thread(
+                target=self._observe, args=(system_reserve_bytes, interval_seconds),
+                name="device-memory-observation", daemon=True)
+            try:
+                self._observer_thread.start()
+            except (RuntimeError, OSError):
+                self._observer_thread = None
+                self._observer_stop.set()
+                raise
+
+    def _observe(self, system_reserve_bytes: int, interval_seconds: float) -> None:
+        while not self._observer_stop.is_set():
+            self.check(system_reserve_bytes=system_reserve_bytes, additional_commit_bytes=0)
+            self._observer_stop.wait(interval_seconds)
+
+    def stop_observing(self, timeout_seconds: float) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("Memory observation stop timeout must be nonnegative")
+        with self._observer_lock:
+            self._observer_stop.set()
+            thread = self._observer_thread
+            if thread is not None:
+                thread.join(timeout_seconds)
+                return not thread.is_alive()
+            return True
 
     def check(self, *, system_reserve_bytes: int, additional_memory_bytes: int = 0,
               additional_commit_bytes: int | None = None) -> MemoryDecision:
@@ -251,8 +302,17 @@ class HostMemoryMonitor:
                     and (type(additional_commit_bytes) is not int or additional_commit_bytes < 0))):
             raise ValueError("Memory checks require explicit positive system headroom and nonnegative new demand")
         required_available_bytes = system_reserve_bytes + additional_memory_bytes
-        sample = self.sampler()
         with self._lock:
+            # Native sampling and recovery writes are one ordered operation.
+            try:
+                sample = self.sampler()
+            except Exception as exc:
+                # A failed native sampler is an unknown observation, never a healthy tick.
+                logger.exception("Host memory observation failed")
+                sample = MemorySample(self.policy.platform if self.policy else sys.platform,
+                    self.clock(), datetime.now(timezone.utc).isoformat(), "unknown", None, None,
+                    {"pressure": {"value": None, "unit": "state", "source": "sampler",
+                                  "unavailable": type(exc).__name__}})
             now = sample.observed_monotonic
             policy = self.policy
             commit_required = (policy.min_commit_headroom_bytes + additional_commit_bytes

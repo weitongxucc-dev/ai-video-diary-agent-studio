@@ -846,7 +846,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert repo.get_job_run(workspace, job_id).status == "queued"
             with repo._connect() as conn:
                 assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone()[0] == "resource_busy"
-            assert main_module._creation_execution_status(workspace, task_id)["waiting_reason"] == "本机资源余量不足，正在等待满足制作条件。"
+            assert main_module._creation_execution_status(workspace, task_id)["waiting_reason"] == "本机资源检查尚未通过，正在等待满足制作条件。"
             return
         assert grant is not None
         assert grant.request_id == request_id and grant.unit_key.startswith("narration:")

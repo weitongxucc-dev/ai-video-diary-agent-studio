@@ -31,6 +31,7 @@ from app.device_scheduler import (
     Verdict,
     WorkRequest,
 )
+from app.host_memory import HostMemoryMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -123,12 +124,18 @@ class DeviceRuntime:
     """One driver thread; failures retain the grant for recovery inspection."""
 
     def __init__(self, scheduler: DeviceScheduler, registrations: Mapping[str, OwnerRegistration],
-                 *, poll_interval_seconds: float) -> None:
+                 *, poll_interval_seconds: float, memory_monitor: HostMemoryMonitor | None = None,
+                 memory_reserve_bytes: int | None = None) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("调度轮询间隔必须为正数")
         self.scheduler = scheduler
         self.registrations = dict(registrations)
         self.poll_interval_seconds = poll_interval_seconds
+        if ((memory_monitor is None) != (memory_reserve_bytes is None)
+                or memory_reserve_bytes is not None and (type(memory_reserve_bytes) is not int or memory_reserve_bytes <= 0)):
+            raise ValueError("持续内存观察必须绑定同一监测器和明确系统余量")
+        self.memory_monitor = memory_monitor
+        self.memory_reserve_bytes = memory_reserve_bytes
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._wake = threading.Event()
@@ -199,8 +206,18 @@ class DeviceRuntime:
             if self._dispatch_lock.locked():
                 raise RuntimeUnavailable("同步派发尚未结束，不能启动后台调度驱动")
             self._stop.clear()
+            if self.memory_monitor is not None:
+                self.memory_monitor.start_observing(system_reserve_bytes=self.memory_reserve_bytes,
+                    interval_seconds=self.poll_interval_seconds)
             self._thread = threading.Thread(target=self._run, name="device-dispatch", daemon=True)
-            self._thread.start()
+            try:
+                self._thread.start()
+            except (RuntimeError, OSError):
+                self._thread = None
+                self._stop.set()
+                if self.memory_monitor is not None and not self.memory_monitor.stop_observing(self.poll_interval_seconds):
+                    raise RuntimeUnavailable("派发启动失败，内存观察线程尚未停止")
+                raise
 
     def wake(self) -> None:
         """Wake the existing driver; never start or duplicate one."""
@@ -249,6 +266,8 @@ class DeviceRuntime:
         if not self._dispatch_lock.acquire(timeout=max(0, deadline - time.monotonic())):
             return False
         try:
+            if self.memory_monitor is not None and not self.memory_monitor.stop_observing(max(0, deadline - time.monotonic())):
+                return False
             self.scheduler.close()
         finally:
             self._dispatch_lock.release()
@@ -266,6 +285,8 @@ def build_device_runtime(
     activity_source_reliable: bool = False,
     poll_interval_seconds: float = 1.0,
     admission_recorder: ResourceAdmissionWrite | None = None,
+    memory_monitor: HostMemoryMonitor | None = None,
+    memory_reserve_bytes: int | None = None,
 ) -> DeviceRuntime:
     """Build only from explicit trusted adapters; never supply permissive probes."""
     if not database_path or not device_lock_path or device_access is None or resources is None or processes is None:
@@ -296,4 +317,5 @@ def build_device_runtime(
                                     activity_source_reliable=activity_source_reliable)
     except ValueError as exc:
         raise RuntimeUnavailable(str(exc)) from exc
-    return DeviceRuntime(scheduler, registered, poll_interval_seconds=poll_interval_seconds)
+    return DeviceRuntime(scheduler, registered, poll_interval_seconds=poll_interval_seconds,
+                         memory_monitor=memory_monitor, memory_reserve_bytes=memory_reserve_bytes)

@@ -21,6 +21,7 @@ from app.device_scheduler import (
     VerifiedSession,
     VerifiedWork,
 )
+from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample
 
 
 class Owner:
@@ -107,7 +108,7 @@ def _intent(owner_id, owner_type="job_run"):
     return SubmissionIntent("private-a", owner_type, owner_id, "sha256:input", "narration", SchedulePolicy())
 
 
-def _runtime(tmp_path, *, database=None, executor=None, resources=None, registrations=None):
+def _runtime(tmp_path, *, database=None, executor=None, resources=None, registrations=None, memory_monitor=None):
     database = database or _database(tmp_path)
     executor = executor or CompletingExecutor()
     registrations = registrations or {"job_run": OwnerRegistration(Owner(), executor)}
@@ -116,7 +117,111 @@ def _runtime(tmp_path, *, database=None, executor=None, resources=None, registra
         device_access=Access(), registrations=registrations,
         resources=resources or Resources(), processes=Processes(),
         poll_interval_seconds=0.01,
+        memory_monitor=memory_monitor,
+        memory_reserve_bytes=100 if memory_monitor is not None else None,
     )
+
+
+class MemoryObservations:
+    """Virtual one-second native observations; wall-clock waits stay small."""
+    def __init__(self):
+        self.now = 0.
+        self.condition = threading.Condition()
+        self.monitor = HostMemoryMonitor(MemoryPolicy("darwin", 10, 2, "synthetic-observer-cadence"),
+            sampler=self.sample, clock=lambda: self.now)
+
+    def sample(self):
+        with self.condition:
+            self.now += 1
+            self.condition.notify_all()
+            return MemorySample("darwin", self.now, "synthetic", "normal", 1000, None, {})
+
+    def wait_past(self, observation):
+        with self.condition:
+            assert self.condition.wait_for(lambda: self.now > observation, timeout=1)
+
+
+def test_independent_memory_recovery_survives_slow_owner_checks_and_multiple_queued_units(tmp_path):
+    observations = MemoryObservations()
+    checking, release_owner, finished = (threading.Event() for _ in range(3))
+    class SlowOwner(Owner):
+        def check_current(self, request, conn):
+            assert observations.monitor.observing  # Observer starts before dispatch.
+            if request.owner_id == "slow":
+                checking.set()
+                assert release_owner.wait(2)
+            return "ready"
+    class LiveResources(Resources):
+        def admit(self, request):
+            from app.host_resource_probes import HostResourceDecision
+            decision = observations.monitor.check(system_reserve_bytes=100, additional_memory_bytes=200)
+            return HostResourceDecision(decision.verdict, {}, {}, decision.reason)
+    class Executor(CompletingExecutor):
+        def execute(self, grant, scheduler):
+            super().execute(grant, scheduler)
+            if len(self.calls) == 2:
+                finished.set()
+    executor = Executor()
+    runtime = _runtime(tmp_path, resources=LiveResources(), memory_monitor=observations.monitor,
+        registrations={"job_run": OwnerRegistration(SlowOwner(), executor)})
+    for name in ("slow", "second"):
+        runtime.scheduler.submit(_intent(name), "member")
+    try:
+        runtime.start()
+        assert checking.wait(1)
+        observations.wait_past(11)  # Full 10s/2s recovery while the owner call is still blocked.
+        assert not executor.calls
+        release_owner.set()
+        assert finished.wait(2)
+        assert len(executor.calls) == 2 and runtime.last_error is None
+    finally:
+        release_owner.set()
+        assert runtime.stop(2)
+    assert not observations.monitor.observing
+
+
+def test_memory_observer_stays_on_during_pause_and_failed_stop_then_joins(tmp_path):
+    observations = MemoryObservations()
+    entered, release = threading.Event(), threading.Event()
+    class Executor(CompletingExecutor):
+        def execute(self, grant, scheduler):
+            entered.set()
+            assert release.wait(2)
+            super().execute(grant, scheduler)
+    runtime = _runtime(tmp_path, executor=Executor(), memory_monitor=observations.monitor)
+    try:
+        runtime.start()
+        thread = observations.monitor._observer_thread
+        runtime.start()
+        assert observations.monitor._observer_thread is thread
+        assert runtime.pause(1)
+        observations.wait_past(observations.now)
+        assert observations.monitor.observing
+        runtime.scheduler.submit(_intent("blocked-executor"), "member")
+        runtime.resume()
+        assert entered.wait(1)
+        assert not runtime.stop(.01)
+        observations.wait_past(observations.now)
+        assert observations.monitor.observing
+    finally:
+        release.set()
+        assert runtime.stop(2)
+    assert not observations.monitor.observing and not thread.is_alive()
+
+
+def test_dispatch_start_failure_stops_the_existing_memory_observer(tmp_path, monkeypatch):
+    observations = MemoryObservations()
+    runtime = _runtime(tmp_path, memory_monitor=observations.monitor)
+    original = threading.Thread.start
+    def fail_dispatch(thread):
+        if thread.name == "device-dispatch":
+            raise RuntimeError("synthetic thread startup failure")
+        return original(thread)
+    monkeypatch.setattr(threading.Thread, "start", fail_dispatch)
+    with pytest.raises(RuntimeError, match="startup failure"):
+        runtime.start()
+    assert not observations.monitor.observing and not runtime.running
+    assert runtime.stop(1)
 
 
 def test_factory_requires_explicit_probes_lock_and_initialized_database(tmp_path):

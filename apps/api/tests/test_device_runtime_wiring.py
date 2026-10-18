@@ -305,6 +305,11 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         assert probe_arguments['disk_paths'] == (repository.database_path.resolve().parent, Path(settings.video_output_path).expanduser())
         assert runtime_arguments['registrations'] is registrations
         assert runtime_arguments['resources'] is observations['probes'][0]
+        assert runtime.memory_monitor is runtime_arguments['resources'].memory_monitor
+        assert runtime.memory_reserve_bytes == budget.min_available_memory_bytes
+        assert runtime_arguments['memory_monitor'] is runtime.memory_monitor
+        assert runtime_arguments['poll_interval_seconds'] == probe_arguments['device_poll_interval_seconds'] == 1.0
+        assert not runtime.memory_monitor.observing
         assert runtime_arguments['processes'] is observations['probes'][1]
         assert runtime_arguments['device_access']._members is members
         assert runtime_arguments['device_access']._identity_verifier is verify_identity

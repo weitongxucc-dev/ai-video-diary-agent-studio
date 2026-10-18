@@ -4,6 +4,8 @@ from dataclasses import asdict
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -136,6 +138,62 @@ def test_unknown_does_not_become_zero_or_normal_and_resets_recovery():
     world.monitor.policy = None
     world.available = 1000
     assert world.check().reason == "memory_policy_unavailable"
+
+
+def test_sampling_and_window_writes_are_serialized_across_background_and_live_checks():
+    world = World()
+    first_entered, release_first, second_entered = (threading.Event() for _ in range(3))
+    calls = []
+    def sample():
+        calls.append(threading.get_ident())
+        if len(calls) == 1:
+            first_entered.set()
+            assert release_first.wait(2)
+        else:
+            second_entered.set()
+        world.now += 1
+        return world.sample()
+    world.monitor.sampler = sample
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(world.check)
+        assert first_entered.wait(1)
+        second = pool.submit(world.check)
+        try:
+            assert not second_entered.wait(.05)  # The second sampler cannot overtake a blocked first read.
+        finally:
+            release_first.set()
+        before, after = first.result(timeout=1), second.result(timeout=1)
+    assert before.sample.observed_monotonic == 1 and after.sample.observed_monotonic == 2
+    assert after.stable_elapsed_seconds == 1
+
+
+@pytest.mark.parametrize("failure", ["critical", "unknown", "sampler_exception"])
+def test_background_failure_resets_healthy_window_and_keeps_observing(failure):
+    world = World()
+    assert world.stabilize().verdict is True
+    sampled = threading.Event()
+    def failed_sample():
+        sampled.set()
+        if failure == "sampler_exception":
+            raise OSError("synthetic native sampler failure")
+        world.pressure = failure
+        return world.sample()
+    world.monitor.sampler = failed_sample
+    world.monitor.start_observing(system_reserve_bytes=100, interval_seconds=.01)
+    try:
+        assert sampled.wait(1) and world.monitor.observing
+        stopped = world.check()
+        assert stopped.reason == ("memory_pressure_critical" if failure == "critical" else "memory_measurement_unavailable")
+        assert stopped.stable_elapsed_seconds == 0
+        if failure == "sampler_exception":
+            assert stopped.sample.available_bytes is None
+    finally:
+        assert world.monitor.stop_observing(1)
+    world.monitor.sampler = world.sample
+    world.now += 1
+    world.pressure = "normal"
+    assert world.check().reason == "memory_recovery_stabilizing"
+    assert not world.monitor.observing
 
 
 def test_windows_commit_is_distinct_from_available_physical_memory():
