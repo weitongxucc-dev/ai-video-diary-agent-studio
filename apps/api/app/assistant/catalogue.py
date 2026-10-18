@@ -20,10 +20,11 @@ ASSISTANT_BUSINESS_TOOLS = {
     "task_edit": ("read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
-                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution"),
+                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "regenerate_storyboard"),
 }
 
 TASK_READ_PREVIEW_TOOLS = ("read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+                           "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
                            "read_task_observations", "observe_task_output", "read_task_observation_request",
@@ -36,6 +37,8 @@ ASSISTANT_BUSINESS_TOOLS = {
 }
 
 _PI_TOOL_LABELS = {
+    "regenerate_storyboard": "重新生成故事板",
+    "read_storyboard_regeneration": "查询原故事板重算",
     "select_narration_voice": "选择配音声音",
     "read_narration_voice_selection": "查询原声音选择",
     "read_workspace_context": "读取当前工作区",

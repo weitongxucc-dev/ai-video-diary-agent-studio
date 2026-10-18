@@ -203,6 +203,7 @@ class EditProposal:
 
 EditOperationStatus = Literal["running", "applied", "failed"]
 EditOperationType = Literal[
+    "RegenerateStoryboard",
     "ChangePresenterShare",
     "EditAudioTimeline",
     "EditCompoundTimeline",
@@ -239,6 +240,7 @@ EditOperationType = Literal[
     "RegeneratePersonRender",
 ]
 SUPPORTED_EDIT_OPERATION_TYPES = {
+    "RegenerateStoryboard",
     "ChangePresenterShare",
     "EditAudioTimeline",
     "EditCompoundTimeline",

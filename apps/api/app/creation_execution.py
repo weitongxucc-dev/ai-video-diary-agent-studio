@@ -762,6 +762,13 @@ class CreationJobOwnerVerifier:
                 ))
                 or revision_digest(script, plan) != job.input_digest):
             return "stale"
+        if event.get("operation") == "regenerate_storyboard":
+            from app.creation.storyboard_regeneration import request_current
+            try:
+                if stage != "montage_plan" or not request_current(self.repository, task, event):
+                    return "stale"
+            except (KeyError, OSError, ValueError):
+                return "dependency"
         return "ready"
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
@@ -892,9 +899,16 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
     plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
     script = repository.get_creation_task_script(job.workspace_id, task.confirmed_script_id)
+    event = repository.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
+    regenerate = event.get("operation") == "regenerate_storyboard"
     if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
         raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
-    if not upstream_stage_valid(repository, task, "narration"):
+    if regenerate:
+        from app.creation.storyboard_regeneration import request_current
+        if not request_current(repository, task, event):
+            raise ValueError("故事板原请求的时间线、文案或配音已变化")
+        stage = "montage_plan"
+    elif not upstream_stage_valid(repository, task, "narration"):
         stage = "narration"
     elif plan.presenter_share_target and not owner.person_valid(task):
         stage = "person_render"
@@ -911,6 +925,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor)
     elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
         stage, _resources = owner.stage_facts(task, script, plan, stage)
+    if regenerate and stage != event["stage_key"]:
+        raise ValueError("故事板原请求的来源已变化")
     return SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
                             job.input_digest, stage, SchedulePolicy())
 
@@ -979,7 +995,10 @@ class CreationJobUnitExecutor:
                     or output != f"{version_id}:{ref}"):
                 raise ValueError("成片检查点与当前版本产物不一致")
         now = datetime.now(timezone.utc).isoformat()
-        if stage in {"narration", "montage_plan"} and status in {"failed", "cancelled"}:
+        start = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                             (grant.workspace_id, f"event_{grant.owner_id}_start")).fetchone()
+        regeneration = start is not None and json.loads(start["payload_json"]).get("operation") == "regenerate_storyboard"
+        if not regeneration and stage in {"narration", "montage_plan"} and status in {"failed", "cancelled"}:
             task_row = conn.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
                                     (grant.workspace_id, row["task_id"])).fetchone()
             payload = json.loads(task_row["payload"])
@@ -1055,6 +1074,21 @@ class CreationJobUnitExecutor:
             owner = scheduler.owners
             if hasattr(owner, 'registrations'):
                 owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+
+            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start').payload
+            if event.get('operation') == 'regenerate_storyboard':
+                from app.creation.storyboard_regeneration import StoryboardRegeneration
+                if stage != 'montage_plan':
+                    raise PermissionError('故事板重算不得执行配音或渲染')
+                regeneration = StoryboardRegeneration(self.repository, self.montage_stage)
+                prepared = regeneration.prepare(job, event, context)
+                context.check()
+                def commit_storyboard(conn, current):
+                    output = regeneration.commit(job, event, prepared, conn)
+                    return self._checkpoint(conn, current, status='succeeded', output=output, stage=stage)
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                    checkpoint_write=commit_storyboard)
+                return
 
             def valid(current):
                 return owner.person_valid(current) if stage == 'person_render' else upstream_stage_valid(self.repository, current, stage) or (stage == 'montage_plan' and montage_waiting_for_confirmation(self.repository, current))
@@ -1543,6 +1577,12 @@ class CreationExecution:
             return False
         return True
 
+    def regenerate_storyboard(self, workspace_id, task_id, inputs, actor, *, stage_facts):
+        from app.creation.storyboard_regeneration import StoryboardRegeneration
+        task = self.repository.get_creation_task(workspace_id, task_id)
+        return StoryboardRegeneration(self.repository).enqueue(task, inputs, actor,
+            validate_input=self.validate_input, stage_facts=stage_facts)
+
     def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None) -> JobRun:
         latest = self.latest(workspace_id, task_id)
         if latest is None:
@@ -1575,12 +1615,17 @@ class CreationExecution:
             )
         )
         if not self._has_start_event(workspace_id, run.id):
+            resumed_payload = dict(event.payload)
+            if resumed_payload.get("operation") == "regenerate_storyboard":
+                resumed_payload = {key: resumed_payload[key] for key in
+                    ("script_id", "plan_id", "input_digest", "member_id", "identity_kind", "device_id", "user_id")
+                    if key in resumed_payload}
             self.repository.append_task_event(
                 TaskEvent(
                     id=f"event_{run.id}_start", workspace_id=workspace_id,
                     task_id=task_id, job_id=run.id,
                     event_type="creation_execution_resumed",
-                    payload=dict(event.payload),
+                    payload=resumed_payload,
                     created_at=run.created_at,
                 )
             )
@@ -1601,6 +1646,9 @@ class CreationExecution:
         job = self.repository.get_job_run(workspace_id, job_id)
         if job.kind != KIND:
             raise ValueError("不是连续制作作业")
+        event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+        if event.payload.get("operation") == "regenerate_storyboard":
+            raise PermissionError("故事板重算必须由现有设备队列取得许可后执行")
         token = set_workspace_context(workspace_id)
         try:
             return self.runtime.resume(workspace_id, job_id, self._work)

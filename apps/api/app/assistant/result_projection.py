@@ -4,6 +4,26 @@ import json
 from app.assistant.projection import _business_event_lines
 from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
 
+
+def storyboard_regeneration_message(value: dict) -> str:
+    kind = value["kind"]
+    if kind == "storyboard_regeneration_unknown":
+        return "故事板重算结果尚未知；原请求已保留，先查询原请求，不重复提交。"
+    if kind == "storyboard_regeneration_rejected":
+        return "故事板重算请求已拒绝，原稿保留；请按实际原因处理。"
+    status = value["receipt"]["status"]
+    if status == "succeeded":
+        return ("已回读原故事板保存结果；当前采用版本以任务页为准，本回执不表示新视频已生成。"
+            if value["action"] == "query" else "故事板版本已保存，可撤销；尚未生成新视频。")
+    return {
+        "queued": "故事板重算已排队，尚未完成；未生成新视频。",
+        "running": "故事板正在重新编排，尚未完成；未生成新视频。",
+        "interrupted": "故事板重算已中断，原稿保留；未生成新视频。",
+        "failed": "故事板重算失败，原稿保留；未生成新视频。",
+        "cancelled": "故事板重算已取消，原稿保留；未生成新视频。",
+    }[status]
+
+
 def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[str, dict | None]:
     """Project typed SDK completion and real business receipts, never CLI history."""
     answer = result["answer"]
@@ -36,6 +56,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     edit_applied = None
     script_tool_result = None
     script_tool_status = None
+    storyboard_result = None
+    storyboard_attempted = False
     try:
         events = [json.loads(line) for line in _business_event_lines("\n".join(json.dumps(event) for event in result["tool_results"]))]
     except json.JSONDecodeError as exc:
@@ -48,6 +70,16 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if event.get("type") == "tool_execution_end" and event.get("toolName") in {"regenerate_storyboard", "read_storyboard_regeneration"}:
+            storyboard_attempted = True
+            action = "submit" if event["toolName"] == "regenerate_storyboard" else "query"
+            source = {key: details[key] for key in ("input_id", "input_turn_id") if key in details}
+            if details.get("kind") == "storyboard_regeneration_receipt" and not event.get("isError"):
+                storyboard_result = {"kind": details["kind"], "action": action, "receipt": details["receipt"],
+                    "tool_call_id": event.get("toolCallId"), **source}
+            elif action == "submit" and details.get("kind") in {"storyboard_regeneration_unknown", "storyboard_regeneration_rejected"}:
+                storyboard_result = {key: details[key] for key in ("kind", "request_id", "query_url", "failure")}
+                storyboard_result.update(action=action, tool_call_id=event.get("toolCallId"), **source)
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {"apply_typed_edit", "preview_typed_edit", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
             status_details = (event.get("result") or {}).get("details") or {}
             if status_details.get("kind") == "edit_request_status":
@@ -168,6 +200,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                     preview = details.get("preview")
                     if kind == "topic_generation":
                         preview = {"kind": "topic_generation", "topics": details.get("topics")}
+    if storyboard_result is not None:
+        return storyboard_regeneration_message(storyboard_result), storyboard_result
+    if storyboard_attempted:
+        raise _fail(FAILURE_TOOL_FAILED, explanation="故事板重算没有返回可核验的原请求回执，未确认完成。")
     if edit_applied is not None:
         # A later provider/tool failure cannot erase a committed edit. A real
         # render receipt takes precedence when the same input did both actions.

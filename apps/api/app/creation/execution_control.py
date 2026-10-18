@@ -203,6 +203,43 @@ class CreationExecutionControl:
                     executor.request_cancel(row["id"])
         return self.status(workspace_id, task_id, verify_media=verify_media)
 
+    def regenerate_storyboard(self, workspace_id, task_id, payload, actor, runtime):
+        from app.creation.storyboard_regeneration import StoryboardRegeneration
+        case = StoryboardRegeneration(self.repository)
+        inputs = payload.model_dump(mode="json", exclude_unset=True)
+        try:
+            replay = case.replay(workspace_id, task_id, inputs, actor)
+            if replay is not None:
+                return case.read(workspace_id, task_id, str(payload.request_id), actor)
+            owner = runtime.scheduler.owners
+            if hasattr(owner, "registrations"):
+                owner = owner.registrations["creation_job"].owner
+            job, fresh = self.execution.regenerate_storyboard(workspace_id, task_id, inputs, actor,
+                stage_facts=lambda current, script, plan: owner.stage_facts(current, script, plan, "montage_plan")[0])
+            if fresh:
+                submit_creation_stage(self.execution, runtime.scheduler, job, actor)
+                runtime.wake()
+            return case.read(workspace_id, task_id, str(payload.request_id), actor)
+        except PermissionError as exc:
+            raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise ExecutionControlRejected(status_code=404, detail="故事板任务或输入不存在") from exc
+        except OSError as exc:
+            raise ExecutionControlRejected(status_code=409, detail="当前配音或素材文件不可用，请读取当前任务后处理") from exc
+        except ValueError as exc:
+            raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
+
+    def read_storyboard_regeneration(self, workspace_id, task_id, request_id, actor):
+        from app.creation.storyboard_regeneration import StoryboardRegeneration
+        try:
+            return StoryboardRegeneration(self.repository).read(workspace_id, task_id, request_id, actor)
+        except PermissionError as exc:
+            raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise ExecutionControlRejected(status_code=404, detail="故事板原请求不存在") from exc
+        except ValueError as exc:
+            raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
+
     def recover(self, runtime) -> None:
         """开机恢复：身份只取持久行，并且每次都重新对本机名册核一遍。
 

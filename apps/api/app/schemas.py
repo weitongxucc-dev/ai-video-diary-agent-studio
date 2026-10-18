@@ -1626,6 +1626,16 @@ EXACT_MONTAGE_REQUIRED_FIELDS = {
 EXACT_EDIT_ENVELOPE_FIELDS = {"assistant_turn_id", "request_id", "expected_timeline_version_id", "expected_timeline_sequence"}
 
 
+class StoryboardRegenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    script_id: str = Field(min_length=1, max_length=120)
+    input_digest: str = Field(min_length=64, max_length=64)
+    expected_timeline_version_id: str = Field(min_length=1, max_length=120)
+    expected_timeline_sequence: int = Field(ge=1)
+    assistant_turn_id: UUID | None = None
+
+
 class CreationTaskExactEditRequest(BaseModel):
     audio_edit: AudioMixEditRequest | None = None
     clip_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
@@ -2282,7 +2292,55 @@ class AssistantScriptToolReceipt(BaseModel):
     tool: dict[str, object] | None = None
 
 
+class StoryboardRegenerationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    montage_plan_id: str
+    timeline_version_id: str
+    timeline_sequence: int = Field(ge=1, strict=True)
+    operation_id: str
+
+
+class StoryboardRegenerationReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    task_id: str
+    job_id: str
+    status: Literal["queued", "running", "interrupted", "succeeded", "failed", "cancelled"]
+    stage: Literal["montage_plan"]
+    script_id: str
+    narration_cache_key: str
+    base_timeline_version_id: str
+    base_timeline_sequence: int = Field(ge=1, strict=True)
+    result: StoryboardRegenerationResult | None
+    failure_reason: str | None
+    result_url: str
+
+
+class AssistantStoryboardRegenerationReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["storyboard_regeneration_receipt"]
+    action: Literal["submit", "query"]
+    receipt: StoryboardRegenerationReceipt
+
+
+class StoryboardRegenerationFailure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(max_length=500)
+    repair_action: str = Field(max_length=500)
+
+
+class AssistantStoryboardRegenerationFailure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["storyboard_regeneration_unknown", "storyboard_regeneration_rejected"]
+    action: Literal["submit"]
+    request_id: UUID
+    query_url: str
+    failure: StoryboardRegenerationFailure
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    storyboard_regeneration: AssistantStoryboardRegenerationReceipt | AssistantStoryboardRegenerationFailure | None = None
     script_tool: AssistantScriptToolReceipt | None = None
     edit_request: AssistantEditRequestLocator | None = None
     media_job: TaskMediaJobResponse | None = None

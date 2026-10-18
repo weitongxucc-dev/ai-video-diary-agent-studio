@@ -8,6 +8,64 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
   readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    let storyboardAttempt: {inputKey: string; requestId: string} | null = null;
+    const storyboardPath = `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`;
+    const storyboardRequestPath = (id: string) => `${storyboardPath}/requests/${encodeURIComponent(id)}`;
+    const checkStoryboardReceipt = (receipt: any, requestId: string) => {
+      if (receipt.task_id !== taskId || receipt.request_id !== requestId || receipt.stage !== "montage_plan"
+          || typeof receipt.job_id !== "string" || !["queued", "running", "interrupted", "succeeded", "failed", "cancelled"].includes(receipt.status)
+          || (receipt.status === "succeeded" && (!receipt.result?.timeline_version_id || !receipt.result?.montage_plan_id
+            || receipt.result.request_id !== requestId)))
+        throw new Error(`故事板回执身份不一致，先查询原请求 ${requestId}`);
+      return receipt;
+    };
+    pi.registerTool({name: "read_storyboard_regeneration", label: "查询原故事板重算",
+      description: "只读显式故事板重算的原UUID；丢失排队回应先查询，不重发。成功仅表示新故事板版本已保存，不代表已生成视频；回执保留原结果，即使随后已撤销。",
+      parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}}, required: ["request_id"], additionalProperties: false},
+      execute: async (_id: string, params: {request_id: string}) => {
+        const receipt = checkStoryboardReceipt(await request(storyboardRequestPath(params.request_id)), params.request_id);
+        const details = {kind: "storyboard_regeneration_receipt", receipt};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      }});
+    pi.registerTool({name: "regenerate_storyboard", label: "重新生成故事板",
+      description: "仅用户明确要求整体重新生成故事板时调用。复用当前采用文案与原配音，只排队重算镜头并保存可撤销版本；保留字幕、图层和声音，不配音或渲染。原作业仍运行、排队或未释放时拒绝，不自动取消。普通开始、继续制作不会重算；未知结果只查原UUID。",
+      parameters: {type: "object", properties: {}, additionalProperties: false},
+      execute: async (callId: string) => {
+        const source = readActionSource();
+        if (!source.turnId || !isTaskRead()) throw new Error("请先读取当前任务和可信要求，再重新生成故事板");
+        const inputKey = source.inputId ?? source.turnId;
+        if (storyboardAttempt?.inputKey === inputKey)
+          throw new Error(`本轮故事板重算已提交，先查询原请求 ${storyboardAttempt.requestId}，不重复写入`);
+        if (hasCreationAction() || hasEditControlWrite() || hasPreview() || directEditUnverified?.())
+          throw new Error("本轮已有制作或未核实的编辑动作，请先读取原结果");
+        const before = await readCurrentTaskFacts();
+        const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`);
+        if (before.task_id !== taskId || preview.task_id !== taskId || !before.current_timeline_version_id
+            || !Number.isInteger(before.timeline_sequence) || before.timeline_sequence < 1
+            || !before.confirmed_script_id || preview.script_id !== before.confirmed_script_id
+            || typeof preview.input_digest !== "string" || !/^[a-f0-9]{64}$/.test(preview.input_digest))
+          throw new Error("当前时间线或采用文案事实不完整，没有提交故事板重算");
+        if ((readActionSource().inputId ?? readActionSource().turnId) !== inputKey)
+          throw new Error("当前要求已变化，没有提交旧输入的故事板重算");
+        const requestId = typedRequestId(source.turnId, callId);
+        storyboardAttempt = {inputKey, requestId};
+        markCreationAction();
+        let receipt;
+        try {
+          receipt = await request(storyboardPath, {method: "POST", body: JSON.stringify({request_id: requestId,
+            assistant_turn_id: source.turnId, script_id: preview.script_id, input_digest: preview.input_digest,
+            expected_timeline_version_id: before.current_timeline_version_id, expected_timeline_sequence: before.timeline_sequence})});
+        } catch (error) {
+          const unknown = !(error instanceof BusinessRequestError);
+          const details = {kind: unknown ? "storyboard_regeneration_unknown" : "storyboard_regeneration_rejected",
+            request_id: requestId, query_url: storyboardRequestPath(requestId), failure: {
+              reason: unknown ? "故事板重算回应未知，尚未宣称完成。" : boundedText(error.message, 500).text,
+              repair_action: `先查询原请求 ${requestId}；不要重复提交故事板重算。`}};
+          return {isError: true, content: [{type: "text", text: JSON.stringify(details)}], details};
+        }
+        const details = {kind: "storyboard_regeneration_receipt", receipt: checkStoryboardReceipt(receipt, requestId)};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      }});
     let voiceAttempt: {inputKey: string; requestId: string} | null = null;
     const voiceRequestPath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice/requests/${encodeURIComponent(id)}`;
     pi.registerTool({name: "read_narration_voice_selection", label: "查询原声音选择",
