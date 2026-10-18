@@ -43,6 +43,7 @@ from app.host_resource_probes import (
     ObservationBudget,
     QualityBudget,
     CoverBudget,
+    MaterialVisualQueryBudget,
     HostBudget,
     HostProcessProbe,
     HostResourceProbe,
@@ -260,6 +261,7 @@ def host_budget_from_env(
     *,
     cpu_render: CpuRenderBudget | None = None,
     media_script: MediaScriptBudget | None = None,
+    material_visual_query: MaterialVisualQueryBudget | None = None,
 ) -> HostBudget:
     """从显式标定值读出整机预算。
 
@@ -286,7 +288,8 @@ def host_budget_from_env(
         for field, value in raw.items()
         if field in _INT_HOST_BUDGET_FIELDS
     }
-    return HostBudget(max_cpu_percent=max_cpu_percent, cpu_render=cpu_render, media_script=media_script, **numbers)
+    return HostBudget(max_cpu_percent=max_cpu_percent, cpu_render=cpu_render, media_script=media_script,
+                      material_visual_query=material_visual_query, **numbers)
 
 
 #: CPU 成片预算的标定项。与整机预算一样，全部来自这台设备的标定结果。
@@ -454,3 +457,21 @@ def cover_budget_from_env(env: Mapping[str, str] | None = None) -> CoverBudget |
                               for field, name in names.items()})
     except ValueError as exc:
         raise HostBudgetUncalibrated(str(exc)) from None
+
+
+def material_visual_query_budget_from_env(env: Mapping[str, str] | None = None) -> MaterialVisualQueryBudget | None:
+    """Read only this query calibration; absent values never borrow another stage."""
+    environment = os.environ if env is None else env
+    names = {item.name: "DEVICE_MATERIAL_VISUAL_QUERY_" + item.name.upper()
+             for item in fields(MaterialVisualQueryBudget)}
+    if not any(environment.get(name, "").strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not environment.get(name, "").strip()]
+    if missing:
+        raise HostBudgetUncalibrated("素材画面查询预算尚未标定：缺少 " + "、".join(missing))
+    try:
+        return MaterialVisualQueryBudget(**{field: environment[name].strip() if field in {"model_id", "model_version"}
+            else float(environment[name]) if field.endswith("seconds") else int(environment[name])
+            for field, name in names.items()})
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(f"素材画面查询预算无效：{exc}") from None

@@ -27,6 +27,8 @@ import psutil
 from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
 from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.quality_worker_runtime import QualityBudget, budget_identity
+from app.model_runtime import CHINESE_CLIP_VIT_B16
+from app.visual_semantics import VisualQueryExecutionLimits, visual_feature_version
 
 
 logger = logging.getLogger(__name__)
@@ -319,6 +321,78 @@ class ObservationBudget:
 
 
 @dataclass(frozen=True)
+class MaterialVisualQueryBudget:
+    """One explicitly calibrated isolated Chinese-CLIP text-query envelope."""
+
+    model_id: str
+    model_version: str
+    max_query_chars: int
+    max_timeout_seconds: float
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    max_output_file_bytes: int
+    max_threads: int
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        if (self.model_id != CHINESE_CLIP_VIT_B16.id
+                or self.model_version != visual_feature_version(self.model_id)):
+            raise ValueError("Material visual query calibration must bind the pinned Chinese-CLIP version")
+        for name, value in vars(self).items():
+            if name in {"model_id", "model_version"}:
+                continue
+            if name.endswith("seconds"):
+                if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
+                    raise ValueError("Material visual query timings must be explicitly finite and positive")
+            elif type(value) is not int or value <= 0:
+                raise ValueError("Material visual query limits must be explicitly positive integers")
+        if (self.max_query_chars > 120 or self.max_process_threads < self.max_threads
+                or self.runtime_sample_seconds > .25
+                or self.additional_memory_bytes < self.max_process_rss_bytes
+                or self.additional_disk_bytes < self.max_output_file_bytes):
+            raise ValueError("Material visual query requires bounded text, reserved memory/disk and process monitoring")
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+
+    @property
+    def execution_limits(self) -> VisualQueryExecutionLimits:
+        return VisualQueryExecutionLimits(self.max_timeout_seconds, self.max_stdout_bytes,
+            self.max_stderr_bytes, self.max_output_file_bytes, self.max_threads)
+
+
+def material_visual_query_resources(budget: MaterialVisualQueryBudget, *, query_chars: int) -> dict[str, object]:
+    if type(query_chars) is not int or not 1 <= query_chars <= budget.max_query_chars:
+        raise ValueError("视觉查询长度超出已标定范围")
+    return {"kind": "material_visual_query", "model_id": budget.model_id,
+        "model_version": budget.model_version, "query_chars": query_chars, "text_count": 1,
+        "execution_limits": asdict(budget.execution_limits), "budget_digest": budget.digest}
+
+
+def material_visual_query_refusal(resources, budget: MaterialVisualQueryBudget | None) -> str | None:
+    if budget is None:
+        return "material_visual_query_budget_unavailable"
+    if resources.get("budget_digest") != budget.digest:
+        return "material_visual_query_profile_changed"
+    if (resources.get("model_id") != budget.model_id or resources.get("model_version") != budget.model_version
+            or type(resources.get("text_count")) is not int or resources["text_count"] != 1
+            or type(resources.get("query_chars")) is not int or resources["query_chars"] <= 0):
+        return "material_visual_query_fields_invalid"
+    if resources["query_chars"] > budget.max_query_chars:
+        return "declared_resources_exceed_budget"
+    expected = material_visual_query_resources(budget, query_chars=resources["query_chars"])
+    # Exact field/type agreement prevents bool/float aliases and unsealed purpose additions.
+    if (resources != expected or json.dumps(resources, sort_keys=True) != json.dumps(expected, sort_keys=True)):
+        return "material_visual_query_fields_invalid"
+    return None
+
+
+@dataclass(frozen=True)
 class HostBudget:
     max_cpu_percent: float
     min_available_memory_bytes: int
@@ -339,6 +413,7 @@ class HostBudget:
     clip_preview: CpuRenderBudget | None = None
     quality: QualityBudget | None = None
     cover: CoverBudget | None = None
+    material_visual_query: MaterialVisualQueryBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -361,6 +436,8 @@ class HostBudget:
             raise ValueError("Media script requires explicit host memory and disk headroom")
         if self.observation is not None and (self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
             raise ValueError("Output observation requires explicit host memory and disk headroom")
+        if self.material_visual_query is not None and (self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
+            raise ValueError("Material visual query requires explicit host memory and disk headroom")
 
 
 # Per-kind static caps. These are the device-calibrated upper bounds a declared
@@ -543,6 +620,7 @@ class HostResourceRefusal(RecoveryBlocked):
             "disk_io_bytes_per_second": ("磁盘读写速率", "字节/秒"),
             "size_bytes": ("输入大小", "字节"),
             "text_chars": ("配音文字数量", "字"),
+            "query_chars": ("画面查询文字数量", "字"),
             "section_count": ("段落数量", "段"),
             "reference_bytes": ("参考音频大小", "字节"),
             "duration_seconds": ("配音时长", "秒"),
@@ -577,6 +655,9 @@ class HostResourceRefusal(RecoveryBlocked):
             "scene_fields_invalid": "场景检测的输入声明无效",
             "scene_output_sampling_contract_invalid": "场景采样数量与输入时长不一致",
             "unsupported_resource_kind": "当前阶段的资源类型不受支持",
+            "material_visual_query_budget_unavailable": "素材画面查询专属预算尚未标定",
+            "material_visual_query_profile_changed": "素材画面查询标定已变化，原声明不可执行",
+            "material_visual_query_fields_invalid": "素材画面查询的模型、长度或执行声明不一致",
             "granted_resources_unreadable": "当前许可的阶段资源记录不可读取",
             "declared_resources_exceed_budget": "阶段输入超出已标定的设备预算",
         }
@@ -746,7 +827,19 @@ class HostResourceProbe:
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
-        if kind == "cover_generation":
+        if kind == "material_visual_query":
+            query = self.budget.material_visual_query
+            if query is not None:
+                checks["material_visual_query_budget"] = {"limits": asdict(query)}
+                if type(resources.get("query_chars")) is int:
+                    checks["query_chars"] = {"actual": resources["query_chars"], "maximum": query.max_query_chars,
+                        "passed": 1 <= resources["query_chars"] <= query.max_query_chars}
+            refusal = material_visual_query_refusal(resources, query)
+            if refusal is not None:
+                return decision(None if query is None else False, refusal)
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else query.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes + query.additional_disk_bytes
+        elif kind == "cover_generation":
             cover = self.budget.cover
             if cover is None or resources.get("execution_mode") != "isolated_cover_python":
                 return decision(None, "cover_budget_or_execution_mode_unavailable")
@@ -1005,7 +1098,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check", "cover_generation"}
+            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check", "cover_generation", "material_visual_query"}
             before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
             if before is None or (sustained and not before):
                 return decision(None, "disk_io_before_unavailable")
@@ -1109,8 +1202,9 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation"}
-                and (self.budget.cover if resources["kind"] == "cover_generation" else
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query"}
+                and (self.budget.material_visual_query if resources["kind"] == "material_visual_query" else
+                     self.budget.cover if resources["kind"] == "cover_generation" else
                      self.budget.quality if resources["kind"] == "quality_check" else
                      self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
             key = (grant.request_id, grant.generation)
@@ -1131,6 +1225,15 @@ class HostResourceProbe:
         resources = self._grant_resources(grant)
         if resources is None:
             raise RecoveryBlocked("获许可资源事实不可读取，不能执行子进程")
+        if resources.get("kind") == "material_visual_query" or purpose == "material_visual_query":
+            query = self.budget.material_visual_query
+            if (grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:")
+                    or purpose not in {None, "material_visual_query"}
+                    or resources.get("kind") != "material_visual_query"
+                    or material_visual_query_refusal(resources, query) is not None):
+                raise RecoveryBlocked("视觉查询许可、专属标定或执行用途不一致")
+            return SceneRuntimeLimits(query.max_process_rss_bytes, query.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, query.runtime_sample_seconds)
         if resources.get("kind") == "cover_generation":
             cover = self.budget.cover
             if cover is None or resources.get("budget_digest") != cover.digest:
@@ -1206,6 +1309,10 @@ class HostResourceProbe:
         # DeviceScheduler before this per-unit resource lease is released.
         if resources is None:
             return None
+        if resources.get("kind") == "material_visual_query":
+            if grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:"):
+                return None
+            return True  # The scheduler independently proves the encoder's registered group exited.
         if resources.get("kind") in {"quality_check", "cover_generation"}:
             return True  # Scheduler separately proves the registered Python/native group exited.
         if resources.get("kind") in self._SUPPORTED_KINDS:
