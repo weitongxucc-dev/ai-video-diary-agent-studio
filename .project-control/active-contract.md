@@ -120,6 +120,8 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 A新增实际文案约束与接续绑定：在既有`topics.py`、`main.py`、`agent_tools/diary/script-tools.ts`、`runtime.ts`、`conversation_repository.py`及`assistant_goal_continuation.py`直接消费者和定向测试，将宿主核验的本轮真实要求纳入逐段核查，保留原方案约束并在核查后复核输入身份；`content`所有文字都会朗读，角标/署名/制作说明属于画面要求，不得作为旁白采用。文案采用工具复用当前任务回读返回实际阶段与缺项，按原自主制作授权接入已有接续，不让讨论/仅写稿启动制作。没有新工具系统、调度器或核查回退。声音写入回执/CAS方案暂仅只读，具体文件另绑。
 
+声音采用回执续绑：C独占`production.py::select_creation_task_narration_voice`及同对象原请求查询、`schemas.py::CreationTaskNarrationVoiceSelectionRequest`/对应回执类型、Web`lib/api/creation-tasks.ts`、`lib/types.ts`、`CreationTaskWorkspace.tsx`的声音选择调用及直接测试。复用既有`task_events`在同一事务校验workspace/member、固定声音版本、任务/方案修订及现有narration阶段，写入声音与不可变请求回执；同请求同输入回读、异输入拒绝，旧版本拒绝。Web使用真实当前修订/UUID并在丢响应时查原请求，不保留绕过版本检查的旧写入口。A仍独占`main.py`，C提交业务接口签名与薄路由建议，由A在现有路由接线；C不得编辑main.py。A当前文案修复完成后接Pi声音选择/原请求查询工具，不提前并发写共享文件。主控串行集成与实测。
+
 C新增独占绑定`apps/web/src/components/HomeCommandComposer.tsx`及`__tests__/HomeCommandComposer.test.tsx`：真实首页会话携带任务目标保存并采用文案后，复用既有`onTaskUpdated`刷新当前任务；将真实`script_draft`回执纳入刷新条件，保留会话/目标切换的晚回包保护。不新增缓存、事件总线或轮询层，不变更左侧名称与分区。
 
 C续绑正式模式外壳的直接身份消费者：`hooks/useLocalMemberIdentity.ts`及其定向测试、`components/AppShell.tsx`的必要调用点。仅阻止正式模式启动本地whoami/写入本地成员凭据，保持正式设备角色由已有核验入口获得，不新增另一套身份事实源；本地模式既有行为保留，不改左栏名称或分区。手机及设置候选已提交后保持冻结，后续实机发现的具体缺口再划转。
