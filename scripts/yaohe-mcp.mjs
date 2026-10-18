@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {homedir} from 'node:os';
+import {realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {McpServer, ResourceTemplate} from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -111,6 +112,6 @@ async function main() {
   await readConfig(path);
   await createMcpServer(path).connect(new StdioServerTransport());
 }
-if(process.argv[1] && fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
+if(process.argv[1] && fileURLToPath(import.meta.url)===realpathSync(process.argv[1])) {
   main().catch(()=>{process.stderr.write('曜核MCP启动失败：请检查私有配置、依赖与命令参数。\n');process.exitCode=1;});
 }

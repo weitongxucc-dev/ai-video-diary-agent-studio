@@ -43,6 +43,8 @@ function main() {
     write(root, 'apps/desktop/package.json', '{"build":{"files":["main.js"]}}');
     write(root, 'apps/desktop/assets/runtime.json', '{"mode":"local"}');
     write(root, 'apps/desktop/dist/api-server', 'api-v1');
+    write(root, 'apps/desktop/dist/programmatic/yaohe.mjs', 'cli-v1');
+    write(root, 'apps/desktop/dist/programmatic/yaohe-mcp.mjs', 'mcp-v1');
     write(root, 'apps/api/model_workers/voice.py', 'worker-v1');
     write(root, 'apps/api/agent_tools/diary_tools.ts', 'agent-tools-v1');
     write(root, 'apps/api/agent_runtime/host.mjs', 'sdk-bridge-v1');
@@ -70,6 +72,8 @@ function main() {
     }
     for (const inputPath of [
       'agent-tools/diary_tools.ts',
+      'programmatic/yaohe.mjs',
+      'programmatic/yaohe-mcp.mjs',
       'agent_runtime/host.mjs',
       'agent_runtime/skills/local-edit/SKILL.md',
       'web/.next/BUILD_ID',
@@ -82,6 +86,8 @@ function main() {
 
     for (const relativePath of [
       'apps/desktop/main.js',
+      'apps/desktop/dist/programmatic/yaohe.mjs',
+      'apps/desktop/dist/programmatic/yaohe-mcp.mjs',
       'apps/desktop/device-identity.js',
       'apps/desktop/preload.js',
       'apps/desktop/runtime/supervisor.js',

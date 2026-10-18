@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {homedir} from 'node:os';
+import {realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {HELP} from './yaohe/usage.mjs';
@@ -31,6 +32,6 @@ export async function runCli(argv,{stdout=process.stdout} = {}) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

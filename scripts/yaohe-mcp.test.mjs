@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,copyFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -23,7 +23,12 @@ async function fixture(t,handler) {
   const config=join(directory,'private.json');
   const writeConfig=credential=>writeFile(config,JSON.stringify({api_base:`http://127.0.0.1:${http.address().port}`,local_member_token:credential}),{mode:0o600});
   await writeConfig(token);
-  const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('./yaohe-mcp.mjs',import.meta.url)),'--config',config],stderr:'pipe'});
+  let entry=fileURLToPath(new URL('./yaohe-mcp.mjs',import.meta.url));
+  if(process.env.YAOHE_TEST_BUNDLE) {
+    entry=join(directory,'yaohe-mcp.mjs');
+    await copyFile(process.env.YAOHE_TEST_BUNDLE,entry);
+  }
+  const transport=new StdioClientTransport({command:process.execPath,args:[entry,'--config',config],cwd:directory,stderr:'pipe'});
   const client=new Client({name:'yaohe-acceptance-client',version:'1.0'});
   t.after(async()=>{await client.close();http.closeAllConnections();await new Promise(resolve=>http.close(resolve));await rm(directory,{recursive:true,force:true});});
   await client.connect(transport);

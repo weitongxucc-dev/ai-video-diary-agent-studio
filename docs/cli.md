@@ -2,9 +2,11 @@
 
 本文记录当前源码命令及协议。产品默认直接编辑策略见[产品规则](product-requirements.md#23-自然语言与精确编辑共享同一事实源)；下面显式的 preview/apply 是可用接口，不表示每条用户指令都必须再确认，也不表示新的默认交互已经接通。实现调整时同步核对真实命令，不仅改文档。
 
-`scripts/yaohe.mjs` 是普通业务 API 的独立消费者。使用 Node.js 22 或更高版本及原生 `fetch`，没有额外依赖。当前从源码仓库执行；桌面安装包尚未随包交付 CLI，也没有安装全局 `yaohe` 命令。运行前须已有可用的业务 API 和合法成员或会话身份。
+`scripts/yaohe.mjs` 是普通业务 API 的独立消费者。使用 Node.js 22 或更高版本及原生 `fetch`，没有额外运行依赖。运行前须已有可用的业务 API 和合法成员或会话身份；没有安装全局 `yaohe` 命令。
 
 入口与`scripts/yaohe/`子目录一起使用：私有配置、HTTP传输、回执和具体命令分别由该目录内模块拥有，不能只复制入口文件。命令组复用同一身份与未知结果处理边界，不另存制作事实。
+
+桌面构建的`build:programmatic`把CLI和MCP分别连同依赖打包为`Contents/Resources/programmatic/yaohe.mjs`、`yaohe-mcp.mjs`，纳入候选输入标识。这两个生成入口可独立运行，不依赖源码仓库或其`node_modules`。调用时将下方示例的源码路径替换成相应包内绝对路径。Node.js仍由使用环境提供；源码构建接线不代表已通过干净安装或完整安装包验收。
 
 业务动作、权限和版本规则引用[架构 §3.8](system-architecture.md#38-editcompiler)、[认证边界](auth-workspace-boundary.md)及[领域模型](domain-model.md)。本页说明实际命令协议；能力与结果由服务端当前回执决定。
 

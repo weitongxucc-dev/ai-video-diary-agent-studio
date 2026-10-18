@@ -21,6 +21,7 @@ const INPUT_SOURCES = [
   { identityPath: 'desktop/package.json', relativePath: 'apps/desktop/package.json' },
   { identityPath: 'desktop/assets', relativePath: 'apps/desktop/assets' },
   { identityPath: 'api-server', relativePath: 'apps/desktop/dist/api-server' },
+  { identityPath: 'programmatic', relativePath: 'apps/desktop/dist/programmatic' },
   { identityPath: 'model-workers', relativePath: 'apps/api/model_workers', include: (relativePath) => relativePath.endsWith('.py') },
   { identityPath: 'agent-tools', relativePath: 'apps/api/agent_tools', include: (relativePath) => relativePath.endsWith('.ts') },
   { identityPath: 'agent_runtime', relativePath: 'apps/api/agent_runtime', include: (relativePath) => /\.(mjs|md)$/.test(relativePath) },
