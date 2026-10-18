@@ -110,7 +110,7 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 ## 6. 收口门
 
-桌面真实创作续绑：A在既有首页目标接收、任务回合及`assistant_goal_continuation.py`直接消费者中补自主委托采用任务后的可信接续；讨论模式不自动制作，复用当前会话/任务授权与幂等，不新建调度器。A同时拥有`schemas.py::VoicePreviewRequest`目标语言薄接线及直接测试，复用声音预览用例已有的显式语言参数；双语声音能力声明不能直接充当一次合成的目标语言。C独占`PeopleAndVoiceWorkspace`、`lib/api/media-profiles`及对应类型/测试的试听语言选择与回读消费者，不复用另一语言的试听回执。主控仍独占受控模型实测、候选打包和真实闭环；实验配置不自动成为生产资源档。
+桌面真实创作续绑：A在既有首页目标接收、任务回合及`assistant_goal_continuation.py`直接消费者中补自主委托采用任务后的可信接续；讨论模式不自动制作，复用当前会话/任务授权与幂等，不新建调度器。A同时拥有`schemas.py::VoicePreviewRequest`目标语言薄接线及直接测试，复用声音预览用例已有的显式语言参数；双语声音能力声明不能直接充当一次合成的目标语言。C独占`PeopleAndVoiceWorkspace`、`lib/media-profiles-api.ts`及对应类型/测试的试听语言选择与回读消费者，不复用另一语言的试听回执。主控仍独占受控模型实测、候选打包和真实闭环；实验配置不自动成为生产资源档。
 
 配音实测诊断续绑：B在既有`profile_preview_execution.py`、`granted_subprocess.py`及直接测试保留同一request/attempt的运行拒绝决定和有界模型阶段/内存诊断，复用现有日志归属；不能只剩通用`resource_pressure`而丢失判定依据。不记录参考文字、凭据或完整请求，不扩大输出预算或新建监控事实库。原始决定缺失的历史实验保持未知，修复后由主控再安排单次受控验证。
 
