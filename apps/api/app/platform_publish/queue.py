@@ -112,6 +112,48 @@ class PlatformPublishOwnerVerifier:
             return "unauthorized"
         return "ready"
 
+    def capture_local(self, request, conn):
+        try:
+            job, event = self._facts(conn, request.workspace_id, request.owner_id)
+        except (KeyError, ValueError, TypeError):
+            return lambda current: "stale"
+        def read(current):
+            job_row = current.execute(
+                "SELECT task_id,input_digest,status FROM job_runs WHERE workspace_id=? AND id=?",
+                (job.workspace_id, job.id),
+            ).fetchone()
+            task = current.execute(
+                """SELECT json_extract(payload,'$.current_timeline_version_id'),
+                   json_extract(payload,'$.output_ready'),json_extract(payload,'$.owner_user_id'),
+                   json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?""",
+                (job.workspace_id, job.task_id),
+            ).fetchone()
+            sent = current.execute(
+                "SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='platform_publish_submission_started'",
+                (job.workspace_id, job.id),
+            ).fetchone()
+            artifact = current.execute(
+                "SELECT id,sha256,size_bytes FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
+                (job.workspace_id, job.task_id, event.get("logical_ref")),
+            ).fetchone()
+            account = current.execute(
+                "SELECT account_ref FROM platform_browser_accounts WHERE workspace_id=? AND user_id=? AND platform=?",
+                (job.workspace_id, event["identity"].get("user_id") or request.member_id, event["platform"]),
+            ).fetchone()
+            return (tuple(job_row) if job_row else None, tuple(task) if task else None,
+                    bool(sent), tuple(artifact) if artifact else None,
+                    account["account_ref"] if account else None)
+        expected = read(conn)
+        def check(current):
+            actual = read(current)
+            if actual[-1] is None or actual[-1] != expected[-1]:
+                return "unauthorized"
+            return "ready" if actual == expected else "stale"
+        return check
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
         try:
             with self.repository._connect() as conn:
@@ -128,7 +170,8 @@ class PlatformPublishOwnerVerifier:
         return self.can_manage(request, actor)
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason,
-                     conn: sqlite3.Connection) -> str:
+                     conn: sqlite3.Connection):
+        from app.device_scheduler import VerifiedRetry
         if reason != "failed" or not self.can_manage(request, actor):
             raise PermissionError("发布只能在已有安全重试证据下由原成员重试")
         safe = conn.execute(
@@ -137,7 +180,11 @@ class PlatformPublishOwnerVerifier:
         ).fetchone()
         if safe is None:
             raise PermissionError("未知或可能已提交的平台动作不得重试")
-        return request.input_digest
+        def recheck(current):
+            if current.execute("SELECT 1 FROM task_events WHERE job_id=? AND event_type='platform_publish_safe_retry'",
+                               (request.owner_id,)).fetchone() is None:
+                raise PermissionError("发布安全重试证据已经失效")
+        return VerifiedRetry(request.input_digest, recheck)
 
 
 class PlatformPublishExecutor:

@@ -212,7 +212,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
             assert terminal.payload == {"check_id": check_id, "status": "succeeded"}
             assert reopened.get_check("local", "task", check_id)["check_state"] == "done"
         assert calls == [old_id, newer[0]]
-        assert len(resources.admissions) == 2 and len(resources.releases) >= 2
+        assert len(resources.admissions) == 4 and len(resources.releases) >= 2
         released_result = service.start(runtime, actor, "local", "task", force=True)
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None and grant.owner_id == f"job_quality_{released_result}"

@@ -775,8 +775,10 @@ class TaskMediaJobs:
         if (request.owner_type != "creation_job" or request.member_id != actor.member_id
                 or request.work_class != "preview_dependency" or request.source_refs):
             return "unauthorized"
+        terminal = {"done": "succeeded", "failed": "failed", "cancelled": "cancelled"}.get(request.state)
         if (request.input_digest != job.input_digest or request.unit_key != f"task_media:{job.input_digest}"
-                or request.resources != event["resources"] or job.status not in {"queued", "interrupted", "running"}):
+                or request.resources != event["resources"]
+                or job.status not in {"queued", "interrupted", "running", terminal}):
             return "stale"
         if media_digest({key: value for key, value in event.items() if key != "input_digest"}) != job.input_digest:
             return "stale"
@@ -792,16 +794,124 @@ class TaskMediaJobs:
                     return "stale"
         return self.check(job, event, actor)
 
+    def capture_local(self, request, conn):
+        try:
+            job, event = self.read(request.workspace_id, request.owner_id, conn)
+        except (KeyError, ValueError):
+            return lambda current: "stale"
+        # Resolve the sealed source graph once, before any write lock. The
+        # commit check reads only revisions of those concrete dependencies.
+        references = set()
+        def collect(value):
+            if isinstance(value, str):
+                references.add(value)
+            elif isinstance(value, dict):
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+        collect(event["input_facts"])
+        collect(event["arguments"])
+        artifacts, assets, narrations = set(), set(), set()
+        pending = list(references)
+        visited = set()
+        while pending:
+            reference = pending.pop()
+            if reference in visited:
+                continue
+            visited.add(reference)
+            record = conn.execute(
+                "SELECT id,input_refs_json FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
+                (job.workspace_id, job.task_id, reference),
+            ).fetchone()
+            if record is not None:
+                artifacts.add(record["id"])
+                pending.extend(json.loads(record["input_refs_json"]))
+            if reference.startswith("narration://artifact/"):
+                narrations.add(reference.removeprefix("narration://artifact/"))
+            if reference.startswith("workspace://"):
+                try:
+                    reference = str(self.repository.resolve_workspace_media_reference(
+                        job.workspace_id, reference, require_registered=True))
+                except (KeyError, ValueError, OSError):
+                    return lambda current: "stale"
+            rows = conn.execute(
+                "SELECT id FROM material_assets WHERE workspace_id=? AND (id=? OR file_path=?)",
+                (job.workspace_id, reference, reference),
+            ).fetchall()
+            assets.update(row["id"] for row in rows)
+        def read(current):
+            job_row = current.execute(
+                "SELECT task_id,input_digest,status FROM job_runs WHERE workspace_id=? AND id=?",
+                (job.workspace_id, job.id),
+            ).fetchone()
+            task = current.execute(
+                """SELECT plan_id,json_extract(payload,'$.confirmed_script_id'),
+                   json_extract(payload,'$.narration_cache_key'),json_extract(payload,'$.montage_plan_id'),
+                   json_extract(payload,'$.current_timeline_version_id'),json_extract(payload,'$.owner_user_id'),
+                   json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?""",
+                (job.workspace_id, job.task_id),
+            ).fetchone()
+            plan = current.execute(
+                "SELECT updated_at FROM creation_plans WHERE workspace_id=? AND id=?",
+                (job.workspace_id, task[0] if task else None),
+            ).fetchone()
+            script = current.execute(
+                "SELECT updated_at FROM creation_task_scripts WHERE workspace_id=? AND id=?",
+                (job.workspace_id, task[1] if task else None),
+            ).fetchone()
+            montage = current.execute(
+                "SELECT id,updated_at FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=?",
+                (job.workspace_id, job.task_id),
+            ).fetchone()
+            source_rows = []
+            for asset_id in sorted(assets):
+                row = current.execute("SELECT updated_at,visibility FROM material_assets WHERE workspace_id=? AND id=?",
+                                      (job.workspace_id, asset_id)).fetchone()
+                source_rows.append(tuple(row) if row else None)
+            for artifact_id in sorted(artifacts):
+                row = current.execute(
+                    """SELECT a.sha256,a.size_bytes,j.status FROM artifact_records a
+                       LEFT JOIN job_runs j ON j.workspace_id=a.workspace_id AND j.id=a.producer_job_id
+                       WHERE a.workspace_id=? AND a.id=?""", (job.workspace_id, artifact_id),
+                ).fetchone()
+                source_rows.append(tuple(row) if row else None)
+            for narration_id in sorted(narrations):
+                row = current.execute("SELECT id,created_at FROM narration_artifacts WHERE workspace_id=? AND id=?",
+                                      (job.workspace_id, narration_id)).fetchone()
+                source_rows.append(tuple(row) if row else None)
+            return (tuple(job_row) if job_row else None, tuple(task) if task else None,
+                    tuple(plan) if plan else None, tuple(script) if script else None,
+                    tuple(montage) if montage else None, tuple(source_rows))
+        expected = read(conn)
+        if expected[1] is None:
+            return lambda current: "stale"
+        def check(current):
+            actual = read(current)
+            if actual[1] is None or actual[1][-2:] != expected[1][-2:]:
+                return "unauthorized"
+            return "ready" if actual == expected else "stale"
+        return check
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def verify_retry(self, request, actor, reason, conn):
+        from app.device_scheduler import VerifiedRetry
         job, event = self.read(request.workspace_id, request.owner_id, conn)
         if event["arguments"].get("_media_kind") == "clip_preview" and "_clip_preview" not in event["arguments"]:
             raise PermissionError("历史短预览仅供回读，请为当前版本提交新的独立预览请求")
         expected = "succeeded" if reason == "result_invalid" else reason
         if job.status != expected or self.check(job, event, actor) != "ready":
             raise PermissionError("只能显式重试当前成员、当前固定输入的对应终态媒体作业")
-        conn.execute("UPDATE job_runs SET status='interrupted',failure_reason=NULL,impact=NULL,repair_action=NULL,finished_at=NULL,updated_at=? "
-                     "WHERE workspace_id=? AND id=?", (utc_now().isoformat(),job.workspace_id,job.id))
-        return actor.member_id
+        def reopen(current):
+            changed = current.execute("UPDATE job_runs SET status='interrupted',failure_reason=NULL,impact=NULL,repair_action=NULL,finished_at=NULL,updated_at=? "
+                "WHERE workspace_id=? AND id=? AND status=?",
+                (utc_now().isoformat(), job.workspace_id, job.id, expected))
+            if changed.rowcount != 1:
+                raise PermissionError("重试期间原媒体作业终态已经变化")
+        return VerifiedRetry(actor.member_id, reopen)
 
     def execute(self, grant, scheduler, executor):
         from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext

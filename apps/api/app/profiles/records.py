@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 import json
 import sqlite3
@@ -26,6 +27,54 @@ class ProfileRecordStore:
     ) -> None:
         self._connect = connection_factory
         self._authorizations = authorizations
+
+    def capture_local_check(self, conn, workspace_id, profile_refs, pronunciation_refs=(), *, pronunciation_scope=None):
+        """Fence the fixed profiles and their current access metadata with SQL only."""
+        from app.profiles.contracts import profile_use_failure
+
+        def read(current):
+            profiles, assets, failures = [], set(), []
+            for kind, profile_id, version in profile_refs:
+                getter = self._get_person_profile if kind == "person" else self._get_versioned_voice_profile
+                try:
+                    fixed = getter(current, workspace_id, profile_id, version)
+                    fixed = replace(fixed, authorization=self._authorizations._current_authorization(
+                        current, workspace_id, fixed.authorization))
+                    latest = getter(current, workspace_id, profile_id)
+                    latest = replace(latest, authorization=self._authorizations._current_authorization(
+                        current, workspace_id, latest.authorization))
+                except (KeyError, ValueError):
+                    return None
+                profiles.append((asdict(fixed), (latest.owner_user_id, latest.visibility, latest.use_state,
+                    asdict(latest.authorization) if latest.authorization else None, latest.reference_issue)))
+                if fixed.reference and fixed.reference.asset_id:
+                    assets.add(fixed.reference.asset_id)
+                for item in (fixed, latest):
+                    failures.append(profile_use_failure(item,
+                        content_type="person_likeness" if kind == "person" else "voice",
+                        usage_scope="avatar_lipsync" if kind == "person" else "narration"))
+            asset_versions = [tuple(row) for asset_id in sorted(assets) for row in current.execute(
+                "SELECT id,updated_at FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id))]
+            pronunciations = [tuple(row) for entry_id, version in pronunciation_refs for row in current.execute(
+                "SELECT id,version,payload FROM pronunciation_entries WHERE workspace_id=? AND id=? AND version=?",
+                (workspace_id, entry_id, version))]
+            if pronunciation_scope is not None:
+                person_id, episode_id = pronunciation_scope
+                pronunciations.extend(asdict(item) for item in self.list_applicable_pronunciation_entries(
+                    workspace_id=workspace_id, person_profile_id=person_id, episode_id=episode_id, connection=current))
+            return profiles, asset_versions, pronunciations, failures
+
+        expected = read(conn)
+
+        def check(current):
+            actual = read(current)
+            if actual == expected:
+                return "ready"
+            if actual is not None and expected is not None and actual[-1] != expected[-1] and any(actual[-1]):
+                return "unauthorized"
+            return "stale"
+
+        return check
 
     def _latest_profile_payload_row(
         self,
@@ -226,8 +275,9 @@ class ProfileRecordStore:
         workspace_id: str,
         person_profile_id: str | None,
         episode_id: str,
+        connection: sqlite3.Connection | None = None,
     ) -> list[PronunciationEntry]:
-        with self._connect() as conn:
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT payload FROM pronunciation_entries

@@ -29,6 +29,8 @@ from app.device_scheduler import (
     SubmissionIntent,
     VerifiedSession,
     VerifiedWork,
+    VerifiedRetry,
+    LocalCheck,
     Verdict,
     WorkRequest,
 )
@@ -48,11 +50,13 @@ class BusinessOwner(Protocol):
 
     def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork: ...
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection) -> Verdict: ...
+    def capture_local(self, request: WorkRequest, conn: sqlite3.Connection) -> LocalCheck: ...
+    def check_local(self, request: WorkRequest, conn: sqlite3.Connection, observed: LocalCheck) -> Verdict: ...
     def can_manage(self, request: WorkRequest, actor: object) -> bool: ...
     def can_wake(self, request: WorkRequest, actor: object) -> bool: ...
     def can_view_detail(self, request: WorkRequest, actor: object) -> bool: ...
     def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason,
-                     conn: sqlite3.Connection) -> str: ...
+                     conn: sqlite3.Connection) -> VerifiedRetry: ...
 
 
 class DeviceAccess(Protocol):
@@ -96,6 +100,18 @@ class OwnerRouter(OwnerVerifier):
             return "unknown"
         return registration.owner.check_current(request, conn)
 
+    def capture_local(self, request: WorkRequest, conn: sqlite3.Connection) -> LocalCheck:
+        registration = self.registrations.get(request.owner_type)
+        if registration is None:
+            return lambda current: "unknown"
+        return registration.owner.capture_local(request, conn)
+
+    def check_local(self, request: WorkRequest, conn: sqlite3.Connection, observed: LocalCheck) -> Verdict:
+        registration = self.registrations.get(request.owner_type)
+        if registration is None:
+            return "unknown"
+        return registration.owner.check_local(request, conn, observed)
+
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
         registration = self.registrations.get(request.owner_type)
         return registration is not None and registration.owner.can_manage(request, actor)
@@ -109,7 +125,7 @@ class OwnerRouter(OwnerVerifier):
         return registration is not None and registration.owner.can_view_detail(request, actor)
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason,
-                     conn: sqlite3.Connection) -> str:
+                     conn: sqlite3.Connection) -> VerifiedRetry:
         registration = self.registrations.get(request.owner_type)
         if registration is None:
             raise RuntimeUnavailable("执行对象没有已注册的验证者和执行器")

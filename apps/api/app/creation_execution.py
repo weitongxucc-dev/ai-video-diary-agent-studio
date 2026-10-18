@@ -797,9 +797,9 @@ class CreationJobOwnerVerifier:
         except (ValueError, KeyError, TypeError, AttributeError):
             return "unauthorized"
         if self.verify_identity is not None:
-            identity = self.verify_identity(original)
-            if identity != "ready":
-                return identity
+            verdict = self.verify_identity(original)
+            if verdict != "ready":
+                return verdict
         try:
             if job.kind == NARRATION_EDIT_KIND:
                 key, resources = self.narration_edit_facts(job, task, event, plan)
@@ -815,6 +815,113 @@ class CreationJobOwnerVerifier:
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
 
+    def capture_local(self, request, conn):
+        if request.unit_key.startswith("cover:") and self.cover is not None:
+            return self.cover.capture_local(request, conn)
+        if request.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.capture_local(request, conn)
+        try:
+            job, task, event, script, plan = self._facts(conn, request.workspace_id, request.owner_id)
+        except KeyError:
+            return lambda current: "stale"
+        stage = request.unit_key.split(":", 1)[0]
+        refs = []
+        if plan.selected_voice:
+            refs.append(("voice", plan.selected_voice.profile_id, plan.selected_voice.version))
+        if plan.selected_person:
+            refs.append(("person", plan.selected_person.profile_id, plan.selected_person.version))
+        pronunciation_scope = None
+        if stage == "narration" and plan.selected_voice:
+            try:
+                voice = self.repository.get_versioned_voice_profile(request.workspace_id,
+                    plan.selected_voice.profile_id, plan.selected_voice.version)
+            except KeyError:
+                return lambda current: "stale"
+            pronunciation_scope = (voice.person_profile_id, task.id)
+        profiles = self.repository.capture_profile_local_check(conn, request.workspace_id, refs,
+            [(item.id, item.version) for item in plan.pronunciation_references],
+            pronunciation_scope=pronunciation_scope)
+        assets, persons = set(), set()
+        if stage == "render" and task.montage_plan_id:
+            try:
+                montage = self.repository.get_creation_task_montage_plan(request.workspace_id, task.id)
+            except KeyError:
+                return lambda current: "stale"
+            for clip in montage.get("clips", []):
+                if clip.get("asset_id"):
+                    assets.add(clip["asset_id"])
+                if clip.get("person_render_id"):
+                    persons.add(clip["person_render_id"])
+            references = set()
+            def collect(value):
+                if isinstance(value, str):
+                    references.add(value)
+                elif isinstance(value, dict):
+                    for child in value.values():
+                        collect(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        collect(child)
+            collect(montage)
+            for reference in references:
+                if reference.startswith("workspace://"):
+                    try:
+                        reference = str(self.repository.resolve_workspace_media_reference(
+                            request.workspace_id, reference, require_registered=True))
+                    except (KeyError, ValueError, OSError):
+                        return lambda current: "stale"
+                assets.update(row[0] for row in conn.execute(
+                    "SELECT id FROM material_assets WHERE workspace_id=? AND file_path=?",
+                    (request.workspace_id, reference)))
+
+        def read(current):
+            job_row = current.execute("SELECT task_id,kind,input_digest,status FROM job_runs WHERE workspace_id=? AND id=?",
+                (request.workspace_id, request.owner_id)).fetchone()
+            task_row = current.execute("SELECT plan_id,json_extract(payload,'$.confirmed_script_id'),json_extract(payload,'$.narration_cache_key'),json_extract(payload,'$.montage_plan_id'),json_extract(payload,'$.current_timeline_version_id'),json_extract(payload,'$.owner_user_id'),json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?",
+                (request.workspace_id, task.id)).fetchone()
+            plan_row = current.execute("SELECT updated_at,visibility FROM creation_plans WHERE workspace_id=? AND id=?",
+                (request.workspace_id, plan.id)).fetchone()
+            script_row = current.execute("SELECT updated_at FROM creation_task_scripts WHERE workspace_id=? AND id=?",
+                (request.workspace_id, script.id)).fetchone()
+            montage_row = current.execute("SELECT id,updated_at FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=?",
+                (request.workspace_id, task.id)).fetchone() if stage == "render" else None
+            if stage == "montage_plan":
+                source_rows = [tuple(row) for row in current.execute("SELECT id,updated_at FROM material_assets WHERE workspace_id=? ORDER BY id", (request.workspace_id,))]
+            else:
+                source_rows = [tuple(row) for asset_id in sorted(assets) for row in current.execute(
+                    "SELECT id,updated_at FROM material_assets WHERE workspace_id=? AND id=?", (request.workspace_id, asset_id))]
+            person_rows = [tuple(row) for render_id in sorted(persons) for row in current.execute(
+                "SELECT id,status,output_path,updated_at FROM person_renders WHERE workspace_id=? AND id=?",
+                (request.workspace_id, render_id))]
+            proposal_row = current.execute("SELECT updated_at,status FROM edit_proposals WHERE workspace_id=? AND id=?",
+                (request.workspace_id, event["edit_proposal_id"])).fetchone() if event.get("edit_proposal_id") else None
+            narration_row = current.execute("SELECT id,created_at FROM narration_artifacts WHERE workspace_id=? AND cache_key=?",
+                (request.workspace_id, task.narration_cache_key)).fetchone() if task.narration_cache_key else None
+            subtitles = [tuple(row) for row in current.execute("SELECT id,updated_at FROM subtitle_tracks WHERE workspace_id=? AND task_id=? AND timeline_version_id=? ORDER BY id",
+                (request.workspace_id, task.id, task.current_timeline_version_id))] if stage == "render" and task.current_timeline_version_id else []
+            segments = [tuple(row) for row in current.execute(
+                "SELECT id,updated_at FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? ORDER BY id",
+                (request.workspace_id, task.id, script.id))] if stage in {"person_render", "person_edit", "narration_edit"} or plan.presenter_share_target else []
+            if stage == "montage_plan" and plan.presenter_share_target:
+                person_rows.extend(tuple(row) for row in current.execute(
+                    """SELECT p.id,p.updated_at FROM person_renders p JOIN narration_segments n
+                       ON n.workspace_id=p.workspace_id AND n.id=p.narration_segment_id
+                       WHERE p.workspace_id=? AND p.task_id=? AND n.script_id=? ORDER BY p.id""",
+                    (request.workspace_id, task.id, script.id)))
+            return tuple(tuple(row) if row is not None else None for row in (job_row, task_row, plan_row, script_row, montage_row, proposal_row, narration_row)), source_rows, person_rows, subtitles, segments
+
+        expected = read(conn)
+
+        def check(current):
+            if read(current) != expected:
+                return "stale"
+            return profiles(current)
+
+        return check
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
         return isinstance(actor, CreationExecutionActor) and (actor.workspace_id, actor.member_id) == (request.workspace_id, request.member_id)
 
@@ -825,7 +932,7 @@ class CreationJobOwnerVerifier:
         return self.can_manage(request, actor) and (
             self.verify_identity is None or self.verify_identity(actor) == "ready")
 
-    def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection) -> str:
+    def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection):
         if request.unit_key.startswith("cover:") and self.cover is not None:
             raise PermissionError("封面只能续交原请求的固定回执，不能盲重试生成")
         if request.unit_key.startswith("task_media:") and self.task_media is not None:

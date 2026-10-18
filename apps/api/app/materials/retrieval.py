@@ -107,6 +107,22 @@ class MaterialRetrievalService:
             return "stale"
         return "ready"
 
+    def capture_local(self, request, conn):
+        def read(current):
+            row = current.execute(
+                """SELECT member_id,identity_json,query_text,model_id,index_version
+                   FROM material_semantic_queries WHERE workspace_id=? AND id=?""",
+                (request.workspace_id, request.owner_id),
+            ).fetchone()
+            resources = (material_visual_query_resources(self.query_budget, query_chars=len(row[2]))
+                         if row is not None and self.execution_limits is not None else None)
+            return tuple(row) if row else None, self.provider.model_id, self.index_version, resources
+        expected = read(conn)
+        return lambda current: "ready" if read(current) == expected else "stale"
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def can_manage(self, request, actor):
         try:
             self._actor(request.workspace_id, actor)
@@ -119,9 +135,10 @@ class MaterialRetrievalService:
     can_wake = can_manage
 
     def verify_retry(self, request, actor, reason, conn):
+        from app.device_scheduler import VerifiedRetry
         if not self.can_manage(request, actor):
             raise PermissionError("不能重试其他成员的视觉查询")
-        return actor.member_id
+        return VerifiedRetry(actor.member_id)
 
     def search(self, workspace_id, *, query="", asset_ids=None, eligible_segment_refs=None,
                usage_roles=None, tags=None, min_duration_seconds=None, max_duration_seconds=None,

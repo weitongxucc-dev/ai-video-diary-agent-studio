@@ -38,8 +38,16 @@ class AutomationCreationOwner(CreationJobOwnerVerifier):
         verdict = super().check_current(request, conn)
         return automation_job_gate(request,conn) if verdict == "ready" else verdict
 
+    def check_local(self, request, conn, observed):
+        verdict = super().check_local(request, conn, observed)
+        return automation_job_gate(request, conn) if verdict == "ready" else verdict
+
 
 class AutomationPlatformPublishOwner(PlatformPublishOwnerVerifier):
+    def check_local(self, request, conn, observed):
+        verdict = super().check_local(request, conn, observed)
+        return automation_job_gate(request, conn) if verdict == "ready" else verdict
+
     def check_current(self, request, conn):
         verdict = super().check_current(request, conn)
         if verdict != "ready":

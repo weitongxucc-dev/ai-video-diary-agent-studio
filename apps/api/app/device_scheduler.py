@@ -15,7 +15,7 @@ import os
 import re
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal, Protocol
@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 WorkClass = Literal["preview_dependency", "normal_make", "background"]
 PolicyMode = Literal["asap", "idle", "scheduled"]
 Verdict = Literal["ready", "dependency", "stale", "unauthorized", "unknown"]
+LocalCheck = Callable[[sqlite3.Connection], Verdict]
 RecoveryState = Literal["released", "active", "unknown"]
 RetryReason = Literal["failed", "cancelled", "result_invalid"]
 DeferReason = Literal["dependency_unavailable", "input_stale", "authorization_lost", "resource_pressure", "window_closed", "device_active", "worker_interrupted", "transient_failure"]
@@ -109,6 +110,12 @@ class VerifiedWork:
 
 
 @dataclass(frozen=True)
+class VerifiedRetry:
+    actor_id: str
+    owner_write: Callable[[sqlite3.Connection], None] | None = None
+
+
+@dataclass(frozen=True)
 class WorkRequest:
     id: str
     workspace_id: str
@@ -172,12 +179,15 @@ class VerifiedSession:
 class OwnerVerifier(Protocol):
     """Production adapter derives identity from the saved owner and sharing grants.
 
-    check_current must recheck input digest, material stage input digest,
-    owner access and every referenced source's current sharing right.
-    verify_retry must prove the actor's current right and, for result_invalid,
-    verify the referenced business result is actually invalid. These checks
-    receive the permit's SQLite connection
-    so same-database revocation and checkpoint use one transaction. For an
+    check_current rechecks identity, input digest, material stage input digest,
+    owner access and every referenced source's current sharing right outside a
+    write transaction. check_local rechecks the local facts on the supplied
+    transaction without network calls or waiting resource samples. Its use is
+    limited to committing that same observation; execution still checks current.
+    verify_retry observes the actor's current right and invalid-result evidence
+    outside the write transaction, returning any SQL-only owner update for the
+    fenced commit. Local revision checks and owner writes use the permit's
+    SQLite connection, so revocation and checkpoint use one transaction. For an
     external authorization store, unknown or unavailable must return unknown;
     this module cannot promise a cross-database atomic revocation boundary.
     No client-supplied role, class or refs are authoritative; historical work
@@ -186,12 +196,14 @@ class OwnerVerifier(Protocol):
 
     def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork: ...
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection) -> Verdict: ...
+    def capture_local(self, request: WorkRequest, conn: sqlite3.Connection) -> LocalCheck: ...
+    def check_local(self, request: WorkRequest, conn: sqlite3.Connection, observed: LocalCheck) -> Verdict: ...
     def can_manage(self, request: WorkRequest, actor: object) -> bool: ...
     def can_wake(self, request: WorkRequest, actor: object) -> bool: ...
     def verify_session(self, heartbeat: SessionHeartbeat, actor: object) -> VerifiedSession: ...
     def can_view_detail(self, request: WorkRequest, actor: object) -> bool: ...
     def can_view_device_summary(self, actor: object) -> bool: ...
-    def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason, conn: sqlite3.Connection) -> str: ...
+    def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason, conn: sqlite3.Connection) -> VerifiedRetry: ...
 
 
 class ResourceAdmission(Protocol):
@@ -391,6 +403,12 @@ class DeviceScheduler:
                 or type(trusted.resources.get("size_bytes")) is not int
                 or trusted.resources["size_bytes"] < 0):
             raise ValueError("仅支持可信的素材元数据探针替换")
+        previous = self._get(old_request_id)
+        replacement = replace(previous, unit_key=trusted.unit_key, resources=trusted.resources,
+                              source_refs=trusted.source_refs)
+        with self._connect() as reader:
+            local = self.owners.capture_local(replacement, reader)
+            observed = self.owners.check_current(replacement, reader)
         now = _stamp(self._now())
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -418,6 +436,8 @@ class DeviceScheduler:
                 if existing is None or old.wait_reason != f"replaced_by:{existing['id']}":
                     raise RecoveryBlocked("已替换请求的审计指针不一致")
                 return self._request(existing)
+            if old != previous:
+                raise PermissionError("观察期间旧请求已经变化")
             if (old.state not in {"waiting", "blocked"} or old.attempt_number != 1
                     or old.last_grant_generation is not None or old_row["checkpoint_ref"] is not None
                     or old_row["last_failure_reason"] is not None):
@@ -464,7 +484,8 @@ class DeviceScheduler:
                      now, new_id),
                 )
             new_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (new_id,)).fetchone()
-            if self.owners.check_current(self._request(new_row), conn) != "ready":
+            current = self.owners.check_local(self._request(new_row), conn, local)
+            if (observed if current == "ready" else current) != "ready":
                 raise PermissionError("替换单元的当前素材或授权尚未就绪")
             self._record_event(conn, old_row, "deferred", f"superseded_by:{new_id}:{reason}", None, now)
             conn.execute("UPDATE device_work_requests SET state='cancelled', wait_reason=?, updated_at=? WHERE id=?",
@@ -730,12 +751,32 @@ class DeviceScheduler:
             ("waiting" if reason is None else "blocked", reason, _stamp(since) if since else None, total, _stamp(now), row["id"]),
         )
 
-    def _eligible(self, conn: sqlite3.Connection, row: sqlite3.Row, now: datetime) -> bool:
-        request = self._request(row)
+    def _schedule_wait(self, conn: sqlite3.Connection, request: WorkRequest, now: datetime) -> str | None:
         if not _material_key_has_digest(request.owner_type, request.unit_key):
-            self._update_wait(conn, row, now, "legacy_stage_digest_missing")
+            return "legacy_stage_digest_missing"
+        if request.policy.not_before_utc and now < request.policy.not_before_utc:
+            return "scheduled_time"
+        if request.retry_not_before_utc and now < request.retry_not_before_utc:
+            return "retry_not_before"
+        if request.policy.window and not request.policy.window.contains(now):
+            return "outside_window"
+        if request.policy.mode == "idle":
+            idle = self._idle(conn, now)
+            if idle is not True:
+                return "activity_unknown" if idle is None else "device_active"
+        return None
+
+    def _eligible(self, conn: sqlite3.Connection, row: sqlite3.Row, now: datetime,
+                  observed_owner: Verdict, decision: ResourceAdmission | None,
+                  observed_at: datetime, local_check: LocalCheck) -> bool:
+        request = self._request(row)
+        wait = self._schedule_wait(conn, request, now)
+        if wait is not None:
+            self._update_wait(conn, row, now, wait)
             return False
-        owner_state = self.owners.check_current(request, conn)
+        owner_state = self.owners.check_local(request, conn, local_check)
+        if owner_state == "ready":
+            owner_state = observed_owner
         if owner_state == "stale":
             self._update_wait(conn, row, now, "input_stale")
             return False
@@ -745,23 +786,9 @@ class DeviceScheduler:
         if owner_state != "ready":
             self._update_wait(conn, row, now, "dependency" if owner_state == "dependency" else "owner_unknown")
             return False
-        if request.policy.not_before_utc and now < request.policy.not_before_utc:
-            self._update_wait(conn, row, now, "scheduled_time")
-            return False
-        if request.retry_not_before_utc and now < request.retry_not_before_utc:
-            self._update_wait(conn, row, now, "retry_not_before")
-            return False
-        if request.policy.window and not request.policy.window.contains(now):
-            self._update_wait(conn, row, now, "outside_window")
-            return False
-        if request.policy.mode == "idle":
-            idle = self._idle(conn, now)
-            if idle is not True:
-                self._update_wait(conn, row, now, "activity_unknown" if idle is None else "device_active")
-                return False
-        decision = self.resources.admit(request)
+        assert decision is not None  # A ready observation includes its actual resource decision.
         if self.admission_recorder is not None:
-            self.admission_recorder(conn, request, decision, self._now())
+            self.admission_recorder(conn, request, decision, observed_at)
         available = decision.verdict
         if available is not True:
             self._update_wait(conn, row, now, "resource_unknown" if available is None else "resource_busy")
@@ -874,7 +901,36 @@ class DeviceScheduler:
                 conn.execute("BEGIN IMMEDIATE")
                 permit = self._reconcile_local(conn, data, _stamp(now))
                 rows = conn.execute("SELECT * FROM device_work_requests WHERE state IN ('waiting', 'blocked') ORDER BY first_ready_at_utc, id").fetchall()
-                ready_ids = [row["id"] for row in rows if self._eligible(conn, row, now)]
+                candidates = []
+                for row in rows:
+                    request = self._request(row)
+                    wait = self._schedule_wait(conn, request, now)
+                    if wait is not None:
+                        self._update_wait(conn, row, now, wait)
+                    else:
+                        candidates.append(request)
+                conn.commit()
+            observations = []
+            for request in candidates:
+                with self._connect() as conn:
+                    local_check = self.owners.capture_local(request, conn)
+                    owner_state = self.owners.check_current(request, conn)
+                decision = self.resources.admit(request) if owner_state == "ready" else None
+                observations.append((request, owner_state, decision, self._now(), local_check))
+            now = self._now()
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current_permit = conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
+                if current_permit is None or current_permit["state"] != "free" or current_permit["generation"] != permit["generation"] or current_permit["lock_key"] != permit["lock_key"]:
+                    raise RecoveryBlocked("设备许可在候选核验后已变化")
+                permit = current_permit
+                ready_ids = []
+                for request, owner_state, decision, observed_at, local_check in observations:
+                    row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request.id,)).fetchone()
+                    if row is None or self._request(row) != request:
+                        continue
+                    if self._eligible(conn, row, now, owner_state, decision, observed_at, local_check):
+                        ready_ids.append(request.id)
                 if not ready_ids:
                     conn.commit()
                     return None
@@ -889,6 +945,29 @@ class DeviceScheduler:
                     conn.commit()
                     return None
                 chosen = self._choose(ready, permit, now)
+                selected = self._request(chosen)
+                conn.commit()
+            # Earlier candidates may have waited behind slow owner checks. The
+            # selected unit gets its own current decision, outside the write lock.
+            with self._connect() as conn:
+                local_check = self.owners.capture_local(selected, conn)
+                owner_state = self.owners.check_current(selected, conn)
+            decision = self.resources.admit(selected) if owner_state == "ready" else None
+            observed_at = self._now()
+            now = self._now()
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current_permit = conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
+                if current_permit is None or current_permit["state"] != "free" or current_permit["generation"] != permit["generation"] or current_permit["lock_key"] != permit["lock_key"]:
+                    raise RecoveryBlocked("设备许可在最终候选核验后已变化")
+                permit = current_permit
+                chosen = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (selected.id,)).fetchone()
+                if chosen is None or self._request(chosen) != selected:
+                    conn.commit()
+                    return None
+                if not self._eligible(conn, chosen, now, owner_state, decision, observed_at, local_check):
+                    conn.commit()
+                    return None
                 identity = self.processes.current()
                 if identity.pid <= 0 or not identity.start_token or not identity.boot_id:
                     raise RecoveryBlocked("当前执行进程身份不可核查")
@@ -968,6 +1047,10 @@ class DeviceScheduler:
         if row is None:
             raise PermissionError("输入版本或共享授权已失效")
         verdict = self.owners.check_current(self._request(row), conn)
+        self._require_current(verdict, grant)
+
+    @staticmethod
+    def _require_current(verdict: Verdict, grant: Grant) -> None:
         if verdict != "ready":
             logger.warning("Device owner current check refused: %s", json.dumps({
                 "request_id": grant.request_id, "attempt_number": grant.attempt_number,
@@ -977,6 +1060,25 @@ class DeviceScheduler:
             if verdict == "stale":
                 raise StaleGrantInput("输入版本已过期")
             raise PermissionError("输入版本或共享授权已失效")
+
+    def _observe_grant(self, grant: Grant):
+        with self._connect() as conn:
+            self._assert_grant(conn, grant)
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            request = self._request(row)
+            local = self.owners.capture_local(request, conn)
+            verdict = self.owners.check_current(request, conn)
+        return request, local, verdict
+
+    def _observed_current(self, conn, observation):
+        request, local, verdict = observation
+        row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request.id,)).fetchone()
+        if row is None or self._request(row) != request:
+            raise PermissionError("观察期间执行单元、取消状态或输入已变化")
+        if not _material_key_has_digest(request.owner_type, request.unit_key):
+            raise PermissionError("旧素材请求缺少阶段输入摘要，不能执行")
+        current = self.owners.check_local(request, conn, local)
+        return verdict if current == "ready" else current
 
     def assert_grant(self, grant: Grant) -> None:
         """Call immediately before a model/FFmpeg unit; nested calls reuse grant."""
@@ -1022,10 +1124,11 @@ class DeviceScheduler:
 
     def register_child(self, grant: Grant, child: ProcessIdentity) -> None:
         """A future process wrapper must register and receive ACK before exec."""
+        observation = self._observe_grant(grant)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             data = self._assert_grant(conn, grant)
-            self._assert_current(conn, grant)
+            self._require_current(self._observed_current(conn, observation), grant)
             if child.pid <= 0 or not child.start_token or not child.boot_id:
                 raise ValueError("子进程身份不完整")
             children = data.get("children", [])
@@ -1099,12 +1202,13 @@ class DeviceScheduler:
         continuation = self.owners.verify_submission(next_intent, actor) if next_intent else None
         if continuation is not None:
             self._assert_material_stage_key(continuation)
+        observation = self._observe_grant(grant) if not cancelled else None
         now = self._now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             data = self._released_for_commit(conn, grant)
             if not cancelled:
-                self._assert_current(conn, grant)
+                self._require_current(self._observed_current(conn, observation), grant)
             request_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
             if request_row is None:
                 raise KeyError(grant.request_id)
@@ -1159,12 +1263,13 @@ class DeviceScheduler:
         if reason in {"resource_pressure", "device_active", "worker_interrupted", "transient_failure"}:
             if retry_at is None or retry_at <= now:
                 raise ValueError("该等待原因必须指定未来的最早重试时间")
+        observation = self._observe_grant(grant)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             data = self._released_for_commit(conn, grant)
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
             request = self._request(row)
-            verdict = self.owners.check_current(request, conn)
+            verdict = self._observed_current(conn, observation)
             if ((reason == "authorization_lost" and verdict != "unauthorized")
                     or (reason == "input_stale" and verdict != "stale")
                     or (reason == "dependency_unavailable" and verdict != "dependency")
@@ -1209,6 +1314,19 @@ class DeviceScheduler:
         """Explicitly reopen a terminal request after trusted business validation."""
         if reason not in {"failed", "cancelled", "result_invalid"}:
             raise ValueError("重试原因无效")
+        with self._connect() as reader:
+            row = reader.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            expected_state = "done" if reason == "result_invalid" else reason
+            if row["state"] != expected_state:
+                raise ValueError("只有匹配的终态请求可以显式重试")
+            request = self._request(row)
+            local = self.owners.capture_local(request, reader)
+            retry = self.owners.verify_retry(request, actor, reason, reader)
+            if not retry.actor_id:
+                raise PermissionError("重试身份未通过服务端验证")
+            observation = request, local, self.owners.check_current(request, reader)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
@@ -1217,19 +1335,17 @@ class DeviceScheduler:
             expected_state = "done" if reason == "result_invalid" else reason
             if row["state"] != expected_state:
                 raise ValueError("只有匹配的终态请求可以显式重试")
-            request = self._request(row)
-            actor_id = self.owners.verify_retry(request, actor, reason, conn)
-            if not actor_id:
-                raise PermissionError("重试身份未通过服务端验证")
             if not _material_key_has_digest(request.owner_type, request.unit_key):
                 raise ValueError("旧素材请求缺少阶段输入摘要，须由发现循环创建新请求")
-            if self.owners.check_current(request, conn) != "ready":
+            if self._observed_current(conn, observation) != "ready":
                 raise PermissionError("输入版本或共享授权未恢复")
             permit = conn.execute("SELECT request_id FROM device_permit WHERE id=1").fetchone()
             if permit is None or permit["request_id"] == request_id:
                 raise RecoveryBlocked("请求仍有关联的设备许可")
+            if retry.owner_write is not None:
+                retry.owner_write(conn)
             now = _stamp(self._now())
-            self._record_event(conn, row, "retried", reason, actor_id, now)
+            self._record_event(conn, row, "retried", reason, retry.actor_id, now)
             conn.execute(
                 """UPDATE device_work_requests SET state='waiting', wait_reason=NULL,
                 checkpoint_ref=NULL, last_failure_reason=NULL, retry_not_before_utc=NULL,
@@ -1240,13 +1356,16 @@ class DeviceScheduler:
         return self.view_for(request_id, actor)
 
     def change_policy(self, request_id: str, policy: SchedulePolicy, actor: object) -> dict[str, object]:
+        observed = self._get(request_id)
+        if not self.owners.can_manage(observed, actor):
+            raise PermissionError("不能调整其他成员的执行安排")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             if row is None:
                 raise KeyError(request_id)
-            if not self.owners.can_manage(self._request(row), actor):
-                raise PermissionError("不能调整其他成员的执行安排")
+            if self._request(row) != observed:
+                raise PermissionError("观察期间执行安排已变化，请回读原请求")
             if row["state"] not in {"waiting", "blocked"}:
                 raise ValueError("当前单元已执行或正在执行")
             conn.execute("UPDATE device_work_requests SET policy=?, not_before_utc=?, window_json=?, updated_at=? WHERE id=?",
@@ -1256,13 +1375,20 @@ class DeviceScheduler:
         return self.view_for(request_id, actor)
 
     def cancel(self, request_id: str, actor: object) -> dict[str, object]:
+        observed = self._get(request_id)
+        if not self.owners.can_manage(observed, actor):
+            raise PermissionError("不能取消其他成员的执行单元")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             if row is None:
                 raise KeyError(request_id)
-            if not self.owners.can_manage(self._request(row), actor):
-                raise PermissionError("不能取消其他成员的执行单元")
+            current = self._request(row)
+            if ((current.workspace_id, current.member_id, current.owner_type, current.owner_id,
+                 current.input_digest, current.unit_key, current.attempt_number) !=
+                    (observed.workspace_id, observed.member_id, observed.owner_type, observed.owner_id,
+                     observed.input_digest, observed.unit_key, observed.attempt_number)):
+                raise PermissionError("观察期间执行单元的归属或尝试已变化")
             if row["state"] in {"waiting", "blocked"}:
                 conn.execute("UPDATE device_work_requests SET state='cancelled', wait_reason='user_cancelled', updated_at=? WHERE id=?", (_stamp(self._now()), request_id))
             elif row["state"] == "granted":

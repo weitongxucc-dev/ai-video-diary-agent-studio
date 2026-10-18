@@ -108,6 +108,45 @@ class QualityCheckOwnerVerifier:
         except (KeyError, OSError, ValueError):
             return "stale"
 
+    def capture_local(self, request, conn):
+        try:
+            job, event, record, sealed = self.service.read(request.workspace_id, request.owner_id, connection=conn)
+        except (KeyError, ValueError):
+            return lambda current: "stale"
+        source = sealed["source"]
+        def read(current):
+            job_row = current.execute(
+                "SELECT task_id,input_digest,status FROM job_runs WHERE workspace_id=? AND id=?",
+                (request.workspace_id, request.owner_id),
+            ).fetchone()
+            check = current.execute(
+                """SELECT updated_at,check_state FROM creation_task_quality_history
+                   WHERE workspace_id=? AND task_id=? AND check_id=?""",
+                (request.workspace_id, job.task_id, record["check_id"]),
+            ).fetchone()
+            task = current.execute(
+                """SELECT json_extract(payload,'$.owner_user_id'),json_extract(payload,'$.visibility')
+                   FROM creation_tasks WHERE workspace_id=? AND id=?""",
+                (request.workspace_id, job.task_id),
+            ).fetchone()
+            artifact = current.execute(
+                "SELECT task_id,kind,logical_ref,sha256,size_bytes FROM artifact_records WHERE workspace_id=? AND id=?",
+                (request.workspace_id, source["artifact_id"]),
+            ).fetchone()
+            return (tuple(job_row) if job_row else None, tuple(check) if check else None,
+                    tuple(task) if task else None, tuple(artifact) if artifact else None,
+                    vars(self.service.budget).copy() if self.service.budget else None)
+        expected = read(conn)
+        def check(current):
+            actual = read(current)
+            if actual[2] != expected[2]:
+                return "unauthorized"
+            return "ready" if actual == expected else "stale"
+        return check
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def can_manage(self, request, actor):
         try:
             _, event, _, _ = self.service.read(request.workspace_id, request.owner_id)

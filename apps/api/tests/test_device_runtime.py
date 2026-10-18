@@ -23,6 +23,7 @@ from app.device_scheduler import (
     SubmissionIntent,
     VerifiedSession,
     VerifiedWork,
+    VerifiedRetry,
 )
 from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample
 from app.host_resource_probes import HostBudget, HostResourceProbe, NarrationBudget, RuntimeCpuPolicy
@@ -38,6 +39,12 @@ class Owner:
     def check_current(self, request, conn):
         return "ready"
 
+    def capture_local(self, request, conn):
+        return None
+
+    def check_local(self, request, conn, observed):
+        return "ready"
+
     def can_manage(self, request, actor):
         return actor == "member"
 
@@ -50,7 +57,7 @@ class Owner:
     def verify_retry(self, request, actor, reason, conn):
         if actor != "member":
             raise PermissionError("unknown member")
-        return actor
+        return VerifiedRetry(actor)
 
 
 class Access:
@@ -155,7 +162,10 @@ class BaseObservations:
 
     def sample(self):
         with self.condition:
-            self.now += 1
+            # Only the observer's cadence advances a virtual second. Reading
+            # memory during admission/execution must not invent an IO gap.
+            if threading.current_thread() is self.probe._observer_thread:
+                self.now += 1
             self.condition.notify_all()
             return MemorySample("darwin", self.now, "synthetic", "normal", 10000, None, {})
 
@@ -500,6 +510,7 @@ def _post_grant_owner_change(tmp_path, verdict):
     """Change business input after a real grant, without forging its fences."""
     owner, executor, states, grants = Owner(), CompletingExecutor(), {}, []
     owner.check_current = lambda request, conn: states.get(request.owner_id, "ready")
+    owner.check_local = lambda request, conn, observed: states.get(request.owner_id, "ready")
     runtime = _runtime(tmp_path, registrations={"job_run": OwnerRegistration(owner, executor)})
     request = runtime.scheduler.submit(_intent("old-input"), "member")
     pick = runtime.scheduler.pick_and_grant

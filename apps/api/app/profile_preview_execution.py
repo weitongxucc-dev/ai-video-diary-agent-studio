@@ -116,9 +116,9 @@ class ProfilePreviewOwner:
             actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
             if request.member_id != actor.member_id:
                 return "unauthorized"
-            identity = self.verify_identity(actor)
-            if identity != "ready":
-                return identity
+            verdict = self.verify_identity(actor)
+            if verdict != "ready":
+                return verdict
             if run.status not in {"queued", "running"}:
                 return "stale"
             digest, unit, resources = self.facts(run)
@@ -127,6 +127,50 @@ class ProfilePreviewOwner:
             return "unauthorized"
         except (ValueError, KeyError, OSError):
             return "dependency"
+
+    def capture_local(self, request, conn):
+        try:
+            run = self.read(request.workspace_id, request.owner_id, conn)
+        except KeyError:
+            return lambda current: "stale"
+        refs = [("voice", run.voice_profile_id, run.voice_version)]
+        if run.preview_type == "avatar_lipsync":
+            refs.append(("person", run.preview_input["person_id"], run.preview_input["person_version"]))
+        pronunciation_scope = None
+        if run.preview_type == "voice":
+            try:
+                voice = self.repository.get_versioned_voice_profile(run.workspace_id, run.voice_profile_id, run.voice_version)
+            except KeyError:
+                return lambda current: "stale"
+            pronunciation_scope = (voice.person_profile_id, run.preview_input.get("episode_id", "voice_preview"))
+        profiles = self.repository.capture_profile_local_check(conn, run.workspace_id, refs,
+            pronunciation_scope=pronunciation_scope)
+        def read(current):
+            own = current.execute(
+                "SELECT updated_at FROM media_preview_attempts WHERE workspace_id=? AND id=?",
+                (run.workspace_id, run.id),
+            ).fetchone()
+            upstream = authorization = None
+            if run.preview_type == "avatar_lipsync":
+                upstream = tuple(map(tuple, current.execute(
+                    """SELECT id,updated_at FROM media_preview_attempts
+                       WHERE workspace_id=? AND preview_type='voice' AND identity=? ORDER BY attempt""",
+                    (run.workspace_id, run.preview_input["audio_cache_key"]),
+                ).fetchall()))
+                authorization = tuple(map(tuple, current.execute(
+                    "SELECT version,payload FROM media_authorizations WHERE workspace_id=? AND id=? ORDER BY created_at,version",
+                    (run.workspace_id, run.preview_input["authorization_id"]),
+                ).fetchall()))
+            budget = self.narration_budget if run.preview_type == "voice" else self.presenter_budget
+            limits = ((budget.max_duration_seconds, budget.max_output_bytes, budget.max_threads,
+                       budget.max_timeout_seconds) if budget else None)
+            return (tuple(own) if own else None, upstream, authorization,
+                    self.services[run.preview_type].provider.model_id, limits)
+        expected = read(conn)
+        return lambda current: profiles(current) if read(current) == expected else "stale"
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
 
     def can_manage(self, request, actor):
         return isinstance(actor, CreationExecutionActor) and (actor.workspace_id, actor.member_id) == (request.workspace_id, request.member_id) and self.verify_identity(actor) == "ready"

@@ -8,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from threading import Event
 
 import pytest
 
@@ -22,6 +23,7 @@ from app.device_scheduler import (
     SubmissionIntent,
     VerifiedSession,
     VerifiedWork,
+    VerifiedRetry,
     Window,
     material_stage_unit_key,
 )
@@ -60,6 +62,12 @@ class Owners:
     def check_current(self, request, conn):
         return "unauthorized" if self.revoked else "ready"
 
+    def capture_local(self, request, conn):
+        return None
+
+    def check_local(self, request, conn, observed):
+        return self.check_current(request, conn)
+
     def can_manage(self, request, actor):
         return actor == "main" or actor == request.member_id
 
@@ -84,7 +92,12 @@ class Owners:
             valid = conn.execute("SELECT valid FROM checkpoint_validity WHERE request_id=?", (request.id,)).fetchone()
             if valid is None or valid[0]:
                 raise PermissionError("checkpoint still valid")
-        return actor
+        def recheck(current):
+            if reason == "result_invalid":
+                valid = current.execute("SELECT valid FROM checkpoint_validity WHERE request_id=?", (request.id,)).fetchone()
+                if valid is None or valid[0]:
+                    raise PermissionError("checkpoint still valid")
+        return VerifiedRetry(actor, recheck)
 
 
 class Resources:
@@ -166,6 +179,261 @@ def _scheduler(tmp_path, *, db_name="business.sqlite", lock_name="device.lock", 
 def _complete(scheduler, grant):
     return scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                                    checkpoint_write=lambda conn, current: current.unit_key)
+
+
+@pytest.mark.parametrize("operation", ["cancel", "policy"])
+def test_slow_management_identity_keeps_sqlite_writable(tmp_path, operation):
+    entered, proceed = Event(), Event()
+    class SlowManagement(Owners):
+        def can_manage(self, request, actor):
+            entered.set()
+            assert proceed.wait(3)
+            return super().can_manage(request, actor)
+    scheduler = _scheduler(tmp_path, owners=SlowManagement())
+    request = scheduler.submit(_intent("managed"), "member-a")
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("CREATE TABLE ordinary_edits(value TEXT)")
+    def manage():
+        return (scheduler.cancel(request.id, "member-a") if operation == "cancel"
+                else scheduler.change_policy(request.id, SchedulePolicy(mode="idle"), "member-a"))
+    def edit():
+        with sqlite3.connect(scheduler.database_path, timeout=.25) as conn:
+            conn.execute("INSERT INTO ordinary_edits VALUES ('saved')")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        managed = pool.submit(manage)
+        try:
+            assert entered.wait(2)
+            pool.submit(edit).result(timeout=1)
+        finally:
+            proceed.set()
+        managed.result(timeout=2)
+    assert scheduler._get(request.id).state == ("cancelled" if operation == "cancel" else "waiting")
+
+
+@pytest.mark.parametrize("operation", ["complete", "defer", "register_child", "retry"])
+@pytest.mark.parametrize("mutation", [None, "source", "cancel"])
+def test_owner_observation_before_atomic_write_keeps_edits_live_and_rechecks_input(tmp_path, operation, mutation):
+    entered, proceed = Event(), Event()
+
+    class SqlOwners(Owners):
+        blocking = False
+
+        def capture_local(self, request, conn):
+            expected = conn.execute("SELECT version FROM owner_inputs").fetchone()[0]
+            return lambda current: ("ready" if current.execute("SELECT version FROM owner_inputs").fetchone()[0] == expected else "stale")
+
+        def check_current(self, request, conn):
+            assert not conn.in_transaction
+            if self.blocking:
+                entered.set()
+                assert proceed.wait(3)
+            return "ready"
+
+        def check_local(self, request, conn, observed):
+            assert conn.in_transaction
+            return observed(conn)
+
+    owners = SqlOwners()
+    scheduler = _scheduler(tmp_path, owners=owners)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.executescript("CREATE TABLE owner_inputs(version INTEGER); INSERT INTO owner_inputs VALUES(1); CREATE TABLE ordinary_edits(value TEXT)")
+    request = scheduler.submit(_intent("commit-observation"), "member-a")
+    grant = scheduler.pick_and_grant()
+    if operation == "retry":
+        scheduler.fail_unit(grant, reason="fixture_failure", failure_write=lambda conn, current: None)
+    owners.blocking = True
+    writes = []
+
+    def write_operation():
+        if operation == "complete":
+            return scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
+                checkpoint_write=lambda conn, current: writes.append("checkpoint") or "saved")
+        if operation == "defer":
+            return scheduler.defer_unit(grant, reason="resource_pressure",
+                retry_not_before_utc=scheduler._now() + timedelta(seconds=30),
+                owner_database_path=scheduler.database_path, owner_write=lambda conn, current: writes.append("deferred"))
+        if operation == "retry":
+            return scheduler.retry_existing(request.id, "member-a", reason="failed")
+        return scheduler.register_child(grant, ProcessIdentity(999, "child-start", "child-boot"))
+
+    def ordinary_edit():
+        with sqlite3.connect(scheduler.database_path, timeout=.25) as conn:
+            conn.execute("INSERT INTO ordinary_edits VALUES ('saved')")
+            if mutation == "source":
+                conn.execute("UPDATE owner_inputs SET version=2")
+        if mutation == "cancel":
+            scheduler.cancel(request.id, "member-a")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        committing = pool.submit(write_operation)
+        try:
+            assert entered.wait(2)
+            pool.submit(ordinary_edit).result(timeout=1)
+        finally:
+            proceed.set()
+        # A stale input can be recorded as a deferral, but cannot publish a
+        # successful checkpoint, register a child, or reopen a terminal unit.
+        refused = mutation == "cancel" and operation != "retry" or mutation == "source" and operation != "defer"
+        if refused:
+            with pytest.raises(PermissionError):
+                committing.result(timeout=2)
+            assert not writes
+        else:
+            committing.result(timeout=2)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM ordinary_edits").fetchone()[0] == 1
+    scheduler.close()
+
+
+@pytest.mark.parametrize("phase,observation", [("owner", 1), ("owner", 2), ("resource", 1), ("resource", 2)])
+def test_slow_admission_observations_leave_sqlite_available_for_ordinary_writes(tmp_path, phase, observation):
+    entered, proceed = Event(), Event()
+
+    class SlowOwners(Owners):
+        calls = 0
+
+        def check_current(self, request, conn):
+            assert not conn.in_transaction
+            self.calls += 1
+            if phase == "owner" and self.calls == observation:
+                entered.set()
+                assert proceed.wait(3)
+            return "ready"
+
+        def check_local(self, request, conn, observed):
+            assert conn.in_transaction
+            return "ready"
+
+    class SlowResources(Resources):
+        calls = 0
+
+        def admit(self, request):
+            self.calls += 1
+            if phase == "resource" and self.calls == observation:
+                entered.set()
+                assert proceed.wait(3)
+            return super().admit(request)
+
+    scheduler = _scheduler(tmp_path, owners=SlowOwners(), resources=SlowResources())
+    scheduler.submit(_intent("ordinary-edit-during-observation"), "member-a")
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("CREATE TABLE ordinary_edits (value TEXT)")
+
+    def write_edit():
+        with sqlite3.connect(scheduler.database_path, timeout=.25) as conn:
+            conn.execute("INSERT INTO ordinary_edits VALUES ('saved')")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        picking = pool.submit(scheduler.pick_and_grant)
+        try:
+            assert entered.wait(2)
+            pool.submit(write_edit).result(timeout=1)
+            assert not proceed.is_set()
+        finally:
+            proceed.set()
+        assert picking.result(timeout=2) is not None
+    scheduler.close()
+
+
+@pytest.mark.parametrize("mutation,wait_reason", [("cancel", None), ("source", "input_stale"), ("revoke", "authorization_lost")])
+def test_admission_rechecks_cancel_source_and_permission_after_observation(tmp_path, mutation, wait_reason):
+    entered, proceed = Event(), Event()
+
+    class ObservingOwners(Owners):
+        def verdict(self, request, conn):
+            row = conn.execute("SELECT digest,allowed FROM owner_inputs WHERE owner_id=?", (request.owner_id,)).fetchone()
+            return "unauthorized" if not row[1] else "ready" if row[0] == request.input_digest else "stale"
+
+        def check_current(self, request, conn):
+            assert not conn.in_transaction
+            observed = self.verdict(request, conn)
+            entered.set()
+            assert proceed.wait(3)
+            return observed
+
+        def check_local(self, request, conn, observed):
+            return self.verdict(request, conn)
+
+    scheduler = _scheduler(tmp_path, owners=ObservingOwners())
+    request = scheduler.submit(_intent("observed-source"), "member-a")
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("CREATE TABLE owner_inputs (owner_id TEXT PRIMARY KEY,digest TEXT,allowed INTEGER)")
+        conn.execute("INSERT INTO owner_inputs VALUES (?, ?, 1)", (request.owner_id, request.input_digest))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        picking = pool.submit(scheduler.pick_and_grant)
+        try:
+            assert entered.wait(2)
+            if mutation == "cancel":
+                scheduler.cancel(request.id, "member-a")
+            else:
+                with sqlite3.connect(scheduler.database_path, timeout=.25) as conn:
+                    if mutation == "source":
+                        conn.execute("UPDATE owner_inputs SET digest='sha256:new'")
+                    else:
+                        conn.execute("UPDATE owner_inputs SET allowed=0")
+        finally:
+            proceed.set()
+        assert picking.result(timeout=2) is None
+    with scheduler._connect() as conn:
+        row = conn.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?", (request.id,)).fetchone()
+        assert row[0] == ("cancelled" if mutation == "cancel" else "blocked")
+        if wait_reason is not None:
+            assert row[1] == wait_reason
+
+
+def test_selected_candidate_gets_fresh_resources_after_a_later_owner_changes_host_state(tmp_path):
+    class ChangingResources(Resources):
+        busy = False
+
+        def admit(self, request):
+            from app.host_resource_probes import HostResourceDecision
+            return HostResourceDecision(not (request.owner_id == "first" and self.busy), dict(request.resources), {})
+
+    resources = ChangingResources()
+
+    class ChangingOwners(Owners):
+        def check_current(self, request, conn):
+            if request.owner_id == "later":
+                resources.busy = True
+            return "ready"
+
+        def check_local(self, request, conn, observed):
+            return "ready"
+
+    scheduler = _scheduler(tmp_path, owners=ChangingOwners(), resources=resources)
+    first = scheduler.submit(_intent("first"), "member-a")
+    scheduler.clock.advance(seconds=1)
+    scheduler.submit(_intent("later"), "member-a")
+    assert scheduler.pick_and_grant() is None
+    with scheduler._connect() as conn:
+        assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE id=?", (first.id,)).fetchone()[0] == "resource_busy"
+        assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+    grant = scheduler.pick_and_grant()
+    assert grant is not None and grant.owner_id == "later"
+    _complete(scheduler, grant)
+
+
+@pytest.mark.parametrize("reason", ["scheduled_time", "retry_not_before", "outside_window"])
+def test_requests_not_due_skip_owner_and_resource_observation(tmp_path, reason):
+    class NotCalledOwners(Owners):
+        def check_current(self, request, conn):
+            raise AssertionError("not-due work must not call the owner")
+
+    class NotCalledResources(Resources):
+        def admit(self, request):
+            raise AssertionError("not-due work must not sample resources")
+
+    clock = Clock(datetime(2026, 9, 27, 12, tzinfo=timezone.utc))
+    policy = SchedulePolicy(not_before_utc=clock() + timedelta(minutes=1)) if reason == "scheduled_time" else (
+        SchedulePolicy(window=Window("UTC", "13:00", "14:00")) if reason == "outside_window" else SchedulePolicy())
+    scheduler = _scheduler(tmp_path, clock=clock, owners=NotCalledOwners(), resources=NotCalledResources())
+    request = scheduler.submit(_intent("not-due", policy=policy), "member-a")
+    if reason == "retry_not_before":
+        with scheduler._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET retry_not_before_utc=? WHERE id=?", ((clock() + timedelta(minutes=1)).isoformat(), request.id))
+    assert scheduler.pick_and_grant() is None
+    with scheduler._connect() as conn:
+        assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE id=?", (request.id,)).fetchone()[0] == reason
 
 
 def _holder_process(database, lock_path, ready, release):
@@ -957,6 +1225,7 @@ def test_scheduler_keeps_exact_host_refusal_and_checks_revocation_first(tmp_path
     from types import SimpleNamespace
     from app.host_resource_probes import HostBudget, HostResourceProbe, HostResourceRefusal
     import app.host_resource_probes as probes
+    from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample
 
     class MaterialOwners(Owners):
         def verify_submission(self, intent, actor):
@@ -971,8 +1240,15 @@ def test_scheduler_keeps_exact_host_refusal_and_checks_revocation_first(tmp_path
     monkeypatch.setattr(probes.psutil, "virtual_memory", lambda: SimpleNamespace(available=available[0]))
     monkeypatch.setattr(probes.psutil, "swap_memory", lambda: SimpleNamespace(used=0))
     monkeypatch.setattr(probes.psutil, "disk_usage", lambda path: SimpleNamespace(free=200))
+    memory_clock = [0.]
+    memory = HostMemoryMonitor(MemoryPolicy("darwin", 5., 2., "synthetic://scheduler-refusal"),
+        clock=lambda: memory_clock[0], sampler=lambda: MemorySample("darwin", memory_clock[0],
+            "2026-10-18T00:00:00+00:00", "normal", available[0], None, {}))
+    for second in range(6):
+        memory_clock[0] = float(second)
+        memory.check(system_reserve_bytes=100)
     probe = HostResourceProbe(tmp_path / "business.sqlite", disk_paths=(tmp_path,),
-                              budget=HostBudget(75, 100, 50, 200, 100, 1024))
+                              budget=HostBudget(75, 100, 50, 200, 100, 1024), memory_monitor=memory)
     scheduler = _scheduler(tmp_path, owners=owners, resources=probe)
     scheduler.submit(_intent("bounded"), "member-a")
     grant = scheduler.pick_and_grant()
@@ -982,11 +1258,11 @@ def test_scheduler_keeps_exact_host_refusal_and_checks_revocation_first(tmp_path
         scheduler.assert_grant(grant)
     assert stopped.value.decision.verdict is False
     assert stopped.value.decision.checks["available_memory_bytes"] == {"actual": 99, "minimum": 100, "passed": False}
-    assert len(calls) == 2  # Admission plus the precise refusing call, no diagnostic resample.
+    assert len(calls) == 3  # Candidate, fresh final admission, then the precise refusing call.
     owners.revoked = True
     with pytest.raises(PermissionError):
         scheduler.assert_grant(grant)
-    assert len(calls) == 2  # Resource diagnosis cannot bypass earlier continuous authorization.
+    assert len(calls) == 3  # Resource diagnosis cannot bypass earlier continuous authorization.
     owners.revoked = False
     scheduler.fail_unit(grant, reason="fixture_host_refusal", failure_write=lambda conn, current: None)
     scheduler.assert_released(grant)

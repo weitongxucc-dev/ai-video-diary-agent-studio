@@ -1516,6 +1516,10 @@ class ProductionRepository:
     ) -> PersonProfile:
         return self._profile_registration.save_person_profile(person, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
+    def capture_profile_local_check(self, conn, workspace_id, profile_refs, pronunciation_refs=(), *, pronunciation_scope=None):
+        return self._profile_records.capture_local_check(conn, workspace_id, profile_refs, pronunciation_refs,
+            pronunciation_scope=pronunciation_scope)
+
     def get_person_profile(
         self,
         workspace_id: str,

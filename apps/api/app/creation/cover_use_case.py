@@ -459,6 +459,53 @@ class CoverUseCase:
         except (KeyError, ValueError, OSError, CoverUnresolved):
             return "unknown"
 
+    def capture_local(self, request, connection):
+        try:
+            job, payload, command = self._start(request.workspace_id, request.owner_id, connection)
+        except (KeyError, ValueError, CoverUnresolved):
+            return lambda current: "unknown"
+        deadline = datetime.fromisoformat(payload["deadline_utc"])
+        def read(current):
+            job_row = current.execute(
+                "SELECT task_id,kind,input_digest,status FROM job_runs WHERE workspace_id=? AND id=?",
+                (command.workspace_id, job.id),
+            ).fetchone()
+            task = current.execute(
+                """SELECT json_extract(payload,'$.current_timeline_version_id'),
+                   json_extract(payload,'$.owner_user_id'),json_extract(payload,'$.visibility')
+                   FROM creation_tasks WHERE workspace_id=? AND id=?""",
+                (command.workspace_id, command.task_id),
+            ).fetchone()
+            proposal = current.execute(
+                "SELECT status,updated_at FROM edit_proposals WHERE workspace_id=? AND id=?",
+                (command.workspace_id, command.proposal_id),
+            ).fetchone()
+            source = current.execute(
+                "SELECT id,sha256,size_bytes FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
+                (command.workspace_id, command.task_id, command.operation["source_video_ref"]),
+            ).fetchone()
+            started = current.execute(
+                "SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (command.workspace_id, f"event_{job.id}_cover_worker_started"),
+            ).fetchone()
+            return (tuple(job_row) if job_row else None, tuple(task) if task else None,
+                    tuple(proposal) if proposal else None, tuple(source) if source else None,
+                    tuple(started) if started else None, self.budget.digest if self.budget else None)
+        expected = read(connection)
+        if expected[1] is None:
+            return lambda current: "stale"
+        def check(current):
+            if datetime.now(timezone.utc) >= deadline:
+                return "unknown"
+            actual = read(current)
+            if actual[1] is None or actual[1][1:] != expected[1][1:]:
+                return "unauthorized"
+            return "ready" if actual == expected else "stale"
+        return check
+
+    def check_local(self, request, connection, observed):
+        return observed(connection)
+
     def submit(self, runtime, actor: CreationExecutionActor, task_id: str, proposal_id: str,
                *, request_id: str | None):
         from app.device_scheduler import SchedulePolicy, SubmissionIntent

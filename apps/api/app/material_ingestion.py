@@ -168,6 +168,38 @@ class MaterialHashOwnerVerifier:
             return "ready"
         return "stale"
 
+    def capture_local(self, request, conn):
+        def read(current):
+            binding = current.execute(
+                "SELECT workspace_id,library_path FROM material_ingestion_binding WHERE id=1"
+            ).fetchone()
+            source = current.execute(
+                """SELECT a.file_path,a.updated_at,f.provisional_revision,f.state,
+                   f.attempted_digest,f.completed_digest,f.size_bytes,f.mtime_ns,f.ctime_ns,f.inode
+                   FROM material_assets a LEFT JOIN material_ingestion_files f
+                   ON f.workspace_id=a.workspace_id AND f.file_path=a.file_path
+                   WHERE a.workspace_id=? AND a.id=?""",
+                (request.workspace_id, request.owner_id),
+            ).fetchone()
+            checkpoints = current.execute(
+                """SELECT unit_key,stage_input_digest,result_ref FROM material_analysis_checkpoints
+                   WHERE workspace_id=? AND asset_id=? AND source_sha256=?
+                     AND (unit_key LIKE 'hash:v1:%' OR unit_key LIKE 'probe-meta:v%')
+                   ORDER BY unit_key""", (request.workspace_id, request.owner_id, request.input_digest),
+            ).fetchall()
+            return (tuple(binding) if binding else None, tuple(source) if source else None,
+                    tuple(map(tuple, checkpoints)))
+        expected = read(conn)
+        def check(current):
+            actual = read(current)
+            if actual[0] is None or actual[0][0] != request.workspace_id:
+                return "unauthorized"
+            return "ready" if actual == expected else "stale"
+        return check
+
+    def check_local(self, request, conn, observed):
+        return observed(conn)
+
     def can_manage(self, request: WorkRequest, actor: object) -> bool:
         return False
 
