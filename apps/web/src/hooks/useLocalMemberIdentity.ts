@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ensureLocalMemberIdentity, type LocalMemberIdentity, type LocalMemberRole } from "@/lib/local-member-auth";
+import { isLocalAuthMode } from "@/lib/auth/routing";
 
 export type LocalMemberIdentityState = {
   token: string | null;
@@ -30,7 +31,8 @@ export function requestLocalMemberIdentityRefresh(): void {
 }
 
 /**
- * 挂载时拉一次 whoami，暴露 { token, role, ready, refresh }。
+ * 仅 local 模式挂载时拉一次 whoami，暴露 { token, role, ready, refresh }。
+ * 正式模式不读取或保存本地成员身份；设备角色由正式核验入口负责。
  *
  * `ready=false` 期间调用方不要渲染身份相关 UI，避免首屏闪 owner 视图
  * （令牌在 localStorage，SSR 读不到，首帧必然先按 owner 渲染）。
@@ -38,10 +40,12 @@ export function requestLocalMemberIdentityRefresh(): void {
  * 失败（含 401 凭据无效）时如实暴露 error，不静默当作 owner 放行。
  */
 export function useLocalMemberIdentity(): LocalMemberIdentityState {
-  const [state, setState] = useState<Omit<LocalMemberIdentityState, "refresh">>({ token: null, role: null, ready: false, error: null });
+  const localAuthMode = isLocalAuthMode();
+  const [state, setState] = useState<Omit<LocalMemberIdentityState, "refresh">>({ token: null, role: null, ready: !localAuthMode, error: null });
   const mountedRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (!isLocalAuthMode()) return;
     try {
       const identity: LocalMemberIdentity = await ensureLocalMemberIdentity();
       if (!mountedRef.current) return;
@@ -53,6 +57,7 @@ export function useLocalMemberIdentity(): LocalMemberIdentityState {
   }, []);
 
   useEffect(() => {
+    if (!localAuthMode) return;
     mountedRef.current = true;
     void load();
     const listener = () => { void load(); };
@@ -61,9 +66,11 @@ export function useLocalMemberIdentity(): LocalMemberIdentityState {
       mountedRef.current = false;
       refreshListeners.delete(listener);
     };
-  }, [load]);
+  }, [load, localAuthMode]);
 
   const refresh = useCallback(() => { void load(); }, [load]);
 
-  return { ...state, refresh };
+  return localAuthMode
+    ? { ...state, refresh }
+    : { token: null, role: null, ready: true, error: null, refresh };
 }

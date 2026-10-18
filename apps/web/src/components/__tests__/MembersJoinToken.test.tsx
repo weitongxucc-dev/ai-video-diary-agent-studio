@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_MEMBER_TOKEN_STORAGE_KEY, readLocalMemberToken } from "@/lib/local-member-auth";
 import { requestLocalMemberIdentityRefresh, useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 
@@ -18,10 +18,12 @@ import { MembersAndSpacesWorkspace } from "@/components/MembersAndSpacesWorkspac
 const owner = { member_id: "m-1", name: "本机创作者", role: "owner" as const, created_at: "2026-09-01T00:00:00Z" };
 
 beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "local");
   window.localStorage.clear();
   vi.clearAllMocks();
   api.listLocalMembers.mockResolvedValue({ members: [owner] });
 });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 async function submitJoin() {
   render(<MembersAndSpacesWorkspace />);

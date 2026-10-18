@@ -231,7 +231,7 @@ export function AppShellFrame({
     const desktop = window.electronAPI as (NonNullable<Window["electronAPI"]> & { isElectron: boolean; platform: string }) | undefined;
     setNativeMac(desktop?.isElectron === true && desktop.platform === "darwin");
   }, []);
-  // 身份引导：挂载时拉一次 whoami 并把令牌写进 localStorage（hook 内完成）。
+  // 本地身份引导仅在 local 模式运行；正式设备角色由正式核验入口负责。
   // 角色未知（加载中）时先显示“成员与空间”，避免 owner 首屏看不到自己的页面。
   const { role: localMemberRole, ready: identityReady, token: identityToken, error: identityError } = useLocalMemberIdentity();
   const showMembersNav = localMemberRole !== "member";
