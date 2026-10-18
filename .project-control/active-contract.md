@@ -38,7 +38,7 @@
 
 | 负责人 | 当前范围 |
 | --- | --- |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | 全部源码冻结；已交付Agent/工具/接口消费者保留，未经新绑定不继续旧清单。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | 仅第5节认证读取传输与unknown投影的两个生产文件及直接测试，其余源码冻结。 |
 | B `01a14301-7591-74f1-b240-d3643b78ecfe` | 全部源码冻结；第5节局部修复已交主控集成，未经新绑定不继续旧清单。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | 全部Web源码冻结；正式页签和版本回读消费者保留，未经新绑定不继续旧清单。 |
 | 主控 | 项目权威、合同与计划、集成提交、`apps/desktop/`、`scripts/`、依赖/锁文件和当前隔离验收目录；其他产品源码需先绑定，不与实施线程并写。 |
@@ -47,7 +47,11 @@
 
 ## 5. 当前收口与后续绑定
 
-写锁局部修复源码及直接测试已由主控集成至`f5ba40aa`，B的`TaskMediaJobs.check_current`、`get_creation_task`和专属测试写权结束。旧授予后stale隔离、图层ID协议及Web版本回读消费者保留；A/B/C均冻结，任何下一批源码实施须由主控按开发清单重新绑定具体路径。当前不恢复历史批次或扩大为全仓重构。
+写锁局部修复源码及直接测试已由主控集成至`f5ba40aa`，B的`TaskMediaJobs.check_current`、`get_creation_task`和专属测试写权结束。旧授予后stale隔离、图层ID协议及Web版本回读消费者保留；仅下方明确续绑的A认证修复具有当前写权，B/C及其他旧源码范围冻结。后续实施由主控按开发清单绑定具体路径，不恢复历史批次或扩大为全仓重构。
+
+A认证读取传输修复续绑（C2，替代本故障只读限制）：c8新对话在PATCH原会话前置状态保存时，成员关系TLS握手超时被误归403，未创建新会话或启动模型/媒体。重读认证边界§2及架构§3.14的应用组装职责后REBASE_ACK直接实施。A仅独占`auth.py`、`main.py`相关装配/认证middleware/`_goal_request`消费者、`tests/test_auth_workspace_boundary.py`原相关门及新增`tests/test_auth_transport.py`；不写bootstrap/Web/共享权威。Auth接受借用的httpx.Client并有显式bind_http_client；仅成员/onboarding两个GET使用借用传输，每次独立headers/params、原10秒timeout/TLS/JWT/RLS规则，不保存用户默认auth、不缓存判断、不自动重试写入。应用拥有独立无默认用户headers的auth_http_client，startup绑定当前Auth，依赖发布/设置重载绑定候选；全部goal/assistant/worker使用者停止后关闭并解除绑定，第二次startup创建新client。JWT/JWKS、complete_onboarding写入及原permit transport不改。
+
+网络/TLS/超时、上游暂不可用和无效读取响应按明确AuthDependencyUnavailableError映射固定503/error auth_dependency_unavailable及“暂时无法核实工作区访问权限或初始化状态，请稍后重试。”；真实拒绝/有效空成员/未初始化仍403，token错误仍401；不透传URL/底层异常/凭据、不授予未知权限、不强制logout。`_goal_request`仅对该unknown返回None、保留既有waiting_identity而不写永久blocked，后续仍独立重新核验，不造新状态机。测试真实本地keep-alive、当前撤权立即反映、并发身份请求不串、原10秒配置、关闭顺序/二次启动/重载、503无handler副作用和真实403/401保留、goal unknown不永久blocked；已核实网络长空闲后仍可能失败，不承诺连接池消除网络问题。仅轻量测试，禁止模型/媒体/build，主控集成后实际新对话及一次目标双语粗剪复验。B/C冻结。
 
 主控当前负责最终Mac候选的原生播放、保存、正常Quit与同候选重启恢复、证据核对和差额判断。完整结果以本机直接证据入口为准；普通用户生产资源配置、自动质检和完整产品接受点仍沿开发清单逐项推进，不能由该闭环外推通过。
 
