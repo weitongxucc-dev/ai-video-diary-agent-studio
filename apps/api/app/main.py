@@ -39,6 +39,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 import httpx
 
@@ -795,17 +796,19 @@ async def auth_boundary_middleware(request: Request, call_next):
             # Identity-only entry: a first-time invitee has no workspace yet,
             # so membership resolution, the onboarding gate and the workspace
             # context are all skipped. Any token failure is a 401.
-            request.state.principal = auth_context.authenticate_identity(request)
+            request.state.principal = await run_in_threadpool(auth_context.authenticate_identity, request)
             return await call_next(request)
-        request.state.principal = auth_context.authenticate(request)
+        # JWT/JWKS, membership, device and onboarding checks use synchronous I/O.
+        # Await them in the existing pool; keep request context in this coroutine.
+        request.state.principal = await run_in_threadpool(auth_context.authenticate, request)
         principal = request.state.principal
         if WORKSPACE_SELECTION_HEADER in request.headers:
-            request.state.companion_identity = require_companion_identity(
+            request.state.companion_identity = await run_in_threadpool(require_companion_identity,
                 request, DeviceAccountService(settings, trusted_device_credential()),
             )
         if (
             not is_onboarding_repair_path(path)
-            and not auth_context.is_onboarding_complete(
+            and not await run_in_threadpool(auth_context.is_onboarding_complete,
                 principal.user_id,
                 principal.workspace_id or LEGACY_WORKSPACE_ID,
                 principal.access_token or "",

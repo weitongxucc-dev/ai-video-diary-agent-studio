@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest import mock
 
 import jwt as pyjwt
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi.testclient import TestClient
+from fastapi import FastAPI, Request
 
 import app.main as main_module
 from app.auth import (
@@ -307,6 +311,114 @@ def test_public_endpoints_skip_auth_when_enabled(auth_ctx, monkeypatch):
     assert client.get("/api/setup/preflight").status_code == 200
     assert client.get("/api/runtime/health").status_code == 401
     reader.assert_not_called()
+
+
+@pytest.mark.parametrize("blocked_check", ["identity", "membership", "device", "onboarding"])
+def test_slow_auth_does_not_block_public_or_other_workspace_requests(auth_ctx, monkeypatch, blocked_check):
+    ctx, settings, private_pem, _ = auth_ctx
+    entered, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    checks, contexts = [], []
+    workspaces = {"slow-user": "ws-a", "fast-user": "ws-b"}
+
+    def check(stage, user_id):
+        checks.append((stage, user_id))
+        if stage == blocked_check and user_id == "slow-user":
+            entered.set()
+            assert release.wait(timeout=5), "auth blocked the event loop before it could release this check"
+
+    verify_token = ctx.verify_token
+    def verify(token):
+        claims = verify_token(token)
+        check("identity", claims["sub"])
+        return claims
+
+    def membership(user_id, access_token, *, selected_workspace_id=None):
+        check("membership", user_id)
+        assert selected_workspace_id == workspaces[user_id]
+        return selected_workspace_id
+
+    def device_identity(request, accounts):
+        principal = request.state.principal
+        check("device", principal.user_id)
+        return main_module.CompanionIdentity("device", principal.workspace_id, principal.user_id, None, "member")
+
+    def onboarding(user_id, workspace_id, access_token):
+        check("onboarding", user_id)
+        assert workspace_id == workspaces[user_id]
+        return True
+
+    def set_context(workspace_id):
+        assert threading.get_ident() == loop_thread
+        contexts.append(("set", workspace_id))
+        return set_workspace_context(workspace_id)
+
+    def reset_context(token):
+        assert threading.get_ident() == loop_thread
+        contexts.append(("reset", active_workspace_id()))
+        reset_workspace_context(token)
+        with pytest.raises(WorkspaceContextRequiredError):
+            active_workspace_id()
+
+    monkeypatch.setattr(ctx, "verify_token", verify)
+    monkeypatch.setattr(ctx, "resolve_workspace_id", membership)
+    monkeypatch.setattr(ctx, "is_onboarding_complete", onboarding)
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "require_companion_identity", device_identity)
+    monkeypatch.setattr(main_module, "DeviceAccountService", lambda *args: mock.sentinel.accounts)
+    monkeypatch.setattr(main_module, "trusted_device_credential", lambda: mock.sentinel.credential)
+    monkeypatch.setattr(main_module, "set_workspace_context", set_context)
+    monkeypatch.setattr(main_module, "reset_workspace_context", reset_context)
+    monkeypatch.setattr("app.repository._AUTH_ENABLED", True)
+    app = FastAPI()
+    app.middleware("http")(main_module.auth_boundary_middleware)
+    app.add_api_route("/api/version", main_module.get_version)
+
+    @app.api_route("/test/workspace", methods=["GET"])
+    @app.api_route(main_module.DEVICE_INVITE_ACCEPT_PATH, methods=["POST"])
+    async def echo_identity(request: Request):
+        principal = request.state.principal
+        if principal.workspace_id is None:
+            with pytest.raises(WorkspaceContextRequiredError):
+                active_workspace_id()
+            return {"user_id": principal.user_id, "workspace_id": None}
+        assert request.state.companion_identity.workspace_id == principal.workspace_id
+        return {"user_id": principal.user_id, "workspace_id": active_workspace_id()}
+
+    headers = {user: {"Authorization": "Bearer " + _sign_token(user, key=private_pem),
+        "X-Workspace-Id": workspace} for user, workspace in workspaces.items()}
+
+    async def concurrent_requests():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            # Identity-only acceptance must also yield while JWT verification waits.
+            identity_only = blocked_check == "identity"
+            slow = asyncio.create_task(client.request("POST" if identity_only else "GET",
+                main_module.DEVICE_INVITE_ACCEPT_PATH if identity_only else "/test/workspace",
+                headers={"Authorization": headers["slow-user"]["Authorization"]} if identity_only else headers["slow-user"]))
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                public, other = await asyncio.wait_for(asyncio.gather(
+                    client.get("/api/version"), client.get("/test/workspace", headers=headers["fast-user"])), timeout=2)
+                assert public.status_code == 200
+                assert other.status_code == 200 and other.json() == {"user_id": "fast-user", "workspace_id": "ws-b"}
+                assert not slow.done() and not release.is_set()
+            finally:
+                release.set()
+                response = await slow
+            assert response.status_code == 200
+            assert response.json() == {"user_id": "slow-user", "workspace_id": None if identity_only else "ws-a"}
+            with pytest.raises(WorkspaceContextRequiredError):
+                active_workspace_id()
+
+    asyncio.run(concurrent_requests())
+    expected_contexts = [("set", "ws-b"), ("reset", "ws-b")]
+    if blocked_check == "identity":
+        assert [stage for stage, user in checks if user == "slow-user"] == ["identity"]
+    else:
+        expected_contexts += [("set", "ws-a"), ("reset", "ws-a")]
+        assert [stage for stage, user in checks if user == "slow-user"] == ["identity", "membership", "device", "onboarding"]
+    assert contexts == expected_contexts
 
 
 def test_runtime_health_authenticates_before_workspace_read_and_supports_initialization(auth_ctx, monkeypatch):
