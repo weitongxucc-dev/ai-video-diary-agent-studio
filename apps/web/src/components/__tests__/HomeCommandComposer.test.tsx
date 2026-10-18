@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { AssistantConversationContext } from "../AssistantConversationContext";
 import { useScopedAssistantConversation } from "../useAssistantConversation";
-import type { CreationTask } from "@/lib/types";
-import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import type { AssistantConversation, AssistantConversationTurn, CreationTask } from "@/lib/types";
+import type { AssistantBusinessContinuation, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 
 const queuedStoryboard: AssistantStoryboardRegeneration = {
@@ -62,9 +62,10 @@ vi.mock("@/lib/api", () => {
     const materialResult = result.material_result as { scope: string; changed: boolean } | null | undefined;
     const projected = result.plan_preview ? { kind: "plan_preview", plan_preview: result.plan_preview }
       : materialResult ? { kind: "material_result", scope: materialResult.scope, changed: materialResult.changed }
-        : result.execution_action || result.script_draft || result.topic_candidates || result.storyboard_regeneration
+        : result.execution_action || result.script_draft || result.topic_candidates || result.storyboard_regeneration || result.timeline_action || result.continuation
           ? { kind: "task_turn", execution_action: result.execution_action, execution_status: result.execution_status,
               script_draft: result.script_draft ? "saved" : null, topic_candidates: Boolean(result.topic_candidates),
+              timeline_action: result.timeline_action, continuation: result.continuation,
               edit_preview: Boolean(result.edit_preview), ...(result.storyboard_regeneration ? {response: result} : {}) }
           : result.edit_preview ? { kind: "task_turn", edit_preview: true }
             : { kind: "conversation" };
@@ -129,6 +130,108 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(input).toBeEnabled());
     return input;
   }
+
+  function TaskConversation({task, onTaskUpdated}: {task: CreationTask; onTaskUpdated: () => void}) {
+    const assistant = useScopedAssistantConversation({scope_kind: "home", scope_id: "home"});
+    return <AssistantConversationContext.Provider value={assistant}>
+      <button type="button" onClick={() => void assistant.refresh()}>回读持久会话</button>
+      <button type="button" onClick={() => void assistant.createNew()}>切换持久会话</button>
+      <output aria-label="持久会话ID">{assistant.conversation?.id}</output>
+      <output aria-label="持久回合更新时间">{assistant.conversation?.turns.at(-1)?.updated_at}</output>
+      <HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated}/>
+    </AssistantConversationContext.Provider>;
+  }
+
+  function appliedReceipt(operationId: string): AssistantBusinessContinuation {
+    return {type: "business_result", event_id: `event-${operationId}`, task_id: "task-1", phase: "apply",
+      status: "confirmed", actionable: false, operation_id: operationId, result_version_id: `version-${operationId}`};
+  }
+
+  function persistedReceiptTurn(id: string, continuation: unknown): AssistantConversationTurn {
+    return {id, sequence: 2, status: "completed", user_message: "", assistant_text: "已回读持久回合", events: [],
+      result: {kind: "task_turn", continuation}, created_at: "2026-10-18T11:00:00Z", updated_at: "2026-10-18T11:00:00Z"};
+  }
+
+  it("refreshes persisted apply receipts from the initial turn and a second autonomous edit once each", async () => {
+    configuredModel();
+    const task = {id: "task-1", stage: "montage", name: "当前作品"} as CreationTask;
+    const onTaskUpdated = vi.fn();
+    mocks.selection = {version: 7, items: [{kind: "shot", task_id: task.id, object_id: "clip-1", version: "v1", label: "镜头 1"}],
+      select: vi.fn(), remove: vi.fn()};
+    const fixedReferences = structuredClone(mocks.selection.items);
+    mocks.editAsk.mockResolvedValueOnce({reply: "标题已保存，继续调整声音。", provider: "fixture", model: "fixture",
+      edit_preview: null, script_draft: null, execution_action: null, topic_candidates: null,
+      timeline_action: "apply", continuation: appliedReceipt("operation-title")});
+    const view = render(<TaskConversation task={task} onTaskUpdated={onTaskUpdated}/>);
+    const input = await readyInput("任务对话要求");
+    fireEvent.change(input, {target: {value: "修改标题，再降低声音"}});
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "发送"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeDisabled());
+    const conversationId = screen.getByLabelText("持久会话ID").textContent!;
+    fireEvent.change(input, {target: {value: "下一条草稿保持"}});
+    const saved = mocks.saved.get(conversationId)!;
+    const child = persistedReceiptTurn("autonomous-audio-turn", appliedReceipt("operation-audio"));
+    mocks.saved.set(conversationId, {...saved, turns: [...saved.turns, child]});
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledTimes(2));
+    expect(input).toHaveValue("下一条草稿保持");
+    expect(mocks.selection.items).toEqual(fixedReferences);
+    expect(mocks.selection.select).not.toHaveBeenCalled();
+    expect(mocks.selection.remove).not.toHaveBeenCalled();
+    expect(mocks.sendTaskTurn).toHaveBeenCalledOnce();
+
+    const repeated = mocks.saved.get(conversationId)!;
+    mocks.saved.set(conversationId, {...repeated, turns: repeated.turns.map(turn => ({...turn, updated_at: "2026-10-18T11:00:01Z"}))});
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    await waitFor(() => expect(screen.getByLabelText("持久回合更新时间")).toHaveTextContent("2026-10-18T11:00:01Z"));
+    view.rerender(<TaskConversation task={{...task, name: "已回读的同一作品"}} onTaskUpdated={() => onTaskUpdated()}/>);
+    expect(onTaskUpdated).toHaveBeenCalledTimes(2);
+    expect(input).toHaveValue("下一条草稿保持");
+    expect(mocks.sendTaskTurn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {phase: "preview"}, {status: "unknown"}, {status: "failed"}, {task_id: "task-other"},
+    {operation_id: null}, {result_version_id: null}, {type: "model_text"}, {textOnly: true},
+  ])("ignores unconfirmed, incomplete or foreign persisted apply receipts (%#)", async invalid => {
+    configuredModel();
+    const onTaskUpdated = vi.fn();
+    render(<TaskConversation task={{id: "task-1", stage: "montage", name: "当前作品"} as CreationTask} onTaskUpdated={onTaskUpdated}/>);
+    await readyInput("任务对话要求");
+    const conversationId = screen.getByLabelText("持久会话ID").textContent!;
+    const saved = mocks.saved.get(conversationId)!;
+    const turn = persistedReceiptTurn("invalid-receipt", {...appliedReceipt("operation-unconfirmed"), ...invalid});
+    if ("textOnly" in invalid) turn.result = {kind: "task_turn"};
+    mocks.saved.set(conversationId, {...saved, turns: [turn]});
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    expect(await screen.findByText("已回读持久回合")).toBeVisible();
+    expect(onTaskUpdated).not.toHaveBeenCalled();
+    expect(mocks.sendTaskTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(["task", "conversation", "unmount"])("isolates a late persisted apply read after changing %s", async change => {
+    configuredModel();
+    const task = {id: "task-1", stage: "montage", name: "原作品"} as CreationTask;
+    const onTaskUpdated = vi.fn();
+    const view = render(<TaskConversation task={task} onTaskUpdated={onTaskUpdated}/>);
+    await readyInput("任务对话要求");
+    const conversationId = screen.getByLabelText("持久会话ID").textContent!;
+    const saved = mocks.saved.get(conversationId)!;
+    const api = await import("@/lib/api");
+    let finish!: (value: AssistantConversation) => void;
+    vi.mocked(api.getAssistantConversation).mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    await waitFor(() => expect(api.getAssistantConversation).toHaveBeenCalledOnce());
+    if (change === "task") view.rerender(<TaskConversation task={{...task, id: "task-other"}} onTaskUpdated={onTaskUpdated}/>);
+    else if (change === "conversation") {
+      fireEvent.click(screen.getByRole("button", {name: "切换持久会话"}));
+      await waitFor(() => expect(screen.getByLabelText("持久会话ID").textContent).not.toBe(conversationId));
+    } else view.unmount();
+    await act(async () => finish({...saved, turns: [persistedReceiptTurn("late-applied-turn", appliedReceipt("operation-late"))]}));
+    expect(onTaskUpdated).not.toHaveBeenCalled();
+  });
 
   it("restores the original input after a real-shaped persisted failure stream without deleting the failed turn",async()=>{
     configuredModel();

@@ -5,14 +5,14 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
-import type { AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
+import type { AssistantConversation, AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { CreationRequestPanel } from "@/components/CreationRequestPanel";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
-import { useAssistantConversation } from "@/components/useAssistantConversation";
+import { assistantTaskTurnResult, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 
 export type HomeCommandComposerProps = {
@@ -73,6 +73,15 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
   </>;
 }
 
+function appliedTaskReceiptKeys(conversation: AssistantConversation, taskId: string) {
+  return conversation.turns.flatMap(turn => {
+    const receipt = assistantTaskTurnResult(turn)?.continuation;
+    return receipt?.type === "business_result" && receipt.task_id === taskId && receipt.phase === "apply"
+      && receipt.status === "confirmed" && receipt.operation_id && receipt.result_version_id
+      ? [JSON.stringify([conversation.id, taskId, receipt.operation_id])] : [];
+  });
+}
+
 export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext, taskContext }: HomeCommandComposerProps) {
   const selectionState = useAssistantSelection();
   const selectionSnapshot = JSON.stringify([selectionState?.version, selectionState?.items]);
@@ -96,6 +105,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const scopeKind = task ? "task" as const : "home" as const;
   const scopeId = task?.id ?? "home";
   const assistant = useAssistantConversation({ scope_kind: "home", scope_id: "home" });
+  const persistedConversation = assistant.conversation;
+  const isCurrentConversation = assistant.isCurrentConversation;
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [requestBinding, setRequestBinding] = useState<{ id: string; conversationId: string; revision: number } | null>(null);
@@ -123,6 +134,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const scopeRevision = useRef(0);
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
+  const appliedTaskReads = useRef(new Set<string>());
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);
@@ -134,6 +146,17 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     restoredPlanKey.current = null;
     return () => { scopeRevision.current += 1; shareRevision.current += 1; };
   }, [task?.id, materialSelectionKey, pageContext?.pathname]);
+  useEffect(() => {
+    const saved = persistedConversation;
+    if (scopeKind !== "task" || !onTaskUpdated || pending === "chat" || !saved || !isCurrentConversation(saved.id)) return;
+    let needsRead = false;
+    for (const key of appliedTaskReceiptKeys(saved, scopeId)) {
+      if (appliedTaskReads.current.has(key)) continue;
+      appliedTaskReads.current.add(key);
+      needsRead = true;
+    }
+    if (needsRead) onTaskUpdated();
+  }, [persistedConversation, isCurrentConversation, onTaskUpdated, pending, scopeId, scopeKind]);
   useEffect(() => {
     const saved = assistant.conversation;
     if (!saved) return;
@@ -209,11 +232,14 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           // Removing a chip must not resurrect a page's previous local selection.
           selected_object_refs: selectionState ? [] : taskContext?.selectedObjectRefs ?? [], playhead_ms: taskContext?.getPlayheadMs() ?? null,
         }, onStreamEvent);
-        if (assistant.isCurrentConversation(turn.conversationId)) await assistant.refresh();
+        const fresh = assistant.isCurrentConversation(turn.conversationId) ? await assistant.refresh() : null;
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
-        if (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration) onTaskUpdated?.();
+        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration)) {
+          if (fresh) for (const key of appliedTaskReceiptKeys(fresh, task.id)) appliedTaskReads.current.add(key);
+          onTaskUpdated();
+        }
       } else {
         const result = (materialContext
           ? await sendMaterialAssistantTurn(command, turn.conversationId, materialContext.selection,
