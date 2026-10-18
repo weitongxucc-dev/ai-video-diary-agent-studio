@@ -146,4 +146,8 @@ C续绑正式模式外壳的直接身份消费者：`hooks/useLocalMemberIdentit
 
 A局部编辑真实错误归因续绑：独占`creation/editing/exact_preview_use_case.py::source_facts`及现有`test_exact_preview_application.py`直接用例。当前真实InsertClip提交了不存在的clip_id，仓储KeyError正确拒绝，但404被统一包装成素材失效，诱导错误换素材。保留404和所有来源/身份/版本校验，对明确的“当前任务镜头不存在”返回准确的目标镜头缺失提示；其他来源失效仍原语义，不透传路径或任意异常。只修此边界，不扩大Agent重试、放宽事实门或写其他编辑消费者。主控负责用实际当前镜头重试原明确片尾要求。
 
+A图文直接保存真实缺陷续绑：独占`schemas.py::CreationTaskExactEditRequest`、`creation/editing/exact_preview_use_case.py`、`main.py::_save_direct_metadata_edit`的动作序列化直接消费者及`test_typed_assistant_edits_api.py`/`test_exact_preview_application.py`相关测试。真实EditGraphicOverlay add已由TextOverlay生成默认id，但exclude_unset递归序列化丢失id及默认值，直接保存409 KeyError(id)。集中保留已校验图层的完整值/稳定id，其他patch动作仍仅提交显式字段；原请求输入摘要和journal重放语义保持，不能每处复制另一套默认规则或要求模型捏造id。验证最小图层请求经实际HTTP事务保存、同UUID回读不新建图层/版本、撤销，且未触及音频/画面参数不回默认；不运行模型/媒体，不新增通用框架。
+
+B字幕与分镜单位纠正续绑：独占`montage.py::build_for_creation_task`、`creation/narration_stage_use_case.py::retime_for_segments`及原直接辅助消费者、`test_montage_pipeline.py`/`test_task_montage_duration_policy.py`/`test_narration_stage_application.py`直接用例。按产品§8及领域§5.4复用固定配音段身份与真实时长建立叙事区间，字幕48字符/8秒显示cue继续保留；退役每cue必有镜头及按单cue时长重排镜头的旧假设。短字幕不能产生单词闪切，素材不足显式失败，不循环/变速补齐。保留原配音产物、字幕时间/内容、人工镜头和既有版本/撤销事务；局部重生成按真实段落关联，不能给所有段落新ID或改文案。先以真实英文四段7.68/5.36/6.64/5.68秒与10条字幕复现，再补一个局部时长变化反例。核对已有公开重新生成故事板入口及缓存身份，未经明确重新生成不改历史计划；不写A独占main/schemas或另建阶段/事实源，路由若有必需改动先报主控。禁止模型、媒体或打包。
+
 同一集成候选完成真实输入到输出、连续三类精修与人工交替、撤销和重启恢复；正式UI满足左栏保护及shadcn/DESIGN并通过实际可见操作。当前收口先以Mac电脑端核心闭环为准。手机联动恢复后必须按开发清单§1.1.4在同一集成候选完成两端真实输入、制作回看与重启恢复；Android/iOS分别列证据，任一未验不写全平台完成。CLI/MCP及平台按各自真实客户端单列证据。未运行、缺配置、模型不可用或仅测试通过不得写成通过。资源设计缺陷、预算准备未实现和Windows适配未实现不得归为环境阻断；真实配音/视频可工作与高压保护恢复两面均须通过，Windows独立平台实机门移至下一阶段，不作为当前Mac桌面核心收口条件。文档变更检查链接与唯一权威，代码与运行证据分别记录。活动合同只保留当前执行绑定，历史通过Git追溯。
