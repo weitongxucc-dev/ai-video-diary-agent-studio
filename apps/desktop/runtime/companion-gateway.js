@@ -127,7 +127,7 @@ function createCompanionGateway({ userDataPath, getApiEndpoint, getAuthConfig, g
           incoming.resume(); response.writeHead(502); response.end('Phone endpoint redirects are not supported.'); return;
         }
         const outputHeaders = {};
-        for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified', 'x-timeline-version-id', 'x-timeline-sequence']) {
           if (incoming.headers[key] !== undefined) outputHeaders[key] = incoming.headers[key];
         }
         outputHeaders['cache-control'] = 'no-store';

@@ -8900,6 +8900,18 @@ class ProductionRepository:
             self._workspace_media_references.claim_asset_reference(conn, workspace_id, saved.id)
         return saved
 
+    def mobile_transfer_service(self, *, min_free_disk_bytes: int):
+        """Compose byte intake with the material owners and their one transaction."""
+        from app.mobile_transfers import MobileTransfers
+
+        def confirm(conn: sqlite3.Connection, workspace_id: str, **values) -> None:
+            self.confirm_material_copy_complete(workspace_id, connection=conn, **values)
+
+        return MobileTransfers(self._connect, assets=self._material_assets,
+            workspace_references=self._workspace_media_references,
+            target_for=self.material_link_target, confirm_copy_in_transaction=confirm,
+            min_free_disk_bytes=min_free_disk_bytes)
+
     def material_link_target(self, workspace_id: str) -> Path:
         """Return the intake directory a direct link may write into, or refuse.
 

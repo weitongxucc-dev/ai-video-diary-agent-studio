@@ -33,6 +33,13 @@ class ObservationSource:
     binding: dict
 
 
+@dataclass(frozen=True)
+class OutputDownload:
+    path: Path
+    version_id: str | None
+    sequence: int | None
+
+
 class OutputObservationUseCase:
     def __init__(self, repository, artifact_store, audio, temporary_root, ocr_worker_path):
         if audio.repository is not repository:
@@ -70,6 +77,38 @@ class OutputObservationUseCase:
         except (FileNotFoundError, ValueError):
             raise OutputObservationRejected(status_code=404, detail='creation task output not found')
         return path
+
+    def download(self, workspace_id: str, task_id: str, *, expected_version_id: str | None, subtitle: bool) -> OutputDownload:
+        task = self._task_or_404(workspace_id, task_id)
+        if expected_version_id is not None and expected_version_id != task.current_timeline_version_id:
+            raise OutputObservationRejected(409, '作品版本已变化，请刷新当前任务后重新下载。')
+        if task.current_timeline_version_id is None:
+            return OutputDownload(self.output_path(workspace_id, task_id, subtitle=subtitle), None, None)
+        try:
+            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        except KeyError as exc:
+            raise OutputObservationRejected(404, '作品版本不存在。') from exc
+        if version.task_id != task_id:
+            raise OutputObservationRejected(404, '作品版本不存在。')
+        montage = version.snapshot.get('montage')
+        ref = montage.get('subtitle_path' if subtitle else 'output_path') if isinstance(montage, dict) else None
+        if (not isinstance(ref, str) or not ref or montage.get('status') != 'rendered'
+                or ref not in version.snapshot.get('output_refs', [])):
+            raise OutputObservationRejected(409, '当前版本尚无可下载的有效产物，请等待该版本制作完成。')
+        kind = 'subtitle_track' if subtitle else 'rendered_video'
+        registered = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
+            if item.logical_ref == ref and item.kind == kind), None)
+        if registered is None:
+            raise OutputObservationRejected(409, '当前版本产物尚未登记。')
+        try:
+            path = self.artifact_store.resolve_file(ref)
+        except (FileNotFoundError, ValueError) as exc:
+            raise OutputObservationRejected(404, '当前版本产物已不可读取。') from exc
+        if path.stat().st_size != registered.size_bytes:
+            raise OutputObservationRejected(409, '当前版本产物与登记文件不一致。')
+        if self._task_or_404(workspace_id, task_id).current_timeline_version_id != version.id:
+            raise OutputObservationRejected(409, '作品版本已变化，请刷新当前任务后重新下载。')
+        return OutputDownload(path, version.id, version.sequence)
 
     def quality_source_metadata(self, workspace_id: str, task_id: str):
         task = self._task_or_404(workspace_id, task_id)

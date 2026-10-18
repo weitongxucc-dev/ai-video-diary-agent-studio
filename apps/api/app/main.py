@@ -7,6 +7,7 @@ from app.creation.narration_stage_use_case import NarrationStageUseCase,Narratio
 
 import base64
 import hashlib
+from functools import cache
 import json
 import logging
 import os
@@ -81,6 +82,8 @@ from app.auth import WORKSPACE_SELECTION_HEADER
 from app.companion.identity import CompanionIdentity, require_account_principal, require_companion_identity
 from app.companion.routes import build_companion_router, companion_http_error
 from app.companion.pairing import CompanionPairingService
+from app.mobile_transfer_routes import build_mobile_transfer_router
+from app.mobile_transfers import MobileTransferActor
 from app.artifact_store import ArtifactStore
 from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies, bind_device_runtime
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
@@ -1133,6 +1136,23 @@ def _content_visible(
 # 只能落到保留的 local 工作区，全部成员共享同一空间，跨空间授权本就不成立。
 def _prepare_runtime_routes(database: DatabaseOwners, auth: SupabaseAuthContext):
     router = APIRouter()
+
+    @cache
+    def transfers_for():
+        try:
+            minimum = int(os.environ.get("DEVICE_HOST_MIN_FREE_DISK_BYTES", ""))
+            if minimum <= 0:
+                raise ValueError("positive disk reserve required")
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail={"code": "storage_budget_unavailable",
+                "message": "主机接收磁盘余量尚未准备，请先在主机完成设备配置。", "retryable": True}) from exc
+        return database.production.mobile_transfer_service(min_free_disk_bytes=minimum)
+
+    def transfer_actor(request: Request) -> MobileTransferActor:
+        identity = companion_identity_for(request)
+        return MobileTransferActor(identity.workspace_id, identity.member_id, identity.member_id)
+
+    router.include_router(build_mobile_transfer_router(transfers_for=transfers_for, actor_for=transfer_actor))
     router.include_router(build_companion_router(
         accounts_for=lambda: DeviceAccountService(settings, trusted_device_credential()),
         identity_for=companion_identity_for,
@@ -10217,21 +10237,28 @@ def check_creation_task_quality(task_id: str, request: Request,
 
 
 @app.get("/api/creation-tasks/{task_id}/output")
-def get_creation_task_output(task_id: str, request: Request) -> FileResponse:
+def get_creation_task_output(task_id: str, request: Request, expected_version_id: str | None = None) -> FileResponse:
     _readable_creation_task(request, task_id)
-    path = _creation_task_output_path(
-        current_workspace_id(request), task_id, subtitle=False
-    )
-    return FileResponse(path, media_type="video/mp4", filename=f"{task_id}.mp4")
+    return _creation_task_download_response(task_id, request, expected_version_id, subtitle=False)
 
 
 @app.get("/api/creation-tasks/{task_id}/output/subtitles")
-def get_creation_task_subtitles(task_id: str, request: Request) -> FileResponse:
+def get_creation_task_subtitles(task_id: str, request: Request, expected_version_id: str | None = None) -> FileResponse:
     _readable_creation_task(request, task_id)
-    path = _creation_task_output_path(
-        current_workspace_id(request), task_id, subtitle=True
-    )
-    return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
+    return _creation_task_download_response(task_id, request, expected_version_id, subtitle=True)
+
+
+def _creation_task_download_response(task_id: str, request: Request, expected_version_id: str | None, *, subtitle: bool) -> FileResponse:
+    try:
+        result = _output_observation_use_case().download(current_workspace_id(request), task_id,
+            expected_version_id=expected_version_id, subtitle=subtitle)
+    except OutputObservationRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    headers = {"Cache-Control": "no-store"}
+    if result.version_id is not None:
+        headers.update({"X-Timeline-Version-Id": result.version_id, "X-Timeline-Sequence": str(result.sequence)})
+    return FileResponse(result.path, media_type="application/x-subrip" if subtitle else "video/mp4",
+        filename=f"{task_id}.srt" if subtitle else f"{task_id}.mp4", headers=headers)
 
 
 def _timeline_version_or_404(
@@ -10462,7 +10489,7 @@ def get_creation_task_timeline_version_artifact(
     request: Request,
 ) -> FileResponse:
     workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
+    _readable_creation_task(request, task_id)
     version = _timeline_version_or_404(workspace_id, task_id, version_id)
     logical_ref = _history_artifact_refs(version, workspace_id, task_id)[kind]
     if logical_ref is None:

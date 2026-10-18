@@ -1,9 +1,8 @@
 """查看历史时间线版本：只读旧版本自己的快照与产物，不动当前版本。"""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -150,8 +149,8 @@ def history_task(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "artifact_store", store)
-    monkeypatch.setattr(main_module, "settings",
-                        SimpleNamespace(effective_temporary_root_path=tmp_path / "temp"))
+    monkeypatch.setattr(main_module, "settings", replace(main_module.settings,
+        video_output_path=str(tmp_path / 'outputs'), temporary_root_path=str(tmp_path / 'temp')))
     monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
     return repo, task.id, TestClient(main_module.app)
 

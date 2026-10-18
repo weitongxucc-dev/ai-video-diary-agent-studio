@@ -14,6 +14,8 @@ const { createCompanionGateway, allowedRequest } = require('../runtime/companion
     calls++;
     assert.equal(request.headers['x-local-member-token'], undefined);
     response.setHeader('Content-Type', 'application/json');
+    response.setHeader('X-Timeline-Version-Id', 'test-version');
+    response.setHeader('X-Timeline-Sequence', '2');
     if (request.url === '/api/companion/session') response.end(JSON.stringify({ device_id: 'test-device', workspace_id: 'test-space', role: 'owner', member_id: 'test-member' }));
     else { response.statusCode = request.headers.authorization === 'Bearer unit-test-token' ? 200 : 401; response.end(JSON.stringify({ version: 'test-version' })); }
   });
@@ -23,7 +25,7 @@ const { createCompanionGateway, allowedRequest } = require('../runtime/companion
     getAuthConfig: () => ({ supabase_url: 'https://unit-test.invalid', publishable_key: 'public-test' }), addresses: () => ['127.0.0.1'] });
   let gateway = create();
   const get = (url, ca, headers = {}) => new Promise((resolve, reject) => {
-    const request = https.get(url, { ca, headers }, (response) => { let body = ''; response.on('data', (data) => body += data); response.on('end', () => resolve({ status: response.statusCode, body })); });
+    const request = https.get(url, { ca, headers }, (response) => { let body = ''; response.on('data', (data) => body += data); response.on('end', () => resolve({ status: response.statusCode, body, headers: response.headers })); });
     request.on('error', reject);
   });
   try {
@@ -43,6 +45,10 @@ const { createCompanionGateway, allowedRequest } = require('../runtime/companion
     assert.equal((await get(`${state.endpoint}/api/creation-tasks`, ca, { Authorization: 'Bearer unit-test-token' })).status, 403);
     assert.equal(calls, before);
     assert.equal((await get(`${state.endpoint}/api/creation-tasks`, ca, { Authorization: 'Bearer unit-test-token', 'X-Workspace-Id': 'test-space' })).status, 200);
+    const output = await get(`${state.endpoint}/api/creation-tasks/test-task/output?expected_version_id=test-version`, ca, { Authorization: 'Bearer unit-test-token', 'X-Workspace-Id': 'test-space' });
+    assert.equal(output.status, 200);
+    assert.equal(output.headers['x-timeline-version-id'], 'test-version');
+    assert.equal(output.headers['x-timeline-sequence'], '2');
     apiReady = false;
     assert.equal((await get(`${state.endpoint}/api/creation-tasks`, ca, { Authorization: 'Bearer unit-test-token', 'X-Workspace-Id': 'test-space' })).status, 503);
     apiReady = true;
