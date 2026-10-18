@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
+import logging
+import re
 import selectors
 import signal
 import subprocess
@@ -10,6 +13,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Sequence
 from pathlib import Path
 
@@ -17,6 +21,38 @@ import psutil
 
 from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, RecoveryBlocked
 from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits, HostResourceDecision, HostResourceRefusal
+
+
+logger = logging.getLogger(__name__)
+_QWEN_PHASE = re.compile(rb"QWEN_PHASE (?:worker_started|importing_runtime|loading_weights|weights_loaded|inference_started|inference_returned|audio_written)")
+_QWEN_MEMORY = re.compile(rb"QWEN_MEMORY phase=(?:cache_disabled|weights_loaded|inference_started|inference_returned|audio_written) active_bytes=[0-9]{1,20} cache_bytes=[0-9]{1,20} peak_bytes=[0-9]{1,20}")
+
+
+def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
+    """Keep only fixed worker markers from the already bounded pipe buffers."""
+    if not isinstance(grant, Grant):
+        return
+    markers = {stream: [line.decode("ascii") for line in diagnostic[stream].splitlines()
+        if _QWEN_PHASE.fullmatch(line) or _QWEN_MEMORY.fullmatch(line)]
+        for stream in ("stdout", "stderr")}
+    if failure is None and diagnostic["returncode"] == 0 and not any(markers.values()):
+        return
+    payload = {"recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+        "request_id": grant.request_id, "workspace_id": grant.workspace_id,
+        "owner_type": grant.owner_type, "owner_id": grant.owner_id,
+        "attempt_number": grant.attempt_number, "permit_generation": grant.generation,
+        "child": {"pid": child.pid, "start_token": child.start_token, "boot_id": child.boot_id} if child else None,
+        "failure_type": type(failure).__name__ if failure is not None else None,
+        "qwen_markers": markers,
+        **{key: diagnostic[key] for key in ("stdout_truncated", "stderr_truncated", "exec_ack",
+            "group_released", "before_termination_returncode", "returncode")}}
+    if isinstance(failure, HostResourceRefusal):
+        payload["decision"] = failure.decision.diagnostic_payload()
+    if isinstance(failure, GrantedCommandResourceLimit):
+        payload["process_resource_sample"] = failure.resource_sample
+    # These bounded execution receipts must reach the existing API stderr log,
+    # including successful worker runs when application INFO logging is disabled.
+    logger.warning("Granted command diagnostic: %s", json.dumps(payload, ensure_ascii=False))
 
 
 @dataclass(frozen=True)
@@ -51,6 +87,8 @@ class GrantedCommandResourceLimit(GrantedCommandError):
                 "threads": limits.max_process_threads}
         exceeded = [key for key in measured if measured[key] > caps[key]]
         self.resource_sample = {"measured": measured, "limits": caps, "exceeded": exceeded}
+        self.resource_sample["observed_at_utc"] = datetime.now(timezone.utc).isoformat()
+        self.resource_sample["observed_monotonic"] = time.monotonic()
         labels = {"rss_bytes": "进程组内存（字节）", "threads": "进程组线程数"}
         detail = "；".join(f"{labels[key]} {measured[key]} > 上限 {caps[key]}" for key in exceeded)
         super().__init__(f"{detail}。请核对本次实测与场景预算后再运行。")
@@ -300,34 +338,44 @@ def run_granted_command(
             _terminate_and_verify(process, child, probe)
             raise GrantedCommandError("Command left a live process-group descendant")
         check_running_unit()
+        _record_command_diagnostics(grant, child, {
+            **{name: bytes(value) for name, value in outputs.items()},
+            "stdout_truncated": False, "stderr_truncated": False,
+            "exec_ack": exec_ack, "group_released": True,
+            "before_termination_returncode": process.returncode, "returncode": process.returncode,
+        })
         return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
     except BaseException as exc:
         before_termination_returncode = process.poll() if process is not None else None
-        if process is not None:
-            _terminate_and_verify(process, child, probe)
-            # Drain only this released group's pipes, within the original caps.
-            # A resource refusal must retain the diagnostics collected before it.
-            for name in outputs:
-                pipe = getattr(process, name)
-                if pipe is not None:
-                    os.set_blocking(pipe.fileno(), False)
-                    while len(outputs[name]) <= limits[name]:
-                        try:
-                            chunk = os.read(pipe.fileno(), min(65536, limits[name] + 1 - len(outputs[name])))
-                        except BlockingIOError:
-                            break
-                        if not chunk:
-                            break
-                        outputs[name].extend(chunk)
-        exc.command_diagnostics = {
-            "stdout": bytes(outputs["stdout"][:max_stdout_bytes]),
-            "stderr": bytes(outputs["stderr"][:max_stderr_bytes]),
-            "stdout_truncated": len(outputs["stdout"]) > max_stdout_bytes,
-            "stderr_truncated": len(outputs["stderr"]) > max_stderr_bytes,
-            "exec_ack": exec_ack, "group_released": True,
-            "before_termination_returncode": before_termination_returncode,
-            "returncode": process.returncode if process is not None else None,
-        }
+        group_released = True if process is None else None
+        try:
+            if process is not None:
+                _terminate_and_verify(process, child, probe)
+                group_released = True
+                # Drain only this released group's pipes, within the original caps.
+                for name in outputs:
+                    pipe = getattr(process, name)
+                    if pipe is not None:
+                        os.set_blocking(pipe.fileno(), False)
+                        while len(outputs[name]) <= limits[name]:
+                            try:
+                                chunk = os.read(pipe.fileno(), min(65536, limits[name] + 1 - len(outputs[name])))
+                            except BlockingIOError:
+                                break
+                            if not chunk:
+                                break
+                            outputs[name].extend(chunk)
+        finally:
+            exc.command_diagnostics = {
+                "stdout": bytes(outputs["stdout"][:max_stdout_bytes]),
+                "stderr": bytes(outputs["stderr"][:max_stderr_bytes]),
+                "stdout_truncated": len(outputs["stdout"]) > max_stdout_bytes,
+                "stderr_truncated": len(outputs["stderr"]) > max_stderr_bytes,
+                "exec_ack": exec_ack, "group_released": group_released,
+                "before_termination_returncode": before_termination_returncode,
+                "returncode": process.returncode if process is not None else None,
+            }
+            _record_command_diagnostics(grant, child, exc.command_diagnostics, failure=exc)
         raise
     finally:
         if read_fd >= 0:

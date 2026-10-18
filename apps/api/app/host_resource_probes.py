@@ -610,6 +610,52 @@ class HostResourceDecision:
     reason: str | None = None
     observed_interval_seconds: float | None = None
 
+    def diagnostic_payload(self) -> dict:
+        """Private numeric evidence only: no paths, request text or raw errors."""
+        numeric_fields = {
+            "actual", "minimum", "maximum", "passed", "delta_bytes", "window_seconds",
+            "required_window_seconds", "window_complete", "sample_started_monotonic",
+            "sample_finished_monotonic", "sample_interval_seconds", "window_started_monotonic",
+            "window_finished_monotonic", "finite_byte_budget", "verdict", "required_available_bytes",
+            "required_commit_headroom_bytes", "stable_elapsed_seconds", "recovery_required_seconds",
+            "max_sample_gap_seconds", "system_reserve_bytes", "additional_memory_bytes",
+        }
+        def numbers(value):
+            return {key: item for key, item in value.items() if key in numeric_fields
+                and (item is None or type(item) is bool or
+                     type(item) in {int, float} and math.isfinite(item))}
+        checks = {}
+        for name, check in self.checks.items():
+            metric = "disk_free_bytes" if name.startswith("disk_free_bytes:") else name
+            if metric not in {"cpu_percent", "available_memory_bytes", "commit_headroom_bytes",
+                              "disk_io_bytes_per_second", "disk_free_bytes", "memory_policy", "memory_pressure"}:
+                continue
+            item = numbers(check)
+            if metric == "memory_policy":
+                sample = check.get("sample", {})
+                item["sample"] = {key: sample[key] for key in (
+                    "observed_monotonic", "available_bytes", "commit_headroom_bytes")
+                    if key in sample and (sample[key] is None or
+                        type(sample[key]) in {int, float} and math.isfinite(sample[key]))}
+                stamp = sample.get("observed_at_utc")
+                if isinstance(stamp, str) and re.fullmatch(r"[0-9TZ:+.\-]+", stamp):
+                    item["sample"]["observed_at_utc"] = stamp
+                for key, allowed in (("platform", {"darwin", "win32", "linux"}),
+                                     ("pressure", {"normal", "warning", "critical", "unknown"})):
+                    if sample.get(key) in allowed:
+                        item["sample"][key] = sample[key]
+                pressure = sample.get("facts", {}).get("pressure", {})
+                if type(pressure.get("native_value")) is int:
+                    item["sample"]["native_pressure_value"] = pressure["native_value"]
+            if metric == "disk_free_bytes":
+                checks.setdefault(metric, []).append(item)
+            else:
+                checks[metric] = item
+        reason = self.reason.partition(":")[0] if self.reason else None
+        return {"verdict": self.verdict,
+            "reason": reason if reason is None or re.fullmatch(r"[a-z_]+", reason) else None,
+            "observed_interval_seconds": self.observed_interval_seconds, "checks": checks}
+
 
 class HostResourceRefusal(RecoveryBlocked):
     """Carry the exact refusing observation through the existing failure path."""

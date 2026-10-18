@@ -1037,7 +1037,9 @@ def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(
     assert "目标磁盘可用空间不可读取" in str(disk) and str(tmp_path) not in str(disk)
 
 
-def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, monkeypatch):
+@pytest.mark.parametrize("release_unknown", [False, True])
+def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, monkeypatch, caplog, release_unknown):
+    import app.granted_subprocess as commands
     from app.host_resource_probes import SceneRuntimeLimits
     grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
                   "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
@@ -1055,16 +1057,80 @@ def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, m
     monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current:
         isolated_runtime_limits(1024**3, 16, 1, 2**63, 0.1))
     scheduler.began = time.monotonic()
-    with pytest.raises(HostResourceRefusal) as stopped:
+    if release_unknown:
+        cleanup = commands._terminate_and_verify
+        def unavailable_proof(*args):
+            cleanup(*args)  # The test still cleans its real child.
+            raise RecoveryBlocked("synthetic release proof unavailable")
+        monkeypatch.setattr(commands, "_terminate_and_verify", unavailable_proof)
+    with pytest.raises(RecoveryBlocked if release_unknown else HostResourceRefusal) as stopped:
         run_granted_command(scheduler, grant, [sys.executable, "-c",
-            "import sys,time; print('QWEN_PHASE importing_runtime',file=sys.stderr,flush=True); time.sleep(5)"],
+            "import sys,time; print('PRIVATE_BODY',file=sys.stderr); print('QWEN_PHASE importing_runtime',file=sys.stderr,flush=True); time.sleep(5)"],
             timeout_seconds=2, max_stdout_bytes=64, max_stderr_bytes=64)
-    assert stopped.value.decision is decision
-    diagnostic = stopped.value.command_diagnostics
-    assert diagnostic["exec_ack"] and diagnostic["group_released"]
-    assert b"QWEN_PHASE importing_runtime" in diagnostic["stderr"]
-    assert len(diagnostic["stderr"]) <= 64
+    if not release_unknown:
+        assert stopped.value.decision is decision
+        diagnostic = stopped.value.command_diagnostics
+        assert diagnostic["exec_ack"] and diagnostic["group_released"]
+        assert b"QWEN_PHASE importing_runtime" in diagnostic["stderr"]
+        assert len(diagnostic["stderr"]) <= 64
+    record = next(r for r in caplog.records if r.msg == "Granted command diagnostic: %s")
+    payload = json.loads(record.args[0])
+    assert payload["request_id"] == grant.request_id and payload["attempt_number"] == 1
+    assert payload["permit_generation"] == 1 and payload["child"]["pid"] == scheduler.children[0].pid
+    assert payload["decision"]["checks"]["disk_io_bytes_per_second"] == decision.checks["disk_io_bytes_per_second"]
+    assert payload["qwen_markers"]["stderr"] == ["QWEN_PHASE importing_runtime"]
+    assert payload["group_released"] is (None if release_unknown else True)
+    assert "PRIVATE_BODY" not in record.getMessage()
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+@pytest.mark.parametrize("returncode,with_markers", [(0, True), (3, True), (3, False)])
+def test_successful_command_records_only_closed_qwen_diagnostics(tmp_path, monkeypatch, caplog, returncode, with_markers):
+    grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
+                  "a" * 64, 1, 7, "PRIVATE_TOKEN", tmp_path / "isolated.sqlite")
+    class Scheduler(RecordingScheduler):
+        def assert_grant(self, current):
+            assert current == grant
+    scheduler = Scheduler()
+    scheduler.resources = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 2**63, 1, 2**63, 1024))
+    monkeypatch.setattr(scheduler.resources, "scene_runtime_limits", lambda current:
+        isolated_runtime_limits(1024**3, 32, 1, 2**63, 0.1))
+    code = "import sys; print('PRIVATE_REFERENCE'); print('QWEN_PHASE loading_weights PRIVATE_TEXT',file=sys.stderr); "
+    if with_markers:
+        code += ("print('QWEN_PHASE audio_written'); "
+            "print('QWEN_MEMORY phase=audio_written active_bytes=12 cache_bytes=0 peak_bytes=42',file=sys.stderr); ")
+    code += f"sys.exit({returncode})"
+    result = run_granted_command(scheduler, grant, [sys.executable, "-c", code],
+        timeout_seconds=2, max_stdout_bytes=256, max_stderr_bytes=256)
+    assert result.returncode == returncode and b"PRIVATE_REFERENCE" in result.stdout
+    record = next(r for r in caplog.records if r.msg == "Granted command diagnostic: %s")
+    payload = json.loads(record.args[0])
+    assert payload["returncode"] == returncode and payload["failure_type"] is None
+    assert payload["permit_generation"] == 7 and payload["group_released"] is True
+    assert payload["qwen_markers"] == ({"stdout": ["QWEN_PHASE audio_written"],
+        "stderr": ["QWEN_MEMORY phase=audio_written active_bytes=12 cache_bytes=0 peak_bytes=42"]}
+        if with_markers else {"stdout": [], "stderr": []})
+    assert all(secret not in record.getMessage() for secret in ("PRIVATE_REFERENCE", "PRIVATE_TEXT", "PRIVATE_TOKEN"))
+
+
+def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_fields():
+    decision = HostResourceDecision(False, {"text": "PRIVATE_TEXT"}, {
+        "cpu_percent": {"actual": 95, "maximum": 91, "passed": False, "raw": "PRIVATE_BODY"},
+        "disk_free_bytes:/PRIVATE_PATH": {"actual": 50, "minimum": 100, "passed": False},
+        "memory_policy": {"passed": False, "system_reserve_bytes": 100,
+            "policy_evidence_reference": "PRIVATE_PATH", "sample": {
+                "platform": "darwin", "observed_monotonic": 42.0,
+                "observed_at_utc": "2026-10-18T05:15:28+00:00", "pressure": "critical",
+                "available_bytes": 50, "facts": {"pressure": {"native_value": 4}, "private": "PRIVATE_TEXT"}}},
+        "private": {"raw": "PRIVATE_TOKEN"},
+    }, "memory_pressure_critical", 0.1)
+    payload = decision.diagnostic_payload()
+    assert payload["checks"]["memory_policy"]["sample"]["native_pressure_value"] == 4
+    assert payload["checks"]["memory_policy"]["sample"]["observed_at_utc"] == "2026-10-18T05:15:28+00:00"
+    assert payload["checks"]["cpu_percent"] == {"actual": 95, "maximum": 91, "passed": False}
+    assert payload["checks"]["disk_free_bytes"] == [{"actual": 50, "minimum": 100, "passed": False}]
+    assert "PRIVATE" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("scenario", ["short_peak", "sustained", "unknown", "counter_regressed", "observation_gap"])

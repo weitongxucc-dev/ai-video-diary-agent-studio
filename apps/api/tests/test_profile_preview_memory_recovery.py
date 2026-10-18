@@ -1,6 +1,7 @@
 """Real preview service/repository/device request; synthetic provider, no model load."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
 import pytest
 
 from app.creation_execution import CreationExecutionActor
@@ -29,7 +30,7 @@ def _pressure():
     return GrantedCommandMemoryPressure(MemoryDecision(False, "memory_pressure_critical", sample, 100, None, 0.))
 
 
-def test_pressure_keeps_original_attempt_waits_and_then_succeeds(repo, tmp_path):
+def test_pressure_keeps_original_attempt_waits_and_then_succeeds(repo, tmp_path, caplog):
     provider = PressureProvider(_pressure())
     runtime, resources, provider, queued = setup_preview(repo, tmp_path, provider=provider)
     resources.admit_value = True
@@ -41,6 +42,12 @@ def test_pressure_keeps_original_attempt_waits_and_then_succeeds(repo, tmp_path)
     assert waiting.status == "queued" and waiting.reason == "resource_pressure"
     assert waiting.device_request_id == queued.device_request_id and waiting.attempt == queued.attempt
     assert waiting.output_path is None and waiting.finished_at is None
+    log = next(r for r in caplog.records if r.msg == "Profile preview resource refusal: %s")
+    payload = json.loads(log.args[0])
+    assert payload["request_id"] == queued.device_request_id and payload["preview_attempt"] == queued.attempt
+    assert payload["decision"]["reason"] == "memory_pressure_critical"
+    assert payload["decision"]["checks"]["memory_policy"]["sample"]["available_bytes"] == 1000
+    assert "preview_input" not in payload and "member_identity" not in payload
     view = runtime.scheduler.view_for(queued.device_request_id, CreationExecutionActor("ws", "member"))
     assert view["state"] == "blocked" and view["wait_reason"] == "resource_pressure"
     with repo._connect() as conn:

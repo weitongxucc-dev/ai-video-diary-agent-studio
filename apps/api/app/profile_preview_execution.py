@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 import wave
@@ -18,6 +19,7 @@ from app.host_resource_probes import HostResourceRefusal
 from app.persistence_json import _json_payload
 
 OWNER = "media_preview"
+logger = logging.getLogger(__name__)
 
 
 def _digest(value):
@@ -199,6 +201,12 @@ class ProfilePreviewExecutor:
             else:
                 scheduler.fail_unit(grant, reason="preview_failed", failure_write=lambda conn, _: write(conn, result))
         except HostResourceRefusal as exc:
+            logger.warning("Profile preview resource refusal: %s", json.dumps({
+                "request_id": grant.request_id, "workspace_id": grant.workspace_id,
+                "owner_id": grant.owner_id, "attempt_number": grant.attempt_number,
+                "permit_generation": grant.generation, "preview_attempt": run.attempt,
+                "decision": exc.decision.diagnostic_payload(),
+            }, ensure_ascii=False))
             if not exc.recoverable_pressure:
                 terminal = replace(owner.read(run.workspace_id, run.id), status="failed", finished_at=utc_now(),
                     output_path=None, reason=exc.decision.reason or "resource_unavailable",
