@@ -16,7 +16,7 @@ export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selected
   const parameters=typedEditSchema({...declaration,
     supported_operations:declaration.direct_apply.operations.map((item:any)=>item.operation_type)});
   pi.registerTool({name:"apply_typed_edit",label:"执行明确修改",
-    description:"用户已明确要求的可撤销修改直接保存到当前时间线。先读真实任务、目标、字段与单位；仅使用 API direct_apply 声明的操作和字段。不确定对象、数值或扩大范围时先询问或准备提案。使用同一业务仓储/CAS/操作回执，成功后可整项撤销；不会自动生成成片。结果未知只能按原 request_id 回读，禁止新调用重放。每个已消费用户输入最多一次直接编辑。",
+    description:"用户已明确要求的可撤销修改直接保存到当前时间线。先读真实任务、目标、字段与单位；仅使用 API direct_apply 声明的操作和字段。修改已有图文叠加层先读取现有完整图层，仅改用户指定字段；overlay_action=update 必须显式提供完全一致的 overlay_id 与 graphic_overlay.id，不省略或生成新 id。不确定对象、数值或扩大范围时先询问或准备提案。使用同一业务仓储/CAS/操作回执，成功后可整项撤销；不会自动生成成片。结果未知只能按原 request_id 回读，禁止新调用重放。每个已消费用户输入最多一次直接编辑。",
     parameters,
     execute:async (callId:string,params:Record<string,unknown>)=>{
       if (!isTaskRead() || !selectedTaskVersion) throw new Error("请先读取本次输入的可信任务与版本");
@@ -30,6 +30,11 @@ export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selected
         throw new Error("直接编辑参数包含未声明操作字段或可信宿主字段，未提交");
       if (operation.required_fields.some((key:string)=>params[key]===undefined || params[key]===null))
         throw new Error("直接编辑缺少 API 声明的必填参数，未提交");
+      if (params.operation_type === "EditGraphicOverlay" && params.overlay_action === "update") {
+        const overlay=params.graphic_overlay as {id?:unknown}|null|undefined;
+        if (typeof params.overlay_id !== "string" || !params.overlay_id || overlay?.id !== params.overlay_id)
+          throw new Error("更新图文叠加层必须显式提供完全一致的 overlay_id 与 graphic_overlay.id；请读取现有完整图层，仅修改用户指定字段后重试，未提交");
+      }
       if (params.operation_type === "EditAudioTimeline"
           && !["update","track"].includes((params.audio_edit as {action?:string})?.action ?? ""))
         throw new Error("直接音频编辑仅支持修改现有片段或音轨；其他操作需准备提案");
