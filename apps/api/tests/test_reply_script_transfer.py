@@ -567,7 +567,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         payload = json.loads(request.content)
         review_requests.append(payload)
         section = json.loads(payload["messages"][1]["content"])["script"]["sections"][0]
-        response = {"sections": [{"index": 1, "grounded": True, "constraints_met": True,
+        response = {"sections": [{"index": 1,
             "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
                           "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}]}
         return _review_tool_response(response)

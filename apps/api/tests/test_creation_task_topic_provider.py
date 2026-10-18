@@ -98,7 +98,7 @@ def _script_document(*, evidence_ids: list[str]) -> dict[str, object]:
 
 def _script_review(script: dict, source_pieces: list[dict]) -> dict:
     """The controlled model selects IDs from the supplied original fragments."""
-    return {"sections": [{"index": section["index"], "grounded": True, "constraints_met": True,
+    return {"sections": [{"index": section["index"],
         "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
                       "source_quote_id": source_pieces[0]["quote_id"]}], "issues": []}
         for section in script["sections"]]}

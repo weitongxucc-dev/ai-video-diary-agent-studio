@@ -12,8 +12,8 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     const reportInvalid = failure.error === "script_review_invalid";
     const reason = reportInvalid ? `${section}核查报告无效，尚不能判定正文是否通过。`
       : `${section}正文${failure.error === "script_fact_unsupported" ? "存在无资料支持的事实" : "与制作要求冲突"}。`;
-    const repair = reportInvalid ? "停止本轮提交并保留原稿；先核对核查服务的报告与引用，不要把此错误当正文已证伪，也不要改写正文后原样重试。"
-      : "重新读取当前任务的固定资料，只纠正指出段落的无据事实或要求冲突后提交修订；不要原样重试或编造新证据。";
+    const repair = reportInvalid ? "停止本轮提交并保留原稿；先核对核查服务的报告与引用，不要把此错误当正文已证伪，也不要改写正文后原样重试。向用户说明核查未完成、草稿未保存及需先修复核查服务；不得建议等待后重交、试探服务是否恢复，或让用户选择盲试。"
+      : "重新读取当前任务的固定资料，只纠正指出段落的无据事实或要求冲突后提交修订；content全部会朗读，片头、署名等画面要求放入visual_prompt并融入实际旁白段，不单独充当旁白。不要原样重试或编造新证据。";
     const details = {kind: "script_draft_rejected", failure: {...failure, reason, repair_action: repair}};
     return {isError: true, content: [{type: "text", text: JSON.stringify(details.failure)}], details};
   }
@@ -69,7 +69,7 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
   pi.registerTool({
     name: "preview_script_draft",
     label: "保存待确认文案",
-    description: "保存当前任务完整文案及真实来源。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
+    description: "保存当前任务完整旁白及真实来源。content全部会朗读；片头、署名等画面要求只放visual_prompt，不能单独作为旁白段。提交前按本轮目标语言、字数及时长检查。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
     parameters: {
       type: "object",
       properties: {

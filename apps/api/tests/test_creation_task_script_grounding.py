@@ -46,7 +46,7 @@ def draft(content=FACT, visual='展示素材用途设置界面'):
 
 
 def reviewed(document):
-    return {'sections': [{'index': index, 'grounded': True, 'constraints_met': True,
+    return {'sections': [{'index': index,
         'supports': [{'candidate_quote_id': '@content:0', 'source_quote_id': '@evidence_1:0'}], 'issues': []}
         for index, _ in enumerate(document['script']['sections'], start=1)]}
 
@@ -56,9 +56,7 @@ def rejected(document, *, kind, field, quote, detail):
     result = reviewed(document)
     review = result['sections'][0]
     if kind == 'unsupported_fact':
-        review.update(grounded=False, supports=[])
-    else:
-        review['constraints_met'] = False
+        review['supports'] = []
     review['issues'] = [{'kind': kind, 'candidate_quote_id': '@' + field + ':0',
         'reference_ids': ['evidence_1'] if kind == 'unsupported_fact' else [],
         'missing_or_conflicting': detail}]
@@ -140,7 +138,8 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     schema = tool['function']['parameters']
     assert schema['required'] == ['sections'] and schema['additionalProperties'] is False
     properties = schema['properties']['sections']['items']['properties']
-    assert properties['grounded']['type'] == properties['constraints_met']['type'] == 'boolean'
+    assert set(properties) == {'index', 'supports', 'issues'}
+    assert schema['properties']['sections']['items']['required'] == ['index', 'supports', 'issues']
     assert set(properties['supports']['items']['properties']) == {'candidate_quote_id', 'source_quote_id'}
     assert 'enum' not in properties['supports']['items']['properties']['candidate_quote_id']
     assert 'enum' not in properties['supports']['items']['properties']['source_quote_id']
@@ -569,7 +568,7 @@ def test_agent_concurrent_edit_during_check_preserves_newer_draft(api_state, mon
 def test_compact_five_section_review_closes_with_one_issue_per_failure_without_retry():
     document = draft(FACT + '每天自动备份。')
     document['script']['sections'] = [copy.deepcopy(document['script']['sections'][0]) for _ in range(5)]
-    review = {'sections': [{'index': index, 'grounded': False, 'constraints_met': True,
+    review = {'sections': [{'index': index,
         'supports': [], 'issues': [{'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': '导览资料没有自动备份说明。'}]}
         for index in range(1, 6)]}
@@ -587,12 +586,36 @@ def test_compact_review_keeps_both_failure_kinds_when_both_judgements_fail():
     document = draft(FACT + '每天自动备份。', '人物出镜口播')
     review = rejected(document, kind='unsupported_fact', field='content', quote='每天自动备份',
         detail='导览资料没有自动备份说明。')
-    review['sections'][0]['constraints_met'] = False
     review['sections'][0]['issues'].append({'kind': 'goal_conflict', 'candidate_quote_id': '@visual_prompt:0', 'reference_ids': [], 'missing_or_conflicting': '方案要求人物不出镜。'})
     calls = []
     with pytest.raises(CreationTaskScriptGenerationError) as error:
         provider(document, review, calls).generate(inputs())
     assert error.value.code == 'script_fact_unsupported' and len(calls) == 2
+
+
+@pytest.mark.parametrize('spoken_only', [False, True])
+def test_english_spoken_text_and_credit_directions_have_distinct_review_results(spoken_only):
+    content = ('The footage shows an outdoor maize shelling site, with a green cylindrical machine at the center.'
+        if spoken_only else 'Opening tag "Public footage / 公开素材演示", on-screen text.')
+    document = draft(content, 'Opening tag "Public footage / 公开素材演示" appears on screen.')
+    document['script']['language'] = 'en-US'
+    instruction = '正文只写会朗读的英语；素材演示标记和来源署名仅放画面建议。'
+    value = replace(inputs(), language='en-US', current_instruction=instruction,
+        sources=(CreationTaskTopicSource(reference_id='knowledge:fixture:v1', kind='knowledge',
+            title='现场观察', text='户外玉米脱粒现场，绿色圆筒设备，可见侧面轮带、白色袋子、蓝色篷布及多人协作。'),))
+    review = (reviewed(document) if spoken_only else rejected(document, kind='goal_conflict',
+        field='content', quote=content, detail='片头文字应放在画面建议，正文里的说明都会被朗读。'))
+    calls = []
+    if spoken_only:
+        result = provider(document, review, calls).generate(value)
+        assert result.sections[0].content == content
+    else:
+        with pytest.raises(CreationTaskScriptGenerationError) as error:
+            provider(document, review, calls).generate(value)
+        assert error.value.code == 'script_goal_conflict'
+        assert error.value.reason_code == 'goal_conflict' and error.value.section_index == 1
+    assert len(calls) == 2
+    assert json.loads(calls[1][1]['messages'][1]['content'])['current_instruction'] == instruction
 
 
 def test_minimax_reasoning_only_length_response_is_rejected_without_retry():
@@ -615,8 +638,8 @@ def test_minimax_reasoning_only_length_response_is_rejected_without_retry():
 
 
 @pytest.mark.parametrize('failure_kind', ['length', 'envelope', 'tool_arguments', 'section_count',
-    'section_shape', 'index', 'bool', 'support_shape', 'support_quote', 'support_reference',
-    'source_quote', 'issue_shape', 'issue_quote', 'issue_reference', 'issue_flags', 'issue_count'])
+    'section_shape', 'index', 'legacy_flags', 'support_shape', 'support_quote', 'support_reference',
+    'source_quote', 'issue_shape', 'issue_quote', 'issue_reference', 'issue_count'])
 def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(caplog, failure_kind):
     import logging
 
@@ -637,8 +660,8 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
         review['sections'] = [None]
     elif failure_kind == 'index':
         section['index'] = source_id
-    elif failure_kind == 'bool':
-        section['grounded'] = source_secret
+    elif failure_kind == 'legacy_flags':
+        section.update(grounded=True, constraints_met=False)
     elif failure_kind == 'support_shape':
         section['supports'] = []
     elif failure_kind == 'support_quote':
@@ -659,13 +682,11 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
             issue['candidate_quote_id'] = 'private-absent-quote'
         else:
             issue['reference_ids'] = [source_id]
-    elif failure_kind == 'issue_flags':
-        section['constraints_met'] = False  # No corresponding goal_conflict issue.
     elif failure_kind == 'issue_count':
         document['script']['sections'] *= 5
         issue = {'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-issue-detail'}
-        review['sections'] = [{'index': index, 'grounded': False, 'constraints_met': True,
+        review['sections'] = [{'index': index,
             'supports': [], 'issues': [copy.deepcopy(issue) for _ in range(3)]} for index in range(1, 6)]
     content = 'private-content-report-sentinel'
     message = {'content': content, 'reasoning_content': reasoning_secret,
@@ -699,8 +720,8 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
     text = records[0].getMessage()
     assert text.startswith(prefix) and len(text) < 1200
     diagnostic = json.loads(text.removeprefix(prefix))
-    assert diagnostic['reason_code'] == failure_kind
-    assert error.value.reason_code == failure_kind
+    assert diagnostic['reason_code'] == ('section_shape' if failure_kind == 'legacy_flags' else failure_kind)
+    assert error.value.reason_code == diagnostic['reason_code']
     expected_section = diagnostic['section_index']
     if type(expected_section) is not int or not 1 <= expected_section <= 20:
         expected_section = None

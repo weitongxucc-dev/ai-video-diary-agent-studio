@@ -971,10 +971,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "type": "object", "additionalProperties": False, "required": ["sections"],
             "properties": {"sections": {"type": "array", "minItems": 1, "maxItems": 20,
                 "items": {"type": "object", "additionalProperties": False,
-                    "required": ["index", "grounded", "constraints_met", "supports", "issues"],
+                    "required": ["index", "supports", "issues"],
                     "properties": {
                         "index": {"type": "integer", "minimum": 1, "maximum": 20},
-                        "grounded": {"type": "boolean"}, "constraints_met": {"type": "boolean"},
                         "supports": {"type": "array", "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["candidate_quote_id", "source_quote_id"], "properties": {
@@ -1009,24 +1008,25 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "把制作说明写成旁白，或用‘画面文字、不读旁白’占位，均应报告goal_conflict，不能因该说明有资料依据就判通过。"
                     "候选每个字段和资料text均为按顺序的{quote_id,text}片段，拼接text就是该字段完整原文，没有省略。"
                     "必须阅读全部片段来核全部事实，只选现有quote_id定位，不自行复述引句或构造新ID。"
-                    "仅调用一次submit_script_review报告工具，在arguments中提交{sections:[{index,grounded,constraints_met,supports,issues}]}。"
+                    "仅调用一次submit_script_review报告工具，在arguments中提交{sections:[{index,supports,issues}]}。"
                     "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
-                    "完整覆盖输入全部段落，index从1开始且唯一。grounded和constraints_met为布尔值。"
+                    "完整覆盖输入全部段落，index从1开始且唯一；每段严格只有index、supports、issues三个字段。"
+                    "结论只由具体问题表达，不另返回grounded、constraints_met等重复判断。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
                     "candidate_quote_id须来自当前段的title/content/visual_prompt或全局总标题；"
                     "每段allowed_source_quote_ids按该段已声明资料列出本段可选的source_quote_id；"
                     "source_quote_id只能从本段此映射选择，不借用其他段或未声明资料的片段。"
                     "资料片段须真正支持候选片段的事实，不能用无关文字。"
-                    "核查全部事实，supports用简短摘录说明依据，不用grounded:true代替真实依据。"
+                    "核查全部事实，supports引用真实支持片段，不能只声称有据。"
                     "核查范围不因精简报告而缩小；不要复述整段正文、穷举每个错误或输出长分析。"
-                    "无据段grounded=false且supports为空，issues通常只报最重要的一项短问题。"
-                    "若同段事实支持和制作要求均失败，分别保留每类最重要一项，共2项，布尔判断须如实且与问题对应。"
+                    "无据事实必须在issues报告unsupported_fact；没有这类问题时supports至少给1项真实支持。"
+                    "若同段事实支持和制作要求均失败，分别保留每类最重要一项，共2项。"
                     "issues总计至多12项，每项为"
                     "{kind,candidate_quote_id,reference_ids,missing_or_conflicting}。kind仅unsupported_fact或goal_conflict；"
                     "candidate_quote_id须为当前段或总标题的现有片段；unsupported_fact列该段资料编号，goal_conflict可列空数组。"
                     "不返回field、quote、source_quote或全文，程序会从片段ID还原准确原文。"
                     "missing_or_conflicting用80字以内的普通短说明指出哪份资料缺少什么或哪条要求冲突，不写原ID、证据编号或协议术语。"
-                    "无据事实令grounded=false，约束矛盾令constraints_met=false，并给对应issue；其他项保持如实。"
+                    "要求冲突必须报告goal_conflict；issues为空表示核查全部事实与要求后没有发现问题。"
                     "不写Markdown；在有限输出内完整核查，不能用少核几段来假装通过。"
                 )},
                 {"role": "user", "content": json.dumps({
@@ -1128,7 +1128,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         seen = set()
         all_issues = []
         for review in reviews:
-            if not isinstance(review, dict):
+            if not isinstance(review, dict) or set(review) != {"index", "supports", "issues"}:
                 raise self._review_failure("section_shape", diagnostics)
             index = review.get("index")
             diagnostics["section_index"] = safe_count(index)
@@ -1136,11 +1136,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 raise self._review_failure("index", diagnostics)
             seen.add(index)
             section = sections[index - 1]
-            grounded, constraints = review.get("grounded"), review.get("constraints_met")
-            if type(grounded) is not bool or type(constraints) is not bool:
-                raise self._review_failure("bool", diagnostics)
             supports, issues = review.get("supports"), review.get("issues")
-            if not isinstance(supports, list) or len(supports) > 3 or (grounded and not supports):
+            if not isinstance(supports, list) or len(supports) > 3:
                 raise self._review_failure("support_shape", diagnostics)
             if not isinstance(issues, list) or len(issues) > 3:
                 raise self._review_failure("issue_shape", diagnostics)
@@ -1175,9 +1172,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     raise self._review_failure("issue_reference", diagnostics)
                 kinds.add(kind)
                 all_issues.append((index, {**issue, "field": fragment["field"], "quote": fragment["text"]}))
-            if (("unsupported_fact" in kinds) != (not grounded)
-                    or ("goal_conflict" in kinds) != (not constraints)):
-                raise self._review_failure("issue_flags", diagnostics)
+            if "unsupported_fact" not in kinds and not supports:
+                raise self._review_failure("support_shape", diagnostics)
         if len(all_issues) > 12:
             raise self._review_failure("issue_count", diagnostics)
         if all_issues:

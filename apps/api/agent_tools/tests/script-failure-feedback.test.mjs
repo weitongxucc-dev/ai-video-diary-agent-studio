@@ -34,6 +34,8 @@ test('invalid review exposes only safe metadata and stops the same input from su
     error: 'script_review_invalid', reason_code: 'issue_reference', section_index: 3, retryable: false,
     reason: undefined, repair_action: undefined});
   assert.match(result.content[0].text, /尚不能判定正文/);
+  assert.match(result.content[0].text, /不得建议等待后重交/);
+  assert.match(result.content[0].text, /草稿未保存/);
   assert.equal(JSON.stringify(result).includes(secret), false);
   await state.tool.execute('again', draft);
   assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);
@@ -70,6 +72,8 @@ test('script schema separates spoken text, visual instructions and complete evid
   const {tool} = rejectedTool({});
   const fields = tool.parameters.properties.sections.items.properties;
   assert.match(fields.content.description, /仅实际朗读/);
+  assert.match(tool.description, /content全部会朗读/);
+  assert.match(tool.description, /字数及时长检查/);
   assert.match(fields.visual_prompt.description, /不代表已经生成/);
   assert.match(fields.evidence_reference_ids.description, /reference_id 完整引用/);
 });

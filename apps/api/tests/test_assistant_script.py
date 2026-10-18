@@ -299,7 +299,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         payload = json.loads(request.content)
         review_requests.append(payload)
         candidate = json.loads(payload["messages"][1]["content"])["script"]
-        response = {"sections": [{"index": index, "grounded": True, "constraints_met": True,
+        response = {"sections": [{"index": index,
             "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
                           "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}
             for index, section in enumerate(candidate["sections"], start=1)]}
