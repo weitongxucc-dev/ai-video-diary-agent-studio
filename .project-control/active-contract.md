@@ -118,6 +118,8 @@ B续绑已发现的P0直接消费者`app/profile_preview_execution.py`及新增�
 
 同一消费者薄接线继续由A负责`main.py`现有文案错误响应；`execution-tools.ts`、`task-context.ts`可复用配音阶段现有候选列表与换声音用例，将明确对话要求绑定当前任务和固定声音版本，仍限定现有配音阶段与状态，不因后来更改默认声音而静默修改已采用任务。C在现有`MaterialLibraryWorkspace`、列表/详情组件及直接测试修复页签恢复后的旧素材快照误选：可见时立即复用既有刷新，刷新完成前不创建新选择引用，既有引用保持冻结版本；不新增缓存或轮询框架。
 
+A新增实际文案约束与接续绑定：在既有`topics.py`、`main.py`、`agent_tools/diary/script-tools.ts`、`runtime.ts`、`conversation_repository.py`及`assistant_goal_continuation.py`直接消费者和定向测试，将宿主核验的本轮真实要求纳入逐段核查，保留原方案约束并在核查后复核输入身份；`content`所有文字都会朗读，角标/署名/制作说明属于画面要求，不得作为旁白采用。文案采用工具复用当前任务回读返回实际阶段与缺项，按原自主制作授权接入已有接续，不让讨论/仅写稿启动制作。没有新工具系统、调度器或核查回退。声音写入回执/CAS方案暂仅只读，具体文件另绑。
+
 C新增独占绑定`apps/web/src/components/HomeCommandComposer.tsx`及`__tests__/HomeCommandComposer.test.tsx`：真实首页会话携带任务目标保存并采用文案后，复用既有`onTaskUpdated`刷新当前任务；将真实`script_draft`回执纳入刷新条件，保留会话/目标切换的晚回包保护。不新增缓存、事件总线或轮询层，不变更左侧名称与分区。
 
 C续绑正式模式外壳的直接身份消费者：`hooks/useLocalMemberIdentity.ts`及其定向测试、`components/AppShell.tsx`的必要调用点。仅阻止正式模式启动本地whoami/写入本地成员凭据，保持正式设备角色由已有核验入口获得，不新增另一套身份事实源；本地模式既有行为保留，不改左栏名称或分区。手机及设置候选已提交后保持冻结，后续实机发现的具体缺口再划转。
