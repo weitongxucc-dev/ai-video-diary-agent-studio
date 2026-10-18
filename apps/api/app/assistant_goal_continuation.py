@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import math
 from typing import Any
 
 from app.conversation_repository import ConversationRepository
@@ -389,6 +390,10 @@ class GoalResultProjection:
 
     @staticmethod
     def ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint):
+        if checkpoint and "delivery_duration" in checkpoint:
+            facts = {**facts, "delivery_duration": checkpoint["delivery_duration"]}
+            if checkpoint["status"] != "completed":
+                checkpoint = None
         execution = facts.get("execution_status") or {}
         job = execution.get("job") or {}
         production_result = None
@@ -526,14 +531,43 @@ class GoalResultProjection:
         return {"job_id": rendered["owner_id"], "input_digest": source.get("input_digest")}
 
     @staticmethod
-    def completed_output(observation, output, version, source, actual):
+    def completed_output(observation, output, version, source, actual, *, goal=None,
+                         duration_target_seconds=None):
         if (actual["job"]["status"] != "succeeded" or not actual["video_ready"]
                 or source["input_digest"] != actual["job"]["input_digest"]):
             return None
-        return {"status": "completed", "scope": "production_and_output_observation", "job_id": actual["job"]["id"],
+        checkpoint = {"status": "completed", "scope": "production_and_output_observation", "job_id": actual["job"]["id"],
             "observation_job_id": observation["receipt"]["job_id"], "timeline_version_id": version.id, "sha256": output["sha256"],
             "measurement_scope": observation["result"]["measurement_scope"], "unavailable": [
                 {"scope": item["scope"], "reason": item["reason"][:500]} for item in observation["result"].get("unavailable", [])]}
+        adoption = (goal or {}).get("creation_adoption")
+        # Only the original adopted creation input owns this duration requirement.
+        # Creation roots omit source_input_id even when adoption follows a home
+        # input revision. Only a later, explicitly bound input replaces it.
+        input_id = (goal or {}).get("source_input_id")
+        if adoption and (input_id is None or input_id == adoption["source"].get("input_id")):
+            def measured(value):
+                return float(value) if type(value) in {int, float} and math.isfinite(value) and value > 0 else None
+
+            target = measured(duration_target_seconds)
+            actual_duration = measured(observation["result"].get("media", {}).get("duration_seconds"))
+            tolerance = 1 / 30  # One frame on the current 30 fps output clock.
+            delta = target - actual_duration if target is not None and actual_duration is not None else None
+            status = ("unverified" if delta is None else "matched" if abs(delta) <= tolerance + 1e-9
+                      else "short" if delta > 0 else "long")
+            repair = {
+                "unverified": "先核对原目标与当前成片的输出观察回执，取得真实视频时长；不能用时间线或配音估计值宣布完成。",
+                "short": "调用read_current_task、read_task_edit_capabilities回读当前时间线、音频和实际可用编辑能力，并核对真实素材范围；依据差额自主修订，再渲染并观察。配音结束后的画面留白不延长字幕，素材不足须说明，不能循环、补帧或擅自变速。",
+                "long": "调用read_current_task、read_task_edit_capabilities回读当前时间线、音频和实际可用编辑能力，核对超出目标的区间及字幕；依据差额自主修订，再渲染并观察。不能只改时长元数据或截断旁白。",
+                "matched": "真实输出时长已符合原新建目标。",
+            }[status]
+            checkpoint["delivery_duration"] = {"scope": "original_creation_delivery", "status": status,
+                "target_duration_seconds": target, "actual_duration_seconds": actual_duration,
+                "delta_seconds": round(delta, 6) if delta is not None else None, "tolerance_seconds": tolerance,
+                "repair_action": repair}
+            if status != "matched":
+                checkpoint["status"] = "incomplete"
+        return checkpoint
 
     def execution_source_current(self, task, source, job_id, status):
         base = source["expected_timeline_version_id"]

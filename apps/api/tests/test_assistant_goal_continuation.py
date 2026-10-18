@@ -1,9 +1,11 @@
 """Real isolated conversation persistence; model and current-principal seams only."""
+import hashlib
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.assistant_goal_continuation import GoalContinuationService
+from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection
 from app.conversation_repository import ConversationRepository
 
 
@@ -332,6 +334,139 @@ def test_host_projection_does_not_promote_success_without_playable_output():
     for facts in ({}, {"execution_status": {"job": {"id": "render", "status": "succeeded"}, "video_ready": False}}):
         projected = GoalResultProjection.ready(task, version, None, facts, False, [], [], None)
         assert "production_result" not in projected and "completed_output_checkpoint" not in projected
+
+
+@pytest.fixture
+def observed_delivery():
+    """Declared observation metadata; no model, media execution or ffprobe."""
+    return {"observation": {"receipt": {"job_id": "observation:one"}, "result": {
+                "measurement_scope": "actual_output_bounded_frames",
+                "media": {"duration_seconds": 25.36}, "unavailable": []}},
+            "output": {"sha256": "a" * 64}, "version": SimpleNamespace(id="version:one", sequence=1),
+            "source": {"input_digest": "render-input"}, "actual": {
+                "job": {"id": "execution:one", "status": "succeeded", "input_digest": "render-input"},
+                "video_ready": True},
+            "goal": {"creation_adoption": {"source": {}}}, "duration_target_seconds": 30}
+
+
+@pytest.mark.parametrize("duration,status,delta", [
+    (25.36, "short", 4.64), (32, "long", -2),
+    (30, "matched", 0), (30 - 1 / 30, "matched", 1 / 30),
+    (30 + 1 / 30, "matched", -1 / 30), (30 - 2 / 30, "short", 2 / 30),
+])
+def test_original_creation_output_must_meet_target_on_actual_output_clock(observed_delivery, duration, status, delta):
+    observed_delivery["observation"]["result"]["media"]["duration_seconds"] = duration
+    checkpoint = GoalResultProjection.completed_output(**observed_delivery)
+    assert checkpoint["status"] == ("completed" if status == "matched" else "incomplete")
+    assert checkpoint["sha256"] == "a" * 64 and checkpoint["job_id"] == "execution:one"
+    fact = checkpoint["delivery_duration"]
+    assert fact["status"] == status and fact["target_duration_seconds"] == 30
+    assert fact["actual_duration_seconds"] == duration and fact["delta_seconds"] == pytest.approx(delta, abs=1e-6)
+    if status != "matched":
+        assert "read_task_edit_capabilities" in fact["repair_action"]
+        assert "edit_operations" not in fact  # Availability is read from the actual capability owner.
+
+
+@pytest.mark.parametrize("media", [{}, {"duration_seconds": None}, {"duration_seconds": "30"},
+    {"duration_seconds": False}, {"duration_seconds": 0}, {"duration_seconds": -1},
+    {"duration_seconds": float("nan")}, {"duration_seconds": float("inf")}])
+def test_creation_cannot_substitute_plan_or_timeline_for_unmeasured_output(observed_delivery, media):
+    observed_delivery["observation"]["result"]["media"] = media
+    observed_delivery["version"].snapshot = {"montage": {"duration_seconds": 30}}
+    checkpoint = GoalResultProjection.completed_output(**observed_delivery)
+    assert checkpoint["status"] == "incomplete"
+    assert checkpoint["delivery_duration"]["status"] == "unverified"
+    assert checkpoint["delivery_duration"]["actual_duration_seconds"] is None
+    assert checkpoint["delivery_duration"]["delta_seconds"] is None
+    assert "真实视频时长" in checkpoint["delivery_duration"]["repair_action"]
+
+
+def test_creation_cannot_claim_duration_verified_without_target(observed_delivery):
+    observed_delivery["duration_target_seconds"] = None
+    checkpoint = GoalResultProjection.completed_output(**observed_delivery)
+    assert checkpoint["status"] == "incomplete"
+    assert checkpoint["delivery_duration"]["actual_duration_seconds"] == 25.36
+    assert checkpoint["delivery_duration"]["target_duration_seconds"] is None
+
+
+@pytest.mark.parametrize("goal", [
+    {"original_instruction": "把当前视频剪短到20秒"},
+    {"creation_adoption": {"source": {"input_id": "adopted-home-input"}},
+     "source_input_id": "later-task-edit", "original_instruction": "把当前视频剪短到20秒"},
+])
+def test_later_shortening_goal_does_not_inherit_creation_plan_duration(observed_delivery, goal):
+    observed_delivery["goal"] = goal
+    observed_delivery["observation"]["result"]["media"]["duration_seconds"] = 20
+    checkpoint = GoalResultProjection.completed_output(**observed_delivery)
+    assert checkpoint["status"] == "completed" and "delivery_duration" not in checkpoint
+
+
+@pytest.mark.parametrize("changed", ["job_status", "video_ready", "digest"])
+def test_duration_match_cannot_replace_original_output_provenance(observed_delivery, changed):
+    observed_delivery["observation"]["result"]["media"]["duration_seconds"] = 30
+    if changed == "job_status":
+        observed_delivery["actual"]["job"]["status"] = "failed"
+    elif changed == "video_ready":
+        observed_delivery["actual"]["video_ready"] = False
+    else:
+        observed_delivery["source"]["input_digest"] = "different-render"
+    assert GoalResultProjection.completed_output(**observed_delivery) is None
+
+
+def adopted_creation_goal(repo, *, revised):
+    message = "请自主制作30秒脱壳机介绍"
+    chat = repo.create("workspace", "member", "home", "home")
+    chat = repo.save_draft(chat["id"], "workspace", "member", message, chat["draft_version"])
+    turn, _ = repo.create_turn_idempotent(chat["id"], "workspace", "member", message,
+        str(uuid4()), chat["draft_version"], request_context={"kind": "home"})
+    source = {"kind": "conversation_input", "turn_id": turn["id"], "conversation_id": chat["id"],
+              "member_id": "member"}
+    if revised:
+        message = "按刚才讨论，自主制作30秒英文脱壳机介绍"
+        chat = repo.get(chat["id"], "workspace", "member")
+        chat = repo.save_draft(chat["id"], "workspace", "member", message, chat["draft_version"])
+        input_id = str(uuid4())
+        repo.enqueue_input(chat["id"], "workspace", "member", target_turn_id=turn["id"],
+            client_request_id=input_id, message=message, mode="steer", expected_draft_version=chat["draft_version"],
+            expected_reference_version=0, request_context={"kind": "home"})
+        repo.transition_input(chat["id"], "workspace", "member", input_id, "consumed")
+        source["input_id"] = input_id
+    source["message_digest"] = hashlib.sha256(message.encode()).hexdigest()
+    repo.finish_turn(turn["id"], "completed", "窗口已采用。")
+    roots = repo.register_creation_task_goals(turn["id"], "workspace", "member",
+        {"request_id": "creation-request", "window_id": "adopted-window", "source": source},
+        [{"kind": "task", "task_id": "task", "stage": "montage",
+          "target_snapshot": {"timeline_version_id": "version:one", "timeline_sequence": 1}}])
+    assert len(roots) == 1
+    root = repo.get_turn(roots[0])
+    assert repo.update_goal_checkpoint(root["id"], status="waiting_result", waiting_reason="await_output",
+        event_id=root["events"][0]["event_id"])
+    return root, repo.get_task_goal(root["id"])
+
+
+@pytest.mark.parametrize("revised", [False, True])
+def test_duration_gap_reaches_existing_agent_continuation_without_completed_checkpoint(repo, observed_delivery, revised):
+    root, goal = adopted_creation_goal(repo, revised=revised)
+    assert "source_input_id" not in goal
+    assert bool(goal["creation_adoption"]["source"].get("input_id")) == revised
+    observed_delivery["goal"] = goal
+    checkpoint = GoalResultProjection.completed_output(**observed_delivery)
+    assert checkpoint["status"] == "incomplete"
+    task = SimpleNamespace(current_timeline_version_id="version:one")
+    fresh = GoalResultProjection.ready(task, observed_delivery["version"], None,
+        {"execution_status": observed_delivery["actual"]}, True, [], [], checkpoint)
+    assert fresh["status"] == "ready" and "completed_output_checkpoint" not in fresh
+    assert fresh["production_result"]["video_ready"] is True
+    emit(repo, root, phase="observation", result_kind="observation")
+    svc, calls = service(repo, response={"edit_request": {"request_id": "duration-repair"}}, readiness=fresh)
+    assert svc.reconcile() == 1 and len(calls) == 1
+    claim, verified = calls[0]
+    assert claim["goal"]["original_instruction"] == goal["original_instruction"]
+    assert verified["facts"]["delivery_duration"]["delta_seconds"] == 4.64
+    assert "read_current_task" in verified["facts"]["delivery_duration"]["repair_action"]
+    persisted = ConversationRepository(repo.database_path).get_task_goal(root["id"])
+    assert persisted["status"] == "waiting_result" and "completed_output_checkpoint" not in persisted
+    assert svc.reconcile() == 0 and len(calls) == 1
 
 
 def test_proposal_waits_real_adoption_then_new_version_drives_remaining_goal(repo):

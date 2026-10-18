@@ -14469,7 +14469,10 @@ def _goal_output_checkpoint(goal, event, facts, task, version, actor, request):
     if source is None:
         return None
     actual = _read_bound_execution_result(task.id, request, source["job_id"])
-    checkpoint = owner.completed_output(observation, output, version, source, actual)
+    duration_target = (_creation_plan_for_task_or_404(task.workspace_id, task).duration_target_seconds
+        if goal.get("creation_adoption") else None)
+    checkpoint = owner.completed_output(observation, output, version, source, actual,
+        goal=goal, duration_target_seconds=duration_target)
     if checkpoint is not None:
         checkpoint["unavailable"] = [{"scope": item["scope"], "reason": _assistant_stream_safe_text(item["reason"], task.workspace_id)}
             for item in checkpoint["unavailable"]]
