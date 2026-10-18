@@ -5699,12 +5699,14 @@ def _workspace_assistant_plan_turn(
     )
     if not created:
         settings_for_replay = _workspace_settings_for(workspace_id)
-        return _replay_assistant_turn(
+        response = _replay_assistant_turn(
             turn_id, WorkspaceAssistantPlanTurnResponse,
             provider=settings_for_replay.effective_llm_provider,
             model=settings_for_replay.effective_llm_model,
             draft_version=payload.expected_draft_version + 1,
         )
+        _register_adopted_creation_goals(request, turn_id, response.creation_request)
+        return response
     preview = None
     try:
         reply, preview = run_plan_turn(
@@ -5809,6 +5811,7 @@ def _workspace_assistant_plan_turn(
         "plan_preview": plan_preview.model_dump(mode="json") if plan_preview else None,
         "response": response.model_dump(mode="json"),
     })
+    _register_adopted_creation_goals(request, turn_id, creation_request)
     return response
 
 
@@ -14327,6 +14330,20 @@ def _goal_media_result(task_id, job_id, request):
 
 def _goal_service():
     return GoalContinuationService(conversation_repo, verify_current_goal=_verify_current_goal, run_goal_turn=_run_goal_turn)
+
+
+def _register_adopted_creation_goals(request, turn_id, creation_request):
+    if creation_request is None:
+        return
+    workspace_id = current_workspace_id(request)
+    member_id = _content_reader(request, workspace_id)[0]
+    # Never bind the model's returned task IDs. Read the owning repository's
+    # actual window/tasks/adoption again through the same member boundary.
+    current = _creation_request_response(_creation_request_or_404(request, creation_request.id)).model_dump(mode="json")
+    registered = _goal_service().register_creation_request(turn_id, workspace_id, member_id, current)
+    if registered:
+        _remember_goal_transport(request, workspace_id, member_id)
+        _wake_assistant_continuations()
 
 
 def _read_bound_execution_result(task_id, request, job_id):

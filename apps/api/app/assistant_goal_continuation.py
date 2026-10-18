@@ -30,6 +30,36 @@ class GoalContinuationService:
         # never infers goals from pre-existing completed conversations.
         return self.repo.register_task_goal(turn_id)
 
+    def register_creation_request(self, turn_id: str, workspace_id: str, member_id: str, saved: dict) -> list[str]:
+        """Bind only a host-read, actually adopted window to existing task goals."""
+        intent, window = saved.get("intent") or {}, saved.get("current_window")
+        if intent.get("kind") not in {"goal_delegation", "final_script"} or not window or window["status"] != "confirmed":
+            return []
+        source = intent["source"]
+        if source.get("kind") != "conversation_input" or source.get("turn_id") != turn_id:
+            return []
+        entries = window["entries"]
+        if not 1 <= len(entries) <= 8:
+            raise ValueError("接续只绑定当前已采用窗口内的任务")
+        tasks = []
+        for entry in entries:
+            task, plan = entry["task"], entry["plan"]
+            adoption = plan.get("adoption") or {}
+            if (task is None or entry["task_id"] != task["id"] or task["workspace_id"] != workspace_id
+                    or entry["plan_id"] != task["plan_id"] or adoption.get("plan_id") != task["plan_id"]
+                    or adoption.get("kind") != "delegated_system" or adoption.get("member_id") != member_id
+                    or adoption.get("request_id") != saved["id"] or adoption.get("window_id") != window["id"]
+                    or adoption.get("window_input_fingerprint") != window["input_fingerprint"]
+                    or adoption.get("authorization_source") != source):
+                raise ValueError("任务采用回执与原制作目标不一致")
+            tasks.append({"kind": "task", "task_id": task["id"], "stage": task["stage"],
+                "selected_object_refs": [], "playhead_ms": None,
+                "target_snapshot": {"timeline_version_id": task["current_timeline_version_id"],
+                    "timeline_sequence": task["timeline_sequence"]}})
+        return self.repo.register_creation_task_goals(turn_id, workspace_id, member_id,
+            {"request_id": saved["id"], "window_id": window["id"],
+             "input_fingerprint": window["input_fingerprint"], "source": source}, tasks)
+
     def observe_business_result(self, source_turn_id: str, event: dict) -> bool:
         goal = self.repo.get_task_goal(source_turn_id)
         return bool(goal and event.get("type") == "business_result" and event.get("event_id")

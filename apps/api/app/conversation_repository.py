@@ -697,6 +697,77 @@ class ConversationRepository:
             conn.execute("BEGIN IMMEDIATE")
             return self._register_task_goal(conn, turn_id, running_execution=running_execution)
 
+    def register_creation_task_goals(self, source_turn_id: str, workspace_id: str, member_id: str,
+                                     adoption: dict, task_contexts: list[dict]) -> list[str]:
+        """Persist host-verified adopted tasks without inventing a user message.
+
+        Production owns adoption; this repository owns only the originating
+        consumed conversation receipt and its derived business checkpoints.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT t.*,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id WHERE t.id=? "
+                "AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (source_turn_id, workspace_id, member_id)).fetchone()
+            if row is None or row["status"] != "completed":
+                return []
+            source = adoption["source"]
+            if (source["turn_id"] != source_turn_id or source["conversation_id"] != row["conversation_id"]
+                    or source["member_id"] != member_id):
+                raise ValueError("接续必须来自同一成员已消费的首页输入")
+            events = json.loads(row["events_json"])
+            consumed = latest_consumed_input(events)
+            input_id = source.get("input_id")
+            if (consumed["input_id"] if consumed else None) != input_id:
+                return []
+            context = consumed["request_context"] if consumed else json.loads(row["request_context_json"])
+            instruction = consumed["message"] if consumed else row["user_message"]
+            if context.get("kind") != "home" or source["message_digest"] != hashlib.sha256(instruction.encode()).hexdigest():
+                raise ValueError("接续不能更改已保存首页输入的正文或作用域")
+            latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+                "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (row["conversation_id"],)).fetchone()
+            if latest is None or latest["id"] != source_turn_id:
+                return []
+            registered = []
+            for task_context in task_contexts:
+                task_id = task_context["task_id"]
+                identity = f"{source_turn_id}:{adoption['request_id']}:{adoption['window_id']}:{input_id}:{task_id}"
+                root_id = str(uuid5(NAMESPACE_URL, "yaohe-creation-goal:" + identity))
+                existing = conn.execute("SELECT id FROM assistant_conversation_turns WHERE id=?", (root_id,)).fetchone()
+                if existing is not None:
+                    registered.append(root_id)
+                    continue
+                receipt = {**adoption, "turn_id": source_turn_id}
+                snapshot = task_context["target_snapshot"]
+                event_id = "creation-adopted:" + root_id
+                event = {"type": "business_result", "event_id": event_id, "phase": "creation",
+                    "status": "confirmed", "task_id": task_id, "request_id": adoption["request_id"],
+                    "window_id": adoption["window_id"], "base_version_id": snapshot["timeline_version_id"],
+                    "result_version_id": snapshot["timeline_version_id"]}
+                goal = {"original_turn_id": root_id, "workspace_id": workspace_id, "member_id": member_id,
+                    "task_id": task_id, "conversation_id": row["conversation_id"], "original_instruction": instruction,
+                    "request_context": task_context, "target_snapshot": snapshot, "creation_adoption": receipt,
+                    "status": "waiting_result", "waiting_reason": "continue_adopted_creation_task", "revision": 0,
+                    "round_count": 0, "current_turn_id": root_id, "handled_event_ids": [],
+                    "unfinished_steps": ["continue_adopted_creation_task", "complete_original_instruction"],
+                    "next_checkpoint": "continue_adopted_creation_task"}
+                sequence = conn.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM assistant_conversation_turns "
+                    "WHERE conversation_id=?", (row["conversation_id"],)).fetchone()[0]
+                now = _now()
+                conn.execute("INSERT INTO assistant_conversation_turns "
+                    "(id,conversation_id,sequence,user_message,assistant_text,status,events_json,result_json,created_at,updated_at) "
+                    "VALUES(?,?,?,'',?,'completed',?,?,?,?)", (root_id, row["conversation_id"], sequence,
+                    "任务已采用，等待接续制作。", json.dumps([event]),
+                    json.dumps({"kind": "creation_task_adopted", "goal_continuation": goal}, ensure_ascii=False), now, now))
+                conn.execute("INSERT INTO assistant_conversation_request_receipts "
+                    "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
+                    "expected_draft_version,request_context_json,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,'',0,?,'consumed',?,?)",
+                    (root_id, row["conversation_id"], workspace_id, member_id, "task", task_id,
+                    json.dumps(task_context, ensure_ascii=False), root_id, now))
+                registered.append(root_id)
+            return registered
+
     def _register_task_goal(self, conn: sqlite3.Connection, turn_id: str, *, running_execution: bool = False) -> dict | None:
         row = conn.execute("SELECT t.*,r.workspace_id,r.member_id,r.request_context_json "
                            "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
@@ -901,7 +972,16 @@ class ConversationRepository:
                 return None
             latest_user = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
                                        "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (root["conversation_id"],)).fetchone()
-            if latest_user is None or latest_user["id"] != root_id:
+            adoption = goal.get("creation_adoption")
+            origin_id = adoption["turn_id"] if adoption else root_id
+            origin_current = latest_user is not None and latest_user["id"] == origin_id
+            if origin_current and adoption:
+                origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
+                    (origin_id,)).fetchone()
+                consumed = latest_consumed_input(json.loads(origin["events_json"]))
+                origin_current = (origin["status"] == "completed"
+                    and (consumed["input_id"] if consumed else None) == adoption["source"].get("input_id"))
+            if not origin_current:
                 self._write_goal(conn, root, {**goal, "status": "invalidated", "waiting_reason": "new_user_instruction"})
                 return None
             if conn.execute("SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running'",
