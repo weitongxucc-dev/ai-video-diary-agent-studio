@@ -7,7 +7,6 @@ const PUBLIC_PATHS = new Set([
 ]);
 
 const PUBLIC_API_PATHS = new Set([
-  "/api/runtime/health",
   "/api/setup/preflight",
   "/api/is_setup",
   "/api/system/status",
@@ -24,6 +23,7 @@ const ONBOARDING_SUPPORT_PATHS = new Set([
 ]);
 
 const ONBOARDING_SUPPORT_API_PATHS = new Set([
+  "/api/runtime/health",
   "/api/onboarding/complete",
   "/api/settings/runtime",
 ]);

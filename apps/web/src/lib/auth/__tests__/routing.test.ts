@@ -38,9 +38,11 @@ describe("auth routing", () => {
     expect(isPublicAuthPath("/tasks/task-1")).toBe(false);
   });
 
-  it("keeps only readiness endpoints public", () => {
-    expect(isPublicApiPath("/api/setup/preflight")).toBe(true);
-    expect(isPublicApiPath("/api/runtime/health")).toBe(true);
+  it("keeps the existing process and setup probes public but protects workspace diagnostics", () => {
+    for (const path of ["/api/setup/preflight", "/api/is_setup", "/api/system/status", "/api/version", "/api/workflow/status", "/api/content-templates"]) {
+      expect(isPublicApiPath(path), path).toBe(true);
+    }
+    expect(isPublicApiPath("/api/runtime/health")).toBe(false);
     expect(isPublicApiPath("/api/creation-tasks/task-1")).toBe(false);
   });
 
@@ -69,6 +71,9 @@ describe("auth routing", () => {
     expect(isOnboardingSupportPath("/tasks/task-1")).toBe(false);
     expect(isOnboardingSupportApiPath("/api/onboarding/complete")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/settings/runtime")).toBe(true);
+    expect(isOnboardingSupportApiPath("/api/runtime/health")).toBe(true);
+    expect(shouldBlockOnboarding("user-1", false, "GET", "/api/runtime/health")).toBe(false);
+    expect(shouldBlockOnboarding("user-1", false, "GET", "/api/runtime/health/extra")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/models")).toBe(true);
     expect(
       isOnboardingSupportApiPath("/api/models/chinese-clip/install"),

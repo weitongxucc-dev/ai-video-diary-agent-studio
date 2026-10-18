@@ -667,7 +667,6 @@ _EXTERNAL_URLS_CONFIGURATION_REQUIRED = "configuration_required"
 # stay public even when Supabase auth is enabled. Everything else requires a
 # verified bearer token.
 PUBLIC_AUTH_PATHS: set[str] = {
-    "/api/runtime/health",
     "/api/setup/preflight",
     "/api/is_setup",
     "/api/system/status",
@@ -688,6 +687,7 @@ PAIRING_ACCEPT_PATH = "/api/companion/pairings/accept"
 ONBOARDING_REPAIR_PATHS: set[str] = {
     # Binding facts only; accepting an invite has not initialized the workspace.
     "/api/companion/session",
+    "/api/runtime/health",
     "/api/onboarding/complete",
     "/api/settings/runtime",
     "/api/models",
@@ -11652,7 +11652,8 @@ def _require_feature(feature: str) -> None:
 
 @app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
 def get_runtime_health(request: Request) -> RuntimeHealthResponse:
-    return RuntimeHealthResponse.model_validate(runtime_health(_workspace_settings_for(current_workspace_id(request)), current_workspace_id(request)))
+    workspace_id = current_workspace_id(request)
+    return RuntimeHealthResponse.model_validate(runtime_health(_workspace_settings_for(workspace_id), workspace_id))
 
 
 @app.get("/api/setup/preflight", response_model=SetupPreflightResponse)

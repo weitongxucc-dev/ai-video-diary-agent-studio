@@ -295,10 +295,44 @@ def test_public_endpoints_skip_auth_when_enabled(auth_ctx, monkeypatch):
     ctx, settings, _, _ = auth_ctx
     monkeypatch.setattr(main_module, "auth_context", ctx)
     monkeypatch.setattr(main_module, "settings", settings)
+    # The packaged runtime enables this repository guard too. Without it, a
+    # public route can silently fall back to local and conceal a missing scope.
+    monkeypatch.setattr("app.repository._AUTH_ENABLED", True)
+    reader = mock.Mock(side_effect=AssertionError("anonymous probe must not read workspace settings"))
+    monkeypatch.setattr(main_module, "_workspace_settings_for", reader)
 
     client = TestClient(main_module.app)
-    assert client.get("/api/runtime/health").status_code == 200
+    assert client.get("/api/version").status_code == 200
+    assert client.get("/api/system/status").status_code == 200
     assert client.get("/api/setup/preflight").status_code == 200
+    assert client.get("/api/runtime/health").status_code == 401
+    reader.assert_not_called()
+
+
+def test_runtime_health_authenticates_before_workspace_read_and_supports_initialization(auth_ctx, monkeypatch):
+    ctx, settings, private_pem, _ = auth_ctx
+    ctx.resolve_workspace_id = lambda user_id, access_token: None
+    ctx.is_onboarding_complete = mock.Mock(return_value=False)
+    monkeypatch.setattr(main_module, "auth_context", ctx)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr("app.repository._AUTH_ENABLED", True)
+    reader = mock.Mock(return_value=settings)
+    probe = mock.Mock(return_value={"summary": {"total": 0, "ready": 0, "missing": 0, "degraded": 0, "invalid": 0},
+        "items": [], "feature_gates": []})
+    monkeypatch.setattr(main_module, "_workspace_settings_for", reader)
+    monkeypatch.setattr(main_module, "runtime_health", probe)
+    client = TestClient(main_module.app)
+    assert client.get("/api/runtime/health").status_code == 401
+    assert client.get("/api/runtime/health", headers={"Authorization": "Bearer invalid"}).status_code == 401
+    headers = {"Authorization": "Bearer " + _sign_token("user-a", key=private_pem)}
+    assert client.get("/api/runtime/health", headers=headers).status_code == 403
+    reader.assert_not_called()
+    probe.assert_not_called()
+    ctx.resolve_workspace_id = lambda user_id, access_token: "verified-workspace"
+    assert client.get("/api/runtime/health", headers=headers).status_code == 200
+    reader.assert_called_once_with("verified-workspace")
+    probe.assert_called_once_with(settings, "verified-workspace")
+    ctx.is_onboarding_complete.assert_not_called()
 
 
 

@@ -125,7 +125,9 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     return waitForHttpService({
       service: 'api',
       port,
-      path: '/api/runtime/health',
+      // Process readiness must work before a user/workspace can be selected.
+      // Capability diagnostics remain behind the authenticated runtime API.
+      path: '/api/version',
       maxRetries,
       ready: (statusCode) => statusCode === 200,
       label: 'API server',

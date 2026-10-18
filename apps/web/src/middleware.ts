@@ -83,6 +83,15 @@ export async function middleware(request: NextRequest) {
     }
 
     const session = await refreshSession(request);
+    if (pathname === "/api/runtime/health" && (!session.userId || !session.accessToken)) {
+      return copyRefreshedSession(
+        NextResponse.json(
+          { error: "authentication_required", detail: "Sign in before reading workspace diagnostics." },
+          { status: 401 },
+        ),
+        session.response,
+      );
+    }
     if (
       shouldBlockOnboarding(
         session.userId,

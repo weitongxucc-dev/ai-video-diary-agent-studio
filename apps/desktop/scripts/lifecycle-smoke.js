@@ -40,8 +40,8 @@ const server = http.createServer((request, response) => {
     response.end('fixture-mp4');
     return;
   }
-  response.writeHead(200, { 'content-type': 'text/plain' });
-  response.end(request.url === '/api/runtime/health' ? 'ok' : 'web');
+  response.writeHead(request.url === '/api/runtime/health' ? 401 : 200, { 'content-type': 'text/plain' });
+  response.end(request.url === '/api/version' ? 'ok' : 'web');
 });
 server.listen(port, '127.0.0.1');
 process.on('SIGTERM', () => server.close(() => { process.exitCode = 0; }));
@@ -409,6 +409,8 @@ function createResources({ api = true, web = true, legacyWorker = false, buildId
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-video-diary-lifecycle-'));
   const appRoot = path.join(root, 'app');
   fs.mkdirSync(appRoot, { recursive: true });
+  // Runtime dependencies are installed with the desktop; fixtures relocate only source.
+  fs.symlinkSync(path.resolve(__dirname, '..', 'node_modules'), path.join(appRoot, 'node_modules'), 'dir');
   const mainPath = path.join(appRoot, 'main.js');
   fs.copyFileSync(MAIN_SOURCE, mainPath);
   fs.cpSync(RUNTIME_SOURCE, path.join(appRoot, 'runtime'), { recursive: true });
