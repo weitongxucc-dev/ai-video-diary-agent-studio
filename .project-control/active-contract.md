@@ -47,6 +47,8 @@
 
 目录内同名文件以上表完整父目录为准。不得自行提交、修改共享权威/依赖/锁文件、启动模型/媒体/完整构建或修改用户验收库；只运行直接轻量测试。生产资源标定、构建与媒体由主控串行安排，构建来自已审核提交；未触及的正式Web构建可复用，实际候选按build identity核对，不以旧SHA当新结论。
 
+补充当前真实试验发现的最小绑定：B独占`apps/api/app/topics.py`与`apps/api/tests/test_creation_task_script_grounding.py`，仅收紧既有核查报告引用schema、补安全有界拒绝子类诊断及直接测试，保留事实/引用/段落校验，不自动纠正模型引用、不增加盲重试。主控在`schemas.py`补既有素材检索结果的`evidence_excerpt`与`needs_confirmation`两项透传，不增加新检索器。
+
 ## 5. 共同接入约定与接受点
 
 A/B失败接口沿HTTP detail与既有工具details.failure，最少安全error/code、reason、repair_action；新字段按有限白名单保留实际阶段、提交效果及原请求/对象定位。不透传凭据、路径、原始异常或上游body；已有script failure消费者保持兼容。A提供具体窗口版本/输入摘要冲突而非一律409文字；B不根据未知5xx断言零副作用，未知结果先查原请求。需共享schema或测试文件扩权先由主控登记，不暗中多写。
