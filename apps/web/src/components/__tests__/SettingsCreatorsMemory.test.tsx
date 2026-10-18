@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { AnchorHTMLAttributes } from "react";
+vi.mock("@/lib/auth/routing", () => ({ isLocalAuthMode: () => true }));
 vi.mock("next/link", () => ({ default: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@/lib/api", () => ({ listLocalMembers: async () => ({ members: [{ member_id: "member-a", name: "成员甲", role: "member" }] }), membersErrorMessage: (error: Error) => error.message }));
 vi.mock("@/lib/local-member-auth", () => ({ fetchLocalMemberIdentity: async () => ({ member_id: "member-a", name: "成员甲", role: "member" }) }));

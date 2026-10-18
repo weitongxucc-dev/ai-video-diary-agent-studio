@@ -1,11 +1,18 @@
 "use client";
 import Link from "next/link";
+import { isLocalAuthMode } from "@/lib/auth/routing";
+import { CompanionConnection } from "./CompanionConnection";
 import { useEffect, useState } from "react";
 import { listLocalMembers, membersErrorMessage, type LocalMember } from "@/lib/api";
 import { fetchLocalMemberIdentity, type LocalMemberIdentity } from "@/lib/local-member-auth";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 
 export function SettingsCreators({ selectedMemberId }: { selectedMemberId?: string }) {
+  if (!isLocalAuthMode()) return <section aria-label="创作者资料"><CompanionConnection /><p><Link href="/profile">创作偏好</Link></p></section>;
+  return <><LocalSettingsCreators selectedMemberId={selectedMemberId} /><CompanionConnection /></>;
+}
+
+function LocalSettingsCreators({ selectedMemberId }: { selectedMemberId?: string }) {
   const identityState = useLocalMemberIdentity();
   const [identity, setIdentity] = useState<LocalMemberIdentity | null>(null);
   const [members, setMembers] = useState<LocalMember[]>([]);

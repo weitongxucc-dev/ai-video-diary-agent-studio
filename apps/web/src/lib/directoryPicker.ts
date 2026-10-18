@@ -20,6 +20,10 @@ export type MaterialImportIdentity = {
 declare global {
   interface Window {
     electronAPI?: {
+      companionStatus?: () => Promise<CompanionStatus>;
+      configureCompanion?: (input: { address: string; accessToken: string; workspaceId: string }) => Promise<CompanionStatus>;
+      disableCompanion?: () => Promise<CompanionStatus>;
+      companionInvitation?: (input: { purpose: "pair"; token: string; expires_at: string; workspace_id: string }) => Promise<CompanionInvitationResult>;
       setCardMediaEscape?: (cardId: string | null) => void;
       onCardMediaEscape?: (callback: (cardId: string) => void) => () => void;
       openDirectory?: () => Promise<string | null>;
@@ -53,6 +57,12 @@ declare global {
     };
   }
 }
+
+export type CompanionStatus = { enabled: boolean; endpoint: string | null; addresses: string[]; device_id: string };
+export type CompanionInvitationResult = {
+  payload: { type: "yaohe-companion"; version: 1; purpose: "pair" | "invite"; token: string; expires_at: string; workspace_id: string; device_id: string; endpoint: string; tls_ca_pem: string; auth: { supabase_url: string; publishable_key: string } };
+  qr_data_url: string;
+};
 
 export type DirectoryPickResult =
   | { kind: "picked"; path: string }

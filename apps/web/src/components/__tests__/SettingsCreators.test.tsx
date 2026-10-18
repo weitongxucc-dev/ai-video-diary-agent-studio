@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AnchorHTMLAttributes } from "react";
 const mocks=vi.hoisted(()=>({identity:vi.fn(),members:vi.fn(),refresh:vi.fn()}));
+vi.mock("@/lib/auth/routing", () => ({ isLocalAuthMode: () => true }));
 vi.mock("next/link",()=>({default:({href,children,...props}:AnchorHTMLAttributes<HTMLAnchorElement>)=><a href={href} {...props}>{children}</a>}));
 vi.mock("@/lib/api",()=>({listLocalMembers:mocks.members,membersErrorMessage:(error:Error)=>error.message}));
 vi.mock("@/lib/local-member-auth",()=>({fetchLocalMemberIdentity:mocks.identity}));

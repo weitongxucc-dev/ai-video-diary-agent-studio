@@ -18,3 +18,5 @@ export { previewCreationTaskAudio, listCreationTaskRecordings, adoptCreationTask
 export { type ScheduledTaskType, type ScheduledTaskTriggerMode, type ScheduledTask, type ScheduledTasksResponse, type ScheduledTaskCreateInput, listScheduledTasks, createScheduledTask, setScheduledTaskEnabled, deleteScheduledTask } from './api/scheduled-tasks';
 export { type LocalMember, type LocalMemberListResponse, membersErrorMessage, listLocalMembers, addLocalMember, removeLocalMember, setLocalMemberRole, createLocalInviteCode, joinLocalMember } from './api/members';
 export { saveScriptLibraryEntry, listScriptLibraryEntries, getScriptLibrarySources, reuseScriptLibraryEntry } from './api/script-library';
+
+export { readCompanionContext, createCompanionPairing, CompanionError, type CompanionContext, type CompanionIdentity, type CompanionPairingTicket } from './api/companion';
