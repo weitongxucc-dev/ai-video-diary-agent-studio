@@ -28,7 +28,7 @@ def client_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "auth_context", SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "request-test")
     live_fingerprint = ["a" * 64]
-    def preflight(_request, workspace_id, payload):
+    def preflight(_request, workspace_id, payload, **_dependencies):
         return replace(entries(count=1)[0][0], goal=payload.goal, name=payload.name or payload.goal,
             language=payload.language, aspect_ratio=payload.aspect_ratio,
             presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
@@ -37,6 +37,7 @@ def client_state(tmp_path, monkeypatch):
     app = FastAPI()
     for path, handler, methods in [
         ("/api/creation-requests", main.create_creation_request, ["POST"]),
+        ("/api/assistant/creation-request", main.read_current_input_creation_request, ["GET"]),
         ("/api/creation-requests/{request_id}", main.get_creation_request, ["GET"]),
         ("/api/creation-requests/{request_id}", main.revise_creation_request, ["PATCH"]),
         ("/api/creation-requests/{request_id}/windows", main.preview_creation_request_window, ["POST"]),
@@ -110,6 +111,25 @@ def test_model_cannot_change_original_count_or_turn_identity(client_state):
     saved = create(c, goal="模型改写", assistant_turn_id=turn["id"], request_key=turn["id"])
     assert saved.status_code == 200 and saved.json()["goal"] == message
     c.conversations.finish_turn(turn["id"], "completed", "已保存")
+
+
+def test_original_creation_request_can_be_read_by_trusted_input_without_server_id(client_state):
+    c = client_state
+    message = "制作10000条视频，每条两分钟"
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "原输入")
+    chat = c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
+        message, str(uuid4()), chat["draft_version"])
+    lookup = "/api/assistant/creation-request?assistant_turn_id=" + turn["id"]
+    assert c.client.get(lookup, headers=c.alice).json() is None
+    saved = create(c, assistant_turn_id=turn["id"], request_key=turn["id"])
+    assert saved.status_code == 200, saved.text
+    recovered = c.client.get(lookup, headers=c.alice)
+    assert recovered.status_code == 200 and recovered.json()["id"] == saved.json()["id"]
+    assert c.client.get(lookup, headers=c.bob).status_code == 404
+    c.conversations.finish_turn(turn["id"], "completed", "原输入已结束")
+    assert c.client.get(lookup, headers=c.alice).status_code == 409
+    assert c.repository.list_creation_tasks("request-test") == []
     assert create(c, assistant_turn_id=turn["id"]).status_code == 409
 
 
@@ -132,6 +152,9 @@ def test_stale_external_preflight_cannot_partially_confirm_window(client_state):
     rejected = c.client.post(base + "/windows/" + window["id"] + "/confirm", headers=c.alice,
         json={"expected_revision": planned["revision"], "input_fingerprint": window["input_fingerprint"]})
     assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error"] == "creation_window_dependencies_changed"
+    assert rejected.json()["detail"]["expected_input_fingerprint"] == "a" * 64
+    assert rejected.json()["detail"]["current_input_fingerprint"] == "b" * 64
     assert c.client.get(base, headers=c.alice).json()["confirmed_count"] == 0
     assert c.repository.list_creation_tasks("request-test") == []
     replacement = c.client.post(base + "/windows/" + window["id"] + "/replan", headers=c.alice,
@@ -151,6 +174,96 @@ def test_ninth_window_item_and_duplicate_goal_are_rejected(client_state):
     base = "/api/creation-requests/" + saved["id"] + "/windows"
     for goals in [[{"goal": str(i)} for i in range(9)], [{"goal": "相同"}, {"goal": "相同"}]]:
         assert c.client.post(base, headers=c.alice, json={"expected_revision": saved["revision"], "goals": goals}).status_code == 422
+    assert c.repository.list_creation_tasks("request-test") == []
+
+
+def test_replan_applies_new_goals_and_rejects_old_window_and_revision(client_state):
+    c = client_state
+    saved = create(c, goal="制作中英文各一条", target_count=2, output_relation="variants").json()
+    base = "/api/creation-requests/" + saved["id"]
+    planned = c.client.post(base + "/windows", headers=c.alice, json={"expected_revision": saved["revision"],
+        "goals": [{"goal": "原中文"}, {"goal": "原英文", "requirements": {"language": "en-US"}}]}).json()
+    old = planned["current_window"]
+    goals = [{"goal": "修订中文", "requirements": {"language": "zh-CN", "duration_target_seconds": 30}},
+        {"goal": "修订英文", "requirements": {"language": "en-US", "duration_target_seconds": 30}}]
+    replacement = c.client.post(base + "/windows/" + old["id"] + "/replan", headers=c.alice,
+        json={"expected_revision": planned["revision"], "goals": goals})
+    assert replacement.status_code == 200, replacement.text
+    fresh = replacement.json()
+    assert fresh["current_window"]["id"] != old["id"]
+    assert [(x["plan"]["goal"], x["plan"]["language"], x["plan"]["duration_target_seconds"])
+        for x in fresh["current_window"]["entries"]] == [("修订中文", "zh-CN", 30), ("修订英文", "en-US", 30)]
+    for invalid_goals in [[], [{"goal": str(i)} for i in range(9)]]:
+        invalid = c.client.post(base + "/windows/" + fresh["current_window"]["id"] + "/replan", headers=c.alice,
+            json={"expected_revision": fresh["revision"], "goals": invalid_goals})
+        assert invalid.status_code == 422
+    wrong_input = c.client.post(base + "/windows/" + fresh["current_window"]["id"] + "/confirm", headers=c.alice,
+        json={"expected_revision": fresh["revision"], "input_fingerprint": "f" * 64})
+    assert wrong_input.status_code == 409
+    assert wrong_input.json()["detail"]["error"] == "creation_window_input_conflict"
+    assert wrong_input.json()["detail"]["current_input_fingerprint"] == fresh["current_window"]["input_fingerprint"]
+    stale = c.client.post(base + "/windows/" + fresh["current_window"]["id"] + "/replan", headers=c.alice,
+        json={"expected_revision": planned["revision"], "goals": goals})
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == {"error": "creation_request_revision_conflict",
+        "reason": "制作目标的修订已变化，未应用旧要求。", "repair_action": "先读取当前制作目标，再按实际修订提交新要求。",
+        "request_id": saved["id"], "expected_revision": planned["revision"], "current_revision": fresh["revision"]}
+    old_confirm = c.client.post(base + "/windows/" + old["id"] + "/confirm", headers=c.alice,
+        json={"expected_revision": fresh["revision"], "input_fingerprint": old["input_fingerprint"]})
+    assert old_confirm.status_code == 409 and old_confirm.json()["detail"]["error"] == "creation_window_not_current"
+    window = fresh["current_window"]
+    confirmation = {"expected_revision": fresh["revision"], "input_fingerprint": window["input_fingerprint"]}
+    for _ in range(2):
+        response = c.client.post(base + "/windows/" + window["id"] + "/confirm", headers=c.alice, json=confirmation)
+        assert response.status_code == 200 and response.json()["confirmed_count"] == 2
+    assert len(c.repository.list_creation_tasks("request-test")) == 2
+
+
+def test_confirm_checks_live_blocking_condition_even_when_digest_is_unchanged(client_state, monkeypatch):
+    from app.production import CreationPlanBlocker
+    c = client_state
+    base, data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
+    prepare = main._creation_plan_preflight
+    def blocked(*args, **kwargs):
+        return replace(prepare(*args, **kwargs), blockers=[CreationPlanBlocker(reason="content_sources_missing",
+            impact="当前所选资料已不可使用", repair_action="恢复资料", stage="topic", blocks_confirmation=True)])
+    monkeypatch.setattr(main, "_creation_plan_preflight", blocked)
+    response = c.client.post(url, headers=c.alice, json=confirmation)
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "creation_window_blocked"
+    assert response.json()["detail"]["reason"] == "content_sources_missing"
+    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.client.get(base, headers=c.alice).json()["current_window"]["id"] == data["current_window"]["id"]
+
+
+def test_stale_assistant_input_cannot_replan_or_revise_request(client_state):
+    c = client_state
+    base, data, _url, _confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "原对话")
+    chat = c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, "继续制作", 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
+        "继续制作", str(uuid4()), chat["draft_version"])
+    c.conversations.finish_turn(turn["id"], "completed", "输入已结束")
+    suffix = "?assistant_turn_id=" + turn["id"]
+    response = c.client.post(base + "/windows/" + data["current_window"]["id"] + "/replan" + suffix,
+        headers=c.alice, json={"expected_revision": data["revision"], "goals": [{"goal": "不得写入"}]})
+    assert response.status_code == 409
+    response = c.client.patch(base + suffix, headers=c.alice, json={"expected_revision": data["revision"]})
+    assert response.status_code == 409
+    assert c.client.get(base, headers=c.alice).json()["revision"] == data["revision"]
+    assert c.repository.list_creation_tasks("request-test") == []
+
+
+def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_state, monkeypatch):
+    c = client_state
+    _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
+    def revoked(*args, **kwargs):
+        raise PermissionError("private-source-path-and-credential")
+    monkeypatch.setattr(c.repository, "confirm_creation_request_window", revoked)
+    response = c.client.post(url, headers=c.alice, json=confirmation)
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "creation_window_resource_unavailable"
+    assert "private" not in response.text
     assert c.repository.list_creation_tasks("request-test") == []
 
 

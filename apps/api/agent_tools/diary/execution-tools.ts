@@ -150,13 +150,30 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });
+    let executionSubmissionPending = false;
+    const submitExecution = async (action: "start" | "resume" | "cancel", binding: string, body: object) => {
+      if (executionSubmissionPending || hasCreationAction()) throw new RequestNotSubmitted("本轮制作动作已经提交或正在提交，不重复执行");
+      executionSubmissionPending = true;
+      try {
+        const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/${action}${binding}`, {
+          method: "POST", body: JSON.stringify(body)});
+        markCreationAction();
+        return result;
+      } catch (error) {
+        // Transport performs its own version GET before POST. Only a known
+        // not-submitted receipt can release this attempt; an unknown write cannot.
+        if (!(error instanceof RequestNotSubmitted)) markCreationAction();
+        throw error;
+      } finally {
+        executionSubmissionPending = false;
+      }
+    };
     const perform = async (action: "start" | "resume" | "cancel") => {
-      if (!isTaskRead()) throw new Error("请先读取当前创作任务");
-      if (hasCreationAction()) throw new Error("本轮制作动作已经提交，不重复执行");
-      if (directEditUnverified?.()) throw new Error("本次直接编辑结果未核实，不能继续制作；请先查询原请求");
-      if (hasEditControlWrite()) throw new Error("本轮已提交历史控制动作，不能同时开始、继续或取消制作");
-      if (hasPreview()) throw new Error("本轮已请求修改预览，不能同时开始、继续或取消制作");
-      markCreationAction();
+      if (!isTaskRead()) throw new RequestNotSubmitted("请先读取当前创作任务");
+      if (executionSubmissionPending || hasCreationAction()) throw new RequestNotSubmitted("本轮制作动作已经提交或正在提交，不重复执行");
+      if (directEditUnverified?.()) throw new RequestNotSubmitted("本次直接编辑结果未核实，不能继续制作；请先查询原请求");
+      if (hasEditControlWrite()) throw new RequestNotSubmitted("本轮已提交历史控制动作，不能同时开始、继续或取消制作");
+      if (hasPreview()) throw new RequestNotSubmitted("本轮已请求修改预览，不能同时开始、继续或取消制作");
       const turn = readActionSource().turnId;
       if (action !== "cancel" && !turn) throw new RequestNotSubmitted("制作请求缺少当前助手轮次，未提交");
       const binding = action !== "cancel" ? `?assistant_turn_id=${encodeURIComponent(turn!)}` : "";
@@ -165,7 +182,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
         const preview = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/preview`);
         const requirements = preview.requirements as { can_continue?: boolean; continuation_blocker?: string | null } | undefined;
         if (!requirements?.can_continue) {
-          throw new Error(requirements?.continuation_blocker || "当前制作条件尚未就绪，未提交制作");
+          throw new RequestNotSubmitted(requirements?.continuation_blocker || "当前制作条件尚未就绪，未提交制作");
         }
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution`);
         const existingJob = current.job as { input_digest?: string; status?: string } | null;
@@ -173,17 +190,10 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
           && (existingJob.status === "failed" || existingJob.status === "interrupted"
             || existingJob.status === "cancelled" || !current.video_ready);
         status = canRetryCurrent
-          ? await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/resume${binding}`, {
-            method: "POST", body: JSON.stringify({}),
-          })
-          : await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/start${binding}`, {
-            method: "POST",
-            body: JSON.stringify({ script_id: preview.script_id, input_digest: preview.input_digest, requirements_confirmed: true }),
-          });
+          ? await submitExecution("resume", binding, {})
+          : await submitExecution("start", binding, {script_id: preview.script_id, input_digest: preview.input_digest, requirements_confirmed: true});
       } else {
-        status = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution/${action}${binding}`, {
-          method: "POST", body: JSON.stringify({}),
-        });
+        status = await submitExecution(action, binding, {});
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ action, status }) }],
@@ -207,7 +217,10 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
             const reason = boundedText(error instanceof Error ? error.message : String(error), 500).text;
             const repair = error instanceof BusinessRequestError && typeof error.repairAction === "string" ? boundedText(error.repairAction, 500).text : undefined;
             return {isError: true, content: [{type: "text", text: reason}], details: {
-              kind: "execution_action_failed", action, failure: {reason, ...(repair ? {repair_action: repair} : {})}}};
+              kind: "execution_action_failed", action, failure: {reason, ...(repair ? {repair_action: repair} : {}),
+                ...(error instanceof RequestNotSubmitted ? {error: "request_not_submitted", stage: "execution_preflight",
+                  submission_effect: "not_submitted", task_id: taskId,
+                  repair_action: "重新读取当前任务和原请求，处理阻断后再提交。"} : {})}}};
           }
         },
       });

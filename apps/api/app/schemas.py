@@ -2544,6 +2544,7 @@ class CreationRequestWindowConfirmRequest(BaseModel):
 class CreationRequestWindowReplanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
+    goals: list[CreationRequestWindowGoal] | None = Field(default=None, min_length=1, max_length=8)
 
 
 class CreationRequestItemResponse(BaseModel):
@@ -2656,7 +2657,7 @@ class AssistantStreamEvent(BaseModel):
     label: str | None = None
     ok: bool | None = None
     summary: str | None = None
-    failure: dict[str, str] | None = None
+    failure: dict[str, str | int | bool | None] | None = None
     result: dict[str, object] | None = None
     message: str | None = None
     status: int | None = None

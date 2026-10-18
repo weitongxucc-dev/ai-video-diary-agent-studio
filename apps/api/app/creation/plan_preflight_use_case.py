@@ -105,7 +105,7 @@ class CreationPlanPreflightUseCase:
 
     def prepare(self, workspace_id: str, payload: CreationPlanPreflightInput, *, template: VideoTemplate | None,
                 reader_user_id: str | None, local_diagnostic: bool,
-                automation_scope: dict[str, list[str]] | None = None) -> CreationPlan:
+                automation_scope: dict[str, list[str]] | None = None, frozen_plan: dict | None = None) -> CreationPlan:
         _plan_user_id, _plan_local_diagnostic = reader_user_id, local_diagnostic
         knowledge_references = [
             CreationPlanKnowledgeReference(
@@ -156,10 +156,28 @@ class CreationPlanPreflightUseCase:
         if automation_scope is not None:
             knowledge_references = [item for item in knowledge_references if item.id in automation_scope["knowledge_ids"]]
             source_references = [item for item in source_references if item.connector_id in automation_scope["connector_ids"]]
+        if frozen_plan is not None:
+            source_ids = {item["id"] for item in frozen_plan["source_references"]}
+            knowledge_references = []
+            for reference in frozen_plan["knowledge_references"]:
+                try:
+                    item = self.sources.get_knowledge_reference_readable_by(workspace_id, reference["id"], reference["version"],
+                        user_id=_plan_user_id, local_diagnostic=_plan_local_diagnostic)
+                except KeyError:
+                    continue  # The missing dependency changes the digest; it never authorizes the old Plan.
+                if item.use_state == "not_for_automation" or not content_allows_use(item.use_state, "reference"):
+                    continue
+                knowledge_references.append(CreationPlanKnowledgeReference(id=item.id, version=item.version,
+                    title=item.title, authorization=item.authorization, ownership=item.ownership))
+            source_references = [item for item in source_references if item.id in source_ids]
         usable = self.production.automatic_material_segments(workspace_id, viewer_user_id=_plan_user_id,
                                                               local_diagnostic=_plan_local_diagnostic)
         if automation_scope is not None:
             usable = [(asset, segment) for asset, segment in usable if asset.id in automation_scope["material_asset_ids"]]
+        if frozen_plan is not None:
+            chosen_pairs = {(item["asset_ref"].removeprefix("asset:"), item["segment_ref"].removeprefix("segment:"))
+                for item in frozen_plan["material_matches"]}
+            usable = [(asset, segment) for asset, segment in usable if (asset.id, segment.id) in chosen_pairs]
         approved_assets = list({asset.id: asset for asset, _ in usable}.values())
         approved_clips = [segment for asset, segment in usable if effective_segment_usage_role(asset, segment) == "b_roll"]
         eligible_material_pairs = {(asset.id, segment.id) for asset, segment in usable}
@@ -345,6 +363,9 @@ class CreationPlanPreflightUseCase:
                 stage="video_editing", blocks_confirmation=True,
             ))
         name = payload.name or payload.goal[:48]
+        required_model_ids = ({selected_voice.model_id} if selected_voice else set())
+        if selected_lipsync_provider is not None:
+            required_model_ids.add(selected_lipsync_provider.model_id)
         fingerprint_payload = {
             "template_id": template.id if template else None,
             "template_version": template.version if template else None,
@@ -364,14 +385,11 @@ class CreationPlanPreflightUseCase:
             "pronunciation_references": [
                 item.__dict__ for item in pronunciation_references
             ],
-            "approved_asset_count": len(approved_assets),
-            "approved_clip_count": len(approved_clips),
             "material_rule_summary": "使用当前可自动选用的有效镜头；保留主动限制、人工疑点与匹配依据。",
             "material_matches": [asdict(item) for item in material_matches],
-            "eligible_material_pairs": sorted(eligible_material_pairs),
-            "model_snapshot": model_snapshot,
+            "model_snapshot": [{key: model[key] for key in ("id", "capability", "state", "ready")}
+                for model in model_snapshot if model["id"] in required_model_ids],
             "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],
-            "blockers": [item.__dict__ for item in blockers],
         }
         fingerprint = hashlib.sha256(
             json.dumps(

@@ -15,6 +15,7 @@ for (const kind of ['discussion', 'goal_delegation', 'final_script']) {
     const intent = {kind, ...(kind === 'final_script' ? {final_script: {title: '原稿', text: '准确正文。'}} : {})};
     let current = null;
     async function request(path, init) {
+      path = new URL(path, 'http://test').pathname;
       const body = init?.body ? JSON.parse(init.body) : null;
       calls.push({path, body});
       if (path === '/api/creation-requests') {

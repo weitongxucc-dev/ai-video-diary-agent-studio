@@ -161,7 +161,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     assert zero.source_references[0].identity == source_item_identity(source) == "06e2443a3a33afc383efaf1d80dece9b0ea5b0407d9a801a89900d5d6a519bba"
     assert zero.material_matches == [match] and (zero.approved_asset_count, zero.approved_clip_count) == (1, 1)
     assert [x.reason for x in zero.blockers] == ["voice_reference_missing"]
-    assert zero.preflight_fingerprint == "f47e4b7a5796231c7a2fd86f6d62f382985555f03d1c8f9ca00feb4bdd121543"
+    assert zero.preflight_fingerprint == "f0d89c8c53d963447aac4c7de07e46f5ff7d81c6cb93160bd0104881595b0509"
     invocations.append({"kind": "preview_omitted_zero", "trace": list(trace),
         "fingerprint": zero.preflight_fingerprint, "provided_fields": sorted(inputs[0].provided_fields)})
     trace.clear()
@@ -173,7 +173,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     assert inputs[1].provided_fields == explicit.model_fields_set | {"language", "aspect_ratio", "duration_target_seconds"}
     assert inputs[1].selected_knowledge == inputs[0].selected_knowledge
     assert [x.reason for x in positive.blockers] == ["voice_reference_missing", "'absent-person'", "person_render_unavailable"]
-    assert positive.preflight_fingerprint == "b3607b753aa5685b7d63d4c89e7db3e7e47b6f50681b6a9e3da3267dc3059d91"
+    assert positive.preflight_fingerprint == "f736664a4a19d8edfd9843b321b629400d7910195432a03aad4b1651c9a5707d"
     assert all(not x.blocks_confirmation for x in positive.blockers)
     invocations.append({"kind": "confirm_explicit_positive", "trace": list(trace),
         "fingerprint": positive.preflight_fingerprint, "provided_fields": sorted(inputs[1].provided_fields)})
@@ -188,3 +188,79 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
             "database": str(database), "counts": counts, "real_source_metadata": True,
             "qualified_material_catalog_provider": "declared facts only",
             "production_identity_file_media_model_acceptance": False}, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.fixture
+def selected_dependencies():
+    from app.creation.plan_preflight_use_case import CreationPlanPreflightInput
+    state = SimpleNamespace(extra=False, knowledge_readable=True, voice_allowed=True, material_present=True,
+        voice_ready=True, diagnostic="first diagnostic", searched=[])
+    knowledge = SimpleNamespace(id="knowledge", version="1", title="实际资料", authorization="authorized",
+        ownership="user_owned", use_state="available")
+    asset = SimpleNamespace(id="selected-asset", usage_role="b_roll")
+    segment = SimpleNamespace(id="selected-segment", usage_role="b_roll")
+    def knowledge_pin(workspace, identifier, version, **reader):
+        assert (workspace, identifier, version, reader) == ("ws", "knowledge", "1",
+            {"user_id": "reader", "local_diagnostic": False})
+        if not state.knowledge_readable:
+            raise KeyError(identifier)
+        return knowledge
+    def materials(*args, **kwargs):
+        selected = [(asset, segment)] if state.material_present else []
+        extras = [(SimpleNamespace(id=f"other-{i}", usage_role="b_roll"),
+            SimpleNamespace(id=f"new-{i}", usage_role="b_roll")) for i in range(12)] if state.extra else []
+        return selected + extras
+    def search(workspace, **kwargs):
+        pairs = kwargs["eligible_segment_refs"]
+        state.searched.append(set(pairs))
+        # A full-library top eight would displace the original selected pair.
+        return [MaterialSegmentMatch("asset:" + a, "segment:" + s, 1.0, ["matching input"])
+            for a, s in sorted(pairs)[:8]]
+    def voice_reference(*args, **kwargs):
+        assert kwargs == {"viewer_user_id": "reader", "local_diagnostic": False}
+        if not state.voice_allowed:
+            raise PermissionError("profile_excluded")
+        return SimpleNamespace(profile_id="voice", version="v1", model_id="voice-model")
+    production = SimpleNamespace(automatic_material_segments=materials, search_material_segments=search,
+        get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
+        creation_plan_voice_reference=voice_reference, list_applicable_pronunciation_entries=lambda **_:[])
+    sources = SimpleNamespace(list_knowledge_items_for_use=lambda *_, **__: [knowledge] + ([SimpleNamespace(
+        **{**vars(knowledge), "id":"other-knowledge"})] if state.extra else []),
+        get_knowledge_reference_readable_by=knowledge_pin, list_source_items_for_use=lambda *_, **__:[])
+    def statuses():
+        selected = SimpleNamespace(model=SimpleNamespace(id="voice-model", capability="voice"), state="ready",
+            ready=state.voice_ready, message=state.diagnostic)
+        return [selected] + ([SimpleNamespace(model=SimpleNamespace(id="unused-vision", capability="visual"),
+            state="unavailable", ready=False, message=state.diagnostic)] if state.extra else [])
+    case = CreationPlanPreflightUseCase(production, sources, SimpleNamespace(list_statuses=statuses),
+        lipsync_provider_for=lambda _:pytest.fail("zero presenter does not need a lipsync provider"))
+    payload = CreationPlanPreflightInput(goal="实际目标", name=None, target_count=1, language="zh-CN",
+        aspect_ratio="16:9", duration_target_seconds=30, presenter_share_target=0, lipsync_quality="high",
+        template_id=None, template_version=None, selected_knowledge=None, selected_voice=("voice","v1"),
+        selected_person=None, provided_fields=frozenset())
+    def prepare(frozen=None):
+        return case.prepare("ws", payload, template=None, reader_user_id="reader", local_diagnostic=False, frozen_plan=frozen)
+    baseline = prepare()
+    frozen = {"knowledge_references":[asdict(x) for x in baseline.knowledge_references],
+        "source_references":[], "material_matches":[asdict(x) for x in baseline.material_matches]}
+    return state, prepare, baseline, frozen
+
+
+def test_adoption_search_is_scoped_before_top_n_and_ignores_unselected_diagnostics(selected_dependencies):
+    state, prepare, baseline, frozen = selected_dependencies
+    state.extra, state.diagnostic = True, "unrelated status text changed"
+    current = prepare(frozen)
+    assert state.searched[-1] == {("selected-asset", "selected-segment")}
+    assert current.material_matches == baseline.material_matches
+    assert current.preflight_fingerprint == baseline.preflight_fingerprint
+    assert [x.id for x in current.knowledge_references] == ["knowledge"]
+
+
+@pytest.mark.parametrize("change", ["knowledge_readable", "voice_allowed", "material_present", "voice_ready"])
+def test_selected_dependencies_and_current_permission_still_fence_adoption(selected_dependencies, change):
+    state, prepare, baseline, frozen = selected_dependencies
+    setattr(state, change, False)
+    current = prepare(frozen)
+    assert current.preflight_fingerprint != baseline.preflight_fingerprint
+    if change == "knowledge_readable":
+        assert any(x.blocks_confirmation for x in current.blockers)

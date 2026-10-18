@@ -7,7 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Callable
 from app.config import Settings
-from app.assistant.failures import _fail, AssistantUnavailable, FAILURE_RUNTIME_MISSING, FAILURE_UNKNOWN, FAILURE_TIMEOUT
+from app.assistant.failures import _fail, AssistantUnavailable, FAILURE_RUNTIME_MISSING, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
+from app.assistant.projection import _safe_business_failure, _PiStreamProjector, _business_event_lines
 from app.assistant.turn_control import AssistantStopped, TurnControl
 from app.assistant.sessions import SessionLocks
 from app.assistant.runtime_context import prepare_runtime
@@ -85,6 +86,24 @@ def run_turn(
             FAILURE_UNKNOWN,
             explanation="同一个任务还有一条对话正在处理，这一轮没有开始，也没有碰过服务。",
         )
+    first_business_failure = None
+    pending_tools: set[object] = set()
+    saw_tool = False
+
+    def observe_event(event):
+        nonlocal first_business_failure, saw_tool
+        if event.get("type") == "tool_start":
+            saw_tool = True
+            pending_tools.add(event.get("tool_id"))
+        elif event.get("type") == "tool_end":
+            saw_tool = True
+            pending_tools.discard(event.get("tool_id"))
+            if event.get("ok") is False and first_business_failure is None:
+                first_business_failure = _safe_business_failure(event.get("failure")) or None
+        if on_event:
+            on_event(event)
+
+    streaming = on_event is not None or turn_id is not None or input_handler is not None
     model_message = message
     memory_facts = None
     try:
@@ -132,16 +151,36 @@ def run_turn(
         }, ensure_ascii=False) + "\n"
         result = (run_process(
             cmd, message=model_message, env=env, cwd=runtime_root,
-            timeout_seconds=180, on_event=on_event or (lambda _event: None), turn_id=turn_id,
+            timeout_seconds=180, on_event=observe_event, turn_id=turn_id,
             keep_turn_control=keep_turn_control, input_handler=input_handler,
-        ) if on_event is not None or turn_id is not None or input_handler is not None else subprocess.run(
+        ) if streaming else subprocess.run(
             cmd, input=model_message, text=True, capture_output=True, timeout=180,
             env=env, cwd=runtime_root, check=False,
         ))
     except subprocess.TimeoutExpired as exc:
-        # 请求已经发出去了，所以这是关于服务的一次真实观察。
-        record_service(settings, ok=False, cause=FAILURE_TIMEOUT, workspace_id=workspace_id)
-        raise _fail(FAILURE_TIMEOUT) from exc
+        # This is the bridge's wall-clock deadline, not evidence of a provider timeout.
+        if not streaming:
+            output = exc.stdout or ""
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="replace")
+            projector = _PiStreamProjector()
+            for line in _business_event_lines(output):
+                event = projector.project(line)
+                if event is not None:
+                    observe_event(event)
+        repair = "先查询原请求及当前对象，核实已提交动作的结果；未知写入不得盲重试。"
+        if first_business_failure:
+            code = first_business_failure.get("error") or first_business_failure.get("code")
+            reason = first_business_failure.get("reason") or "业务操作未完成。"
+            headline = (f"业务回执（{code}）：" if code else "业务回执：") + reason + " 会话随后达到总等待时限，原回执保留。"
+            if not pending_tools and first_business_failure.get("repair_action"):
+                repair = first_business_failure["repair_action"]
+            raise _fail(FAILURE_TOOL_FAILED, explanation=headline, repair_action=repair) from exc
+        raise AssistantUnavailable(
+            ("业务工具仍未返回，会话总等待超时，工具结果未知。" if pending_tools else "会话总等待超时，未取得完整回复。")
+            + " 下一步：" + repair,
+            cause=FAILURE_TOOL_FAILED if saw_tool else "bridge_timeout", service_contacted=False,
+        ) from exc
     except OSError as exc:
         raise _fail(
             FAILURE_RUNTIME_MISSING,

@@ -4,12 +4,66 @@ import json
 import re
 from app.assistant.catalogue import _PI_TOOL_LABELS
 
+
+def _safe_business_failure(value: object, *, secrets=()) -> dict:
+    """Finite business diagnostics shared by streaming and durable event adapters.
+
+    Legacy text-only failures stay text-only; absent stage/effect is not invented.
+    """
+    if not isinstance(value, dict):
+        return {}
+    safe = {}
+    for key in ("reason", "repair_action"):
+        text = value.get(key)
+        if not isinstance(text, str):
+            continue
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[已隐藏]")
+        text = re.sub(r"\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[已隐藏]", text, flags=re.I)
+        text = re.sub(r"\b(?:authorization|cookie|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+", "[已隐藏]", text, flags=re.I)
+        text = re.sub(r"https?://[^\s）)；;]+|(?:[A-Za-z]:\\|/(?!api/)[A-Za-z0-9_.~-]+/)[^\s）)；;]+", "[已隐藏]", text)
+        safe[key] = re.sub(r"[\x00-\x1f\x7f]", " ", text)[:500]
+    for key in ("error", "code", "stage", "object_type", "query_tool", "reason_code"):
+        if isinstance(value.get(key), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", value[key]):
+            safe[key] = value[key]
+    for key in ("request_id", "window_id", "current_window_id", "plan_id", "task_id", "object_id", "job_id"):
+        if (isinstance(value.get(key), str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value[key])
+                and not any(secret and secret in value[key] for secret in secrets)):
+            safe[key] = value[key]
+    for key in ("expected_revision", "current_revision"):
+        if type(value.get(key)) is int and 0 <= value[key] <= 9007199254740991:
+            safe[key] = value[key]
+    if isinstance(value.get("request_key"), str) and re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value["request_key"], flags=re.I):
+        safe["request_key"] = value["request_key"]
+    for key in ("expected_input_fingerprint", "current_input_fingerprint"):
+        if isinstance(value.get(key), str) and re.fullmatch(r"[a-f0-9]{64}", value[key]):
+            safe[key] = value[key]
+    if value.get("submission_effect") in ("not_submitted", "rejected", "unknown"):
+        safe["submission_effect"] = value["submission_effect"]
+    if isinstance(value.get("query_url"), str) and re.fullmatch(
+            r"/api/(?:creation-requests|creation-tasks)/[A-Za-z0-9_/-]{1,350}(?:\?phase=(?:apply|preview))?", value["query_url"]):
+        safe["query_url"] = value["query_url"]
+    if type(value.get("retryable")) is bool:
+        safe["retryable"] = value["retryable"]
+    if "section_index" in value and (value["section_index"] is None
+            or type(value["section_index"]) is int and 1 <= value["section_index"] <= 20):
+        safe["section_index"] = value["section_index"]
+    return {key: text for key, text in safe.items()
+            if not isinstance(text, str) or not any(secret and secret in text for secret in secrets)}
+
+
 def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> str:
     if failed:
         if tool_name in {"start_creation_execution", "resume_creation_execution"}:
             missing = sorted(set(re.findall(r"\bDEVICE_CPU_RENDER_[A-Z_]+\b", json.dumps(result, ensure_ascii=False))))
             if missing:
                 return "本机渲染尚未完成资源标定，未开始制作；诊断项：" + "、".join(missing)
+        details = result.get("details") if isinstance(result, dict) else None
+        failure = _safe_business_failure(details.get("failure")) if isinstance(details, dict) else {}
+        if failure.get("reason"):
+            return failure["reason"] + (" 下一步：" + failure["repair_action"] if failure.get("repair_action") else "")
         return "这一步没有完成；请以页面显示的任务状态和错误提示为准。"
     payload = result if isinstance(result, dict) else {}
     details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
@@ -181,7 +235,6 @@ class _PiStreamProjector:
                 "type": "tool_end", "tool_id": tool_id, "label": label,
                 "ok": not failed,
                 "summary": _safe_tool_result_summary(name, event.get("result"), failed),
-                **({"failure": {key: value[:500] for key, value in failure.items()
-                    if key in {"reason", "repair_action"} and isinstance(value, str)}} if failed and failure else {}),
+                **({"failure": _safe_business_failure(failure)} if failed and failure else {}),
             }
         return None

@@ -49,6 +49,7 @@ from app.assistant_pi import (
     request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
+from app.assistant.projection import _safe_business_failure
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 from app.conversation_repository import (
     ConversationDraftVersionConflict,
@@ -2910,7 +2911,7 @@ def _creation_plan_preflight(
     request: Request,
     workspace_id: str,
     payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
-    *, automation_scope: dict[str, list[str]] | None = None,
+    *, automation_scope: dict[str, list[str]] | None = None, frozen_plan: dict | None = None,
 ) -> CreationPlan:
     values = CreationPlanPreflightInput(
         goal=payload.goal, name=payload.name, target_count=payload.target_count,
@@ -2932,7 +2933,8 @@ def _creation_plan_preflight(
         values = case.inherit_template(values, template)
         user_id, local_diagnostic = _content_reader(request, workspace_id)
         return case.prepare(workspace_id, values, template=template,
-            reader_user_id=user_id, local_diagnostic=local_diagnostic, automation_scope=automation_scope)
+            reader_user_id=user_id, local_diagnostic=local_diagnostic, automation_scope=automation_scope,
+            **({"frozen_plan": frozen_plan} if frozen_plan is not None else {}))
     except CreationPlanPreflightRejected as exc:
         status = {"template_version_required": 422, "template_id_required": 422,
             "knowledge_outside_automation_scope": 409, "knowledge_version_unreadable": 404,
@@ -5205,13 +5207,7 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
     owner, diagnostic = _content_reader(request, workspace_id)
     if not owner:
         return None
-    with production_repo._connect() as conn:
-        saved = conn.execute("SELECT id FROM creation_requests WHERE workspace_id=? AND owner_user_id=? AND request_key=?",
-                             (workspace_id, owner, request_key)).fetchone()
-    if saved is None:
-        return None
-    return production_repo.get_creation_request(workspace_id, saved["id"],
-        viewer_user_id=owner, local_diagnostic=diagnostic)
+    return production_repo.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
 
 
 def _assistant_conversation_response(row: dict, request: Request) -> dict:
@@ -5968,6 +5964,24 @@ def _creation_request_or_404(request: Request, request_id: str) -> dict:
         raise HTTPException(status_code=404, detail="没有找到当前成员的制作目标。") from exc
 
 
+def _creation_request_conflict(error: str, reason: str, repair_action: str, **facts) -> HTTPException:
+    return HTTPException(status_code=409, detail={"error": error, "reason": reason,
+        "repair_action": repair_action, **facts})
+
+
+def _check_creation_request_revision(current: dict, expected_revision: int) -> None:
+    if current["revision"] != expected_revision:
+        raise _creation_request_conflict("creation_request_revision_conflict", "制作目标的修订已变化，未应用旧要求。",
+            "先读取当前制作目标，再按实际修订提交新要求。", request_id=current["id"],
+            expected_revision=expected_revision, current_revision=current["revision"])
+
+
+def _creation_request_tool_input(request: Request) -> None:
+    turn_id = request.query_params.get("assistant_turn_id")
+    if turn_id is not None:
+        _creation_request_input(request, turn_id)
+
+
 def _creation_request_questions(target_count: int, relation: str | None, scope: str) -> list[str]:
     questions = []
     if target_count > 1 and relation not in {"different_topics", "variants", "series"}:
@@ -6095,6 +6109,19 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
     return _creation_request_response(data)
 
 
+@app.get("/api/assistant/creation-request", response_model=CreationRequestResponse | None)
+def read_current_input_creation_request(request: Request, assistant_turn_id: UUID):
+    turn, _message, source_input = _creation_request_input(request, str(assistant_turn_id))
+    workspace_id = current_workspace_id(request)
+    owner, _diagnostic = _content_reader(request, workspace_id)
+    if not owner:
+        raise HTTPException(status_code=403, detail="请先确认当前成员，再读取制作目标。")
+    request_key = source_input["input_id"] if source_input else turn["id"]
+    saved = production_repo.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
+    # An absent row is a read observation, not proof that an in-flight POST failed.
+    return _creation_request_response(saved) if saved is not None else None
+
+
 @app.get("/api/creation-requests/{request_id}", response_model=CreationRequestResponse)
 def get_creation_request(request_id: str, request: Request):
     return _creation_request_response(_creation_request_or_404(request, request_id))
@@ -6102,7 +6129,9 @@ def get_creation_request(request_id: str, request: Request):
 
 @app.patch("/api/creation-requests/{request_id}", response_model=CreationRequestResponse)
 def revise_creation_request(request_id: str, request: Request, payload: CreationRequestReviseRequest):
+    _creation_request_tool_input(request)
     current = _creation_request_or_404(request, request_id)
+    _check_creation_request_revision(current, payload.expected_revision)
     workspace_id = current_workspace_id(request)
     owner, diagnostic = _content_reader(request, workspace_id)
     relation = payload.output_relation or current["output_relation"]
@@ -6132,7 +6161,9 @@ def preview_creation_request_window(request_id: str, request: Request, payload: 
 def _prepare_creation_request_window(request_id: str, request: Request, payload: CreationRequestWindowPreviewRequest,
     *, replace_window_id: str | None = None):
     from app.creation.intent_use_case import CreationIntentUseCase
+    _creation_request_tool_input(request)
     current = _creation_request_or_404(request, request_id)
+    _check_creation_request_revision(current, payload.expected_revision)
     if current["clarification_questions"]:
         raise HTTPException(status_code=409, detail="先确认制作目标中尚未明确的条件，再准备逐条方案。")
     workspace_id = current_workspace_id(request)
@@ -6160,6 +6191,7 @@ def _prepare_creation_request_window(request_id: str, request: Request, payload:
         "revision": payload.expected_revision, "goals": [item.model_dump() for item in payload.goals],
         "preflights": [plan.preflight_fingerprint for plan, _task in entries],
     }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    _creation_request_tool_input(request)
     try:
         data = production_repo.save_creation_request_window(
             workspace_id, request_id, expected_revision=payload.expected_revision,
@@ -6175,11 +6207,15 @@ def _prepare_creation_request_window(request_id: str, request: Request, payload:
 def replan_creation_request_window(request_id: str, window_id: str, request: Request, payload: CreationRequestWindowReplanRequest):
     from app.creation.intent_use_case import CreationIntentUseCase
     current = _creation_request_or_404(request, request_id)
+    _check_creation_request_revision(current, payload.expected_revision)
     window = current["current_window"]
     if window is None or window["id"] != window_id or window["status"] != "proposed":
-        raise HTTPException(status_code=409, detail="这组方案已处理，请重新读取当前制作目标。")
+        raise _creation_request_conflict("creation_window_not_current", "这组候选已变化或已经采用，未改写原窗口。",
+            "读取当前制作目标；只对尚未采用的当前窗口重新规划。", request_id=request_id,
+            window_id=window_id, current_window_id=window["id"] if window else None,
+            expected_revision=payload.expected_revision, current_revision=current["revision"])
     inputs = CreationRequestWindowPreviewRequest.model_validate({"expected_revision": payload.expected_revision,
-        "goals": [{"goal": entry["plan"]["goal"], "name": entry["plan"]["name"],
+        "goals": payload.goals if payload.goals is not None else [{"goal": entry["plan"]["goal"], "name": entry["plan"]["name"],
             "requirements": {key: value for key, value in CreationIntentUseCase.frozen_delivery_inputs(
                 current["requirements"], entry["plan"]).items()
                 if key in {*CreationIntentUseCase.DELIVERY_FIELDS, "selected_voice", "selected_person"}}}
@@ -6198,20 +6234,44 @@ def confirm_creation_request_window(request_id: str, window_id: str, request: Re
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     current = _creation_request_or_404(request, request_id)
     window = current["current_window"]
+    if current["requirements"].get("creation_intent", {}).get("kind") == "discussion":
+        raise _creation_request_conflict("creation_window_not_authorized", "讨论没有制作授权，不能采用方案或文案。",
+            "保留讨论方案；只有取得实际制作委托后才能采用。", request_id=request_id, window_id=window_id)
     if window is None or window["id"] != window_id:
-        raise HTTPException(status_code=409, detail="当前待确认方案已变化，请重新读取制作目标。")
+        raise _creation_request_conflict("creation_window_not_current", "当前候选窗口已变化，未采用旧窗口。",
+            "读取当前制作目标，核对新要求后重新规划或采用当前窗口。", request_id=request_id,
+            window_id=window_id, current_window_id=window["id"] if window else None,
+            expected_revision=payload.expected_revision, current_revision=current["revision"])
+    if payload.input_fingerprint != window["input_fingerprint"]:
+        raise _creation_request_conflict("creation_window_input_conflict", "窗口输入摘要不一致，未采用其他方案。",
+            "读取当前窗口并核对实际逐条要求；不要重复旧摘要。", request_id=request_id, window_id=window_id,
+            expected_input_fingerprint=payload.input_fingerprint, current_input_fingerprint=window["input_fingerprint"])
     if window["status"] == "proposed":
+        _check_creation_request_revision(current, payload.expected_revision)
         for entry in window["entries"]:
             frozen = entry["plan"]
             inputs = CreationPlanPreviewRequest.model_validate(
                 CreationIntentUseCase.frozen_delivery_inputs(current["requirements"], frozen))
             try:
-                live = CreationIntentUseCase.use_provided_copy(_creation_plan_preflight(request, current_workspace_id(request), inputs),
+                live = CreationIntentUseCase.use_provided_copy(_creation_plan_preflight(request, current_workspace_id(request), inputs,
+                    frozen_plan=frozen),
                     current["requirements"].get("creation_intent"))
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            blocking = next((item for item in live.blockers if item.blocks_confirmation), None)
+            if blocking is not None:
+                reason = blocking.reason if blocking.reason in {"content_sources_missing", "template_voice_unavailable",
+                    "template_material_matches_missing"} else "preflight_confirmation_blocked"
+                raise _creation_request_conflict("creation_window_blocked", reason,
+                    "读取当前制作目标，修复所选资料或档案后重新规划；不要重复采用旧候选。",
+                    request_id=request_id, window_id=window_id, plan_id=frozen["id"], stage=blocking.stage)
             if live.preflight_fingerprint != frozen["preflight_fingerprint"]:
-                raise HTTPException(status_code=409, detail="方案使用的素材、资料或制作条件已变化，请重新准备这组方案。")
+                raise _creation_request_conflict("creation_window_dependencies_changed", "实际所选素材、资料、档案或制作条件已变化，未采用旧方案。",
+                    "读取当前制作目标和可用资源，用prepare_creation_window保存修订后的逐条要求再采用。",
+                    request_id=request_id, window_id=window_id, plan_id=frozen["id"],
+                    expected_input_fingerprint=frozen["preflight_fingerprint"], current_input_fingerprint=live.preflight_fingerprint)
+    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
+        _creation_request_input(request, str(payload.assistant_turn_id))
     owner, diagnostic = _content_reader(request, current_workspace_id(request))
     try:
         data = production_repo.confirm_creation_request_window(
@@ -6219,8 +6279,15 @@ def confirm_creation_request_window(request_id: str, window_id: str, request: Re
             input_fingerprint=payload.input_fingerprint, verified_owner_user_id=owner, local_diagnostic=diagnostic,
             adoption_kind=payload.adoption_kind,
         )
+    except (PermissionError, KeyError, OSError) as exc:
+        raise _creation_request_conflict("creation_window_resource_unavailable", "所选资源已变化、不可读取或当前不允许采用。",
+            "读取当前所选资料和档案，修复来源或权限后重新规划。", request_id=request_id, window_id=window_id) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        latest = _creation_request_or_404(request, request_id)
+        _check_creation_request_revision(latest, payload.expected_revision)
+        raise _creation_request_conflict("creation_window_validation_rejected", "窗口当前授权、所选输入或任务状态未通过业务校验。",
+            "读取当前制作目标，核对原委托与所选资源后修订并重新规划。", request_id=request_id, window_id=window_id,
+            expected_revision=payload.expected_revision, current_revision=latest["revision"]) from exc
     return _creation_request_response(data)
 
 
@@ -7423,8 +7490,8 @@ def _assistant_stream_response(
                 "summary": _assistant_stream_safe_text(str(raw_event.get("summary", "")), workspace_id),
             }
             if isinstance(raw_event.get("failure"), dict):
-                event["failure"] = {key: _assistant_stream_safe_text(value[:500], workspace_id)
-                    for key, value in raw_event["failure"].items() if key in {"reason", "repair_action"} and isinstance(value, str)}
+                event["failure"] = {key: _assistant_stream_safe_text(value, workspace_id) if isinstance(value, str) else value
+                    for key, value in _safe_business_failure(raw_event["failure"]).items()}
         elif event_type == "turn_started":
             event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state", "draft_version") if key in raw_event}
             turn_ref["id"] = str(raw_event["turn_id"])
@@ -14449,8 +14516,8 @@ def _run_goal_turn(claim, fresh):
                 if key in safe:
                     safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
             if isinstance(event.get("failure"), dict):
-                safe["failure"] = {key: _assistant_stream_safe_text(value[:500], workspace_id)
-                    for key, value in event["failure"].items() if key in {"reason", "repair_action"} and isinstance(value, str)}
+                safe["failure"] = {key: _assistant_stream_safe_text(value, workspace_id) if isinstance(value, str) else value
+                    for key, value in _safe_business_failure(event["failure"]).items()}
             conversation_repo.append_event(turn_id, safe)
     try:
         reply, preview = run_task_turn(_workspace_settings_for(workspace_id), workspace_id=workspace_id,

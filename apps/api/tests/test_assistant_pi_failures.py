@@ -122,7 +122,7 @@ def test_unreachable_address_is_not_blamed_on_the_key(monkeypatch, tmp_path):
     assert caught.value.cause == FAILURE_ADDRESS_UNREACHABLE
 
 
-def test_timeout_offers_retry_then_address_check(monkeypatch, tmp_path):
+def test_bridge_deadline_is_not_a_provider_timeout_or_evidence_of_unchanged_task(monkeypatch, tmp_path):
     def fake_run(cmd, **_kwargs):
         if cmd[-1] == "--version":
             return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
@@ -130,14 +130,86 @@ def test_timeout_offers_retry_then_address_check(monkeypatch, tmp_path):
 
     _install_fake_pi(monkeypatch, tmp_path)
     monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    settings = _settings(tmp_path)
     with pytest.raises(AssistantUnavailable) as caught:
-        run_task_turn(_settings(tmp_path), workspace_id="w", task_id="t", message="你好",
+        run_task_turn(settings, workspace_id="w", task_id="t", message="你好",
                       stage="montage", selected_refs=[], playhead_ms=None)
     text = str(caught.value)
     assert "超时" in text
-    assert "任务和时间线没有因此改变" in text
-    assert "重试" in text
-    assert caught.value.cause == FAILURE_TIMEOUT
+    assert "任务和时间线没有因此改变" not in text
+    assert "先查询原请求" in text
+    assert caught.value.cause == "bridge_timeout"
+    assert caught.value.service_contacted is False
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_bridge_deadline_keeps_first_business_rejection(monkeypatch, tmp_path, streaming):
+    from app.assistant.projection import _PiStreamProjector, _business_event_lines
+
+    failure = {"error": "creation_window_input_changed", "reason": "所选声音版本已变化。",
+        "repair_action": "读取原请求并重规划当前窗口。", "stage": "window_confirmation", "submission_effect": "rejected",
+        "request_id": "request-original", "window_id": "window-original", "expected_revision": 1, "current_revision": 2}
+    rejected = {"type": "tool_execution_end", "toolName": "prepare_creation_window", "toolCallId": "first", "isError": True,
+        "result": {"details": {"failure": failure}}}
+    later = {**rejected, "toolCallId": "later", "result": {"details": {"failure": {**failure, "error": "later_conflict", "reason": "稍后的另一项拒绝。"}}}}
+    output = json.dumps(rejected, ensure_ascii=False) + "\n" + json.dumps(later, ensure_ascii=False)
+    _install_fake_pi(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "--version":
+            return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        raise subprocess.TimeoutExpired(cmd, 180, output=output)
+
+    def fake_stream(cmd, *, on_event, timeout_seconds, **_kwargs):
+        assert timeout_seconds == 180
+        projector = _PiStreamProjector()
+        for line in _business_event_lines(output):
+            event = projector.project(line)
+            if event:
+                on_event(event)
+        raise subprocess.TimeoutExpired(cmd, 180, output=output)
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    monkeypatch.setattr("app.assistant_pi._run_pi_streaming", fake_stream)
+    settings = _settings(tmp_path)
+    events = []
+    with pytest.raises(AssistantUnavailable) as caught:
+        run_task_turn(settings, workspace_id="w", task_id="t", message="制作视频", stage="montage", selected_refs=[],
+            playhead_ms=None, on_event=events.append if streaming else None)
+    assert caught.value.cause == FAILURE_TOOL_FAILED
+    assert caught.value.service_contacted is False
+    assert "creation_window_input_changed" in str(caught.value)
+    assert "所选声音版本已变化" in str(caught.value)
+    assert "later_conflict" not in str(caught.value)
+    assert "读取原请求并重规划" in str(caught.value)
+    if streaming:
+        assert next(event["failure"] for event in events if "failure" in event) == failure
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
+
+
+def test_slow_business_tool_is_not_a_model_service_timeout(monkeypatch, tmp_path):
+    _install_fake_pi(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **_kwargs):
+        assert cmd[-1] == "--version"
+        return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+
+    def fake_stream(cmd, *, on_event, timeout_seconds, **_kwargs):
+        assert timeout_seconds == 180
+        on_event({"type": "tool_start", "tool_id": 1, "label": "开始连续制作"})
+        raise subprocess.TimeoutExpired(cmd, timeout_seconds)
+
+    monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
+    monkeypatch.setattr("app.assistant_pi._run_pi_streaming", fake_stream)
+    settings = _settings(tmp_path)
+    with pytest.raises(AssistantUnavailable) as caught:
+        run_task_turn(settings, workspace_id="w", task_id="t", message="开始制作", stage="montage", selected_refs=[],
+            playhead_ms=None, on_event=lambda _event: None)
+    assert caught.value.cause == FAILURE_TOOL_FAILED
+    assert "工具仍未返回" in str(caught.value) and "结果未知" in str(caught.value)
+    assert "先查询原请求" in str(caught.value)
+    assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
 
 
 def test_missing_pi_runtime_is_its_own_class(monkeypatch, tmp_path):

@@ -1,6 +1,12 @@
 import type {BusinessRequest, ToolRegistrar} from './contracts.ts';
 import {registerMaterialTools} from '../material_tools.ts';
 
+const safeVoiceReasons = new Set([
+  "profile_reference_only", "profile_excluded", "profile_not_for_automation",
+  "authorization_workspace_mismatch", "authorization_revoked", "authorization_expired",
+  "authorization_not_effective", "authorization_content_type_denied", "authorization_scope_denied",
+]);
+
 export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge, isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection}: {
   request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any;
 }) {
@@ -88,6 +94,33 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         id: item.id, name: item.name, stage: item.stage, status: item.status,
       }));
       return { content: [{ type: "text", text: JSON.stringify({ tasks }) }], details: { tasks } };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_voice_profiles",
+    label: "读取声音",
+    description: "新建前也可只读当前成员可见的声音档案当前版本，每页至多24项。仅返回真实ID、版本、名称、语言、使用状态与安全可用原因；不读取参考文本或原件，不选择声音、不授权生成。runnable是档案来源及使用限制事实，目标语言和制作条件仍由现有预检核实。根据本轮结果填写selected_voice固定版本，不能猜ID或版本；空页不表示空库，以total_count为准。",
+    parameters: {type: "object", properties: {offset: {type: "integer", minimum: 0}}, additionalProperties: false},
+    execute: async (_id: string, params: {offset?: number} = {}) => {
+      if (Object.keys(params).some(key => key !== "offset")) throw new Error("声音读取仅接受分页位置，不能指定身份或工作区");
+      const offset = params.offset ?? 0;
+      if (!Number.isInteger(offset) || offset < 0) throw new Error("声音读取位置须为非负整数");
+      const data = await request("/api/media/voice-profiles");
+      if (!Array.isArray(data.items) || !Number.isInteger(data.total_count) || data.total_count !== data.items.length)
+        throw new Error("声音列表不可读，不能推断为没有声音");
+      const voices = data.items.slice(offset, offset + 24).map((voice: Record<string, unknown>) => {
+        if (!voice || typeof voice.id !== "string" || !voice.id || typeof voice.version !== "string" || !voice.version
+            || typeof voice.display_name !== "string" || !["zh", "en", "zh-en"].includes(voice.language as string)
+            || typeof voice.use_state !== "string" || typeof voice.runnable !== "boolean")
+          throw new Error("声音档案身份或状态不可读，不能猜测可用版本");
+        return {profile_id: voice.id, version: voice.version, display_name: voice.display_name.slice(0, 160),
+          language: voice.language, use_state: voice.use_state, runnable: voice.runnable,
+          reason: voice.runnable ? null : safeVoiceReasons.has(voice.runnable_reason as string) ? voice.runnable_reason
+            : "声音暂不可用于制作，请在人物与声音页面检查来源和使用限制。"};
+      });
+      const details = {voices, offset, total_count: data.total_count, truncated: offset > 0 || offset + voices.length < data.total_count};
+      return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
 

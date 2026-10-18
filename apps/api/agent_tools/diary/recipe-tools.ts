@@ -22,7 +22,7 @@ export function registerRecipeTools(pi: ToolRegistrar, {request, taskId, selecte
       return {content: [{type: "text", text: JSON.stringify(details)}], details};},
   });
   pi.registerTool({name: "list_media_script_tools", label: "查找可复用图片工具",
-    description: "读取当前成员真实工具列表和active事实，最多24项及实际truncated标记。codemode返回结构化对象，直接读items，不JSON.parse对象；发现不授予旧任务/输入权限。",
+    description: "只列当前成员保存的可复用图片脚本及active事实，不是产品全部能力清单；空列表不代表内建配音等业务能力不可用。最多24项及实际truncated标记。codemode返回结构化对象，直接读items，不JSON.parse对象；发现不授予旧任务/输入权限。",
     parameters: {type: "object", properties: {include_inactive: {type: "boolean"}}, additionalProperties: false},
     execute: async (_id: string, params: {include_inactive?: boolean} = {}) => {
       const page = await request(`/api/media-script-tools${params.include_inactive ? "?include_inactive=true" : ""}`);

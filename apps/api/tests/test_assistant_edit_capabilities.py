@@ -138,13 +138,13 @@ def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, 
     assert "找不到或同名歧义时说明具体缺口或询问" in json.loads(calls[0]["message"])["systemPrompt"]
 
 
-@pytest.mark.parametrize("scope,tool_scope", [("asset", "material"), ("segment", "task_edit")])
+@pytest.mark.parametrize("scope,tool_scope", [("asset", "material"), ("segment", "task_edit"), ("home", "home")])
 def test_current_sdk_allowlist_has_registered_business_implementations(scope, tool_scope):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is required to register the shipped TypeScript tools")
     extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-    selection = {"scope": "asset", "assetId": "asset-current"} if scope == "asset" else TOOL_SELECTION
+    selection = {"scope": "asset", "assetId": "asset-current"} if scope == "asset" else TOOL_SELECTION if scope == "segment" else None
     script = "const {default:register}=await import(process.argv[1]);const names=[];await register({registerTool:tool=>names.push(tool.name)});console.log(JSON.stringify(names));"
     from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS, MediaScriptPreviewRequest, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
     capability = {"schema": CreationTaskExactEditRequest.model_json_schema(), "supported_operations": list(EXACT_EDIT_FIELDS)}
@@ -155,8 +155,8 @@ def test_current_sdk_allowlist_has_registered_business_implementations(scope, to
     completed = subprocess.run(
         [node, "--experimental-strip-types", "--input-type=module", "-e", script, extension.as_uri()],
         text=True, capture_output=True, check=True, timeout=10,
-        env={**os.environ, "AI_VIDEO_DIARY_AGENT_STAGE": "material" if tool_scope == "material" else "montage",
-             "AI_VIDEO_DIARY_AGENT_TASK_ID": "" if tool_scope == "material" else "task-current",
+        env={**os.environ, "AI_VIDEO_DIARY_AGENT_STAGE": "material" if tool_scope == "material" else "home" if tool_scope == "home" else "montage",
+             "AI_VIDEO_DIARY_AGENT_TASK_ID": "" if tool_scope in {"material", "home"} else "task-current",
              "AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION": json.dumps(selection),
              "AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES": json.dumps(capability),
              "AI_VIDEO_DIARY_AGENT_MEDIA_SCRIPT_CAPABILITIES": json.dumps({"schema": MediaScriptPreviewRequest.model_json_schema(), "available": False}),
@@ -166,6 +166,11 @@ def test_current_sdk_allowlist_has_registered_business_implementations(scope, to
     )
     registered = set(json.loads(completed.stdout))
     assert set(pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]) <= registered
+    if tool_scope == "home":
+        assert "read_voice_profiles" in pi.ASSISTANT_BUSINESS_TOOLS[tool_scope]
+        assert pi._PI_TOOL_LABELS["read_voice_profiles"] == "读取声音"
+        assert "read_voice_profiles" in pi.PLAN_PROMPT and "selected_voice" in pi.PLAN_PROMPT
+        assert "空列表不代表内建配音" in pi.PLAN_PROMPT
     assert "preview_edit" not in registered
     assert all("preview_edit" not in names for names in pi.ASSISTANT_BUSINESS_TOOLS.values())
 

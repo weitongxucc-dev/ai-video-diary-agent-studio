@@ -5,8 +5,8 @@ SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_t
 
 ASSISTANT_BUSINESS_TOOLS = {
     "home": (
-        "read_workspace_context", "read_video_templates", "find_knowledge", "find_materials",
-        "preview_creation_plan", "prepare_creation_window",
+        "read_workspace_context", "read_video_templates", "read_voice_profiles", "find_knowledge", "find_materials",
+        "preview_creation_plan", "read_creation_request", "revise_creation_request", "prepare_creation_window",
         "read_material_library_status", "search_material_library",
     ),
     "profile_reference": ("read_selected_profile",),
@@ -37,6 +37,9 @@ ASSISTANT_BUSINESS_TOOLS = {
 }
 
 _PI_TOOL_LABELS = {
+    "read_voice_profiles": "读取声音",
+    "read_creation_request": "读取制作目标",
+    "revise_creation_request": "修订制作要求",
     "regenerate_storyboard": "重新生成故事板",
     "read_storyboard_regeneration": "查询原故事板重算",
     "select_narration_voice": "选择配音声音",
@@ -123,8 +126,10 @@ typed预览每轮至多3个不同候选，每次重新核验本轮版本；失�
 PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当前工作区的新视频目标。
 需要事实时调用 find_knowledge；查询可用镜头时调用 find_materials；了解已有任务时调用 read_workspace_context。
 用户要求沿用我的模板时，先调用 read_video_templates 查明真实 ID 和版本。
+需要已有声音时先调用 read_voice_profiles，只使用本轮读到的profile_id/version填写现有selected_voice；分别核对每条交付的语言，zh-en支持中英文，不能猜ID或版本。空页不代表空库，按total_count/offset继续有限读取；没有可见或可用声音时说明实际缺口，读取本身不选择或生成。list_media_script_tools只列用户保存的可复用图片脚本，空列表不代表内建配音等业务能力缺失。
 用户指定露脸比例时，将其归到 0%、20%、40%、60%、80%、100% 中最近的一档并说明；无明确人物要求的产品介绍默认0%，有明确人物需求或人物模板按该要求。露脸只用于需要出镜的段落，其余画面共用配音。
 用户提出制作目标后，调用 preview_creation_plan 保存完整数量、时长、素材范围及关系；100或10000不是1，不把数量写死。素材默认使用workspace_library；仅用户明确限制为今日接收才选today_received，不能从刚导入、稍后导入或今天制作推定日期限制。多条关系未明确时不要猜测，工具保存等待条件后问少量具体问题。条件已明确时调用 prepare_creation_window，只为当前至多8条给出具体目标；不能一次输出全部目标，也不能重复同一目标凑数。未明确覆盖的要求才继承共同要求；分别保留每条交付要求和实际采用来源，其余尚未规划。
+已有目标或发生冲突/结果未知先read_creation_request核对原请求、revision、窗口和阻断。共同要求改变用revise_creation_request比较实际revision保存，逐条目标/声音/语言改变用prepare_creation_window传完整新goals，已有proposed窗口会替换为实际新版后沿原委托采用。不能重复确认旧窗口，也不能把相同已采用goals展开成下一批；讨论始终不创建任务。输入已变化时重新回读本轮绑定目标，不沿旧输入继续写入。
 素材引用是创作上下文，不关闭工作区创作能力。只有用户明确要求修改标签并确定添加、移除或替换及文字时，先read_selected_material，再update_selected_material_tags一次；不改系统标签或从标签推定用途。需要引用内容先read_selected_reference；有绑定素材时可读取或按明确要求修改用户标签。review_status=approved表示已确认，usage_role=b_roll就是界面‘用作配图’，与用户标签分别保存；不能因没有‘配图’标签或视觉模型blocked否认已保存的人工审核、用途和片段description。
 只讨论或只写文案不启动制作；明确委托在已保存授权范围内系统采用，保存实际版本，不伪装成人工点击。已有主题不强迫重新选题，明确最终稿固定准确正文，不自动改写。不同交付版本分别保存语言、声音、画幅与时长，未指定项才继承共同要求。不要把旧任务、旧文案或旧成片说成新结果；预检不是任务创建。使用实际已接通的采用能力，缺少相应工具时说明具体缺口，不宣称已开始。
 不要请求或上传原始媒体文件；只用已提供的业务工具。

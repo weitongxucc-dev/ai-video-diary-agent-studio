@@ -1,5 +1,7 @@
 import {readAgentContext, verifyTaskVersion as verifyVersion} from './trusted-context.ts';
-import {createBusinessRequest} from './transport.ts';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {createBusinessRequest, RequestNotSubmitted, safeBusinessFailure, safeFailureText, credentialSecrets} from './transport.ts';
+import type {BusinessFailure} from './transport.ts';
 import {typedRequestId as requestIdentity} from './request-identity.ts';
 import {createToolCallScope} from './registration.ts';
 import {createPreviewBudget, createExecutionGuards} from './turn-actions.ts';
@@ -32,9 +34,14 @@ export function createDiaryTools(environment: Record<string, string | undefined>
   const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion);
   const typedRequestId = (turn: string, call: string) => requestIdentity(taskId, turn, call);
   const callScope = createToolCallScope(readActionSource);
+  const failures = new AsyncLocalStorage<{first?: BusinessFailure}>();
   const {getSignal} = callScope;
   const request = createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion,
-    readCredentials, readActionSource, getSignal, fetchRequest: (input, init) => fetch(input, init)});
+    readCredentials, readActionSource, getSignal, fetchRequest: (input, init) => fetch(input, init),
+    onFailure: failure => {
+      const call = failures.getStore();
+      if (call && !call.first) call.first = failure;
+    }});
   const {readTaskEditCapabilities, readMediaScriptCapabilities, readMediaScriptToolCapabilities,
     getEditCapabilities, getMediaScriptCapabilities, getScriptToolCapabilities} = createCapabilities({
       request, taskId, verifyTaskVersion, initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities});
@@ -44,7 +51,39 @@ export function createDiaryTools(environment: Record<string, string | undefined>
   const {hasPreview, markPreview} = createPreviewBudget();
 
   function register(agent: ToolRegistrar) {
-    const pi = callScope.bind(agent);
+    const scoped = callScope.bind(agent);
+    const pi = new Proxy(scoped, {get(target, property) {
+      if (property !== "registerTool") return Reflect.get(target, property);
+      return (tool: any) => target.registerTool({...tool, execute: (...args: any[]) => failures.run({}, async () => {
+        let result;
+        try { result = await tool.execute(...args); }
+        catch (error) {
+          const notSubmitted = error instanceof RequestNotSubmitted;
+          const secrets = credentialSecrets(readCredentials());
+          const failure = safeBusinessFailure({task_id: taskId, request_id: readActionSource().creationRequestId,
+            error: notSubmitted ? "request_not_submitted" : "business_tool_failed", stage: "tool",
+            submission_effect: notSubmitted ? "not_submitted" : "unknown",
+            reason: error instanceof Error ? safeFailureText(error.message, secrets) : "业务工具未完成，尚未确认原请求结果。",
+            repair_action: "先读取原请求及当前对象状态，核实结果后再决定后续动作；不要盲重试。"}, secrets);
+          result = {isError: true, content: [{type: "text", text: JSON.stringify({failure})}], details: {failure}};
+        }
+        const receipt = failures.getStore()?.first;
+        if (!result.isError) return result;
+        const original = result.details?.failure;
+        const scriptFailure = receipt && ["script_review_invalid", "script_fact_unsupported", "script_goal_conflict"].includes(receipt.error);
+        if (!receipt && !original) return result;
+        // Some existing tools catch HTTP errors themselves. Preserve the transport
+        // receipt on that same failure. Safe existing failures keep their contract.
+        const secrets = credentialSecrets(readCredentials());
+        const failure = receipt && !scriptFailure
+          ? {...safeBusinessFailure(result.details, secrets), ...safeBusinessFailure(original, secrets), ...receipt}
+          : safeBusinessFailure(original, secrets);
+        if (original && Object.keys(original).length === Object.keys(failure).length
+            && Object.entries(failure).every(([key, value]) => original[key] === value)) return result;
+        const details = {...result.details, failure};
+        return {...result, details, content: [{type: "text", text: JSON.stringify(details)}]};
+      })});
+    }});
     registerReferenceRead(pi,request,selectedReferences);
     const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite, hasHistoryControlWrite, markDirectEditAttempt, verifyDirectEdit, directEditUnverified} = createExecutionGuards();
     registerRecipeTools(pi, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource,

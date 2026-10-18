@@ -4211,6 +4211,17 @@ class ProductionRepository:
             conn.execute("BEGIN")
             return self._creation_request_header(conn, self._creation_request_row(conn, workspace_id, request_id, content_owner(viewer_user_id), local_diagnostic))
 
+    def find_creation_request_by_key(self, workspace_id: str, request_key: str, *, viewer_user_id: str) -> dict | None:
+        """Read the original member-owned intake after a lost response; never create."""
+        owner = content_owner(viewer_user_id)
+        if not owner:
+            raise PermissionError("读取原制作请求需要当前成员身份")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute("SELECT * FROM creation_requests WHERE workspace_id=? AND owner_user_id=? AND request_key=?",
+                               (workspace_id, owner, request_key)).fetchone()
+            return self._creation_request_header(conn, row) if row is not None else None
+
     def revise_creation_request(self, workspace_id: str, request_id: str, *, expected_revision: int,
                                 output_relation: str | None, requirements: dict, material_scope: dict, clarification_questions: list[str],
                                 verified_owner_user_id: str | None = None, local_diagnostic: bool = False) -> dict:
