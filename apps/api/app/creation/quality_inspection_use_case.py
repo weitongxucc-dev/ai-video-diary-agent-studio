@@ -5,10 +5,13 @@ from contextlib import closing
 from dataclasses import asdict
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 
 from app.creation.contracts import JobRun, TaskEvent
+from app.creation.task_authorization import TaskAuthorizationDenied
 from app.creation_execution import CreationExecutionActor
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SourceRef, SubmissionIntent, VerifiedWork
 from app.device_runtime import RuntimeUnavailable
@@ -19,6 +22,7 @@ from app.quality_worker_runtime import QualityBudget, budget_identity, file_iden
 
 
 QUALITY_KIND = "quality_check"
+logger = logging.getLogger(__name__)
 
 
 def quality_input_digest(request: dict) -> str:
@@ -27,10 +31,18 @@ def quality_input_digest(request: dict) -> str:
 
 class QualityInspectionUseCase:
     def __init__(self, production, checks, outputs, *, budget: QualityBudget | None,
-                 verify_identity, temporary_root: Path, budget_error: str | None = None):
+                 verify_identity, temporary_root: Path, budget_error: str | None = None, task_authorizations=None):
         self.production, self.checks, self.outputs = production, checks, outputs
         self.budget, self.budget_error = budget, budget_error
         self.verify_identity, self.temporary_root = verify_identity, Path(temporary_root)
+        self.task_authorizations = task_authorizations
+
+    def authorization_verdict(self, workspace_id, task_id, actor, *, connection=None):
+        if actor.workspace_id != workspace_id:
+            return "unauthorized"
+        if self.task_authorizations is not None:
+            return self.task_authorizations.verdict(actor, task_id, QUALITY_KIND, connection=connection, check_scope=False)
+        return self.verify_identity(actor)
 
     def _connect(self):
         if Path(self.production.database_path).resolve() != Path(self.checks.database_path).resolve():
@@ -40,7 +52,7 @@ class QualityInspectionUseCase:
         return connection
 
     def require_actor(self, workspace_id, task_id, actor):
-        if actor.workspace_id != workspace_id or self.verify_identity(actor) != "ready":
+        if self.authorization_verdict(workspace_id, task_id, actor) != "ready":
             raise PermissionError("质检执行身份失效或尚未就绪")
         task = self.production.get_creation_task(workspace_id, task_id)
         if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
@@ -122,6 +134,26 @@ class QualityInspectionUseCase:
                     error=str(exc), connection=conn)
             return check_id
 
+    def schedule_rendered_tasks(self, runtime):
+        """Recover the render-commit/schedule gap from existing durable outcomes."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT j.workspace_id,j.task_id,j.id FROM job_runs j "
+                "JOIN creation_tasks t ON t.workspace_id=j.workspace_id AND t.id=j.task_id "
+                "JOIN creation_task_montage_plans m ON m.workspace_id=t.workspace_id AND m.task_id=t.id "
+                "WHERE j.kind='creation_task_execution' AND j.status='succeeded' "
+                "AND json_extract(t.payload,'$.output_ready')=1 "
+                "AND NOT EXISTS(SELECT 1 FROM creation_task_quality_checks q WHERE q.workspace_id=t.workspace_id "
+                "AND q.task_id=t.id AND q.timeline_version_id=json_extract(t.payload,'$.current_timeline_version_id') "
+                "AND q.source_ref=json_extract(m.payload,'$.output_path')) "
+                "AND NOT EXISTS(SELECT 1 FROM job_runs newer WHERE newer.workspace_id=j.workspace_id "
+                "AND newer.task_id=j.task_id AND newer.kind=j.kind AND newer.created_at>j.created_at) "
+                "ORDER BY j.updated_at LIMIT 8").fetchall()
+        for row in rows:
+            try:
+                self.start_for_render(runtime,row["workspace_id"],row["task_id"],row["id"])
+            except Exception:
+                logger.exception("Rendered output remains saved; independent quality scheduling is pending")
+
     @staticmethod
     def same_actor(workspace_id, event, actor):
         return CreationExecutionActor.from_event(workspace_id, event) == actor
@@ -142,6 +174,8 @@ class QualityInspectionUseCase:
             raise ValueError("检查期间成片内容已变化，请重新检查当前成片。")
 
     def start(self, runtime, actor, workspace_id, task_id, *, force=False):
+        if self.task_authorizations is not None:
+            self.task_authorizations.ensure(self.production.get_creation_task(workspace_id, task_id), actor)
         check_id, job = self._reserve(actor, workspace_id, task_id, force=force)
         if job is None:
             return check_id
@@ -217,7 +251,7 @@ class QualityInspectionUseCase:
 
     def settle(self, connection, job, check_id, *, status, result=None, error=None):
         record = self.checks.get_check(job.workspace_id, job.task_id, check_id, connection=connection)
-        private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input"}}
+        private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input", "_worker_result"}}
         evidence = ({**private, **result["evidence"], "_source_receipt": result["receipt"]} if result is not None else private)
         self.checks.finish(job.workspace_id, job.task_id, check_id, evidence=evidence, error=error, connection=connection)
         self.production.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
@@ -241,41 +275,86 @@ class QualityInspectionUseCase:
             if row["state"] == "cancelled" and job.status in {"queued", "interrupted"}:
                 self.settle(conn, job, record["check_id"], status="cancelled", error="检查已取消，请重新检查当前成片。")
 
+    def pause(self, connection, job, check_id, *, reason):
+        # The sealed request and staged worker result stay in their original row.
+        if job.status == "interrupted" and job.failure_reason == reason:
+            return
+        self.production.finish_job_run(job.workspace_id, job.id, status="interrupted",
+            failure_reason=reason, impact="检查暂停，原成片和已有检查回执保留。",
+            repair_action="原任务授权及执行条件恢复后继续同一次检查。", connection=connection)
+        event = TaskEvent(id=f"event_{job.id}_quality_pause_{uuid4().hex}",
+            workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+            event_type="quality_check_paused", payload={"check_id": check_id, "reason": reason})
+        self.production.append_task_event(event, connection=connection)
+
     def recover(self, scheduler):
         if scheduler is None or Path(scheduler.database_path).resolve() != Path(self.production.database_path).resolve():
             raise RecoveryBlocked("质检缺少同一数据库的设备释放核验，原检查保持未完成。")
         generation = scheduler.reconcile_released()
-        with closing(self._connect()) as conn, conn:
-            conn.execute("BEGIN IMMEDIATE")
-            permit = conn.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
-            if permit is None or (permit["state"], permit["generation"]) != ("free", generation):
-                raise RecoveryBlocked("设备许可在恢复前已变化，原检查保持未完成。")
-            rows = conn.execute("SELECT workspace_id,id,status FROM job_runs WHERE kind=? AND status IN ('queued','interrupted','running')",
-                                (QUALITY_KIND,)).fetchall()
-            for row in rows:
-                job, original, record, request = self.read(row["workspace_id"], row["id"], connection=conn)
-                actor = CreationExecutionActor.from_event(job.workspace_id, original)
-                result = record["evidence"].get("_worker_result")
-                error = "服务中断，检查未完成，请重新检查当前成片。"
-                status = "failed" if row["status"] == "running" else "cancelled"
-                terminal_result = None
-                if result is not None:
-                    try:
-                        if request["actor"] != actor.identity_payload():
-                            raise PermissionError("质检原执行身份不匹配")
-                        self.verify_source(request, actor)
+        with closing(self._connect()) as reader:
+            rows = reader.execute("SELECT workspace_id,id FROM job_runs WHERE kind=? "
+                "AND status IN ('queued','interrupted','running') ORDER BY updated_at LIMIT 16", (QUALITY_KIND,)).fetchall()
+        for row in rows:
+            job, original, record, request = self.read(row["workspace_id"], row["id"])
+            actor = CreationExecutionActor.from_event(job.workspace_id, original)
+            authorization_denied = False
+            if self.task_authorizations is not None:
+                try:
+                    self.task_authorizations.ensure(self.production.get_creation_task(job.workspace_id, job.task_id), actor)
+                except TaskAuthorizationDenied:
+                    authorization_denied = True
+            result = record["evidence"].get("_worker_result")
+            # Cloud/identity and source/file/result observations precede the writer.
+            ready = not authorization_denied and self.authorization_verdict(job.workspace_id, job.task_id, actor) == "ready"
+            error = None
+            if ready:
+                try:
+                    if request["actor"] != actor.identity_payload():
+                        raise PermissionError("质检原执行身份不匹配")
+                    self.verify_source(request, actor)
+                    if result is not None:
                         self.validate_result(request, result)
-                    except (KeyError, PermissionError, OSError, ValueError, TypeError) as exc:
-                        error = str(exc)
-                    else:
-                        if job.status in {"queued", "interrupted"}:
-                            job = self.production.claim_job_run(job.workspace_id, job.id, connection=conn)
-                        status, terminal_result, error = "succeeded", result, None
-                checkpoint = self.settle(conn, job, record["check_id"], status=status, result=terminal_result, error=error)
+                except (KeyError, PermissionError, OSError, ValueError, TypeError) as exc:
+                    error = str(exc)
+            with closing(self._connect()) as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                permit = conn.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
+                if permit is None or (permit["state"], permit["generation"]) != ("free", generation):
+                    raise RecoveryBlocked("设备许可在恢复前已变化，原检查保持未完成。")
+                current = conn.execute("SELECT status,updated_at FROM job_runs WHERE workspace_id=? AND id=?",
+                                       (job.workspace_id,job.id)).fetchone()
+                current_record = conn.execute("SELECT updated_at,check_state FROM creation_task_quality_history "
+                    "WHERE workspace_id=? AND task_id=? AND check_id=?", (job.workspace_id,job.task_id,record["check_id"])).fetchone()
+                if (current is None or current["updated_at"] != job.updated_at.isoformat() or current_record is None
+                        or tuple(current_record) != (record["updated_at"], record["check_state"])):
+                    continue  # A newer executor/check owns its own receipt.
+                if self.task_authorizations is not None:
+                    ready = ready and self.authorization_verdict(job.workspace_id,job.task_id,actor,connection=conn) == "ready"
                 source = request["source"]
-                expected = VerifiedWork(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
-                    f"quality:{record['check_id']}", actor.member_id, "normal_make", request["resources"],
-                    (SourceRef(job.workspace_id, "artifact", source["artifact_id"], source["render_ref"]),))
-                scheduler.complete_recovered_quality(conn, expected, generation=generation,
-                    checkpoint_ref=checkpoint, status=status)
-            self.checks.recover_interrupted(connection=conn)
+                current_source = conn.execute("SELECT task_id,kind,logical_ref,sha256,size_bytes FROM artifact_records "
+                    "WHERE workspace_id=? AND id=?", (job.workspace_id,source["artifact_id"])).fetchone()
+                if ready and (current_source is None or tuple(current_source) != (job.task_id,"rendered_video",
+                        source["source_ref"],source["render_ref"],source["size_bytes"])):
+                    error = "质检固定来源在恢复观察后已变化"
+                if not ready or result is None and error is None:
+                    self.pause(conn, job, record["check_id"], reason="task_authorization_unavailable" if not ready else "process_interrupted")
+                    terminal = False
+                else:
+                    status = "failed" if error is not None else "succeeded"
+                    if job.status in {"queued", "interrupted"}:
+                        job = self.production.claim_job_run(job.workspace_id, job.id, connection=conn)
+                    checkpoint = self.settle(conn, job, record["check_id"], status=status,
+                        result=result if status == "succeeded" else None, error=error)
+                    source = request["source"]
+                    expected = VerifiedWork(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
+                        f"quality:{record['check_id']}", actor.member_id, "normal_make", request["resources"],
+                        (SourceRef(job.workspace_id, "artifact", source["artifact_id"], source["render_ref"]),))
+                    scheduler.complete_recovered_quality(conn, expected, generation=generation,
+                        checkpoint_ref=checkpoint, status=status)
+                    terminal = True
+            if not terminal and ready:
+                try:
+                    scheduler.submit(SubmissionIntent(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
+                        f"quality:{record['check_id']}", SchedulePolicy()), actor)
+                except (PermissionError, ValueError):
+                    logger.info("Original quality request remains paused; its current authority/input is not ready")

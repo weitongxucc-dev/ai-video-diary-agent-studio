@@ -178,3 +178,56 @@ def test_failed_user_shutdown_does_not_close_transport_under_an_active_user(monk
         main.stop_creation_permit_transport()
     assert client.is_closed and main.app.state.creation_permit_client is None
 
+
+
+def test_desktop_shutdown_control_is_loopback_only_and_uses_one_deadline(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import time
+    calls = []
+    class Shutdown:
+        def execute(self, request_id, deadline):
+            calls.append((request_id, deadline-time.monotonic()))
+            checks = dict.fromkeys(("dispatch_stopped", "executors_notified", "processes_released", "checkpoints_saved"), True)
+            return {"exit_request_id": request_id, "status": "ready_to_exit", "checks": checks, "pending": []}
+    monkeypatch.setattr(main.app.state, "desktop_control_token", "cd"*32)
+    monkeypatch.setattr(main.app.state, "desktop_shutdown", Shutdown())
+    request_id = str(uuid4())
+    payload = {"exit_request_id": request_id, "deadline_at_utc": (datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()}
+    client = TestClient(main.app, client=("127.0.0.1", 43210))
+    assert client.post(main.DESKTOP_SHUTDOWN_PATH, json=payload).status_code == 403
+    headers = {"X-Yaohe-Desktop-Control": "cd"*32}
+    response = client.post(main.DESKTOP_SHUTDOWN_PATH, json=payload, headers=headers)
+    assert response.status_code == 200 and response.json()["exit_request_id"] == request_id
+    assert len(calls) == 1 and 29 < calls[0][1] <= 30
+    expired = {**payload, "deadline_at_utc": (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()}
+    assert client.post(main.DESKTOP_SHUTDOWN_PATH, json=expired, headers=headers).status_code == 408
+    remote = TestClient(main.app, client=("192.0.2.1", 43210))
+    assert remote.post(main.DESKTOP_SHUTDOWN_PATH, json=payload, headers=headers).status_code == 403
+    assert len(calls) == 1
+
+
+def test_desktop_shutdown_repeats_receipt_without_restarting_or_resetting_budget():
+    from app.creation.execution_control import DesktopShutdownUseCase
+    import time
+    calls = []
+    class Driver:
+        def request_stop(self): calls.append("notify")
+        def stop(self, timeout_seconds, **kwargs):
+            calls.append(timeout_seconds)
+            time.sleep(.01)
+            return True
+    runtime = SimpleNamespace(begin_shutdown=lambda: calls.append("dispatch"),
+        stop=lambda timeout_seconds: calls.append(timeout_seconds) or True,
+        shutdown_checks=lambda: dict.fromkeys(("dispatch_stopped", "executors_notified", "processes_released", "checkpoints_saved"), True))
+    service = DesktopShutdownUseCase(runtime=runtime, automation=Driver(), ingestion=Driver(), assistant=Driver(),
+        stop_assistant=lambda **kwargs: [], conversations=None, close_clients=lambda: calls.append("close"))
+    deadline = time.monotonic()+1
+    first = service.execute("same-id", deadline)
+    count = len(calls)
+    assert first["status"] == "ready_to_exit"
+    assert service.execute("same-id", time.monotonic()+30) == first and len(calls) == count
+    budgets = [value for value in calls if isinstance(value, float)]
+    assert 0 < budgets[-1] < budgets[0] <= 1
+    assert calls[-1] == "close"
+    with pytest.raises(ValueError):
+        service.execute("different-id", deadline)

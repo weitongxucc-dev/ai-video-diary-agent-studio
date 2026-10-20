@@ -91,7 +91,8 @@ class PicturePreviewRenderer:
         context.check()
         actor = CreationExecutionActor.from_event(workspace_id,
             self.repository.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
-        if self.verify_identity(actor) != "ready":
+        verdict = context.task_authorization_verdict(actor, task_id)
+        if (self.verify_identity(actor) if verdict is None else verdict) != "ready":
             raise PermissionError("当前图片渲染成员许可不可核验")
         from PIL import Image
         paths = {}
@@ -207,7 +208,8 @@ class PicturePreviewRenderer:
         context.check()
         actor = CreationExecutionActor.from_event(workspace_id,
             self.repository.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
-        if self.verify_identity(actor) != "ready":
+        verdict = context.task_authorization_verdict(actor, plan.task_id)
+        if (self.verify_identity(actor) if verdict is None else verdict) != "ready":
             raise PermissionError("当前音轨渲染成员许可不可核验")
         with context.scheduler._connect() as conn:
             row = conn.execute("SELECT resources_json FROM device_work_requests WHERE id=?",

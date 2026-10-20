@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import math
+import logging
+import threading
+import time
 from typing import Any
 
 from app.conversation_repository import ConversationRepository
@@ -25,6 +28,67 @@ class GoalContinuationService:
         self.verify_current_goal = verify_current_goal
         self.run_goal_turn = run_goal_turn
         self.max_rounds = max_rounds
+        self.stop_event = threading.Event()
+        self._wake = threading.Event()
+        self._paused = threading.Event()
+        self._reconcile_lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
+        self._thread = None
+        self._scan_limit = 8
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            if self.stop_event.is_set():
+                raise RuntimeError("接续服务已停止，不能恢复旧生命周期。")
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._run, name="assistant-goal-continuation", daemon=True)
+            self._thread.start()
+
+    def tick(self, *, limit: int = 8) -> None:
+        if self.stop_event.is_set() or self._paused.is_set():
+            return
+        if self._thread is None or not self._thread.is_alive():
+            raise RuntimeError("接续发现必须绑定已启动的持久服务实例。")
+        self._scan_limit = limit
+        # Coalesce discoveries; durable events remain the only work source.
+        self._wake.set()
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            self._wake.wait()
+            self._wake.clear()
+            if self.stop_event.is_set():
+                break
+            try:
+                self.reconcile(limit=self._scan_limit)
+            except Exception:
+                logging.getLogger(__name__).exception("目标接续中断；原认领及业务回执保留，未重放操作")
+
+    def pause(self, timeout_seconds: float) -> bool:
+        self._paused.set()
+        if not self._reconcile_lock.acquire(timeout=max(0, timeout_seconds)):
+            self._paused.clear()
+            return False
+        self._reconcile_lock.release()
+        return True
+
+    def resume(self) -> None:
+        if self.stop_event.is_set():
+            raise RuntimeError("接续服务已停止，不能恢复旧生命周期。")
+        self._paused.clear()
+        self._wake.set()
+
+    def request_stop(self) -> None:
+        self.stop_event.set()
+        self._wake.set()
+
+    def stop(self, *, deadline_monotonic: float) -> bool:
+        self.request_stop()
+        if self._thread is not None:
+            self._thread.join(timeout=max(0, deadline_monotonic - time.monotonic()))
+            return not self._thread.is_alive()
+        return True
 
     def register_turn(self, turn_id: str) -> dict | None:
         # Called only at the live, verified task-response boundary. Startup
@@ -83,8 +147,14 @@ class GoalContinuationService:
         return self.repo.invalidate_task_goal(turn_id, reason, expected_goal=expected_goal)
 
     def reconcile(self, *, limit: int = 8) -> int:
+        with self._reconcile_lock:
+            return self._reconcile(limit=limit)
+
+    def _reconcile(self, *, limit: int) -> int:
         advanced = 0
         for candidate in self.repo.goal_event_candidates(limit=limit):
+            if self.stop_event.is_set() or self._paused.is_set():
+                break
             root, event = candidate["root"], candidate["event"]
             goal, status = root["goal"], event.get("status")
             if event.get("task_id") != goal["task_id"]:
@@ -150,6 +220,8 @@ class GoalContinuationService:
                 "read_actual_output_and_continue" if event.get("phase") == "execution" else "evaluate_actual_result")
             self.repo.update_goal_checkpoint(root["id"], status="waiting_result", waiting_reason=checkpoint,
                 next_checkpoint=checkpoint, expected_goal=goal)
+            if self.stop_event.is_set() or self._paused.is_set():
+                break
             claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds,
                 selection_context=fresh.get("selection_context"))
             if claim is None:

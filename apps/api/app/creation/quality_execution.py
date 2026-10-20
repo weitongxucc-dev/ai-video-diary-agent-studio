@@ -138,6 +138,11 @@ class QualityCheckOwnerVerifier:
                     vars(self.service.budget).copy() if self.service.budget else None)
         expected = read(conn)
         def check(current):
+            if self.service.task_authorizations is not None:
+                actor = CreationExecutionActor.from_event(request.workspace_id,event)
+                verdict = self.service.authorization_verdict(request.workspace_id,job.task_id,actor,connection=current)
+                if verdict != "ready":
+                    return verdict
             actual = read(current)
             if actual[2] != expected[2]:
                 return "unauthorized"
@@ -175,6 +180,7 @@ class QualityCheckUnitExecutor:
     def __init__(self, service, *, worker=run_quality_worker):
         self.service, self.worker = service, worker
         self._cancellations = {}
+        self._user_cancelled = set()
         self._lock = threading.Lock()
         self._stopping = False
 
@@ -183,14 +189,37 @@ class QualityCheckUnitExecutor:
             self.service.cancel_queued(request_id, actor)
         with self._lock:
             event = self._cancellations.get(request_id)
-        if event is not None:
-            event.set()
+            if event is not None:
+                self._user_cancelled.add(request_id)
+                event.set()
 
     def request_stop(self):
         with self._lock:
             self._stopping = True
             for event in self._cancellations.values():
                 event.set()
+
+    def _pause(self, grant, scheduler, job, check_id, *, reason):
+        def save(connection, current):
+            row = connection.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?",
+                                     (current.request_id,)).fetchone()
+            with self._lock:
+                user_cancelled = current.request_id in self._user_cancelled
+            if user_cancelled or row is not None and (row["state"] == "cancelled" or row["wait_reason"] == "user_cancelled"):
+                raise GrantedCommandCancelled("user_cancelled")
+            self.service.pause(connection,job,check_id,reason=reason)
+        try:
+            scheduler.defer_unit(grant,reason="worker_interrupted",
+                retry_not_before_utc=datetime.now(timezone.utc)+timedelta(minutes=1),
+                owner_database_path=self.service.production.database_path,owner_write=save)
+        except GrantedCommandCancelled:
+            return False  # Explicit user cancellation wins; the pause transaction rolled back.
+        return True
+
+    def _cancel(self, grant, scheduler, job, check_id, error):
+        scheduler.complete_unit(grant,checkpoint_database_path=self.service.production.database_path,
+            checkpoint_write=lambda conn,current: self.service.settle(conn,job,check_id,
+                status="cancelled",error=error),cancelled=True)
 
     def execute(self, grant, scheduler):
         if grant.owner_type != QUALITY_KIND:
@@ -216,6 +245,8 @@ class QualityCheckUnitExecutor:
             row = conn.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
         if row is not None and row["state"] == "yield_requested" and row["wait_reason"] == "user_cancelled":
             cancellation.set()
+            with self._lock:
+                self._user_cancelled.add(grant.request_id)
         try:
             try:
                 context.check()
@@ -224,19 +255,28 @@ class QualityCheckUnitExecutor:
                 result = record["evidence"].get("_worker_result")
                 if result is None:
                     result = self.worker(context, request, self.service.temporary_root)
-                    context.check()
-                    self.service.verify_source(request, actor)
+                    # A produced, bounded receipt survives Quit/expiry. Adoption
+                    # still checks current source and authority below.
                     self.service.validate_result(request, result)
                     self.service.checks.store_worker_result(job.workspace_id, job.task_id, record["check_id"], result)
                 self.service.validate_result(request, result)
                 self.service.verify_source(request, actor)
                 context.check()
             except GrantedCommandCancelled as exc:
-                scheduler.complete_unit(grant, checkpoint_database_path=self.service.production.database_path,
-                    checkpoint_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                        status="cancelled", error=str(exc)), cancelled=True)
+                if self._stopping and self._pause(grant,scheduler,job,record["check_id"],reason="application_quit"):
+                    return
+                self._cancel(grant,scheduler,job,record["check_id"],str(exc))
+                return
+            except PermissionError:
+                reason = "application_quit" if self._stopping else "task_authorization_unavailable"
+                if not self._pause(grant,scheduler,job,record["check_id"],reason=reason):
+                    self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
                 return
             except HostResourceRefusal as exc:
+                if self._stopping:
+                    if not self._pause(grant,scheduler,job,record["check_id"],reason="application_quit"):
+                        self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
+                    return
                 if not exc.recoverable_pressure:
                     scheduler.fail_unit(grant, reason="quality_resource_unavailable",
                         failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
@@ -249,18 +289,34 @@ class QualityCheckUnitExecutor:
             except RecoveryBlocked:
                 raise
             except Exception as exc:
+                if self._stopping:
+                    if not self._pause(grant,scheduler,job,record["check_id"],reason="application_quit"):
+                        self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
+                    return
                 scheduler.fail_unit(grant, reason="quality_check_failed",
                     failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
                         status="failed", error=str(exc)))
                 return
             # Keep terminal SQL outside the worker-error handler. A late SQL error
             # rolls back the whole checkpoint and preserves its staged worker receipt.
-            scheduler.complete_unit(grant, checkpoint_database_path=self.service.production.database_path,
-                checkpoint_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                    status="succeeded", result=result))
+            def checkpoint(connection,current):
+                if self._stopping or cancellation.is_set():
+                    raise GrantedCommandCancelled("质检已停止，未提交成功")
+                return self.service.settle(connection,job,record["check_id"],status="succeeded",result=result)
+            try:
+                scheduler.complete_unit(grant,checkpoint_database_path=self.service.production.database_path,
+                    checkpoint_write=checkpoint)
+            except GrantedCommandCancelled as exc:
+                if not (self._stopping and self._pause(grant,scheduler,job,record["check_id"],reason="application_quit")):
+                    self._cancel(grant,scheduler,job,record["check_id"],str(exc))
+            except PermissionError:
+                reason = "application_quit" if self._stopping else "task_authorization_unavailable"
+                if not self._pause(grant,scheduler,job,record["check_id"],reason=reason):
+                    self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
         finally:
             with self._lock:
                 self._cancellations.pop(grant.request_id, None)
+                self._user_cancelled.discard(grant.request_id)
 
 
 def quality_check_registration(service, *, worker=run_quality_worker):

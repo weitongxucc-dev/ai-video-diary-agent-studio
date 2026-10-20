@@ -1,5 +1,7 @@
 """Real isolated conversation persistence; model and current-principal seams only."""
 import hashlib
+import threading
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -126,6 +128,64 @@ def service(repo, *, response=None, readiness=None, max_rounds=6, action_refs=No
         repo.finish_turn(claim["turn_id"], "completed", "下一步已核验。", result={"kind": "task_turn",
             "response": actual, "goal_business_actions": proofs if action_refs is None else action_refs})
     return GoalContinuationService(repo, verify_current_goal=verify, run_goal_turn=run, max_rounds=max_rounds), calls
+
+
+def test_bounded_goal_pages_rotate_past_eight_waiting_roots(repo):
+    for _ in range(8):
+        original(repo)
+    _, ready, _, _ = original(repo)
+    event = emit(repo, ready)
+    svc, calls = service(repo)
+    assert svc.reconcile() == 0 and calls == []
+    assert svc.reconcile() == 1
+    assert calls[0][0]["event"]["event_id"] == event["event_id"]
+    assert repo.get_task_goal(ready["id"])["round_count"] == 1
+    with repo._connect() as conn:
+        plan = conn.execute("EXPLAIN QUERY PLAN SELECT id,created_at FROM assistant_conversation_turns WHERE "
+            "json_extract(result_json,'$.goal_continuation.status') IN "
+            "('running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown') "
+            "AND (created_at,id) > (?,?) ORDER BY created_at,id LIMIT 8", ("", "")).fetchall()
+    assert any("idx_assistant_active_goals_created" in row["detail"] for row in plan)
+
+
+def test_slow_goal_tick_leaves_projection_free_and_stops_without_losing_later_result(repo):
+    _, first, _, _ = original(repo)
+    emit(repo, first)
+    _, later, _, _ = original(repo)
+    synchronous, calls = service(repo)
+    entered, release = threading.Event(), threading.Event()
+    tick_lock = threading.Lock()
+    def slow(claim, fresh):
+        entered.set()
+        assert release.wait(2)
+        synchronous.run_goal_turn(claim, fresh)
+    svc = GoalContinuationService(repo, verify_current_goal=synchronous.verify_current_goal, run_goal_turn=slow)
+    svc.start()
+    try:
+        with tick_lock:
+            svc.tick()
+        assert entered.wait(1)
+        # The real business-event persistence remains available while a model
+        # callback is blocked, under the driver's same projection tick lock.
+        with tick_lock:
+            later_event = emit(repo, later)
+            svc.tick()
+            svc.tick()
+        svc.request_stop()
+        assert svc.stop(deadline_monotonic=time.monotonic()) is False
+        assert repo.get_task_goal(later["id"])["round_count"] == 0
+        release.set()
+        assert svc.stop(deadline_monotonic=time.monotonic() + 1)
+        assert len(calls) == 1
+    finally:
+        release.set()
+        svc.stop(deadline_monotonic=time.monotonic() + 1)
+    # A fresh owner reads the existing durable event, without replaying the
+    # first claim or creating another input/goal queue.
+    restarted, resumed = service(ConversationRepository(repo.database_path))
+    assert restarted.reconcile() == 1
+    assert len(resumed) == 1 and resumed[0][0]["event"]["event_id"] == later_event["event_id"]
+    assert repo.get_task_goal(first["id"])["round_count"] == 1
 
 
 def test_real_result_starts_one_empty_human_turn_preserves_instruction_and_new_draft(repo):

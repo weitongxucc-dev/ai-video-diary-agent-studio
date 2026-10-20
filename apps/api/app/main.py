@@ -1,5 +1,5 @@
 from __future__ import annotations
-from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
+from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
 from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
@@ -7,6 +7,8 @@ from app.creation.narration_stage_use_case import NarrationStageUseCase,Narratio
 
 import base64
 import hashlib
+import hmac
+import ipaddress
 from functools import cache
 import json
 import logging
@@ -18,7 +20,6 @@ import subprocess
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -546,6 +547,48 @@ app = FastAPI(title="AI视频日记 Agent Studio API")
 logger = logging.getLogger(__name__)
 app.state.creation_permit_client = None
 app.state.auth_http_client = None
+app.state.desktop_control_token = os.environ.pop("YAOHE_DESKTOP_CONTROL_TOKEN", "")
+app.state.desktop_shutdown = None
+_desktop_shutdown_lock = threading.Lock()
+DESKTOP_SHUTDOWN_PATH = "/internal/desktop-shutdown"
+
+
+class DesktopShutdownRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    exit_request_id: UUID
+    deadline_at_utc: datetime
+
+
+@app.post(DESKTOP_SHUTDOWN_PATH)
+def desktop_shutdown(payload: DesktopShutdownRequest, request: Request):
+    token = app.state.desktop_control_token
+    supplied = request.headers.get("X-Yaohe-Desktop-Control", "")
+    try:
+        loopback = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        loopback = False
+    if (not loopback or not re.fullmatch(r"[0-9a-f]{64}", token)
+            or not re.fullmatch(r"[0-9a-f]{64}", supplied) or not hmac.compare_digest(token, supplied)):
+        raise HTTPException(status_code=403, detail="本次启动的桌面退出控制凭据无效")
+    deadline = payload.deadline_at_utc
+    if deadline.tzinfo is None or deadline.utcoffset() is None:
+        raise HTTPException(status_code=422, detail="退出截止必须包含UTC时区")
+    remaining = (deadline-datetime.now(UTC)).total_seconds()
+    if remaining <= 0:
+        raise HTTPException(status_code=408, detail="退出请求已超期")
+    deadline_monotonic = time.monotonic() + min(30.0, remaining)
+    with _desktop_shutdown_lock:
+        if app.state.desktop_shutdown is None:
+            app.state.desktop_shutdown = DesktopShutdownUseCase(runtime=device_runtime,
+                automation=automation_runtime, ingestion=material_ingestion,
+                assistant=assistant_continuation_driver, stop_assistant=stop_all_assistant_turns,
+                conversations=conversation_repo,
+                close_clients=lambda: (stop_auth_transport(), stop_creation_permit_transport()))
+        shutdown = app.state.desktop_shutdown
+    try:
+        return shutdown.execute(str(payload.exit_request_id), deadline_monotonic)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # Register before every driver that can verify a creation identity.
@@ -823,6 +866,10 @@ async def auth_boundary_middleware(request: Request, call_next):
     queries stay inside the caller's partition.
     """
     path = request.url.path
+    if path == DESKTOP_SHUTDOWN_PATH and request.method == "POST":
+        return await call_next(request)
+    if app.state.desktop_shutdown is not None and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        return JSONResponse(status_code=503, content={"detail": "应用正在保存并暂停，未接收新操作"})
     is_device_accept = request.method == "POST" and path in {DEVICE_INVITE_ACCEPT_PATH, PAIRING_ACCEPT_PATH}
     if (
         path in PUBLIC_AUTH_PATHS
@@ -3746,7 +3793,7 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == 'visual_edit_preview' and '_clip_preview' not in arguments:
         return _visual_preview_facts(workspace_id, task_id, arguments, actor)
     if operation in MEDIA_SCRIPT_ACTIONS:
-        owner = _media_script_use_case()
+        owner = _media_script_use_case(task_id=task_id)
         prepared = owner.prepare_source(workspace_id, task_id, operation, arguments, actor)
         toolchain, budget = _script_configuration()
         return owner.seal(prepared, toolchain, budget, arguments.get('_script_toolchain'))
@@ -4539,9 +4586,9 @@ def preview_media_script(task_id: str, request: Request, payload: MediaScriptPre
     return _submit_media_script(task_id, request, payload)
 
 
-def _media_script_use_case(repository=None):
+def _media_script_use_case(repository=None, *, task_id=None):
     repo = repository if repository is not None else production_repo
-    return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo))
+    return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo, task_id=task_id))
 
 
 def _submit_media_script(task_id, request, payload, *, tool_id=None):
@@ -4618,14 +4665,15 @@ def _submit_media_script(task_id, request, payload, *, tool_id=None):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _media_script_tools(repository=None):
+def _media_script_tools(repository=None, *, task_id=None):
     repo = repository if repository is not None else production_repo
     def authorize(actor, task):
         user_id = actor.user_id or actor.member_id
         return (actor.workspace_id == task.workspace_id and (task.owner_user_id is None or task.owner_user_id == user_id)
             and content_readable(user_id=user_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id))
     return MediaScriptTools(repo, artifact_store, verify_identity=_verify_creation_identity,
-                            authorize_task_write=authorize)
+        authorize_task_write=authorize, task_id=task_id,
+        task_authorizations=device_runtime.task_authorizations if task_id is not None and device_runtime is not None else None)
 
 
 def _script_tool_error(exc):
@@ -10443,8 +10491,6 @@ def _render_creation_task_montage_for_workspace(
         plan = _render_stage_use_case().render(workspace_id, task_id, render_context=render_context)
     except RenderRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    _quality_inspection_use_case().start_for_render(device_runtime, workspace_id, task_id,
-        render_context.grant.owner_id if render_context is not None else None)
     return _creation_task_montage_response(plan)
 
 
@@ -10492,15 +10538,18 @@ def _quality_check_source(workspace_id: str, task_id: str):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _quality_inspection_use_case(repository=None):
+def _quality_inspection_use_case(repository=None, *, task_authorizations=None):
     budget, error = None, None
     try:
         budget = quality_budget_from_env()
     except HostBudgetUncalibrated as exc:
         error = str(exc)
     repo = production_repo if repository is None else repository
+    if task_authorizations is None and device_runtime is not None:
+        task_authorizations = device_runtime.task_authorizations
     return QualityInspectionUseCase(repo, quality_check_repo, _output_observation_use_case(repo),
         budget=budget, budget_error=error, verify_identity=_verify_creation_identity,
+        task_authorizations=task_authorizations,
         temporary_root=settings.effective_temporary_root_path / "quality-checks")
 
 
@@ -12169,7 +12218,6 @@ def _activate_runtime_reload(prepared: PreparedRuntimeReload, drivers: QuiescedR
         automation_runtime.stop()
         if automation_runtime.thread is not None and automation_runtime.thread.is_alive():
             raise RuntimeError("自动任务驱动尚未退出，原运行绑定保持。")
-    _stop_execution_worker()
     _stop_material_ingestion()
     if database_changed:
         old_platform_auth.sessions.close_all()
@@ -12180,7 +12228,6 @@ def _activate_runtime_reload(prepared: PreparedRuntimeReload, drivers: QuiescedR
     _publish_runtime_routes(prepared.routes)
     creation_execution = prepared.creation
     automation_runtime = None
-    _start_execution_worker()
     _start_material_ingestion()
     _start_device_runtime(start=restart_device)
     if restart_automation:
@@ -14014,7 +14061,6 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
 
 
 creation_execution: CreationExecution
-execution_worker: ThreadPoolExecutor | None = None
 material_ingestion = None
 material_execution_mode: Literal["legacy", "scheduled"] = "legacy"
 creation_execution_mode: Literal["legacy", "scheduled"] = "legacy"
@@ -14031,7 +14077,6 @@ class RenderStageRejected(RuntimeError):
 def _render_creation_stage_with_grant(workspace_id: str, task_id: str, grant: CpuRenderGrantContext):
     try:
         plan = _render_stage_use_case().render(workspace_id, task_id, render_context=grant)
-        _quality_inspection_use_case().start_for_render(device_runtime, workspace_id, task_id, grant.grant.owner_id)
         return plan
     except (RenderRejected, HTTPException) as exc:
         raise RenderStageRejected(str(exc.detail)) from exc
@@ -14081,7 +14126,10 @@ def _build_device_components(*, repository: ProductionRepository):
     from app.member_permits import media_script_budget_from_env
     budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),
                      observation=observation_budget_from_env())
-    quality = _quality_inspection_use_case(repository)
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
+        CreationExecutionActor.from_event(identity["workspace_id"], identity)))
+    quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations)
     cover = _cover_use_case(repository)
     budget = replace(budget, quality=quality.budget, cover=cover.budget)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
@@ -14090,18 +14138,22 @@ def _build_device_components(*, repository: ProductionRepository):
         audio_edit=_audio_edit_use_case(repository),
         output_observation=_output_observation_use_case(repository),
         media_script=_media_script_use_case(repository),
+        media_script_for_task=lambda task_id: _media_script_use_case(repository,task_id=task_id),
         visual_preview=_visual_preview_use_case(repository),
         compound_selection=_compound_edit_use_case(repository),
         exact_preview=_exact_preview_use_case(repository),
         command_preview=_command_preview_use_case(repository),
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
+    cover.task_authorizations = task_authorizations
+    task_media.task_authorizations = task_authorizations
     registrations = {
         QUALITY_KIND: quality_check_registration(quality),
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
             cover=cover,
+            task_authorizations=task_authorizations,
             person_stage=_person_stage_use_case(repository),
             montage_stage=_montage_stage_use_case(repository),
             narration_stage=_narration_stage_use_case(repository,narration_budget=narration_budget),
@@ -14150,26 +14202,15 @@ def _build_device_components(*, repository: ProductionRepository):
         registrations=registrations, budget=budget, material_executor=material_executor,
         verify_identity=_verify_creation_identity, record_admission=task_media.record_admission,
     )
+    runtime.task_authorizations = task_authorizations
+    registrations["creation_job"].executor.on_render_completed = lambda workspace_id, task_id, job_id: quality.start_for_render(
+        runtime, workspace_id, task_id, job_id)
     return runtime, material_service
 
 
 def _new_material_ingestion():
     from app.material_ingestion import MaterialIngestionService
     return MaterialIngestionService(production_repo, scan_interval_seconds=60, stable_seconds=10)
-
-
-def _start_execution_worker() -> None:
-    global execution_worker
-    if execution_worker is None:
-        execution_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="creation-execution")
-
-
-def _stop_execution_worker() -> None:
-    global execution_worker
-    worker = execution_worker
-    execution_worker = None
-    if worker is not None:
-        worker.shutdown(wait=True)
 
 
 def _start_material_ingestion() -> None:
@@ -14195,9 +14236,10 @@ def _start_material_ingestion() -> None:
 def _stop_material_ingestion() -> None:
     global material_ingestion
     service = material_ingestion
-    material_ingestion = None
     if service is not None:
-        service.stop()
+        if not service.stop(timeout_seconds=30):
+            raise RuntimeError("素材接收线程尚未退出，原运行绑定保持。")
+        material_ingestion = None
 
 
 def _start_device_runtime(*, start: bool = True) -> bool:
@@ -14239,9 +14281,6 @@ def _stop_device_runtime() -> None:
     global device_runtime
     runtime = device_runtime
     if runtime is not None:
-        quality = runtime.registrations.get(QUALITY_KIND)
-        if quality is not None:
-            quality.executor.request_stop()
         if not runtime.stop(timeout_seconds=30.0):
             raise RuntimeError("整机运行单元尚未退出，原许可与运行绑定保持。")
         device_runtime = None
@@ -14287,7 +14326,8 @@ def start_automation_due_driver() -> None:
 def stop_automation_due_driver() -> None:
     global automation_runtime
     if automation_runtime is not None:
-        automation_runtime.stop()
+        if not automation_runtime.stop():
+            raise RuntimeError("自动任务驱动尚未退出，原运行绑定保持。")
         automation_runtime = None
 
 
@@ -15029,20 +15069,21 @@ class AssistantContinuationDriver:
         self._paused.clear()
         self.wake.set()
 
-    def stop(self):
+    def request_stop(self):
         self.stop_event.set()
         self.wake.set()
-        # The model may be waiting inside this driver's active reconcile call.
-        # Signal it before joining; shutdown is not a user's cancellation.
-        active_turns = stop_all_assistant_turns()
-        self.thread.join(timeout=5)
-        if self.thread.is_alive():
-            raise RuntimeError("对话结果驱动尚未退出")
 
-        # A process shutdown stops model controls, but is not a user decision
-        # to invalidate the original goal or replay an in-flight operation.
+    def stop(self, timeout_seconds=5, *, notify=True):
+        self.request_stop()
+        deadline = time.monotonic() + max(0, timeout_seconds)
+        active_turns = stop_all_assistant_turns(deadline_monotonic=deadline) if notify else []
+        if self.thread is not None:
+            self.thread.join(timeout=max(0, deadline-time.monotonic()))
+            if self.thread.is_alive():
+                return False
         for turn_id in active_turns:
             conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
+        return True
 
 
 def start_assistant_continuation_driver():
@@ -15057,7 +15098,8 @@ def start_assistant_continuation_driver():
 def stop_assistant_continuation_driver():
     global assistant_continuation_driver
     if assistant_continuation_driver is not None:
-        assistant_continuation_driver.stop()
+        if not assistant_continuation_driver.stop():
+            raise RuntimeError("对话结果驱动尚未退出，原运行绑定保持。")
         assistant_continuation_driver = None
     _assistant_goal_transports.clear()
 
@@ -15070,7 +15112,6 @@ def stop_active_assistant_turns() -> None:
 
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
-    _start_execution_worker()
     try:
         # Register the runtime first, recover all persisted owner jobs while its
         # dispatch loop is still stopped, then allow any queued unit to run.
@@ -15080,6 +15121,8 @@ def resume_persisted_creation_executions() -> None:
         _start_material_ingestion()
         _recover_creation_executions()
         runtime = device_runtime
+        if runtime is not None:
+            runtime.registrations[QUALITY_KIND].owner.service.schedule_rendered_tasks(runtime)
         if runtime is not None and "platform_publish" in runtime.registrations:
             recover_platform_publish_jobs(
                 production_repo, runtime,
@@ -15093,7 +15136,6 @@ def resume_persisted_creation_executions() -> None:
     except Exception:
         _stop_device_runtime()
         _stop_material_ingestion()
-        _stop_execution_worker()
         raise
 
 
@@ -15101,7 +15143,6 @@ def resume_persisted_creation_executions() -> None:
 def stop_creation_execution_worker() -> None:
     _stop_device_runtime()
     _stop_material_ingestion()
-    _stop_execution_worker()
     platform_auth_service.sessions.close_all()
 
 
@@ -15152,7 +15193,6 @@ def create_app() -> FastAPI:
     app.router.routes[_runtime_routes_insert_at:_runtime_routes_insert_at] = _bound_runtime_routes
     app.openapi_schema = None
     creation_execution = _new_creation_execution(production_repo)
-    _start_execution_worker()
     return app
 
 

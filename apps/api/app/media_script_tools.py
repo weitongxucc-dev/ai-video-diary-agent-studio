@@ -136,18 +136,25 @@ class MediaScriptTools:
     """
 
     def __init__(self, repository: ProductionRepository, store: ArtifactStore, *,
-                 verify_identity, authorize_task_write):
+                 verify_identity, authorize_task_write, task_authorizations=None, task_id=None):
         self.repository = repository
         self.store = store
         self.verify_identity = verify_identity
         self.authorize_task_write = authorize_task_write
+        self.task_authorizations, self.task_id = task_authorizations, task_id
 
     def _identity(self, actor):
-        if not isinstance(actor, CreationExecutionActor) or self.verify_identity(actor) != "ready":
+        if not isinstance(actor, CreationExecutionActor):
+            raise PermissionError("current recipe identity is unavailable or unauthorized")
+        verdict = (self.task_authorizations.verdict(actor,self.task_id,"task_media",check_scope=False)
+                   if self.task_authorizations is not None and self.task_id is not None else self.verify_identity(actor))
+        if verdict != "ready":
             raise PermissionError("current recipe identity is unavailable or unauthorized")
         return actor.user_id or actor.member_id
 
     def _creation_identity(self, actor, request_id):
+        if self.task_id is not None:
+            raise PermissionError("任务授权不能创建通用配方")
         owner = self._identity(actor)
         try:
             request = str(UUID(str(request_id)))
@@ -244,9 +251,12 @@ class MediaScriptTools:
 
     def _runs(self, conn, actor, tool_id=None):
         owner = self._identity(actor)
+        if self.task_id is not None and tool_id is None:
+            raise PermissionError("任务授权不能浏览通用配方库")
         rows = conn.execute("""SELECT * FROM transform_runs
             WHERE workspace_id=? AND transform_type='media_script_tool_recipe'
-              AND json_extract(parameters_json,'$.owner_member_id')=?""", (actor.workspace_id, owner)).fetchall()
+              AND json_extract(parameters_json,'$.owner_member_id')=?
+              AND (? IS NULL OR json_extract(parameters_json,'$.tool_id')=?)""", (actor.workspace_id, owner, tool_id, tool_id)).fetchall()
         runs = [self.repository._transform_run_from_row(row) for row in rows]
         return [run for run in runs if tool_id is None or run.parameters["tool_id"] == tool_id]
 
@@ -258,6 +268,10 @@ class MediaScriptTools:
 
     def _value(self, actor, run, head):
         metadata = run.parameters
+        if self.task_authorizations is not None and self.task_id is not None:
+            if self.task_authorizations.verdict(actor,self.task_id,"task_media",
+                    references=[metadata["definition_ref"]]) != "ready":
+                raise PermissionError("配方来源不在原任务授权范围内")
         record = self.repository.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
         job = self.repository.get_job_run(actor.workspace_id, run.job_id)
         if (job.kind != "media_script_tool_registration" or job.status != "succeeded" or run.status != "succeeded"

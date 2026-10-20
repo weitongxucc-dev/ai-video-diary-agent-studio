@@ -132,6 +132,7 @@ class CoverUseCase:
         self.artifact_store = artifact_store
         self.metadata = metadata
         self.verify_identity = verify_identity
+        self.task_authorizations = None
         self.output_root = Path(output_root).resolve()
         self.budget = budget
         self.on_settled = on_settled
@@ -149,9 +150,13 @@ class CoverUseCase:
         return self.budget
 
     def _access(self, actor: CreationExecutionActor, task_id: str):
-        if not actor.member_id or self.verify_identity(actor) != "ready":
-            raise PermissionError("封面处理身份失效或无法复核")
         task = self.repository.get_creation_task(actor.workspace_id, task_id)
+        if self.task_authorizations is not None:
+            verdict = self.task_authorizations.verdict(actor, task_id, "cover", check_scope=False)
+        else:
+            verdict = self.verify_identity(actor)
+        if not actor.member_id or verdict != "ready":
+            raise PermissionError("原任务封面授权失效或无法复核")
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能处理此任务的封面")
         return task
@@ -460,10 +465,12 @@ class CoverUseCase:
             return "unknown"
 
     def capture_local(self, request, connection):
+        from app.creation_execution import CreationExecutionActor
         try:
             job, payload, command = self._start(request.workspace_id, request.owner_id, connection)
         except (KeyError, ValueError, CoverUnresolved):
             return lambda current: "unknown"
+        actor = CreationExecutionActor.from_event(command.workspace_id, payload)
         deadline = datetime.fromisoformat(payload["deadline_utc"])
         def read(current):
             job_row = current.execute(
@@ -495,6 +502,10 @@ class CoverUseCase:
         if expected[1] is None:
             return lambda current: "stale"
         def check(current):
+            if self.task_authorizations is not None:
+                verdict = self.task_authorizations.verdict(actor, command.task_id, "cover", connection=current, check_scope=False)
+                if verdict != "ready":
+                    return verdict
             if datetime.now(timezone.utc) >= deadline:
                 return "unknown"
             actual = read(current)
@@ -508,6 +519,8 @@ class CoverUseCase:
 
     def submit(self, runtime, actor: CreationExecutionActor, task_id: str, proposal_id: str,
                *, request_id: str | None):
+        if self.task_authorizations is not None:
+            self.task_authorizations.ensure(self.repository.get_creation_task(actor.workspace_id, task_id), actor)
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
         result = self.original_result(actor, task_id, proposal_id)
         if result is not None:
@@ -562,8 +575,7 @@ class CoverUseCase:
         budget = self.require_budget()
         deadline = self._current(command, actor, job, payload)
         cancellation = threading.Event()
-        with executor._cancellation_lock:
-            executor._cancellations[grant.request_id] = cancellation
+        executor.register_cancellation(grant.request_id, cancellation)
         context = CreationStageGrantContext(scheduler, grant,
             time.monotonic() + (deadline - datetime.now(timezone.utc)).total_seconds(),
             budget.max_output_bytes, budget.decoder_threads, cancellation)
@@ -609,6 +621,8 @@ class CoverUseCase:
                     raise ValueError(result.stderr.decode(errors="replace") or "封面worker执行失败")
             self.complete(command, actor, context, max_receipt_bytes=budget.max_receipt_bytes)
         except GrantedCommandCancelled:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             def cancelled(connection, current):
                 self.repository.finish_job_run(command.workspace_id, job.id, status="cancelled",
                     failure_reason="user_cancelled", impact="当前时间线保持不变。",
@@ -619,6 +633,8 @@ class CoverUseCase:
         except RecoveryBlocked:
             raise
         except Exception as exc:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             if known_failure:
                 def failed(connection, current):
                     self.repository.finish_job_run(command.workspace_id, job.id, status="failed",

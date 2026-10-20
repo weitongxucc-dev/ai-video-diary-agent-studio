@@ -255,12 +255,18 @@ class MaterialIngestionService:
         self._thread = threading.Thread(target=self._run, name="material-ingestion", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
         self._stop.set()
         self._wake.set()
+
+    def stop(self, timeout_seconds: float | None = None) -> bool:
+        self.request_stop()
         if self._thread is not None:
-            self._thread.join()
+            self._thread.join(timeout=timeout_seconds)
+            if self._thread.is_alive():
+                return False
             self._thread = None
+        return True
 
     def wake(self) -> None:
         """Schedule the next scan after binding or retry without blocking the request."""
@@ -394,9 +400,18 @@ class MaterialIngestionService:
         """Execute one hash grant; never choose or issue a host permit here."""
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
+        from app.granted_subprocess import GrantedCommandCancelled
+        def check(active):
+            if self._stop.is_set():
+                raise GrantedCommandCancelled("应用退出，素材接收暂停")
+            self.scheduler.assert_grant(active)
         try:
-            self.scheduler.assert_grant(grant)
-            result = self.repository.hash_granted_material(grant, self.scheduler.assert_grant)
+            check(grant)
+            result = self.repository.hash_granted_material(grant, check)
+        except GrantedCommandCancelled:
+            self.scheduler.defer_unit(grant, reason="worker_interrupted",
+                retry_not_before_utc=datetime.now(timezone.utc)+timedelta(minutes=1))
+            return None
         except (OSError, ValueError, PermissionError, RecoveryBlocked) as error:
             verdict = self.repository.material_hash_verdict_for_grant(grant)
             reason = {
@@ -675,6 +690,10 @@ class MaterialHashUnitExecutor:
         if self._service is not None or service.execution_mode != "scheduled" or service.scheduler is None:
             raise ValueError("素材哈希执行器需要一次性绑定已调度的服务")
         self._service = service
+
+    def request_stop(self):
+        if self._service is not None:
+            self._service.request_stop()
 
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         if self._service is None or scheduler is not self._service.scheduler:

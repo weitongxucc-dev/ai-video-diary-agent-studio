@@ -118,13 +118,22 @@ class MontageStageUseCase:
         if selected_sections and creation_plan.selected_voice is None:
             raise ValueError("露脸段落缺少当前任务已授权的人物和声音")
         planner = self.montage_planner if grant_context is None else MontagePlanner()
+        asset_ids = None
+        if grant_context is not None:
+            owner = grant_context.scheduler.owners
+            if hasattr(owner, "registrations"):
+                owner = owner.registrations["creation_job"].owner
+            authorizations = owner.task_authorizations
+            if authorizations is not None:
+                asset_ids = authorizations.material_asset_ids(workspace_id, task.id)
         montage = planner.build_for_creation_task(
             duration_target_seconds=creation_plan.duration_target_seconds,
             workspace_id=workspace_id,
             task_id=task.id,
             script=script,
             profile=self.repository.get_profile(workspace_id),
-            assets=list({asset.id: asset for asset, _ in self.repository.automatic_material_segments(workspace_id, viewer_user_id=task.owner_user_id)}.values()),
+            assets=list({asset.id: asset for asset, _ in self.repository.automatic_material_segments(workspace_id,
+                viewer_user_id=task.owner_user_id, asset_ids=asset_ids)}.values()),
             media_reference_for_asset=lambda asset_id: self.repository.workspace_media_reference_for_asset(
                 workspace_id, asset_id
             ),

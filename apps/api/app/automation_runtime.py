@@ -318,8 +318,13 @@ class AutomationRuntime:
         self._paused.clear()
         self._wake.set()
 
-    def stop(self):
+    def request_stop(self):
         self.stop_event.set()
         self._wake.set()
+
+    def stop(self, timeout_seconds=10):
+        self.request_stop()
         if self.thread:
-            self.thread.join(timeout=10)
+            self.thread.join(timeout=max(0, timeout_seconds))
+            return not self.thread.is_alive()
+        return True

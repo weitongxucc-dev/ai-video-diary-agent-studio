@@ -44,13 +44,13 @@ from _media_preview_test_fixtures import (
 )
 
 
-def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True):
+def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = ""):
     library = tmp_path / "library"
     library.mkdir(exist_ok=True)
     repo = ProductionRepository(database_path=tmp_path / "isolated.sqlite3", video_library_path=library)
-    task_id = f"task_{workspace_id}"
+    task_id = f"task_{workspace_id}{task_suffix}"
     plan = CreationPlan(
-        id=f"plan_{workspace_id}", workspace_id=workspace_id,
+        id=f"plan_{workspace_id}{task_suffix}", workspace_id=workspace_id,
         goal="一条测试视频", name="测试", target_count=1, language="zh-CN",
         aspect_ratio="9:16", duration_target_seconds=30,
         knowledge_references=[], source_references=[],
@@ -67,7 +67,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
                         name="测试", scenario="knowledge_explanation")
     repo.confirm_creation_plan(plan, task)
     now = datetime.now(timezone.utc).isoformat()
-    script_id = f"script_{workspace_id}"
+    script_id = f"script_{workspace_id}{task_suffix}"
     payload = {
         "id": script_id, "workspace_id": workspace_id, "task_id": task_id,
         "run_id": f"run_{workspace_id}", "topic_id": f"topic_{workspace_id}",
@@ -1845,7 +1845,7 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
 
 
-@pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "write_failure", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
+@pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "write_failure", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel", "application_quit"])
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
     from datetime import timedelta
@@ -1901,6 +1901,9 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         attempts.append(context.grant.generation)
         grants.append(context.grant)
         repo.start_creation_task_narration(workspace, current_task)
+        if after_wait == "application_quit":
+            executor.request_stop()
+            context.check_execution_limits()
         if len(attempts) == 1 and after_wait != "checkpoint_pressure":
             if after_wait == "ordinary_error":
                 raise RuntimeError("synthetic narration failed")
@@ -1973,6 +1976,15 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
                 checkpoint_write=lambda conn, current: None, cancelled=True)
             return
         assert runtime.run_once() is True and runtime.last_error is None
+        if after_wait == "application_quit":
+            interrupted = repo.get_job_run("local", job.id)
+            assert interrupted.status == "interrupted" and interrupted.failure_reason == "application_quit"
+            assert repo.get_creation_task("local", task_id).stage_status == "not_started"
+            with repo._connect() as conn:
+                row = conn.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+                assert tuple(row) == ("blocked", "worker_interrupted")
+            runtime.scheduler.assert_released(grants[-1])
+            return
         if after_wait in {"ordinary_error", "user_cancel"}:
             failed_task = repo.get_creation_task("local", task_id)
             assert failed_task.stage_status == ("failed" if after_wait == "ordinary_error" else "not_started")
@@ -2031,3 +2043,147 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
     finally:
         assert runtime.stop(2) is True
+
+
+def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revocation(tmp_path):
+    from datetime import timedelta
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    task = repo.get_creation_task("local", task_id)
+    actor = CreationExecutionActor("local", "original-member")
+    now = [datetime.now(timezone.utc)]
+    verdict = ["ready"]
+    calls = []
+    def verify(identity):
+        calls.append(identity)
+        return verdict[0]
+    service = TaskAuthorizationUseCase(repo, verify, clock=lambda: now[0])
+    issued = service.ensure(task, actor)
+    verdict[0] = "unknown"
+    service.refresh(issued)
+    unchanged = repo.get_task_authorization("local", task_id)
+    assert unchanged.expires_at == issued.expires_at
+    service.last_error = RuntimeError("observation unavailable")
+    assert service.status("local", task_id) == "valid"
+    restarted = TaskAuthorizationUseCase(repo, verify, clock=lambda: now[0])
+    before = len(calls)
+    assert restarted.ensure(task, actor) == unchanged
+    assert len(calls) == before
+    with pytest.raises(PermissionError, match="不能切换"):
+        restarted.ensure(task, CreationExecutionActor("local", "another-member"))
+    now[0] = issued.expires_at + timedelta(seconds=1)
+    assert restarted.status("local", task_id) == "expired"
+    verdict[0] = "ready"
+    restarted.refresh(unchanged)
+    renewed = repo.get_task_authorization("local", task_id)
+    assert renewed.expires_at > now[0]
+    verdict[0] = "unauthorized"
+    restarted.refresh(renewed)
+    revoked = repo.get_task_authorization("local", task_id)
+    verdict[0] = "ready"
+    restarted.refresh(renewed)  # Late ready cannot overwrite the authoritative revocation.
+    assert repo.get_task_authorization("local", task_id) == revoked
+    assert restarted.status("local", task_id) == "revoked"
+
+
+def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_output(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.production import ArtifactRecord, JobRun, MaterialSegmentMatch
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    task = repo.get_creation_task("local", task_id)
+    actor = CreationExecutionActor("local", "original-member")
+    for asset_id in ("selected", "unselected"):
+        path = repo.video_library_path / f"{asset_id}.mp4"
+        path.write_bytes(b"metadata-only fixture")
+        repo._save_asset(MaterialAsset(asset_id, "local", path.name, str(path), path.stat().st_size,
+            datetime.now(timezone.utc), visibility="shared"))
+    plan = repo.get_creation_plan("local", task.plan_id)
+    plan.material_matches = [MaterialSegmentMatch("asset:selected", "segment:selected", 1, ["explicit selection"])]
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
+                     (json.dumps(asdict(plan), default=str), "local", plan.id))
+    service = TaskAuthorizationUseCase(repo, lambda _: "ready")
+    authorization = service.ensure(task, actor)
+    assert authorization.resource_scope["assets"] == ["selected"]
+    source = repo.workspace_media_reference_for_asset("local", "selected")
+    job = repo.create_job_run(JobRun("derived-job", "local", task_id, "creation_task_execution", "derived", "a"*64))
+    repo.create_artifact_record(ArtifactRecord("derived-artifact", "local", task_id, "rendered_video",
+        "artifacts/own-output.mp4", "a"*64, 1, job.id, [source]))
+    assert service.verdict(actor, task_id, "task_media", references=["artifacts/own-output.mp4"]) == "ready"
+    assert service.verdict(actor, task_id, "task_media", references=[repo.workspace_media_reference_for_asset("local", "unselected")]) == "unauthorized"
+    assert service.verdict(actor, task_id, "task_media", references=["workspace://invented-output.mp4"]) == "unauthorized"
+    with repo._connect() as conn:
+        value = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id=?", (plan.id,)).fetchone()[0])
+        value["goal"] = "a different goal"
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(value),plan.id))
+    assert service.status("local", task_id) == "outside_scope"
+
+
+def test_restart_keeps_revoked_task_paused_and_recovers_other_valid_task(tmp_path):
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    repo, revoked_task, revoked_script, revoked_digest = _seed(tmp_path, workspace_id="local")
+    _, valid_task, valid_script, valid_digest = _seed(tmp_path, workspace_id="local", task_suffix="_valid")
+    scheduler, _, member = _permit_scheduler(repo, tmp_path)
+    register_synthetic_profiles(repo, workspace_id="local", member_id=member.member_id,
+        person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
+        language="zh", model_id="test", person_authorization_id="person_auth_1",
+        voice_authorization_id="voice_auth_1", voice_usage_scopes=("narration",))
+    actor = CreationExecutionActor("local", member.member_id)
+    service = TaskAuthorizationUseCase(repo, lambda _: "ready")
+    scheduler.owners.task_authorizations = service
+    execution = _execution(repo)
+    revoked_job = execution.start("local", revoked_task, revoked_script, revoked_digest, actor=actor)
+    valid_job = execution.start("local", valid_task, valid_script, valid_digest, actor=actor)
+    revoked = service.ensure(repo.get_creation_task("local", revoked_task), actor)
+    service.ensure(repo.get_creation_task("local", valid_task), actor)
+    repo.save_task_authorization(replace(revoked,revision=revoked.revision+1,
+        revoked_at=datetime.now(timezone.utc),last_verdict="unauthorized"),expected_revision=revoked.revision)
+    runtime = SimpleNamespace(scheduler=scheduler,
+        registrations={"creation_job":SimpleNamespace(owner=scheduler.owners)},wake=lambda:None)
+    try:
+        CreationExecutionControl(repo,execution,None,lambda _: "ready").recover(runtime)
+        with repo._connect() as conn:
+            queued = [row[0] for row in conn.execute("SELECT owner_id FROM device_work_requests")]
+        assert queued == [valid_job.id]
+        assert repo.get_job_run("local",revoked_job.id).status == "queued"
+        assert service.status("local",revoked_task) == "revoked"
+        assert service.status("local",valid_task) == "valid"
+    finally:
+        scheduler.close()
+
+
+def test_scope_refusal_does_not_stop_other_task_authorization_observation(tmp_path):
+    from datetime import timedelta
+    from app.creation.contracts import JobRun
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    repo, denied_task, _, _ = _seed(tmp_path,workspace_id="local")  # Missing voice version is a real resource refusal.
+    _, valid_task, _, _ = _seed(tmp_path,workspace_id="local",voice=False,task_suffix="_valid")
+    actor = CreationExecutionActor("local","original-member")
+    now = [datetime.now(timezone.utc)]
+    verdict = ["unknown"]
+    service = TaskAuthorizationUseCase(repo,lambda _:verdict[0],clock=lambda:now[0])
+    denied = service.ensure(repo.get_creation_task("local",denied_task),actor)
+    now[0] += timedelta(seconds=1)
+    service.ensure(repo.get_creation_task("local",valid_task),actor)
+    for task_id in (denied_task,valid_task):
+        repo.create_job_run(JobRun("job_"+task_id,"local",task_id,"creation_task_execution","observe_"+task_id,"a"*64))
+    now[0] += timedelta(minutes=1,seconds=1)
+    verdict[0] = "ready"
+    service.start()
+    try:
+        for _ in range(100):
+            if repo.get_task_authorization("local",valid_task).issued_at is not None:
+                break
+            time.sleep(.01)
+        refused = repo.get_task_authorization("local",denied_task)
+        valid = repo.get_task_authorization("local",valid_task)
+        assert refused.expires_at == denied.expires_at and refused.issued_at is None
+        assert refused.last_verdict.startswith("scope_refused: 原任务声音参考不可用")
+        assert refused.last_checked_at == now[0]
+        receipt = repo.get_task_event("local",f"event_{refused.id}_{refused.revision}")
+        assert receipt.payload["verdict"] == refused.last_verdict
+        assert valid.issued_at == now[0] and valid.expires_at > now[0]
+        assert service.last_error is None and service._thread.is_alive()
+    finally:
+        assert service.stop(2)

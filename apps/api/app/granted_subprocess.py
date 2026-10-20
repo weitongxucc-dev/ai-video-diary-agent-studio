@@ -336,6 +336,11 @@ def run_granted_command(
     if cancel_event is not None and cancel_event.is_set():
         raise GrantedCommandCancelled("Command cancelled before launch")
     scheduler.assert_grant(grant)
+    # One frozen dependency view per command. The pipe/cancel watchdog checks
+    # local versions and task expiry/revocation, never rebuilds the whole film.
+    running_check = (scheduler.capture_running_check(grant)
+        if isinstance(scheduler, DeviceScheduler) and isinstance(grant, Grant) and grant.owner_type == "creation_job"
+        else lambda: scheduler.assert_grant(grant))
     if cancel_event is not None and cancel_event.is_set():
         raise GrantedCommandCancelled("Command cancelled before launch")
     resources = getattr(scheduler, "resources", None)
@@ -430,7 +435,7 @@ def run_granted_command(
         def check_running_unit():
             nonlocal next_permission_sample
             if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit or quality_unit) and time.monotonic() >= next_permission_sample:
-                scheduler.assert_grant(grant)
+                running_check()
                 next_permission_sample = time.monotonic() + _PERMISSION_SAMPLE_SECONDS
             if max_output_file_bytes is not None:
                 output_size = 0

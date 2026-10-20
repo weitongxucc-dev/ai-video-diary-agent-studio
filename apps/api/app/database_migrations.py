@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 20
+PRODUCTION_SCHEMA_VERSION = 21
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -809,6 +809,26 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (18, LOCAL_ADOPTION_RECEIPTS_DDL),
     (19, VOICE_SAMPLING_TASKS_DDL),
     (20, DISCOVERY_SCHEMA),
+    (21, """
+        CREATE TABLE IF NOT EXISTS task_authorizations (
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            id TEXT NOT NULL UNIQUE,
+            revision INTEGER NOT NULL,
+            identity_json TEXT NOT NULL,
+            goal_revision TEXT NOT NULL,
+            allowed_operations_json TEXT NOT NULL,
+            resource_scope_json TEXT NOT NULL,
+            issued_at TEXT,
+            verified_at TEXT,
+            expires_at TEXT,
+            revoked_at TEXT,
+            last_checked_at TEXT,
+            last_verdict TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, task_id),
+            FOREIGN KEY(task_id) REFERENCES creation_tasks(id)
+        );
+    """),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。

@@ -150,6 +150,7 @@ class DeviceRuntime:
         self.registrations = dict(registrations)
         self.poll_interval_seconds = poll_interval_seconds
         self.host_observer = host_observer
+        self.task_authorizations = None
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._wake = threading.Event()
@@ -158,6 +159,8 @@ class DeviceRuntime:
         self._thread: threading.Thread | None = None
         self._closed = False
         self._last_error: Exception | None = None
+        self._active_grant = None
+        self._executors_notified = False
 
     @property
     def last_error(self) -> Exception | None:
@@ -181,6 +184,8 @@ class DeviceRuntime:
                 grant = self.scheduler.pick_and_grant()
                 if grant is None:
                     return False
+                with self._lifecycle_lock:
+                    self._active_grant = grant
                 if self._stop.is_set():
                     raise RecoveryBlocked("停止信号已到，获准单元未执行并保留许可供核查")
                 registration = self.registrations.get(grant.owner_type)
@@ -208,6 +213,9 @@ class DeviceRuntime:
                     if registration is not None and registration.on_stopped is not None:
                         registration.on_stopped(grant, self.scheduler, exc)
                 raise
+            finally:
+                with self._lifecycle_lock:
+                    self._active_grant = None
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -230,6 +238,8 @@ class DeviceRuntime:
             if self._dispatch_lock.locked():
                 raise RuntimeUnavailable("同步派发尚未结束，不能启动后台调度驱动")
             self._stop.clear()
+            if self.task_authorizations is not None:
+                self.task_authorizations.start()
             if self.host_observer is not None:
                 self.host_observer.start_observing(interval_seconds=self.poll_interval_seconds)
             self._thread = threading.Thread(target=self._run, name="device-dispatch", daemon=True)
@@ -275,6 +285,7 @@ class DeviceRuntime:
         if timeout_seconds < 0:
             raise ValueError("停止等待时间不能为负数")
         deadline = time.monotonic() + timeout_seconds
+        self.begin_shutdown()
         with self._lifecycle_lock:
             self._closed = True
             self._stop.set()
@@ -289,12 +300,40 @@ class DeviceRuntime:
         if not self._dispatch_lock.acquire(timeout=max(0, deadline - time.monotonic())):
             return False
         try:
+            if self.task_authorizations is not None and not self.task_authorizations.stop(max(0, deadline-time.monotonic())):
+                return False
             if self.host_observer is not None and not self.host_observer.stop_observing(max(0, deadline - time.monotonic())):
                 return False
             self.scheduler.close()
         finally:
             self._dispatch_lock.release()
         return True
+
+    def begin_shutdown(self):
+        """Close admission first, then notify existing in-flight executors."""
+        with self._lifecycle_lock:
+            self._closed = True
+            self._stop.set()
+            self._wake.set()
+            active = self._active_grant
+        notified = active is None
+        for kind, registration in self.registrations.items():
+            request_stop = getattr(registration.executor, "request_stop", None)
+            if request_stop is not None:
+                request_stop()
+                if active is not None and active.owner_type == kind:
+                    notified = True
+        self._executors_notified = notified
+
+    def shutdown_checks(self):
+        stopped = self._closed and not self.running and not self._dispatch_lock.locked()
+        try:
+            released = stopped and self.scheduler.shutdown_released()
+        except RecoveryBlocked:
+            released = False
+        return {"dispatch_stopped": stopped, "executors_notified": self._executors_notified,
+                "processes_released": released,
+                "checkpoints_saved": released and self.last_error is None}
 
 
 def build_device_runtime(

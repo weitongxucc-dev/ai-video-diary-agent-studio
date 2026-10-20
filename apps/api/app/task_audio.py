@@ -545,7 +545,7 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, visual_preview=None, compound_selection=None, exact_preview=None, command_preview=None):
+    def __init__(self, repository, *, facts, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, media_script_for_task=None, visual_preview=None, compound_selection=None, exact_preview=None, command_preview=None):
         self.repository = repository
         self.facts = facts
         self.clip_preview = clip_preview
@@ -553,12 +553,34 @@ class TaskMediaJobs:
         self.audio_edit = audio_edit
         self.output_observation = output_observation
         self.media_script = media_script
+        self.media_script_for_task = media_script_for_task
         self.visual_preview = visual_preview
         self.compound_selection = compound_selection
         self.exact_preview = exact_preview
         self.command_preview = command_preview
         self.on_settled = on_settled
         self.verify_identity = verify_identity
+        self.task_authorizations = None
+
+    def authorization_verdict(self, job, event, actor, *, connection=None, check_scope=True):
+        if self.task_authorizations is None:
+            return self.verify_identity(actor)
+        references = set()
+        def collect(value):
+            if isinstance(value, dict):
+                for key in ("asset_id", "asset_ref"):
+                    asset = value.get(key)
+                    if isinstance(asset, str):
+                        references.add(asset if asset.startswith("asset:") else "asset:"+asset)
+                for child in value.values(): collect(child)
+            elif isinstance(value, list):
+                for child in value: collect(child)
+            elif isinstance(value, str) and value.startswith(("workspace://", "artifact://", "narration://", "person-render://", "artifacts/", "asset:")):
+                references.add(value)
+        if check_scope:
+            collect(event.get("arguments", {}))
+            collect(event.get("input_facts", {}))
+        return self.task_authorizations.verdict(actor, job.task_id, "task_media", references=references, connection=connection, check_scope=check_scope)
 
     def read(self, workspace_id, job_id, conn=None):
         if conn is None:
@@ -572,13 +594,13 @@ class TaskMediaJobs:
             raise KeyError(job_id)
         return self.repository._job_run_from_row(row), json.loads(event["payload_json"])
 
-    def _read_access(self, job, event, actor):
+    def _read_access(self, job, event, actor, *, check_scope=True):
         from app.creation_execution import CreationExecutionActor
         if media_digest({key: value for key, value in event.items() if key != "input_digest"}) != job.input_digest:
             return "stale"
         if actor != CreationExecutionActor.from_event(job.workspace_id, event):
             return "unauthorized"
-        identity = self.verify_identity(actor)
+        identity = self.authorization_verdict(job, event, actor, check_scope=check_scope)
         if identity != "ready":
             return identity
         try:
@@ -705,8 +727,8 @@ class TaskMediaJobs:
         values["context"] = "pending_request" if pending else "history"
         return ResourceAdmissionReceipt.model_validate(values).model_dump(mode="json")
 
-    def check(self, job, event, actor):
-        access = self._read_access(job, event, actor)
+    def check(self, job, event, actor, *, check_scope=True):
+        access = self._read_access(job, event, actor, check_scope=check_scope)
         if access != "ready":
             return access
         try:
@@ -728,8 +750,13 @@ class TaskMediaJobs:
         task = self.repository.get_creation_task(actor.workspace_id, task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能安排此任务的媒体处理")
-        if self.verify_identity(actor) != "ready":
-            raise PermissionError("媒体处理身份失效或无法复核")
+        if self.task_authorizations is not None:
+            self.task_authorizations.ensure(task, actor)
+            identity = self.task_authorizations.verdict(actor, task_id, "task_media")
+        else:
+            identity = self.verify_identity(actor)
+        if identity != "ready":
+            raise PermissionError("原任务媒体处理授权失效或无法复核")
         facts, resources = self.facts(actor.workspace_id, task_id, operation, arguments, actor)
         payload = {"operation": operation, "arguments": arguments, "result_kind": result_kind,
                    "input_facts": facts, "resources": resources, **actor.identity_payload()}
@@ -757,6 +784,8 @@ class TaskMediaJobs:
     def verify_submission(self, intent, actor):
         from app.device_scheduler import VerifiedWork
         job, event = self.read(intent.workspace_id, intent.owner_id)
+        if self.task_authorizations is not None:
+            self.task_authorizations.ensure(self.repository.get_creation_task(job.workspace_id, job.task_id), actor)
         if (intent.owner_type != "creation_job" or intent.input_digest != job.input_digest
                 or intent.unit_key != f"task_media:{job.input_digest}"
                 or job.status not in {"queued", "interrupted", "running"}
@@ -789,10 +818,10 @@ class TaskMediaJobs:
                 try:
                     task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
                 except KeyError:
-                    return self.check(job, event, actor)
+                    return self.check(job, event, actor, check_scope=False)
                 if version != task.current_timeline_version_id:
                     return "stale"
-        return self.check(job, event, actor)
+        return self.check(job, event, actor, check_scope=False)
 
     def capture_local(self, request, conn):
         try:
@@ -888,6 +917,12 @@ class TaskMediaJobs:
         if expected[1] is None:
             return lambda current: "stale"
         def check(current):
+            if self.task_authorizations is not None:
+                from app.creation_execution import CreationExecutionActor
+                actor = CreationExecutionActor.from_event(job.workspace_id, event)
+                verdict = self.authorization_verdict(job, event, actor, connection=current, check_scope=False)
+                if verdict != "ready":
+                    return verdict
             actual = read(current)
             if actual[1] is None or actual[1][-2:] != expected[1][-2:]:
                 return "unauthorized"
@@ -936,12 +971,14 @@ class TaskMediaJobs:
         direct_exact = event["operation"] == "exact_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
         direct_command = event["operation"] == "command_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
         actor = CreationExecutionActor.from_event(job.workspace_id, event)
+        media_script = self.media_script_for_task(job.task_id) if direct_script and self.media_script_for_task is not None else self.media_script
         cancellation = threading.Event()
-        with executor._cancellation_lock:
-            executor._cancellations[grant.request_id] = cancellation
+        executor.register_cancellation(grant.request_id, cancellation)
         token = set_workspace_context(job.workspace_id)
         verification_facts = None
         def checkpoint(conn, current, status, reason=None):
+            if status == "succeeded":
+                context.check_execution_limits()
             if status == "succeeded":
                 self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_verified", workspace_id=job.workspace_id,
                     task_id=job.task_id,job_id=job.id,event_type="task_media_verified",payload={"outputs":verification_facts},created_at=job.created_at),connection=conn)
@@ -991,9 +1028,9 @@ class TaskMediaJobs:
                         raise ValueError("画面编辑执行负责人未组装")
                     result = self.visual_preview.execute(job, event, actor, context)
                 elif direct_script:
-                    if self.media_script is None:
+                    if media_script is None:
                         raise ValueError("媒体脚本执行负责人未组装")
-                    result = self.media_script.execute(job, event, actor, context)
+                    result = media_script.execute(job, event, actor, context)
                 elif direct_observation:
                     if self.output_observation is None:
                         raise ValueError("输出观察执行负责人未组装")
@@ -1022,7 +1059,7 @@ class TaskMediaJobs:
             elif direct_exact:verification_facts=self.exact_preview.validate_result(job,event,result,context)
             elif direct_compound:verification_facts=self.compound_selection.validate_result(job,event,result,context)
             elif direct_visual:verification_facts=self.visual_preview.validate_result(job,event,result,context)
-            elif direct_script:verification_facts=self.media_script.validate_result(job,event,result,context)
+            elif direct_script:verification_facts=media_script.validate_result(job,event,result,context)
             elif direct_observation:verification_facts=self.output_observation.validate_result(job,event,result,context)
             elif direct_edit:verification_facts=self.audio_edit.validate_result(job,event,result,context)
             elif direct_audio:verification_facts=self.audio_ingress.validate_result(job,event,result,context)
@@ -1032,9 +1069,13 @@ class TaskMediaJobs:
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=lambda conn, current: checkpoint(conn, current, "succeeded"))
         except GrantedCommandCancelled:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
         except HostResourceRefusal as exc:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             diagnostics = getattr(exc, "command_diagnostics", None)
             if not exc.recoverable_pressure or (diagnostics and diagnostics.get("before_termination_returncode") not in {None, 0}):
                 raise
@@ -1046,12 +1087,16 @@ class TaskMediaJobs:
         except RecoveryBlocked:
             raise
         except PermissionError:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             elif not executor._defer_permission_loss(grant, scheduler):
                 raise
         except Exception as exc:
+            if executor._pause_for_quit(grant, scheduler):
+                return
             if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)

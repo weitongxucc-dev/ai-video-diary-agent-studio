@@ -24,7 +24,7 @@ from app.assistant.preflight import read_task_before_pi, read_memory_before_pi
 from app.assistant.process_runner import run_pi_streaming
 from app.assistant.turn import run_turn
 
-_turn_control = TurnControl(terminate=lambda process: _terminate_process_group(process))
+_turn_control = TurnControl(terminate=lambda process, **kwargs: _terminate_process_group(process, **kwargs))
 _session_control = SessionLocks()
 # Existing diagnostic readers can inspect markers; all writes stay with owner.
 _turn_stop_events = _turn_control.stop_events
@@ -38,8 +38,8 @@ def register_turn_control(turn_id: str) -> None:
 def forget_turn_control(turn_id: str) -> None:
     _turn_control.forget(turn_id)
 
-def stop_all_assistant_turns() -> list[str]:
-    return _turn_control.stop_all()
+def stop_all_assistant_turns(*, deadline_monotonic: float | None = None) -> list[str]:
+    return _turn_control.stop_all(deadline_monotonic=deadline_monotonic)
 
 def _extension_path() -> Path:
     return Path(os.getenv("AI_VIDEO_DIARY_PI_EXTENSION") or Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts")

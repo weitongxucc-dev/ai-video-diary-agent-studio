@@ -4,17 +4,83 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime
 import logging
+import threading
+import time
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
     revision_digest, submit_creation_stage, montage_waiting_for_confirmation)
 from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent
+from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy
 from app.production import CreationPlan, CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.task_audio import TASK_MEDIA_KIND
 
 logger = logging.getLogger("app.main")
+
+
+class DesktopShutdownUseCase:
+    """One save/pause request consumes one common desktop exit budget."""
+    def __init__(self, *, runtime, automation, ingestion, assistant, stop_assistant,
+                 conversations, close_clients):
+        self.runtime, self.automation, self.ingestion = runtime, automation, ingestion
+        self.assistant, self.stop_assistant = assistant, stop_assistant
+        self.conversations, self.close_clients = conversations, close_clients
+        self._lock = threading.Lock()
+        self._request_id = None
+        self._result = None
+
+    def execute(self, exit_request_id, deadline_monotonic):
+        with self._lock:
+            if self._request_id is not None:
+                if self._request_id != exit_request_id:
+                    raise ValueError("本次API已在处理另一个退出请求")
+                return self._result
+            self._request_id = exit_request_id
+            checks = dict.fromkeys(("dispatch_stopped", "executors_notified", "processes_released", "checkpoints_saved"), False)
+            if self.runtime is not None:
+                self.runtime.begin_shutdown()
+            # Notify every driver before waiting on any one executor.
+            if self.automation is not None:
+                self.automation.request_stop()
+            if self.ingestion is not None:
+                self.ingestion.request_stop()
+            if self.assistant is not None:
+                self.assistant.request_stop()
+            background_stopped = False
+            assistant_released = False
+            try:
+                turns = self.stop_assistant(deadline_monotonic=deadline_monotonic)
+                assistant_released = True
+                for turn_id in turns:
+                    self.conversations.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
+                automation_stopped = self.automation is None or self.automation.stop(timeout_seconds=max(0, deadline_monotonic-time.monotonic()))
+                ingestion_stopped = self.ingestion is None or self.ingestion.stop(timeout_seconds=max(0, deadline_monotonic-time.monotonic()))
+                assistant_stopped = self.assistant is None or self.assistant.stop(timeout_seconds=max(0, deadline_monotonic-time.monotonic()), notify=False)
+                background_stopped = automation_stopped and ingestion_stopped and assistant_stopped
+                if self.runtime is not None:
+                    runtime_stopped = self.runtime.stop(timeout_seconds=max(0, deadline_monotonic-time.monotonic()))
+                    checks.update(self.runtime.shutdown_checks())
+                    checks["checkpoints_saved"] &= runtime_stopped
+                else:
+                    checks = dict.fromkeys(checks, True)
+            except Exception:
+                logger.exception("Desktop save/pause remains unconfirmed")
+                if self.runtime is not None:
+                    checks.update(self.runtime.shutdown_checks())
+            checks["dispatch_stopped"] &= background_stopped
+            checks["executors_notified"] &= assistant_released
+            checks["processes_released"] &= assistant_released and background_stopped
+            checks["checkpoints_saved"] &= assistant_released and background_stopped
+            if all(checks.values()) and time.monotonic() <= deadline_monotonic:
+                self.close_clients()
+            elif time.monotonic() > deadline_monotonic:
+                checks["checkpoints_saved"] = False
+            pending = [name for name, confirmed in checks.items() if not confirmed]
+            self._result = {"exit_request_id": exit_request_id,
+                "status": "unconfirmed" if pending else "ready_to_exit", "checks": checks, "pending": pending}
+            return self._result
 
 
 class ExecutionControlRejected(Exception):
@@ -162,6 +228,11 @@ class CreationExecutionControl:
 
     def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool):
         try:
+            owner = runtime.registrations["creation_job"].owner
+            if owner.task_authorizations is not None:
+                task = self.repository.get_creation_task(workspace_id, task_id)
+                self.execution.validate_input(workspace_id, task, script_id, digest)
+                owner.task_authorizations.ensure(task, actor, interactive=True)
             job = self.execution.start(workspace_id, task_id, script_id, digest,
                                            actor=actor)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
@@ -272,6 +343,12 @@ class CreationExecutionControl:
                         if saved["state"] in {"waiting", "blocked", "granted", "yield_requested"}:
                             runtime.scheduler.cancel(saved["id"], original)
                     continue
+                if media.task_authorizations is not None:
+                    try:
+                        media.task_authorizations.ensure(self.repository.get_creation_task(job.workspace_id, job.task_id), original)
+                    except TaskAuthorizationDenied as exc:
+                        logger.warning("任务媒体作业 %s 的原任务授权不可用，保留待处理：%s",job.id,exc)
+                        continue
                 if media.check(job, event, original) != "ready":
                     continue
                 if not request_rows:
@@ -316,7 +393,18 @@ class CreationExecutionControl:
                     task_is_current=lambda conn: runtime.registrations["creation_job"].owner.owns_task_stage(
                         conn, job.workspace_id, job.id, stage),
                     expected_free_permit_generation=generation)
-            if self.verify_identity(original) != "ready":
+            owner = runtime.registrations["creation_job"].owner
+            if owner.task_authorizations is not None:
+                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                try:
+                    owner.task_authorizations.ensure(task, original)
+                except TaskAuthorizationDenied as exc:
+                    logger.warning("制作作业 %s 的原任务授权不可用，保留待处理：%s",job.id,exc)
+                    continue
+                verdict = owner.authorization_verdict(task, original, "render")
+            else:
+                verdict = self.verify_identity(original)
+            if verdict != "ready":
                 logger.warning("制作作业 %s 的成员许可失效或未知，保留待处理", job.id)
                 continue
             try:

@@ -43,6 +43,7 @@ class ConversationRepository:
 
     def __init__(self, database_path: str | Path, *, initialize: bool = True) -> None:
         self.database_path = Path(database_path).expanduser()
+        self._goal_candidate_cursor = None
         if initialize:
             self.initialize()
 
@@ -95,6 +96,10 @@ class ConversationRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_assistant_turns_conversation
                     ON assistant_conversation_turns(conversation_id, sequence ASC);
+                CREATE INDEX IF NOT EXISTS idx_assistant_active_goals_created
+                    ON assistant_conversation_turns(created_at, id)
+                    WHERE json_extract(result_json,'$.goal_continuation.status') IN
+                        ('running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown');
                 CREATE TABLE IF NOT EXISTS assistant_conversation_request_receipts (
                     client_request_id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
@@ -1000,13 +1005,19 @@ class ConversationRepository:
             return next((slot for slot in root["goal"].get("completed_source_slots", []) if slot["slot_key"] == key), None)
 
     def goal_event_candidates(self, *, limit: int = 8) -> list[dict]:
-        """Read unconsumed trusted results already projected into existing turns."""
+        """Round-robin a bounded page of active goals, including empty waiters."""
         candidates = []
         with self._connect() as conn:
-            roots = conn.execute("SELECT id FROM assistant_conversation_turns WHERE "
-                                 "json_extract(result_json,'$.goal_continuation.status') IN "
-                                 "('running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown') "
-                                 "ORDER BY updated_at LIMIT ?", (limit,)).fetchall()
+            active = ("SELECT id,created_at FROM assistant_conversation_turns WHERE "
+                      "json_extract(result_json,'$.goal_continuation.status') IN "
+                      "('running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown') ")
+            cursor = self._goal_candidate_cursor
+            roots = conn.execute(active + ("AND (created_at,id) > (?,?) " if cursor else "")
+                + "ORDER BY created_at,id LIMIT ?", (*cursor, limit) if cursor else (limit,)).fetchall()
+            if cursor and len(roots) < limit:
+                roots += conn.execute(active + "AND (created_at,id) <= (?,?) ORDER BY created_at,id LIMIT ?",
+                                      (*cursor, limit - len(roots))).fetchall()
+            self._goal_candidate_cursor = (roots[-1]["created_at"], roots[-1]["id"]) if roots else None
             for root_row in roots:
                 root = self._goal_root(conn, root_row["id"])
                 if root is None:

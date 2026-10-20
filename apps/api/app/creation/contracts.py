@@ -107,6 +107,28 @@ class JobRun:
 
 
 @dataclass(frozen=True)
+class TaskAuthorization:
+    id: str
+    workspace_id: str
+    task_id: str
+    identity: dict[str, str | None]
+    goal_revision: str
+    allowed_operations: tuple[str, ...]
+    resource_scope: dict[str, list[str]]
+    issued_at: datetime | None
+    verified_at: datetime | None
+    expires_at: datetime | None
+    revision: int = 1
+    revoked_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    last_verdict: str = "unknown"
+
+
+class TaskAuthorizationConflict(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
 class ArtifactRecord:
     id: str
     workspace_id: str

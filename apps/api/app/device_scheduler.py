@@ -1095,6 +1095,29 @@ class DeviceScheduler:
             if self.resources.continue_unit(grant) is not True:
                 raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
 
+    def capture_running_check(self, grant: Grant):
+        """Freeze this command's local dependencies before launch, then read versions."""
+        with self._connect() as conn:
+            self._assert_grant(conn, grant)
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            request = self._request(row)
+            local = self.owners.capture_local(request, conn)
+        def check():
+            with self._connect() as conn:
+                self._assert_grant(conn, grant)
+                self._require_current(self.owners.check_local(request, conn, local), grant)
+                if self.resources.continue_unit(grant) is not True:
+                    raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
+        return check
+
+    def shutdown_released(self) -> bool:
+        """Read existing release proofs; never reclaim a group or invent a receipt."""
+        if self._held_fd is not None:
+            return False
+        with self._connect() as conn:
+            row = conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()
+        return row is not None and row[0] == "free" and self._read_ledger(self.lock_path.exists())["state"] == "free"
+
     def assert_released(self, grant: Grant) -> None:
         """Verify this coordinator's exact grant no longer owns the host or DB."""
         if grant != self._last_issued_grant or grant.database_path != self.database_path:

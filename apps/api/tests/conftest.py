@@ -49,9 +49,9 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    from app.main import _stop_execution_worker
+    from app.main import stop_creation_execution_worker
 
-    _stop_execution_worker()
+    stop_creation_execution_worker()
     _test_directory.cleanup()
 
 
