@@ -30,7 +30,7 @@
 
 复用现有可见线程，不新增内部代理、平行计划或治理日志。实施者确认当前绑定后直接工作，不等待逐次批准；需要范围外文件时只回报证据，由主控原位分配。每个文件同一时间一个写者；不自行提交/推送，只有C在本次验收范围内操作当前候选运行与恢复，其余线程不得启停服务或运行重型验收。最小检查按风险选现有入口，不预设新增测试文件，不重复全套检查。主控审核后提交共同候选，G按该diff审查。
 
-B当前只读恢复核对自然交付后，按用户在G线程批准的治理1、2、4接续实施；新增独占 `apps/api/app/production.py` 中本次作业/任务/事件状态仓储方法及 `apps/api/app/device_runtime.py` 的具体停止投影入口，连同原绑定的 `creation_execution.py`、`device_scheduler.py`、`main.py` 仅处理同事务让出、unknown停止原因及启动恢复接线。复用已有 `defer_unit` 回调和恢复/状态响应，不改共享schema或引入新枚举；如现有契约不足，先给主控具体差额。已有 `apps/api/tests/test_creation_execution.py` 与 `apps/api/tests/test_device_scheduler.py` 仅按真实缺口局部验证，不新增套件。C本次0任务/旧许可未恢复的首个证据须先核实际workspace和初始化入口，不能从旧数据库单独推断根因；不得人工改库或释放当前许可，不接管C的运行环境。A控件工作独立继续。
+B当前只读恢复核对自然交付后，按用户在G线程批准的治理1、2、4接续实施；新增独占 `apps/api/app/production.py` 中本次作业/任务/事件状态仓储方法、`apps/api/app/device_runtime.py` 的具体停止投影入口及 `apps/api/app/creation/execution_control.py` 的原启动恢复入口，连同原绑定的 `creation_execution.py`、`device_scheduler.py`、`main.py` 仅处理同事务让出、unknown停止原因及启动恢复接线。复用已有 `defer_unit` 回调和恢复/状态响应，不改共享schema或引入新枚举；如现有契约不足，先给主控具体差额。已有 `apps/api/tests/test_creation_execution.py` 与 `apps/api/tests/test_device_scheduler.py` 仅按真实缺口局部验证，不新增套件。C本次0任务/旧许可未恢复的首个证据须先核实际workspace和初始化入口，不能从旧数据库单独推断根因；不得人工改库或释放当前许可，不接管C的运行环境。A控件工作独立继续。
 
 ### 3.1 恢复后的责任分工
 
