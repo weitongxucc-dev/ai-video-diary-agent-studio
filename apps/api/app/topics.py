@@ -1195,6 +1195,11 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             if not isinstance(supports, list) or len(supports) > 3:
                 raise self._review_failure("support_shape", diagnostics)
             if not isinstance(issues, list) or len(issues) > 3:
+                diagnostics["issue_shape_mismatch"] = {
+                    "subtype": "too_many" if isinstance(issues, list) else "not_array",
+                    "issues_type": {type(None): "null", list: "array", dict: "object", str: "string",
+                        bool: "boolean", int: "number", float: "number"}[type(issues)],
+                    "issue_count": len(issues) if isinstance(issues, list) else None}
                 raise self._review_failure("issue_shape", diagnostics)
             for support_index, support in enumerate(supports, start=1):
                 if not isinstance(support, dict) or set(support) != {"candidate_quote_id", "source_quote_id"}:

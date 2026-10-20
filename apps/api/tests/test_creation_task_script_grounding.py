@@ -1464,6 +1464,8 @@ def test_all_twelve_findings_are_returned_with_the_existing_report_limit():
 
 
 @pytest.mark.parametrize('change,subtype,missing_keys,unknown_count', [
+    ('issues_not_array', 'not_array', None, None),
+    ('issues_too_many', 'too_many', None, None),
     ('not_object', 'not_object', [], None),
     ('missing', 'missing_keys', ['reference_ids'], 0),
     ('extra', 'extra_keys', [], 1),
@@ -1489,7 +1491,11 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
         review = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
             detail='private-original-detail'), data)
         issue = review['sections'][0]['issues'][0]
-        if change == 'not_object':
+        if change == 'issues_not_array':
+            review['sections'][0]['issues'] = {'private-unknown-key': 'private-unknown-value'}
+        elif change == 'issues_too_many':
+            review['sections'][0]['issues'] = [copy.deepcopy(issue) for _ in range(4)]
+        elif change == 'not_object':
             review['sections'][0]['issues'][0] = 'private-not-an-object'
         elif change in {'missing', 'missing_and_extra'}:
             del issue['reference_ids']
@@ -1521,9 +1527,15 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
     text = records[0].getMessage()
     diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))
     shape = diagnostic['issue_shape_mismatch']
-    assert shape['subtype'] == subtype and shape['issue_index'] == 1
-    if missing_keys is not None:
+    assert shape['subtype'] == subtype
+    if change in {'issues_not_array', 'issues_too_many'}:
+        assert shape == {'subtype': subtype,
+            'issues_type': 'object' if change == 'issues_not_array' else 'array',
+            'issue_count': None if change == 'issues_not_array' else 4}
+    elif missing_keys is not None:
+        assert shape['issue_index'] == 1
         assert shape['missing_keys'] == missing_keys and shape['unknown_key_count'] == unknown_count
     else:
+        assert shape['issue_index'] == 1
         assert type(shape['detail_length']) is int or shape['detail_length'] is None
     assert 'private-' not in text and FACT not in text and len(text) < 1200
