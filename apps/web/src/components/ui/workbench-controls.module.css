@@ -8,16 +8,23 @@
 .tabsTrigger:focus-visible,.button:focus-visible,.scrollViewport:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .tabsContent { min-width:0; min-height:0; outline:none; }
 .tabsContent[hidden] { display:none; }
-.button { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:8px; height:32px; padding:0 12px; border:1px solid transparent; border-radius:8px; background:var(--accent); color:var(--accent-contrast); font:inherit; font-weight:500; white-space:nowrap; cursor:pointer; transition:background 140ms; }
+.button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:8px; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:500; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
+.button[data-variant] { background:var(--button-bg); color:var(--button-fg); }
 .button[data-size="icon"] { width:32px; padding:0; }
-.button[data-variant="outline"] { border-color:var(--border-2); background:var(--surface-1); color:var(--text-1); }
-.button[data-variant="secondary"] { background:var(--surface-2); color:var(--text-1); }
-.button[data-variant="ghost"],.button[data-variant="link"] { background:transparent; color:var(--text-2); }
-.button[data-variant="destructive"] { color:var(--danger); background:var(--surface-2); }
-.button:hover { filter:brightness(.96); }
-.button[data-variant="ghost"]:hover { background:var(--surface-3); filter:none; }
-.button:disabled,.button[aria-disabled="true"] { opacity:.5; pointer-events:none; }
+.button[data-variant="outline"] { --button-bg:var(--surface-1); --button-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); border-color:var(--border-2); }
+.button[data-variant="secondary"] { --button-bg:var(--surface-2); --button-fg:var(--text-1); --button-hover-bg:var(--surface-3); --button-pressed-bg:color-mix(in srgb,var(--text-1) 8%,var(--surface-3)); }
+.button[data-variant="ghost"] { --button-bg:transparent; --button-fg:var(--text-2); --button-hover-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); }
+.button[data-variant="destructive"] { --button-bg:color-mix(in srgb,var(--danger) 10%,var(--surface-1)); --button-fg:var(--danger); --button-hover-bg:color-mix(in srgb,var(--danger) 20%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--danger) 28%,var(--surface-1)); }
+.button[data-variant="link"] { --button-bg:transparent; --button-fg:var(--accent); --button-hover-bg:transparent; --button-pressed-bg:transparent; --button-pressed-fg:var(--text-2); text-underline-offset:4px; }
+.button:hover:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { background:var(--button-hover-bg); color:var(--button-hover-fg,var(--button-fg)); }
+.button:active:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { background:var(--button-pressed-bg); color:var(--button-pressed-fg,var(--button-hover-fg,var(--button-fg))); }
+.button[data-variant="ghost"][aria-pressed="true"],.button[data-variant="outline"][aria-expanded="true"],.button[data-variant="ghost"][aria-expanded="true"] { --button-bg:var(--surface-3); --button-hover-bg:var(--surface-3); --button-fg:var(--text-1); background:var(--button-bg); color:var(--button-fg); }
+.button[data-variant="link"]:hover:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { text-decoration:underline; }
+.button:focus-visible { border-color:var(--focus); }
+.button[data-variant="destructive"]:focus-visible { outline-color:var(--danger); border-color:color-mix(in srgb,var(--danger) 40%,transparent); }
+.button:disabled,.button[data-disabled],.button[aria-disabled="true"] { opacity:.5; pointer-events:none; }
 .button svg,.tabsTrigger svg { width:16px; height:16px; flex-shrink:0; stroke-width:1.7; }
+.button svg { pointer-events:none; }
 .scrollArea { position:relative; min-width:0; }
 .scrollViewport { width:100%; height:100%; border-radius:inherit; outline:none; }
 .scrollbar { display:flex; padding:1px; touch-action:none; user-select:none; }

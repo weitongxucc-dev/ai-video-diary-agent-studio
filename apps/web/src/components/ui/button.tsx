@@ -1,7 +1,9 @@
 "use client";
 
-// shadcn/ui base-nova Button (MIT), CSS/token adaptation of the official source:
-// https://ui.shadcn.com/r/styles/base-nova/button.json (2026-10-18).
+// shadcn/ui Base Nova Button (MIT); reviewed source:
+// https://ui.shadcn.com/r/styles/base-nova/button.json
+// designs/yaohe-desktop-language-20261020/candidate-v2/src/registry/base-nova/ui/button.tsx
+// Keep the existing Base UI props; map variant states to DESIGN.md tokens and 13/21 typography.
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import styles from "./workbench-controls.module.css";
 
