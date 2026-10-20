@@ -1,7 +1,7 @@
 import {readAgentContext, verifyTaskVersion as verifyVersion} from './trusted-context.ts';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createBusinessRequest, RequestNotSubmitted, safeBusinessFailure, safeFailureText, credentialSecrets} from './transport.ts';
-import type {BusinessFailure} from './transport.ts';
+import type {BusinessFailure, HostBusinessCall} from './transport.ts';
 import {typedRequestId as requestIdentity} from './request-identity.ts';
 import {createToolCallScope} from './registration.ts';
 import {createPreviewBudget, createExecutionGuards} from './turn-actions.ts';
@@ -26,7 +26,7 @@ import {registerExecutionTools} from './execution-tools.ts';
 import {registerControlledCodemode} from '../controlled_codemode.ts';
 import type {ToolRegistrar} from './contracts.ts';
 
-export function createDiaryTools(environment: Record<string, string | undefined>, declarations = readAgentContext(environment)) {
+export function createDiaryTools(environment: Record<string, string | undefined>, declarations = readAgentContext(environment), businessCall?: HostBusinessCall) {
   const {apiBase, taskId, stage, selectedRefs, selectedReferences, playheadMs, selectedProfile, selectedKnowledge,
     selectedTaskVersion, readCredentials, readActionSource, readMaterialSelection,
     initialTaskRead, initialScriptDraftUpdatedAt,
@@ -39,7 +39,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
   const request = createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion,
     readCredentials, readActionSource, getSignal,
     getToolCallId: environment.AI_VIDEO_DIARY_AGENT_HOST_PROTOCOL === "phase-v1" ? getToolCallId : undefined,
-    fetchRequest: (input, init) => fetch(input, init),
+    fetchRequest: (input, init) => fetch(input, init), businessCall,
     onFailure: failure => {
       const call = failures.getStore();
       if (call && !call.first) call.first = failure;

@@ -10,7 +10,7 @@ const resources = dirname(fileURLToPath(import.meta.url));
  * No project/user extensions, coding tools or personal context are discovered.
  */
 export async function openCreationSession({ modulePath, cwd, sessionDir, sessionId,
-  modelId, systemPrompt, extensionPath, tools, customTools = [], extensionFactories = [] }) {
+  modelId, systemPrompt, extensionPath, tools, customTools = [], extensionFactories = [], businessCall }) {
   const packageRoot = dirname(dirname(modulePath));
   const installed = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   if (installed.version !== PI_VERSION) {
@@ -18,7 +18,7 @@ export async function openCreationSession({ modulePath, cwd, sessionDir, session
   }
   const sdk = await import(pathToFileURL(modulePath).href);
   const productModule = extensionPath ? await import(pathToFileURL(extensionPath).href) : null;
-  const productExtension = productModule?.createDiaryExtension(process.env);
+  const productExtension = productModule?.createDiaryExtension(process.env, businessCall);
   const settingsManager = sdk.SettingsManager.inMemory({
     steeringMode: "one-at-a-time", followUpMode: "one-at-a-time",
     retry: { enabled: false },

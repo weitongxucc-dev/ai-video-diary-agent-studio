@@ -151,17 +151,71 @@ export class BusinessResultUnknown extends Error {
   constructor(failure: BusinessFailure) {super(failure.reason); this.businessFailure = failure;}
 }
 
-export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, getToolCallId, fetchRequest, onFailure}: {
+export type HostBusinessCall = (operation: string, arguments_: Record<string, any>, options: {
+  callId: string; toolCallId?: string; signal: AbortSignal;
+}) => Promise<{ok: boolean; value?: any; failure?: any}>;
+
+// Only these existing task consumers can cross the background host boundary.
+// Paths remain an internal tool implementation detail, never a host command.
+function hostOperation(path: string, method: string, payload: any): {operation: string; arguments: Record<string, any>} | null {
+  const [pathname, search = '', extra] = path.split('?');
+  if (extra !== undefined) return null;
+  const query = new URLSearchParams(search);
+  const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
+  const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
+  if (method === 'GET') {
+    if (pathname === '/api/assistant/memory' && !search) return result('read_creator_memory');
+    if (pathname === '/api/media-script-tools/capabilities' && !search) return result('read_media_script_tool_capabilities');
+    if (pathname === '/api/production/materials/search' && only('q', 'limit'))
+      return result('search_task_materials', {query: query.get('q') || '', limit: Number(query.get('limit') || 8)});
+    const material = pathname.match(/^\/api\/production\/materials\/([^/]+)$/);
+    if (material && !search) return result('read_task_material', {asset_id: decodeURIComponent(material[1])});
+  }
+  const task = pathname.match(/^\/api\/creation-tasks\/([^/]+)(.*)$/);
+  if (!task) return null;
+  const args = {task_id: decodeURIComponent(task[1])};
+  const suffix = task[2];
+  if (method === 'GET') {
+    if (!suffix && !search) return result('read_task_workspace', args);
+    if (suffix === '/execution' && only('job_id')) return result('read_creation_execution',
+      {...args, ...(query.has('job_id') ? {job_id: query.get('job_id')} : {})});
+    const reads: Record<string, string> = {
+      '/execution/preview': 'read_creation_execution_preview',
+      '/assistant/script-context': 'read_assistant_script_context',
+      '/assistant/edit-capabilities': 'read_task_edit_capabilities',
+      '/assistant/media-script-capabilities': 'read_media_script_capabilities',
+    };
+    if (reads[suffix] && !search) return result(reads[suffix], args);
+  }
+  if (method !== 'POST' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (['/execution/start', '/execution/resume'].includes(suffix) && only('assistant_turn_id'))
+    return result(suffix.endsWith('/start') ? 'start_creation_execution' : 'resume_creation_execution',
+      {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
+  if (search) return null;
+  const writes: Record<string, string> = {
+    '/assistant/script-draft': 'save_assistant_script_draft',
+    '/execution/cancel': 'cancel_creation_execution',
+    '/topics/generate': 'generate_creation_task_topics',
+  };
+  if (writes[suffix]) return result(writes[suffix], {...args, payload});
+  const script = suffix.match(/^\/scripts\/([^/]+)\/confirm$/);
+  if (script) return result('confirm_creation_task_script', {...args, script_id: decodeURIComponent(script[1]), payload});
+  const topic = suffix.match(/^\/topics\/([^/]+)\/confirm$/);
+  return topic ? result('confirm_creation_task_topic', {...args, candidate_id: decodeURIComponent(topic[1]), payload}) : null;
+}
+
+export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, getToolCallId, fetchRequest, businessCall, onFailure}: {
   apiBase?: string; taskId?: string; selectedTaskVersion: TaskVersion | null;
   verifyTaskVersion: (workspace: any) => void;
   readCredentials: () => {authorization?: string; cookie?: string; localMemberToken?: string};
   readActionSource?:()=>ActionSource;
   getSignal: () => AbortSignal | undefined; fetchRequest: typeof fetch;
+  businessCall?: HostBusinessCall;
   getToolCallId?: () => string | undefined;
   onFailure?: (failure: BusinessFailure) => void;
 }) {
   async function request(path: string, init?: RequestInit, reportFailure = true) {
-    const credentials = readCredentials();
+    const credentials = businessCall ? {} : readCredentials();
     const secrets = credentialSecrets(credentials);
     const write = !["GET", "HEAD"].includes((init?.method || "GET").toUpperCase());
     const segments = path.split("?")[0].split("/");
@@ -188,15 +242,9 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     };
     const notSubmitted = (error: string, reason: string, stage: string) => reject(new RequestNotSubmitted(reason,
       {...locators, error, reason, repair_action: "重新读取当前对象和原请求，处理阻断后再提交。", stage, submission_effect: "not_submitted"}));
-    if (!apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
-    const headers = new Headers(init?.headers);
-    headers.set("Content-Type", "application/json");
-    const {authorization, cookie, localMemberToken} = credentials;
-    if (authorization) headers.set("Authorization", authorization);
-    if (cookie) headers.set("Cookie", cookie);
-    if (localMemberToken) headers.set("X-Local-Member-Token", localMemberToken);
-    const inputId=readActionSource?.().inputId;
-    if(inputId)headers.set("X-Assistant-Input-ID",inputId);
+    const operation = businessCall ? hostOperation(path, (init?.method || 'GET').toUpperCase(), requestBody) : null;
+    if (businessCall && !operation) return notSubmitted('business_operation_not_supported', '该操作未接入原目标后台执行，请求未提交。', 'capability');
+    if (!businessCall && !apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
     if (taskId && selectedTaskVersion && init?.method && init.method !== "GET" && path.startsWith(`/api/creation-tasks/${encodeURIComponent(taskId)}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`, undefined, false);
@@ -227,28 +275,49 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     };
     phase("start");
     try {
-      let response: Response;
-      try { response = await fetchRequest(`${apiBase}${path}`, {...init, headers, signal}); }
-      catch { return unknown("business_connection_lost", "connection"); }
-      let body: any;
-      try { body = await response.json(); }
-      catch { return unknown("business_response_unreadable", "response_decode"); }
-      if (!response.ok) {
-        const detail = typeof body?.detail === "string" ? {reason: body.detail} : body?.detail;
+      let status: number, detail: any;
+      if (businessCall) {
+        let receipt;
+        try { receipt = await businessCall(operation!.operation, operation!.arguments, {callId: requestId, toolCallId, signal}); }
+        catch { return unknown('business_host_response_lost', 'connection'); }
+        if (receipt.ok === true) return receipt.value;
+        if (receipt.ok !== false || !receipt.failure || !Number.isInteger(receipt.failure.status_code))
+          return unknown('business_host_response_unreadable', 'response_decode');
+        status = receipt.failure.status_code;
+        detail = receipt.failure;
+      } else {
+        const headers = new Headers(init?.headers);
+        headers.set('Content-Type', 'application/json');
+        const {authorization, cookie, localMemberToken} = credentials;
+        if (authorization) headers.set('Authorization', authorization);
+        if (cookie) headers.set('Cookie', cookie);
+        if (localMemberToken) headers.set('X-Local-Member-Token', localMemberToken);
+        const inputId = readActionSource?.().inputId;
+        if (inputId) headers.set('X-Assistant-Input-ID', inputId);
+        let response: Response;
+        try { response = await fetchRequest(`${apiBase}${path}`, {...init, headers, signal}); }
+        catch { return unknown('business_connection_lost', 'connection'); }
+        let body: any;
+        try { body = await response.json(); }
+        catch { return unknown('business_response_unreadable', 'response_decode'); }
+        if (response.ok) return body;
+        status = response.status;
+        detail = typeof body?.detail === 'string' ? {reason: body.detail} : body?.detail;
+      }
+      {
         const scriptFailure = scriptDraftFailure(detail, secrets);
         const safe = safeBusinessFailure(detail, secrets);
-        const effect = safe.submission_effect ?? (response.status < 500 || scriptFailure ? "rejected" : "unknown");
-        const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${response.status}`,
+        const effect = safe.submission_effect ?? (status < 500 || scriptFailure ? "rejected" : "unknown");
+        const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${status}`,
           stage: safe.stage || "business_request", submission_effect: effect,
-          reason: scriptFailure ? "文案审核未通过，草稿未保存。" : safe.reason || `业务操作失败（${response.status}）。`,
+          reason: scriptFailure ? "文案审核未通过，草稿未保存。" : safe.reason || `业务操作失败（${status}）。`,
           repair_action: effect === "unknown" ? ("先查询原请求及当前对象，确定未写入后才能修订并再次提交；不要盲重试。"
             + (safe.repair_action ? ` 确定未写入后再处理：${safe.repair_action}` : "")).slice(0, 500)
             : safe.repair_action || "读取当前对象和原请求，按拒绝原因修订后再提交。"};
-        if (effect === "unknown") return reject(new BusinessResultUnknown(failure));
-        if (effect === "not_submitted") return reject(new RequestNotSubmitted(failure.reason, failure));
-        return reject(new BusinessRequestError(failure.reason, response.status, failure.repair_action, scriptFailure, failure));
+        if (effect === "unknown") return reject(Object.assign(new BusinessResultUnknown(failure), {httpStatus: status}));
+        if (effect === "not_submitted") return reject(Object.assign(new RequestNotSubmitted(failure.reason, failure), {httpStatus: status}));
+        return reject(new BusinessRequestError(failure.reason, status, failure.repair_action, scriptFailure, failure));
       }
-      return body;
     } finally {
       phase("end");
     }

@@ -10,7 +10,7 @@ def prepare_runtime(*, root: Path, pi_executable: str, base_url: str, model: str
     environment, workspace_id: str, session_key: str | None, task_id: str, caller_user_id: str | None,
     stage: str, selected_refs: list[str], playhead_ms: int | None, authorization: str | None, cookie: str | None,
     local_member_token: str | None, material_selection, profile_reference, knowledge_reference, task_version,
-    turn_id: str | None, creation_request, message: str, tool_names: str):
+    turn_id: str | None, creation_request, message: str, tool_names: str, host_business: bool = False):
     # 已解析的可信调用方身份参与会话键：不同成员不共用同一段对话历史。
     # 没有身份时沿用既有单机行为，不额外造第二套隔离。
     caller_scope = f":{caller_user_id}" if caller_user_id else ""
@@ -69,4 +69,9 @@ def prepare_runtime(*, root: Path, pi_executable: str, base_url: str, model: str
     if module:
         env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(module)
     env["AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS"] = tool_names
+    if host_business:
+        for name in ("AI_VIDEO_DIARY_AGENT_API_BASE", "AI_VIDEO_DIARY_AGENT_AUTHORIZATION",
+                     "AI_VIDEO_DIARY_AGENT_COOKIE", "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN",
+                     "YAOHE_DESKTOP_CONTROL_TOKEN"):
+            env.pop(name, None)
     return runtime_root, env, tool_names, session_id

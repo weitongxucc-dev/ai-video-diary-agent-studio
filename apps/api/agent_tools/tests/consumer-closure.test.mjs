@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, readdir, mkdir, copyFile, rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
-import {execFile} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -68,4 +68,57 @@ console.log(JSON.stringify({errors:loaded.errors,paths:loaded.extensions.map(e=>
   assert.deepEqual(result.paths, [tree.extension]);
   assert.ok(result.tools.includes('read_current_task') && result.tools.includes('read_typed_edit_request'));
   assert.ok(result.tools.includes('read_selected_material') && result.tools.includes('read_media_script_capabilities'));
+});
+
+test('background host projects bounded facts over stdio and never falls back to HTTP', {timeout: 10000}, async t => {
+  const tree = await resourceTree(t);
+  const host = fileURLToPath(new URL('../../agent_runtime/host.mjs', import.meta.url));
+  const child = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e',
+    `globalThis.fetch=()=>{throw new Error('HTTP forbidden in background host')};await import(process.argv[1]);`, pathToFileURL(host).href],
+    {cwd: tree.root, env: {...tree.environment, AI_VIDEO_DIARY_AGENT_API_BASE: 'http://127.0.0.1:1'}});
+  t.after(() => child.kill());
+  let output = '', errors = '', buffer = '', calls = 0;
+  child.stderr.on('data', value => { errors += value; });
+  child.stdout.on('data', value => {
+    output += value;
+    buffer += value;
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      const event = JSON.parse(line);
+      if (event.type !== 'diary_business_call') continue;
+      calls++;
+      assert.equal(event.operation, 'read_creator_memory');
+      assert.deepEqual(event.arguments, {});
+      assert.deepEqual(Object.keys(event).sort(), ['arguments', 'call_id', 'operation', 'tool_call_id', 'type']);
+      child.stdin.write(JSON.stringify({type: 'diary_business_result', call_id: event.call_id, ok: true,
+        value: {id: 'synthetic-memory', revision: 2, common_expressions: Array(25).fill('x'.repeat(350)),
+          banned_words: [], style_preferences: {tone: 'plain'}}}) + '\n');
+    }
+  });
+  child.stdin.write(JSON.stringify({factMode: 'memory', extensionPath: tree.extension, businessEnabled: true, controlEnabled: true}) + '\n');
+  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+  assert.equal(code, 0, errors);
+  assert.equal(calls, 1);
+  const facts = output.trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'diary_preflight_result').value;
+  assert.equal(facts.common_expressions.length, 24);
+  assert.equal(facts.common_expressions[0].length, 300);
+  assert.equal(facts.truncated, true);
+
+  const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+const {createBusinessRequest,RequestNotSubmitted,BusinessRequestError}=await import(process.argv[1]);
+let calls=0;globalThis.fetch=()=>{throw new Error('HTTP forbidden')};
+const request=createBusinessRequest({apiBase:'http://127.0.0.1:1',taskId:'task_synthetic',selectedTaskVersion:null,
+ verifyTaskVersion(){},readCredentials:()=>{throw new Error('credentials forbidden')},getSignal:()=>undefined,
+ fetchRequest:globalThis.fetch,businessCall:async(operation,args)=>{calls++;
+  if(operation!=='save_assistant_script_draft'||args.payload.request_id!=='original-request')throw new Error('business request changed');
+  return {ok:false,failure:{status_code:422,error:'script_review_invalid',reason_code:'issue_shape',retryable:false,section_index:null,submission_effect:'rejected'}};}});
+let rejected=false,unsupported=false;
+try{await request('/api/creation-tasks/task_synthetic/assistant/script-draft',{method:'POST',body:JSON.stringify({request_id:'original-request'})});}
+catch(error){rejected=error instanceof BusinessRequestError&&error.httpStatus===422&&error.scriptFailure?.reason_code==='issue_shape';}
+try{await request('https://arbitrary.invalid/api/assistant/memory');}catch(error){unsupported=error instanceof RequestNotSubmitted;}
+if(!rejected||!unsupported||calls!==1)throw new Error('host failure classification or finite operation boundary lost');
+console.log('host receipt: PASS');`, pathToFileURL(join(tree.root, 'Resources', 'agent-tools', 'diary', 'transport.ts')).href],
+    {cwd: tree.root, env: tree.environment, timeout: 10000});
+  assert.match(stdout, /host receipt: PASS/);
 });

@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import json
+import copy
 from collections import deque
 from pathlib import Path
 from app.assistant.turn_control import AssistantStopped, TurnControl, _capture_process_group, _process_group_released, _require_process_group_platform
@@ -101,7 +102,12 @@ class _PhaseDeadlines:
 def run_pi_streaming(
     cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
     timeout_seconds: int, on_event, control: TurnControl, terminate, projector_factory, business_event_lines, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None,
+    business_handler=None, source_binding=None,
 ) -> subprocess.CompletedProcess[str]:
+    if business_handler is not None and not isinstance(source_binding, dict):
+        raise ValueError("后台业务管道缺少宿主绑定的可信来源。")
+    if business_handler is not None and turn_id is None:
+        turn_id = source_binding["turn_id"]
     stop_event = control.begin(turn_id) if turn_id else None
     _require_process_group_platform()
     def launch_process():
@@ -141,6 +147,65 @@ def run_pi_streaming(
     except json.JSONDecodeError:
         initial = None
     control_enabled = isinstance(initial, dict) and initial.get("controlEnabled") is True
+    current_binding = copy.deepcopy(source_binding)
+    tool_bindings = {}
+    # Code Mode already admits at most eight calls. One worker preserves the
+    # business writer order while its bounded queue leaves stdout/cancel free.
+    business_queue = queue.Queue(maxsize=8)
+    business_results = queue.SimpleQueue()
+    business_calls = {}
+    business_closed = threading.Event()
+
+    def failure(error, reason, effect="not_submitted", status=409):
+        return {"ok": False, "failure": {"status_code": status, "error": error,
+            "reason": reason, "stage": "host_business", "submission_effect": effect,
+            "repair_action": "读取原请求与当前对象，核实结果后再决定后续动作；不要盲重试。"}}
+
+    def run_business():
+        while not business_closed.is_set():
+            try:
+                item = business_queue.get(timeout=.25)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            event, binding, cancelled, deadline = item
+            if cancelled.is_set() or time.monotonic() >= deadline:
+                result = failure("request_aborted_before_submit", "业务调用在执行前已停止，请求未提交。")
+            else:
+                try:
+                    result = business_handler(event["operation"], event["arguments"],
+                        call_id=event["call_id"], tool_call_id=event.get("tool_call_id"),
+                        source_binding=binding, cancel_event=cancelled, deadline_monotonic=deadline)
+                except Exception:
+                    # A callback exception cannot prove that an admitted write
+                    # did not happen. Never expose its raw exception to Pi.
+                    result = failure("business_host_failed", "宿主业务调用未取得完整回执。", "unknown", 500)
+            business_results.put({"type": "diary_business_result", "call_id": event["call_id"], **result})
+
+    def close_business():
+        business_closed.set()
+        for cancelled in tuple(business_calls.values()):
+            cancelled.set()
+        try:
+            business_queue.put_nowait(None)
+        except queue.Full:
+            pass  # A busy worker observes the close flag before taking more work.
+
+    def write_input(value):
+        # This invocation's consume/drain loop is the sole stdin writer.
+        process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
+        process.stdin.flush()
+
+    def drain_business_results():
+        while not business_results.empty():
+            result = business_results.get_nowait()
+            business_calls.pop(result["call_id"], None)
+            if process.poll() is None:
+                try:
+                    write_input(result)
+                except BrokenPipeError:
+                    return
 
     def decode(line):
         try:
@@ -150,15 +215,51 @@ def run_pi_streaming(
         return event if isinstance(event, dict) else None
 
     def consume(line: str, *, cancelling: bool = False) -> None:
+        nonlocal current_binding
         output_lines.append(line)
         event = decode(line)
         if event is None:
             return
+        kind = event.get("type")
+        if business_handler is not None:
+            if kind == "tool_execution_start":
+                tool_bindings[event["toolCallId"]] = copy.deepcopy(current_binding)
+            elif kind == "diary_business_cancel":
+                cancelled = business_calls.get(event.get("call_id"))
+                if cancelled is not None:
+                    cancelled.set()
+                return
+            elif kind == "diary_business_call":
+                call_id = event.get("call_id")
+                if not isinstance(call_id, str) or call_id in business_calls or not isinstance(event.get("operation"), str) or not isinstance(event.get("arguments"), dict):
+                    raise ValueError("后台业务调用身份或参数不可读。")
+                binding = tool_bindings.get(event.get("tool_call_id"))
+                if event.get("tool_call_id") is None and isinstance(initial, dict) and initial.get("factMode") in {"task", "memory"}:
+                    binding = current_binding
+                if cancelling or business_closed.is_set() or binding is None:
+                    write_input({"type": "diary_business_result", "call_id": call_id,
+                        **failure("request_not_submitted", "调用已停止或没有可信工具来源，请求未提交。")})
+                    return
+                cancelled = threading.Event()
+                try:
+                    business_queue.put_nowait((event, copy.deepcopy(binding), cancelled,
+                        time.monotonic() + min(120, max(0, phases.remaining(time.monotonic())))))
+                except queue.Full:
+                    write_input({"type": "diary_business_result", "call_id": call_id,
+                        **failure("business_queue_full", "本轮业务调用已达到现有编排容量，请求未提交。")})
+                else:
+                    business_calls[call_id] = cancelled
+                return
         if event.get("type") == "diary_input_checkpoint":
             if input_handler is not None and not cancelling:
                 result = input_handler(event["phase"], event.get("input_id"), event.get("mode"))
-                process.stdin.write(json.dumps({"type": "diary_input_response", "checkpoint_id": event["checkpoint_id"], "result": result}, ensure_ascii=False) + "\n")
-                process.stdin.flush()
+                if business_handler is not None and event["phase"] == "consume" and result:
+                    environment = result["environment"]
+                    current_binding = {**current_binding,
+                        "input_id": environment["AI_VIDEO_DIARY_AGENT_INPUT_ID"],
+                        "input_turn_id": environment["AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID"],
+                        "task_version": json.loads(environment["AI_VIDEO_DIARY_AGENT_TASK_VERSION"] or "null")}
+                write_input({"type": "diary_input_response", "checkpoint_id": event["checkpoint_id"], "result": result})
             return
         for business_line in business_event_lines(line, seen_business_calls):
             projected = projector.project(business_line)
@@ -166,6 +267,8 @@ def run_pi_streaming(
                 on_event(projected)
 
     def cancel_and_collect() -> None:
+        for cancelled in business_calls.values():
+            cancelled.set()
         if control_enabled and process.poll() is None:
             try:
                 process.stdin.write('{"type":"diary_abort"}\n')
@@ -176,6 +279,7 @@ def run_pi_streaming(
             # cooperative shutdown, never extra model or HTTP execution budget.
             until = time.monotonic() + 1
             while time.monotonic() < until:
+                drain_business_results()
                 try:
                     _, line = line_queue.get(timeout=max(0, min(.25, until - time.monotonic())))
                 except queue.Empty:
@@ -193,6 +297,8 @@ def run_pi_streaming(
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
     try:
+        if business_handler is not None:
+            control.launch_callback(turn_id, threading.Thread(target=run_business, name="pi-assistant-business", daemon=True), close_business)
         assert process.stdin is not None
         try:
             process.stdin.write(message)
@@ -206,6 +312,7 @@ def run_pi_streaming(
             except BrokenPipeError:
                 pass
         while True:
+            drain_business_results()
             if stop_event is not None and stop_event.is_set():
                 cancel_and_collect()
                 raise AssistantStopped("assistant turn stopped")
@@ -246,6 +353,7 @@ def run_pi_streaming(
         exc.output, exc.stderr = "".join(output_lines), "".join(error_lines)
         raise
     finally:
+        close_business()
         if process.stdin is not None and not process.stdin.closed:
             try:
                 process.stdin.close()

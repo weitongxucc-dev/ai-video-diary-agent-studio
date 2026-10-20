@@ -46,6 +46,8 @@ def run_turn(
     continuation_context: dict[str, object] | None = None,
     selected_references: list[dict] | None = None,
     input_handler=None,
+    business_handler=None,
+    source_binding=None,
 ) -> tuple[str, dict | None]:
     checks = check_runtime()
     for check in checks:
@@ -65,7 +67,9 @@ def run_turn(
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms, authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, material_selection=material_selection, profile_reference=profile_reference,
         knowledge_reference=knowledge_reference, task_version=task_version, turn_id=turn_id, creation_request=creation_request,
-        message=message, tool_names=tool_names)
+        message=message, tool_names=tool_names, host_business=business_handler is not None)
+    business_options = ({"business_handler": business_handler, "source_binding": source_binding}
+                        if business_handler is not None else {})
     env["AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES"] = json.dumps(selected_references or [],ensure_ascii=False)
     env["AI_VIDEO_DIARY_AGENT_INPUT_ID"] = str((continuation_context or {}).get("source_input_id") or "")
     env["AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID"] = str((continuation_context or {}).get("source_input_turn_id") or "")
@@ -107,13 +111,13 @@ def run_turn(
     memory_facts = None
     try:
         if caller_user_id:
-            memory_facts = read_memory(extension, env, runtime_root)
+            memory_facts = read_memory(extension, env, runtime_root, **business_options)
         if task_id and stage not in {"material", "plan", "home"}:
             label = "读取当前任务（发送前）"
             if on_event:
                 on_event({"type": "tool_start", "tool_id": 0, "label": label})
             try:
-                facts = read_task(extension, env, runtime_root)
+                facts = read_task(extension, env, runtime_root, **business_options)
             except AssistantStopped:
                 if turn_id:
                     control.forget(turn_id)
@@ -148,11 +152,12 @@ def run_turn(
             "modelId": model, "systemPrompt": prompt, "extensionPath": str(extension),
             "tools": tool_names.split(","), "message": model_message, "inputEnabled": input_handler is not None,
             "controlEnabled": True,
+            "businessEnabled": business_handler is not None,
         }, ensure_ascii=False) + "\n"
         result = run_process(
             cmd, message=model_message, env=env, cwd=runtime_root,
             timeout_seconds=180, on_event=observe_event, turn_id=turn_id,
-            keep_turn_control=keep_turn_control, input_handler=input_handler,
+            keep_turn_control=keep_turn_control, input_handler=input_handler, **business_options,
         )
     except subprocess.TimeoutExpired as exc:
         # A host phase deadline is not evidence that the provider timed out.

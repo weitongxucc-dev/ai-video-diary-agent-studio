@@ -5,12 +5,15 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import threading
+import shutil
 
 import pytest
 
 from app.assistant.process_runner import AssistantPhaseTimeout, _PhaseDeadlines, run_pi_streaming
 from app.assistant.projection import _PiStreamProjector, _business_event_lines
 from app.assistant.turn_control import TurnControl, _terminate_process_group
+from app.assistant.turn_control import AssistantStopped, AssistantProcessReleaseError
 
 
 def tool(call, end=False):
@@ -34,6 +37,192 @@ def test_two_slow_business_requests_do_not_spend_either_model_call_budget():
         clock.observe(event, at)
     assert clock.expired(575) is None
     assert clock.expired(576) == ("model", 180)
+
+
+def test_slow_host_business_callback_keeps_output_and_cancel_live(tmp_path):
+    control = TurnControl(terminate=_terminate_process_group)
+    control.register("host-business-turn")
+    started, finished = threading.Event(), threading.Event()
+    observed, bindings = [], []
+    binding = {"workspace_id": "workspace", "member_id": "member", "task_id": "task",
+        "conversation_id": "conversation", "turn_id": "host-business-turn", "goal_revision": "goal-v1",
+        "input_id": None, "input_turn_id": None, "task_version": None}
+
+    def callback(operation, arguments, **options):
+        assert operation == "start_creation_execution"
+        assert arguments["payload"]["request_id"] == "original-request"
+        assert options["call_id"] == "transport-call"
+        assert options["tool_call_id"] == "work"
+        bindings.append(options["source_binding"])
+        assert time.monotonic() < options["deadline_monotonic"] <= time.monotonic() + 120
+        started.set()
+        try:
+            assert options["cancel_event"].wait(3), "cancel was blocked behind the business callback"
+            return {"ok": False, "failure": {"status_code": 409, "error": "result_unknown", "submission_effect": "unknown"}}
+        finally:
+            finished.set()
+
+    def on_event(event):
+        observed.append(event)
+        if event.get("type") == "text_delta":
+            assert started.wait(1)
+            binding["input_id"] = "later-input"
+            control.request_stop("host-business-turn")
+
+    script = '''import json,sys,time
+json.loads(sys.stdin.readline())
+for event in [
+ {"type":"tool_execution_start","toolName":"start_creation_execution","toolCallId":"work"},
+ {"type":"diary_business_request","phase":"start","tool_call_id":"work","request_id":"transport-call","write":True,"timeout_ms":120000},
+ {"type":"diary_business_call","call_id":"transport-call","tool_call_id":"work","operation":"start_creation_execution","arguments":{"task_id":"task","payload":{"request_id":"original-request"}}},
+ {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"callback remains in flight"}}]:
+ print(json.dumps(event),flush=True)
+assert json.loads(sys.stdin.readline())["type"]=="diary_abort"
+print(json.dumps({"type":"diary_abort_ack"}),flush=True)
+'''
+    with pytest.raises(AssistantStopped):
+        run_pi_streaming([sys.executable, "-u", "-c", script], message='{"controlEnabled":true,"businessEnabled":true}\n',
+            env=os.environ.copy(), cwd=tmp_path, timeout_seconds=5, on_event=on_event,
+            control=control, terminate=_terminate_process_group, projector_factory=_PiStreamProjector,
+            business_event_lines=_business_event_lines, turn_id="host-business-turn",
+            business_handler=callback, source_binding=binding)
+    assert finished.wait(1)
+    assert any(event.get("type") == "text_delta" for event in observed)
+    assert bindings[0]["input_id"] is None, "late work must retain its admitted input binding"
+
+
+def test_background_preflight_uses_host_facts_and_strips_inherited_credentials(tmp_path):
+    from app.assistant.runtime_context import prepare_runtime
+    from app.assistant.preflight import read_memory_before_pi, read_task_before_pi
+
+    node = shutil.which("node")
+    assert node is not None
+    runtime, env, _, _ = prepare_runtime(root=tmp_path, pi_executable="/synthetic/pi",
+        base_url="https://synthetic.invalid/v1", model="fixture", key="synthetic-model-key", provider="deepseek",
+        environment={"PATH": str(Path(node).parent), "AI_VIDEO_DIARY_AGENT_AUTHORIZATION": "inherited-bearer",
+            "AI_VIDEO_DIARY_AGENT_COOKIE": "inherited-cookie", "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN": "inherited-member",
+            "YAOHE_DESKTOP_CONTROL_TOKEN": "inherited-desktop-control"}, workspace_id="workspace",
+        session_key="conversation", task_id="task", caller_user_id="member", stage="montage",
+        selected_refs=[], playhead_ms=None, authorization="explicit-bearer", cookie="explicit-cookie",
+        local_member_token="explicit-member", material_selection=None, profile_reference=None,
+        knowledge_reference=None, task_version=None, turn_id=None, creation_request=None,
+        message="original instruction", tool_names="read_preference_memory", host_business=True)
+    assert not any(key in env for key in ("AI_VIDEO_DIARY_AGENT_AUTHORIZATION", "AI_VIDEO_DIARY_AGENT_COOKIE",
+        "AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN", "AI_VIDEO_DIARY_AGENT_API_BASE", "YAOHE_DESKTOP_CONTROL_TOKEN"))
+    calls = []
+    values = {
+        "read_creator_memory": {"id": "memory", "revision": 4, "common_expressions": ["a" * 350],
+            "banned_words": [], "style_preferences": {"tone": "plain"}},
+        "read_task_workspace": {"task": {"id": "task", "stage": "montage", "timeline_sequence": 0}},
+        "read_creation_execution": {"task_id": "task", "job": None},
+        "read_task_edit_capabilities": {"task_id": "task", "schema": {"type": "object", "properties": {}}, "supported_operations": []},
+        "read_media_script_capabilities": {"task_id": "task", "schema": {"type": "object", "properties": {}}, "available": False},
+        "read_media_script_tool_capabilities": {"schemas": {name: {"type": "object", "properties": {}}
+            for name in ("save", "update", "revoke", "invoke")}, "invocation_phase": "script", "result_kind": "graphic_source"},
+    }
+    binding = {"workspace_id": "workspace", "member_id": "member", "task_id": "task",
+        "conversation_id": "conversation", "turn_id": "turn", "goal_revision": "goal-v1",
+        "input_id": None, "input_turn_id": None, "task_version": None}
+
+    def business(operation, arguments, **options):
+        calls.append(operation)
+        assert arguments == ({} if operation in {"read_creator_memory", "read_media_script_tool_capabilities"} else {"task_id": "task"})
+        assert options["source_binding"] == binding
+        return {"ok": True, "value": values[operation]}
+
+    def run_process(cmd, **options):
+        return run_pi_streaming(cmd, **options, control=TurnControl(terminate=_terminate_process_group),
+            terminate=_terminate_process_group, projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines)
+
+    extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+    facts = read_memory_before_pi(extension, env, runtime, run_process=run_process,
+        business_handler=business, source_binding=binding)
+    assert calls == ["read_creator_memory"]
+    assert facts["revision"] == 4 and facts["common_expressions"] == ["a" * 300] and facts["truncated"]
+    task = read_task_before_pi(extension, env, runtime, run_process=run_process,
+        business_handler=business, source_binding=binding)
+    assert task["task_id"] == "task" and task["execution"]["job"] is None
+    assert task["_edit_capabilities"] == values["read_task_edit_capabilities"]
+    assert task["_media_script_capabilities"]["available"] is False
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_host_callback_release_is_unconfirmed_until_callback_returns(tmp_path, keep):
+    control = TurnControl(terminate=_terminate_process_group)
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+    binding = {"turn_id": "owned-callback-turn"}
+
+    def callback(_operation, _arguments, **options):
+        entered.set()
+        try:
+            release.wait(3)  # Deliberately ignores cancel to expose the review counterexample.
+            return {"ok": True, "value": {}}
+        finally:
+            returned.set()
+
+    script = '''import sys,json
+json.loads(sys.stdin.readline())
+print(json.dumps({"type":"tool_execution_start","toolName":"read_current_task","toolCallId":"work"}),flush=True)
+print(json.dumps({"type":"diary_business_call","call_id":"transport","tool_call_id":"work","operation":"read_task_workspace","arguments":{"task_id":"task"}}),flush=True)
+sys.stdin.readline()
+'''
+
+    def run():
+        try:
+            run_pi_streaming([sys.executable, "-u", "-c", script], message='{"controlEnabled":true}\n',
+                env=os.environ.copy(), cwd=tmp_path, timeout_seconds=5, on_event=lambda event: None,
+                control=control, terminate=_terminate_process_group, projector_factory=_PiStreamProjector,
+                business_event_lines=_business_event_lines, turn_id=binding["turn_id"], keep_turn_control=keep,
+                business_handler=callback, source_binding=binding)
+        except Exception as error:
+            errors.append(error)
+
+    runner = threading.Thread(target=run)
+    runner.start()
+    try:
+        assert entered.wait(2)
+        with pytest.raises(AssistantProcessReleaseError):
+            control.stop_all(deadline_monotonic=time.monotonic() + .05)
+        runner.join(2)
+        assert not runner.is_alive()
+        assert any(isinstance(error, AssistantProcessReleaseError) for error in errors)
+        assert binding["turn_id"] in control.stop_events
+        with pytest.raises(AssistantProcessReleaseError):
+            control.stop_all(deadline_monotonic=time.monotonic())
+    finally:
+        release.set()
+        assert returned.wait(1)
+        runner.join(2)
+    assert control.stop_all(deadline_monotonic=time.monotonic() + 1) == [binding["turn_id"]]
+    control.forget(binding["turn_id"])
+    assert binding["turn_id"] not in control.stop_events
+
+
+@pytest.mark.parametrize("code,status", [("task_authorization_expired", 409), ("task_authorization_revoked", 403)])
+def test_preflight_preserves_safe_authorization_failure(tmp_path, code, status):
+    from app.assistant.preflight import read_memory_before_pi
+    from app.assistant.failures import AssistantUnavailable
+
+    control = TurnControl(terminate=_terminate_process_group)
+    def callback(_operation, _arguments, **options):
+        return {"ok": False, "failure": {"status_code": status, "error": code, "reason": "原任务授权不可用。",
+            "repair_action": "核对原任务授权后继续。", "submission_effect": "not_submitted", "task_id": "task",
+            "request_id": "source-request", "stack": "raw-private-stack"}}
+    def run_process(cmd, **options):
+        return run_pi_streaming(cmd, **options, control=control, terminate=_terminate_process_group,
+            projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines)
+    env = {"PATH": os.environ["PATH"], "AI_VIDEO_DIARY_AGENT_TASK_ID": "task"}
+    extension = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
+    with pytest.raises(AssistantUnavailable) as caught:
+        read_memory_before_pi(extension, env, tmp_path, run_process=run_process,
+            business_handler=callback, source_binding={"turn_id": "preflight"})
+    error = caught.value
+    assert error.cause == "tool_failed" and error.service_contacted is False
+    assert error.business_failure["error"] == code and error.business_failure["status_code"] == status
+    assert error.business_failure["submission_effect"] == "not_submitted"
+    assert error.business_failure["task_id"] == "task" and error.business_failure["request_id"] == "source-request"
+    assert "raw-private-stack" not in str(error) + json.dumps(error.business_failure)
 
 
 @pytest.mark.parametrize("event", [
