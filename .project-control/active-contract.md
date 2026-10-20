@@ -54,6 +54,7 @@
 - B新增独占 `apps/api/app/creation/montage_stage_use_case.py`：故事板选材阶段即消费原任务已核实的素材范围，禁止先越界选材再仅在渲染前拒绝；不修改无关剪辑策略或另建素材发现入口。
 - B新增独占 `apps/api/app/task_audio.py` 中TaskMediaJobs的身份/停止分支及 `apps/api/app/creation/cover_use_case.py` 的对应分支：同一任务授权与退出暂停语义覆盖已有局部媒体和封面执行，不保留同步云端否决或把Quit记为用户取消的旧消费者；不改音频算法、封面生成策略或顺手拆文件。
 - B新增独占 `apps/api/app/material_ingestion.py`、`apps/api/app/automation_runtime.py` 的stop入口及直接收尾调用：消费退出共同剩余预算，退役无界join和阶段重新计时，不改扫描、分析或定时业务策略。
+- B新增独占 `apps/api/app/assistant_pi.py`、`apps/api/app/assistant/turn_control.py` 的停止适配：把同一退出截止传到已登记Pi进程组回收，先通知所有在途回合再有界等待，不为每个回合重新分配完整预算，不改Pi模型/工具能力。
 - B新增独占 `apps/api/app/creation/quality_inspection_use_case.py`：质检监督消费同一任务授权，退役同步云端否决；连同已批准审查项3，核验移出写事务，恢复时保留已产生的worker结果，不因暂时无法续期而丢失。审查项5只在既有main装配/渲染直接调用处处理：成片先持久化，质检独立安排，不把质检启动失败反写为渲染失败；不引入新质检框架。
 - 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
 - 已有定向检查按实际风险选择，不预设新增测试文件。B已申请并独占现有 `apps/api/tests/test_creation_execution.py`、`apps/api/tests/test_creation_permit_transport.py`，只覆盖本次授权范围/续期/撤权/恢复及退出控制共同截止的真实差额，不叠加无关矩阵。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5已随实际质检消费者绑定，仍在1/2/4后收尾；C保持停止。
