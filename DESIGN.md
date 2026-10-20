@@ -278,6 +278,8 @@ authority_rule: "DESIGN.md owns visible UI and interaction; reference assets ill
 
 通用界面必须逐类对照 [shadcn/ui组件目录](https://ui.shadcn.com/docs/components) 的组件结构、状态和交互，不以相似圆角或已有Base UI依赖视为已符合。官方当前存在Base UI等底座实现，沿适合现有工程的官方实现与公共适配复用；不为品牌名称统一而机械切换底层库。公共组件记录来源与本地适配，页面消费同一组件而非复制一套。
 
+公共按钮和选择器吸收已审议的 Base Nova 组件状态与结构：按钮各变体分别定义悬停、按下、禁用与焦点，避免对整个按钮使用亮度滤镜；选择器的选中标记、选项文字、方向图标保留独立位置，长内容与滚动不挤压操作。沿用现有 Base UI 交互及真实消费者，不新增同类底座。外观映射第3节既有颜色、字号与密度，不能把示例的字体、大标题或微小辅助字整体带入；按受影响真实页面验证键盘、焦点、状态与两种主题后接受。候选中的其它组件须按职责逐项采用，不由这一批推导整套候选已成为规范。
+
 | 用途 | 标准组件与交互责任 |
 | --- | --- |
 | 按钮、输入、参数与表单 | Button、Field/Input、Textarea、Select/Combobox、Checkbox、Switch、Slider；标签、错误、禁用/忙碌与键盘语义完整 |
