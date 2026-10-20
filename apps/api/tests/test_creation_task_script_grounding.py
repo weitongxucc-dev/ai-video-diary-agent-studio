@@ -364,10 +364,15 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
             return httpx.Response(503, text='private-provider-response')
         envelope = _review_tool_response(patch).json()
         envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
+        envelope['choices'][0]['message'].update(content='private-repair-content', reasoning_content='private-repair-reasoning')
+        envelope['model'] = 'private-provider-model'
+        envelope['usage'] = {'prompt_tokens': 1200, 'completion_tokens': 47, 'total_tokens': 1247,
+            'completion_tokens_details': {'reasoning_tokens': 11}}
+        frozen['repair_arguments_length'] = len(envelope['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
         return httpx.Response(200, json=envelope)
 
-    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
-        transport=httpx.MockTransport(respond))
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
+        api_key='private-credential-sentinel', transport=httpx.MockTransport(respond))
     if expected_code is None:
         assert generator.generate(inputs()).sections[1].content == FACT
     else:
@@ -382,10 +387,40 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
             records = [record.getMessage() for record in caplog.records if record.name == 'app.topics']
             assert len(records) == 1
             diagnostic = json.loads(records[0].removeprefix('creation_script_review_invalid '))
-            assert diagnostic['protocol_repair'] == {'status': 'request_failed',
+            repair = diagnostic['protocol_repair']
+            assert {key: repair[key] for key in ('status', 'initial_completion_tokens', 'requested_max_tokens', 'error_category', 'http_status')} == {'status': 'request_failed',
                 'initial_completion_tokens': 100, 'requested_max_tokens': 8092,
                 'error_category': 'http_failed', 'http_status': 503}
+            assert repair['response'] == {'model_id': 'MiniMax-M3'}
             assert 'private-' not in records[0] and FACT not in records[0]
+        elif case in {'missing_index', 'duplicate_index', 'extra_index', 'still_string', 'extra_field'}:
+            records = [record.getMessage() for record in caplog.records if record.name == 'app.topics']
+            assert len(records) == 1
+            diagnostic = json.loads(records[0].removeprefix('creation_script_review_invalid '))
+            repair = diagnostic['protocol_repair']
+            assert repair['status'] == 'invalid_patch'
+            assert repair['patch_failure_reason'] == {'missing_index': 'patches_count',
+                'duplicate_index': 'index_duplicate', 'extra_index': 'index_target',
+                'still_string': 'issues_type', 'extra_field': 'item_fields'}[case]
+            assert repair['patches_type'] == 'array'
+            assert repair['patch_count'] == (2 if case in {'duplicate_index', 'extra_index'} else 1)
+            assert repair['patch_item_position'] == (None if case == 'missing_index'
+                else 2 if case in {'duplicate_index', 'extra_index'} else 1)
+            if case != 'missing_index':
+                assert repair['patch_item_type'] == 'object' and repair['index_type'] == 'number'
+                assert repair['index_matches_target'] is (case != 'extra_index')
+                assert repair['issues_type'] == ('string' if case == 'still_string' else 'array')
+                assert repair['issue_count'] == (None if case == 'still_string' else 0)
+            response = repair['response']
+            assert response['model_id'] == 'MiniMax-M3' and response['finish_reason'] == 'tool_calls'
+            assert response['tool_call_count'] == 1 and response['tool_name_matches'] is True
+            assert response['tool_arguments_length'] == frozen['repair_arguments_length']
+            assert response['usage'] == {'prompt_tokens': 1200, 'completion_tokens': 47,
+                'total_tokens': 1247, 'reasoning_tokens': 11}
+            assert diagnostic['usage']['completion_tokens'] == repair['initial_completion_tokens'] == 100
+            assert repair['requested_max_tokens'] == 8092
+            for secret in ('private-', FACT, SOURCE, 'knowledge:fixture:v1', 'https://models.invalid', 'Authorization'):
+                assert secret not in caplog.text
     assert len(calls) == request_count
 
 

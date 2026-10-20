@@ -38,6 +38,7 @@ class TopicGenerationResponseError(RuntimeError):
 
 def _generation_report_document(
     response: httpx.Response, expected_tool: str, *, requested_max_tokens: int,
+    response_diagnostics: dict | None = None,
 ) -> dict:
     """Read one inert candidate report. No tool execution, text fallback or loop."""
     # Only fixed enums and counts may enter rejection logs, never provider text.
@@ -46,12 +47,17 @@ def _generation_report_document(
         "tool_call_count": None, "tool_name_matches": None, "tool_arguments_length": None,
         "usage": {"prompt_tokens": None, "completion_tokens": None,
             "total_tokens": None, "reasoning_tokens": None}}
+    if response_diagnostics is not None:
+        response_diagnostics.update(diagnostics)
+        diagnostics = response_diagnostics
 
     def safe_count(value):
         return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
 
     def invalid(reason):
         import logging
+        if response_diagnostics is not None:
+            diagnostics["reason_code"] = reason
         kind = "topics" if expected_tool == "submit_topic_candidates" else "script"
         logging.getLogger(__name__).warning("creation_generation_report_invalid %s", json.dumps(
             {"kind": kind, "reason_code": reason, **diagnostics}, sort_keys=True, separators=(",", ":")))
@@ -1220,6 +1226,14 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 raise self._review_failure("issue_shape", diagnostics)
             repair["status"] = "attempted"
             repair["requested_max_tokens"] = remaining_tokens
+            # Record the model actually sent, not arbitrary provider metadata.
+            model_id = self._model if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", self._model)
+                and not self._model.startswith(("sk-", "eyJ"))
+                and not (self._api_key and self._api_key in self._model)) else "redacted"
+            repair.update({"patch_failure_reason": None, "patches_type": None, "patch_count": None,
+                "patch_item_position": None, "patch_item_type": None, "index_type": None,
+                "index_matches_target": None, "issues_type": None, "issue_count": None,
+                "response": {"model_id": model_id}})
             repair_payload = {**payload, "max_tokens": remaining_tokens,
                 "messages": [{"role": "system", "content": (
                     review_rules
@@ -1255,24 +1269,54 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 raise self._review_failure("issue_shape", diagnostics)
             try:
                 patch = _generation_report_document(repaired_response, "repair_script_review_issues",
-                    requested_max_tokens=remaining_tokens)
+                    requested_max_tokens=remaining_tokens, response_diagnostics=repair["response"])
             except ValueError:
                 repair["status"] = "invalid_patch"
+                repair["patch_failure_reason"] = "response_" + repair["response"]["reason_code"]
                 raise self._review_failure("issue_shape", diagnostics) from None
-            if set(patch) != {"patches"} or not isinstance(patch["patches"], list) or len(patch["patches"]) != len(malformed):
+
+            def invalid_patch(reason):
                 repair["status"] = "invalid_patch"
+                repair["patch_failure_reason"] = reason
                 raise self._review_failure("issue_shape", diagnostics)
+
+            json_types = {type(None): "null", list: "array", dict: "object", str: "string",
+                bool: "boolean", int: "number", float: "number"}
+            patches = patch.get("patches")
+            repair["patches_type"] = json_types[type(patches)] if "patches" in patch else "missing"
+            repair["patch_count"] = safe_count(len(patches)) if isinstance(patches, list) else None
+            if set(patch) != {"patches"}:
+                invalid_patch("patch_fields")
+            if not isinstance(patches, list):
+                invalid_patch("patches_type")
+            if len(patches) != len(malformed):
+                invalid_patch("patches_count")
             replacements = {}
-            for item in patch["patches"]:
-                if (not isinstance(item, dict) or set(item) != {"index", "issues"}
-                        or type(item["index"]) is not int or item["index"] not in targets
-                        or item["index"] in replacements or not isinstance(item["issues"], list) or len(item["issues"]) > 3):
-                    repair["status"] = "invalid_patch"
-                    raise self._review_failure("issue_shape", diagnostics)
+            for position, item in enumerate(patches, start=1):
+                repair.update({"patch_item_position": position, "patch_item_type": json_types[type(item)],
+                    "index_type": None, "index_matches_target": None, "issues_type": None, "issue_count": None})
+                if not isinstance(item, dict):
+                    invalid_patch("item_type")
+                index, issues = item.get("index"), item.get("issues")
+                repair.update({"index_type": json_types[type(index)] if "index" in item else "missing",
+                    "index_matches_target": type(index) is int and index in targets,
+                    "issues_type": json_types[type(issues)] if "issues" in item else "missing",
+                    "issue_count": safe_count(len(issues)) if isinstance(issues, list) else None})
+                if set(item) != {"index", "issues"}:
+                    invalid_patch("item_fields")
+                if type(index) is not int:
+                    invalid_patch("index_type")
+                if index not in targets:
+                    invalid_patch("index_target")
+                if index in replacements:
+                    invalid_patch("index_duplicate")
+                if not isinstance(issues, list):
+                    invalid_patch("issues_type")
+                if len(issues) > 3:
+                    invalid_patch("issues_count")
                 replacements[item["index"]] = item["issues"]
             if set(replacements) != targets:
-                repair["status"] = "invalid_patch"
-                raise self._review_failure("issue_shape", diagnostics)
+                invalid_patch("target_coverage")
             if monotonic() >= deadline:
                 repair["status"] = "deadline_exhausted"
                 raise self._review_failure("issue_shape", diagnostics)
