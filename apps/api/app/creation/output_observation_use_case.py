@@ -47,6 +47,46 @@ class OutputObservationUseCase:
         self.repository, self.artifact_store, self.audio = repository, artifact_store, audio
         self.temporary_root, self.ocr_worker_path = temporary_root, ocr_worker_path
 
+    def submit(self, runtime, media, task, actor, payload, source, *, receipt_for, write_guard=None):
+        """Both transports arrange one original observation through the media owner."""
+        previous=self.original_request(task,actor,payload)
+        if previous is not None:
+            return previous
+        try:
+            self.version(task,payload)
+        except ValueError as exc:
+            raise OutputObservationRejected(409,str(exc)) from exc
+        event_id=None
+        if payload.request_id is not None:
+            event_id,fresh=self.repository.claim_edit_request(task,actor.user_id or actor.member_id,
+                payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True),write_guard=write_guard)
+            if not fresh:
+                return self.original_request(task,actor,payload)
+        values={'_media_kind':'output_observation','_draft':False,'_typed_source':source,
+            'payload':payload.model_dump(mode='json',exclude_unset=True)}
+        try:
+            job=media.submit(runtime,actor,task.id,'output_observation',values,'observation',write_guard=write_guard)
+            receipt=receipt_for(media,job,actor,runtime)
+            if event_id is not None:
+                self.repository.save_edit_request_result(task,event_id,status_code=202,response=receipt)
+        except Exception:
+            if event_id is not None:
+                # A durable claim survives both queue and projection failures.
+                return self.original_request(task,actor,payload)
+            located=next((event for event in reversed(self.repository.list_task_events(task.workspace_id,task.id))
+                if event.event_type=='task_media_submitted' and event.payload['arguments']==values
+                and CreationExecutionActor.from_event(task.workspace_id,event.payload)==actor),None)
+            if located is not None:
+                raise OutputObservationRejected(409,{'error':'observation_result_unknown',
+                    'reason':'原观察作业已登记，后续安排或回填未确认；请查询原作业','submission_effect':'unknown',
+                    'task_id':task.id,'job_id':located.job_id,'query_tool':'read_task_media_job',
+                    'query_url':f'/api/creation-tasks/{task.id}/media-jobs/{located.job_id}'})
+            raise
+        return {**receipt,'result':None}
+
+    def original_request(self,task,actor,payload):
+        return read_original_observation_request(self.repository,task,actor,payload)
+
     def _task_or_404(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
             return self.repository.get_creation_task(workspace_id, task_id)
@@ -274,3 +314,28 @@ class OutputObservationUseCase:
             raise ValueError('观察回执超过有界大小')
         return []
 
+
+
+def read_original_observation_request(repository,task,actor,payload):
+    if payload.request_id is None:
+        return None
+    from app.task_audio import media_digest
+    member_id=actor.user_id or actor.member_id
+    event_id='event_edit_request_'+media_digest([task.workspace_id,member_id,str(payload.request_id),'observation'])
+    try:
+        event=repository.get_task_event(task.workspace_id,event_id)
+    except KeyError:
+        return None
+    inputs=payload.model_dump(mode='json',exclude_unset=True)
+    digest=media_digest([task.id,inputs])
+    if (event.task_id!=task.id or event.payload['member_id']!=member_id or event.payload['input_digest']!=digest):
+        raise OutputObservationRejected(409,{'error':'observation_request_conflict','reason':'原观察请求身份已绑定不同任务或输入'})
+    result=repository.read_edit_request_result(task,event_id)
+    if result is None:
+        raise OutputObservationRejected(409,{'error':'observation_result_unknown','reason':'原观察请求结果尚未知，未重复执行；请查询原请求',
+            'submission_effect':'unknown','task_id':task.id,'request_id':str(payload.request_id),'input_digest':digest,
+            'query_tool':'read_task_observation_request','query_url':f'/api/creation-tasks/{task.id}/assistant/edit-requests/{payload.request_id}?phase=observation'})
+    if not 200<=result['status_code']<300:
+        response=result['response']
+        raise OutputObservationRejected(result['status_code'],response.get('detail',response))
+    return result['response']

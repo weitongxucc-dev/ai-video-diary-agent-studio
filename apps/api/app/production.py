@@ -4910,9 +4910,9 @@ class ProductionRepository:
         return version
 
     def get_timeline_version(
-        self, workspace_id: str, version_id: str
+        self, workspace_id: str, version_id: str, *, connection: sqlite3.Connection | None = None
     ) -> TimelineVersion:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT * FROM timeline_versions WHERE workspace_id = ? AND id = ?",
                 (workspace_id, version_id),
@@ -4934,6 +4934,42 @@ class ProductionRepository:
                 (workspace_id, task_id),
             ).fetchall()
         return [self._timeline_version_from_row(row) for row in rows]
+
+    def create_creation_execution_job(self, run, *, start_payload, event_type="creation_execution_started",
+                                      write_guard=None, execution_source=None):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
+            current=self.create_job_run(run,connection=conn)
+            event_id=f"event_{current.id}_start"
+            try:
+                event=self.get_task_event(run.workspace_id,event_id,connection=conn)
+            except KeyError:
+                event=self.append_task_event(TaskEvent(event_id,run.workspace_id,run.task_id,current.id,
+                    event_type,start_payload,created_at=current.created_at),connection=conn)
+            if event.payload != start_payload:
+                raise PermissionError("已有制作任务的原输入与身份不同")
+            if execution_source is not None:
+                self.bind_creation_execution_source(current,execution_source,connection=conn)
+            return current
+
+    def bind_creation_execution_source(self, job, source, *, connection=None, write_guard=None):
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                return self.bind_creation_execution_source(job,source,connection=conn,write_guard=write_guard)
+        if write_guard is not None:
+            write_guard(connection)
+        event_id=f"event_assistant_execution_locator_{source['assistant_turn_id']}"+(f"_{source['input_id']}" if source.get('input_id') else "")
+        try:
+            event=self.get_task_event(job.workspace_id,event_id,connection=connection)
+        except KeyError:
+            return self.append_task_event(TaskEvent(event_id,job.workspace_id,job.task_id,job.id,
+                "assistant_execution_located",{"job_id":job.id,"input_digest":job.input_digest,"source":source}),connection=connection)
+        if event.job_id!=job.id or event.payload['source']!=source:
+            raise ValueError("原助手输入已绑定不同制作作业")
+        return event
 
     def create_job_run(self, run: JobRun, *, connection: sqlite3.Connection | None = None) -> JobRun:
         _validate_new_job_run(run)
@@ -5209,7 +5245,7 @@ class ProductionRepository:
         failure_reason: str | None = None,
         impact: str | None = None,
         repair_action: str | None = None,
-        connection: sqlite3.Connection | None = None,
+        connection: sqlite3.Connection | None = None, write_guard=None,
     ) -> JobRun:
         if status != "succeeded" and not all(
             value is not None and value.strip()
@@ -5220,6 +5256,10 @@ class ProductionRepository:
         for reference in refs:
             _validate_logical_reference(reference, "产物输出引用")
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if write_guard is not None:
+                if not conn.in_transaction:
+                    conn.execute("BEGIN IMMEDIATE")
+                write_guard(conn)
             row = conn.execute(
                 "SELECT status, task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
                 (workspace_id, job_id),
@@ -5342,6 +5382,19 @@ class ProductionRepository:
                 "JOIN creation_request_windows w ON w.id=i.window_id JOIN creation_requests r ON r.id=w.request_id "
                 "WHERE r.workspace_id=? AND i.task_id=?", (workspace_id,task_id)).fetchone()
         return json.loads(row[0]) if row is not None else None
+
+    def task_source_revisions(self, workspace_id, knowledge_ids, source_ids, *, connection=None):
+        """Finite source facts for this goal, re-read on the owner's write connection."""
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            knowledge=[list(row) for row in conn.execute("SELECT id,version,content_hash,use_state,visibility,owner_user_id "
+                "FROM knowledge_items WHERE workspace_id=? AND id IN (SELECT value FROM json_each(?)) ORDER BY id",
+                (workspace_id,json.dumps(knowledge_ids)))] if knowledge_ids else []
+            sources=[list(row) for row in conn.execute("SELECT id,use_state FROM source_items "
+                "WHERE workspace_id=? AND id IN (SELECT value FROM json_each(?)) ORDER BY id",
+                (workspace_id,json.dumps(source_ids)))] if source_ids else []
+        if len(knowledge)!=len(set(knowledge_ids)) or len(sources)!=len(set(source_ids)):
+            raise PermissionError("原目标的固定资料已不可用")
+        return {"knowledge":knowledge,"sources":sources}
 
     def task_authorization_goal_revision(self, workspace_id, task_id, *, connection=None):
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
@@ -5944,8 +5997,9 @@ class ProductionRepository:
         task_id: str,
         *,
         timeline_version_id: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> list[SubtitleTrack]:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             if timeline_version_id is None:
                 rows = conn.execute(
@@ -6507,7 +6561,7 @@ class ProductionRepository:
                 "ctime_ns":stat.st_ctime_ns, "inode":stat.st_ino, "device":stat.st_dev})
         return facts
 
-    def claim_edit_request(self, task, member_id, request_id, phase, inputs):
+    def claim_edit_request(self, task, member_id, request_id, phase, inputs, *, write_guard=None):
         identity = hashlib.sha256(json.dumps(
             [task.workspace_id, member_id, str(request_id), phase], sort_keys=True,
             ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
@@ -6516,6 +6570,8 @@ class ProductionRepository:
             ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute("SELECT payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
             if row:
                 previous = json.loads(row["payload_json"])
@@ -7226,12 +7282,14 @@ class ProductionRepository:
 
     def start_topic_generation(
         self,
-        run: TopicGenerationRun,
-    ) -> tuple[CreationTask, TopicGenerationRun]:
+        run: TopicGenerationRun, *, write_guard=None) -> tuple[CreationTask, TopicGenerationRun]:
         """Persist the running attempt before the provider boundary is crossed."""
         if run.status != "running":
             raise ValueError("选题运行必须以 running 状态开始")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute(
                 """
                 SELECT payload FROM creation_tasks
@@ -7291,8 +7349,7 @@ class ProductionRepository:
         self,
         run_id: str,
         candidates: list[TopicCandidate],
-        evidence_references: list[TopicEvidenceReference],
-    ) -> tuple[CreationTask, TopicGenerationRun, list[TopicCandidate], list[TopicEvidenceReference]]:
+        evidence_references: list[TopicEvidenceReference], *, write_guard=None) -> tuple[CreationTask, TopicGenerationRun, list[TopicCandidate], list[TopicEvidenceReference]]:
         """Commit validated candidates, their evidence, and the stage transition together."""
         if not candidates:
             raise ValueError("选题生成没有返回候选")
@@ -7308,6 +7365,9 @@ class ProductionRepository:
             raise ValueError("每个选题候选都必须保留来源证据")
 
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute(
                 """
                 SELECT payload FROM topic_generation_runs
@@ -7568,13 +7628,15 @@ class ProductionRepository:
 
     def confirm_topic_candidate(
         self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None,
-        adoption_kind: Literal["manual", "delegated_system"] = "manual", verified_owner_user_id: str | None = None,
-    ) -> tuple[CreationTask, TopicCandidate]:
+        adoption_kind: Literal["manual", "delegated_system"] = "manual", verified_owner_user_id: str | None = None, write_guard=None) -> tuple[CreationTask, TopicCandidate]:
         if title is not None:
             title = title.strip()
             if not 1 <= len(title) <= 80:
                 raise ValueError("选题标题需要填写 1–80 个字符")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             task_row = conn.execute(
                 """
                 SELECT payload FROM creation_tasks
@@ -7657,14 +7719,15 @@ class ProductionRepository:
 
     def start_script_generation(
         self,
-        run: ScriptGenerationRun,
-    ) -> tuple[CreationTask, ScriptGenerationRun]:
+        run: ScriptGenerationRun, *, write_guard=None) -> tuple[CreationTask, ScriptGenerationRun]:
         if run.run_kind != "generation" or run.source_reply_reference is not None:
             raise ValueError("对话回复移交不能伪装成模型生成运行")
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (run.workspace_id, run.task_id),
@@ -8036,8 +8099,7 @@ class ProductionRepository:
     def complete_script_generation(
         self,
         run_id: str,
-        script: CreationTaskScript,
-    ) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
+        script: CreationTaskScript, *, write_guard=None, result_write=None) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
         if not script.title.strip() or not script.sections:
             raise ValueError("文案必须包含标题和正文")
         if any(
@@ -8050,6 +8112,9 @@ class ProductionRepository:
         ):
             raise ValueError("文案段落必须包含画面建议和来源证据")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute(
                 "SELECT payload FROM script_generation_runs WHERE id = ?", (run_id,)
             ).fetchone()
@@ -8124,6 +8189,8 @@ class ProductionRepository:
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
                 (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
             )
+            if result_write is not None:
+                result_write(conn,script)
         return (
             self.get_creation_task(run.workspace_id, run.task_id),
             self.get_script_generation_run(run.workspace_id, run.id),
@@ -8273,6 +8340,16 @@ class ProductionRepository:
             json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
 
+    def record_assistant_script_save(self, script, source, request_digest, *, connection):
+        identity=hashlib.sha256(json.dumps([script.id,script.updated_at.isoformat(),source],sort_keys=True).encode()).hexdigest()
+        event_id='event_assistant_script_saved_'+identity
+        try:
+            return self.get_task_event(script.workspace_id,event_id,connection=connection)
+        except KeyError:
+            return self.append_task_event(TaskEvent(event_id,script.workspace_id,script.task_id,None,
+                'assistant_script_saved',{'script_id':script.id,'updated_at':script.updated_at.isoformat(),
+                    'request_digest':request_digest,'source':source}),connection=connection)
+
     def update_assistant_script_draft(
         self,
         workspace_id: str,
@@ -8281,8 +8358,7 @@ class ProductionRepository:
         *,
         title: str,
         sections: list[CreationTaskScriptSection],
-        expected_updated_at: datetime | str | None = None,
-    ) -> CreationTaskScript:
+        expected_updated_at: datetime | str | None = None, write_guard=None, result_write=None) -> CreationTaskScript:
         """Revise only the current unconfirmed assistant draft in its existing run."""
         if not title.strip() or not sections or any(
             not section.id.strip()
@@ -8293,6 +8369,8 @@ class ProductionRepository:
             raise ValueError("文案草稿必须包含标题和正文")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             task = self._require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
@@ -8348,6 +8426,8 @@ class ProductionRepository:
                 "UPDATE creation_task_scripts SET payload=?, updated_at=? WHERE workspace_id=? AND task_id=? AND id=?",
                 (_json_payload(script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
             )
+            if result_write is not None:
+                result_write(conn,script)
         return script
 
     def save_script_library_entry(
@@ -8500,10 +8580,11 @@ class ProductionRepository:
         sections: list[CreationTaskScriptSection],
         expected_updated_at: datetime | str | None = None,
         adoption_kind: Literal["manual", "delegated_system"] = "manual",
-        verified_owner_user_id: str | None = None,
-    ) -> tuple[CreationTask, CreationTaskScript]:
+        verified_owner_user_id: str | None = None, write_guard=None, result_write=None) -> tuple[CreationTask, CreationTaskScript]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (workspace_id, task_id),
@@ -8610,6 +8691,8 @@ class ProductionRepository:
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
                 (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
             )
+            if result_write is not None:
+                result_write(conn,script)
         return self.get_creation_task(workspace_id, task_id), self.get_creation_task_script(
             workspace_id, script_id
         )

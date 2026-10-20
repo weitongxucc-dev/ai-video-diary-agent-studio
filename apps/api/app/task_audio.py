@@ -745,7 +745,7 @@ class TaskMediaJobs:
             return "stale"
         return "ready"
 
-    def submit(self, runtime, actor, task_id, operation, arguments, result_kind):
+    def submit(self, runtime, actor, task_id, operation, arguments, result_kind, *, write_guard=None):
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
         task = self.repository.get_creation_task(actor.workspace_id, task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
@@ -771,6 +771,8 @@ class TaskMediaJobs:
         else:
             with self.repository._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                if write_guard is not None:
+                    write_guard(conn)
                 job = self.repository.create_job_run(run, connection=conn)
                 self.repository.append_task_event(TaskEvent(
                     id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,

@@ -1778,7 +1778,7 @@ class CreationExecution:
         return script, plan
 
     def start(self, workspace_id: str, task_id: str, script_id: str, digest: str,
-              *, member_id: str | None = None, actor: CreationExecutionActor | None = None) -> JobRun:
+              *, member_id: str | None = None, actor: CreationExecutionActor | None = None, write_guard=None, execution_source=None) -> JobRun:
         if actor is not None:
             if actor.workspace_id != workspace_id or (member_id is not None and actor.member_id != member_id):
                 raise PermissionError("制作身份与工作区不匹配")
@@ -1792,7 +1792,7 @@ class CreationExecution:
                      or narration.source_kind != "recorded")):
             raise ValueError("请先为本次制作选择已授权声音")
         key = f"creation-execution:{task_id}:{digest}"
-        run = self.repository.create_job_run(
+        run = self.repository.create_creation_execution_job(
             JobRun(
                 id=f"job_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -1801,21 +1801,9 @@ class CreationExecution:
                 idempotency_key=key,
                 input_digest=digest,
             )
-        )
-        if not self._has_start_event(workspace_id, run.id):
-            self.repository.append_task_event(
-                TaskEvent(
-                    id=f"event_{run.id}_start",
-                    workspace_id=workspace_id,
-                    task_id=task_id,
-                    job_id=run.id,
-                    event_type="creation_execution_started",
-                    payload={"script_id": script_id, "plan_id": task.plan_id, "input_digest": digest,
-                             **(actor.identity_payload() if actor is not None else
-                                {"member_id": member_id} if member_id is not None else {})},
-                    created_at=run.created_at,
-                )
-            )
+            , start_payload={"script_id":script_id,"plan_id":task.plan_id,"input_digest":digest,
+                **(actor.identity_payload() if actor is not None else {"member_id":member_id} if member_id is not None else {})},
+            write_guard=write_guard,execution_source=execution_source)
         if member_id is not None:
             start_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
             if start_event.payload.get("member_id") != member_id:
@@ -1837,7 +1825,7 @@ class CreationExecution:
         return StoryboardRegeneration(self.repository).enqueue(task, inputs, actor,
             validate_input=self.validate_input, stage_facts=stage_facts)
 
-    def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None) -> JobRun:
+    def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None, execution_source=None) -> JobRun:
         latest = self.latest(workspace_id, task_id)
         if latest is None:
             raise ValueError("请先明确开始制作")
@@ -1858,7 +1846,10 @@ class CreationExecution:
             if job.input_digest == latest.input_digest
         ]
         retry_number = len(same_input)
-        run = self.repository.create_job_run(
+        resumed_payload=dict(event.payload)
+        if resumed_payload.get("operation")=="regenerate_storyboard":
+            resumed_payload={key:resumed_payload[key] for key in ("script_id","plan_id","input_digest","member_id","identity_kind","device_id","user_id") if key in resumed_payload}
+        run = self.repository.create_creation_execution_job(
             JobRun(
                 id=f"job_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -1867,22 +1858,8 @@ class CreationExecution:
                 idempotency_key=f"creation-execution:{task_id}:{latest.input_digest}:retry:{retry_number}",
                 input_digest=latest.input_digest,
             )
-        )
-        if not self._has_start_event(workspace_id, run.id):
-            resumed_payload = dict(event.payload)
-            if resumed_payload.get("operation") == "regenerate_storyboard":
-                resumed_payload = {key: resumed_payload[key] for key in
-                    ("script_id", "plan_id", "input_digest", "member_id", "identity_kind", "device_id", "user_id")
-                    if key in resumed_payload}
-            self.repository.append_task_event(
-                TaskEvent(
-                    id=f"event_{run.id}_start", workspace_id=workspace_id,
-                    task_id=task_id, job_id=run.id,
-                    event_type="creation_execution_resumed",
-                    payload=resumed_payload,
-                    created_at=run.created_at,
-                )
-            )
+, start_payload=resumed_payload,event_type="creation_execution_resumed",
+            write_guard=write_guard,execution_source=execution_source)
         if member_id is not None:
             resume_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
             if resume_event.payload.get("member_id") != member_id:
@@ -1909,7 +1886,7 @@ class CreationExecution:
         finally:
             reset_workspace_context(token)
 
-    def cancel(self, workspace_id: str, task_id: str, *, member_id: str | None = None) -> JobRun:
+    def cancel(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None) -> JobRun:
         job = self.latest(workspace_id, task_id)
         if job is None:
             raise ValueError("尚未开始制作")
@@ -1917,6 +1894,11 @@ class CreationExecution:
             event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
             if event.payload.get("member_id") != member_id:
                 raise PermissionError("当前成员不能停止其他成员创建的制作任务")
+        if write_guard is not None:
+            if job.status in {"succeeded","failed","cancelled"}:
+                return job
+            return self.repository.finish_job_run(workspace_id,job.id,status="cancelled",failure_reason="user_cancelled",
+                impact="当前阶段在下一个安全边界停止；此前有效产物保留。",repair_action="需要时点击继续制作。",write_guard=write_guard)
         return self.runtime.cancel(
             workspace_id, job.id,
             impact="当前阶段在下一个安全边界停止；此前有效产物保留。",

@@ -66,6 +66,7 @@
 - 实际完成链补4项已有观察能力：`read_task_observations`、`observe_task_output`、`read_task_observation_request`、`read_task_media_job`，保留原request_id和版本，不新增观察算法。A仅在既有transport补有限映射；B接同一TaskMediaJobs/OutputObservationUseCase和原请求仓储，必要观察编排从main抽到 `apps/api/app/creation/output_observation_use_case.py` 共同复用。未知制作回执按可信原输入定位原作业，不能用任务最新作业替代；文案保存未知不得盲重存。
 - 上述观察提交的事务接线由B在既有 `apps/api/app/task_audio.py` 的submit入口透传同一write_guard到原仓储事务；仅补实际提交前的授权/取消/版本核验，不改媒体算法或另建请求存储。
 - G对业务接线候选的增量审查由B统一定点收口：修复前置读取参数透传、观察原请求优先对账及未知提交回执、后台追加输入消费、暂停共同预算。为追加输入的同事务消费和范围继承，`apps/api/app/assistant/input_delivery.py`、`apps/api/app/assistant/process_runner.py`、`apps/api/app/conversation_repository.py` 本批移交B独占，A保持冻结；只扩展既有安全点/仓储入口，不新增队列或通用回执层。宿主在同一可信消费事务核对原授权、更新目标修订并封存未扩大的范围，桥只接受宿主返回的绑定；旧在途工具仍持有旧绑定。新增私人资源或越界输入保留明确待授权状态，不由后台扩大任务授权。必要验证复用当前B已绑定的测试入口，按上述实际失败选取，不展开全工具矩阵。
+- 上述候选复审发现“已消费追加输入后退出”仍使原目标失效，B继续收口；确需调整时独占 `apps/api/app/assistant/inputs.py`、`apps/api/app/assistant_goal_continuation.py` 的中断结算与恢复分支，A保持冻结。只保留已持久采用、原任务授权仍有效的输入，先对账原业务，不普遍放行interrupted输入或复活撤销目标；一并修复观察拒绝回执重放丢失原状态的问题。
 - 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
 - 已有定向检查按实际风险选择，不预设新增测试文件。B已申请并独占现有 `apps/api/tests/test_creation_execution.py`、`apps/api/tests/test_creation_permit_transport.py`，只覆盖本次授权范围/续期/撤权/恢复及退出控制共同截止的真实差额，不叠加无关矩阵。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5已随实际质检消费者绑定，仍在1/2/4后收尾；C保持停止。
 

@@ -2187,3 +2187,412 @@ def test_scope_refusal_does_not_stop_other_task_authorization_observation(tmp_pa
         assert service.last_error is None and service._thread.is_alive()
     finally:
         assert service.stop(2)
+
+
+def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp_path):
+    from threading import Event
+    from uuid import uuid4
+    from app.assistant.task_business import TaskBusiness
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.conversation_repository import ConversationRepository
+    from app.production import JobRun, TaskEvent
+    repo,task_id,_,_=_seed(tmp_path,workspace_id='local',voice=False)
+    conversations=ConversationRepository(repo.database_path)
+    member='original-member';actor=CreationExecutionActor('local',member)
+    chat=conversations.create('local',member,'task',task_id)
+    chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
+    context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
+             'target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}}
+    turn,_=conversations.create_turn_idempotent(chat['id'],'local',member,chat['draft_text'],str(uuid4()),chat['draft_version'],request_context=context)
+    conversations.finish_turn(turn['id'],'completed','已安排',result={'kind':'task_turn',
+        'response':{'media_job':{'job_id':'declared-existing-source','status':'queued'}}})
+    goal=conversations.register_task_goal(turn['id'])
+    authorizations=TaskAuthorizationUseCase(repo,lambda _: 'ready')
+    task=repo.get_creation_task('local',task_id)
+    authorizations.bind_business_context(task,actor,goal,memory={'revision':3,'banned_words':['私有偏好快照']})
+    event={'type':'business_result','event_id':str(uuid4()),'task_id':task_id,'status':'succeeded','phase':'preview','result_kind':'graphic_source'}
+    conversations.project_business_result(turn['id'],'local',member,event,response_patch={},message='原结果已核实')
+    candidate=conversations.goal_event_candidates()[0]
+    claim=conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+    goal=claim['goal']
+    control=CreationExecutionControl(repo,_execution(repo),None,lambda _: 'ready')
+    job=repo.create_job_run(JobRun('original-job','local',task_id,'creation_task_execution','original-job','a'*64))
+    repo.append_task_event(TaskEvent('event_original-job_start','local',task_id,job.id,'creation_execution_started',
+        {'member_id':member,'script_id':'script_local','plan_id':'plan_local','input_digest':'a'*64}))
+    repo.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
+        'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')})
+    def revoke_before_owner_write():
+        current=repo.get_task_authorization('local',task_id)
+        repo.save_task_authorization(replace(current,revision=current.revision+1,
+            revoked_at=datetime.now(timezone.utc),last_verdict='unauthorized'),expected_revision=current.revision)
+        return None
+    ports={key:(lambda *args,**kwargs:None) for key in ('workspace_facts','script_context','script_case','script_facts','generate_topics',
+        'topic_facts','edit_capabilities','script_capabilities','tool_capabilities','material_facts','observation_facts',
+        'observe_output','request_result','media_result','record_adoption')}
+    business=TaskBusiness(repo,conversations,authorizations,runtime=revoke_before_owner_write,execution=control,**ports)
+    binding={'workspace_id':'local','member_id':member,'task_id':task_id,'conversation_id':chat['id'],
+        'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),'input_id':goal.get('source_input_id'),
+        'input_turn_id':goal.get('source_input_turn_id'),'task_version':{'timeline_version_id':None,'timeline_sequence':0}}
+    def call(op,args):
+        return business(op,args,call_id='transport-only',tool_call_id='tool-only',source_binding=binding,
+            cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    assert call('read_creator_memory',{})=={'ok':True,'value':{'revision':3,'banned_words':['私有偏好快照']}}
+    wrong=call('start_creation_execution',{'task_id':task_id,'assistant_turn_id':str(uuid4()),'payload':{}})
+    assert wrong['ok'] is False and wrong['failure']['status_code']==403
+    late=call('cancel_creation_execution',{'task_id':task_id,'payload':{}})
+    assert late['ok'] is False and late['failure']['status_code']==403
+    assert repo.get_job_run('local',job.id).status=='queued'
+    with repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM task_events WHERE event_type LIKE 'task_business_invok%'").fetchone()[0]==0
+
+
+def test_creation_job_and_original_goal_source_share_the_guarded_owner_transaction(tmp_path):
+    from app.assistant.task_business import TaskBusinessRejected
+    repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local')
+    execution=_execution(repo);actor=CreationExecutionActor('local','original-member')
+    source={'workspace_id':'local','task_id':task_id,'member_id':actor.member_id,
+        'assistant_turn_id':'trusted-turn','conversation_id':'trusted-conversation','action':'start'}
+    def refused(conn):
+        assert conn.in_transaction
+        raise TaskBusinessRejected('任务授权已到期')
+    with pytest.raises(TaskBusinessRejected):
+        execution.start('local',task_id,script_id,digest,actor=actor,write_guard=refused,execution_source=source)
+    assert repo.list_job_runs('local',task_id)==[]
+    calls=[]
+    def allowed(conn):
+        assert conn.in_transaction
+        calls.append(True)
+    job=execution.start('local',task_id,script_id,digest,actor=actor,write_guard=allowed,execution_source=source)
+    assert execution.start('local',task_id,script_id,digest,actor=actor,write_guard=allowed,execution_source=source).id==job.id
+    located=repo.get_task_event('local','event_assistant_execution_locator_trusted-turn')
+    assert located.job_id==job.id and located.payload['source']==source
+    assert calls==[True,True] and len(repo.list_job_runs('local',task_id))==1
+
+
+def _seed_background_business(tmp_path):
+    from uuid import uuid4
+    from app.assistant.task_business import TaskBusiness
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.conversation_repository import ConversationRepository
+    repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local',voice=False)
+    conversations=ConversationRepository(repo.database_path);member='original-member'
+    chat=conversations.create('local',member,'task',task_id)
+    chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
+    context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
+        'target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}}
+    turn,_=conversations.create_turn_idempotent(chat['id'],'local',member,chat['draft_text'],str(uuid4()),chat['draft_version'],request_context=context)
+    conversations.finish_turn(turn['id'],'completed','已安排',result={'kind':'task_turn',
+        'response':{'media_job':{'job_id':'declared-source','status':'queued'}}})
+    goal=conversations.register_task_goal(turn['id'])
+    authorization=TaskAuthorizationUseCase(repo,lambda _: 'ready')
+    conversations.task_goal_input_authorized=authorization.adopted_goal_input_valid
+    authorization.bind_business_context(repo.get_creation_task('local',task_id),CreationExecutionActor('local',member),goal,memory={'revision':3})
+    conversations.project_business_result(turn['id'],'local',member,{'type':'business_result','event_id':str(uuid4()),
+        'task_id':task_id,'status':'succeeded','phase':'preview','result_kind':'graphic_source'},response_patch={},message='原结果已核实')
+    claim=conversations.claim_goal_event(conversations.goal_event_candidates()[0],
+        {'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+    goal=claim['goal']
+    ports={key:(lambda *args,**kwargs:None) for key in ('workspace_facts','script_context','script_case','script_facts','generate_topics',
+        'topic_facts','edit_capabilities','script_capabilities','tool_capabilities','material_facts','observation_facts',
+        'observe_output','request_result','media_result','record_adoption')}
+    business=TaskBusiness(repo,conversations,authorization,runtime=lambda:None,
+        execution=CreationExecutionControl(repo,_execution(repo),None,lambda _: 'ready'),**ports)
+    binding={'workspace_id':'local','member_id':member,'task_id':task_id,'conversation_id':chat['id'],
+        'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),'input_id':goal.get('source_input_id'),
+        'input_turn_id':goal.get('source_input_turn_id'),'task_version':{'timeline_version_id':None,'timeline_sequence':0}}
+    return business,binding,claim,script_id,digest
+
+
+def test_public_background_turn_forwards_trusted_preflight_binding(tmp_path,monkeypatch):
+    from app import assistant_pi as pi
+    from app.assistant import turn as turn_module
+    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    bridge=tmp_path/'host.mjs';bridge.touch()
+    monkeypatch.setattr(pi,'pi_runtime_checks',lambda:[])
+    monkeypatch.setattr(pi,'_pi_executable',lambda:'declared-pi')
+    monkeypatch.setattr(pi,'_configured_model',lambda _:('unused','unused','unused'))
+    monkeypatch.setattr(pi,'_agent_root',lambda *_:tmp_path)
+    monkeypatch.setattr(turn_module,'runtime_bundle',lambda _:tmp_path)
+    monkeypatch.setattr(turn_module,'prepare_runtime',lambda **kwargs:(tmp_path,
+        {'PATH':os.environ['PATH'],'AI_VIDEO_DIARY_AGENT_PI_MODULE':'declared-module',
+         'AI_VIDEO_DIARY_AGENT_TASK_ID':binding['task_id']},kwargs['tool_names'],'isolated-session'))
+    business.workspace_facts=lambda ws,task:{'task_id':task.id,'selected_refs':[]}
+    observed=[]
+    def process(cmd,*,message,**kwargs):
+        assert kwargs['business_handler'] is business and kwargs['source_binding']==binding
+        value=json.loads(message)
+        if 'factMode' not in value:
+            raise pi.AssistantStopped('stop before any model')
+        kind=value['factMode'];observed.append(kind)
+        result=business('read_creator_memory' if kind=='memory' else 'read_task_workspace',{},
+            call_id='declared-preflight',tool_call_id=None,source_binding=binding,
+            cancel_event=__import__('threading').Event(),deadline_monotonic=time.monotonic()+10)
+        assert result['ok']
+        return subprocess.CompletedProcess(cmd,0,json.dumps({'type':'diary_preflight_result','kind':kind,
+            'ok':True,'value':result['value']}),'')
+    monkeypatch.setattr(pi,'_run_pi_streaming',process)
+    with pytest.raises(pi.AssistantStopped,match='stop before any model'):
+        pi.run_task_turn(main_module.Settings(),workspace_id='local',task_id=binding['task_id'],
+            conversation_id=binding['conversation_id'],message='继续完成',stage='narration',selected_refs=[],playhead_ms=None,
+            caller_user_id=binding['member_id'],turn_id=claim['turn_id'],business_handler=business,source_binding=binding)
+    assert observed==['memory','task']
+
+
+def test_background_input_consumption_inherits_scope_and_fences_old_calls(tmp_path,monkeypatch):
+    from threading import Event
+    from uuid import uuid4
+    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    conversations=business.conversations;delivery=business.input_delivery(binding)
+    def enqueue(context,message='增加结尾要求'):
+        chat=conversations.get(binding['conversation_id'],'local',binding['member_id'])
+        chat=conversations.save_draft(chat['id'],'local',binding['member_id'],message,chat['draft_version'])
+        item,_=conversations.enqueue_input(chat['id'],'local',binding['member_id'],target_turn_id=claim['turn_id'],
+            client_request_id=str(uuid4()),message=message,mode='steer',expected_draft_version=chat['draft_version'],
+            expected_reference_version=chat['reference_version'],request_context=context)
+        assert delivery('next',mode='any')['input_id']==item['input_id']
+        return item
+    context={**claim['request_context'],'selected_reference':None}
+    first=enqueue(context)
+    adopted=delivery('consume',first['input_id'],cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    current={**binding,**adopted['_business_binding']}
+    assert current['input_id']==first['input_id'] and current['goal_revision']!=binding['goal_revision']
+    assert conversations.list_inputs(binding['conversation_id'],'local',binding['member_id'])[0]['status']=='consumed'
+    def read(source):
+        return business('read_creator_memory',{},call_id='read',tool_call_id='tool',source_binding=source,
+            cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    assert not read(binding)['ok']
+    assert read(current)=={'ok':True,'value':{'revision':3}}
+    goal=conversations.get_task_goal(claim['turn_id'])
+    before=business.production.get_task_event('local',business.authorizations.business_context_id(claim['goal'])).payload
+    after=business.production.get_task_event('local',business.authorizations.business_context_id(goal)).payload
+    assert before['authorization_id']==after['authorization_id'] and before['identity']==after['identity']
+    assert before['source_revisions']==after['source_revisions']
+    for invalid_context in ({**context,'task_id':'another-task'},
+            {**context,'knowledge_reference':{'knowledge_item_id':'new-private','version':'v1'}},
+            {**context,'target_snapshot':{'timeline_version_id':'stale','timeline_sequence':5}}):
+        refused=enqueue(invalid_context)
+        assert delivery('consume',refused['input_id'],cancel_event=Event(),deadline_monotonic=time.monotonic()+10) is None
+        receipt=conversations.list_inputs(binding['conversation_id'],'local',binding['member_id'])[-1]
+        assert receipt['status']=='rejected' and receipt['reason']
+        assert conversations.get_task_goal(claim['turn_id'])['revision']==goal['revision']
+    from app.assistant.task_business import TaskBusinessRejected
+    original_inherit=business.authorizations.inherit_business_context
+    def expired_after_seal(*args,**kwargs):
+        original_inherit(*args,**kwargs)
+        raise TaskBusinessRejected('原任务授权在消费前已到期')
+    with monkeypatch.context() as patch:
+        patch.setattr(business.authorizations,'inherit_business_context',expired_after_seal)
+        rolled_back=enqueue(context)
+        assert delivery('consume',rolled_back['input_id'],cancel_event=Event(),deadline_monotonic=time.monotonic()+10) is None
+    assert conversations.get_task_goal(claim['turn_id'])['revision']==goal['revision']
+    with pytest.raises(KeyError):
+        business.production.get_task_event('local',business.authorizations.business_context_id(
+            {**goal,'revision':goal['revision']+1,'source_input_id':rolled_back['input_id']}))
+    cancelled=enqueue(context);stop=Event();stop.set()
+    assert delivery('consume',cancelled['input_id'],cancel_event=stop,deadline_monotonic=time.monotonic()+10) is None
+    assert conversations.get_task_goal(claim['turn_id'])['source_input_id']==first['input_id']
+    business.finish(claim,'已处理追加输入')
+    assert claim['goal']['source_input_id']==first['input_id']
+    assert conversations.list_inputs(binding['conversation_id'],'local',binding['member_id'])[0]['status']=='completed'
+    assert conversations.settle_goal_round(claim) is not None
+
+
+def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_path,monkeypatch):
+    from uuid import uuid4
+    from app.creation.output_observation_use_case import OutputObservationUseCase,OutputObservationRejected
+    from app.schemas import CreationTaskObservationRequest
+    repo,task_id,_,_=_seed(tmp_path,workspace_id='local',voice=False)
+    task=repo.get_creation_task('local',task_id);actor=CreationExecutionActor('local','original-member')
+    case=OutputObservationUseCase(repo,None,SimpleNamespace(repository=repo),tmp_path,None)
+    payload=CreationTaskObservationRequest(expected_timeline_version_id=None,expected_timeline_sequence=0,
+        target={'kind':'final'},request_id=uuid4())
+    event_id,_=repo.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
+    receipt={'job_id':'original-observation','status':'queued'}
+    repo.save_edit_request_result(task,event_id,status_code=202,response=receipt)
+    later=replace(task,current_timeline_version_id='later-version')
+    assert case.submit(None,None,later,actor,payload,{},receipt_for=None)==receipt
+    monkeypatch.setattr(main_module,'_exact_edit_access',lambda *_args,**_kwargs:(later,actor.member_id))
+    monkeypatch.setattr(main_module,'_require_permit_actor',lambda *_args:actor)
+    monkeypatch.setattr(main_module,'_output_observation_use_case',lambda:case)
+    assert main_module.observe_creation_task_output(task_id,None,payload).status_code==202
+    other=payload.model_copy(update={'sample_times_seconds':[0.2]})
+    with pytest.raises(OutputObservationRejected) as conflict:
+        case.submit(None,None,later,actor,other,{},receipt_for=None)
+    assert conflict.value.status_code==409
+    unknown=payload.model_copy(update={'request_id':uuid4()})
+    class FailedQueue:
+        def submit(self,*args,**kwargs):
+            raise ValueError('queue failed after claim')
+    with pytest.raises(OutputObservationRejected) as failure:
+        case.submit(None,FailedQueue(),task,actor,unknown,{},receipt_for=None)
+    assert failure.value.detail['submission_effect']=='unknown'
+    assert failure.value.detail['request_id']==str(unknown.request_id)
+    assert failure.value.detail['query_tool']=='read_task_observation_request'
+    for exception,status in ((PermissionError('source denied'),403),(ValueError('bad source'),422),(KeyError('gone'),422)):
+        monkeypatch.setattr(case,'original_request',lambda *_args:None)
+        def prepare(*args): raise exception
+        monkeypatch.setattr(main_module,'_prepare_observation_request',prepare)
+        with pytest.raises(main_module.HTTPException) as error:
+            main_module.observe_creation_task_output(task_id,None,payload)
+        assert error.value.status_code==status
+
+
+def test_execution_projection_failure_reports_original_committed_job(tmp_path,monkeypatch):
+    from threading import Event
+    business,binding,claim,script_id,digest=_seed_background_business(tmp_path)
+    control=business.execution
+    def start(ws,task_id,script_id,digest,actor,runtime,**kwargs):
+        # Declare the control result through the actual atomic job/source owner;
+        # this case tests failed projection, independent of media prerequisites.
+        from app.creation.contracts import JobRun
+        job=business.production.create_creation_execution_job(JobRun('persisted-job',ws,task_id,
+            'creation_task_execution','persisted-job',digest),
+            start_payload={'script_id':script_id,'plan_id':'plan_local','input_digest':digest,**actor.identity_payload()},
+            write_guard=kwargs['write_guard'],execution_source=kwargs['execution_source'])
+        return {'job':asdict(job)}
+    monkeypatch.setattr(control,'start',start)
+    def failed_projection(*args,**kwargs): raise ValueError('projection unavailable')
+    monkeypatch.setattr(business.conversations,'record_task_execution',failed_projection)
+    result=business('start_creation_execution',{'payload':{'script_id':script_id,'input_digest':digest,'requirements_confirmed':True}},
+        call_id='start',tool_call_id='tool',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    assert result['ok'] is False and result['failure'].get('submission_effect')=='unknown',result
+    jobs=business.production.list_job_runs('local',binding['task_id'])
+    assert len(jobs)==1 and result['failure']['job_id']==jobs[0].id
+    assert result['failure']['query_tool']=='read_creation_execution'
+
+
+def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_path):
+    import sys
+    from uuid import uuid4
+    from app import assistant_pi as pi
+    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    repo=business.conversations
+    chat=repo.get(binding['conversation_id'],'local',binding['member_id'])
+    chat=repo.save_draft(chat['id'],'local',binding['member_id'],'补充结尾',chat['draft_version'])
+    item,_=repo.enqueue_input(chat['id'],'local',binding['member_id'],target_turn_id=claim['turn_id'],
+        client_request_id=str(uuid4()),message='补充结尾',mode='steer',expected_draft_version=chat['draft_version'],
+        expected_reference_version=chat['reference_version'],request_context={**claim['request_context'],'selected_reference':None})
+    delivery=business.input_delivery(binding);observed=[]
+    def input_handler(*args,**kwargs):
+        result=delivery(*args,**kwargs)
+        if args[0]=='consume':
+            result['environment']['AI_VIDEO_DIARY_AGENT_INPUT_ID']='untrusted-environment-value'
+        return result
+    def callback(operation,arguments,**kwargs):
+        observed.append((kwargs['tool_call_id'],kwargs['source_binding']['input_id']))
+        return business(operation,arguments,**kwargs)
+    script='''import json,sys
+json.loads(sys.stdin.readline())
+def send(value): print(json.dumps(value),flush=True)
+send({'type':'tool_execution_start','toolName':'read_creator_memory','toolCallId':'old-tool'})
+send({'type':'diary_input_checkpoint','checkpoint_id':1,'phase':'next','mode':'any'})
+item=json.loads(sys.stdin.readline())['result']
+send({'type':'diary_input_checkpoint','checkpoint_id':2,'phase':'consume','input_id':item['input_id']})
+adopted=json.loads(sys.stdin.readline())['result']
+assert '_business_binding' not in adopted
+send({'type':'tool_execution_start','toolName':'read_creator_memory','toolCallId':'new-tool'})
+for tool in ['old-tool','new-tool']:
+ send({'type':'diary_business_call','call_id':tool,'tool_call_id':tool,'operation':'read_creator_memory','arguments':{}})
+answers=[json.loads(sys.stdin.readline()),json.loads(sys.stdin.readline())]
+assert answers[0]['ok'] is False and answers[1]['ok'] is True
+'''
+    pi.register_turn_control(claim['turn_id'])
+    result=pi._run_pi_streaming([sys.executable,'-u','-c',script],message='{"controlEnabled":true,"businessEnabled":true}\n',
+        env=os.environ.copy(),cwd=tmp_path,timeout_seconds=5,on_event=lambda _:None,turn_id=claim['turn_id'],
+        input_handler=input_handler,business_handler=callback,source_binding=binding)
+    assert result.returncode==0,result.stderr
+    assert observed==[('old-tool',None),('new-tool',item['input_id'])]
+
+
+@pytest.mark.parametrize('interruption',['quit','restart'])
+def test_adopted_input_and_original_job_survive_turn_interruption(tmp_path,interruption):
+    from fastapi.encoders import jsonable_encoder
+    from threading import Event
+    from uuid import uuid4
+    from app.conversation_repository import ConversationRepository
+    from app.creation.contracts import JobRun
+    business,binding,claim,_,digest=_seed_background_business(tmp_path)
+    business.execution.render_stage=SimpleNamespace(valid=lambda *args,**kwargs:False)
+    conversations=business.conversations;production=business.production
+    chat=conversations.get(binding['conversation_id'],'local',binding['member_id'])
+    chat=conversations.save_draft(chat['id'],'local',binding['member_id'],'补充结尾并继续原制作',chat['draft_version'])
+    item,_=conversations.enqueue_input(chat['id'],'local',binding['member_id'],target_turn_id=claim['turn_id'],
+        client_request_id=str(uuid4()),message=chat['draft_text'],mode='steer',expected_draft_version=chat['draft_version'],
+        expected_reference_version=chat['reference_version'],request_context={**claim['request_context'],'selected_reference':None})
+    delivery=business.input_delivery(binding)
+    delivery('next',mode='any')
+    consumed=delivery('consume',item['input_id'],cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    current={**binding,**consumed['_business_binding']}
+    source={**{key:binding[key] for key in ('workspace_id','member_id','task_id','conversation_id')},
+        'assistant_turn_id':claim['turn_id'],'action':'start','input_id':item['input_id'],'input_turn_id':claim['turn_id']}
+    job=production.create_creation_execution_job(JobRun('job_adopted_input','local',binding['task_id'],
+        'creation_task_execution','adopted-input-job',digest),start_payload={'script_id':'script_local','plan_id':'plan_local',
+        'input_digest':digest,**CreationExecutionActor('local',binding['member_id']).identity_payload()},
+        write_guard=lambda conn:business.check(current,Event(),time.monotonic()+10,connection=conn),execution_source=source)
+    assert conversations.record_task_execution(claim['turn_id'],'local',binding['member_id'],binding['task_id'],
+        {'task_id':binding['task_id'],'job':jsonable_encoder(job)},current_source=True,input_id=item['input_id'])
+    if interruption=='quit':
+        conversations.finish_turn(claim['turn_id'],'failed',result={'reason':'api_shutdown'})
+        settled=conversations.settle_goal_round(claim)  # Deliberately the pre-consumption claim.
+        assert settled['status']=='waiting_result' and settled['source_input_id']==item['input_id']
+    restarted=ConversationRepository(production.database_path,
+        task_goal_input_authorized=business.authorizations.adopted_goal_input_valid)
+    restarted.fail_interrupted_turns()
+    assert restarted.list_inputs(binding['conversation_id'],'local',binding['member_id'])[0]['status']=='consumed'
+    assert restarted.get_task_goal(claim['turn_id'])['status'] in {'running','waiting_result'}
+    business.conversations=restarted
+    def call(source_binding):
+        return business('read_creation_execution',{'job_id':job.id},call_id='reconcile-original',tool_call_id='read',
+            source_binding=source_binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    assert not call(binding)['ok']  # The prior tool still owns the old input/revision.
+    actual=business.read_execution(restarted.get_task_goal(claim['turn_id']),CreationExecutionActor('local',binding['member_id']),job_id=job.id)
+    assert actual['job']['id']==job.id
+    event={'type':'business_result','event_id':'event_original_job_reconciled','task_id':binding['task_id'],
+        'phase':'execution','status':'queued','job_id':job.id,'input_id':item['input_id']}
+    assert restarted.project_business_result(claim['turn_id'],'local',binding['member_id'],event,
+        response_patch={'execution_status':jsonable_encoder(actual)},message='已核对原作业')
+    candidate=restarted.goal_event_candidates()[0]
+    resumed=restarted.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+    assert resumed is not None and resumed['goal']['source_input_id']==item['input_id']
+    resumed_binding={**current,'turn_id':resumed['turn_id']}
+    assert call(resumed_binding)['value']['job']['id']==job.id
+    authorization=production.get_task_authorization('local',binding['task_id'])
+    production.save_task_authorization(replace(authorization,revision=authorization.revision+1,
+        revoked_at=datetime.now(timezone.utc),last_verdict='unauthorized'),expected_revision=authorization.revision)
+    denied=call(resumed_binding)
+    assert denied['ok'] is False and denied['failure']['status_code']==403
+    with production._connect() as conn:
+        assert not business.authorizations.adopted_goal_input_valid(resumed['goal'],connection=conn)
+
+
+def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monkeypatch):
+    from threading import Event
+    from uuid import uuid4
+    from app.creation.output_observation_use_case import OutputObservationUseCase,OutputObservationRejected
+    from app.schemas import CreationTaskObservationRequest
+    business,binding,_,_,_=_seed_background_business(tmp_path)
+    repo=business.production;task=repo.get_creation_task('local',binding['task_id'])
+    actor=CreationExecutionActor('local',binding['member_id'])
+    case=OutputObservationUseCase(repo,None,SimpleNamespace(repository=repo),tmp_path,None)
+    payload=CreationTaskObservationRequest(expected_timeline_version_id=None,expected_timeline_sequence=0,
+        target={'kind':'final'},request_id=uuid4(),assistant_turn_id=binding['turn_id'])
+    event_id,_=repo.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
+    rejection={'error':'original_observation_refused','reason':'原输入被拒绝','submission_effect':'rejected'}
+    repo.save_edit_request_result(task,event_id,status_code=409,response={'detail':rejection})
+    def must_not_submit(*args,**kwargs): raise AssertionError('must replay original refusal before any version or media work')
+    monkeypatch.setattr(case,'version',must_not_submit)
+    with pytest.raises(OutputObservationRejected) as original:
+        case.submit(None,None,task,actor,payload,{},receipt_for=None)
+    assert original.value.status_code==409 and original.value.detail==rejection
+    monkeypatch.setattr(main_module,'_exact_edit_access',lambda *_args,**_kwargs:(task,actor.member_id))
+    monkeypatch.setattr(main_module,'_require_permit_actor',lambda *_args:actor)
+    monkeypatch.setattr(main_module,'_output_observation_use_case',lambda:case)
+    with pytest.raises(main_module.HTTPException) as http:
+        main_module.observe_creation_task_output(task.id,None,payload)
+    assert http.value.status_code==409 and http.value.detail==rejection
+    response=business('observe_task_output',{'payload':payload.model_dump(mode='json',exclude_unset=True)},
+        call_id='old-refusal',tool_call_id='observe',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
+    assert response['ok'] is False and response['failure']['status_code']==409
+    assert response['failure']['error']==rejection['error'] and response['failure']['submission_effect']=='rejected'

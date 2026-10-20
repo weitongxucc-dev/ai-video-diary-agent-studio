@@ -226,15 +226,15 @@ class CreationExecutionControl:
             "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
         }
 
-    def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool):
+    def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
                 task = self.repository.get_creation_task(workspace_id, task_id)
                 self.execution.validate_input(workspace_id, task, script_id, digest)
-                owner.task_authorizations.ensure(task, actor, interactive=True)
+                owner.task_authorizations.ensure(task, actor, interactive=write_guard is None)
             job = self.execution.start(workspace_id, task_id, script_id, digest,
-                                           actor=actor)
+                                           actor=actor,write_guard=write_guard,execution_source=execution_source)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="创作任务或确认对象不存在") from exc
@@ -246,9 +246,11 @@ class CreationExecutionControl:
         result = self.status(workspace_id, task_id, verify_media=verify_media)
         return result
 
-    def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool):
+    def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
-            job = self.execution.retry(workspace_id, task_id, member_id=actor.member_id)
+            job = self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source)
+            if execution_source is not None:
+                self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
         except PermissionError as exc:
             raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
@@ -258,9 +260,9 @@ class CreationExecutionControl:
         result = self.status(workspace_id, task_id, verify_media=verify_media)
         return result
 
-    def cancel(self, workspace_id, task_id, actor, runtime, *, verify_media: bool):
+    def cancel(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None):
         try:
-            job = self.execution.cancel(workspace_id, task_id, member_id=actor.member_id)
+            job = self.execution.cancel(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard)
         except PermissionError as exc:
             raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:

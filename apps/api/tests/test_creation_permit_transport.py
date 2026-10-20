@@ -19,6 +19,24 @@ from app.device_accounts import DeviceAccountService, DeviceCredential
 PROOF = "ab" * 32
 
 
+def test_continuation_pause_spends_one_deadline_and_restores_failed_pause(monkeypatch):
+    from threading import Event
+    driver=main.AssistantContinuationDriver.__new__(main.AssistantContinuationDriver)
+    driver._paused=Event()
+    now=[100.0];budgets=[]
+    class TickLock:
+        def acquire(self,timeout):
+            budgets.append(timeout);now[0]+=0.4
+            return True
+        def release(self): pass
+    driver._tick_lock=TickLock()
+    service=SimpleNamespace(pause=lambda remaining:budgets.append(remaining) or False)
+    monkeypatch.setattr(main.time,'monotonic',lambda:now[0])
+    monkeypatch.setattr(main,'_goal_service',lambda:service)
+    assert driver.pause(1) is False
+    assert budgets==pytest.approx([1,0.6]) and not driver._paused.is_set()
+
+
 @pytest.fixture
 def permit_server():
     state = SimpleNamespace(calls=[], status=200, result=True)

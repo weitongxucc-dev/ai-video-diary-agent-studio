@@ -252,13 +252,16 @@ def run_pi_streaming(
                 return
         if event.get("type") == "diary_input_checkpoint":
             if input_handler is not None and not cancelling:
-                result = input_handler(event["phase"], event.get("input_id"), event.get("mode"))
+                input_options=({"cancel_event":stop_event,"deadline_monotonic":time.monotonic()+min(120,max(0,phases.remaining(time.monotonic())))}
+                    if business_handler is not None else {})
+                result = input_handler(event["phase"], event.get("input_id"), event.get("mode"),**input_options)
                 if business_handler is not None and event["phase"] == "consume" and result:
-                    environment = result["environment"]
+                    # Only the repository-backed host callback can advance a
+                    # goal binding. This private field is never sent to JS.
+                    trusted=result.pop('_business_binding')
                     current_binding = {**current_binding,
-                        "input_id": environment["AI_VIDEO_DIARY_AGENT_INPUT_ID"],
-                        "input_turn_id": environment["AI_VIDEO_DIARY_AGENT_INPUT_TURN_ID"],
-                        "task_version": json.loads(environment["AI_VIDEO_DIARY_AGENT_TASK_VERSION"] or "null")}
+                        "goal_revision":trusted['goal_revision'],"input_id":trusted['input_id'],
+                        "input_turn_id":trusted['input_turn_id'],"task_version":trusted['task_version']}
                 write_input({"type": "diary_input_response", "checkpoint_id": event["checkpoint_id"], "result": result})
             return
         for business_line in business_event_lines(line, seen_business_calls):

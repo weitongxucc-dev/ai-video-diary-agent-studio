@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -16,7 +16,7 @@ from app.materials.contracts import MediaAuthorityError
 logger = logging.getLogger(__name__)
 TASK_AUTHORIZATION_LIFETIME = timedelta(hours=24)
 AUTHORIZATION_OBSERVATION_INTERVAL = timedelta(minutes=1)
-TASK_OPERATIONS = ("narration", "person_render", "montage_plan", "render", "narration_edit", "person_edit", "cover", "task_media", "quality_check")
+TASK_OPERATIONS = ("narration", "person_render", "montage_plan", "render", "narration_edit", "person_edit", "cover", "task_media", "quality_check", "task_goal")
 
 
 class TaskAuthorizationDenied(PermissionError):
@@ -220,6 +220,91 @@ class TaskAuthorizationUseCase:
         if self.status(workspace_id, task_id, operation="montage_plan") != "valid":
             raise PermissionError("原任务的选材授权未就绪")
         return frozenset(self.repository.get_task_authorization(workspace_id, task_id).resource_scope["assets"])
+
+    @staticmethod
+    def business_context_id(goal):
+        import hashlib
+        value = [goal["task_id"],goal["original_turn_id"],goal.get("revision",0),goal.get("source_input_id")]
+        return "event_task_business_"+hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
+
+    def bind_business_context(self, task, actor, goal, *, memory, references=None, write_guard=None):
+        """Called at actual interactive adoption; never reconstruct private scope on restart."""
+        from app.creation.contracts import TaskEvent
+        authorization = self.ensure(task,actor,interactive=True)
+        if self.status(task.workspace_id,task.id,identity=self.identity(actor)) != "valid":
+            raise TaskAuthorizationDenied("原目标授权尚未核实，未封存后台读取范围")
+        plan = self.repository.get_creation_plan(task.workspace_id,task.plan_id)
+        source_revisions=self.repository.task_source_revisions(task.workspace_id,
+            [item.id for item in plan.knowledge_references],[item.id for item in plan.source_references])
+        payload = {"authorization_id":authorization.id,"identity":authorization.identity,
+            "goal_revision":goal.get("revision",0),"original_turn_id":goal["original_turn_id"],
+            "source_input_id":goal.get("source_input_id"),"memory":memory,
+            "source_revisions":source_revisions,
+            **(references or {}),
+            "knowledge":[asdict(item) for item in plan.knowledge_references],
+            "sources":[asdict(item) for item in plan.source_references]}
+        event_id=self.business_context_id(goal)
+        with self.repository._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
+            if self.repository.task_source_revisions(task.workspace_id,
+                    [item.id for item in plan.knowledge_references],[item.id for item in plan.source_references],connection=conn)!=source_revisions:
+                raise TaskAuthorizationDenied("原目标资料在签发期间已变化")
+            if self.status(task.workspace_id,task.id,identity=authorization.identity,connection=conn,check_scope=False) != "valid":
+                raise TaskAuthorizationDenied("任务采用期间原授权已失效")
+            if "task_goal" not in authorization.allowed_operations:
+                authorization=self.repository.save_task_authorization(replace(authorization,
+                    revision=authorization.revision+1,allowed_operations=TASK_OPERATIONS),
+                    expected_revision=authorization.revision,connection=conn)
+            try:
+                return self.repository.get_task_event(task.workspace_id,event_id,connection=conn)
+            except KeyError:
+                return self.repository.append_task_event(TaskEvent(event_id,task.workspace_id,task.id,None,
+                    "task_business_scope",payload),connection=conn)
+
+    def inherit_business_context(self, old_goal, goal, context, *, connection):
+        """Same writer as input consumption; copy only the original sealed authority."""
+        from app.creation.contracts import TaskEvent
+        ws,task_id=goal['workspace_id'],goal['task_id']
+        previous=self.repository.get_task_event(ws,self.business_context_id(old_goal),connection=connection).payload
+        authorization=self.repository.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
+        if (authorization is None or authorization.id!=previous['authorization_id']
+                or authorization.identity!=previous['identity']
+                or self.status(ws,task_id,identity=previous['identity'],operation='task_goal',connection=connection,check_scope=False)!='valid'):
+            raise TaskAuthorizationDenied('原任务授权已到期或撤销；追加输入未获新的授权')
+        if self.repository.task_source_revisions(ws,[item['id'] for item in previous['knowledge']],
+                [item['id'] for item in previous['sources']],connection=connection)!=previous['source_revisions']:
+            raise TaskAuthorizationDenied('原任务固定资料已变化；需要重新授权')
+        payload={**previous,'goal_revision':goal['revision'],'source_input_id':goal['source_input_id'],
+            'selected_references':context['target_snapshot'].get('selected_references',[])}
+        self.repository.append_task_event(TaskEvent(self.business_context_id(goal),ws,task_id,None,
+            'task_business_scope',payload),connection=connection)
+        return payload
+
+    def adopted_goal_input_valid(self, goal, *, connection):
+        """Local owner check used when a turn ends before its adopted goal does."""
+        ws,task_id=goal['workspace_id'],goal['task_id']
+        authorization=self.repository.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
+        if (authorization is None or (authorization.identity.get('user_id') or authorization.identity['member_id'])!=goal['member_id']
+                or self.status(ws,task_id,identity=authorization.identity,operation='task_goal',connection=connection)!='valid'):
+            return False
+        try:
+            event=self.repository.get_task_event(ws,self.business_context_id(goal),connection=connection)
+        except KeyError:
+            return False  # Ordinary consumed input has no atomic goal adoption.
+        sealed=event.payload
+        if (event.task_id!=task_id or event.event_type!='task_business_scope'
+                or sealed['authorization_id']!=authorization.id or sealed['identity']!=authorization.identity
+                or sealed['original_turn_id']!=goal['original_turn_id']
+                or sealed['source_input_id']!=goal.get('source_input_id') or sealed['goal_revision']!=goal.get('revision',0)):
+            return False
+        plan=json.loads(connection.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id='
+            "(SELECT json_extract(payload,'$.plan_id') FROM creation_tasks WHERE workspace_id=? AND id=?)",
+            (ws,ws,task_id)).fetchone()[0])
+        return (sealed['knowledge']==plan['knowledge_references'] and sealed['sources']==plan['source_references']
+            and self.repository.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
+                [item['id'] for item in sealed['sources']],connection=connection)==sealed['source_revisions'])
 
     def verdict(self, actor, task_id, operation, *, references=(), connection=None, check_scope=True):
         status = self.status(actor.workspace_id, task_id, identity=self.identity(actor), operation=operation,

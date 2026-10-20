@@ -12,9 +12,14 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def settle_inputs(events, reason):
+def settle_inputs(events, reason, *, adopted_input_id=None):
     for item in events:
         if item.get("type") == "assistant_input" and item["status"] in {"accepted", "consumed"}:
+            if item['status']=='consumed' and item['input_id']==adopted_input_id:
+                # The owner already adopted/sealed this goal in its writer.
+                # Ending its model turn does not withdraw that authority.
+                item.update(reason='adopted_goal_turn_interrupted',updated_at=_now())
+                continue
             item.update(status="rejected" if item["status"] == "accepted" else "interrupted",
                         reason=reason, updated_at=_now())
     return events
