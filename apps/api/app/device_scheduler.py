@@ -214,7 +214,7 @@ class ResourceAdmission(Protocol):
     observed_interval_seconds: float | None
 
 
-ResourceAdmissionWrite = Callable[[sqlite3.Connection, WorkRequest, ResourceAdmission, datetime], None]
+ResourceAdmissionWrite = Callable[[sqlite3.Connection, WorkRequest, ResourceAdmission, datetime], Literal['input_rejected'] | None]
 
 
 class ResourceProbe(Protocol):
@@ -787,8 +787,16 @@ class DeviceScheduler:
             self._update_wait(conn, row, now, "dependency" if owner_state == "dependency" else "owner_unknown")
             return False
         assert decision is not None  # A ready observation includes its actual resource decision.
-        if self.admission_recorder is not None:
-            self.admission_recorder(conn, request, decision, observed_at)
+        disposition=(self.admission_recorder(conn, request, decision, observed_at)
+            if self.admission_recorder is not None else None)
+        if disposition=='input_rejected':
+            if decision.verdict is not False or decision.reason!='declared_resources_exceed_budget':
+                raise ValueError('固定输入拒绝必须来自本次确定的声明超限')
+            self._record_event(conn,row,'failed',decision.reason,None,_stamp(now))
+            conn.execute("UPDATE device_work_requests SET state='failed',wait_reason=?,last_failure_reason=?,"
+                "eligible_since_utc=NULL,retry_not_before_utc=NULL,updated_at=? WHERE id=?",
+                (decision.reason,decision.reason,_stamp(now),request.id))
+            return False
         available = decision.verdict
         if available is not True:
             self._update_wait(conn, row, now, "resource_unknown" if available is None else "resource_busy")

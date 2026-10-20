@@ -5235,6 +5235,32 @@ class ProductionRepository:
                 raise ValueError("任务运行记录已结束，进度未写入")
         return self.get_job_run(workspace_id, job_id)
 
+    def reject_creation_execution_admission(self, workspace_id, job_id, request_id, input_digest, *,
+                                           event, reason, impact, repair_action, connection):
+        """Reject one ungranted fixed-input unit without pretending it executed."""
+        if not connection.in_transaction:
+            raise ValueError('准入拒绝须与原请求处于同一事务')
+        row=connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',(workspace_id,job_id)).fetchone()
+        request=connection.execute('SELECT * FROM device_work_requests WHERE workspace_id=? AND id=?',
+            (workspace_id,request_id)).fetchone()
+        if (row is None or request is None or row['kind']!='creation_task_execution'
+                or row['status'] not in {'queued','interrupted'} or row['input_digest']!=input_digest
+                or request['owner_type']!='creation_job' or request['owner_id']!=job_id
+                or request['input_digest']!=input_digest or request['state'] not in {'waiting','blocked'}
+                or (event.workspace_id,event.task_id,event.job_id)!=(workspace_id,row['task_id'],job_id)
+                or event.payload.get('device_request_id')!=request_id or event.payload.get('input_digest')!=input_digest
+                or event.payload.get('unit_key')!=request['unit_key']):
+            raise PermissionError('固定输入拒绝与原请求、作业或输入摘要不一致')
+        if connection.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+                "AND owner_id=? AND state IN ('granted','yield_requested')",(workspace_id,job_id)).fetchone():
+            raise PermissionError('原作业仍有执行许可，不能按未准入结束')
+        self.append_task_event(event,connection=connection)
+        now=event.created_at.isoformat()
+        connection.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? "
+            "WHERE workspace_id=? AND id=?",(reason,impact,repair_action,now,now,workspace_id,job_id))
+        return self._job_run_from_row(connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
+            (workspace_id,job_id)).fetchone())
+
     def finish_job_run(
         self,
         workspace_id: str,

@@ -587,6 +587,20 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
     return f"{stage}:{digest}", resources
 
 
+def creation_input_rejection(events, job_id):
+    return next((event.payload for event in reversed(events) if event.job_id==job_id
+        and event.event_type=='creation_execution_stage' and event.payload.get('failure_kind')=='input_budget_exceeded'),None)
+
+
+class CreationInputRejected(ValueError):
+    def __init__(self, rejection):
+        self.detail={'error':rejection['reason_code'],'reason':rejection['reason'],'stage':'admission',
+            'job_id':rejection['job_id'],'request_id':rejection['device_request_id'],
+            'submission_effect':'rejected','repair_action':rejection['repair_action'],
+            'query_tool':'read_creation_execution','query_url':f"/api/creation-tasks/{rejection['task_id']}/execution"}
+        super().__init__(rejection['reason'])
+
+
 class CreationJobOwnerVerifier:
     """Validate a persisted JobRun before it can become a device work unit."""
 
@@ -619,6 +633,80 @@ class CreationJobOwnerVerifier:
         status = self.task_authorizations.status(task.workspace_id, task.id,
             identity=self.task_authorizations.identity(actor), operation=stage, connection=connection, check_scope=check_scope)
         return "ready" if status == "valid" else "unknown" if status in {"expired", "unverified"} else "unauthorized"
+
+    def record_admission(self, conn, request, decision, checked_at):
+        if request.owner_type!='creation_job':
+            return None
+        if request.unit_key.startswith('task_media:') and self.task_media is not None:
+            return self.task_media.record_admission(conn,request,decision,checked_at)
+        stage=request.unit_key.split(':',1)[0]
+        if (stage not in {'narration','person_render','montage_plan'} or decision.verdict is not False
+                or decision.reason!='declared_resources_exceed_budget'):
+            return None
+        job,task,start,script,plan=self._facts(conn,request.workspace_id,request.owner_id)
+        if job.kind!=KIND:
+            return None
+        if decision.declared!=request.resources or request.input_digest!=job.input_digest or start.get('member_id')!=request.member_id:
+            raise PermissionError('准入观察不是原作业成员和固定输入的决定')
+        binding={'workspace_id':job.workspace_id,'device_request_id':request.id,'job_id':job.id,'task_id':task.id,'input_digest':job.input_digest,
+            'unit_key':request.unit_key,'attempt_number':request.attempt_number,'last_grant_generation':request.last_grant_generation}
+        event_id='event_creation_input_refused_'+hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
+        try:
+            existing=self.repository.get_task_event(job.workspace_id,event_id,connection=conn)
+        except KeyError:
+            existing=None
+        if existing is not None:
+            if any(existing.payload.get(key)!=value for key,value in binding.items()):
+                raise PermissionError('原准入拒绝回执的归属不一致')
+            return 'input_rejected'
+        if self._check_facts(job,task,start,script,plan,stage,request.member_id)!='ready':
+            raise PermissionError('原作业的固定输入已变化，未写入新的准入拒绝')
+        fields={'text_chars','section_count','reference_bytes','duration_seconds','max_output_bytes','threads',
+            'timeout_seconds','input_bytes','asset_count','clip_count','overlay_count','width_px','height_px'}
+        failed=[]
+        for name,check in decision.checks.items():
+            if name not in fields or check.get('passed') is not False:
+                continue
+            actual,maximum=check.get('actual'),check.get('maximum')
+            if (type(actual) not in {int,float} or type(maximum) not in {int,float}
+                    or not math.isfinite(actual) or not math.isfinite(maximum) or actual<=maximum
+                    or request.resources.get(name)!=actual):
+                raise ValueError('声明超限字段缺少同次观察的实际值或上限')
+            failed.append({'field':name,'actual':actual,'maximum':maximum})
+        if not failed:
+            raise ValueError('声明超限决定没有可核验的超限字段')
+        reason='固定输入超出当前执行档：'+'；'.join(f"{item['field']} {item['actual']:g} > {item['maximum']:g}" for item in failed)
+        repair='先读取原作业与准入拒绝；仅在输入或适用执行档依据变化后重新核实，不要原样重试或扩大预算。'
+        payload={**binding,'observation_id':event_id,'stage':stage,'status':'failed','failure_kind':'input_budget_exceeded',
+            'reason_code':decision.reason,'reason':reason,'failed_limits':failed,'retryable':False,'context':'history','admitted':False,
+            'checked_at':checked_at.astimezone(timezone.utc).isoformat(),'repair_action':repair}
+        event=TaskEvent(event_id,job.workspace_id,task.id,job.id,'creation_execution_stage',payload,created_at=checked_at)
+        self.repository.reject_creation_execution_admission(job.workspace_id,job.id,request.id,job.input_digest,
+            event=event,reason=reason,impact='本次执行单元未获设备许可；原作业、上游产物和已采用版本保留。',
+            repair_action=repair,connection=conn)
+        return 'input_rejected'
+
+    def admission_basis_changed(self, rejection):
+        """Reopen only when current fixed unit/profile facts resolve the refusal."""
+        with self.repository._connect() as conn:
+            job,task,start,script,plan=self._facts(conn,rejection['workspace_id'],rejection['job_id'])
+        stage=rejection['stage']
+        budget={'narration':self.narration_budget,'person_render':self.presenter_budget,
+            'montage_plan':self.montage_budget}.get(stage)
+        if budget is None:
+            return False
+        actor=CreationExecutionActor.from_event(job.workspace_id,start)
+        if self.authorization_verdict(task,actor,stage,check_scope=False)!='ready':
+            return False
+        key,resources=self.stage_facts(task,script,plan,stage)
+        changed=key!=rejection['unit_key']
+        for failed in rejection['failed_limits']:
+            field=failed['field'];limit=getattr(budget,field if field.startswith('max_') else 'max_'+field)
+            actual=resources[field]
+            if actual>limit:
+                return False
+            changed=changed or actual!=failed['actual'] or limit!=failed['maximum']
+        return changed
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None):
         # Person composition never inherits the pure-material caps.
@@ -1825,7 +1913,8 @@ class CreationExecution:
         return StoryboardRegeneration(self.repository).enqueue(task, inputs, actor,
             validate_input=self.validate_input, stage_facts=stage_facts)
 
-    def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None, execution_source=None) -> JobRun:
+    def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None, execution_source=None,
+              admission_recheck=None) -> JobRun:
         latest = self.latest(workspace_id, task_id)
         if latest is None:
             raise ValueError("请先明确开始制作")
@@ -1841,6 +1930,9 @@ class CreationExecution:
         script_id = str(event.payload["script_id"])
         task = self.repository.get_creation_task(workspace_id, task_id)
         self.validate_input(workspace_id, task, script_id, latest.input_digest)
+        rejection=creation_input_rejection(self.repository.list_task_events(workspace_id,task_id),latest.id)
+        if rejection is not None and (admission_recheck is None or not admission_recheck(rejection)):
+            raise CreationInputRejected(rejection)
         same_input = [
             job for job in self.jobs(workspace_id, task_id)
             if job.input_digest == latest.input_digest

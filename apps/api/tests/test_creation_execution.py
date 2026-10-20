@@ -35,7 +35,7 @@ from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTa
 from app.artifact_store import ArtifactStore
 from app.config import Settings
 from app.narration import NarrationGenerator
-from app.voice_clone import Qwen3TTSSubprocessProvider
+
 from app.host_resource_probes import HostBudget, HostResourceProbe, CpuRenderBudget, NarrationBudget, MontageBudget
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import (
@@ -2596,3 +2596,97 @@ def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monk
         call_id='old-refusal',tool_call_id='observe',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert response['ok'] is False and response['failure']['status_code']==409
     assert response['failure']['error']==rejection['error'] and response['failure']['submission_effect']=='rejected'
+
+
+
+def _queued_creation_admission_case(tmp_path, *, static):
+    from app.host_resource_probes import HostResourceDecision,NarrationBudget
+    from app.device_scheduler import SubmissionIntent,SchedulePolicy
+    repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local')
+    actor=CreationExecutionActor('local','original-member');execution=_execution(repo)
+    register_synthetic_profiles(repo,workspace_id='local',member_id=actor.member_id,
+        person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',model_id='test',
+        person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1')
+    job=execution.start('local',task_id,script_id,digest,actor=actor)
+    budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024)
+    owner=CreationJobOwnerVerifier(repo,narration_budget=budget,verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
+    # Fixed stage facts and host observation are declared ports; the real owner,
+    # scheduler, process identity and SQLite transactions run without a model.
+    resources={'kind':'creation_narration','execution_mode':'isolated_qwen3_tts',
+        'text_chars':547 if static else 300,'section_count':3,'reference_bytes':627574,
+        'duration_seconds':30,'max_output_bytes':3145728,'threads':2,'timeout_seconds':300.0}
+    key='narration:'+'b'*64
+    owner.stage_facts=lambda *_:(key,dict(resources))
+    calls=[]
+    def admit(request):
+        calls.append(request.id)
+        return HostResourceDecision(False,dict(request.resources),
+            {'text_chars':{'actual':547,'maximum':374,'passed':False}} if static else
+            {'available_memory_bytes':{'actual':5,'minimum':10,'passed':False}},
+            'declared_resources_exceed_budget' if static else 'host_memory_pressure')
+    scheduler=DeviceScheduler(repo.database_path,tmp_path/'static-admission.lock',owners=owner,
+        resources=SimpleNamespace(admit=admit,continue_unit=lambda _:True,released=lambda _:True),
+        processes=HostProcessProbe(),admission_recorder=owner.record_admission)
+    request=scheduler.submit(SubmissionIntent('local','creation_job',job.id,digest,key,SchedulePolicy()),actor)
+    return repo,task_id,execution,owner,scheduler,request,actor,calls
+
+
+@pytest.mark.parametrize('static',[True,False])
+def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_waiting(tmp_path,static):
+    from app.creation.execution_control import CreationExecutionControl,ExecutionControlRejected
+    repo,task_id,execution,owner,scheduler,request,actor,calls=_queued_creation_admission_case(tmp_path,static=static)
+    task=asdict(repo.get_creation_task('local',task_id))
+    assert scheduler.pick_and_grant() is None
+    first=repo.get_job_run('local',request.owner_id)
+    assert scheduler.pick_and_grant() is None
+    current=scheduler._get(request.id)
+    assert first.attempt==0 and first.started_at is None and current.last_grant_generation is None
+    assert asdict(repo.get_creation_task('local',task_id))==task
+    control=CreationExecutionControl(repo,execution,SimpleNamespace(valid=lambda *args,**kwargs:False),lambda _:'ready')
+    status=control.read_bound('local',task_id,request.owner_id,actor,verify_media=False)
+    if static:
+        assert current.state=='failed' and current.wait_reason=='declared_resources_exceed_budget'
+        assert first.status=='failed' and calls==[request.id]
+        receipt=status['input_rejection']
+        assert receipt['job_id']==request.owner_id and receipt['device_request_id']==request.id
+        assert receipt['input_digest']==request.input_digest and receipt['failed_limits']==[
+            {'field':'text_chars','actual':547,'maximum':374}]
+        assert status['current_stage']=='narration' and '547' in first.failure_reason
+        stored=repo.get_task_event('local',receipt['observation_id'])
+        with repo._connect() as conn:
+            assert owner.record_admission(conn,request,SimpleNamespace(verdict=False,
+                reason='declared_resources_exceed_budget',declared=request.resources),datetime.now(timezone.utc))=='input_rejected'
+        assert repo.get_task_event('local',stored.id)==stored
+        with pytest.raises(ExecutionControlRejected) as same_input:
+            control.resume('local',task_id,actor,SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=owner)}),verify_media=False)
+        assert same_input.value.detail['job_id']==request.owner_id
+        assert len(repo.list_job_runs('local',task_id))==1
+        from fastapi.encoders import jsonable_encoder
+        assert jsonable_encoder(status)['input_rejection']['failed_limits']==receipt['failed_limits']
+        # An explicitly changed unit declaration may use the formal continue
+        # entry; the old refusal survives and no admission/model is run here.
+        changed={**request.resources,'text_chars':300}
+        owner.stage_facts=lambda *_:('narration:'+'c'*64,changed)
+        runtime=SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=owner)},
+            scheduler=scheduler,wake=lambda:None)
+        resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
+        assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
+        assert repo.get_job_run('local',request.owner_id).status=='failed'
+        assert repo.get_task_event('local',stored.id)==stored and calls==[request.id]
+    else:
+        assert current.state=='blocked' and current.wait_reason=='resource_busy'
+        assert first.status=='queued' and calls==[request.id,request.id]
+        assert status['input_rejection'] is None
+
+
+def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,monkeypatch):
+    repo,task_id,_execution,_owner,scheduler,request,_actor,_calls=_queued_creation_admission_case(tmp_path,static=True)
+    def failed_request_write(*args,**kwargs): raise RuntimeError('request write failed')
+    monkeypatch.setattr(scheduler,'_record_event',failed_request_write)
+    with pytest.raises(RuntimeError,match='request write failed'):
+        scheduler.pick_and_grant()
+    assert repo.get_job_run('local',request.owner_id).status=='queued'
+    assert scheduler._get(request.id).state=='waiting'
+    assert not [event for event in repo.list_task_events('local',task_id)
+        if event.payload.get('failure_kind')=='input_budget_exceeded']
+from app.voice_clone import Qwen3TTSSubprocessProvider

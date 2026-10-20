@@ -8,7 +8,7 @@ import threading
 import time
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
-    revision_digest, submit_creation_stage, montage_waiting_for_confirmation)
+    CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation)
 from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent
 from app.creation.task_authorization import TaskAuthorizationDenied
@@ -176,11 +176,12 @@ class CreationExecutionControl:
     def status(self, workspace_id: str, task_id: str, *, verify_media: bool) -> dict[str, object]:
         task = self.task_or_missing(workspace_id, task_id)
         job = self.execution.latest(workspace_id, task_id)
+        task_events=self.repository.list_task_events(workspace_id,task_id) if job else []
         events = (
             [
                 {"stage": event.payload.get("stage"), "status": event.payload.get("status"),
                  "reason": event.payload.get("reason"), "at": event.created_at.isoformat()}
-                for event in self.repository.list_task_events(workspace_id, task_id)
+                for event in task_events
                 if job is not None and event.job_id == job.id
                 and event.event_type == "creation_execution_stage"
             ]
@@ -220,6 +221,7 @@ class CreationExecutionControl:
             "current_stage": current_stage,
             "waiting_reason": waiting_reason,
             "status_updated_at": status_updated_at,
+            "input_rejection":creation_input_rejection(task_events,job.id) if job else None,
             "video_ready": self.render_valid(
                 workspace_id, task_id, verify_media=verify_media),
             "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
@@ -248,10 +250,13 @@ class CreationExecutionControl:
 
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
-            job = self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source)
+            job = self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
+                admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection))
             if execution_source is not None:
                 self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
+        except CreationInputRejected as exc:
+            raise ExecutionControlRejected(status_code=409,detail=exc.detail) from exc
         except PermissionError as exc:
             raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:

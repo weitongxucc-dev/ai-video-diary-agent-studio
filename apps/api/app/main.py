@@ -13900,6 +13900,7 @@ def _build_device_components(*, repository: ProductionRepository):
         ),
     }
     from app.automation_runtime import restrict_automation_registration
+    creation_owner=registrations['creation_job'].owner
     registrations["creation_job"] = restrict_automation_registration(registrations["creation_job"])
     creation_registration = registrations["creation_job"]
     registrations["creation_job"] = replace(creation_registration,
@@ -13928,7 +13929,7 @@ def _build_device_components(*, repository: ProductionRepository):
     runtime, material_service = bind_device_runtime(
         repository=repository, settings=settings, members=local_members_service,
         registrations=registrations, budget=budget, material_executor=material_executor,
-        verify_identity=_verify_creation_identity, record_admission=task_media.record_admission,
+        verify_identity=_verify_creation_identity, record_admission=creation_owner.record_admission,
     )
     runtime.task_authorizations = task_authorizations
     registrations["creation_job"].executor.on_render_completed = lambda workspace_id, task_id, job_id: quality.start_for_render(
